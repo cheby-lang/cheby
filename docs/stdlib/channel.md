@@ -15,8 +15,8 @@ pub type Receiver<T>
 - **Order.** Values are received in the order they were enqueued, or handed off for capacity 0. So the values that one fiber sends arrive in the order it sent them. The order of sends from different fibers that overlap in time is unspecified, and so is which of several waiting receivers gets a value (§10.5, D-672).
 - **Sharing.** A sent value becomes shared, with everything it reaches (§9.4, D-072).
 - **Waiting forever.** A `send` or `receive` that no other fiber will ever complete waits until its fiber is cancelled. When the program deadlocks as a whole, it ends with status 103, which is not a panic (the Deadlock bullet of [`std::fiber`](fiber.md), §10.4, D-724).
-- **Not waiting.** `send` and `receive` may wait. [`send_now`](#send_now) and [`receive_now`](#receive_now) never wait, and neither is a suspension point, so a loop that only polls keeps its thread, and on JS it starves the other fibers (§10.5, D-185, D-P20). A selector with a timer arm of zero is not a substitute, because it takes a ready value only at random ([`selector::after`](selector.md#after), D-1079).
-- **Kernels.** `new`, `send` and `receive` are kernels that receive the running fiber's context (`@std_context`), and their costs are required (D-300, D-692). `fold`, `try_fold`, `to_list` and `send_all` are written in Cheby over `receive` and `send` (D-P21), and `send_now` and `receive_now` over private kernels (D-P20).
+- **Not waiting.** `send` and `receive` may wait. [`send_now`](#send_now) and [`receive_now`](#receive_now) never wait, and neither is a suspension point, so a loop that only polls keeps its thread, and on JS it starves the other fibers (§10.5, D-185, D-1099). A selector with a timer arm of zero is not a substitute, because it takes a ready value only at random ([`selector::after`](selector.md#after), D-1079).
+- **Kernels.** `new`, `send` and `receive` are kernels that receive the running fiber's context (`@std_context`), and their costs are required (D-300, D-692). `fold`, `try_fold`, `to_list` and `send_all` are written in Cheby over `receive` and `send` (D-1100), and `send_now` and `receive_now` over private kernels (D-1099).
 - **On JS.** Channels close as deterministically as on native, through handle reference counting, which covers every tier-2 handle and every value that holds one (D-100, ADR-0028, D-647).
 
 ## Building
@@ -143,7 +143,7 @@ A channel whose buffer holds one of its own `Sender`s is a reference cycle, and 
 
 ## Draining and filling
 
-These functions are written in Cheby over `receive` and `send`, and wait as those do (D-P21). A cancellation while one of them waits unwinds as usual, and what it has received is lost. `to_list` and `send_all` call no function value, so a tail call to them keeps its caller's frame for a deadlock report, and `fold` and `try_fold` call `f` and keep their tail calls (the Deadlock bullet of [`std::fiber`](fiber.md), D-1059).
+These functions are written in Cheby over `receive` and `send`, and wait as those do (D-1100). A cancellation while one of them waits unwinds as usual, and what it has received is lost. `to_list` and `send_all` call no function value, so a tail call to them keeps its caller's frame for a deadlock report, and `fold` and `try_fold` call `f` and keep their tail calls (the Deadlock bullet of [`std::fiber`](fiber.md), D-1059).
 
 ### `fold`
 
@@ -176,7 +176,7 @@ pub fn try_fold<T, A, E>(
 ) -> Result<A, E>
 ```
 
-Receives and folds as [`fold`](#fold) does, but `f` returns a `Result` (D-P01). The first `Err` stops it, and `try_fold` returns that `Err`. The values still in the channel stay there, for a later `receive`. When the channel is closed and empty, it returns `Ok` of the last accumulator, which is `Ok(initial)` when nothing was received.
+Receives and folds as [`fold`](#fold) does, but `f` returns a `Result` (D-1080). The first `Err` stops it, and `try_fold` returns that `Err`. The values still in the channel stay there, for a later `receive`. When the channel is closed and empty, it returns `Ok` of the last accumulator, which is `Ok(initial)` when nothing was received.
 
 - **Cost:** as `fold`. Informative.
 
@@ -264,7 +264,7 @@ test "send_all stops when the last Receiver goes" {
 
 ## Not waiting
 
-`send_now` and `receive_now` do what `send` and `receive` do when those would not wait, and otherwise return at once (D-P20). Neither waits or is a suspension point, so a fiber that polls in a loop keeps its thread, and on JS it starves the other fibers until it suspends elsewhere ([§10.5](../spec/10-concurrency.md#105-channels), D-185). Across several channels, [`selector::select_now`](selector.md#select_now) takes from whichever is ready. The names follow D-1050's suffix `_now`. Both are written in Cheby over private kernels, implemented after M3, and their tests are pending for M4 (D-741).
+`send_now` and `receive_now` do what `send` and `receive` do when those would not wait, and otherwise return at once (D-1099). Neither waits or is a suspension point, so a fiber that polls in a loop keeps its thread, and on JS it starves the other fibers until it suspends elsewhere ([§10.5](../spec/10-concurrency.md#105-channels), D-185). Across several channels, [`selector::select_now`](selector.md#select_now) takes from whichever is ready. The names follow D-1050's suffix `_now`. Both are written in Cheby over private kernels, implemented after M3, and their tests are pending for M4 (D-741).
 
 ### `Refused`
 
@@ -275,7 +275,7 @@ pub exposed type Refused<T> {
 }
 ```
 
-Why [`send_now`](#send_now) did not send, with the value given back either way (D-179, D-P20). `Full(value)`: the buffer had no room, or, for capacity 0, no receiver or selector was waiting. `Closed(value)`: every `Receiver` is gone. It is `exposed`, so other packages match `channel::Full(v)` and `channel::Closed(v)` and compare with `==`.
+Why [`send_now`](#send_now) did not send, with the value given back either way (D-179, D-1099). `Full(value)`: the buffer had no room, or, for capacity 0, no receiver or selector was waiting. `Closed(value)`: every `Receiver` is gone. It is `exposed`, so other packages match `channel::Full(v)` and `channel::Closed(v)` and compare with `==`.
 
 ### `send_now`
 
@@ -283,7 +283,7 @@ Why [`send_now`](#send_now) did not send, with the value given back either way (
 pub fn send_now<T>(sender: Sender<T>, value: T) -> Result<Nil, Refused<T>>
 ```
 
-Enqueues `value` and returns `Ok(Nil)` when the buffer has room, or hands it to a receiver or a selector that is waiting now. It never waits (D-P20).
+Enqueues `value` and returns `Ok(Nil)` when the buffer has room, or hands it to a receiver or a selector that is waiting now. It never waits (D-1099).
 
 - On capacity 0 it succeeds only when it wins a waiting receiver or selector, as `send` claims one (D-206), and it never waits for a selector's choice.
 - **Fails:** `Err(Closed(value))` when every `Receiver` is gone, which is checked first, and otherwise `Err(Full(value))` when the value could not be enqueued or handed off.
@@ -334,7 +334,7 @@ test "send_now on capacity 0 needs a waiting receiver" {
 pub fn receive_now<T>(receiver: Receiver<T>) -> Option<Result<T, Nil>>
 ```
 
-Returns `Some` of what [`receive`](#receive) would return when `receive` would not wait, and `None` otherwise (D-P20). So `Some(Ok(value))` takes the next value, from the buffer or from a sender waiting on a capacity-0 channel, `Some(Err(Nil))` means that the channel is closed and empty, and `None` that it is empty and some `Sender` still exists. It never waits.
+Returns `Some` of what [`receive`](#receive) would return when `receive` would not wait, and `None` otherwise (D-1099). So `Some(Ok(value))` takes the next value, from the buffer or from a sender waiting on a capacity-0 channel, `Some(Err(Nil))` means that the channel is closed and empty, and `None` that it is empty and some `Sender` still exists. It never waits.
 
 - **Cost:** O(1). Informative.
 

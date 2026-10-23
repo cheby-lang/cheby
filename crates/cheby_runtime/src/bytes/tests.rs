@@ -302,7 +302,7 @@ fn naive_index_of(data: &[u8], part: &[u8], from: i64) -> Option<i64> {
 
 /// `index_of` finds the first occurrence at or after `from`, clamps
 /// `from` as `slice` clamps its bounds, and finds an empty part at the
-/// clamped `from` (D-P15).
+/// clamped `from` (D-1094).
 #[test]
 fn index_of_finds_a_part_at_or_after_from() {
     balanced(|| {

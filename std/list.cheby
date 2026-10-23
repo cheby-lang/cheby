@@ -222,7 +222,7 @@ test "split_at splits after a prefix" {
 
 /// The length of the longest prefix of `xs` whose elements all satisfy
 /// `keep`. It stops calling `keep` at the first element that fails, and
-/// `take`, `drop` and `split_at` make the cut (D-P05).
+/// `take`, `drop` and `split_at` make the cut (D-1084).
 priv fn prefix_length<T>(xs: List<T>, keep: fn(T) -> Bool) -> Int {
   case position(xs, fn(item) { !keep(item) }) {
     Some(index) => index
@@ -231,7 +231,7 @@ priv fn prefix_length<T>(xs: List<T>, keep: fn(T) -> Bool) -> Int {
 }
 
 /// Returns the longest prefix of `xs` whose elements all satisfy `keep`,
-/// stopping at the first element that does not (D-P05).
+/// stopping at the first element that does not (D-1084).
 pub fn take_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T> {
   take(xs, prefix_length(xs, keep))
 }
@@ -250,7 +250,7 @@ test "take_while keeps the matching prefix" {
 }
 
 /// Returns `xs` without the longest prefix whose elements all satisfy
-/// `keep`, stopping at the first element that does not (D-P05).
+/// `keep`, stopping at the first element that does not (D-1084).
 pub fn drop_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> List<T> {
   drop(xs, prefix_length(xs, keep))
 }
@@ -262,7 +262,7 @@ test "drop_while removes the matching prefix" {
 }
 
 /// Splits `xs` after the longest prefix whose elements all satisfy `keep`,
-/// the same as `(take_while(xs, keep), drop_while(xs, keep))` (D-P05).
+/// the same as `(take_while(xs, keep), drop_while(xs, keep))` (D-1084).
 pub fn split_while<T>(xs: List<T>, keep: fn(T) -> Bool) -> (List<T>, List<T>) {
   split_at(xs, prefix_length(xs, keep))
 }
@@ -320,7 +320,7 @@ test "find returns the first match" {
 }
 
 /// Returns the first `Some` that `f` returns, calling `f` front to back and
-/// stopping there (D-P02, D-379).
+/// stopping there (D-1081, D-379).
 pub fn find_map<T, U>(xs: List<T>, f: fn(T) -> Option<U>) -> Option<U> {
   case xs {
     [] => None
@@ -568,10 +568,10 @@ test "fold combines from the front" {
 }
 
 // The `try_` functions match `Ok` and `Err` with `case`: `std::result`
-// imports this module, so this module cannot import it (D-145, D-P02).
+// imports this module, so this module cannot import it (D-145, D-1081).
 
 /// Combines the elements from front to back like `fold`, stopping at the
-/// first `Err` that `f` returns (D-P01, D-P02).
+/// first `Err` that `f` returns (D-1080, D-1081).
 pub fn try_fold<T, A, E>(xs: List<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E> {
   case xs {
     [] => Ok(initial)
@@ -604,7 +604,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Returns the results of calling `f` on each element, in order, or the
-/// first `Err` that `f` returns, where it stops calling `f` (D-P02).
+/// first `Err` that `f` returns, where it stops calling `f` (D-1081).
 pub fn try_map<T, U, E>(xs: List<T>, f: fn(T) -> Result<U, E>) -> Result<List<U>, E> {
   fn step(found: List<U>, rest: List<T>) -> Result<List<U>, E> {
     case rest {
@@ -632,7 +632,7 @@ test "try_map stops at the first error" {
 }
 
 /// Calls `f` on each element, front to back, for its effects, and stops at
-/// the first `Err` that `f` returns (D-P02).
+/// the first `Err` that `f` returns (D-1081).
 pub fn try_each<T, E>(xs: List<T>, f: fn(T) -> Result<Nil, E>) -> Result<Nil, E> {
   case xs {
     [] => Ok(Nil)

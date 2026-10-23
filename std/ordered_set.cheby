@@ -207,7 +207,7 @@ test "each calls the function once per element" {
 }
 
 /// Combines the elements in the set's order like `fold`, and stops at the
-/// first `Err` that `f` returns (D-P01, D-P03). It walks the order tree
+/// first `Err` that `f` returns (D-1080, D-1082). It walks the order tree
 /// through `ordered_map::try_fold`, so a walk that stops after k elements
 /// takes O(log n + k).
 pub fn try_fold<T, A, E>(
@@ -239,7 +239,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some element, in the set's
-/// order, stopping at the first such element (D-P03).
+/// order, stopping at the first such element (D-1082).
 pub fn any<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Bool {
   ordered_map::any(s.items, fn(item, _) { predicate(item) })
 }
@@ -258,7 +258,7 @@ test "any stops at the first match" {
 
 /// Tells whether `predicate` returns `True` for every element, in the
 /// set's order, stopping at the first element for which it returns `False`
-/// (D-P03).
+/// (D-1082).
 pub fn all<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Bool {
   ordered_map::all(s.items, fn(item, _) { predicate(item) })
 }
@@ -271,7 +271,7 @@ test "all needs every element to match" {
 }
 
 /// Returns the first element in the set's order for which `predicate`
-/// returns `True`, stopping there (D-P03).
+/// returns `True`, stopping there (D-1082).
 pub fn find<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Option<T> {
   case ordered_map::find(s.items, fn(item, _) { predicate(item) }) {
     Some((item, _)) => Some(item)

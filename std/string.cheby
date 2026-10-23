@@ -112,7 +112,7 @@ test "split_once splits at the first separator" {
 }
 
 /// Splits `text` into lines at each `\n`, removing one `\r` right before
-/// each `\n`, with no part after a final `\n` (D-P13). No other code point
+/// each `\n`, with no part after a final `\n` (D-1092). No other code point
 /// ends a line, as for `io::read_line` (D-305).
 pub fn lines(text: String) -> List<String> {
   // Every part but the last was followed by `\n`, so only those lose a
@@ -146,7 +146,7 @@ test "lines ends a line only at a line feed" {
 }
 
 /// Splits `text` at every run of Unicode `White_Space`, the whitespace
-/// `trim` removes, with no empty parts (D-310, D-P13).
+/// `trim` removes, with no empty parts (D-310, D-1092).
 @external(native, "cheby_string_words")
 @external(js, "./string.mjs", "words")
 pub fn words(text: String) -> List<String>
@@ -409,7 +409,7 @@ test "from_bytes rejects invalid UTF-8" {
 
 /// Decodes `data` as UTF-8, replacing each invalid sequence with U+FFFD by
 /// the maximal-subpart practice of `from_byte_range`, and keeping a leading
-/// U+FEFF (D-366, D-905, D-P14).
+/// U+FEFF (D-366, D-905, D-1093).
 pub fn from_bytes_lossy(data: bytes::Bytes) -> String {
   from_byte_range(data, 0, bytes::length(data))
 }

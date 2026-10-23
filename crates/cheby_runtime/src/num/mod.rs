@@ -4,7 +4,7 @@
 //!
 //! - [`text`]: `show` and `parse` of every numeric type (§3.3.6, D-312,
 //!   D-313, D-395), `int::parse_base` and `int::to_base` (D-390), and
-//!   `float::to_fixed` (D-P06).
+//!   `float::to_fixed` (D-1085).
 //! - `int`: `std::int` and the sized integer modules: conversions (D-308,
 //!   D-357), parsing and text, checked (D-309) and wrapping (D-025)
 //!   arithmetic, and `int::checked_pow` with its clamped exponent (D-298,

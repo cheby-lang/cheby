@@ -11,7 +11,7 @@ pub type SortedMultimap<K, V>
 - **Values.** Each key holds a `List<V>` in the order the values were inserted, with duplicates kept, so inserting `("a", 1)` twice gives `[1, 1]` (D-332). A key is present only while it has at least one value (D-364).
 - **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`, and `at` counts keys in that order. The values of one key stay in insertion order.
 - **Keys.** Keys must satisfy `Compare`, and every public function has the bound `K: Compare` (D-385). The hooks of equality, hashing and debug printing take none and never call `compare` (D-845). Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. A value inserted under such a key joins the list of the key already stored, which stays (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the multimap does with one.
-- **Written in Cheby.** The module is written in Cheby over `std::sorted_map`, with no runtime kernel (D-336, D-338). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). The tree of `std::sorted_map` keeps the size of every subtree, which `size` and `at` need for their required costs, also if it moves into a runtime kernel (D-336, D-P04).
+- **Written in Cheby.** The module is written in Cheby over `std::sorted_map`, with no runtime kernel (D-336, D-338). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). The tree of `std::sorted_map` keeps the size of every subtree, which `size` and `at` need for their required costs, also if it moves into a runtime kernel (D-336, D-1083).
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted multimaps are `==` when they have the same keys, and each key holds the same list of values in the same order, and equal multimaps hash equally (D-343). Debug printing writes `sorted_multimap::from_list([…])` with one debug-printed pair per value, in the order of `to_pairs`, so the text rebuilds the same multimap (D-344).
 - **Interfaces.** `SortedMultimap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
 - **Costs.** For a multimap of n keys, a lookup or an update takes O(log n) time and calls `compare` O(log n) times, except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns and never calls `compare`, and a walk that stops after k keys, such as `find`, takes O(log n + k).
@@ -238,7 +238,7 @@ test "at counts keys from the smallest" {
 }
 ```
 
-The multimap has no `split`: the parts would need their numbers of values, which would cost O(log n + m) to count for a part of m keys, while `count` is O(1), required (D-P04).
+The multimap has no `split`: the parts would need their numbers of values, which would cost O(log n + m) to count for a part of m keys, while `count` is O(1), required (D-1083).
 
 ## Updating
 
@@ -401,7 +401,7 @@ test "each sees every key with its values" {
 pub fn try_fold<K: Compare, V, A, E>(m: SortedMultimap<K, V>, initial: A, f: fn(A, K, List<V>) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the keys like `fold`, in key order, with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-P01).
+Combines the keys like `fold`, in key order, with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k keys. Informative. It never calls `compare`.
@@ -428,7 +428,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the keys after the stop are never visited (D-P03).
+`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the keys after the stop are never visited (D-1082).
 
 ### `any`
 

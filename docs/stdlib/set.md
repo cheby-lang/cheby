@@ -235,7 +235,7 @@ test "each calls the function once per element" {
 pub fn try_fold<T, A, E>(s: Set<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the elements like `fold`, in the set's per-process order (D-093), with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-P01).
+Combines the elements like `fold`, in the set's per-process order (D-093), with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`. Informative.
@@ -261,7 +261,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of elements is built before the first call, and stopping early saves calls but not that list (D-P03).
+`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of elements is built before the first call, and stopping early saves calls but not that list (D-1082).
 
 ### `any`
 
@@ -307,7 +307,7 @@ test "all needs every element to match" {
 pub fn find<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Option<T>
 ```
 
-Returns a element for which `predicate` returns `True`: the first one in the set's per-process order (D-093). It stops calling `predicate` at that element. When several elements match, which one it returns can change between runs, as the order of `fold` does (D-P03).
+Returns a element for which `predicate` returns `True`: the first one in the set's per-process order (D-093). It stops calling `predicate` at that element. When several elements match, which one it returns can change between runs, as the order of `fold` does (D-1082).
 
 - **Fails:** `None` when no element matches.
 - **Cost:** O(n), plus the calls to `predicate`. Informative.

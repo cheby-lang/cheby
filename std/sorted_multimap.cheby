@@ -186,7 +186,7 @@ test "range includes start and excludes end" {
 
 /// Returns the key at `index` in key order with its values, counting from
 /// 0 and counting keys, as `size` does, or `None` outside 0 to `size - 1`
-/// (D-318, D-363, D-P04): `sorted_map::at` on the tree, O(log n), with no
+/// (D-318, D-363, D-1083): `sorted_map::at` on the tree, O(log n), with no
 /// call to `compare`.
 pub fn at<K: Compare, V>(m: SortedMultimap<K, V>, index: Int) -> Option<(K, List<V>)> {
   sorted_map::at(m.entries, index)
@@ -330,7 +330,7 @@ test "each sees every key with its values" {
 }
 
 /// Combines the keys in order like `fold`, each with all of its values,
-/// and stops at the first `Err` that `f` returns (D-P01, D-P03). It walks
+/// and stops at the first `Err` that `f` returns (D-1080, D-1082). It walks
 /// the tree, so a walk that stops after k keys takes O(log n + k).
 pub fn try_fold<K: Compare, V, A, E>(
   m: SortedMultimap<K, V>,
@@ -361,7 +361,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some key with its values,
-/// in key order, stopping at the first such key (D-P03).
+/// in key order, stopping at the first such key (D-1082).
 pub fn any<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
   sorted_map::any(m.entries, predicate)
 }
@@ -380,7 +380,7 @@ test "any stops at the first matching key" {
 
 /// Tells whether `predicate` returns `True` for every key with its values,
 /// in key order, stopping at the first key for which it returns `False`
-/// (D-P03).
+/// (D-1082).
 pub fn all<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
   sorted_map::all(m.entries, predicate)
 }
@@ -393,7 +393,7 @@ test "all needs every key to match" {
 }
 
 /// Returns the smallest key, with its values, for which `predicate`
-/// returns `True`, stopping there (D-P03).
+/// returns `True`, stopping there (D-1082).
 pub fn find<K: Compare, V>(
   m: SortedMultimap<K, V>,
   predicate: fn(K, List<V>) -> Bool,

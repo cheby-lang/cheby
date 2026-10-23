@@ -8,7 +8,7 @@
 //! stack through it. `selector::select` is not here: it calls the chosen
 //! arm's function in tail position, and select-driven loops rely on that.
 //! D-1059 extends the rule to every public std wait that calls no function
-//! value, such as `channel::to_list` and `channel::send_all` (D-P21). A
+//! value, such as `channel::to_list` and `channel::send_all` (D-1100). A
 //! test reads each module's source and checks that the function exists and
 //! calls no function value.
 

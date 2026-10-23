@@ -159,7 +159,7 @@ test "range includes start and excludes end" {
 
 /// Returns the set of the elements less than `item`, whether some element
 /// compares `Equal` to `item`, and the set of the elements greater than
-/// `item` (D-P04): `sorted_map::split` on the tree, O(log n), calling
+/// `item` (D-1083): `sorted_map::split` on the tree, O(log n), calling
 /// `compare` O(log n) times.
 pub fn split<T: Compare>(s: SortedSet<T>, item: T) -> (SortedSet<T>, Bool, SortedSet<T>) {
   let (below, here, above) = sorted_map::split(tree(s), item)
@@ -183,7 +183,7 @@ test "split cuts the set at an element" {
 }
 
 /// Returns the element at `index` in order, counting from 0, or `None`
-/// outside 0 to `size - 1` (D-318, D-P04): `sorted_map::at` on the tree,
+/// outside 0 to `size - 1` (D-318, D-1083): `sorted_map::at` on the tree,
 /// O(log n), with no call to `compare`.
 pub fn at<T: Compare>(s: SortedSet<T>, index: Int) -> Option<T> {
   case sorted_map::at(tree(s), index) {
@@ -279,7 +279,7 @@ test "each calls the function once per element" {
 }
 
 /// Combines the elements in order like `fold`, and stops at the first
-/// `Err` that `f` returns (D-P01, D-P03). It walks the tree, so a walk that
+/// `Err` that `f` returns (D-1080, D-1082). It walks the tree, so a walk that
 /// stops after k elements takes O(log n + k).
 pub fn try_fold<T: Compare, A, E>(
   s: SortedSet<T>,
@@ -310,7 +310,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some element, in order,
-/// stopping at the first such element (D-P03).
+/// stopping at the first such element (D-1082).
 pub fn any<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Bool {
   sorted_map::any(tree(s), fn(item, _) { predicate(item) })
 }
@@ -328,7 +328,7 @@ test "any stops at the first match" {
 }
 
 /// Tells whether `predicate` returns `True` for every element, in order,
-/// stopping at the first element for which it returns `False` (D-P03).
+/// stopping at the first element for which it returns `False` (D-1082).
 pub fn all<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Bool {
   sorted_map::all(tree(s), fn(item, _) { predicate(item) })
 }
@@ -341,7 +341,7 @@ test "all needs every element to match" {
 }
 
 /// Returns the smallest element for which `predicate` returns `True`,
-/// stopping there (D-P03).
+/// stopping there (D-1082).
 pub fn find<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Option<T> {
   case sorted_map::find(tree(s), fn(item, _) { predicate(item) }) {
     Some((item, _)) => Some(item)

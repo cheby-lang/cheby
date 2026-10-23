@@ -322,7 +322,7 @@ test "decode_value decodes a value built in the program" {
 pub fn value() -> decode::Decoder<Value>
 ```
 
-A decoder that accepts every JSON value and gives it as a `Value`, with `Null` as its placeholder (D-P08). It keeps the generic parts of a document, such as `metadata` or `extensions` fields, as they were written, and it is the way out for shapes that the combinators of [`std::json::decode`](json/decode.md) cannot express: a program decodes the part as a `Value` and walks it with `case`.
+A decoder that accepts every JSON value and gives it as a `Value`, with `Null` as its placeholder (D-1087). It keeps the generic parts of a document, such as `metadata` or `extensions` fields, as they were written, and it is the way out for shapes that the combinators of [`std::json::decode`](json/decode.md) cannot express: a program decodes the part as a `Value` and walks it with `case`.
 
 - **Fails:** never, since every JSON value fits. For a missing field, `field` records its own error and goes on with the placeholder `Null` (D-401).
 - **Cost:** O(n) in the size of the value, through the same rebuild as `decode_value`, which does not grow the stack with the nesting depth (D-094, D-483). Informative.
@@ -341,7 +341,7 @@ test "value keeps any part of a document" {
 }
 ```
 
-`value` lives in `std::json` and is built from the package-visible parts of `decode::Decoder`, as `parse` calls the package-visible `decode::run`, so ADR-0053's split between the two modules stands (D-P08).
+`value` lives in `std::json` and is built from the package-visible parts of `decode::Decoder`, as `parse` calls the package-visible `decode::run`, so ADR-0053's split between the two modules stands (D-1087).
 
 ## Errors
 

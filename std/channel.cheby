@@ -106,7 +106,7 @@ test "values still buffered are released with the last Receiver" {
 
 /// Receives until the channel is closed and empty, and folds each value
 /// into the accumulator in the order received, as `list::fold` does
-/// (D-P21). It calls `f` on the calling fiber, so a tail call to it keeps
+/// (D-1100). It calls `f` on the calling fiber, so a tail call to it keeps
 /// its tail call (D-1059).
 pub fn fold<T, A>(receiver: Receiver<T>, initial: A, f: fn(A, T) -> A) -> A {
   case receive(receiver) {
@@ -127,7 +127,7 @@ test "fold receives until the channel is closed" {
 /// Receives and folds as `fold` does, but `f` returns a `Result`: the
 /// first `Err` stops it and is returned, and the values still in the
 /// channel stay there. Otherwise it returns `Ok` of the last accumulator
-/// (D-P01, D-P21).
+/// (D-1080, D-1100).
 pub fn try_fold<T, A, E>(
   receiver: Receiver<T>,
   initial: A,
@@ -164,7 +164,7 @@ test "try_fold of a closed channel is Ok of the last accumulator" {
 }
 
 /// Returns every value received until the channel is closed and empty, in
-/// the order received (D-P21). It calls no function value, so a tail call
+/// the order received (D-1100). It calls no function value, so a tail call
 /// to it keeps its caller's frame (D-1059).
 pub fn to_list<T>(receiver: Receiver<T>) -> List<T> {
   receive_into(receiver, [])
@@ -187,7 +187,7 @@ test "to_list drains a closed channel" {
 
 /// Sends the elements of `xs` in order and returns `Ok(Nil)`, or, once
 /// every `Receiver` is gone, `Err` with the elements it could not send,
-/// starting with the refused one (D-179, D-P21). It calls no function
+/// starting with the refused one (D-179, D-1100). It calls no function
 /// value, so a tail call to it keeps its caller's frame (D-1059).
 pub fn send_all<T>(sender: Sender<T>, xs: List<T>) -> Result<Nil, List<T>> {
   case xs {

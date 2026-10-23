@@ -334,7 +334,7 @@ test "each calls the function once per entry" {
 pub fn try_fold<K, V, A, E>(m: Map<K, V>, initial: A, f: fn(A, K, V) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the entries like `fold`, in the map's per-process order (D-093), with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-P01).
+Combines the entries like `fold`, in the map's per-process order (D-093), with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`. Informative.
@@ -361,7 +361,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of entries is built before the first call, and stopping early saves calls but not that list (D-P03).
+`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of entries is built before the first call, and stopping early saves calls but not that list (D-1082).
 
 ### `any`
 
@@ -407,7 +407,7 @@ test "all needs every entry to match" {
 pub fn find<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)>
 ```
 
-Returns a entry for which `predicate` returns `True`: the first one in the map's per-process order (D-093). It stops calling `predicate` at that entry. When several entries match, which one it returns can change between runs, as the order of `fold` does (D-P03).
+Returns a entry for which `predicate` returns `True`: the first one in the map's per-process order (D-093). It stops calling `predicate` at that entry. When several entries match, which one it returns can change between runs, as the order of `fold` does (D-1082).
 
 - **Fails:** `None` when no entry matches.
 - **Cost:** O(n), plus the calls to `predicate`. Informative.

@@ -56,13 +56,13 @@ pub fn from_u16(n: U16) -> U32
 @external(js, "./u32.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<U32, Nil>
 
-/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-1091).
 pub fn wrapping_from_int(n: Int) -> U32 {
   let assert Ok(low) = from_int(n & 0xFFFF_FFFF)
   low
 }
 
-/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-1091).
 pub fn wrapping_from_i8(n: I8) -> U32 {
   case n >= 0 {
     True => {
@@ -77,7 +77,7 @@ pub fn wrapping_from_i8(n: I8) -> U32 {
   }
 }
 
-/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-1091).
 pub fn wrapping_from_i16(n: I16) -> U32 {
   case n >= 0 {
     True => {
@@ -92,7 +92,7 @@ pub fn wrapping_from_i16(n: I16) -> U32 {
   }
 }
 
-/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-1091).
 pub fn wrapping_from_i32(n: I32) -> U32 {
   case n >= 0 {
     True => {
@@ -107,13 +107,13 @@ pub fn wrapping_from_i32(n: I32) -> U32 {
   }
 }
 
-/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-1091).
 pub fn wrapping_from_i64(n: I64) -> U32 {
   let assert Ok(low) = from_i64(n & 0xFFFF_FFFF)
   low
 }
 
-/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-P12).
+/// Keeps the low 32 bits of `n`'s two's-complement value and reads them as a `U32` (D-1091).
 pub fn wrapping_from_u64(n: U64) -> U32 {
   let assert Ok(low) = from_u64(n & 0xFFFF_FFFF)
   low
@@ -183,7 +183,7 @@ pub fn parse(text: String) -> Result<U32, Nil>
 @external(js, "./u32.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<U32, Nil>
 
-/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-1090).
 pub fn to_base(n: U32, base: Int) -> Result<String, Nil> {
   int::to_base(int::from_u32(n), base)
 }

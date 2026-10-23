@@ -83,7 +83,7 @@ fn fold_entries<K, V, A>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> A) ->
 /// Combines the entries in key order like `fold_entries`, without calling
 /// `compare`, and stops at the first `Err` that `f` returns, so a walk that
 /// stops after k entries visits O(log n + k) nodes. It has no bound
-/// (D-845, D-P03).
+/// (D-845, D-1082).
 fn try_fold_entries<K, V, A, E>(
   m: SortedMap<K, V>,
   initial: A,
@@ -283,7 +283,7 @@ test "range includes start and excludes end" {
 
 /// Returns the map of the keys less than `key`, the value stored under the
 /// key that compares `Equal` to `key`, if any, and the map of the keys
-/// greater than `key` (D-P04). It descends one path and joins the cut
+/// greater than `key` (D-1083). It descends one path and joins the cut
 /// subtrees with `link`, which never compares keys, so it takes O(log n)
 /// and calls `compare` O(log n) times.
 pub fn split<K: Compare, V>(
@@ -318,7 +318,7 @@ test "split cuts the map at a key" {
 }
 
 /// Returns the entry at `index` in key order, counting from 0, or `None`
-/// outside 0 to `size - 1` (D-318, D-P04). Each node stores the size of its
+/// outside 0 to `size - 1` (D-318, D-1083). Each node stores the size of its
 /// subtree, so it descends one path: O(log n), and `compare` is not called.
 pub fn at<K: Compare, V>(m: SortedMap<K, V>, index: Int) -> Option<(K, V)> {
   case m {
@@ -555,7 +555,7 @@ test "each calls the function once per entry" {
 }
 
 /// Combines the entries in key order like `fold`, and stops at the first
-/// `Err` that `f` returns (D-P01, D-P03). It walks the tree, so a walk that
+/// `Err` that `f` returns (D-1080, D-1082). It walks the tree, so a walk that
 /// stops after k entries takes O(log n + k), and it never calls `compare`.
 pub fn try_fold<K: Compare, V, A, E>(
   m: SortedMap<K, V>,
@@ -588,7 +588,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some entry, in key order,
-/// stopping at the first such entry (D-P03).
+/// stopping at the first such entry (D-1082).
 pub fn any<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
   case find(m, predicate) {
     Some(_) => True
@@ -609,7 +609,7 @@ test "any stops at the first match" {
 }
 
 /// Tells whether `predicate` returns `True` for every entry, in key order,
-/// stopping at the first entry for which it returns `False` (D-P03).
+/// stopping at the first entry for which it returns `False` (D-1082).
 pub fn all<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
   let walked = try_fold_entries(m, Nil, fn(_, key, value) {
     case predicate(key, value) {
@@ -633,7 +633,7 @@ test "all needs every entry to match" {
 }
 
 /// Returns the entry with the smallest key for which `predicate` returns
-/// `True`, stopping there (D-P03).
+/// `True`, stopping there (D-1082).
 pub fn find<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)> {
   let walked = try_fold_entries(m, Nil, fn(_, key, value) {
     case predicate(key, value) {

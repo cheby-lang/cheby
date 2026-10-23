@@ -12,7 +12,7 @@ Every length, position and count in this module is in code points, and grapheme 
 
 `String` satisfies `Add` through `add`, `Compare` through `compare` and `Show` through `show` (§8.7, §8.8).
 
-A conversion between text and bytes lives in the module of its target type, as numeric conversions do (D-308): `bytes::from_string` encodes a string as UTF-8, and `string::from_bytes` and `string::from_bytes_lossy` decode UTF-8. There is no `string::to_bytes`. Bytes are written as Base64 or hex text by [`std::base64`](base64.md) and [`std::hex`](hex.md) (D-P10).
+A conversion between text and bytes lives in the module of its target type, as numeric conversions do (D-308): `bytes::from_string` encodes a string as UTF-8, and `string::from_bytes` and `string::from_bytes_lossy` decode UTF-8. There is no `string::to_bytes`. Bytes are written as Base64 or hex text by [`std::base64`](base64.md) and [`std::hex`](hex.md) (D-1089).
 
 Every cost in this module is **required** (D-300). `n` is the length of the first argument in code points, unless the entry says otherwise.
 
@@ -203,7 +203,7 @@ There is no `index_of`. A code-point position is useful only with `slice`, which
 pub fn lines(text: String) -> List<String>
 ```
 
-Splits `text` into lines. A line ends at each `\n`, and one `\r` right before a `\n` is removed with it, so both LF and CRLF endings work. A final `\n` ends the last line and gives no empty part after it, so `lines("")` is `[]`, `lines("\n")` is `[""]` and `lines("a\r\n")` is `["a"]` (D-P13). No other code point ends a line: a lone `\r`, U+0085 NEXT LINE, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR stay in the text. These are the line endings that `io::read_line` removes (D-305).
+Splits `text` into lines. A line ends at each `\n`, and one `\r` right before a `\n` is removed with it, so both LF and CRLF endings work. A final `\n` ends the last line and gives no empty part after it, so `lines("")` is `[]`, `lines("\n")` is `[""]` and `lines("a\r\n")` is `["a"]` (D-1092). No other code point ends a line: a lone `\r`, U+0085 NEXT LINE, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR stay in the text. These are the line endings that `io::read_line` removes (D-305).
 
 - **Cost:** O(n), required.
 
@@ -217,7 +217,7 @@ test "lines splits at line feeds and drops the carriage return before each" {
 }
 ```
 
-`lines` follows `io::read_line` and Rust's `lines` rather than Unicode's full set of line terminators, as Python's `splitlines` has it, so a stray `\r` inside a field does not split it (D-P13).
+`lines` follows `io::read_line` and Rust's `lines` rather than Unicode's full set of line terminators, as Python's `splitlines` has it, so a stray `\r` inside a field does not split it (D-1092).
 
 ### `words`
 
@@ -225,7 +225,7 @@ test "lines splits at line feeds and drops the carriage return before each" {
 pub fn words(text: String) -> List<String>
 ```
 
-Splits `text` at every run of whitespace and returns the parts between the runs, in order, with no empty parts, so `words("")` and `words(" \t ")` are `[]`. Whitespace is what `trim` removes: every code point with Unicode's `White_Space` property (D-310, D-P13). So U+0085 NEXT LINE separates words, and U+FEFF ZERO WIDTH NO-BREAK SPACE does not.
+Splits `text` at every run of whitespace and returns the parts between the runs, in order, with no empty parts, so `words("")` and `words(" \t ")` are `[]`. Whitespace is what `trim` removes: every code point with Unicode's `White_Space` property (D-310, D-1092). So U+0085 NEXT LINE separates words, and U+FEFF ZERO WIDTH NO-BREAK SPACE does not.
 
 - **Cost:** O(n), required.
 
@@ -238,7 +238,7 @@ test "words splits at runs of White_Space" {
 }
 ```
 
-JS's `\s` and `String.prototype.trim` use ECMAScript's whitespace, which includes U+FEFF and excludes U+0085, so the JS kernel of `words` uses the explicit table of `White_Space` code points that `trim`'s shares, and the cases above pin the difference (D-232, D-P13).
+JS's `\s` and `String.prototype.trim` use ECMAScript's whitespace, which includes U+FEFF and excludes U+0085, so the JS kernel of `words` uses the explicit table of `White_Space` code points that `trim`'s shares, and the cases above pin the difference (D-232, D-1092).
 
 ### `to_code_points`
 
@@ -598,7 +598,7 @@ test "from_bytes rejects invalid UTF-8" {
 pub fn from_bytes_lossy(data: bytes::Bytes) -> String
 ```
 
-Decodes `data` as UTF-8, as `from_bytes` does, but replaces each invalid sequence with U+FFFD REPLACEMENT CHARACTER instead of failing. A sequence is replaced by the maximal-subpart practice of the Unicode standard, which Rust's `String::from_utf8_lossy` and JS's `TextDecoder` both follow, so both targets give the same text (D-905, D-P14). A byte-order mark at the start is kept as U+FEFF, as `from_bytes` keeps it (D-366). It is for text that must be shown even when it is invalid, such as what a socket, a log or another program gives, where `env::args` already replaces in the same way (D-311).
+Decodes `data` as UTF-8, as `from_bytes` does, but replaces each invalid sequence with U+FFFD REPLACEMENT CHARACTER instead of failing. A sequence is replaced by the maximal-subpart practice of the Unicode standard, which Rust's `String::from_utf8_lossy` and JS's `TextDecoder` both follow, so both targets give the same text (D-905, D-1093). A byte-order mark at the start is kept as U+FEFF, as `from_bytes` keeps it (D-366). It is for text that must be shown even when it is invalid, such as what a socket, a log or another program gives, where `env::args` already replaces in the same way (D-311).
 
 - **Cost:** O(n), where n is the length of `data` in bytes, required.
 
@@ -610,7 +610,7 @@ test "from_bytes_lossy replaces each invalid sequence" {
 }
 ```
 
-There is no form that takes a range of `data`: `bytes::slice` cuts one first (D-P14).
+There is no form that takes a range of `data`: `bytes::slice` cuts one first (D-1093).
 
 ### `to_code_point_values`
 

@@ -279,8 +279,8 @@ test "each sees every key with its values" {
 }
 
 /// Combines the keys in the multimap's order like `fold`, each with all of
-/// its values, and stops at the first `Err` that `f` returns (D-P01,
-/// D-P03). It walks the order tree through `ordered_map::try_fold`, so a
+/// its values, and stops at the first `Err` that `f` returns (D-1080,
+/// D-1082). It walks the order tree through `ordered_map::try_fold`, so a
 /// walk that stops after k keys takes O(log n + k).
 pub fn try_fold<K, V, A, E>(
   m: OrderedMultimap<K, V>,
@@ -311,7 +311,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some key with its values,
-/// in the multimap's order, stopping at the first such key (D-P03).
+/// in the multimap's order, stopping at the first such key (D-1082).
 pub fn any<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
   ordered_map::any(m.entries, predicate)
 }
@@ -330,7 +330,7 @@ test "any stops at the first matching key" {
 
 /// Tells whether `predicate` returns `True` for every key with its values,
 /// in the multimap's order, stopping at the first key for which it returns
-/// `False` (D-P03).
+/// `False` (D-1082).
 pub fn all<K, V>(m: OrderedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
   ordered_map::all(m.entries, predicate)
 }
@@ -343,7 +343,7 @@ test "all needs every key to match" {
 }
 
 /// Returns the first key in the multimap's order, with its values, for
-/// which `predicate` returns `True`, stopping there (D-P03).
+/// which `predicate` returns `True`, stopping there (D-1082).
 pub fn find<K, V>(
   m: OrderedMultimap<K, V>,
   predicate: fn(K, List<V>) -> Bool,

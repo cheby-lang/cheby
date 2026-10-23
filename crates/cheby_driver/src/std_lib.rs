@@ -285,8 +285,8 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     ),
     ("random", "a spawn leaves the parent's stream alone", "M4"),
     ("random", "spawned fibers draw reproducibly and apart", "M4"),
-    // `fiber::raise` needs the private kernel `sys_raise` (D-P18), and
-    // `fiber::map` and `try_map` need it and S5's `fiber::cancel` (D-P19).
+    // `fiber::raise` needs the private kernel `sys_raise` (D-1097), and
+    // `fiber::map` and `try_map` need it and S5's `fiber::cancel` (D-1098).
     // Both are built after M3.
     (
         "fiber",
@@ -310,7 +310,7 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     ("fiber", "try_map cancels the calls in flight", "M4"),
     // `channel::send_now`, `receive_now` and `Refused` need the kernels
     // `sys_send_now` and `sys_receive_now`, and `selector::select_now`
-    // needs `sys_select_now`, after M3 (D-P20).
+    // needs `sys_select_now`, after M3 (D-1099).
     (
         "channel",
         "send_now reports a full buffer and gives the value back",
@@ -330,8 +330,8 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
         "M4",
     ),
     // `fiber::yield_now` needs the `@std_context` kernel `sys_yield_now`
-    // and the JS scheduler, M4 (D-P23). Its first test also needs
-    // `channel::receive_now` (D-P20).
+    // and the JS scheduler, M4 (D-1102). Its first test also needs
+    // `channel::receive_now` (D-1099).
     ("fiber", "a loop that yields lets other fibers run", "M4"),
     ("fiber", "a cancellation is delivered at yield_now", "M4"),
 ];

@@ -14,7 +14,7 @@ Multi-byte integers are read and written by functions that name their byte order
 
 Text becomes bytes with `bytes::from_string`, which always encodes UTF-8 (§3.5). Bytes become text with [`string::from_bytes`](string.md#from_bytes), which can fail, because decoding is a conversion to `String` and lives in `std::string` (D-308). There is no `bytes::to_string`: decoding can fail, and the library has no `to_string` functions, since a type's text comes only from `show` (D-307).
 
-Bytes are written as Base64 text by [`std::base64`](base64.md) and as hex text by [`std::hex`](hex.md), each with a strict decoder. They are modules of their own, so that `std::bytes` returns no `String` and each conversion lives with its encoding (D-308, D-P10).
+Bytes are written as Base64 text by [`std::base64`](base64.md) and as hex text by [`std::hex`](hex.md), each with a strict decoder. They are modules of their own, so that `std::bytes` returns no `String` and each conversion lives with its encoding (D-308, D-1089).
 
 Every cost in this module is **required** (D-300). `n` is the length of the first argument in bytes, unless the entry says otherwise. A function that takes a callback, such as `fold`, is written in Cheby over the runtime's kernels, such as `get`, because only kernels that the stdlib requires to take a callback, which is `map::upsert` alone, call back into Cheby (D-484).
 
@@ -136,7 +136,7 @@ test "get reads one byte" {
 pub fn index_of(data: Bytes, part: Bytes, from: Int) -> Option<Int>
 ```
 
-Returns the position of the first occurrence of `part` in `data` that starts at or after position `from` (D-P15). An empty `part` is found at `from`. It is the delimiter search of byte protocols and lexers, such as finding the `\r\n\r\n` that ends an HTTP head.
+Returns the position of the first occurrence of `part` in `data` that starts at or after position `from` (D-1094). An empty `part` is found at `from`. It is the delimiter search of byte protocols and lexers, such as finding the `\r\n\r\n` that ends an HTTP head.
 
 - **Clamps:** `from` below 0 is 0, and above the length of `data` is its length, as `slice` clamps its bounds (D-298, D-334).
 - **Fails:** `None` when `part` does not occur at or after `from`.
@@ -153,7 +153,7 @@ test "index_of finds a part at or after a position" {
 }
 ```
 
-`from` is clamped, while `read_u16_be` and the other offset reads give `None` past the end, because `from` is where a search starts, a bound like those of `slice`, and a search that starts past the end still has an answer. An offset read names a value that is not there (D-318, D-P15). A one-byte `part`, such as `bytes::from_list([0x0A])`, is the search for one byte, so there is no `index_of_byte`. A position in `Bytes` is useful, because `get` and `slice` reach it in O(1) and O(k), which is why `std::string` has no `index_of` and `std::bytes` does (D-371).
+`from` is clamped, while `read_u16_be` and the other offset reads give `None` past the end, because `from` is where a search starts, a bound like those of `slice`, and a search that starts past the end still has an answer. An offset read names a value that is not there (D-318, D-1094). A one-byte `part`, such as `bytes::from_list([0x0A])`, is the search for one byte, so there is no `index_of_byte`. A position in `Bytes` is useful, because `get` and `slice` reach it in O(1) and O(k), which is why `std::string` has no `index_of` and `std::bytes` does (D-371).
 
 ### `slice`
 
@@ -219,7 +219,7 @@ test "fold visits bytes front to back" {
 pub fn try_fold<A, E>(data: Bytes, initial: A, f: fn(A, U8) -> Result<A, E>) -> Result<A, E>
 ```
 
-Calls `f` with the result so far and each byte of `data`, front to back, starting from `initial`, as `fold` does. It stops at the first `Err` that `f` returns and returns it, and calls `f` on no later byte. Otherwise it returns `Ok` of the last result, which is `Ok(initial)` with no bytes (D-P01). A search stops with its answer as the `Err`.
+Calls `f` with the result so far and each byte of `data`, front to back, starting from `initial`, as `fold` does. It stops at the first `Err` that `f` returns and returns it, and calls `f` on no later byte. Otherwise it returns `Ok` of the last result, which is `Ok(initial)` with no bytes (D-1080). A search stops with its answer as the `Err`.
 
 - **Cost:** O(k), where k is the number of bytes visited, plus the calls to `f`, required.
 

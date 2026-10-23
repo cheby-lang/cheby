@@ -30,7 +30,7 @@ test "try stops at the first error" {
 }
 
 /// Wraps the error of `r` with `wrap`, then calls `next` with the value of
-/// an `Ok`: `try(map_error(r, wrap), next)` (D-P16).
+/// an `Ok`: `try(map_error(r, wrap), next)` (D-1095).
 pub fn try_with<T, E, F, U>(
   r: Result<T, E>,
   wrap: fn(E) -> F,
@@ -90,7 +90,7 @@ test "map_error changes only an Err" {
 }
 
 /// Replaces the error of an `Err` with `error`, and returns an `Ok`
-/// unchanged (D-P16).
+/// unchanged (D-1095).
 pub fn replace_error<T, E, F>(r: Result<T, E>, error: F) -> Result<T, F> {
   case r {
     Ok(value) => Ok(value)

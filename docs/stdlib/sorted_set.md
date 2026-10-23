@@ -10,7 +10,7 @@ pub type SortedSet<T>
 
 - **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest element to the largest, by the element type's `compare`, and `at` counts positions in that order.
 - **Elements.** Elements must satisfy `Compare`, and every public function has the bound `T: Compare` (D-385). The hooks of equality, hashing and debug printing take none and never call `compare` (D-845). Two elements are the same element when `compare` returns `Equal`, even if they are not `==`. Inserting such an element keeps the one already stored (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the set does with one.
-- **Written in Cheby.** The set is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). Every comparison is an ordinary call to the element type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). Every node of the tree keeps the size of its subtree, which `size` and `at` need for their required costs. If the tree later moves into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-P04).
+- **Written in Cheby.** The set is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). Every comparison is an ordinary call to the element type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). Every node of the tree keeps the size of its subtree, which `size` and `at` need for their required costs. If the tree later moves into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-1083).
 - **Equality, hashing and printing.** Sets with the same elements can have trees of different shapes, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted sets are `==` when they hold the same elements, compared with `==`, and equal sets hash equally (D-343). Debug printing writes `sorted_set::from_list([…])` with the elements in order, each one debug-printed (D-344).
 - **Interfaces.** `SortedSet<T>` satisfies `Show` when `T` does (D-344). It does not satisfy `Compare`.
 - **Costs.** For a set of n elements, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes O(n) and never calls `compare`, and a walk that stops after k elements, such as `find`, takes O(log n + k).
@@ -197,7 +197,7 @@ test "split cuts the set at an element" {
 }
 ```
 
-As with `sorted_map::split`, `split` with `first`, `last` and `size` gives the nearest elements on either side of `item`, and the rank of `item`, the number of elements less than it, which is `size` of the lower part (D-P04).
+As with `sorted_map::split`, `split` with `first`, `last` and `size` gives the nearest elements on either side of `item`, and the rank of `item`, the number of elements less than it, which is `size` of the lower part (D-1083).
 
 ### `at`
 
@@ -340,7 +340,7 @@ test "each calls the function once per element" {
 pub fn try_fold<T: Compare, A, E>(s: SortedSet<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the elements like `fold`, in order, with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-P01).
+Combines the elements like `fold`, in order, with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k elements. Informative. It never calls `compare`.
@@ -367,7 +367,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the elements after the stop are never visited (D-P03).
+`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the elements after the stop are never visited (D-1082).
 
 ### `any`
 

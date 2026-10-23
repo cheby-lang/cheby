@@ -14,7 +14,7 @@ pub type OrderedMultimap<K, V>
 - **Written in Cheby.** The module is written in Cheby over `std::ordered_map`, with no kernel of its own (D-336, D-338). Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered multimaps are `==` only when they have the same keys in the same order, and each key holds the same list of values in the same order. Their hash covers both orders (D-343). Debug printing writes `ordered_multimap::from_list([…])` with one debug-printed pair per value, in the order of `to_pairs` (D-344).
 - **Interfaces.** `OrderedMultimap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a multimap of n keys, a lookup takes O(log n), effectively constant as in `Map`, and an update takes O(log n), except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns, and a walk that stops after k keys, such as `find`, takes O(log n + k) (D-P03).
+- **Costs.** For a multimap of n keys, a lookup takes O(log n), effectively constant as in `Map`, and an update takes O(log n), except that an insert takes O(log n + log m), where m is the number of values of the key: one descent to the key and one push onto its list (D-846). Iterating takes time in proportion to what it returns, and a walk that stops after k keys, such as `find`, takes O(log n + k) (D-1082).
 
 The map functions `values`, `upsert`, `map_values` and `merge` have no counterpart in tier 1. `get` and `to_pairs` reach the values, and a caller can rebuild a multimap with `fold`.
 
@@ -341,7 +341,7 @@ test "each sees every key with its values" {
 pub fn try_fold<K, V, A, E>(m: OrderedMultimap<K, V>, initial: A, f: fn(A, K, List<V>) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the keys like `fold`, in the multimap's order, with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-P01).
+Combines the keys like `fold`, in the multimap's order, with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k keys. Informative.
@@ -368,7 +368,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk the insertion order and look each key's values up, as `fold` does (D-848), and stop where the callback does, so the keys after the stop are never visited (D-P03).
+`try_fold`, `any`, `all` and `find` walk the insertion order and look each key's values up, as `fold` does (D-848), and stop where the callback does, so the keys after the stop are never visited (D-1082).
 
 ### `any`
 

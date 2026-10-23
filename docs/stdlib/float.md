@@ -409,7 +409,7 @@ These are the thresholds of JS's `Number.prototype.toString`, so numbers print a
 pub fn to_fixed(x: Float, digits: Int) -> String
 ```
 
-Returns `x` in decimal with exactly `digits` digits after the point, with no point when `digits` is 0, and never with an exponent (D-P06).
+Returns `x` in decimal with exactly `digits` digits after the point, with no point when `digits` is 0, and never with an exponent (D-1085).
 
 - The digits are the exact binary value of `x` rounded to `digits` decimals. A tie, which only a value exactly halfway such as 0.125 can be, is rounded away from zero, as `round` rounds (D-314). A value such as `1.005` is not a tie, because its binary value is just below 1.005, so it gives `1.00` with 2 digits.
 - The text starts with `-` whenever the sign bit of `x` is set, so `-0.0` and `-0.004` both give `-0.00` with 2 digits, as `show` writes `-0.0` (D-219).

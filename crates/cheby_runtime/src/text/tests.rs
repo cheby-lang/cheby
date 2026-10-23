@@ -514,14 +514,14 @@ fn words(a: &str) -> Vec<String> {
 }
 
 /// The 25 code points with Unicode 17.0.0's `White_Space` property, the
-/// table that `trim` and `words` share on JS in M4 (D-310, D-P13).
+/// table that `trim` and `words` share on JS in M4 (D-310, D-1092).
 const WHITE_SPACE: [u32; 25] = [
     0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
     0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
 ];
 
 /// `words` splits at runs of `White_Space` and gives no empty parts; U+0085
-/// separates words and U+FEFF does not, unlike ECMAScript's `\s` (D-P13).
+/// separates words and U+FEFF does not, unlike ECMAScript's `\s` (D-1092).
 #[test]
 fn words_split_at_runs_of_white_space() {
     balanced(|| {
@@ -548,7 +548,7 @@ fn words_split_at_runs_of_white_space() {
 }
 
 /// The shared `White_Space` test holds for exactly the 25 code points of
-/// the table, so `trim`, `words` and M4's JS table agree (D-310, D-P13).
+/// the table, so `trim`, `words` and M4's JS table agree (D-310, D-1092).
 #[test]
 #[cfg_attr(miri, ignore = "scans every code point")]
 fn white_space_is_the_table_of_25_code_points() {

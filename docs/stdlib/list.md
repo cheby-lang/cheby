@@ -343,7 +343,7 @@ test "take_while keeps the matching prefix" {
 }
 ```
 
-`take_while`, `drop_while` and `split_while` are written in Cheby: `position` finds the cut, and `take`, `drop` and `split_at` make it, so a list at its last use is cut in place (D-894, D-P05).
+`take_while`, `drop_while` and `split_while` are written in Cheby: `position` finds the cut, and `take`, `drop` and `split_at` make it, so a list at its last use is cut in place (D-894, D-1084).
 
 ### `drop_while`
 
@@ -458,7 +458,7 @@ test "find_map returns the first Some" {
 }
 ```
 
-The callback returns `Option`, as `filter_map`'s does (D-379). `list::first(list::filter_map(xs, f))` gives the same answer, but calls `f` on every element and builds a list (D-P02).
+The callback returns `Option`, as `filter_map`'s does (D-379). `list::first(list::filter_map(xs, f))` gives the same answer, but calls `f` on every element and builds a list (D-1081).
 
 ### `position`
 
@@ -758,7 +758,7 @@ test "fold combines from the front" {
 pub fn try_fold<T, A, E>(xs: List<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the elements from front to back like `fold`, with a callback that can fail. It calls `f` with `initial` and the first element, and while `f` returns `Ok`, with the value inside and the next element. It stops calling `f` at the first `Err` and returns that `Err`. Otherwise it returns `Ok` of the last result, which is `Ok(initial)` for `[]` (D-P01).
+Combines the elements from front to back like `fold`, with a callback that can fail. It calls `f` with `initial` and the first element, and while `f` returns `Ok`, with the value inside and the next element. It stops calling `f` at the first `Err` and returns that `Err`. Otherwise it returns `Ok` of the last result, which is `Ok(initial)` for `[]` (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`. Informative.
@@ -786,7 +786,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-The callback comes last, so `use` reads like a loop body, and inside it `use … <- result::try(…)` chains the steps that can fail. A search stops with its answer as `Err(answer)`. `find`, `find_map`, `any` and `all` cover the common searches without that (D-P01).
+The callback comes last, so `use` reads like a loop body, and inside it `use … <- result::try(…)` chains the steps that can fail. A search stops with its answer as `Err(answer)`. `find`, `find_map`, `any` and `all` cover the common searches without that (D-1080).
 
 ### `try_map`
 
@@ -814,7 +814,7 @@ test "try_map stops at the first error" {
 }
 ```
 
-`result::all(list::map(xs, f))` gives the same answer, but keeps calling `f` after the first `Err`, so the effects of the later calls still happen (D-354, D-P02).
+`result::all(list::map(xs, f))` gives the same answer, but keeps calling `f` after the first `Err`, so the effects of the later calls still happen (D-354, D-1081).
 
 ### `try_each`
 
@@ -849,7 +849,7 @@ test "try_each stops at the first error" {
 }
 ```
 
-`try_fold`, `try_map` and `try_each` match `Ok` and `Err` with `case` in their bodies, because `std::result` imports `std::list` (D-145). Each is tail-recursive (D-P02).
+`try_fold`, `try_map` and `try_each` match `Ok` and `Err` with `case` in their bodies, because `std::result` imports `std::list` (D-145). Each is tail-recursive (D-1081).
 
 ### `sum`
 

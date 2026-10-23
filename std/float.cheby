@@ -237,7 +237,7 @@ test "show spells the special values" {
 }
 
 /// Returns `x` in decimal with exactly `digits` digits after the point, the
-/// exact binary value rounded with ties away from zero (D-P06).
+/// exact binary value rounded with ties away from zero (D-1085).
 @external(native, "cheby_float_to_fixed")
 @external(js, "./float.mjs", "to_fixed")
 @std_clamped(digits)

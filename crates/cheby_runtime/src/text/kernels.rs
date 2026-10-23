@@ -248,7 +248,7 @@ pub unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) ->
     })
 }
 
-/// `string::words` (D-P13): the parts of `text` between runs of
+/// `string::words` (D-1092): the parts of `text` between runs of
 /// `White_Space`, the whitespace `trim` removes, with no empty parts.
 /// O(n).
 ///

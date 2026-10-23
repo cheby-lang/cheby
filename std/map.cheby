@@ -205,7 +205,7 @@ test "each calls the function once per entry" {
 }
 
 /// Combines the entries like `fold`, in the map's per-process order
-/// (D-093), and stops at the first `Err` that `f` returns (D-P01, D-P03).
+/// (D-093), and stops at the first `Err` that `f` returns (D-1080, D-1082).
 /// It walks `to_list`, so the list is built before the first call.
 pub fn try_fold<K, V, A, E>(
   m: Map<K, V>,
@@ -236,7 +236,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some entry, stopping at
-/// the first such entry (D-P03).
+/// the first such entry (D-1082).
 pub fn any<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
   list::any(to_list(m), fn((key, value)) { predicate(key, value) })
 }
@@ -249,7 +249,7 @@ test "any looks for a matching entry" {
 }
 
 /// Tells whether `predicate` returns `True` for every entry, stopping at
-/// the first entry for which it returns `False` (D-P03).
+/// the first entry for which it returns `False` (D-1082).
 pub fn all<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
   list::all(to_list(m), fn((key, value)) { predicate(key, value) })
 }
@@ -263,7 +263,7 @@ test "all needs every entry to match" {
 
 /// Returns an entry for which `predicate` returns `True`, the first in the
 /// map's per-process order (D-093), so which of several matches it returns
-/// can change between runs (D-P03).
+/// can change between runs (D-1082).
 pub fn find<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)> {
   list::find(to_list(m), fn((key, value)) { predicate(key, value) })
 }

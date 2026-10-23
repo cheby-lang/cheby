@@ -56,13 +56,13 @@ pub fn from_u32(n: U32) -> Result<U16, Nil>
 @external(js, "./u16.mjs", "from_u64")
 pub fn from_u64(n: U64) -> Result<U16, Nil>
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_int(n: Int) -> U16 {
   let assert Ok(low) = from_int(n & 0xFFFF)
   low
 }
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_i8(n: I8) -> U16 {
   case n >= 0 {
     True => {
@@ -77,7 +77,7 @@ pub fn wrapping_from_i8(n: I8) -> U16 {
   }
 }
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_i16(n: I16) -> U16 {
   case n >= 0 {
     True => {
@@ -92,25 +92,25 @@ pub fn wrapping_from_i16(n: I16) -> U16 {
   }
 }
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_i32(n: I32) -> U16 {
   let assert Ok(low) = from_i32(n & 0xFFFF)
   low
 }
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_i64(n: I64) -> U16 {
   let assert Ok(low) = from_i64(n & 0xFFFF)
   low
 }
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_u32(n: U32) -> U16 {
   let assert Ok(low) = from_u32(n & 0xFFFF)
   low
 }
 
-/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-P12).
+/// Keeps the low 16 bits of `n`'s two's-complement value and reads them as a `U16` (D-1091).
 pub fn wrapping_from_u64(n: U64) -> U16 {
   let assert Ok(low) = from_u64(n & 0xFFFF)
   low
@@ -188,7 +188,7 @@ pub fn parse(text: String) -> Result<U16, Nil>
 @external(js, "./u16.mjs", "parse_base")
 pub fn parse_base(text: String, base: Int) -> Result<U16, Nil>
 
-/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-P11).
+/// Returns `n` written in `base`, from 2 to 36, in lowercase digits (D-390, D-1090).
 pub fn to_base(n: U16, base: Int) -> Result<String, Nil> {
   int::to_base(int::from_u16(n), base)
 }

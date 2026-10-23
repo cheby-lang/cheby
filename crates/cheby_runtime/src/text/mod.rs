@@ -6,7 +6,7 @@
 //! - `ops`: the semantics on Rust `&str`, with no objects: code-point
 //!   counts and positions (D-302), clamping (D-298), splitting (D-315),
 //!   padding, trimming and `words` (one `White_Space` test, D-310,
-//!   D-P13) and grapheme clusters.
+//!   D-1092) and grapheme clusters.
 //! - `kernels`: the C entry points. Arguments are borrowed and results
 //!   owned (D-187); results are built through [`crate::values`],
 //!   [`crate::string`] and `list::from_iter` (plan §4.3.4).
@@ -27,7 +27,7 @@
 //! `str::to_uppercase`, which apply `SpecialCasing.txt`'s unconditional
 //! mappings and the language-independent `Final_Sigma` rule), whitespace is
 //! `char::is_whitespace` (`White_Space`), shared by the trims and `words`,
-//! so U+0085 is whitespace and U+FEFF is not (D-P13), and grapheme
+//! so U+0085 is whitespace and U+FEFF is not (D-1092), and grapheme
 //! clusters are `unicode-segmentation`'s extended clusters. A test asserts
 //! that both follow the same Unicode version, 17.0.0 today.
 //!

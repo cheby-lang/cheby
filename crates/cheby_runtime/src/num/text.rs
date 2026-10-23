@@ -9,7 +9,7 @@
 //!   form when the decimal exponent is from −6 to 20 and in exponent form
 //!   otherwise, with `NaN`, `inf`, `-inf` and `-0.0` for the special values.
 //! - `float::to_fixed` writes the exact binary value rounded to a number of
-//!   decimals, ties away from zero, with no exponent (D-P06).
+//!   decimals, ties away from zero, with no exponent (D-1085).
 //! - Float parsing accepts exactly D-313's grammar and rounds the decimal
 //!   value to the nearest value of the type, ties to even, with infinities
 //!   and signed zeros beyond the range (D-394).
@@ -49,10 +49,10 @@ pub(crate) fn f32_to_string(x: f32) -> String {
 }
 
 /// The largest `digits` of `float::to_fixed`, which clamps it to 0 to 100
-/// (D-P06, D-298).
+/// (D-1085, D-298).
 const MAX_FIXED_DIGITS: i64 = 100;
 
-/// `float::to_fixed` (D-P06): `x` in decimal with exactly `digits` digits
+/// `float::to_fixed` (D-1085): `x` in decimal with exactly `digits` digits
 /// after the point, none and no point for 0, and never an exponent.
 ///
 /// The digits are those of the exact binary value of `x`, rounded at
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!(digits(f64::MAX).0.len(), 309);
     }
 
-    /// D-P06's text from an independent expansion: Rust's `{:.1100}` writes
+    /// D-1085's text from an independent expansion: Rust's `{:.1100}` writes
     /// every digit of the exact value, since none has more than 1074 after
     /// the point, and the result rounds it at `digits`, ties away from zero.
     fn fixed_reference(x: f64, digits: usize) -> String {
@@ -769,7 +769,7 @@ mod tests {
 
     /// Checks `float_to_fixed` against the reference, and away from ties
     /// against Rust's own `{:.N}`, which rounds the exact value too and
-    /// differs only at a tie, which it rounds to even (D-P06).
+    /// differs only at a tie, which it rounds to even (D-1085).
     fn check_fixed(x: f64, digits: usize) -> Result<(), TestCaseError> {
         let ours = float_to_fixed(x, i64::try_from(digits).unwrap());
         prop_assert_eq!(&ours, &fixed_reference(x, digits), "{:e} {}", x, digits);

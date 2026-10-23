@@ -243,7 +243,7 @@ test "neg flips the sign" {
   assert -zero == zero
 }
 
-/// Returns `d` times `factor`, exactly (D-P22). `d` is split into `a`
+/// Returns `d` times `factor`, exactly (D-1101). `d` is split into `a`
 /// seconds and `b` nanoseconds that never have opposite signs, and
 /// `factor` into `q × 10⁹ + r` with `/` and `%`, which truncate. The
 /// result is `a × factor + b × q + (b × r) / 10⁹` seconds plus

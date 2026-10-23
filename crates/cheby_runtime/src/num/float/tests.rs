@@ -214,7 +214,7 @@ fn conversions_follow_d359() {
 }
 
 /// The draft's table and more, checked against Python's `decimal` with
-/// `ROUND_HALF_UP` on the exact value (D-P06).
+/// `ROUND_HALF_UP` on the exact value (D-1085).
 #[test]
 fn to_fixed_rounds_the_exact_value_with_ties_away_from_zero() {
     let cases: &[(f64, i64, &str)] = &[

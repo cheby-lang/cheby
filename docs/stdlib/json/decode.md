@@ -1,6 +1,6 @@
 # `std::json::decode`
 
-Decoders, which turn a JSON value into typed data (D-320). A decoder is built from the primitive decoders below and combined with `use` through `field`, `optional_field` and `then`, as in Gleam's `gleam/dynamic/decode`. `json::parse(text, decoder)` parses and decodes in one step, and `json::decode_value(value, decoder)` decodes a value already parsed (D-361). Decoders exist because an interface function cannot return `Self` without taking it, so there is no `FromJson` interface (D-209, ADR-0037). This module cannot name `json::Value` (D-145, D-361), so the decoder that keeps any part of a document as a `Value` is [`json::value`](../json.md#value) (D-P08).
+Decoders, which turn a JSON value into typed data (D-320). A decoder is built from the primitive decoders below and combined with `use` through `field`, `optional_field` and `then`, as in Gleam's `gleam/dynamic/decode`. `json::parse(text, decoder)` parses and decodes in one step, and `json::decode_value(value, decoder)` decodes a value already parsed (D-361). Decoders exist because an interface function cannot return `Self` without taking it, so there is no `FromJson` interface (D-209, ADR-0037). This module cannot name `json::Value` (D-145, D-361), so the decoder that keeps any part of a document as a `Value` is [`json::value`](../json.md#value) (D-1087).
 
 ```cheby
 pub type Decoder<T>
@@ -22,7 +22,7 @@ Decoding reports every value that did not fit, not just the first (D-322). A dec
 
 - The primitive decoders give `""`, `0`, `0.0` and `False`, `list` and `pairs` give `[]`, and `optional` gives `Some` of its decoder's placeholder.
 - `failure(placeholder, expected)` gives its `placeholder`.
-- A missing field gives the value its decoder produces when run on `json::Null`, with that run's errors dropped. For a missing field, and for a field read from a value that is not an object, a [`lazy`](#lazy) decoder gives its own `placeholder` instead, without making its decoder (D-P07).
+- A missing field gives the value its decoder produces when run on `json::Null`, with that run's errors dropped. For a missing field, and for a field read from a value that is not an object, a [`lazy`](#lazy) decoder gives its own `placeholder` instead, without making its decoder (D-1086).
 
 Errors are reported in the order the decoder visits the values: a field's errors come before those of the decoder `next` returns, and an array's elements are visited from the first to the last. Fields the decoder does not ask for are ignored (D-323).
 
@@ -192,7 +192,7 @@ test "pairs decodes an object with any keys, in order" {
 }
 ```
 
-Besides the decoders of D-320, the module has `pairs` and `map` (D-403), and [`one_of`](#one_of) and [`at`](#at) (D-P09). There is no `Map`-returning `dict`: `map::from_list` makes one from what `pairs` returns.
+Besides the decoders of D-320, the module has `pairs` and `map` (D-403), and [`one_of`](#one_of) and [`at`](#at) (D-1088). There is no `Map`-returning `dict`: `map::from_list` makes one from what `pairs` returns.
 
 ### `field`
 
@@ -333,7 +333,7 @@ pub fn one_of<T>(first: Decoder<T>, others: List<Decoder<T>>) -> Decoder<T>
 
 Runs `first`, and then each decoder of `others` in order, on the same value, and gives the result of the first one that records no errors. It decodes an untagged union, such as an `"id"` that is `1` in one document and `"a1"` in another. The decoders after the one that fits are not run.
 
-- **Fails:** when every decoder records errors, with `first`'s result and only `first`'s errors, so its placeholder is `first`'s (D-P09).
+- **Fails:** when every decoder records errors, with `first`'s result and only `first`'s errors, so its placeholder is `first`'s (D-1088).
 - **Missing fields.** For a missing field, `one_of` is decoded on `null`, as any decoder is (D-401), so a later decoder that accepts `null`, such as an `optional`, gives the field's value.
 - **Cost:** running up to `1 + length(others)` decoders on the value. Informative.
 
@@ -347,7 +347,7 @@ test "one_of takes the first decoder that fits" {
 }
 ```
 
-Only `first`'s errors are reported, because the errors of every alternative would mostly be noise, as Gleam's `one_of` decides too (D-P09).
+Only `first`'s errors are reported, because the errors of every alternative would mostly be noise, as Gleam's `one_of` decides too (D-1088).
 
 ### `at`
 
@@ -355,7 +355,7 @@ Only `first`'s errors are reported, because the errors of every alternative woul
 pub fn at<T>(path: List<String>, decoder: Decoder<T>) -> Decoder<T>
 ```
 
-Decodes the member reached through the object keys of `path`, from the outermost key in, with `decoder`. It is the nested `field` calls it stands for, with their errors and paths, so `at(["author", "name"], d)` is `field("author", field("name", d, success), success)`, and `at([], decoder)` is `decoder` (D-P09). The steps are object keys only: an array index would be ambiguous with the key `"1"` (D-400).
+Decodes the member reached through the object keys of `path`, from the outermost key in, with `decoder`. It is the nested `field` calls it stands for, with their errors and paths, so `at(["author", "name"], d)` is `field("author", field("name", d, success), success)`, and `at([], decoder)` is `decoder` (D-1088). The steps are object keys only: an array index would be ambiguous with the key `"1"` (D-400).
 
 - **Fails:** with the errors of those `field` calls: a missing member, a value that is not an object on the way, and `decoder`'s errors, each with its path.
 - **Cost:** the cost of its `field` calls and of `decoder`. Informative.
@@ -375,7 +375,7 @@ test "at reads a member through nested objects" {
 pub fn lazy<T>(placeholder: T, make: fn() -> Decoder<T>) -> Decoder<T>
 ```
 
-A decoder that calls `make` each time it decodes a value, and decodes the value with the decoder that `make` returns. A decoder is a value built when its function runs, so a decoder that refers to itself, such as the decoder of a tree, must reach itself through `lazy`, or building it never ends. Where a placeholder is needed without a value, which is for a missing field and for a field read from a value that is not an object, a `lazy` decoder gives `placeholder` and does not call `make` (D-P07). So a recursive decoder is built in O(1), and computing its placeholders never recurses.
+A decoder that calls `make` each time it decodes a value, and decodes the value with the decoder that `make` returns. A decoder is a value built when its function runs, so a decoder that refers to itself, such as the decoder of a tree, must reach itself through `lazy`, or building it never ends. Where a placeholder is needed without a value, which is for a missing field and for a field read from a value that is not an object, a `lazy` decoder gives `placeholder` and does not call `make` (D-1086). So a recursive decoder is built in O(1), and computing its placeholders never recurses.
 
 - **Fails:** with the errors of the decoder that `make` returns.
 - **Cost:** O(1) to build, plus the call to `make` and the decoder it returns for each value decoded. Informative.
@@ -405,7 +405,7 @@ test "a lazy decoder's placeholder stands in for a missing field" {
 }
 ```
 
-Without `lazy`, `size()` would build `list(size())` before it could return, and overflow the stack. A placeholder is needed too: under D-401's rule, the placeholder of the missing `child` would be `depth()` run on `null`, which reads `kind` as `""`, reaches `field("child", …)` again and never ends. Elm's `lazy` and Gleam's `recursive` take only `make`, which fixes the first trap but not the second (D-P07).
+Without `lazy`, `size()` would build `list(size())` before it could return, and overflow the stack. A placeholder is needed too: under D-401's rule, the placeholder of the missing `child` would be `depth()` run on `null`, which reads `kind` as `""`, reaches `field("child", …)` again and never ends. Elm's `lazy` and Gleam's `recursive` take only `make`, which fixes the first trap but not the second (D-1086).
 
 ### `success`
 

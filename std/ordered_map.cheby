@@ -339,7 +339,7 @@ test "each calls the function once per entry" {
 }
 
 /// Combines the entries in the map's order like `fold`, and stops at the
-/// first `Err` that `f` returns (D-P01, D-P03). It walks `order` through
+/// first `Err` that `f` returns (D-1080, D-1082). It walks `order` through
 /// `sorted_map::try_fold_entries` and looks each value up, as `fold` does
 /// (D-848), so a walk that stops after k entries takes O(log n + k).
 pub fn try_fold<K, V, A, E>(
@@ -379,7 +379,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some entry, in the map's
-/// order, stopping at the first such entry (D-P03).
+/// order, stopping at the first such entry (D-1082).
 pub fn any<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
   case find(m, predicate) {
     Some(_) => True
@@ -400,7 +400,7 @@ test "any stops at the first match" {
 }
 
 /// Tells whether `predicate` returns `True` for every entry, in the map's
-/// order, stopping at the first entry for which it returns `False` (D-P03).
+/// order, stopping at the first entry for which it returns `False` (D-1082).
 pub fn all<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
   let walked = try_fold(m, Nil, fn(_, key, value) {
     case predicate(key, value) {
@@ -424,7 +424,7 @@ test "all needs every entry to match" {
 }
 
 /// Returns the first entry in the map's order for which `predicate`
-/// returns `True`, stopping there (D-P03).
+/// returns `True`, stopping there (D-1082).
 pub fn find<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)> {
   let walked = try_fold(m, Nil, fn(_, key, value) {
     case predicate(key, value) {

@@ -100,7 +100,7 @@ test "json_plain_end finds the next quote, backslash or control byte" {
 /// starts at or after `from`, or `None`. `from` is where the search starts,
 /// so it is clamped between 0 and the length of `data`, as `slice` clamps
 /// its bounds, and an empty `part` is found at the clamped `from` (D-298,
-/// D-P15).
+/// D-1094).
 @external(native, "cheby_bytes_index_of")
 @external(js, "./bytes.mjs", "index_of")
 @std_clamped(from)
@@ -172,7 +172,7 @@ test "fold visits bytes front to back" {
 
 /// Calls `f` with the result so far and each byte of `data`, front to back,
 /// stops at the first `Err` and returns it, and otherwise returns `Ok` of the
-/// last result (D-P01).
+/// last result (D-1080).
 pub fn try_fold<A, E>(data: Bytes, initial: A, f: fn(A, U8) -> Result<A, E>) -> Result<A, E> {
   fn step(acc, index) {
     case get(data, index) {

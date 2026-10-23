@@ -719,7 +719,7 @@ priv fn open_value(node: Value) -> tree::Children<Value, tree::Tree> {
 }
 
 /// A decoder that accepts every JSON value and gives it as a `Value`, with
-/// `Null` as its placeholder (D-P08). `std::json::decode` cannot name
+/// `Null` as its placeholder (D-1087). `std::json::decode` cannot name
 /// `Value` (D-145, D-361), so it is declared here, as a primitive decoder
 /// whose result is the decoded tree rebuilt as a `Value`, the mirror of
 /// `decode_value`'s conversion (D-483).
@@ -1025,7 +1025,7 @@ priv fn expression() -> decode::Decoder<Expr> {
 
 test "a recursive decoder whose first field recurses terminates with lazy" {
   // Without `lazy`, building `named_tree()` builds the decoder of `children`,
-  // which builds `named_tree()` again, and overflows the stack (D-P07).
+  // which builds `named_tree()` again, and overflows the stack (D-1086).
   let text = r#"{"children": [{"name": "b", "children": []}], "name": "a"}"#
   let leaf = Node { name: "b", children: [] }
   assert parse(text, named_tree()) == Ok(Node { name: "a", children: [leaf] })
@@ -1044,7 +1044,7 @@ test "a recursive decoder whose first field recurses terminates with lazy" {
 
 test "a recursion reached on a missing field stops at lazy's placeholder" {
   // A placeholder made by running `expression()` on `null` would read `op` as
-  // `""` and reach `arg` again forever (D-401, D-P07).
+  // `""` and reach `arg` again forever (D-401, D-1086).
   let good = r#"{"op": "neg", "arg": {"op": "lit", "value": 3}}"#
   assert parse(good, expression()) == Ok(Neg(Lit(3)))
   let missing = decode::Error { expected: "Field", found: "Nothing", path: ["arg"] }

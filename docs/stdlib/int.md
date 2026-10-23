@@ -10,7 +10,7 @@ All arithmetic on `Int` is checked: a result that does not fit panics (D-025). O
 
 This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div` and `checked_modulo`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
-`clamp`, `pow`, `checked_pow` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-P11).
+`clamp`, `pow`, `checked_pow` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-1090).
 
 The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign`, `is_even` or `gcd`: `int::compare(n, 0)` and `n % 2 == 0` say the same, and Euclid's algorithm is a three-line function (example 028).
 
@@ -84,7 +84,7 @@ test "max_safe is the largest portable Int" {
 
 ## Conversions
 
-Conversions follow D-308: from each sized integer type there is a function `from_source`, which returns `Int` when every value of the source fits and `Result<Int, Nil>` otherwise. The two narrowing ones, from `I64` and `U64`, have wrapping twins, `wrapping_from_i64` and `wrapping_from_u64`, which keep the 64 bits of the source (D-P12). There is no `from_float` or `from_f32`. A float becomes an `Int` through `float::truncate`, `round`, `floor` and `ceil`, and the same functions of `std::f32` (D-359).
+Conversions follow D-308: from each sized integer type there is a function `from_source`, which returns `Int` when every value of the source fits and `Result<Int, Nil>` otherwise. The two narrowing ones, from `I64` and `U64`, have wrapping twins, `wrapping_from_i64` and `wrapping_from_u64`, which keep the 64 bits of the source (D-1091). There is no `from_float` or `from_f32`. A float becomes an `Int` through `float::truncate`, `round`, `floor` and `ceil`, and the same functions of `std::f32` (D-359).
 
 ### `from_i8`
 
@@ -232,7 +232,7 @@ test "from_u64 fails above Int's range" {
 pub fn wrapping_from_i64(n: I64) -> Int
 ```
 
-Returns `n` as an `Int`. Every `I64` has the same 64 bits as an `Int`, so this is `from_i64` without the `Result` (D-P12).
+Returns `n` as an `Int`. Every `I64` has the same 64 bits as an `Int`, so this is `from_i64` without the `Result` (D-1091).
 
 - **Panics:** on JS, when `n` is outside ±(2⁵³−1), like any other `Int` result (D-037).
 - **Cost:** O(1). Informative.
@@ -256,7 +256,7 @@ test "wrapping_from_i64 keeps every I64 on native" {
 pub fn wrapping_from_u64(n: U64) -> Int
 ```
 
-Returns the `Int` whose two's-complement bits are those of `n`: `n` itself up to 2⁶³−1, and `n` − 2⁶⁴ above it (D-P12). `u64::wrapping_from_int` is the inverse.
+Returns the `Int` whose two's-complement bits are those of `n`: `n` itself up to 2⁶³−1, and `n` − 2⁶⁴ above it (D-1091). `u64::wrapping_from_int` is the inverse.
 
 - **Panics:** on JS, when the result is outside ±(2⁵³−1), like any other `Int` result (D-037).
 - **Cost:** O(1). Informative.
@@ -372,7 +372,7 @@ test "to_base writes other bases" {
 }
 ```
 
-`to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390). Every sized integer module has a `to_base` with the same digits (D-P11).
+`to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390). Every sized integer module has a `to_base` with the same digits (D-1090).
 
 ## Comparison
 

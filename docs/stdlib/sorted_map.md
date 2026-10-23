@@ -10,7 +10,7 @@ pub type SortedMap<K, V>
 
 - **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`, and `at` counts positions in that order.
 - **Keys.** Keys must satisfy `Compare`, and every function has the bound `K: Compare`. Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. Inserting such a key keeps the key already stored and replaces only the value (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the map does with one.
-- **Written in Cheby.** The map is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). The kind of tree is not specified, except that every node keeps the size of its subtree, which `size` and `at` need for their required costs (D-P04). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a `compare` written in Cheby costs what any call costs, and a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). If a benchmark later moves the tree into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-P04).
+- **Written in Cheby.** The map is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). The kind of tree is not specified, except that every node keeps the size of its subtree, which `size` and `at` need for their required costs (D-1083). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a `compare` written in Cheby costs what any call costs, and a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). If a benchmark later moves the tree into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-1083).
 - **Equality, hashing and printing.** Maps with the same entries can have trees of different shapes, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted maps are `==` when they hold the same entries, however they were built, and equal maps hash equally (D-343). Keys and values are compared here with `==`, not with `compare`. Debug printing writes `sorted_map::from_list([…])` with the entries in key order, each one debug-printed (D-344).
 - **Interfaces.** `SortedMap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
 - **Costs.** For a map of n entries, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes O(n) and never calls `compare`, and a walk that stops after k entries, such as `find`, takes O(log n + k).
@@ -26,7 +26,7 @@ test "sorted maps compare, hash and print by contents" {
 }
 ```
 
-Every function carries the bound `K: Compare`, including those that never compare keys, so the module has one rule (D-385). The rule binds the public functions. The hooks of equality, hashing and debug printing (D-342), and the package-visible helpers that other standard-library modules use to walk the entries, take no bound and never call `compare`: D-482 forbids bounds on hooks, and the walks need the entries without a `Compare` value (D-845). The walk that stops early, `try_fold_entries`, is one of them: `try_fold`, `any`, `all` and `find` go through it here, and the insertion-ordered modules walk their order through it (D-P03).
+Every function carries the bound `K: Compare`, including those that never compare keys, so the module has one rule (D-385). The rule binds the public functions. The hooks of equality, hashing and debug printing (D-342), and the package-visible helpers that other standard-library modules use to walk the entries, take no bound and never call `compare`: D-482 forbids bounds on hooks, and the walks need the entries without a `Compare` value (D-845). The walk that stops early, `try_fold_entries`, is one of them: `try_fold`, `any`, `all` and `find` go through it here, and the insertion-ordered modules walk their order through it (D-1082).
 
 ## Building
 
@@ -220,7 +220,7 @@ test "split cuts the map at a key" {
 }
 ```
 
-With `first`, `last` and `size`, `split` answers the queries that have no function of their own (D-P04). The largest key below `k` is `last` of the lower part, and the smallest key above it is `first` of the upper part. The rank of `k`, the number of keys less than it, is `size` of the lower part, so the number of keys from `a` up to but not including `b` is the rank of `b` minus the rank of `a`.
+With `first`, `last` and `size`, `split` answers the queries that have no function of their own (D-1083). The largest key below `k` is `last` of the lower part, and the smallest key above it is `first` of the upper part. The rank of `k`, the number of keys less than it, is `size` of the lower part, so the number of keys from `a` up to but not including `b` is the rank of `b` minus the rank of `a`.
 
 ### `at`
 
@@ -243,7 +243,7 @@ test "at counts from the smallest key" {
 }
 ```
 
-`at` selects by position, for medians, percentiles and pages of a ranking: the median key of a map of n entries is at `n / 2` (D-P04). `decode::at` in `std::json::decode` is another function, which reads a member of a JSON object by its path (D-P09).
+`at` selects by position, for medians, percentiles and pages of a ranking: the median key of a map of n entries is at `n / 2` (D-1083). `decode::at` in `std::json::decode` is another function, which reads a member of a JSON object by its path (D-1088).
 
 ## Updating
 
@@ -445,7 +445,7 @@ test "each calls the function once per entry" {
 pub fn try_fold<K: Compare, V, A, E>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> Result<A, E>) -> Result<A, E>
 ```
 
-Combines the entries like `fold`, in key order, with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-P01).
+Combines the entries like `fold`, in key order, with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
 - **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k entries. Informative. It never calls `compare`.
@@ -474,7 +474,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the entries after the stop are never visited (D-P03).
+`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the entries after the stop are never visited (D-1082).
 
 ### `any`
 

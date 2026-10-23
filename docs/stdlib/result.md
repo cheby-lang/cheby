@@ -41,7 +41,7 @@ test "try stops at the first error" {
 pub fn try_with<T, E, F, U>(r: Result<T, E>, wrap: fn(E) -> F, next: fn(T) -> Result<U, F>) -> Result<U, F>
 ```
 
-Calls `next` with the value of `r` when `r` is `Ok`, and otherwise returns `Err` of `wrap` applied to the error of `r`. It is `result::try(result::map_error(r, wrap), next)`, the step that wraps a lower error in the caller's error type, so `use config <- result::try_with(json::parse(text, decoder), InvalidConfig)` reads as `result::try` does (D-P16). `next` stays last, so `use` works as with `try`.
+Calls `next` with the value of `r` when `r` is `Ok`, and otherwise returns `Err` of `wrap` applied to the error of `r`. It is `result::try(result::map_error(r, wrap), next)`, the step that wraps a lower error in the caller's error type, so `use config <- result::try_with(json::parse(text, decoder), InvalidConfig)` reads as `result::try` does (D-1095). `next` stays last, so `use` works as with `try`.
 
 - **Cost:** O(1), plus the call to `wrap` or `next`. Informative.
 
@@ -99,7 +99,7 @@ test "map_error changes only an Err" {
 pub fn replace_error<T, E, F>(r: Result<T, E>, error: F) -> Result<T, F>
 ```
 
-Replaces the error of an `Err` with `error`, and returns an `Ok` unchanged. It gives a meaning to the `Err(Nil)` that `int::parse` and the conversions return, without a function that ignores its argument (D-P16).
+Replaces the error of an `Err` with `error`, and returns an `Ok` unchanged. It gives a meaning to the `Err(Nil)` that `int::parse` and the conversions return, without a function that ignores its argument (D-1095).
 
 - **Cost:** O(1). Informative.
 
@@ -229,7 +229,7 @@ test "is_error tells Err from Ok" {
 pub fn all<T, E>(results: List<Result<T, E>>) -> Result<List<T>, E>
 ```
 
-Returns `Ok` with every value, in order, when every element is `Ok`, and otherwise the first `Err`. The results are already computed, so `result::all(list::map(xs, f))` calls `f` on every element, also after the first error. [`list::try_map`](list.md#try_map) stops calling `f` at the first error (D-P02).
+Returns `Ok` with every value, in order, when every element is `Ok`, and otherwise the first `Err`. The results are already computed, so `result::all(list::map(xs, f))` calls `f` on every element, also after the first error. [`list::try_map`](list.md#try_map) stops calling `f` at the first error (D-1081).
 
 - **Cost:** O(n). Informative.
 

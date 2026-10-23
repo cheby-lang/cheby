@@ -1,5 +1,5 @@
 //! Hex text for `Bytes`: two digits per byte, written in lowercase as debug
-//! printing writes bytes (D-388, D-P10).
+//! printing writes bytes (D-388, D-1089).
 //!
 //! Decoding is strict: it accepts digits in either case, needs an even
 //! number of them, and rejects a prefix such as `0x` and whitespace.

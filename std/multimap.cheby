@@ -297,7 +297,7 @@ test "each sees every key with its values" {
 
 /// Combines the keys like `fold`, each with all of its values, in the
 /// multimap's per-process order (D-093), and stops at the first `Err` that
-/// `f` returns (D-P01, D-P03). It walks the map's `to_list`, so the list is
+/// `f` returns (D-1080, D-1082). It walks the map's `to_list`, so the list is
 /// built before the first call.
 pub fn try_fold<K, V, A, E>(
   m: Multimap<K, V>,
@@ -328,7 +328,7 @@ test "try_fold stops at the first error" {
 }
 
 /// Tells whether `predicate` returns `True` for some key with its values,
-/// stopping at the first such key (D-P03).
+/// stopping at the first such key (D-1082).
 pub fn any<K, V>(m: Multimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
   map::any(m.entries, predicate)
 }
@@ -341,7 +341,7 @@ test "any looks for a matching key" {
 }
 
 /// Tells whether `predicate` returns `True` for every key with its values,
-/// stopping at the first key for which it returns `False` (D-P03).
+/// stopping at the first key for which it returns `False` (D-1082).
 pub fn all<K, V>(m: Multimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
   map::all(m.entries, predicate)
 }
@@ -355,7 +355,7 @@ test "all needs every key to match" {
 
 /// Returns a key with its values for which `predicate` returns `True`, the
 /// first in the multimap's per-process order (D-093), so which of several
-/// matches it returns can change between runs (D-P03).
+/// matches it returns can change between runs (D-1082).
 pub fn find<K, V>(m: Multimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Option<(K, List<V>)> {
   map::find(m.entries, predicate)
 }

@@ -8,7 +8,7 @@ pub type Selector<E>
 
 - **Immutable.** A selector is a value. `receive` and `after` return a new selector with one more arm and leave their argument usable. The same selector can be passed to `select` any number of times, and each call waits anew (D-673).
 - **Handle.** `Selector` is a handle, since it holds receivers and functions: it prints as `<Selector>`, `==` and hashing panic when they reach one, and no constant may hold one (§3.13, §4.5, D-233, D-647). A selector keeps its receivers, and so their channels, alive while it exists.
-- **Written in Cheby.** `new`, `receive` and `after` are written in Cheby over private kernels that add an arm, since only a kernel can make a value of an external type (D-590). `select` is written in Cheby over a private kernel that waits and one that takes the value, and [`select_now`](#select_now) over a private kernel that does not wait (D-P20). Their costs are informative (D-675, D-695).
+- **Written in Cheby.** `new`, `receive` and `after` are written in Cheby over private kernels that add an arm, since only a kernel can make a value of an external type (D-590). `select` is written in Cheby over a private kernel that waits and one that takes the value, and [`select_now`](#select_now) over a private kernel that does not wait (D-1099). Their costs are informative (D-675, D-695).
 - **On JS.** Timer arms become ready only when the running fiber suspends (D-185, D-232). A selector is a handle there too, so it is reference-counted and releases its receivers as deterministically as on native (D-100, D-647).
 
 ## Building
@@ -73,7 +73,7 @@ pub fn after<E>(selector: Selector<E>, wait: duration::Duration, map: fn() -> E)
 
 Returns `selector` with a timer arm, which is ready once `wait` has passed since `select` started waiting (D-103, D-673). The clock starts anew in each `select` call, not when `after` is called, so a selector reused in a loop gives each wait its own timer. A `wait` of zero or less is ready at once, and one longer than 2⁶³ − 1 nanoseconds, about 292 years, is never ready (D-652, D-891). A selector may have several timer arms. A selector with only a timer arm is a sleep.
 
-_Note:_ a timer arm of zero or less is ready at once and competes uniformly with every other ready arm (D-673, D-791), so it does not act as Go's `default`: a `select` over a ready receive arm and a zero timer arm takes either one at random. The operations that do not wait are [`select_now`](#select_now), [`channel::send_now`](channel.md#send_now) and [`channel::receive_now`](channel.md#receive_now) (D-1050, D-1079, D-P20).
+_Note:_ a timer arm of zero or less is ready at once and competes uniformly with every other ready arm (D-673, D-791), so it does not act as Go's `default`: a `select` over a ready receive arm and a zero timer arm takes either one at random. The operations that do not wait are [`select_now`](#select_now), [`channel::send_now`](channel.md#send_now) and [`channel::receive_now`](channel.md#receive_now) (D-1050, D-1079, D-1099).
 
 - **Cost:** O(1). Informative.
 
@@ -163,7 +163,7 @@ Both arms of the choice test are always ready, because their channels are closed
 pub fn select_now<E>(selector: Selector<E>) -> Option<E>
 ```
 
-Takes a value from a ready arm of `selector` without waiting, and returns `Some` of that arm's mapped result, or `None` when no arm is ready (D-P20). It is [`select`](#select) without the wait:
+Takes a value from a ready arm of `selector` without waiting, and returns `Some` of that arm's mapped result, or `None` when no arm is ready (D-1099). It is [`select`](#select) without the wait:
 
 - **Choice.** Among ready arms it chooses one uniformly at random, as `select` does (D-673).
 - **Timers.** A timer arm is ready in `select_now` only when its span is zero or less, since no time passes in the call.

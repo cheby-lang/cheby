@@ -11,8 +11,8 @@ pub type Generator
 
 - **State.** A generator's state is in the value itself, so two fibers that use one generator value draw the same numbers. The module keeps no global state. Its only other state is a seeded stream that [`with_generator`](#with_generator) provides to a fiber: while one is in the fiber's context, the host functions draw from it instead of the host, and each draw advances the drawing fiber's copy only. Outside a stream, the host functions start from fresh host bits on each call (D-653, D-1048).
 - **Bounds include both ends.** `int_between(low, high)` and `next_int_between` draw from `low` to `high` with both ends included, so `int_between(0, 0)` is `0` and `int_between(1, 6)` is a die roll. When `high` is less than `low`, the two bounds swap roles, so every pair of bounds is valid and no call fails or panics (D-297, D-654). This is the exception to "ranges exclude their end" (D-319): a pair of bounds is not a range of positions.
-- **The seeded algorithm is fixed.** A generator is SplitMix64, and the way a draw maps its output to a number is given below, bit for bit. So are [`split`](#split), [`next_bool`](#next_bool), [`choose`](#choose) and [`shuffle`](#shuffle). A program's seeded draws are therefore the same on every target and with every toolchain from 1.0 on (D-232, D-655, D-P17).
-- **The generator comes first.** Every seeded function takes the generator as its first argument and returns the value and the next generator, in that order, `(value, generator)`. The generator is the module's subject, the value that every call threads through, so `shuffle` and `choose` take it before their list (D-296, D-653, D-P17).
+- **The seeded algorithm is fixed.** A generator is SplitMix64, and the way a draw maps its output to a number is given below, bit for bit. So are [`split`](#split), [`next_bool`](#next_bool), [`choose`](#choose) and [`shuffle`](#shuffle). A program's seeded draws are therefore the same on every target and with every toolchain from 1.0 on (D-232, D-655, D-1096).
+- **The generator comes first.** Every seeded function takes the generator as its first argument and returns the value and the next generator, in that order, `(value, generator)`. The generator is the module's subject, the value that every call threads through, so `shuffle` and `choose` take it before their list (D-296, D-653, D-1096).
 - **Kernels.** The module has one private kernel, which returns 64 bits from the host's random source. Everything else is written in Cheby over it, so the seeded functions run in constants and the host functions do not: reaching the kernel while computing a constant is E0077 (D-090, D-537, D-656). If the host's random source fails, the kernel ends the program with a fatal runtime error that names the operating system's error. This reaches `int_between`, `fraction` and `from_host`. It is neither an `Err` nor a panic, because no call fails or panics, and a random source that fails is a broken host, not a condition a program can handle (D-794).
 - **Not for secrets.** The host source is unpredictable, but this module makes no promise about cryptographic strength. Keys and tokens wait for a cryptography module (D-656).
 - **Equality and printing.** `Generator` compares, hashes and debug-prints as the record it is, a single `U64` of state, so two generators are `==` exactly when they will draw the same numbers.
@@ -166,7 +166,7 @@ test "a seed always gives the same numbers" {
 pub fn split(generator: Generator) -> (Generator, Generator)
 ```
 
-Returns a new generator and `generator` advanced by one step, in that order (D-P17). Two fibers given the same generator draw the same numbers, so seeded parallel code splits a generator and hands each fiber its own.
+Returns a new generator and `generator` advanced by one step, in that order (D-1096). Two fibers given the same generator draw the same numbers, so seeded parallel code splits a generator and hands each fiber its own.
 
 Let `s` be `generator`'s state. The algorithm is fixed bit for bit:
 
@@ -271,7 +271,7 @@ test "next_fraction draws from a seed" {
 pub fn next_bool(generator: Generator) -> (Bool, Generator)
 ```
 
-Returns `True` or `False`, each equally likely, and the generator that comes after it. It takes one step, as described under `next_int_between`, and returns `True` when the output's highest bit is 1, that is when the output is at least 2⁶³ (D-P17).
+Returns `True` or `False`, each equally likely, and the generator that comes after it. It takes one step, as described under `next_int_between`, and returns `True` when the output's highest bit is 1, that is when the output is at least 2⁶³ (D-1096).
 
 - **Cost:** O(1). Informative.
 
@@ -308,7 +308,7 @@ test "next_bool flips coins from a seed" {
 pub fn choose<T>(generator: Generator, xs: List<T>) -> (Option<T>, Generator)
 ```
 
-Returns an element of `xs` in `Some`, with every position equally likely, and the generator that comes after it. The element is the one at the position `next_int_between(generator, 0, length - 1)` draws, with that call's generator (D-P17).
+Returns an element of `xs` in `Some`, with every position equally likely, and the generator that comes after it. The element is the one at the position `next_int_between(generator, 0, length - 1)` draws, with that call's generator (D-1096).
 
 - An empty list gives `(None, generator)` and draws nothing.
 - **Cost:** O(1) for the draw, plus O(log n) to read the element. Informative.
@@ -342,7 +342,7 @@ test "choose picks an element from a seed" {
 pub fn shuffle<T>(generator: Generator, xs: List<T>) -> (List<T>, Generator)
 ```
 
-Returns the elements of `xs` in an order drawn with every order equally likely, and the generator that comes after it (D-P17). The algorithm is Fisher–Yates, fixed bit for bit:
+Returns the elements of `xs` in an order drawn with every order equally likely, and the generator that comes after it (D-1096). The algorithm is Fisher–Yates, fixed bit for bit:
 
 1. For `i` from `length - 1` down to 1, draw `j` with `next_int_between(generator, 0, i)`, threading the generator from one draw to the next, and swap the elements at positions `i` and `j`. When `j` is `i`, nothing moves, but the draw still counts.
 2. The returned generator is the one the last draw returned.

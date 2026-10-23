@@ -202,14 +202,14 @@ pub unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64) -> i6
 /// `from`, clamped to `0..=length` (D-298, D-334), or `None`. An empty
 /// `part` is found at the clamped `from`. O(n + m) with `memchr`'s
 /// `memmem` finder, which is linear and takes a one-byte `part` through
-/// `memchr` itself (D-P15).
+/// `memchr` itself (D-1094).
 pub(crate) fn find(data: &[u8], part: &[u8], from: i64) -> Option<usize> {
     let start = clamp(from, data.len());
     let rest = data.get(start..)?;
     memchr::memmem::find(rest, part).map(|found| start.saturating_add(found))
 }
 
-/// `bytes::index_of` (D-P15): `Some(position)` of the first occurrence of
+/// `bytes::index_of` (D-1094): `Some(position)` of the first occurrence of
 /// `part` at or after `from`, clamped as `slice` clamps its bounds, or
 /// `None`. O(n + m). It allocates its `Some`, so it runs under a guard and
 /// is not on the never-raise table (D-767).

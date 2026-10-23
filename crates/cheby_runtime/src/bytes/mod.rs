@@ -24,7 +24,7 @@
 //! bounds to `0..=length` and is empty when `end` is not above `start`
 //! (D-298). `index_of` clamps its `from` in the same way, since it is
 //! where a search starts, and searches with `memchr`'s `memmem` finder,
-//! which is linear in the length of `data` and of `part` (D-P15). Equality, hashing and the debug text `bytes::from_list([0x66,
+//! which is linear in the length of `data` and of `part` (D-1094). Equality, hashing and the debug text `bytes::from_list([0x66,
 //! 0x6f])` (D-388) are the generic operations of [`crate::generic`].
 
 pub(crate) mod kernels;

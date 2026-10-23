@@ -10,7 +10,7 @@ pub type Duration
 - **Resolution and range.** The resolution is one nanosecond. The seconds are any `Int`, so a span reaches about ±292 billion years on native and ±285 million years on JS, where `Int` is limited to ±(2⁵³−1) (D-037). Spans may be negative, and arithmetic outside the range panics like `Int` arithmetic (D-025, D-650).
 - **Written in Cheby.** The module has no kernels. Every function runs in constants (D-090), so `const deadline: Duration = duration::seconds(1)` works, and gives the same result on every target (D-232, D-650).
 - **Equality, hashing and printing.** `==` and hashing are the built-in structural ones, which compare spans because the representation is unique. Debug printing is the built-in one for records (D-134), such as `Duration { seconds: 1, nanoseconds: 500000000 }`. `show` gives the short text, such as `1.5s` (D-651).
-- **Interfaces.** `add`, `sub`, `neg`, `compare` and `show` make `Duration` satisfy `Add`, `Sub`, `Neg`, `Compare` and `Show` (§8.7, §8.8), so `a + b`, `a - b`, `-a`, `a < b` and `"{d}"` work. There is no `mul` or `div`, since a span times a span is not a span (§8.7). [`scale`](#scale) multiplies a span by an `Int` exactly (D-651, D-P22).
+- **Interfaces.** `add`, `sub`, `neg`, `compare` and `show` make `Duration` satisfy `Add`, `Sub`, `Neg`, `Compare` and `Show` (§8.7, §8.8), so `a + b`, `a - b`, `-a`, `a < b` and `"{d}"` work. There is no `mul` or `div`, since a span times a span is not a span (§8.7). [`scale`](#scale) multiplies a span by an `Int` exactly (D-651, D-1101).
 - **Waiting.** A function that waits for a `Duration`, such as `fiber::timeout` or `selector::after`, treats a span of zero or less as already elapsed, and a span longer than 2⁶³ − 1 nanoseconds, about 292 years, as never elapsing (D-652, D-891).
 
 Every function costs O(1). The costs are informative.
@@ -261,7 +261,7 @@ test "neg flips the sign" {
 pub fn scale(d: Duration, factor: Int) -> Duration
 ```
 
-Returns `d` times `factor`, exactly, as in a backoff that doubles a wait (D-P22). It panics only where the result does not fit, as `Duration` arithmetic does (D-650), with the message `integer overflow` on every target. The algorithm keeps every intermediate value within the result's range:
+Returns `d` times `factor`, exactly, as in a backoff that doubles a wait (D-1101). It panics only where the result does not fit, as `Duration` arithmetic does (D-650), with the message `integer overflow` on every target. The algorithm keeps every intermediate value within the result's range:
 
 1. Write `d` as `a` seconds plus `b` nanoseconds, such that `a` and `b` never have opposite signs. When `d` is not negative, or is negative with no nanoseconds, `a` and `b` are its seconds and nanoseconds. When `d` is negative and has nanoseconds, `a` is its seconds plus 1 and `b` its nanoseconds minus 10⁹, so −0.5 s is 0 s and `-500_000_000` ns.
 2. Write `factor` as `q × 10⁹ + r`, with `q = factor / 10⁹` and `r = factor % 10⁹`, which truncate toward zero (D-069, D-092).
@@ -270,7 +270,7 @@ Returns `d` times `factor`, exactly, as in a backoff that doubles a wait (D-P22)
 
 Every partial product and partial sum has the sign of the result or is 0, and none is larger in size than the result, so no step overflows unless the result does. A negative span or a negative factor makes `p % 10⁹` negative, which is why the carry is floored.
 
-- **Panics:** with `integer overflow` when the seconds of the result overflow `Int` (D-025). On JS that means leaving ±(2⁵³−1), and `scale` checks that range itself, so the message is the same as on native (D-037, D-P22).
+- **Panics:** with `integer overflow` when the seconds of the result overflow `Int` (D-025). On JS that means leaving ±(2⁵³−1), and `scale` checks that range itself, so the message is the same as on native (D-037, D-1101).
 - **Cost:** O(1). Informative.
 
 ```cheby
@@ -336,7 +336,7 @@ test "scale panics just past the largest span" {
 }
 ```
 
-`duration::divide` waits until its exact algorithm is written (D-P22).
+`duration::divide` waits until its exact algorithm is written (D-1101).
 
 ## Comparison
 

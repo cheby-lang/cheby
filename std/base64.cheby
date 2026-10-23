@@ -1,6 +1,6 @@
 //! Base64 text for `Bytes`, as RFC 4648 defines it: the standard alphabet
 //! with `=` padding (§4), and the URL-safe alphabet without padding (§5),
-//! as JWTs use it (D-P10).
+//! as JWTs use it (D-1089).
 //!
 //! Decoding is strict, so a text has at most one decoding: a character
 //! outside the alphabet, whitespace, a length that no encoding gives and

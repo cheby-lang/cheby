@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-10-23
-log: D-P01
+log: D-1080
 ---
 
 # Early exit is `try_fold` over `Result`
@@ -29,5 +29,5 @@ Cheby has no loops (D-002), so stopping early must come from the library. It als
 
 - An answer that stops a search travels as `Err(answer)`, which reads oddly in hand-written searches. The short forms `find`, `any`, `all` and `find_map` cover the common ones.
 - After 1.0 every collection module carries this shape (D-075). A lazy sequence type, if one ever comes, would be an addition beside it.
-- A module that gains `fold` later, such as `std::channel` (D-P21), gains `try_fold` with it.
-- The hashed modules still build their entry list before the first call (D-P03). A kernel that walks without allocating can come later without changing the API.
+- A module that gains `fold` later, such as `std::channel` (D-1100), gains `try_fold` with it.
+- The hashed modules still build their entry list before the first call (D-1082). A kernel that walks without allocating can come later without changing the API.

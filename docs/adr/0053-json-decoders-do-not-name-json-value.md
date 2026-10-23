@@ -1,5 +1,5 @@
 ---
-status: accepted; refined by D-P08
+status: accepted; refined by D-1087
 date: 2026-10-04
 log: D-361
 ---
