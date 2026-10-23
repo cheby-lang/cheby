@@ -198,6 +198,35 @@ pub unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64) -> i6
     i64::try_from(start.saturating_add(found)).unwrap_or(i64::MAX)
 }
 
+/// The position of the first occurrence of `part` in `data` at or after
+/// `from`, clamped to `0..=length` (D-298, D-334), or `None`. An empty
+/// `part` is found at the clamped `from`. O(n + m) with `memchr`'s
+/// `memmem` finder, which is linear and takes a one-byte `part` through
+/// `memchr` itself (D-P15).
+pub(crate) fn find(data: &[u8], part: &[u8], from: i64) -> Option<usize> {
+    let start = clamp(from, data.len());
+    let rest = data.get(start..)?;
+    memchr::memmem::find(rest, part).map(|found| start.saturating_add(found))
+}
+
+/// `bytes::index_of` (D-P15): `Some(position)` of the first occurrence of
+/// `part` at or after `from`, clamped as `slice` clamps its bounds, or
+/// `None`. O(n + m). It allocates its `Some`, so it runs under a guard and
+/// is not on the never-raise table (D-767).
+///
+/// # Safety
+///
+/// `data` and `part` are live `Bytes`, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_bytes_index_of(data: Word, part: Word, from: i64) -> Word {
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let (data, part) = unsafe { (arg(data), arg(part)) };
+        let found = find(data, part, from).map(|at| i64::try_from(at).unwrap_or(i64::MAX));
+        values::option(found.map(values::int_word))
+    })
+}
+
 /// `bytes::slice`: positions `start..end`, clamped (D-298, D-319, D-334),
 /// in place at count one (D-525). O(end - start); the whole of `data` is
 /// `data` itself, shared.
@@ -498,7 +527,7 @@ pub(super) fn all() -> Vec<Entry> {
             ]
         };
     }
-    let fixed: [Entry; 13] = [
+    let fixed: [Entry; 14] = [
         ("cheby_bytes_new", cheby_bytes_new as *const u8, &[], W),
         (
             "cheby_bytes_from_list",
@@ -524,6 +553,12 @@ pub(super) fn all() -> Vec<Entry> {
             cheby_bytes_json_plain_end as *const u8,
             &[W, I],
             I,
+        ),
+        (
+            "cheby_bytes_index_of",
+            cheby_bytes_index_of as *const u8,
+            &[W, W, I],
+            W,
         ),
         (
             "cheby_bytes_slice",

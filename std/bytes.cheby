@@ -96,6 +96,37 @@ test "json_plain_end finds the next quote, backslash or control byte" {
   assert json_plain_end(new(), 0) == 0
 }
 
+/// Returns the position of the first occurrence of `part` in `data` that
+/// starts at or after `from`, or `None`. `from` is where the search starts,
+/// so it is clamped between 0 and the length of `data`, as `slice` clamps
+/// its bounds, and an empty `part` is found at the clamped `from` (D-298,
+/// D-P15).
+@external(native, "cheby_bytes_index_of")
+@external(js, "./bytes.mjs", "index_of")
+@std_clamped(from)
+pub fn index_of(data: Bytes, part: Bytes, from: Int) -> Option<Int>
+
+test "index_of finds a part at or after a position" {
+  let data = from_string("GET / HTTP/1.1\r\n\r\nbody")
+  let blank = from_string("\r\n\r\n")
+  assert index_of(data, blank, 0) == Some(14)
+  assert index_of(data, from_string(" "), 4) == Some(5)
+  assert index_of(data, blank, 15) == None
+  assert index_of(data, new(), 3) == Some(3)
+}
+
+test "index_of clamps where the search starts" {
+  let data = from_list([0x0A, 0x41, 0x0A])
+  let line_feed = from_list([0x0A])
+  let negative = -3
+  assert index_of(data, line_feed, negative) == Some(0)
+  assert index_of(data, line_feed, 1) == Some(2)
+  assert index_of(data, line_feed, 3) == None
+  assert index_of(data, new(), 99) == Some(3)
+  assert index_of(new(), new(), 0) == Some(0)
+  assert index_of(data, from_list([0x0A, 0x41, 0x0A, 0x41]), 0) == None
+}
+
 /// Returns the bytes of `data` from `start` up to but not including `end` (D-319).
 @external(native, "cheby_bytes_slice")
 @external(js, "./bytes.mjs", "slice")
@@ -137,6 +168,35 @@ test "fold visits bytes front to back" {
   let sum: U32 = fold(data, 0, fn(total, byte) { total + u32::from_u8(byte) })
   assert sum == 6
   assert fold(data, [], fn(found, byte) { [byte, ..found] }) == [3, 2, 1]
+}
+
+/// Calls `f` with the result so far and each byte of `data`, front to back,
+/// stops at the first `Err` and returns it, and otherwise returns `Ok` of the
+/// last result (D-P01).
+pub fn try_fold<A, E>(data: Bytes, initial: A, f: fn(A, U8) -> Result<A, E>) -> Result<A, E> {
+  fn step(acc, index) {
+    case get(data, index) {
+      Some(byte) => case f(acc, byte) {
+        Ok(more) => step(more, index + 1)
+        Err(error) => Err(error)
+      }
+      None => Ok(acc)
+    }
+  }
+  step(initial, 0)
+}
+
+test "try_fold stops at the first error" {
+  fn small(seen: List<U8>, byte: U8) -> Result<List<U8>, List<U8>> {
+    case byte < 0x80 {
+      True => Ok([byte, ..seen])
+      False => Err([byte, ..seen])
+    }
+  }
+  let data = from_list([1, 2, 0xC3, 3, 0xFF])
+  assert try_fold(data, [], small) == Err([0xC3, 2, 1])
+  assert try_fold(slice(data, 0, 2), [], small) == Ok([2, 1])
+  assert try_fold(new(), [7], small) == Ok([7])
 }
 
 // Building

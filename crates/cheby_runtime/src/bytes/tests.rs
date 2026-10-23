@@ -277,6 +277,70 @@ fn json_plain_end_stops_at_json_specials_and_clamps() {
     });
 }
 
+/// `index_of(data, part, from)` through its entry point: the payload of
+/// its `Option<Int>`.
+fn index_of(data: &[u8], part: &[u8], from: i64) -> Option<i64> {
+    let (data, part) = (new_bytes(data), new_bytes(part));
+    // SAFETY: live `Bytes`, borrowed.
+    let found = take_option(unsafe { cheby_bytes_index_of(data, part, from) }, |w| {
+        // SAFETY: a live `Int` word.
+        unsafe { values::word_to_i64(w) }
+    });
+    release(data);
+    release(part);
+    found
+}
+
+/// The first occurrence of `part` at or after the clamped `from`, by
+/// trying every position: the reference for `index_of`.
+fn naive_index_of(data: &[u8], part: &[u8], from: i64) -> Option<i64> {
+    let start = from.clamp(0, data.len() as i64) as usize;
+    (start..=data.len())
+        .find(|&at| data.get(at..).is_some_and(|rest| rest.starts_with(part)))
+        .map(|at| at as i64)
+}
+
+/// `index_of` finds the first occurrence at or after `from`, clamps
+/// `from` as `slice` clamps its bounds, and finds an empty part at the
+/// clamped `from` (D-P15).
+#[test]
+fn index_of_finds_a_part_at_or_after_from() {
+    balanced(|| {
+        let request = b"GET / HTTP/1.1\r\n\r\nbody";
+        let blank = b"\r\n\r\n";
+        assert_eq!(index_of(request, blank, 0), Some(14));
+        assert_eq!(index_of(request, b" ", 4), Some(5));
+        assert_eq!(index_of(request, blank, 15), None);
+        assert_eq!(index_of(request, b"", 3), Some(3));
+        assert_eq!(index_of(request, b"body", i64::MIN), Some(18));
+        assert_eq!(index_of(request, b"", i64::MAX), Some(22));
+        assert_eq!(index_of(request, b"", -5), Some(0));
+        assert_eq!(index_of(request, b"y", 22), None);
+        assert_eq!(index_of(request, b"bodyx", 0), None);
+        assert_eq!(index_of(b"", b"", 0), Some(0));
+        assert_eq!(index_of(b"", b"a", 0), None);
+        assert_eq!(index_of(b"aaab", b"aab", 0), Some(1));
+        assert_eq!(index_of(&[0xFF, 0x00, 0xFF], &[0xFF], 1), Some(2));
+    });
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: miri_cases(256), ..ProptestConfig::default() })]
+
+    /// `index_of` agrees with a search at every position, over a small
+    /// alphabet so that parts occur often.
+    #[test]
+    fn index_of_matches_a_naive_search(
+        data in proptest::collection::vec(0_u8..3, 0..40),
+        part in proptest::collection::vec(0_u8..3, 0..4),
+        from in -3_i64..45,
+    ) {
+        balanced(|| {
+            assert_eq!(index_of(&data, &part, from), naive_index_of(&data, &part, from));
+        });
+    }
+}
+
 #[test]
 fn slice_clamps_its_bounds() {
     balanced(|| {
@@ -1065,10 +1129,10 @@ proptest! {
 #[test]
 fn every_kernel_is_registered_once() {
     let all = all();
-    assert_eq!(all.len(), 37);
+    assert_eq!(all.len(), 38);
     let mut names: Vec<_> = all.iter().map(|entry| entry.0).collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 37);
+    assert_eq!(names.len(), 38);
     assert!(all.iter().all(|entry| !entry.1.is_null()));
 }

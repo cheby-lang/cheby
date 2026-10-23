@@ -129,16 +129,16 @@ Returns `value` as compact JSON text, with no whitespace between tokens. The nam
 
 ```cheby
 test "to_string writes compact JSON" {
-  let value = json::Object([
+  let document = json::Object([
     ("title", json::String("Dune")),
     ("year", json::Int(1965)),
     ("rating", json::Float(4.0)),
     ("tags", json::Array([json::String("classic"), json::Null])),
     ("read", json::Bool(False)),
   ])
-  let text = json::to_string(value)
+  let text = json::to_string(document)
   assert text == r#"{"title":"Dune","year":1965,"rating":4.0,"tags":["classic",null],"read":false}"#
-  assert json::parse_value(text) == Ok(value)
+  assert json::parse_value(text) == Ok(document)
 }
 
 test "to_string writes floats as show does, and non-finite ones as null" {
@@ -169,7 +169,7 @@ Returns `value` as JSON text indented by two spaces, with `": "` after each key 
 
 ```cheby
 test "to_pretty_string indents by two spaces" {
-  let value = json::Object([
+  let document = json::Object([
     ("title", json::String("Dune")),
     ("tags", json::Array([json::String("classic"), json::Int(1)])),
     ("extra", json::Object([])),
@@ -186,7 +186,7 @@ test "to_pretty_string indents by two spaces" {
     r#"  "none": []"#,
     r"}",
   ], "\n")
-  assert json::to_pretty_string(value) == expected
+  assert json::to_pretty_string(document) == expected
   assert json::to_pretty_string(json::Int(1)) == "1"
 }
 ```
@@ -314,7 +314,34 @@ test "decode_value decodes a value built in the program" {
 }
 ```
 
-`decode_value` lives in `std::json` because `std::json::decode` cannot import `std::json` (D-145, D-361, ADR-0053). For the same reason, no decoder can return part of a document as a raw `Value`. Decoders run over the raw tree of the internal module `std::json::tree`, which both modules import. Its items are package-visible, so no other package can name them (D-483).
+`decode_value` lives in `std::json` because `std::json::decode` cannot import `std::json` (D-145, D-361, ADR-0053). For the same reason, the decoder that gives a raw `Value`, [`value`](#value), lives here too. Decoders run over the raw tree of the internal module `std::json::tree`, which both modules import. Its items are package-visible, so no other package can name them (D-483).
+
+### `value`
+
+```cheby
+pub fn value() -> decode::Decoder<Value>
+```
+
+A decoder that accepts every JSON value and gives it as a `Value`, with `Null` as its placeholder (D-P08). It keeps the generic parts of a document, such as `metadata` or `extensions` fields, as they were written, and it is the way out for shapes that the combinators of [`std::json::decode`](json/decode.md) cannot express: a program decodes the part as a `Value` and walks it with `case`.
+
+- **Fails:** never, since every JSON value fits. For a missing field, `field` records its own error and goes on with the placeholder `Null` (D-401).
+- **Cost:** O(n) in the size of the value, through the same rebuild as `decode_value`, which does not grow the stack with the nesting depth (D-094, D-483). Informative.
+
+```cheby
+test "value keeps any part of a document" {
+  fn event() -> decode::Decoder<(String, json::Value)> {
+    use kind <- decode::field("kind", decode::string())
+    use data <- decode::field("data", json::value())
+    decode::success((kind, data))
+  }
+  let text = r#"{"kind": "click", "data": {"x": 1, "tags": [true, null]}}"#
+  let tags = json::Array([json::Bool(True), json::Null])
+  let data = json::Object([("x", json::Int(1)), ("tags", tags)])
+  assert json::parse(text, event()) == Ok(("click", data))
+}
+```
+
+`value` lives in `std::json` and is built from the package-visible parts of `decode::Decoder`, as `parse` calls the package-visible `decode::run`, so ADR-0053's split between the two modules stands (D-P08).
 
 ## Errors
 

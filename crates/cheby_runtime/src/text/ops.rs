@@ -89,21 +89,38 @@ pub(crate) fn slice(text: &str, start: i64, end: i64) -> Range<usize> {
     from..to
 }
 
+/// Whether `c` has Unicode's `White_Space` property: the whitespace that
+/// `trim`, `trim_start` and `trim_end` remove (D-310, D-373) and that
+/// `words` splits at (D-P13). `char::is_whitespace` is exactly that
+/// property, 25 code points in Unicode 17.0.0, so U+0085 is whitespace and
+/// U+FEFF is not, unlike ECMAScript's `\s`. The JS kernels of M4 share one
+/// explicit table of the same code points.
+pub(crate) fn is_white_space(c: char) -> bool {
+    c.is_whitespace()
+}
+
 /// The byte range of `text` without `White_Space` at either end (D-310).
 pub(crate) fn trim(text: &str) -> Range<usize> {
     let start = trim_start(text).start;
-    let end = text.trim_end().len();
+    let end = trim_end(text).end;
     start..end.max(start)
 }
 
 /// The byte range of `text` without `White_Space` at the start (D-373).
 pub(crate) fn trim_start(text: &str) -> Range<usize> {
-    text.len().saturating_sub(text.trim_start().len())..text.len()
+    let rest = text.trim_start_matches(is_white_space);
+    text.len().saturating_sub(rest.len())..text.len()
 }
 
 /// The byte range of `text` without `White_Space` at the end (D-373).
 pub(crate) fn trim_end(text: &str) -> Range<usize> {
-    0..text.trim_end().len()
+    0..text.trim_end_matches(is_white_space).len()
+}
+
+/// The parts of `text` between runs of `White_Space`, with no empty parts
+/// (D-P13): the whitespace that `trim` removes separates them. O(n).
+pub(crate) fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(is_white_space).filter(|part| !part.is_empty())
 }
 
 /// The byte range of `text` without one leading `prefix`, if it is there

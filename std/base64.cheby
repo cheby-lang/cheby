@@ -1,0 +1,275 @@
+//! Base64 text for `Bytes`, as RFC 4648 defines it: the standard alphabet
+//! with `=` padding (§4), and the URL-safe alphabet without padding (§5),
+//! as JWTs use it (D-P10).
+//!
+//! Decoding is strict, so a text has at most one decoding: a character
+//! outside the alphabet, whitespace, a length that no encoding gives and
+//! unused bits that are not zero are all errors.
+//!
+//! The module is written in Cheby over `std::bytes` and `std::string`, with
+//! no kernels, so constants can run it and JS needs no kernel of its own
+//! (D-360). Each group of three bytes becomes four 6-bit digits with the
+//! bitwise operators on `U8`, and the digits are found by arithmetic on
+//! their ASCII codes rather than through a table.
+
+import std::bytes
+import std::string
+
+// Encoding
+
+/// Encodes `data` with the standard alphabet, `A` to `Z`, `a` to `z`, `0`
+/// to `9`, `+` and `/`, padded with `=` to a multiple of four characters
+/// (RFC 4648 §4).
+pub fn encode(data: bytes::Bytes) -> String {
+  encode_with(data, False)
+}
+
+test "base64 pads its output and decodes strictly" {
+  assert encode(bytes::from_string("hello")) == "aGVsbG8="
+  assert decode("aGVsbG8=") == Ok(bytes::from_string("hello"))
+  assert decode("aGVsbG8") == Err(Nil)
+  assert decode("aGVsbG9=") == Err(Nil)
+  assert encode(bytes::new()) == ""
+}
+
+test "encode follows RFC 4648's test vectors" {
+  fn check(text: String, encoded: String) {
+    assert encode(bytes::from_string(text)) == encoded
+    assert decode(encoded) == Ok(bytes::from_string(text))
+  }
+  check("", "")
+  check("f", "Zg==")
+  check("fo", "Zm8=")
+  check("foo", "Zm9v")
+  check("foob", "Zm9vYg==")
+  check("fooba", "Zm9vYmE=")
+  check("foobar", "Zm9vYmFy")
+}
+
+/// Encodes `data` with the URL-safe alphabet, where `-` and `_` stand for
+/// `+` and `/`, and with no padding (RFC 4648 §5).
+pub fn url_encode(data: bytes::Bytes) -> String {
+  encode_with(data, True)
+}
+
+test "url_encode uses the URL alphabet without padding" {
+  let data = bytes::from_list([0xFB, 0xFF])
+  assert encode(data) == "+/8="
+  assert url_encode(data) == "-_8"
+  assert url_decode("-_8") == Ok(data)
+  assert url_decode("-_8=") == Ok(data)
+}
+
+test "url_encode follows RFC 4648's test vectors without padding" {
+  fn check(text: String, encoded: String) {
+    assert url_encode(bytes::from_string(text)) == encoded
+    assert url_decode(encoded) == Ok(bytes::from_string(text))
+  }
+  check("", "")
+  check("f", "Zg")
+  check("fo", "Zm8")
+  check("foo", "Zm9v")
+  check("foob", "Zm9vYg")
+  check("fooba", "Zm9vYmE")
+  check("foobar", "Zm9vYmFy")
+  assert url_encode(bytes::from_list([0x3E, 0x3F, 0xFF])) == "Pj__"
+  assert encode(bytes::from_list([0x3E, 0x3F, 0xFF])) == "Pj//"
+}
+
+/// Encodes `data` with the URL-safe alphabet when `url` holds, with no
+/// padding, and with the standard one and padding otherwise.
+priv fn encode_with(data: bytes::Bytes, url: Bool) -> String {
+  fn step(index, out) {
+    let first = bytes::get(data, index)
+    let second = bytes::get(data, index + 1)
+    let third = bytes::get(data, index + 2)
+    case first, second, third {
+      Some(a), Some(b), Some(c) => {
+        let full =
+          out
+          |> bytes::push(_, digit(a >> 2, url))
+          |> bytes::push(_, digit(((a & 0x03) << 4) | (b >> 4), url))
+          |> bytes::push(_, digit(((b & 0x0F) << 2) | (c >> 6), url))
+          |> bytes::push(_, digit(c & 0x3F, url))
+        step(index + 3, full)
+      }
+      Some(a), Some(b), None => {
+        let last =
+          out
+          |> bytes::push(_, digit(a >> 2, url))
+          |> bytes::push(_, digit(((a & 0x03) << 4) | (b >> 4), url))
+          |> bytes::push(_, digit((b & 0x0F) << 2, url))
+        pad(last, 1, url)
+      }
+      Some(a), None, _ => {
+        let last =
+          out |> bytes::push(_, digit(a >> 2, url)) |> bytes::push(_, digit((a & 0x03) << 4, url))
+        pad(last, 2, url)
+      }
+      None, _, _ => out
+    }
+  }
+  string::from_bytes_lossy(step(0, bytes::new()))
+}
+
+/// Adds `count` padding characters `=` to `out`, or none when `url` holds.
+priv fn pad(out: bytes::Bytes, count: Int, url: Bool) -> bytes::Bytes {
+  case url, count {
+    True, _ => out
+    False, 1 => bytes::push(out, 0x3D)
+    False, _ => out |> bytes::push(_, 0x3D) |> bytes::push(_, 0x3D)
+  }
+}
+
+/// The ASCII code of the digit for the 6-bit `value`.
+priv fn digit(value: U8, url: Bool) -> U8 {
+  case {
+    value < 26 => value + 0x41
+    value < 52 => value + 71
+    value < 62 => value - 4
+    value == 62 && url => 0x2D
+    value == 62 => 0x2B
+    url => 0x5F
+    _ => 0x2F
+  }
+}
+
+// Decoding
+
+/// Decodes standard Base64 with its padding (RFC 4648 §4). It needs the
+/// padding, and rejects any character outside the alphabet, whitespace
+/// included, a length that is not a multiple of four, and a last digit
+/// whose unused bits are not zero.
+pub fn decode(text: String) -> Result<bytes::Bytes, Nil> {
+  let data = bytes::from_string(text)
+  let size = bytes::length(data)
+  case size % 4 {
+    0 => decode_digits(data, unpadded(data, size), False)
+    _ => Err(Nil)
+  }
+}
+
+test "decode rejects what no encoding gives" {
+  assert decode("Zm9vYg==") == Ok(bytes::from_string("foob"))
+  assert decode("Zm9v YmFy") == Err(Nil)
+  assert decode("Zm9vYmFy\n") == Err(Nil)
+  assert decode("Zm9vYg") == Err(Nil)
+  assert decode("Zm9vY===") == Err(Nil)
+  assert decode("====") == Err(Nil)
+  assert decode("Zg=a") == Err(Nil)
+  assert decode("Zh==") == Err(Nil)
+  assert decode("Zm9-") == Err(Nil)
+  assert decode("Zm9é") == Err(Nil)
+  assert decode("") == Ok(bytes::new())
+}
+
+test "decode reads every byte value back" {
+  fn all_bytes(byte: U8, out: bytes::Bytes) -> bytes::Bytes {
+    let more = bytes::push(out, byte)
+    case byte {
+      255 => more
+      _ => all_bytes(byte + 1, more)
+    }
+  }
+  let every = all_bytes(0, bytes::new())
+  assert bytes::length(every) == 256
+  assert decode(encode(every)) == Ok(every)
+  assert url_decode(url_encode(every)) == Ok(every)
+  assert string::length(encode(every)) == 344
+}
+
+/// Decodes URL-safe Base64 (RFC 4648 §5). It accepts the padding or its
+/// absence, and otherwise rejects what `decode` rejects, `+` and `/`
+/// included.
+pub fn url_decode(text: String) -> Result<bytes::Bytes, Nil> {
+  let data = bytes::from_string(text)
+  let size = bytes::length(data)
+  case bytes::get(data, size - 1) {
+    Some(0x3D) => case size % 4 {
+      0 => decode_digits(data, unpadded(data, size), True)
+      _ => Err(Nil)
+    }
+    _ => decode_digits(data, size, True)
+  }
+}
+
+test "url_decode accepts the padding or its absence, never half of it" {
+  assert url_decode("Zm9vYg") == Ok(bytes::from_string("foob"))
+  assert url_decode("Zm9vYg==") == Ok(bytes::from_string("foob"))
+  assert url_decode("Zm9vYg=") == Err(Nil)
+  assert url_decode("Zm9vY") == Err(Nil)
+  assert url_decode("Zm9vYmE") == Ok(bytes::from_string("fooba"))
+  assert url_decode("+/8=") == Err(Nil)
+  assert url_decode("-_9") == Err(Nil)
+}
+
+/// The number of characters of `data`, `size` bytes long, before its
+/// padding: one or two `=` at the end.
+priv fn unpadded(data: bytes::Bytes, size: Int) -> Int {
+  case bytes::get(data, size - 2), bytes::get(data, size - 1) {
+    Some(0x3D), Some(0x3D) => size - 2
+    _, Some(0x3D) => size - 1
+    _, _ => size
+  }
+}
+
+/// Decodes the first `count` characters of `data`, every one of them a
+/// digit of the alphabet that `url` picks. A last group of one digit is
+/// an error, and the unused bits of a last group of two or three digits
+/// must be zero.
+priv fn decode_digits(data: bytes::Bytes, count: Int, url: Bool) -> Result<bytes::Bytes, Nil> {
+  fn step(index, out) {
+    let first = value_at(data, index, url)
+    let second = value_at(data, index + 1, url)
+    let third = value_at(data, index + 2, url)
+    let fourth = value_at(data, index + 3, url)
+    case count - index {
+      0 => Ok(out)
+      1 => Err(Nil)
+      2 => case first, second {
+        Some(a), Some(b) when b & 0x0F == 0 => Ok(bytes::push(out, (a << 2) | (b >> 4)))
+        _, _ => Err(Nil)
+      }
+      3 => case first, second, third {
+        Some(a), Some(b), Some(c) when c & 0x03 == 0 => {
+          let last =
+            out
+            |> bytes::push(_, (a << 2) | (b >> 4))
+            |> bytes::push(_, ((b & 0x0F) << 4) | (c >> 2))
+          Ok(last)
+        }
+        _, _, _ => Err(Nil)
+      }
+      _ => case first, second, third, fourth {
+        Some(a), Some(b), Some(c), Some(d) => {
+          let full =
+            out
+            |> bytes::push(_, (a << 2) | (b >> 4))
+            |> bytes::push(_, ((b & 0x0F) << 4) | (c >> 2))
+            |> bytes::push(_, ((c & 0x03) << 6) | d)
+          step(index + 4, full)
+        }
+        _, _, _, _ => Err(Nil)
+      }
+    }
+  }
+  step(0, bytes::new())
+}
+
+/// The 6-bit value of the character at `index` of `data` in the alphabet
+/// that `url` picks, or `None` when it is no digit of it.
+priv fn value_at(data: bytes::Bytes, index: Int, url: Bool) -> Option<U8> {
+  case bytes::get(data, index) {
+    Some(code) => case {
+      code >= 0x41 && code <= 0x5A => Some(code - 0x41)
+      code >= 0x61 && code <= 0x7A => Some(code - 71)
+      code >= 0x30 && code <= 0x39 => Some(code + 4)
+      code == 0x2D && url => Some(62)
+      code == 0x5F && url => Some(63)
+      code == 0x2B && !url => Some(62)
+      code == 0x2F && !url => Some(63)
+      _ => None
+    }
+    None => None
+  }
+}

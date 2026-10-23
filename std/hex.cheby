@@ -1,0 +1,100 @@
+//! Hex text for `Bytes`: two digits per byte, written in lowercase as debug
+//! printing writes bytes (D-388, D-P10).
+//!
+//! Decoding is strict: it accepts digits in either case, needs an even
+//! number of them, and rejects a prefix such as `0x` and whitespace.
+//!
+//! The module is written in Cheby over `std::bytes` and `std::string`, with
+//! no kernels, so constants can run it and JS needs no kernel of its own
+//! (D-360). The digits are found by arithmetic on their ASCII codes.
+
+import std::bytes
+import std::string
+
+/// Encodes `data` as two lowercase hex digits per byte, in order.
+pub fn encode(data: bytes::Bytes) -> String {
+  fn step(index, out) {
+    case bytes::get(data, index) {
+      Some(byte) => {
+        let more = out |> bytes::push(_, digit(byte >> 4)) |> bytes::push(_, digit(byte & 0x0F))
+        step(index + 1, more)
+      }
+      None => out
+    }
+  }
+  string::from_bytes_lossy(step(0, bytes::new()))
+}
+
+test "hex writes lowercase and reads either case" {
+  let data = bytes::from_list([0x00, 0xAB, 0x10])
+  assert encode(data) == "00ab10"
+  assert decode("00AB10") == Ok(data)
+  assert decode("0ab") == Err(Nil)
+  assert decode("0x00") == Err(Nil)
+}
+
+test "hex writes every byte value with two digits" {
+  fn all_bytes(byte: U8, out: bytes::Bytes) -> bytes::Bytes {
+    let more = bytes::push(out, byte)
+    case byte {
+      255 => more
+      _ => all_bytes(byte + 1, more)
+    }
+  }
+  let every = all_bytes(0, bytes::new())
+  let text = encode(every)
+  assert string::length(text) == 512
+  assert string::starts_with(text, "000102030405060708090a0b0c0d0e0f10")
+  assert string::ends_with(text, "f9fafbfcfdfeff")
+  assert decode(text) == Ok(every)
+  assert decode(string::uppercase(text)) == Ok(every)
+  assert encode(bytes::new()) == ""
+}
+
+/// The ASCII code of the lowercase digit for the 4-bit `value`.
+priv fn digit(value: U8) -> U8 {
+  case value < 10 {
+    True => value + 0x30
+    False => value + 87
+  }
+}
+
+/// Decodes text of two hex digits per byte, in either case. It needs an
+/// even number of digits, and rejects every other character, a prefix
+/// such as `0x` and whitespace included.
+pub fn decode(text: String) -> Result<bytes::Bytes, Nil> {
+  let data = bytes::from_string(text)
+  fn step(index, out) {
+    case bytes::get(data, index), bytes::get(data, index + 1) {
+      None, _ => Ok(out)
+      Some(high), Some(low) => case value_of(high), value_of(low) {
+        Some(a), Some(b) => step(index + 2, bytes::push(out, (a << 4) | b))
+        _, _ => Err(Nil)
+      }
+      Some(_), None => Err(Nil)
+    }
+  }
+  step(0, bytes::new())
+}
+
+test "decode rejects what is not two hex digits per byte" {
+  assert decode("") == Ok(bytes::new())
+  assert decode("fF") == Ok(bytes::from_list([0xFF]))
+  assert decode("0") == Err(Nil)
+  assert decode("0g") == Err(Nil)
+  assert decode(" 00") == Err(Nil)
+  assert decode("00\n") == Err(Nil)
+  assert decode("00 11") == Err(Nil)
+  assert decode("é0") == Err(Nil)
+}
+
+/// The value of the hex digit with the ASCII code `code`, in either case,
+/// or `None`.
+priv fn value_of(code: U8) -> Option<U8> {
+  case {
+    code >= 0x30 && code <= 0x39 => Some(code - 0x30)
+    code >= 0x61 && code <= 0x66 => Some(code - 87)
+    code >= 0x41 && code <= 0x46 => Some(code - 55)
+    _ => None
+  }
+}

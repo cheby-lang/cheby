@@ -97,23 +97,23 @@ test "list encodes each element with its type's to_json" {
   assert list(points) == array(points, to_json)
 }
 
-/// Returns `value` as compact JSON text, with no whitespace between tokens
+/// Returns `document` as compact JSON text, with no whitespace between tokens
 /// (D-325, D-326, D-398).
-pub fn to_string(value: Value) -> String {
-  write(value, False)
+pub fn to_string(document: Value) -> String {
+  write(document, False)
 }
 
 test "to_string writes compact JSON" {
-  let value = Object([
+  let document = Object([
     ("title", String("Dune")),
     ("year", Int(1965)),
     ("rating", Float(4.0)),
     ("tags", Array([String("classic"), Null])),
     ("read", Bool(False)),
   ])
-  let text = to_string(value)
+  let text = to_string(document)
   assert text == r#"{"title":"Dune","year":1965,"rating":4.0,"tags":["classic",null],"read":false}"#
-  assert parse_value(text) == Ok(value)
+  assert parse_value(text) == Ok(document)
 }
 
 test "to_string writes floats as show does, and non-finite ones as null" {
@@ -129,15 +129,15 @@ test "to_string escapes only quotes, backslashes and control characters" {
   assert to_string(String("\u{1}é\u{1F600}")) == "\"\\u0001é\u{1F600}\""
 }
 
-/// Returns `value` as JSON text indented by two spaces, with `": "` after
-/// each key and no final line ending, as `JSON.stringify(value, null, 2)`
+/// Returns `document` as JSON text indented by two spaces, with `": "` after
+/// each key and no final line ending, as `JSON.stringify(document, null, 2)`
 /// writes it (D-327).
-pub fn to_pretty_string(value: Value) -> String {
-  write(value, True)
+pub fn to_pretty_string(document: Value) -> String {
+  write(document, True)
 }
 
 test "to_pretty_string indents by two spaces" {
-  let value = Object([
+  let document = Object([
     ("title", String("Dune")),
     ("tags", Array([String("classic"), Int(1)])),
     ("extra", Object([])),
@@ -154,12 +154,12 @@ test "to_pretty_string indents by two spaces" {
     r#"  "none": []"#,
     r"}",
   ], "\n")
-  assert to_pretty_string(value) == expected
+  assert to_pretty_string(document) == expected
   assert to_pretty_string(Int(1)) == "1"
 }
 
 test "to_pretty_string puts each element on its own line at every depth" {
-  let value = Array([
+  let document = Array([
     Object([
       ("a", Array([Int(1), Array([])])),
       ("b\"\n", Object([("c", Null)])),
@@ -182,8 +182,8 @@ test "to_pretty_string puts each element on its own line at every depth" {
     "  null",
     "]",
   ], "\n")
-  assert to_pretty_string(value) == expected
-  assert to_string(value) == r#"[{"a":[1,[]],"b\"\n":{"c":null}},"x\ny",null]"#
+  assert to_pretty_string(document) == expected
+  assert to_string(document) == r#"[{"a":[1,[]],"b\"\n":{"c":null}},"x\ny",null]"#
   assert to_pretty_string(Array([])) == "[]"
   assert to_pretty_string(Object([])) == "\{}"
   assert to_pretty_string(String("a\tb")) == r#""a\tb""#
@@ -235,8 +235,8 @@ test "to_string writes each float as float::show does" {
 
 @target(native)
 test "to_string writes any Int, and one outside the safe range reads back as a Float" {
-  let value = Array([Int(int::max_safe + 2), Int(int::min_value), Int(int::max_safe)])
-  let text = to_string(value)
+  let document = Array([Int(int::max_safe + 2), Int(int::min_value), Int(int::max_safe)])
+  let text = to_string(document)
   assert text == "[9007199254740993,-9223372036854775808,9007199254740991]"
   let floats = Array([Float(9007199254740992.0), Float(-9223372036854775808.0), Int(int::max_safe)])
   assert parse_value(text) == Ok(floats)
@@ -253,17 +253,17 @@ priv type Open {
   Members(List<(String, Value)>, Int, Open),
 }
 
-/// Writes `value` as text, indented when `pretty` is `True`. The open arrays
+/// Writes `document` as text, indented when `pretty` is `True`. The open arrays
 /// and objects are a chain of cells on the heap, and every piece is added
 /// to the end of one string, which no other value refers to, so each
 /// addition extends it in place (D-577).
-priv fn write(value: Value, pretty: Bool) -> String {
-  write_value("", value, 0, pretty, Done)
+priv fn write(document: Value, pretty: Bool) -> String {
+  write_value("", document, 0, pretty, Done)
 }
 
-/// Adds `value`, at `depth`, to `out`, then goes on with `open`.
-priv fn write_value(out: String, value: Value, depth: Int, pretty: Bool, open: Open) -> String {
-  case value {
+/// Adds `node`, at `depth`, to `out`, then goes on with `open`.
+priv fn write_value(out: String, node: Value, depth: Int, pretty: Bool, open: Open) -> String {
+  case node {
     Null => next(out + "null", open, pretty)
     Bool(True) => next(out + "true", open, pretty)
     Bool(False) => next(out + "false", open, pretty)
@@ -385,7 +385,7 @@ pub fn parse_value(text: String) -> Result<Value, Error> {
     object: Object,
   }
   case tree::parse_with(text, builder) {
-    Ok(value) => Ok(value)
+    Ok(document) => Ok(document)
     Err((line, column)) => Err(Syntax(Position { line, column }))
   }
 }
@@ -469,11 +469,11 @@ test "parse_value reads numbers at the edges of Int and Float" {
     ("-1e400", Float(float::neg_infinity)),
     ("[9007199254740991, -0]", Array([Int(9007199254740991), Int(0)])),
   ]
-  lists::each(cases, fn((text, value)) { assert (text, parse_value(text)) == (text, Ok(value)) })
+  lists::each(cases, fn((text, want)) { assert (text, parse_value(text)) == (text, Ok(want)) })
   // `==` does not tell zeros apart, so their signs are read from the text.
   fn written(text: String) -> String {
-    let assert Ok(value) = parse_value(text)
-    to_string(value)
+    let assert Ok(document) = parse_value(text)
+    to_string(document)
   }
   assert written("-0.0") == "-0.0"
   assert written("1e-400") == "0.0"
@@ -516,8 +516,8 @@ test "parse_value reads every escape and copies other code points" {
     ("\"é\u{1F600}\u{7F}\u{FFFF}\u{10FFFF}\"", "é\u{1F600}\u{7F}\u{FFFF}\u{10FFFF}"),
     (r#""""#, ""),
   ]
-  lists::each(cases, fn((text, value)) {
-    assert (text, parse_value(text)) == (text, Ok(String(value)))
+  lists::each(cases, fn((text, want)) {
+    assert (text, parse_value(text)) == (text, Ok(String(want)))
   })
   let key = Object([("a\nb", String("/")), ("", Int(1))])
   assert parse_value(r#"{"a\nb": "\/", "": 1}"#) == Ok(key)
@@ -525,8 +525,8 @@ test "parse_value reads every escape and copies other code points" {
 
 test "parse_value keeps a leading U+FEFF in keys, strings and runs before an escape" {
   let text = "\{\"\u{FEFF}\": [\"\u{FEFF}x\", \"\u{FEFF}\\n\"]}"
-  let value = Object([("\u{FEFF}", Array([String("\u{FEFF}x"), String("\u{FEFF}\n")]))])
-  assert parse_value(text) == Ok(value)
+  let document = Object([("\u{FEFF}", Array([String("\u{FEFF}x"), String("\u{FEFF}\n")]))])
+  assert parse_value(text) == Ok(document)
 }
 
 test "a bad escape is an error at the first code point that no escape could have" {
@@ -575,7 +575,7 @@ test "parse_value reads arrays, objects and the whitespace around them" {
       Object([("a", Bool(True)), ("b\n", Array([Bool(False), Null]))]),
     ),
   ]
-  lists::each(cases, fn((text, value)) { assert (text, parse_value(text)) == (text, Ok(value)) })
+  lists::each(cases, fn((text, want)) { assert (text, parse_value(text)) == (text, Ok(want)) })
 }
 
 test "parse_value rejects what RFC 8259 does not allow where it starts" {
@@ -656,10 +656,10 @@ test "a text that ends too early is an error just after its end" {
 }
 
 test "parsing, writing and decode_value's conversion keep the stack flat at any depth" {
-  fn nest(value: Value, level: Int, wrap: fn(Value) -> Value) -> Value {
+  fn nest(node: Value, level: Int, wrap: fn(Value) -> Value) -> Value {
     case level {
-      0 => value
-      _ => nest(wrap(value), level - 1, wrap)
+      0 => node
+      _ => nest(wrap(node), level - 1, wrap)
     }
   }
   let depth = 100000
@@ -687,12 +687,12 @@ test "parsing, writing and decode_value's conversion keep the stack flat at any 
 }
 
 /// Runs `decoder` on a value already parsed or built in the program, with
-/// paths starting at `value` itself (D-361).
+/// paths starting at `document` itself (D-361).
 pub fn decode_value<T>(
-  value: Value,
+  document: Value,
   decoder: decode::Decoder<T>,
 ) -> Result<T, List<decode::Error>> {
-  decode::run(decoder, tree::rebuild(value, open_value, tree::Array, tree::Object))
+  decode::run(decoder, tree::rebuild(document, open_value, tree::Array, tree::Object))
 }
 
 test "decode_value decodes a value built in the program" {
@@ -716,6 +716,69 @@ priv fn open_value(node: Value) -> tree::Children<Value, tree::Tree> {
     Array(items) => tree::Items(items)
     Object(members) => tree::Members(members)
   }
+}
+
+/// A decoder that accepts every JSON value and gives it as a `Value`, with
+/// `Null` as its placeholder (D-P08). `std::json::decode` cannot name
+/// `Value` (D-145, D-361), so it is declared here, as a primitive decoder
+/// whose result is the decoded tree rebuilt as a `Value`, the mirror of
+/// `decode_value`'s conversion (D-483).
+pub fn value() -> decode::Decoder<Value> {
+  decode::Leaf("Value", Null, fn(_) { True }, to_value)
+}
+
+/// Rebuilds a decoded tree as a `Value`, for `value`.
+priv fn to_value(document: tree::Tree) -> Value {
+  tree::rebuild(document, open_tree, Array, Object)
+}
+
+/// Takes a tree apart, for `tree::rebuild`: the mirror of `open_value`.
+priv fn open_tree(node: tree::Tree) -> tree::Children<tree::Tree, Value> {
+  case node {
+    tree::Null => tree::Leaf(Null)
+    tree::Bool(flag) => tree::Leaf(Bool(flag))
+    tree::Int(n) => tree::Leaf(Int(n))
+    tree::Float(x) => tree::Leaf(Float(x))
+    tree::String(text) => tree::Leaf(String(text))
+    tree::Array(items) => tree::Items(items)
+    tree::Object(members) => tree::Members(members)
+  }
+}
+
+test "value keeps any part of a document" {
+  fn event() -> decode::Decoder<(String, Value)> {
+    use kind <- decode::field("kind", decode::string())
+    use data <- decode::field("data", value())
+    decode::success((kind, data))
+  }
+  let text = r#"{"kind": "click", "data": {"x": 1, "tags": [true, null]}}"#
+  let tags = Array([Bool(True), Null])
+  let data = Object([("x", Int(1)), ("tags", tags)])
+  assert parse(text, event()) == Ok(("click", data))
+}
+
+test "value gives Null for a missing field and accepts every kind" {
+  fn extra() -> decode::Decoder<Value> {
+    use found <- decode::field("extra", value())
+    decode::success(found)
+  }
+  let missing = decode::Error { expected: "Field", found: "Nothing", path: ["extra"] }
+  assert parse(r"{}", extra()) == Err(Decode([missing]))
+  let texts = ["null", "false", "-7", "2.5", r#""é""#, r"[[], {}]", r#"{"a": {"a": [1]}, "a": 2}"#]
+  lists::each(texts, fn(text) {
+    let assert Ok(expected) = parse_value(text)
+    assert (text, parse(text, value())) == (text, Ok(expected))
+  })
+  assert parse(r"[1, {}]", decode::list(value())) == Ok([Int(1), Object([])])
+  let built = Array([Float(1.5), Object([("k", String("v"))])])
+  assert decode_value(built, value()) == Ok(built)
+}
+
+test "value rebuilds a deep document without growing the stack" {
+  let depth = 100000
+  let text = string::repeat("[", depth) + "null" + string::repeat("]", depth)
+  let assert Ok(decoded) = parse(text, value())
+  assert to_string(decoded) == text
 }
 
 // Errors
@@ -901,6 +964,95 @@ test "failure reports what was expected" {
   assert parse("[2, 3]", decode::list(even())) == Err(Decode([problem]))
 }
 
+test "lazy lets a decoder refer to itself" {
+  fn size() -> decode::Decoder<Int> {
+    let children = decode::list(decode::lazy(0, size))
+    decode::map(children, fn(sizes) { lists::fold(sizes, 1, int::add) })
+  }
+  assert parse("[[], [[]]]", size()) == Ok(4)
+  let problem = decode::Error { expected: "Array", found: "Int", path: ["1", "0"] }
+  assert parse("[[], [3]]", size()) == Err(Decode([problem]))
+}
+
+test "a lazy decoder's placeholder stands in for a missing field" {
+  fn depth() -> decode::Decoder<Int> {
+    use kind <- decode::field("kind", decode::string())
+    case kind {
+      "leaf" => decode::success(0)
+      _ => decode::field("child", decode::lazy(0, depth), fn(d) { decode::success(d + 1) })
+    }
+  }
+  assert parse(r#"{"kind": "node", "child": {"kind": "leaf"}}"#, depth()) == Ok(1)
+  let missing = decode::Error { expected: "Field", found: "Nothing", path: ["child"] }
+  assert parse(r#"{"kind": "node"}"#, depth()) == Err(Decode([missing]))
+}
+
+test "one_of takes the first decoder that fits" {
+  let id = decode::one_of(decode::map(decode::int(), int::show), [decode::string()])
+  assert parse("7", id) == Ok("7")
+  assert parse(r#""a1""#, id) == Ok("a1")
+  let problem = decode::Error { expected: "Int", found: "Bool", path: [] }
+  assert parse("true", id) == Err(Decode([problem]))
+}
+
+test "at reads a member through nested objects" {
+  let name = decode::at(["author", "name"], decode::string())
+  assert parse(r#"{"author": {"name": "Toni Morrison"}}"#, name) == Ok("Toni Morrison")
+  let missing = decode::Error { expected: "Field", found: "Nothing", path: ["author", "name"] }
+  assert parse(r#"{"author": {}}"#, name) == Err(Decode([missing]))
+}
+
+// A tree of names and an expression, for the tests of `lazy` below. They
+// are named in the tests, so user builds do not report them unused (D-631).
+priv type Node { name: String, children: List<Node> }
+
+priv type Expr { Lit(Int), Neg(Expr) }
+
+priv fn named_tree() -> decode::Decoder<Node> {
+  let placeholder = Node { name: "", children: [] }
+  use children <- decode::field("children", decode::list(decode::lazy(placeholder, named_tree)))
+  use name <- decode::field("name", decode::string())
+  decode::success(Node { name, children })
+}
+
+priv fn expression() -> decode::Decoder<Expr> {
+  use op <- decode::field("op", decode::string())
+  case op {
+    "lit" => decode::field("value", decode::int(), fn(n) { decode::success(Lit(n)) })
+    _ => decode::field("arg", decode::lazy(Lit(0), expression), fn(e) { decode::success(Neg(e)) })
+  }
+}
+
+test "a recursive decoder whose first field recurses terminates with lazy" {
+  // Without `lazy`, building `named_tree()` builds the decoder of `children`,
+  // which builds `named_tree()` again, and overflows the stack (D-P07).
+  let text = r#"{"children": [{"name": "b", "children": []}], "name": "a"}"#
+  let leaf = Node { name: "b", children: [] }
+  assert parse(text, named_tree()) == Ok(Node { name: "a", children: [leaf] })
+  fn height(tree_node: Node) -> Int {
+    case tree_node.children {
+      [child] => 1 + height(child)
+      _ => 0
+    }
+  }
+  let open = r#"{"name": "n", "children": ["#
+  let leaf_text = r#"{"name": "leaf", "children": []}"#
+  let deep = string::repeat(open, 100) + leaf_text + string::repeat("]}", 100)
+  let assert Ok(top) = parse(deep, named_tree())
+  assert height(top) == 100
+}
+
+test "a recursion reached on a missing field stops at lazy's placeholder" {
+  // A placeholder made by running `expression()` on `null` would read `op` as
+  // `""` and reach `arg` again forever (D-401, D-P07).
+  let good = r#"{"op": "neg", "arg": {"op": "lit", "value": 3}}"#
+  assert parse(good, expression()) == Ok(Neg(Lit(3)))
+  let missing = decode::Error { expected: "Field", found: "Nothing", path: ["arg"] }
+  assert parse(r#"{"op": "neg"}"#, expression()) == Err(Decode([missing]))
+  let not_object = decode::Error { expected: "Object", found: "Int", path: ["arg"] }
+  assert parse(r#"{"op": "neg", "arg": 5}"#, expression()) == Err(Decode([not_object]))
+}
+
 // A decode error, for the tests below. It is named in them, so user builds
 // do not report it unused (D-631).
 priv fn mismatch(expected: String, found: String, path: List<String>) -> decode::Error {
@@ -961,8 +1113,8 @@ test "the errors of a list of records come in the order visited, with whole path
     "expected Object, found Int at books.3",
   ], "; ")
   assert show(error) == shown
-  let assert Ok(value) = parse_value(text)
-  assert decode_value(value, library()) == Err(errors)
+  let assert Ok(document) = parse_value(text)
+  assert decode_value(document, library()) == Err(errors)
 }
 
 test "a missing or wrong field gives next its decoder's placeholder" {
