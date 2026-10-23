@@ -20,7 +20,7 @@ pub exposed type Timeout {
 - **`Timeout`.** The error of [`timeout`](#timeout). It is `exposed`, so other packages match `fiber::TimedOut` and `fiber::Panicked(p)` in patterns and compare with `==` (D-181, D-199, D-649).
 - **Written in Cheby.** Every function is written in Cheby over private runtime operations, kernels and compiler intrinsics, that only `std` can call. None of them calls a Cheby closure, so D-484 holds, and their costs are informative (D-675, D-692, D-693).
 - **Sharing.** A value becomes shared when it moves to another fiber (§9.4): the captures of a spawned function and the result of a fiber. The body of `scope` and the function of `timeout` run on the calling fiber, so nothing they capture or return is marked. A `Panic` is built on the fiber that reads it, so it never crosses fibers (D-072, D-665, D-674).
-- **Deadlock.** When no fiber is running or can run, no timer, blocking job or IO registration is pending, and the root fiber has not finished, every fiber would wait forever. Every build detects this as a deadlock: `cheby run` writes `fatal error: all fibers are blocked` and one line per blocked fiber to standard error, and exits with status 103. A deadlock is not a panic, so no scope or timeout catches it, and in `cheby run` nothing unwinds before the exit. `cheby test` judges each test's domain on its own and fails only the deadlocked test, and the REPL reports a deadlock of the entry and the session's detached fibers, cancels the entry and continues (§10.4, §13.5.4, §13.6, D-724, D-857, D-859). Each line names the operation, `channel::send`, `channel::receive`, `selector::select`, `fiber::join`, `fiber::scope` or `fiber::timeout`, and the location of the innermost call outside `std` (D-856, D-858).
+- **Deadlock.** When no fiber is running or can run, no timer, blocking job or IO registration is pending, and the root fiber has not finished, every fiber would wait forever. Every build detects this as a deadlock: `cheby run` writes `fatal error: all fibers are blocked` and one line per blocked fiber to standard error, and exits with status 103. A deadlock is not a panic, so no scope or timeout catches it, and in `cheby run` nothing unwinds before the exit. `cheby test` judges each test's domain on its own and fails only the deadlocked test, and the REPL reports a deadlock of the entry and the session's detached fibers, cancels the entry and continues (§10.4, §13.5.4, §13.6, D-724, D-857, D-859). Each line names the operation, `channel::send`, `channel::receive`, `selector::select`, `fiber::join`, `fiber::scope`, `fiber::timeout` or `time::sleep` for a sleep that never ends, and the location of the innermost call outside `std` (D-856, D-858, D-1058). A tail call to a wait of `std` that calls no function value, such as `join`, keeps its caller's frame for this, and one to a wait that does, such as [`race`](#race), does not (D-861, D-1059).
 - **Context.** Every spawn, scoped or detached, gives the new fiber the spawning fiber's context at the moment of the spawn: the values provided through [`std::context`](context.md), and a seeded random stream derived from the spawning fiber's, which it leaves alone ([`random::with_generator`](random.md#with_generator)). The body of `scope` and the function of `timeout` run on the calling fiber, so they see its context, and a caught panic leaves the fiber with the context it had at the call ([§10.11](../spec/10-concurrency.md#1011-context-values), D-1044, D-1048). This is implemented in M4 (D-1049).
 - **On JS.** A fiber runs until its next real suspension point, so cancellation and timeouts take effect only there (D-185, D-232). Everything else in this file holds on every target.
 
@@ -229,6 +229,8 @@ If `fiber` panicked or was cancelled, `join` never returns (D-177, D-668):
 - **Panics:** with `joined fiber failed` in the second case above. This is a rule of `join` (§10.3), not a bad argument: a fiber that failed has no value to return (D-668). _Note:_ the reference implementation reports this panic at `<unknown location>`, like the panics of kernels (§11.6, D-732).
 - **Cost:** O(1), plus the wait. Informative.
 
+_Note:_ a member of the fiber's scope is not always being cancelled when the fiber was. [`cancel`](#cancel) cancels a scope's fibers but not its body, and fibers spawned afterwards run normally, so after a `cancel` the body, or a fiber spawned after it, that joins a fiber the cancel reached panics with `joined fiber failed`, and the scope fails (§10.3, D-668, D-1060). [`race`](#race) never joins its contenders.
+
 ```cheby
 test "join returns the fiber's value every time" {
   let outcome = {
@@ -267,14 +269,161 @@ test "joining a failed fiber from outside its scope panics" {
 
 Cancellation follows §10.7 (D-102, ADR-0029). This section fixes which frames a cancellation unwinds, so that scopes and timeouts nest (D-667):
 
-- Every cancellation has a **target**, an open scope. A scope that fails targets itself, and a timeout whose limit passes targets its own scope.
-- Cancelling a scope's members cancels each fiber spawned into it, and its body. A cancelled body unwinds the calling fiber's frames down to the target's `scope` or `timeout` call, which then returns `Err`. A cancelled fiber unwinds completely and ends.
+- Every cancellation has a **target**, an open scope. A scope that fails targets itself, a timeout whose limit passes targets its own scope, and [`cancel`](#cancel) targets the scope it is given (D-1060).
+- Cancelling a scope's members cancels each fiber spawned into it, and its body. `cancel` cancels only the fibers, never the body. A cancelled body unwinds the calling fiber's frames down to the target's `scope` or `timeout` call, which then returns `Err`. A cancelled fiber unwinds completely and ends.
 - A cancelled fiber or body that has scopes of its own open cancels them too, with the same target. Unwinding passes through their frames without returning from them, and at each one it first waits until every fiber of that scope has ended.
 - When a fiber has several cancellations pending, it unwinds to the outermost target among them. A cancellation that arrives while the fiber unwinds for an inner target extends the unwinding to the new target.
 - A cancelled `send`, `receive`, `select` or `join` takes and delivers nothing: a blocked `send` has not enqueued its value, which unwinding releases, and a blocked `receive` or `select` leaves every value in its channel (D-670).
-- Work that the runtime cannot interrupt, which is file IO, standard input and foreign functions marked `@blocking` (§10.9, §12.7), runs to the end first. The cancellation is delivered when it returns, and its result is released (D-670).
+- A fiber waiting on the lookup of a host name, or on a refill of standard input's reader or of a file's read-ahead buffer, unwinds at once and abandons the job, which runs to its end on its pool thread. A refill's bytes stay in the reader's buffer for the next read, so no line of input is lost (§10.7, D-1065).
+- Other work that the runtime cannot interrupt, which is the rest of file IO, such as writes, opens, closes and directory changes, and foreign functions marked `@blocking` (§10.9, §12.7), runs to the end first. The cancellation is delivered when it returns, and its result is released (D-670, D-1065).
 
 A cancellation therefore stops only at the boundary of the scope it targets, and a scope cancelled from outside never returns. Detached fibers have no enclosing scope, so no cancellation reaches them.
+
+### `cancel`
+
+```cheby
+pub fn cancel(owner: Scope)
+```
+
+Cancels every fiber spawned into `owner` so far, and every scope nested in them, with `owner` as the target (D-667, D-1060, ADR-0069). It never cancels `owner`'s body and does not mark the scope as cancelled:
+
+- Fibers spawned into `owner` afterwards run normally. The scope waits for the cancelled fibers to unwind, as it waits for every fiber, and returns `Ok` with the body's value once every fiber has ended.
+- A panic of a fiber after `cancel` has reached it is not recorded, as for a timeout (D-671), so it does not make the scope fail.
+- Any fiber that holds the `Scope` may call `cancel`. When the caller is one of the fibers it cancels, `cancel` does not return, and the caller unwinds at once, as a cancelled blocking operation does (D-102).
+- On a scope that has ended, failed or been cancelled, `cancel` does nothing.
+- A cancelled fiber unwinds as [Cancellation](#cancellation) says, and a joiner of it follows [`join`](#join)'s rule (D-668). Cancellation stays uncatchable (D-102).
+
+`cancel` is how a program stops work it no longer needs, such as the losers of a [`race`](#race) or the workers of a pool whose answer is known, without a fake panic whose `Err` would mean success. It is written in Cheby over a private kernel (D-1060).
+
+- **Cost:** O(k) in the fibers and nested scopes it reaches. Informative.
+
+```cheby
+test "cancel stops the fibers of a scope but not its body" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { channel::receive(never) })
+    fiber::cancel(owner)
+    "body"
+  }
+  assert outcome == Ok("body")
+  // The cancelled fiber released `never`, the only `Receiver`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "fibers spawned after cancel run normally" {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::cancel(owner)
+    let later = fiber::spawn(owner, fn() { 6 * 7 })
+    fiber::join(later)
+  }
+  assert outcome == Ok(42)
+}
+
+test "a fiber that cancels its own scope unwinds at once" {
+  let (tx, rx) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() {
+      fiber::cancel(owner)
+      channel::send(tx, 1)
+    })
+    Nil
+  }
+  assert outcome == Ok(Nil)
+  // The fiber never reached its send, and unwinding released `tx`.
+  assert channel::receive(rx) == Err(Nil)
+}
+
+test "joining a fiber that cancel reached fails the scope" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let waiting = fiber::spawn(owner, fn() { channel::receive(never) })
+    fiber::cancel(owner)
+    fiber::join(waiting)
+  }
+  let assert Err(failure) = outcome
+  assert fiber::message(failure) == "joined fiber failed"
+  assert channel::send(keep, 1) == Err(1)
+}
+```
+
+### `race`
+
+```cheby
+pub fn race<T>(contenders: List<fn() -> T>) -> Result<Option<T>, Panic>
+```
+
+Calls each function of `contenders` on a fiber of its own, in a scope of its own, and returns `Ok(Some(value))` with the value of the first one to return (D-1061). It cancels the others with [`cancel`](#cancel) and returns once they have unwound.
+
+- An empty list gives `Ok(None)` and spawns nothing.
+- A contender that panics before the race is decided makes `race` return `Err` with that panic, as a panic in any scope does, and the other contenders are cancelled. A panic after the race is decided is not recorded (D-1060).
+- The contenders, their captures and their values cross fibers, so they become shared (§9.4).
+- A variant in which the first `Ok` wins, or the first two of three, is written with `scope`, `spawn` and `cancel` in the same way.
+- **Fails:** `Err(p)` when a contender panicked before another one returned, with its panic `p`.
+- **Cost:** O(n), plus the calls of the contenders. Informative.
+
+```cheby
+test "race returns the first value and cancels the rest" {
+  let (keep, never) = channel::new::<Int>(1)
+  let slow = fn() {
+    let _ = channel::receive(never)
+    2
+  }
+  let outcome = fiber::race([fn() { 1 }, slow])
+  assert outcome == Ok(Some(1))
+  // The slow contender was cancelled and released `never`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "race of no contenders is None" {
+  assert fiber::race::<Int>([]) == Ok(None)
+}
+
+test "a panic before the race is decided fails it" {
+  let (keep, never) = channel::new::<Int>(1)
+  let slow = fn() {
+    let _ = channel::receive(never)
+    2
+  }
+  let outcome = fiber::race([slow, fn() { panic as "lost" }])
+  let assert Err(failure) = outcome
+  assert fiber::message(failure) == "lost"
+  assert channel::send(keep, 1) == Err(1)
+}
+```
+
+_Note:_ `race` is written in Cheby, with no kernel, over `scope`, `spawn`, a channel and `cancel` (D-1061). Its body reads:
+
+```cheby
+pub fn race<T>(contenders: List<fn() -> T>) -> Result<Option<T>, Panic> {
+  use owner <- scope()
+  let (tx, rx) = channel::new::<T>(0)
+  fn start(rest) {
+    case rest {
+      [] => Nil
+      [contender, ..others] => {
+        spawn(owner, fn() { channel::send(tx, contender()) })
+        start(others)
+      }
+    }
+  }
+  start(contenders)
+  // `start` is not used again, so it is released here together with the
+  // `tx` it captured (D-205). Only the contenders hold a `Sender` now, so
+  // `rx` closes at once when there are none.
+  let first = channel::receive(rx)
+  // `rx` is released after its last use, so contenders blocked in `send`
+  // get their value back and end. `cancel` stops the ones still working.
+  cancel(owner)
+  case first {
+    Ok(value) => Some(value)
+    Err(Nil) => None
+  }
+}
+```
 
 ### `timeout`
 

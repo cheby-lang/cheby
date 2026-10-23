@@ -8,9 +8,9 @@ pub type Int
 
 All arithmetic on `Int` is checked: a result that does not fit panics (D-025). On JS, an `Int` result outside ±(2⁵³−1) also panics (D-037), so a program panics at the same points or earlier on JS, but never computes a different value (§12.4, D-232).
 
-This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow` and `to_base`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
+This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `to_base`, `floor_div`, `modulo`, `checked_floor_div` and `checked_modulo`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
-`clamp`, `pow`, `checked_pow` and `to_base` exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389).
+`clamp`, `pow`, `checked_pow`, `to_base` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056).
 
 The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign`, `is_even` or `gcd`: `int::compare(n, 0)` and `n % 2 == 0` say the same, and Euclid's algorithm is a three-line function (example 028).
 
@@ -488,6 +488,65 @@ test "rem keeps the sign of the dividend" {
 }
 ```
 
+### `floor_div`
+
+```cheby
+pub fn floor_div(a: Int, b: Int) -> Int
+```
+
+Returns `a / b` rounded toward negative infinity (D-1056). It differs from `div` only when the division is not exact and `a` and `b` have different signs, where it is one less. With `modulo`, `a == int::floor_div(a, b) * b + int::modulo(a, b)` for every `a` and every `b` other than 0.
+
+- **Panics:** when `b` is 0, as `/` does (D-069), and for `min_value` divided by -1, whose result does not fit, as `div` does (§3.3.1).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "floor_div and modulo round toward negative infinity" {
+  assert int::floor_div(-7, 2) == -4
+  assert int::floor_div(7, -2) == -4
+  assert int::modulo(-1, 10) == 9
+  assert int::modulo(7, -2) == -1
+  assert int::checked_modulo(1, 0) == Err(Nil)
+}
+
+test "floor_div equals div when the signs agree or the division is exact" {
+  assert int::floor_div(7, 2) == 3
+  assert int::floor_div(-7, -2) == 3
+  assert int::floor_div(-6, 2) == -3
+  assert int::floor_div(0, -5) == 0
+}
+```
+
+### `modulo`
+
+```cheby
+pub fn modulo(a: Int, b: Int) -> Int
+```
+
+Returns the remainder of `floor_div`, which is 0 or has the sign of `b` (D-1056). For a positive `b` it is from 0 to `b - 1`, so `int::modulo(index, length)` wraps an index around a sequence in both directions. It differs from `rem` only when the remainder is not 0 and `a` and `b` have different signs, where it is `rem(a, b) + b`.
+
+- **Panics:** when `b` is 0, as `%` does (D-069).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "modulo takes the sign of the divisor" {
+  assert int::modulo(12, 5) == 2
+  assert int::modulo(-12, 5) == 3
+  assert int::modulo(12, -5) == -3
+  assert int::modulo(-12, -5) == -2
+  assert int::modulo(-10, 5) == 0
+}
+
+test "floor_div and modulo rebuild the dividend" {
+  fn rebuilds(pairs) {
+    case pairs {
+      [] => True
+      [(a, b), ..rest] => a == int::floor_div(a, b) * b + int::modulo(a, b) && rebuilds(rest)
+    }
+  }
+  assert rebuilds([(7, 3), (-7, 3), (7, -3), (-7, -3), (0, 4), (9, 1), (-9, -1)])
+}
+```
+
 ### `neg`
 
 ```cheby
@@ -660,6 +719,48 @@ Returns `Ok(a % b)`, with the sign of `a`, when `b` is not 0 (D-309).
 test "checked_rem reports a zero divisor" {
   assert int::checked_rem(-7, 2) == Ok(-1)
   assert int::checked_rem(7, 0) == Err(Nil)
+}
+```
+
+### `checked_floor_div`
+
+```cheby
+pub fn checked_floor_div(a: Int, b: Int) -> Result<Int, Nil>
+```
+
+Returns `Ok(int::floor_div(a, b))` when the division is defined and its result fits (D-356, D-1056).
+
+- **Fails:** `Err(Nil)` when `b` is 0, and for `min_value` divided by -1.
+- **Cost:** O(1). Informative.
+
+```cheby
+test "checked_floor_div reports a zero divisor" {
+  assert int::checked_floor_div(-7, 2) == Ok(-4)
+  assert int::checked_floor_div(7, -1) == Ok(-7)
+  assert int::checked_floor_div(7, 0) == Err(Nil)
+}
+
+@target(native)
+test "checked_floor_div reports overflow" {
+  assert int::checked_floor_div(int::min_value, -1) == Err(Nil)
+}
+```
+
+### `checked_modulo`
+
+```cheby
+pub fn checked_modulo(a: Int, b: Int) -> Result<Int, Nil>
+```
+
+Returns `Ok(int::modulo(a, b))`, with the sign of `b`, when `b` is not 0 (D-356, D-1056).
+
+- **Fails:** `Err(Nil)` when `b` is 0.
+- **Cost:** O(1). Informative.
+
+```cheby
+test "checked_modulo reports a zero divisor" {
+  assert int::checked_modulo(-1, 10) == Ok(9)
+  assert int::checked_modulo(-1, 0) == Err(Nil)
 }
 ```
 

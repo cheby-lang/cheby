@@ -1,21 +1,19 @@
 # `std::time`
 
-Reading the clocks, and waiting. The wall clock says what time it is, and the monotonic clock measures how long something took. Spans of time are [`duration::Duration`](duration.md) values. In the form `cheby doc` prints:
+Reading the clocks, and waiting. The wall clock says what time it is, and the monotonic clock measures how long something took. Spans of time are [`duration::Duration`](duration.md) values, and readings of the monotonic clock are [`instant::Instant`](time/instant.md) values, from the submodule `std::time::instant` (D-1057). In the form `cheby doc` prints:
 
 ```cheby
 pub type Timestamp
-
-pub type Instant
 
 pub type Clock
 ```
 
 - **`Timestamp`.** A point in time on the wall clock, as a span since the Unix epoch, 1970-01-01T00:00:00Z, in UTC, ignoring leap seconds as Unix time does. It is opaque: a record written in Cheby that holds a `Duration`, so it has the same nanosecond resolution and range, and points before 1970 are negative spans (D-650, D-1018). It satisfies `Compare` and `Show` through [`compare`](#compare) and [`show`](#show), so `a < b` and `"{stamp}"` work. `==` and hashing are the built-in structural ones, which compare points because the representation is unique.
-- **`Instant`.** A reading of the monotonic clock, as a span since an origin that the runtime fixes once per process and does not reveal. Readings never go backwards within one process, and the clock does not change when someone sets the wall clock. An `Instant` means nothing in another process or on another machine. It is opaque plain data like `Timestamp`, with structural `==`, but satisfies neither `Compare` nor `Show`, since a module has one `compare` and one `show` (D-045). A program compares instants through [`between`](#between) and [`elapsed`](#elapsed) (D-1018).
-- **`Clock`.** Where [`now`](#now), [`monotonic`](#monotonic) and [`elapsed`](#elapsed) read the time: the system's clocks, a fixed point, or two functions. They read the clock that the key [`clock`](#clock) holds in the calling fiber's context, which is the system clock unless a program provides another, for example in a test ([`std::context`](context.md), D-1046, D-1047). Timers never read it, so [`sleep`](#sleep), `fiber::timeout`, a selector's timers and the deadlock check use the runtime's monotonic clock whatever clock is provided. `Clock` is opaque. The system clock and fixed clocks compare structurally, and `==` panics on a custom clock, as on any function value (§3.13, D-233). Clocks in context belong to tier 4 and are implemented in M4, with `std::context` (D-1049).
-- **Written in Cheby.** Only [`now`](#now), [`monotonic`](#monotonic) and [`sleep`](#sleep) reach kernels, and `now` and `monotonic` do so only through the system clock. Every other function is written in Cheby over `std::duration`, so it runs in constants and gives the same result on every target (D-090, D-232, D-650, D-991): `const launch: time::Timestamp = time::from_unix(duration::seconds(1_700_000_000))` works. Reaching `now`, `monotonic`, `elapsed` or `sleep` while computing a constant is E0077 (D-537), because they read the context or a kernel (D-1045). The clocks of [Clocks in context](#clocks-in-context) are Cheby without kernels, so they can be built in constants (D-1047).
-- **Kernels.** `now` and `monotonic` are ordinary kernels that return seconds and nanoseconds, bound as `@external(native, "cheby_time_sys_now")` and `@external(native, "cheby_time_sys_monotonic")`. `sleep` is Cheby over the `@std_context` kernel `sys_sleep`, which arms a timer on the runtime's timer heap and suspends the fiber (D-680, D-692, D-983, D-985). Each kernel declares `@external(js, "./time.mjs", "sys_<name>")` (D-661, D-986).
-- **Clock sources.** The wall clock is the system's real-time clock. The monotonic clock is the clock the runtime's timers use, read from one origin per process that is taken when the runtime first needs it. It is not a runtime's own timer epoch, so `Instant`s read in different runtimes of one process, such as the REPL's and a test's, are comparable (D-690, D-1021).
+- **`instant::Instant`.** A reading of the monotonic clock. The type and its pure functions, `add`, `compare`, `between` and `from_origin`, live in the submodule [`std::time::instant`](time/instant.md), so that `Instant` can satisfy `Compare` while `time::compare` stays `Timestamp`'s: a module satisfies an interface for one type only (D-045, D-1057). The functions that read the clock or wait stay here, [`monotonic`](#monotonic), [`elapsed`](#elapsed), [`until`](#until) and [`sleep_until`](#sleep_until), because the key [`clock`](#clock) lives here and imports are acyclic (D-145). `std::time` imports `std::time::instant`, and a program that names the type writes `import std::time::instant` too.
+- **`Clock`.** Where [`now`](#now), [`monotonic`](#monotonic), [`elapsed`](#elapsed) and [`until`](#until) read the time: the system's clocks, a fixed point, or two functions. They read the clock that the key [`clock`](#clock) holds in the calling fiber's context, which is the system clock unless a program provides another, for example in a test ([`std::context`](context.md), D-1046, D-1047, D-1057). Timers never read it, so [`sleep`](#sleep), [`sleep_until`](#sleep_until), `fiber::timeout`, a selector's timers and the deadlock check use the runtime's monotonic clock whatever clock is provided. `Clock` is opaque. The system clock and fixed clocks compare structurally, and `==` panics on a custom clock, as on any function value (§3.13, D-233). Clocks in context belong to tier 4 and are implemented in M4, with `std::context` (D-1049).
+- **Written in Cheby.** Only [`now`](#now), [`monotonic`](#monotonic), [`sleep`](#sleep) and [`sleep_until`](#sleep_until) reach kernels, and `now` and `monotonic` do so only through the system clock. Every other function is written in Cheby over `std::duration` and `std::time::instant`, so it runs in constants and gives the same result on every target (D-090, D-232, D-650, D-991): `const launch: time::Timestamp = time::from_unix(duration::seconds(1_700_000_000))` works. Reaching `now`, `monotonic`, `elapsed`, `until`, `sleep` or `sleep_until` while computing a constant is E0077 (D-537), because they read the context or a kernel (D-1045, D-1057). The clocks of [Clocks in context](#clocks-in-context) are Cheby without kernels, so they can be built in constants (D-1047).
+- **Kernels.** `now` and `monotonic` are ordinary kernels that return seconds and nanoseconds, bound as `@external(native, "cheby_time_sys_now")` and `@external(native, "cheby_time_sys_monotonic")`, and `monotonic` builds its reading with `instant::from_origin` (D-1057). `sleep` and `sleep_until` are Cheby over the `@std_context` kernel `sys_sleep`, which arms a timer on the runtime's timer heap and suspends the fiber (D-680, D-692, D-983, D-985). Each kernel declares `@external(js, "./time.mjs", "sys_<name>")`, and the submodule has no kernel of its own (D-661, D-986, D-1057).
+- **Clock sources.** The wall clock is the system's real-time clock. The monotonic clock is the clock the runtime's timers use, read from one origin per process that is taken when the runtime first needs it. It is not a runtime's own timer epoch, so instants read in different runtimes of one process, such as the REPL's and a test's, are comparable (D-690, D-1021).
 - **Timing.** The value of a clock reading depends on when it is taken, so it is outside D-232's promise of equal results. Everything computed from readings is inside it.
 - **On JS.** OQ-P14, with M4. The wall clock comes from `Date.now()`, with millisecond resolution, and the monotonic clock from `performance.now()`, which browsers coarsen. Programs must not expect a resolution finer than a millisecond on JS (D-232).
 
@@ -95,7 +93,7 @@ test "add moves a point by a span" {
 }
 ```
 
-The span between two points is `time::to_unix(later) - time::to_unix(earlier)`.
+The span between two points is `time::to_unix(later) - time::to_unix(earlier)`. There is no `time::between`: `to_unix` says the same, and `between` is `instant::between` (D-1057).
 
 ### `compare`
 
@@ -166,10 +164,10 @@ test "parse reads RFC 3339 with any offset" {
 ### `monotonic`
 
 ```cheby
-pub fn monotonic() -> Instant
+pub fn monotonic() -> instant::Instant
 ```
 
-Returns the current reading of the monotonic clock of the clock in context (D-1047). By default it is the clock the runtime's timers use, so a timer of one second and the time `elapsed` measures across it agree (D-682, D-1021).
+Returns the current reading of the monotonic clock of the clock in context (D-1047, D-1057). By default it is the clock the runtime's timers use, so a timer of one second and the time `elapsed` measures across it agree (D-682, D-1021). Readings are compared with `<` and the other comparison operators, and measured with `instant::between` ([`std::time::instant`](time/instant.md), D-1057).
 
 - **Cost:** O(1), plus the system call. Informative.
 
@@ -178,10 +176,10 @@ The test of [`sleep`](#sleep) uses it.
 ### `elapsed`
 
 ```cheby
-pub fn elapsed(start: Instant) -> duration::Duration
+pub fn elapsed(start: instant::Instant) -> duration::Duration
 ```
 
-Returns the span from `start` to now on the monotonic clock of the clock in context, as `between(start, monotonic())` (D-1047). On the system clock it is never negative for an `Instant` read earlier in the same process.
+Returns the span from `start` to now on the monotonic clock of the clock in context, as `instant::between(start, monotonic())` (D-1047, D-1057). On the system clock it is never negative for an instant read earlier in the same process.
 
 - **Cost:** O(1), plus the system call. Informative.
 
@@ -192,22 +190,34 @@ test "elapsed is never negative" {
 }
 ```
 
-### `between`
+### `until`
 
 ```cheby
-pub fn between(earlier: Instant, later: Instant) -> duration::Duration
+pub fn until(deadline: instant::Instant) -> duration::Duration
 ```
 
-Returns the span from `earlier` to `later`, which is negative when `later` was read first.
+Returns the span from now on the monotonic clock of the clock in context to `deadline`, as `instant::between(monotonic(), deadline)`. It is negative once `deadline` has passed (D-1057). A deadline computed once with `instant::add` and checked with `<`, `until` and [`sleep_until`](#sleep_until) bounds a loop and keeps its partial results, where a `fiber::timeout` would release them by unwinding.
 
-- **Cost:** O(1). Informative.
+- **Cost:** O(1), plus the system call. Informative.
 
 ```cheby
-test "between measures from the first reading to the second" {
-  let first = time::monotonic()
-  let second = time::monotonic()
-  assert time::between(first, second) >= duration::zero
-  assert time::between(second, first) == -time::between(first, second)
+test "until counts down to a deadline" {
+  let start = time::monotonic()
+  let deadline = instant::add(start, duration::hours(1))
+  assert time::until(deadline) <= duration::hours(1)
+  assert time::until(deadline) > duration::minutes(59)
+  assert time::until(start) <= duration::zero
+}
+```
+
+_Example_, not a `test` because how much it finds depends on the machine. It keeps every item it finished before the deadline:
+
+```cheby
+fn solve_until(deadline: instant::Instant, next: Int, found: List<Int>) -> List<Int> {
+  case time::monotonic() < deadline {
+    True => solve_until(deadline, next + 1, [solve(next), ..found])
+    False => found
+  }
 }
 ```
 
@@ -219,8 +229,11 @@ test "between measures from the first reading to the second" {
 pub fn sleep(span: duration::Duration)
 ```
 
-Suspends the calling fiber for at least `span` on the runtime's timer heap, while other fibers run. The clock in context does not change it (D-1047). A span of zero or less returns at once, and one longer than 2⁶³ − 1 nanoseconds never ends, as for every waiting function of the standard library (D-652, D-891). A sleeping fiber can be cancelled, for example by a `fiber::timeout` around it, and then unwinds at once. It counts as pending work, so a program whose only fiber sleeps is not deadlocked, and it never appears in a deadlock report (D-724, D-984, D-1020).
+Suspends the calling fiber for at least `span` on the runtime's timer heap, while other fibers run. The clock in context does not change it (D-1047). A span of zero or less returns at once (D-652). A sleeping fiber can be cancelled, for example by a `fiber::timeout` around it, and then unwinds at once.
 
+- **Endless sleeps.** A span longer than 2⁶³ − 1 nanoseconds never ends, as for every waiting function of the standard library (D-652, D-891). It arms no timer, so it is not pending work: a program whose fibers all wait, one of them in such a sleep, is deadlocked, and the report lists that fiber as `blocked in time::sleep` (§10.4, D-858, D-1058).
+- **Other sleeps.** A sleep up to that cap arms a timer and counts as pending work, so a program whose only fiber sleeps is not deadlocked, and it never appears in a deadlock report (D-724, D-984, D-1020, D-1058).
+- **Tail calls.** A tail call to `sleep` keeps its caller's frame, so a report locates the fiber at the caller and not at `<unknown location>` (D-861, D-1059).
 - **Cost:** O(log t) in the number of pending timers, plus the wait. Informative.
 
 ```cheby
@@ -236,6 +249,54 @@ test "a sleep is cancelled by a timeout" {
 }
 ```
 
+_Example_, not a `test` because it ends the program with a deadlock report. 3,000,000 hours is past the cap, so nothing can ever wake the root fiber:
+
+```cheby
+fn main() {
+  time::sleep(duration::hours(3_000_000))
+}
+```
+
+It exits with status 103, and the report's second line is `  blocked in time::sleep at <location>`, the location of the call in `main` (D-1058, D-1059).
+
+### `sleep_until`
+
+```cheby
+pub fn sleep_until(deadline: instant::Instant)
+```
+
+Suspends the calling fiber until the runtime's monotonic clock reaches `deadline`, while other fibers run. A deadline that has passed returns at once (D-652, D-1057). As a timer, `sleep_until` never reads the clock in context, so a deadline built from the readings of a provided clock means nothing to it (D-1047, D-1057). Otherwise it follows [`sleep`](#sleep): it can be cancelled, a deadline more than 2⁶³ − 1 nanoseconds away is an endless sleep that a deadlock report lists as `blocked in time::sleep` (D-1058), and a tail call to it keeps its caller's frame (D-1059).
+
+- **Cost:** O(log t) in the number of pending timers, plus the wait. Informative.
+
+```cheby
+test "sleep_until waits until its deadline" {
+  let deadline = instant::add(time::monotonic(), duration::milliseconds(10))
+  time::sleep_until(deadline)
+  assert time::until(deadline) <= duration::zero
+}
+
+test "sleep_until returns at once for a deadline that has passed" {
+  let outcome = fiber::timeout(duration::seconds(10), fn() { time::sleep_until(time::monotonic()) })
+  assert outcome == Ok(Nil)
+}
+```
+
+_Example_, not a `test` because it writes to standard output. Each deadline is the one before plus the period, so the ticks do not drift however long each line takes to write:
+
+```cheby
+fn tick(next: instant::Instant, period: duration::Duration, left: Int) {
+  case left > 0 {
+    True => {
+      time::sleep_until(next)
+      io::println("tick")
+      tick(instant::add(next, period), period, left - 1)
+    }
+    False => Nil
+  }
+}
+```
+
 ## Clocks in context
 
 A program replaces the clock for the code it calls by providing one for the key [`clock`](#clock), with [`context::provide`](context.md#provide). Everything spawned meanwhile inherits it ([§10.11](../spec/10-concurrency.md#1011-context-values), D-1044, D-1047).
@@ -246,7 +307,7 @@ A program replaces the clock for the code it calls by providing one for the key 
 pub const clock: context::Key<Clock> = context::key(system_clock())
 ```
 
-The key of the clock that [`now`](#now), [`monotonic`](#monotonic) and [`elapsed`](#elapsed) read. Its default is the system clock.
+The key of the clock that [`now`](#now), [`monotonic`](#monotonic), [`elapsed`](#elapsed) and [`until`](#until) read. Its default is the system clock.
 
 ```cheby
 test "a fixed clock fixes now" {
@@ -277,41 +338,28 @@ Returns the clock that reads the system's real-time clock for `now` and the runt
 pub fn fixed_clock(at: Timestamp) -> Clock
 ```
 
-Returns a clock whose `now` is always `at`, and whose `monotonic` is always `instant_at(duration::zero)`. So `elapsed` of any reading taken under it is zero (D-1047).
+Returns a clock whose `now` is always `at`, and whose `monotonic` is always `instant::from_origin(duration::zero)`. So `elapsed` of any reading taken under it is zero (D-1047, D-1057).
 
 The test of [`clock`](#clock) uses it.
 
 ### `custom_clock`
 
 ```cheby
-pub fn custom_clock(now: fn() -> Timestamp, monotonic: fn() -> Instant) -> Clock
+pub fn custom_clock(read_now: fn() -> Timestamp, read_monotonic: fn() -> instant::Instant) -> Clock
 ```
 
-Returns a clock that calls `now` for the wall clock and `monotonic` for the monotonic clock. A test can move time forward with functions that ask a fiber holding the current time over a channel (D-1047).
+Returns a clock that calls `read_now` for the wall clock and `read_monotonic` for the monotonic clock. The parameters are not named `now` and `monotonic`, because a parameter must not share a name with a function of its own module (D-062, D-1057). It builds its readings with [`instant::from_origin`](time/instant.md#from_origin), which replaces D-1047's `time::instant_at` (D-1057). A test can move time forward with functions that ask a fiber holding the current time over a channel (D-1047).
 
 ```cheby
 test "a custom clock calls its functions" {
-  let start = time::instant_at(duration::seconds(5))
-  let fake = time::custom_clock(fn() { time::from_unix(duration::zero) }, fn() { time::instant_at(duration::seconds(8)) })
+  let start = instant::from_origin(duration::seconds(5))
+  let fake = time::custom_clock(fn() { time::from_unix(duration::zero) }, fn() {
+    instant::from_origin(duration::seconds(8))
+  })
   use <- context::provide(time::clock, fake)
   assert time::now() == time::from_unix(duration::zero)
   assert time::elapsed(start) == duration::seconds(3)
-}
-```
-
-### `instant_at`
-
-```cheby
-pub fn instant_at(span: duration::Duration) -> Instant
-```
-
-Returns the reading `span` after the monotonic clock's origin, so that a custom clock can build readings. The system clock's readings count from the same origin, which a program does not know, so a span between a built reading and one of the system clock is defined but means nothing (D-1047).
-
-```cheby
-test "instant_at counts from the origin" {
-  let first = time::instant_at(duration::seconds(1))
-  let second = time::instant_at(duration::seconds(3))
-  assert time::between(first, second) == duration::seconds(2)
+  assert time::until(instant::from_origin(duration::seconds(10))) == duration::seconds(2)
 }
 ```
 
@@ -322,5 +370,4 @@ Each of these can be added later without breaking a program (D-1018, D-1019):
 - calendar fields (year, month, day, weekday), and building a point from them;
 - local time, time zones and their database;
 - formats other than RFC 3339, and parsing HTTP dates;
-- a monotonic deadline type, and comparing two `Instant`s directly;
 - the CPU time a program or a fiber used.

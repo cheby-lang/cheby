@@ -125,6 +125,8 @@ The path is evaluated like a field-access expression ([§5.11.3](#5113-field-acc
 let message = "user {user.name} has {count} items, state {state:?}"
 ```
 
+_Note:_ when the first part is a `String` value that nothing else refers to, the rest is appended to it in place, so `"{acc}{piece}"` costs what `acc + piece` costs (D-577, D-1055).
+
 ## 5.4 Operators
 
 ### 5.4.1 Precedence and associativity
@@ -593,7 +595,7 @@ Every call in tail position is a **tail call** and must not grow the stack (D-01
 
 Calls to `@external` functions are not covered by the guarantee ([§12.8](12-targets-and-ffi.md#128-tail-calls)).
 
-A tail call from code outside package `std` to `channel::send`, `channel::receive` or `fiber::join` must be compiled as a call followed by a return, so that the caller's frame stays on the stack and a deadlock report can give the caller's location ([§10.4](10-concurrency.md#104-detached-fibers)) (D-861). `channel::send` and `channel::receive` are `@external`, so the guarantee already does not cover them, and the call the user writes is the ordinary call of §12.8. For `fiber::join` the rule is an exception to the guarantee. It adds at most one frame per waiting fiber, because these three never call a function value, so no loop can grow the stack through them. `selector::select` keeps its tail call, since it calls the chosen arm's function in tail position and loops driven by `select` rely on that.
+A tail call from code outside package `std` to a public function of `std` that can wait on a channel, a fiber, a scope or a timer and calls no function value on the calling fiber must be compiled as a call followed by a return, so that the caller's frame stays on the stack and a deadlock report can give the caller's location ([§10.4](10-concurrency.md#104-detached-fibers)) (D-861, D-1059). Calling an interface function through a type parameter's dictionary counts as calling a function value. Today the rule covers `channel::send`, `channel::receive`, `fiber::join`, `time::sleep` and `time::sleep_until`, and it covers each later wait of that kind without a change to this section. Where such a function is `@external`, as `channel::send` and `channel::receive` are, the guarantee already does not cover it, and the call the user writes is the ordinary call of §12.8. For the others the rule is an exception to the guarantee. It adds at most one frame per waiting fiber, because these functions never call a function value, so no loop can grow the stack through them. A waiting function that calls a function value keeps its tail call, as `selector::select` does, since it calls the chosen arm's function in tail position and loops driven by `select` rely on that. `fiber::race`, `process::until_interrupted` and `io::copy` keep theirs too (D-1059).
 
 ## 5.16 Pipe
 

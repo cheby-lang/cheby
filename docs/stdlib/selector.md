@@ -73,6 +73,8 @@ pub fn after<E>(selector: Selector<E>, wait: duration::Duration, map: fn() -> E)
 
 Returns `selector` with a timer arm, which is ready once `wait` has passed since `select` started waiting (D-103, D-673). The clock starts anew in each `select` call, not when `after` is called, so a selector reused in a loop gives each wait its own timer. A `wait` of zero or less is ready at once, and one longer than 2⁶³ − 1 nanoseconds, about 292 years, is never ready (D-652, D-891). A selector may have several timer arms. A selector with only a timer arm is a sleep.
 
+_Note:_ a timer arm of zero or less is ready at once and competes uniformly with every other ready arm (D-673, D-791), so it does not act as Go's `default`: a `select` over a ready receive arm and a zero timer arm takes either one at random. Operations that do not wait are planned as `channel::send_now`, `channel::receive_now` and `selector::select_now` (D-1050, D-1079).
+
 - **Cost:** O(1). Informative.
 
 ```cheby

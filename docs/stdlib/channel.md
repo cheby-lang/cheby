@@ -15,6 +15,7 @@ pub type Receiver<T>
 - **Order.** Values are received in the order they were enqueued, or handed off for capacity 0. So the values that one fiber sends arrive in the order it sent them. The order of sends from different fibers that overlap in time is unspecified, and so is which of several waiting receivers gets a value (§10.5, D-672).
 - **Sharing.** A sent value becomes shared, with everything it reaches (§9.4, D-072).
 - **Waiting forever.** A `send` or `receive` that no other fiber will ever complete waits until its fiber is cancelled. When the program deadlocks as a whole, it ends with status 103, which is not a panic (the Deadlock bullet of [`std::fiber`](fiber.md), §10.4, D-724).
+- **Not waiting.** Every `send` and `receive` may wait. Operations that never wait are planned as `send_now` and `receive_now` (D-1050). A selector with a timer arm of zero is not a substitute, because it takes a ready value only at random ([`selector::after`](selector.md#after), D-1079).
 - **Kernels.** `new`, `send` and `receive` are kernels that receive the running fiber's context (`@std_context`), and their costs are required (D-300, D-692).
 - **On JS.** Channels close as deterministically as on native, through handle reference counting, which covers every tier-2 handle and every value that holds one (D-100, ADR-0028, D-647).
 

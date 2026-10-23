@@ -4,7 +4,9 @@ Status: **draft**, pre-1.0. Breaking changes are allowed until 1.0 (D-075).
 
 This directory specifies the standard library, one file per module (D-204, D-220). The language specification in [`../spec/`](../spec/) fixes the language and the semantics the runtime provides. This specification fixes the names, signatures and behavior of the modules under `std`. Where a rule comes from a logged decision, the decision is cited as `(D-NNN)`.
 
-The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). **Tier 3** holds files, networking, HTTP, time and processes, whose native side comes with M3 and whose JS side comes with M4 (D-985, D-986, D-987). **Tier 4** holds the modules that M4 implements on both targets, starting with `std::context` (D-1049).
+The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). **Tier 3** holds files, networking, HTTP, URLs, time and processes, whose native side comes with M3 and whose JS side comes with M4 (D-985, D-986, D-987). **Tier 4** holds the modules that M4 implements on both targets, starting with `std::context` (D-1049).
+
+An addition to an existing module keeps that module's tier. A new module joins the tier of the milestone that ships it, so `std::url`, which ships in M3, is in tier 3, although it is Cheby with no kernels (D-1054).
 
 ## Modules
 
@@ -12,7 +14,7 @@ The library is written in tiers, each before the milestone that needs it (D-276)
 
 | Module                                                                 | Contents                                                                |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| [`std::io`](io.md)                                                     | standard input and output, reading and writing whole files              |
+| [`std::io`](io.md)                                                     | standard input and output, whole files and byte streams                 |
 | [`std::env`](env.md)                                                   | command-line arguments and environment variables                        |
 | [`std::list`](list.md)                                                 | the built-in `List<T>`                                                  |
 | [`std::map`](map.md)                                                   | `Map<K, V>`, the hashed map                                             |
@@ -55,15 +57,17 @@ Tier 2 is implemented on native in M2. Its JS side comes with M4: until then eve
 
 ### Tier 3
 
-| Module                       | Contents                                                                                |
-| ---------------------------- | --------------------------------------------------------------------------------------- |
-| [`std::file`](file.md)       | file handles, reading and writing in pieces, scoped opening and directories             |
-| [`std::net`](net.md)         | TCP listeners and connections                                                           |
-| [`std::http`](http.md)       | an HTTP/1.1 client with HTTPS, a server, and response builders                          |
-| [`std::time`](time.md)       | `Timestamp` on the wall clock, `Instant` on the monotonic clock, RFC 3339 text, `sleep` |
-| [`std::process`](process.md) | `exit`                                                                                  |
+| Module                                  | Contents                                                                                      |
+| --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`std::file`](file.md)                  | file handles, reading and writing in pieces, scoped opening, directories, scratch directories |
+| [`std::net`](net.md)                    | TCP listeners and connections                                                                 |
+| [`std::http`](http.md)                  | an HTTP/1.1 client with HTTPS, a server, and response builders                                |
+| [`std::url`](url.md)                    | encoding and decoding URL queries and path segments                                           |
+| [`std::time`](time.md)                  | `Timestamp` on the wall clock, readings of the monotonic clock, RFC 3339 text, `sleep`        |
+| [`std::time::instant`](time/instant.md) | `Instant`, a point on the monotonic clock, with its comparison and arithmetic                 |
+| [`std::process`](process.md)            | `exit`, and `until_interrupted` for stopping on SIGINT and SIGTERM                            |
 
-Tier 3 is implemented on native in M3, in the order `std::time`, `std::net`, `std::file`, `std::http` and `std::process` (D-987). Every public function is written in Cheby over private kernels, and `std::http` is written over `std::net` (D-985, D-1003). Kernels never call a Cheby closure. File operations run on the blocking pool, and socket waits and `time::sleep` on the runtime's poller and timers, where a cancellation interrupts them (D-983). The failures of tier 3 are `io::Error`s, with a predicate in `std::io` for each kind its functions cause, and `http::Error` for HTTP's own kinds (D-981, D-1016). As in tier 2, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986). What a host without files, sockets or processes does, such as a browser, is OQ-P14. No tier-3 kernel runs in constants, but the parts of `std::time` and `std::http` that are Cheby without kernels do (D-991).
+Tier 3 is implemented on native in M3, in the order `std::time` with `std::time::instant`, `std::net`, `std::file`, `std::http` with `std::url`, and `std::process` (D-987, D-1057, D-1069). Every public function is written in Cheby over private kernels, and `std::http` is written over `std::net` and `std::url` (D-985, D-1003, D-1069). `std::time::instant` and `std::url` have no kernels at all (D-1057, D-1069). Kernels never call a Cheby closure. File operations run on the blocking pool, and socket waits and `time::sleep` on the runtime's poller and timers, where a cancellation interrupts them (D-983). The failures of tier 3 are `io::Error`s, with a predicate in `std::io` for each kind its functions cause, and `http::Error` for HTTP's own kinds (D-981, D-1016). As in tier 2, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986). What a host without files, sockets or processes does, such as a browser, is OQ-P14. No tier-3 kernel runs in constants, but the parts of `std::time` and `std::http` that are Cheby without kernels do, and so do the whole of `std::time::instant` and `std::url` (D-991, D-1057, D-1069).
 
 ### Tier 4
 
@@ -104,7 +108,8 @@ test "get reads by position" {
 - **Panics.** Present only where a language rule makes the function panic, such as overflow (D-025). Never because of a bad argument (D-297).
 - **Cost.** In terms of `n`, the size of the first argument, unless the entry says otherwise. A cost marked **required** is an upper bound every implementation must meet. One marked **informative** is not binding (D-300).
 - **Example.** At least one `test` block. The examples are written as if the module that contains them imports every module they name, as in `import std::list`. Test names are unique within a file, so a whole file's examples can run as one test module. A test that holds on only one target carries `@target(…)` ([§12.6](../spec/12-targets-and-ffi.md#126-target-specific-code)).
-- **Environment-dependent examples.** A function whose result depends on the environment, such as standard input and output, files or the operating system, cannot have a deterministic test. Its example is a top-level function introduced by `_Example_, not a \`test\` because …:`. Where the function can fail, a `test` that checks only the failure, which is the same everywhere, is added when one exists.
+- **Environment-dependent examples.** A function whose result depends on the environment, such as standard input and output, files it did not create or the operating system, cannot have a deterministic test. Its example is a top-level function introduced by `_Example_, not a \`test\` because …:`. Where the function can fail, a `test` that checks only the failure, which is the same everywhere, is added when one exists.
+- **Examples that need files.** A function that needs files has a `test` that works in a temporary directory, inside `file::with_temp_dir`, instead of an _Example_. It keeps an _Example_ only where the environment still decides the result, such as permissions (D-1068).
 
 Fields that do not apply are left out. Every `cheby` block in this directory must parse as module items with the compiler's parser and with the tree-sitter grammar, as the examples do, and `cargo xtask cross-check` checks this. Validation errors, such as a signature without a body (E0046), are not consulted (D-424, D-662).
 
@@ -127,7 +132,7 @@ These rules apply to every module. Entries do not repeat them.
 ### Failure
 
 - A function returns `Option` when the answer may simply be absent, `Result<T, Nil>` when there is only one way to fail, and `Result<T, E>` with the module's own error type when callers need the reason (D-297).
-- A function never panics because of a bad argument. It panics only where a language rule already does, such as overflow (D-025) or `==` reaching a function value (D-233) (D-297). Any function that compares or hashes values, such as `list::contains` or `map::insert`, panics where `==` or hashing would ([§3.13](../spec/03-types.md#313-equality-hashing-and-debug-printing)).
+- A function never panics because of a bad argument. It panics only where a language rule already does, such as overflow (D-025) or `==` reaching a function value (D-233) (D-297). A function that does an operator's arithmetic panics where that operator would, as `int::floor_div` does for a zero divisor, like `/` (D-1056). Any function that compares or hashes values, such as `list::contains` or `map::insert`, panics where `==` or hashing would ([§3.13](../spec/03-types.md#313-equality-hashing-and-debug-printing)).
 - On native targets, any function that allocates panics with `out of memory` when its result cannot be allocated, as `string::repeat`, `pad_start` and `pad_end` can with a large count or width ([§11.8.2](../spec/11-errors-and-panics.md#1182-out-of-memory), D-642). Entries do not list this panic.
 - **Counts are clamped.** A count, width or length outside its useful range is clamped, so `list::take(xs, -1)` is `[]` and `list::take(xs, 100)` on a shorter list is the whole list (D-298).
 - **Indexes are not counts.** An index outside `0` to `length - 1`, including a negative one, makes the function return `None` or leave its input unchanged, as the entry says. Indexes never count from the end (D-318).
@@ -139,6 +144,9 @@ These rules apply to every module. Entries do not repeat them.
 - Sequences (`List`, `String`, `Bytes`) have `length`. Maps and sets have `size` (D-301).
 - A type's text comes only from its `show` function. There are no `to_string` functions for this (D-307). `json::to_string` encodes a JSON value, which is a different operation.
 - Numeric conversions are named `target::from_source` (D-308).
+- Three affixes have one meaning each (D-1050). `try_x` is the form of `x` whose callback returns a `Result`, and which stops at the first `Err` and returns it, as `result::try` does. `checked_x` is the form of `x` that returns `Err` where `x` panics, as `int::checked_add` does (D-309, D-356). A form of a waiting operation that never waits takes the suffix `_now`, as the planned `channel::send_now` does. A join that does not panic, if one is ever added, is not named `try_join`.
+- `with_` has two meanings, told apart by the last parameter (D-1051). A `with_` function whose last parameter is a callback scopes a resource for the duration of that callback, as `file::with_open` and `random::with_generator` do (D-993, D-1048). Any other `with_` function returns a copy of its first argument with one part replaced, as `http::with_header` does (D-1006). Every new `with_` name follows one of the two.
+- Modules keep their natural names, even where the name is a common local name, such as `url` (D-1053). A module may not bind a local or a parameter with the name of a module it imports (D-062), so std's own sources import such a module under a plural alias, as `std/http.cheby` writes `import std::json as jsons` and `import std::url as urls`, and the module's page says so in its introduction.
 
 ### Text
 

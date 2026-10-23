@@ -1,5 +1,5 @@
 //! The built-in `Int`, a signed 64-bit integer: constants, conversions,
-//! parsing and text, comparison, and checked and wrapping arithmetic.
+//! parsing and text, comparison, and checked, floored and wrapping arithmetic.
 //!
 //! `Int` itself is a builtin item whose home module is this one (D-447).
 //! The functions on operators exist to be passed as values and to satisfy
@@ -244,6 +244,61 @@ test "rem keeps the sign of the dividend" {
   assert rem(7, -2) == 1
 }
 
+/// Returns `a / b` rounded toward negative infinity, panicking like `/` (D-1056).
+pub fn floor_div(a: Int, b: Int) -> Int {
+  // `/` panics first for a zero divisor and for `min_value / -1`. The
+  // quotient moves down only when the signs differ, where `q - 1` cannot
+  // overflow.
+  let q = a / b
+  case {
+    a % b != 0 && (a < 0) != (b < 0) => q - 1
+    _ => q
+  }
+}
+
+test "floor_div and modulo round toward negative infinity" {
+  assert floor_div(-7, 2) == -4
+  assert floor_div(7, -2) == -4
+  assert modulo(-1, 10) == 9
+  assert modulo(7, -2) == -1
+  assert checked_modulo(1, 0) == Err(Nil)
+}
+
+test "floor_div equals div when the signs agree or the division is exact" {
+  assert floor_div(7, 2) == 3
+  assert floor_div(-7, -2) == 3
+  assert floor_div(-6, 2) == -3
+  assert floor_div(0, -5) == 0
+}
+
+/// Returns the remainder of `floor_div`, with the sign of `b`, panicking like `%` (D-1056).
+pub fn modulo(a: Int, b: Int) -> Int {
+  // `r + b` adds values of opposite signs, so it cannot overflow.
+  let r = a % b
+  case {
+    r != 0 && (r < 0) != (b < 0) => r + b
+    _ => r
+  }
+}
+
+test "modulo takes the sign of the divisor" {
+  assert modulo(12, 5) == 2
+  assert modulo(-12, 5) == 3
+  assert modulo(12, -5) == -3
+  assert modulo(-12, -5) == -2
+  assert modulo(-10, 5) == 0
+}
+
+test "floor_div and modulo rebuild the dividend" {
+  fn rebuilds(pairs) {
+    case pairs {
+      [] => True
+      [(a, b), ..rest] => a == floor_div(a, b) * b + modulo(a, b) && rebuilds(rest)
+    }
+  }
+  assert rebuilds([(7, 3), (-7, 3), (7, -3), (-7, -3), (0, 4), (9, 1), (-9, -1)])
+}
+
 /// Returns `-n`, and panics when it does not fit. It makes `Int` satisfy `Neg`.
 pub fn neg(n: Int) -> Int {
   -n
@@ -369,6 +424,40 @@ pub fn checked_rem(a: Int, b: Int) -> Result<Int, Nil> {
 test "checked_rem reports a zero divisor" {
   assert checked_rem(-7, 2) == Ok(-1)
   assert checked_rem(7, 0) == Err(Nil)
+}
+
+/// Returns `Ok(floor_div(a, b))`, or `Err(Nil)` for a zero divisor and for `min_value / -1` (D-1056).
+pub fn checked_floor_div(a: Int, b: Int) -> Result<Int, Nil> {
+  // Dividing by -1 is exact, so it overflows exactly when negating does.
+  case b {
+    0 => Err(Nil)
+    -1 => checked_neg(a)
+    _ => Ok(floor_div(a, b))
+  }
+}
+
+test "checked_floor_div reports a zero divisor" {
+  assert checked_floor_div(-7, 2) == Ok(-4)
+  assert checked_floor_div(7, -1) == Ok(-7)
+  assert checked_floor_div(7, 0) == Err(Nil)
+}
+
+@target(native)
+test "checked_floor_div reports overflow" {
+  assert checked_floor_div(min_value, -1) == Err(Nil)
+}
+
+/// Returns `Ok(modulo(a, b))`, or `Err(Nil)` for a zero divisor (D-1056).
+pub fn checked_modulo(a: Int, b: Int) -> Result<Int, Nil> {
+  case b {
+    0 => Err(Nil)
+    _ => Ok(modulo(a, b))
+  }
+}
+
+test "checked_modulo reports a zero divisor" {
+  assert checked_modulo(-1, 10) == Ok(9)
+  assert checked_modulo(-1, 0) == Err(Nil)
 }
 
 // `min_value` exists only on native, so `checked_neg` cannot test for it

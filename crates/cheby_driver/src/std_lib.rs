@@ -192,7 +192,16 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Modules the standard-library spec plans that `std/` does not ship yet:
 /// the rest of tier 2 and tier 3 (`docs/plan/stdlib.md`). Importing one is
 /// E0038, not E0039 (D-451). Sorted.
-pub const PLANNED_STD_MODULES: &[&str] = &["context", "file", "http", "net", "process", "time"];
+pub const PLANNED_STD_MODULES: &[&str] = &[
+    "context",
+    "file",
+    "http",
+    "net",
+    "process",
+    "time",
+    "time::instant",
+    "url",
+];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -210,6 +219,50 @@ pub const PLANNED_STD_MODULES: &[&str] = &["context", "file", "http", "net", "pr
 /// since (D-728). An entry's comment names what its test needs and the
 /// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
+    // The public `fiber::cancel` and `fiber::race` come with S5 (D-1060,
+    // D-1061).
+    (
+        "fiber",
+        "cancel stops the fibers of a scope but not its body",
+        "M3",
+    ),
+    ("fiber", "fibers spawned after cancel run normally", "M3"),
+    (
+        "fiber",
+        "a fiber that cancels its own scope unwinds at once",
+        "M3",
+    ),
+    (
+        "fiber",
+        "joining a fiber that cancel reached fails the scope",
+        "M3",
+    ),
+    (
+        "fiber",
+        "race returns the first value and cancels the rest",
+        "M3",
+    ),
+    ("fiber", "race of no contenders is None", "M3"),
+    ("fiber", "a panic before the race is decided fails it", "M3"),
+    // `io.md`'s file examples became tests in a temporary directory, which
+    // need `file::with_temp_dir`, S3 (D-1066, D-1068). They live in
+    // `std/file.cheby`, since `std::io` cannot import `std::file`.
+    ("io", "read_file returns the text as stored", "M3"),
+    ("io", "a file that is not UTF-8 is invalid data", "M3"),
+    ("io", "creating a directory twice is already exists", "M3"),
+    ("io", "opening a directory as a file is a directory", "M3"),
+    ("io", "listing a file is not a directory", "M3"),
+    (
+        "io",
+        "removing a directory with entries is directory not empty",
+        "M3",
+    ),
+    ("io", "closing a file twice is closed", "M3"),
+    // `io::Source`, `io::Sink`, `copy` and `other`, S7 (D-1072). The `copy`
+    // test also needs S3's `file::with_temp_dir`, so it lives in
+    // `std/file.cheby`.
+    ("io", "copy moves every byte of one file to another", "M3"),
+    ("io", "other builds an error with its own text", "M3"),
     // Seeded random streams need `std::context`, M4's workstream 4.6
     // (D-1048, D-1049).
     (
