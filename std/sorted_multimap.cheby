@@ -184,6 +184,22 @@ test "range includes start and excludes end" {
   assert range(marks, 5, 2) == []
 }
 
+/// Returns the key at `index` in key order with its values, counting from
+/// 0 and counting keys, as `size` does, or `None` outside 0 to `size - 1`
+/// (D-318, D-363, D-P04): `sorted_map::at` on the tree, O(log n), with no
+/// call to `compare`.
+pub fn at<K: Compare, V>(m: SortedMultimap<K, V>, index: Int) -> Option<(K, List<V>)> {
+  sorted_map::at(m.entries, index)
+}
+
+test "at counts keys from the smallest" {
+  let marks = from_list([(3, "c"), (1, "a"), (3, "C")])
+  assert at(marks, 0) == Some((1, ["a"]))
+  assert at(marks, 1) == Some((3, ["c", "C"]))
+  assert at(marks, 2) == None
+  assert at(marks, -1) == None
+}
+
 // Updating
 
 /// Returns the multimap with `value` appended to the values of `key`. When
@@ -311,6 +327,84 @@ pub fn each<K: Compare, V>(m: SortedMultimap<K, V>, f: fn(K, List<V>)) {
 test "each sees every key with its values" {
   let tags = from_list([("a", 1), ("b", 2), ("b", 3)])
   each(tags, fn(_, values) { assert !list::is_empty(values) })
+}
+
+/// Combines the keys in order like `fold`, each with all of its values,
+/// and stops at the first `Err` that `f` returns (D-P01, D-P03). It walks
+/// the tree, so a walk that stops after k keys takes O(log n + k).
+pub fn try_fold<K: Compare, V, A, E>(
+  m: SortedMultimap<K, V>,
+  initial: A,
+  f: fn(A, K, List<V>) -> Result<A, E>,
+) -> Result<A, E> {
+  sorted_map::try_fold(m.entries, initial, f)
+}
+
+test "try_fold stops at the first error" {
+  fn add_single(total: Int, key: String, values: List<Int>) -> Result<Int, String> {
+    case values {
+      [n] => Ok(total + n)
+      _ => Err(key)
+    }
+  }
+  let tags = from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert try_fold(tags, 0, add_single) == Err("b")
+  assert try_fold(remove(tags, "b"), 0, add_single) == Ok(2)
+  assert try_fold(new(), 7, add_single) == Ok(7)
+  let stops = try_fold(tags, 0, fn(total, key, values) {
+    case key {
+      "b" => panic as "not reached"
+      _ => Err(total + list::length(values))
+    }
+  })
+  assert stops == Err(1)
+}
+
+/// Tells whether `predicate` returns `True` for some key with its values,
+/// in key order, stopping at the first such key (D-P03).
+pub fn any<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
+  sorted_map::any(m.entries, predicate)
+}
+
+test "any stops at the first matching key" {
+  let tags = from_list([("a", 1), ("b", 2), ("b", 3), ("c", 4)])
+  assert any(tags, fn(key, values) {
+    case key {
+      "c" => panic as "not reached"
+      _ => list::length(values) > 1
+    }
+  })
+  assert !any(tags, fn(key, _) { key == "d" })
+  assert !any(new::<String, Int>(), fn(_, _) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every key with its values,
+/// in key order, stopping at the first key for which it returns `False`
+/// (D-P03).
+pub fn all<K: Compare, V>(m: SortedMultimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool {
+  sorted_map::all(m.entries, predicate)
+}
+
+test "all needs every key to match" {
+  let tags = from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert all(tags, fn(_, values) { !list::is_empty(values) })
+  assert !all(tags, fn(_, values) { list::length(values) > 1 })
+  assert all(new::<String, Int>(), fn(_, _) { False })
+}
+
+/// Returns the smallest key, with its values, for which `predicate`
+/// returns `True`, stopping there (D-P03).
+pub fn find<K: Compare, V>(
+  m: SortedMultimap<K, V>,
+  predicate: fn(K, List<V>) -> Bool,
+) -> Option<(K, List<V>)> {
+  sorted_map::find(m.entries, predicate)
+}
+
+test "find returns the first matching key in order" {
+  let tags = from_list([("c", 4), ("b", 2), ("a", 1), ("b", 3)])
+  assert find(tags, fn(key, _) { key > "a" }) == Some(("b", [2, 3]))
+  assert find(tags, fn(key, _) { key == "d" }) == None
 }
 
 // Transforming

@@ -157,6 +157,49 @@ test "range includes start and excludes end" {
   assert range(odd, 7, 3) == []
 }
 
+/// Returns the set of the elements less than `item`, whether some element
+/// compares `Equal` to `item`, and the set of the elements greater than
+/// `item` (D-P04): `sorted_map::split` on the tree, O(log n), calling
+/// `compare` O(log n) times.
+pub fn split<T: Compare>(s: SortedSet<T>, item: T) -> (SortedSet<T>, Bool, SortedSet<T>) {
+  let (below, here, above) = sorted_map::split(tree(s), item)
+  let present = case here {
+    Some(_) => True
+    None => False
+  }
+  (SortedSet(below), present, SortedSet(above))
+}
+
+test "split cuts the set at an element" {
+  let odd = from_list([1, 3, 5, 7])
+  let (below, present, above) = split(odd, 5)
+  assert to_list(below) == [1, 3]
+  assert present
+  assert to_list(above) == [7]
+  let (smaller, missing, larger) = split(odd, 4)
+  assert last(smaller) == Some(3)
+  assert !missing
+  assert first(larger) == Some(5)
+}
+
+/// Returns the element at `index` in order, counting from 0, or `None`
+/// outside 0 to `size - 1` (D-318, D-P04): `sorted_map::at` on the tree,
+/// O(log n), with no call to `compare`.
+pub fn at<T: Compare>(s: SortedSet<T>, index: Int) -> Option<T> {
+  case sorted_map::at(tree(s), index) {
+    Some((item, _)) => Some(item)
+    None => None
+  }
+}
+
+test "at counts from the smallest element" {
+  let odd = from_list([7, 1, 5, 3])
+  assert at(odd, 0) == Some(1)
+  assert at(odd, 3) == Some(7)
+  assert at(odd, 4) == None
+  assert at(odd, -1) == None
+}
+
 // Updating
 
 /// Returns the set with `item` added. An element that compares `Equal` to
@@ -233,6 +276,83 @@ pub fn each<T: Compare>(s: SortedSet<T>, f: fn(T)) {
 
 test "each calls the function once per element" {
   each(from_list([2, 4, 6]), fn(n) { assert n % 2 == 0 })
+}
+
+/// Combines the elements in order like `fold`, and stops at the first
+/// `Err` that `f` returns (D-P01, D-P03). It walks the tree, so a walk that
+/// stops after k elements takes O(log n + k).
+pub fn try_fold<T: Compare, A, E>(
+  s: SortedSet<T>,
+  initial: A,
+  f: fn(A, T) -> Result<A, E>,
+) -> Result<A, E> {
+  sorted_map::try_fold(tree(s), initial, fn(found, item, _) { f(found, item) })
+}
+
+test "try_fold stops at the first error" {
+  fn add_positive(total: Int, n: Int) -> Result<Int, Int> {
+    case n > 0 {
+      True => Ok(total + n)
+      False => Err(n)
+    }
+  }
+  assert try_fold(from_list([3, 1, 2]), 0, add_positive) == Ok(6)
+  assert try_fold(from_list([-1, -2, 3]), 0, add_positive) == Err(-2)
+  assert try_fold(new(), 7, add_positive) == Ok(7)
+  let stops = try_fold(from_list([1, 2, 3]), 0, fn(total, n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err(total)
+      _ => Ok(total + n)
+    }
+  })
+  assert stops == Err(1)
+}
+
+/// Tells whether `predicate` returns `True` for some element, in order,
+/// stopping at the first such element (D-P03).
+pub fn any<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Bool {
+  sorted_map::any(tree(s), fn(item, _) { predicate(item) })
+}
+
+test "any stops at the first match" {
+  let digits = from_list([3, 1, 2])
+  assert any(digits, fn(n) {
+    case n {
+      3 => panic as "not reached"
+      _ => n == 2
+    }
+  })
+  assert !any(digits, fn(n) { n > 3 })
+  assert !any(new::<Int>(), fn(_) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every element, in order,
+/// stopping at the first element for which it returns `False` (D-P03).
+pub fn all<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Bool {
+  sorted_map::all(tree(s), fn(item, _) { predicate(item) })
+}
+
+test "all needs every element to match" {
+  let digits = from_list([3, 1, 2])
+  assert all(digits, fn(n) { n > 0 })
+  assert !all(digits, fn(n) { n < 2 })
+  assert all(new::<Int>(), fn(_) { False })
+}
+
+/// Returns the smallest element for which `predicate` returns `True`,
+/// stopping there (D-P03).
+pub fn find<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Option<T> {
+  case sorted_map::find(tree(s), fn(item, _) { predicate(item) }) {
+    Some((item, _)) => Some(item)
+    None => None
+  }
+}
+
+test "find returns the first match in order" {
+  let digits = from_list([3, 1, 2])
+  assert find(digits, fn(n) { n > 1 }) == Some(2)
+  assert find(digits, fn(n) { n > 3 }) == None
 }
 
 // Transforming
@@ -351,4 +471,16 @@ test "intersection and difference split a set" {
   assert is_subset(both, odd)
   assert is_subset(only, digits)
   assert !is_subset(digits, odd)
+}
+
+test "split and at work on a large set" {
+  let evens = from_list(list::map(list::range(0, 20_000), fn(n) { n * 2 }))
+  assert at(evens, 12_345) == Some(24_690)
+  assert at(evens, 20_000) == None
+  let (below, present, above) = split(evens, 10_001)
+  assert !present
+  assert size(below) == 5_001
+  assert size(above) == 14_999
+  assert at(above, 0) == Some(10_002)
+  assert find(evens, fn(n) { n > 30_000 }) == Some(30_002)
 }

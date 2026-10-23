@@ -80,6 +80,27 @@ fn fold_entries<K, V, A>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> A) ->
   }
 }
 
+/// Combines the entries in key order like `fold_entries`, without calling
+/// `compare`, and stops at the first `Err` that `f` returns, so a walk that
+/// stops after k entries visits O(log n + k) nodes. It has no bound
+/// (D-845, D-P03).
+fn try_fold_entries<K, V, A, E>(
+  m: SortedMap<K, V>,
+  initial: A,
+  f: fn(A, K, V) -> Result<A, E>,
+) -> Result<A, E> {
+  case m {
+    Tip => Ok(initial)
+    Bin(_, k, x, l, r) => case try_fold_entries(l, initial, f) {
+      Ok(found) => case f(found, k, x) {
+        Ok(next) => try_fold_entries(r, next, f)
+        stopped => stopped
+      }
+      stopped => stopped
+    }
+  }
+}
+
 /// The number of entries, O(1). It has no bound (D-845).
 fn count_entries<K, V>(m: SortedMap<K, V>) -> Int {
   case m {
@@ -95,6 +116,16 @@ test "the helpers read the tree in key order" {
   assert count_entries(scores) == 3
   assert count_entries(new::<String, Int>()) == 0
   assert entries(new::<String, Int>()) == []
+  fn before(stop: String) -> fn(String, String, Int) -> Result<String, String> {
+    fn(text, key, _) {
+      case key == stop {
+        True => Err(text)
+        False => Ok(text + key)
+      }
+    }
+  }
+  assert try_fold_entries(scores, "", before("c")) == Err("ab")
+  assert try_fold_entries(scores, "", before("z")) == Ok("abc")
 }
 
 // Building
@@ -248,6 +279,67 @@ test "range includes start and excludes end" {
   assert range(letters, 3, 7) == [(3, "c"), (5, "e")]
   assert range(letters, 2, 4) == [(3, "c")]
   assert range(letters, 7, 3) == []
+}
+
+/// Returns the map of the keys less than `key`, the value stored under the
+/// key that compares `Equal` to `key`, if any, and the map of the keys
+/// greater than `key` (D-P04). It descends one path and joins the cut
+/// subtrees with `link`, which never compares keys, so it takes O(log n)
+/// and calls `compare` O(log n) times.
+pub fn split<K: Compare, V>(
+  m: SortedMap<K, V>,
+  key: K,
+) -> (SortedMap<K, V>, Option<V>, SortedMap<K, V>) {
+  case m {
+    Tip => (Tip, None, Tip)
+    Bin(_, k, x, l, r) => case Compare::compare(key, k) {
+      Less => {
+        let (below, here, above) = split(l, key)
+        (below, here, link(k, x, above, r))
+      }
+      Greater => {
+        let (below, here, above) = split(r, key)
+        (link(k, x, l, below), here, above)
+      }
+      Equal => (l, Some(x), r)
+    }
+  }
+}
+
+test "split cuts the map at a key" {
+  let letters = from_list([(1, "a"), (3, "c"), (5, "e")])
+  let (below, here, above) = split(letters, 3)
+  assert to_list(below) == [(1, "a")]
+  assert here == Some("c")
+  assert to_list(above) == [(5, "e")]
+  let (smaller, missing, _) = split(letters, 4)
+  assert last(smaller) == Some((3, "c"))
+  assert missing == None
+}
+
+/// Returns the entry at `index` in key order, counting from 0, or `None`
+/// outside 0 to `size - 1` (D-318, D-P04). Each node stores the size of its
+/// subtree, so it descends one path: O(log n), and `compare` is not called.
+pub fn at<K: Compare, V>(m: SortedMap<K, V>, index: Int) -> Option<(K, V)> {
+  case m {
+    Tip => None
+    Bin(_, k, x, l, r) => {
+      let smaller = count_entries(l)
+      case {
+        index < smaller => at(l, index)
+        index == smaller => Some((k, x))
+        _ => at(r, index - smaller - 1)
+      }
+    }
+  }
+}
+
+test "at counts from the smallest key" {
+  let letters = from_list([(5, "e"), (1, "a"), (3, "c")])
+  assert at(letters, 0) == Some((1, "a"))
+  assert at(letters, 2) == Some((5, "e"))
+  assert at(letters, 3) == None
+  assert at(letters, -1) == None
 }
 
 // Updating
@@ -460,6 +552,119 @@ pub fn each<K: Compare, V>(m: SortedMap<K, V>, f: fn(K, V)) {
 test "each calls the function once per entry" {
   let lengths = from_list([("a", 1), ("bb", 2)])
   each(lengths, fn(key, value) { assert string::length(key) == value })
+}
+
+/// Combines the entries in key order like `fold`, and stops at the first
+/// `Err` that `f` returns (D-P01, D-P03). It walks the tree, so a walk that
+/// stops after k entries takes O(log n + k), and it never calls `compare`.
+pub fn try_fold<K: Compare, V, A, E>(
+  m: SortedMap<K, V>,
+  initial: A,
+  f: fn(A, K, V) -> Result<A, E>,
+) -> Result<A, E> {
+  try_fold_entries(m, initial, f)
+}
+
+test "try_fold stops at the first error" {
+  fn add_small(total: Int, key: String, value: Int) -> Result<Int, String> {
+    case value < 10 {
+      True => Ok(total + value)
+      False => Err(key)
+    }
+  }
+  let scores = from_list([("b", 20), ("c", 30), ("a", 1)])
+  assert try_fold(scores, 0, add_small) == Err("b")
+  let small = remove(remove(scores, "b"), "c")
+  assert try_fold(small, 0, add_small) == Ok(1)
+  assert try_fold(new(), 7, add_small) == Ok(7)
+  let stops = try_fold(scores, 0, fn(total, key, value) {
+    case key {
+      "c" => panic as "not reached"
+      "b" => Err(total)
+      _ => Ok(total + value)
+    }
+  })
+  assert stops == Err(1)
+}
+
+/// Tells whether `predicate` returns `True` for some entry, in key order,
+/// stopping at the first such entry (D-P03).
+pub fn any<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
+  case find(m, predicate) {
+    Some(_) => True
+    None => False
+  }
+}
+
+test "any stops at the first match" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert any(scores, fn(key, value) {
+    case key {
+      "c" => panic as "not reached"
+      _ => value == 2
+    }
+  })
+  assert !any(scores, fn(_, value) { value > 3 })
+  assert !any(new::<String, Int>(), fn(_, _) { True })
+}
+
+/// Tells whether `predicate` returns `True` for every entry, in key order,
+/// stopping at the first entry for which it returns `False` (D-P03).
+pub fn all<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool {
+  let walked = try_fold_entries(m, Nil, fn(_, key, value) {
+    case predicate(key, value) {
+      True => Ok(Nil)
+      False => Err(Nil)
+    }
+  })
+  walked == Ok(Nil)
+}
+
+test "all needs every entry to match" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert all(scores, fn(_, value) { value > 0 })
+  assert !all(scores, fn(key, value) {
+    case key {
+      "c" => panic as "not reached"
+      _ => value < 2
+    }
+  })
+  assert all(new::<String, Int>(), fn(_, _) { False })
+}
+
+/// Returns the entry with the smallest key for which `predicate` returns
+/// `True`, stopping there (D-P03).
+pub fn find<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)> {
+  let walked = try_fold_entries(m, Nil, fn(_, key, value) {
+    case predicate(key, value) {
+      True => Err((key, value))
+      False => Ok(Nil)
+    }
+  })
+  case walked {
+    Err(found) => Some(found)
+    Ok(_) => None
+  }
+}
+
+test "find returns the first match in key order" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert find(scores, fn(_, value) { value > 1 }) == Some(("b", 2))
+  assert find(scores, fn(_, value) { value > 3 }) == None
+}
+
+test "the early walks stop in a large map" {
+  let numbers = from_list(list::map(list::range(0, 20_000), fn(n) { (n, n * 2) }))
+  assert find(numbers, fn(key, _) { key == 15_000 }) == Some((15_000, 30_000))
+  assert any(numbers, fn(_, value) { value == 39_998 })
+  assert !all(numbers, fn(key, _) { key < 19_999 })
+  let sum = try_fold(numbers, 0, fn(total, key, _) {
+    case key < 100 {
+      True => Ok(total + key)
+      False => Err(total)
+    }
+  })
+  assert sum == Err(4_950)
 }
 
 // Transforming
@@ -770,4 +975,36 @@ test "filter and map_values never call compare" {
   assert keys(filter(backwards, fn(_, _) { True })) == downward
   assert keys(map_values(backwards, fn(key, _) { key })) == downward
   assert values(map_values(backwards, fn(key, value) { key + value })) == list::repeat(0, 100)
+}
+
+test "split and at work on a large map" {
+  // Whether every node of `m` has its size and sides of which neither
+  // weighs more than three times the other.
+  fn weighed(m: SortedMap<Int, Int>) -> Bool {
+    case m {
+      Tip => True
+      Bin(n, _, _, l, r) => {
+        let sl = count_entries(l)
+        let sr = count_entries(r)
+        let here = n == sl + sr + 1 && (sl + sr <= 1 || (sl <= 3 * sr && sr <= 3 * sl))
+        here && weighed(l) && weighed(r)
+      }
+    }
+  }
+  let numbers = from_list(list::map(list::range(0, 20_000), fn(n) { (n * 2, n) }))
+  assert list::all(list::range(0, 200), fn(i) { at(numbers, i * 100) == Some((i * 200, i * 100)) })
+  assert at(numbers, 19_999) == Some((39_998, 19_999))
+  assert at(numbers, 20_000) == None
+  let (below, here, above) = split(numbers, 13_001)
+  assert here == None
+  assert size(below) == 6_501
+  assert size(above) == 13_499
+  assert weighed(below) && weighed(above)
+  assert last(below) == Some((13_000, 6_500))
+  assert first(above) == Some((13_002, 6_501))
+  let (low, found, high) = split(numbers, 30_000)
+  assert found == Some(15_000)
+  assert size(low) + size(high) == 19_999
+  assert weighed(low) && weighed(high)
+  assert at(high, 0) == Some((30_002, 15_001))
 }

@@ -10,7 +10,7 @@ pub type Multimap<K, V>
 
 - **Values.** Each key holds a `List<V>` in the order the values were inserted, with duplicates kept, so inserting `("a", 1)` twice gives `[1, 1]` (D-332). A key is present only while it has at least one value (D-364).
 - **Keys.** Keys need no interface. They are compared with `==` and hashed with the built-in structural hash, as in `Map` (§3.13).
-- **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `each` and the callback of `filter` visit the keys in an order that depends on a per-process random seed and changes between runs (D-093). The values of one key stay in insertion order. Programs that print or compare the order of keys sort first, for example with [`to_sorted_list`](#to_sorted_list).
+- **Order.** `keys`, `to_list`, `to_pairs`, `fold`, `try_fold`, `each`, `any`, `all`, `find` and the callback of `filter` visit the keys in an order that depends on a per-process random seed and changes between runs (D-093). The values of one key stay in insertion order. Programs that print or compare the order of keys sort first, for example with [`to_sorted_list`](#to_sorted_list).
 - **Written in Cheby.** The module is written in Cheby over `std::map`, with no kernel of its own (D-338). The representation is not specified. One that meets the costs below is a `Map<K, List<V>>` plus the total number of values. The costs of the functions that build, read and update follow from those of `Map` and `List`, and are required (D-300). The costs of the functions that take a callback are informative, as in `std::map`.
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two multimaps are `==` when they have the same keys, in any order, and each key holds the same list of values in the same order, and equal multimaps hash equally. Debug printing writes `multimap::from_list([…])` with one debug-printed pair per value, the pairs of each key in insertion order and the keys sorted by their debug text, so the text is the same on every run and rebuilds the same multimap (D-344, D-382). The key texts are compared as UTF-8 bytes, so `10` comes before `9`. Keys with the same debug text are ordered by the text of their pairs, so the hashed map's order never shows. A key's values are never sorted (D-847).
 - **Interfaces.** `Multimap` satisfies neither `Show` nor `Compare`, because its order changes between runs (§8.8, D-344).
@@ -305,6 +305,98 @@ Calls `f` once per key, with all of its values, in the multimap's per-process or
 test "each sees every key with its values" {
   let tags = multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
   multimap::each(tags, fn(_, values) { assert !list::is_empty(values) })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<K, V, A, E>(m: Multimap<K, V>, initial: A, f: fn(A, K, List<V>) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the keys like `fold`, in the multimap's per-process order of keys (D-093), with a callback that can fail. It calls `f` once per key with all of its values, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty multimap (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_single(total: Int, key: String, values: List<Int>) -> Result<Int, String> {
+    case values {
+      [n] => Ok(total + n)
+      _ => Err(key)
+    }
+  }
+  let tags = multimap::from_list([("b", 1), ("a", 2), ("b", 3)])
+  assert multimap::try_fold(tags, 0, add_single) == Err("b")
+  assert multimap::try_fold(multimap::remove(tags, "b"), 0, add_single) == Ok(2)
+  assert multimap::try_fold(multimap::new(), 7, add_single) == Ok(7)
+  let stops = multimap::try_fold(tags, 0, fn(calls, _, _) {
+    case calls {
+      0 => Err("stopped")
+      _ => panic as "not reached"
+    }
+  })
+  assert stops == Err("stopped")
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk `to_list`, as `fold` does, so the list of keys is built before the first call, and stopping early saves calls but not that list (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<K, V>(m: Multimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some key with all of its values. It calls `predicate` in the multimap's per-process order of keys (D-093), stops at the first such key, and is `False` for an empty multimap.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "any looks for a matching key" {
+  let tags = multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert multimap::any(tags, fn(_, values) { list::length(values) > 1 })
+  assert !multimap::any(tags, fn(key, _) { key == "c" })
+  assert !multimap::any(multimap::new::<String, Int>(), fn(_, _) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<K, V>(m: Multimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every key with all of its values. It calls `predicate` in the multimap's per-process order of keys (D-093), stops at the first key for which it returns `False`, and is `True` for an empty multimap.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "all needs every key to match" {
+  let tags = multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert multimap::all(tags, fn(_, values) { !list::is_empty(values) })
+  assert !multimap::all(tags, fn(_, values) { list::length(values) > 1 })
+  assert multimap::all(multimap::new::<String, Int>(), fn(_, _) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<K, V>(m: Multimap<K, V>, predicate: fn(K, List<V>) -> Bool) -> Option<(K, List<V>)>
+```
+
+Returns a key with all of its values for which `predicate` returns `True`: the first one in the multimap's per-process order of keys (D-093). It stops calling `predicate` at that key. When several keys match, which one it returns can change between runs, as the order of `fold` does (D-P03).
+
+- **Fails:** `None` when no key matches.
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "find returns a matching key with its values" {
+  let tags = multimap::from_list([("a", 1), ("b", 2), ("b", 3)])
+  assert multimap::find(tags, fn(_, values) { list::length(values) > 1 }) == Some(("b", [2, 3]))
+  assert multimap::find(tags, fn(key, _) { key == "c" }) == None
 }
 ```
 

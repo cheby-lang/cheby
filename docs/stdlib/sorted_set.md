@@ -8,12 +8,12 @@ pub type SortedSet<T>
 
 `SortedSet` is opaque. Values are immutable, so every update returns a new set, and the old one stays usable.
 
-- **Order.** `to_list`, `fold`, `each`, `show` and debug printing go from the smallest element to the largest, by the element type's `compare`.
+- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest element to the largest, by the element type's `compare`, and `at` counts positions in that order.
 - **Elements.** Elements must satisfy `Compare`, and every public function has the bound `T: Compare` (D-385). The hooks of equality, hashing and debug printing take none and never call `compare` (D-845). Two elements are the same element when `compare` returns `Equal`, even if they are not `==`. Inserting such an element keeps the one already stored (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the set does with one.
-- **Written in Cheby.** The set is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). Every comparison is an ordinary call to the element type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). If the tree later moves into a runtime kernel (D-336), the API and the costs below stay the same.
+- **Written in Cheby.** The set is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). Every comparison is an ordinary call to the element type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). Every node of the tree keeps the size of its subtree, which `size` and `at` need for their required costs. If the tree later moves into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-P04).
 - **Equality, hashing and printing.** Sets with the same elements can have trees of different shapes, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted sets are `==` when they hold the same elements, compared with `==`, and equal sets hash equally (D-343). Debug printing writes `sorted_set::from_list([…])` with the elements in order, each one debug-printed (D-344).
 - **Interfaces.** `SortedSet<T>` satisfies `Show` when `T` does (D-344). It does not satisfy `Compare`.
-- **Costs.** For a set of n elements, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes O(n) and never calls `compare`.
+- **Costs.** For a set of n elements, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes O(n) and never calls `compare`, and a walk that stops after k elements, such as `find`, takes O(log n + k).
 
 ```cheby
 test "sorted sets compare, hash and print by contents" {
@@ -173,6 +173,53 @@ test "range includes start and excludes end" {
 }
 ```
 
+### `split`
+
+```cheby
+pub fn split<T: Compare>(s: SortedSet<T>, item: T) -> (SortedSet<T>, Bool, SortedSet<T>)
+```
+
+Splits `s` at `item`. It returns the set of the elements less than `item`, whether some element compares `Equal` to `item`, and the set of the elements greater than `item`. `item` need not be in the set.
+
+- **Cost:** O(log n), and it calls `compare` O(log n) times. Required (D-300).
+
+```cheby
+test "split cuts the set at an element" {
+  let odd = sorted_set::from_list([1, 3, 5, 7])
+  let (below, present, above) = sorted_set::split(odd, 5)
+  assert sorted_set::to_list(below) == [1, 3]
+  assert present
+  assert sorted_set::to_list(above) == [7]
+  let (smaller, missing, larger) = sorted_set::split(odd, 4)
+  assert sorted_set::last(smaller) == Some(3)
+  assert !missing
+  assert sorted_set::first(larger) == Some(5)
+}
+```
+
+As with `sorted_map::split`, `split` with `first`, `last` and `size` gives the nearest elements on either side of `item`, and the rank of `item`, the number of elements less than it, which is `size` of the lower part (D-P04).
+
+### `at`
+
+```cheby
+pub fn at<T: Compare>(s: SortedSet<T>, index: Int) -> Option<T>
+```
+
+Returns the element at `index` in order, counting from 0, so `at(s, 0)` is `first(s)`.
+
+- **Fails:** `None` when `index` is outside `0` to `size - 1`, negative indexes included (D-318).
+- **Cost:** O(log n), required (D-300). It never calls `compare`.
+
+```cheby
+test "at counts from the smallest element" {
+  let odd = sorted_set::from_list([7, 1, 5, 3])
+  assert sorted_set::at(odd, 0) == Some(1)
+  assert sorted_set::at(odd, 3) == Some(7)
+  assert sorted_set::at(odd, 4) == None
+  assert sorted_set::at(odd, -1) == None
+}
+```
+
 ## Updating
 
 ### `insert`
@@ -284,6 +331,103 @@ Calls `f` once per element, in order, for its effects.
 ```cheby
 test "each calls the function once per element" {
   sorted_set::each(sorted_set::from_list([2, 4, 6]), fn(n) { assert n % 2 == 0 })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<T: Compare, A, E>(s: SortedSet<T>, initial: A, f: fn(A, T) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the elements like `fold`, in order, with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k elements. Informative. It never calls `compare`.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_positive(total: Int, n: Int) -> Result<Int, Int> {
+    case n > 0 {
+      True => Ok(total + n)
+      False => Err(n)
+    }
+  }
+  assert sorted_set::try_fold(sorted_set::from_list([3, 1, 2]), 0, add_positive) == Ok(6)
+  assert sorted_set::try_fold(sorted_set::from_list([-1, -2, 3]), 0, add_positive) == Err(-2)
+  assert sorted_set::try_fold(sorted_set::new(), 7, add_positive) == Ok(7)
+  let stops = sorted_set::try_fold(sorted_set::from_list([1, 2, 3]), 0, fn(total, n) {
+    case n {
+      3 => panic as "not reached"
+      2 => Err(total)
+      _ => Ok(total + n)
+    }
+  })
+  assert stops == Err(1)
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the elements after the stop are never visited (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some element. It calls `predicate` in order, stops at the first such element, and is `False` for an empty set.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k elements. Informative. It never calls `compare`.
+
+```cheby
+test "any stops at the first match" {
+  let digits = sorted_set::from_list([3, 1, 2])
+  assert sorted_set::any(digits, fn(n) {
+    case n {
+      3 => panic as "not reached"
+      _ => n == 2
+    }
+  })
+  assert !sorted_set::any(digits, fn(n) { n > 3 })
+  assert !sorted_set::any(sorted_set::new::<Int>(), fn(_) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every element. It calls `predicate` in order, stops at the first element for which it returns `False`, and is `True` for an empty set.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k elements. Informative. It never calls `compare`.
+
+```cheby
+test "all needs every element to match" {
+  let digits = sorted_set::from_list([3, 1, 2])
+  assert sorted_set::all(digits, fn(n) { n > 0 })
+  assert !sorted_set::all(digits, fn(n) { n < 2 })
+  assert sorted_set::all(sorted_set::new::<Int>(), fn(_) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Option<T>
+```
+
+Returns the smallest element for which `predicate` returns `True`. It calls `predicate` in order and stops calling it at that element.
+
+- **Fails:** `None` when no element matches.
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k elements. Informative. It never calls `compare`.
+
+```cheby
+test "find returns the first match in order" {
+  let digits = sorted_set::from_list([3, 1, 2])
+  assert sorted_set::find(digits, fn(n) { n > 1 }) == Some(2)
+  assert sorted_set::find(digits, fn(n) { n > 3 }) == None
 }
 ```
 

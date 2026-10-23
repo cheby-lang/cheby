@@ -8,12 +8,12 @@ pub type SortedMap<K, V>
 
 `SortedMap` is opaque. Values are immutable, so every update returns a new map, and the old one stays usable and shares most of its nodes with the new one.
 
-- **Order.** `keys`, `values`, `to_list`, `fold`, `each`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`.
+- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`, and `at` counts positions in that order.
 - **Keys.** Keys must satisfy `Compare`, and every function has the bound `K: Compare`. Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. Inserting such a key keeps the key already stored and replaces only the value (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the map does with one.
-- **Written in Cheby.** The map is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). The kind of tree is not specified. Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a `compare` written in Cheby costs what any call costs, and a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). If a benchmark later moves the tree into a runtime kernel (D-336), the API and the costs below stay the same.
+- **Written in Cheby.** The map is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). The kind of tree is not specified, except that every node keeps the size of its subtree, which `size` and `at` need for their required costs (D-P04). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a `compare` written in Cheby costs what any call costs, and a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). If a benchmark later moves the tree into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-P04).
 - **Equality, hashing and printing.** Maps with the same entries can have trees of different shapes, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted maps are `==` when they hold the same entries, however they were built, and equal maps hash equally (D-343). Keys and values are compared here with `==`, not with `compare`. Debug printing writes `sorted_map::from_list([…])` with the entries in key order, each one debug-printed (D-344).
 - **Interfaces.** `SortedMap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a map of n entries, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes O(n) and never calls `compare`.
+- **Costs.** For a map of n entries, a lookup or an update takes O(log n) time and calls `compare` O(log n) times. Iterating takes O(n) and never calls `compare`, and a walk that stops after k entries, such as `find`, takes O(log n + k).
 
 ```cheby
 test "sorted maps compare, hash and print by contents" {
@@ -26,7 +26,7 @@ test "sorted maps compare, hash and print by contents" {
 }
 ```
 
-Every function carries the bound `K: Compare`, including those that never compare keys, so the module has one rule (D-385). The rule binds the public functions. The hooks of equality, hashing and debug printing (D-342), and the package-visible helpers that other standard-library modules use to walk the entries, take no bound and never call `compare`: D-482 forbids bounds on hooks, and the walks need the entries without a `Compare` value (D-845).
+Every function carries the bound `K: Compare`, including those that never compare keys, so the module has one rule (D-385). The rule binds the public functions. The hooks of equality, hashing and debug printing (D-342), and the package-visible helpers that other standard-library modules use to walk the entries, take no bound and never call `compare`: D-482 forbids bounds on hooks, and the walks need the entries without a `Compare` value (D-845). The walk that stops early, `try_fold_entries`, is one of them: `try_fold`, `any`, `all` and `find` go through it here, and the insertion-ordered modules walk their order through it (D-P03).
 
 ## Building
 
@@ -196,6 +196,54 @@ test "range includes start and excludes end" {
   assert sorted_map::range(letters, 7, 3) == []
 }
 ```
+
+### `split`
+
+```cheby
+pub fn split<K: Compare, V>(m: SortedMap<K, V>, key: K) -> (SortedMap<K, V>, Option<V>, SortedMap<K, V>)
+```
+
+Splits `m` at `key`. It returns the map of the keys less than `key`, the value stored under the key that compares `Equal` to `key` if there is one, and the map of the keys greater than `key`. `key` need not be a key of the map. Like `get`, it gives the stored value and not the stored key (D-341).
+
+- **Cost:** O(log n), and it calls `compare` O(log n) times. Required (D-300).
+
+```cheby
+test "split cuts the map at a key" {
+  let letters = sorted_map::from_list([(1, "a"), (3, "c"), (5, "e")])
+  let (below, here, above) = sorted_map::split(letters, 3)
+  assert sorted_map::to_list(below) == [(1, "a")]
+  assert here == Some("c")
+  assert sorted_map::to_list(above) == [(5, "e")]
+  let (smaller, missing, _) = sorted_map::split(letters, 4)
+  assert sorted_map::last(smaller) == Some((3, "c"))
+  assert missing == None
+}
+```
+
+With `first`, `last` and `size`, `split` answers the queries that have no function of their own (D-P04). The largest key below `k` is `last` of the lower part, and the smallest key above it is `first` of the upper part. The rank of `k`, the number of keys less than it, is `size` of the lower part, so the number of keys from `a` up to but not including `b` is the rank of `b` minus the rank of `a`.
+
+### `at`
+
+```cheby
+pub fn at<K: Compare, V>(m: SortedMap<K, V>, index: Int) -> Option<(K, V)>
+```
+
+Returns the entry at `index` in key order, counting from 0, so `at(m, 0)` is `first(m)`.
+
+- **Fails:** `None` when `index` is outside `0` to `size - 1`, negative indexes included (D-318).
+- **Cost:** O(log n), required (D-300). It never calls `compare`.
+
+```cheby
+test "at counts from the smallest key" {
+  let letters = sorted_map::from_list([(5, "e"), (1, "a"), (3, "c")])
+  assert sorted_map::at(letters, 0) == Some((1, "a"))
+  assert sorted_map::at(letters, 2) == Some((5, "e"))
+  assert sorted_map::at(letters, 3) == None
+  assert sorted_map::at(letters, -1) == None
+}
+```
+
+`at` selects by position, for medians, percentiles and pages of a ranking: the median key of a map of n entries is at `n / 2` (D-P04). `decode::at` in `std::json::decode` is another function, which reads a member of a JSON object by its path (D-P09).
 
 ## Updating
 
@@ -388,6 +436,110 @@ Calls `f` once per entry, in key order, for its effects.
 test "each calls the function once per entry" {
   let lengths = sorted_map::from_list([("a", 1), ("bb", 2)])
   sorted_map::each(lengths, fn(key, value) { assert string::length(key) == value })
+}
+```
+
+### `try_fold`
+
+```cheby
+pub fn try_fold<K: Compare, V, A, E>(m: SortedMap<K, V>, initial: A, f: fn(A, K, V) -> Result<A, E>) -> Result<A, E>
+```
+
+Combines the entries like `fold`, in key order, with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-P01).
+
+- **Fails:** the first `Err` that `f` returns.
+- **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k entries. Informative. It never calls `compare`.
+
+```cheby
+test "try_fold stops at the first error" {
+  fn add_small(total: Int, key: String, value: Int) -> Result<Int, String> {
+    case value < 10 {
+      True => Ok(total + value)
+      False => Err(key)
+    }
+  }
+  let scores = sorted_map::from_list([("b", 20), ("c", 30), ("a", 1)])
+  assert sorted_map::try_fold(scores, 0, add_small) == Err("b")
+  let small = sorted_map::remove(sorted_map::remove(scores, "b"), "c")
+  assert sorted_map::try_fold(small, 0, add_small) == Ok(1)
+  assert sorted_map::try_fold(sorted_map::new(), 7, add_small) == Ok(7)
+  let stops = sorted_map::try_fold(scores, 0, fn(total, key, value) {
+    case key {
+      "c" => panic as "not reached"
+      "b" => Err(total)
+      _ => Ok(total + value)
+    }
+  })
+  assert stops == Err(1)
+}
+```
+
+`try_fold`, `any`, `all` and `find` walk the tree and stop where the callback does, so the entries after the stop are never visited (D-P03).
+
+### `any`
+
+```cheby
+pub fn any<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for some entry. It calls `predicate` in key order, stops at the first such entry, and is `False` for an empty map.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k entries. Informative. It never calls `compare`.
+
+```cheby
+test "any stops at the first match" {
+  let scores = sorted_map::from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert sorted_map::any(scores, fn(key, value) {
+    case key {
+      "c" => panic as "not reached"
+      _ => value == 2
+    }
+  })
+  assert !sorted_map::any(scores, fn(_, value) { value > 3 })
+  assert !sorted_map::any(sorted_map::new::<String, Int>(), fn(_, _) { True })
+}
+```
+
+### `all`
+
+```cheby
+pub fn all<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool
+```
+
+Tells whether `predicate` returns `True` for every entry. It calls `predicate` in key order, stops at the first entry for which it returns `False`, and is `True` for an empty map.
+
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k entries. Informative. It never calls `compare`.
+
+```cheby
+test "all needs every entry to match" {
+  let scores = sorted_map::from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert sorted_map::all(scores, fn(_, value) { value > 0 })
+  assert !sorted_map::all(scores, fn(key, value) {
+    case key {
+      "c" => panic as "not reached"
+      _ => value < 2
+    }
+  })
+  assert sorted_map::all(sorted_map::new::<String, Int>(), fn(_, _) { False })
+}
+```
+
+### `find`
+
+```cheby
+pub fn find<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K, V)>
+```
+
+Returns the entry with the smallest key for which `predicate` returns `True`. It calls `predicate` in key order and stops calling it at that entry.
+
+- **Fails:** `None` when no entry matches.
+- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k entries. Informative. It never calls `compare`.
+
+```cheby
+test "find returns the first match in key order" {
+  let scores = sorted_map::from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert sorted_map::find(scores, fn(_, value) { value > 1 }) == Some(("b", 2))
+  assert sorted_map::find(scores, fn(_, value) { value > 3 }) == None
 }
 ```
 
