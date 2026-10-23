@@ -101,3 +101,106 @@ test "values still buffered are released with the last Receiver" {
   assert receive(inner_rx) == Err(Nil)
   let assert Err(_) = send(tx, spare_tx)
 }
+
+// Draining and filling
+
+/// Receives until the channel is closed and empty, and folds each value
+/// into the accumulator in the order received, as `list::fold` does
+/// (D-P21). It calls `f` on the calling fiber, so a tail call to it keeps
+/// its tail call (D-1059).
+pub fn fold<T, A>(receiver: Receiver<T>, initial: A, f: fn(A, T) -> A) -> A {
+  case receive(receiver) {
+    Ok(value) => fold(receiver, f(initial, value), f)
+    Err(Nil) => initial
+  }
+}
+
+test "fold receives until the channel is closed" {
+  let (tx, rx) = new::<Int>(3)
+  let assert Ok(Nil) = send(tx, 1)
+  let assert Ok(Nil) = send(tx, 2)
+  let assert Ok(Nil) = send(tx, 3)
+  // `tx` is not used again, so the channel is closed now.
+  assert fold(rx, [], fn(seen, n) { [n, ..seen] }) == [3, 2, 1]
+}
+
+/// Receives and folds as `fold` does, but `f` returns a `Result`: the
+/// first `Err` stops it and is returned, and the values still in the
+/// channel stay there. Otherwise it returns `Ok` of the last accumulator
+/// (D-P01, D-P21).
+pub fn try_fold<T, A, E>(
+  receiver: Receiver<T>,
+  initial: A,
+  f: fn(A, T) -> Result<A, E>,
+) -> Result<A, E> {
+  case receive(receiver) {
+    Ok(value) => case f(initial, value) {
+      Ok(next) => try_fold(receiver, next, f)
+      Err(error) => Err(error)
+    }
+    Err(Nil) => Ok(initial)
+  }
+}
+
+test "try_fold stops at the first Err and leaves the rest" {
+  let (tx, rx) = new::<Int>(4)
+  let assert Ok(Nil) = send_all(tx, [1, 2, -3, 4])
+  let total = try_fold(rx, 0, fn(sum, n) {
+    case n < 0 {
+      True => Err(n)
+      False => Ok(sum + n)
+    }
+  })
+  assert total == Err(-3)
+  assert receive(rx) == Ok(4)
+  assert receive(rx) == Err(Nil)
+}
+
+test "try_fold of a closed channel is Ok of the last accumulator" {
+  let (tx, rx) = new::<Int>(2)
+  let assert Ok(Nil) = send_all(tx, [5, 6])
+  let total: Result<Int, Nil> = try_fold(rx, 0, fn(sum, n) { Ok(sum + n) })
+  assert total == Ok(11)
+}
+
+/// Returns every value received until the channel is closed and empty, in
+/// the order received (D-P21). It calls no function value, so a tail call
+/// to it keeps its caller's frame (D-1059).
+pub fn to_list<T>(receiver: Receiver<T>) -> List<T> {
+  receive_into(receiver, [])
+}
+
+/// `received` followed by every value received until the channel is
+/// closed and empty.
+fn receive_into<T>(receiver: Receiver<T>, received: List<T>) -> List<T> {
+  case receive(receiver) {
+    Ok(value) => receive_into(receiver, [..received, value])
+    Err(Nil) => received
+  }
+}
+
+test "to_list drains a closed channel" {
+  let (tx, rx) = new::<String>(2)
+  let assert Ok(Nil) = send_all(tx, ["a", "b"])
+  assert to_list(rx) == ["a", "b"]
+}
+
+/// Sends the elements of `xs` in order and returns `Ok(Nil)`, or, once
+/// every `Receiver` is gone, `Err` with the elements it could not send,
+/// starting with the refused one (D-179, D-P21). It calls no function
+/// value, so a tail call to it keeps its caller's frame (D-1059).
+pub fn send_all<T>(sender: Sender<T>, xs: List<T>) -> Result<Nil, List<T>> {
+  case xs {
+    [] => Ok(Nil)
+    [first, ..rest] => case send(sender, first) {
+      Ok(Nil) => send_all(sender, rest)
+      Err(refused) => Err([refused, ..rest])
+    }
+  }
+}
+
+test "send_all gives back what it could not send" {
+  let (tx, _) = new::<Int>(4)
+  assert send_all(tx, [1, 2, 3]) == Err([1, 2, 3])
+  assert send_all(tx, []) == Ok(Nil)
+}

@@ -13,6 +13,7 @@
 
 import std::channel
 import std::duration
+import std::int
 import std::string
 
 // Types
@@ -434,4 +435,52 @@ test "a capacity-0 send completes when a receiver takes the value" {
     (received, join(sender))
   }
   assert outcome == Ok((Ok("hello"), Ok(Nil)))
+}
+
+test "send_all and to_list pass a list between fibers" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { channel::send_all(tx, [1, 2, 3, 4]) })
+    channel::to_list(rx)
+  }
+  assert outcome == Ok([1, 2, 3, 4])
+}
+
+test "send_all stops when the last Receiver goes" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- scope()
+    let sender = spawn(owner, fn() { channel::send_all(tx, [1, 2, 3]) })
+    let first = channel::receive(rx)
+    // `rx` is not used again, so the sender's next send fails.
+    (first, join(sender))
+  }
+  assert outcome == Ok((Ok(1), Err([2, 3])))
+}
+
+// Tests of `std::duration` that need this module.
+
+test "scale panics where the result does not fit" {
+  let outcome = {
+    use _scope <- scope()
+    duration::scale(duration::hours(1), 2_562_047_788_015_216)
+  }
+  // On JS the result leaves the safe-integer range first, which panics
+  // with a message of its own (D-037).
+  let assert Err(_) = outcome
+}
+
+@target(native)
+test "scale panics just past the largest span" {
+  // 1.5 s times this is 2⁶³ + 1 s, past the largest span.
+  let factor = int::max_value / 3 * 2 + 2
+  let fits = duration::scale(duration::milliseconds(1_500), factor - 1)
+  assert fits == duration::seconds(int::max_value) + duration::milliseconds(500)
+  let outcome = {
+    use _scope <- scope()
+    duration::scale(duration::milliseconds(1_500), factor)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "integer overflow"
 }

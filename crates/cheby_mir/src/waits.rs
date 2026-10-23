@@ -6,7 +6,9 @@
 //! name the caller's call (D-856). Each never calls a function value, so the
 //! change adds at most one frame per waiting fiber and no loop can grow the
 //! stack through it. `selector::select` is not here: it calls the chosen
-//! arm's function in tail position, and select-driven loops rely on that. A
+//! arm's function in tail position, and select-driven loops rely on that.
+//! D-1059 extends the rule to every public std wait that calls no function
+//! value, such as `channel::to_list` and `channel::send_all` (D-P21). A
 //! test reads each module's source and checks that the function exists and
 //! calls no function value.
 
@@ -14,6 +16,8 @@
 pub const FRAME_KEEPING_WAITS: &[(&str, &str)] = &[
     ("std::channel", "receive"),
     ("std::channel", "send"),
+    ("std::channel", "send_all"),
+    ("std::channel", "to_list"),
     ("std::fiber", "join"),
 ];
 
@@ -57,10 +61,92 @@ mod tests {
         out
     }
 
+    /// The line at which `lines` declares the top-level function
+    /// `function`, `pub` or not.
+    fn find_fn(lines: &[&str], function: &str) -> Option<usize> {
+        lines.iter().position(|l| {
+            let rest = l.strip_prefix("pub ").unwrap_or(l);
+            rest.starts_with(&format!("fn {function}("))
+                || rest.starts_with(&format!("fn {function}<"))
+        })
+    }
+
+    /// The name before each `(` of `line` outside a comment: a callee, a
+    /// constructor, or the empty name of a tuple or a grouping.
+    fn callees(line: &str) -> Vec<String> {
+        let code = line.split_once("//").map_or(line, |(code, _)| code);
+        let mut out = Vec::new();
+        let mut rest = code;
+        while let Some((before, after)) = rest.split_once('(') {
+            let callee: Vec<char> = before
+                .chars()
+                .rev()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            out.push(callee.into_iter().rev().collect());
+            rest = after;
+        }
+        out
+    }
+
+    /// Checks that the function declared at `lines[at]` takes no function
+    /// value and calls only `natives`, constructors, itself and other
+    /// functions of its module that pass the same check, which `checked`
+    /// collects. A native wrapper itself has no body.
+    fn check_calls(
+        module: &str,
+        lines: &[&str],
+        natives: &[String],
+        at: usize,
+        checked: &mut Vec<String>,
+    ) {
+        let head = lines[at];
+        let name: String = head
+            .trim_start_matches("pub ")
+            .trim_start_matches("fn ")
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if checked.contains(&name) {
+            return;
+        }
+        checked.push(name.clone());
+        assert!(
+            !head.contains("fn("),
+            "{module}::{name} takes a function value: {head}"
+        );
+        if natives.contains(&name) {
+            assert!(
+                !head.ends_with('{'),
+                "{module}::{name} is a native wrapper with a body"
+            );
+            return;
+        }
+        assert!(head.ends_with('{'), "{module}::{name} has no body");
+        let body = lines[at..].iter().skip(1).take_while(|l| **l != "}");
+        for line in body {
+            for callee in callees(line) {
+                let constructor = callee.starts_with(|c: char| c.is_ascii_uppercase());
+                if callee.is_empty() || constructor || natives.contains(&callee) {
+                    continue;
+                }
+                let helper = find_fn(lines, &callee).unwrap_or_else(|| {
+                    panic!(
+                        "{module}::{name} calls `{callee}`, not a native wrapper or a \
+                         function of its module: {line}"
+                    )
+                });
+                check_calls(module, lines, natives, helper, checked);
+            }
+        }
+    }
+
     /// The table is sorted without duplicates, and each entry is a `pub`
     /// function of its std module that takes no function value and calls
-    /// only the module's `@external(native, …)` functions: a native
-    /// wrapper itself (no body), or a body whose every call is one.
+    /// only the module's `@external(native, …)` functions, constructors,
+    /// and functions of the module that pass the same check, such as
+    /// itself: a native wrapper itself (no body), or a body whose every
+    /// call is one of those.
     #[test]
     fn the_waits_exist_in_std_and_call_no_function_value() {
         assert!(
@@ -80,44 +166,22 @@ mod tests {
                         || l.starts_with(&format!("pub fn {function}<"))
                 })
                 .unwrap_or_else(|| panic!("{module}::{function} is not a pub fn"));
-            let head = lines[at];
-            assert!(
-                !head.contains("fn("),
-                "{module}::{function} takes a function value: {head}"
-            );
-            if natives.iter().any(|n| n == function) {
-                assert!(
-                    !head.ends_with('{'),
-                    "{module}::{function} is a native wrapper with a body"
-                );
-                continue;
-            }
-            assert!(head.ends_with('{'), "{module}::{function} has no body");
-            let body: Vec<&str> = lines[at + 1..]
-                .iter()
-                .take_while(|l| **l != "}")
-                .copied()
-                .collect();
-            for line in &body {
-                let mut rest = *line;
-                while let Some((before, after)) = rest.split_once('(') {
-                    let callee: String = before
-                        .chars()
-                        .rev()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_')
-                        .collect::<Vec<char>>()
-                        .into_iter()
-                        .rev()
-                        .collect();
-                    assert!(
-                        natives.contains(&callee),
-                        "{module}::{function} calls `{callee}`, not a native wrapper: {line}"
-                    );
-                    rest = after;
-                }
-            }
+            check_calls(module, &lines, &natives, at, &mut Vec::new());
             assert!(keeps_frame(module, function));
         }
+        // A wait that calls a function value fails the check.
+        let lines = [
+            "pub fn drain(r: Receiver<Int>) -> Int {",
+            "  helper(r, fn(n) { n })",
+            "}",
+            "fn helper(r: Receiver<Int>, f: fn(Int) -> Int) -> Int {",
+            "  f(1)",
+            "}",
+        ];
+        let caught = std::panic::catch_unwind(|| {
+            check_calls("std::test", &lines, &[], 0, &mut Vec::new());
+        });
+        assert!(caught.is_err());
         assert!(!keeps_frame("std::selector", "select"));
         assert!(!keeps_frame("std::fiber", "scope"));
         assert!(!keeps_frame("app", "receive"));
