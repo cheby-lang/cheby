@@ -1,0 +1,128 @@
+# M3's readings on the reference machine (D-1035): GitHub's `ubuntu-24.04`
+# x86-64 runner, with D-640's Apple M3 reported beside it by hand.
+#
+# - Only the user triggers it, with `workflow_dispatch`: at CP1 (the run-time
+#   reading on x86-64, which shows what D-921's fixed feature set costs
+#   there), at CP3 (the first OQ-P11 reading) and at M3's exit. Agents never
+#   push and never trigger it. It holds no secret, pushes nothing and only
+#   reads the repository (`permissions: contents: read`).
+# - GitHub dispatches a workflow only once the default branch has the file.
+#   So this file runs only after it is on `main`: after CP1's review the
+#   user lands it alone on `main` through a small pull request, then runs it
+#   for the branch under test, for example
+#   `gh workflow run bench.yml --ref aot -f base=<commit> -f rounds=3`.
+# - It builds a release `cheby` for the dispatched commit and for `base`,
+#   M2's exit by default, each with its own toolchain, as `ci.yml`'s
+#   `bench-gate` builds them, after `.github/actions/c-compiler` (D-890).
+#   Then it runs `rounds` rounds of `cargo xtask bench-run --against` over
+#   every group of `bench/runtime`, the two binaries' runs interleaved per
+#   benchmark. `.github/scripts/bench_rounds.py` writes, per group, the
+#   median over the rounds of each round's geometric mean of the ratios,
+#   with the lowest and highest round, to the step summary. A benchmark the
+#   base cannot run, or for which it prints another size or checksum, is
+#   left out and listed (D-897). The rounds' JSON is uploaded as an
+#   artifact. Nothing here fails on a ratio: the reading goes to the user.
+
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: The commit to compare with (default M2's exit)
+        type: string
+        default: 151b0b1f9911dbe56f9ef881e4bf401550510f6d
+      rounds:
+        description: Rounds of `bench-run --against`
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+
+# One reading at a time per ref; a second dispatch waits instead of
+# cancelling a reading in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      - uses: ./.github/actions/c-compiler
+      - name: Resolve the base
+        env:
+          BASE_INPUT: ${{ inputs.base }}
+          ROUNDS: ${{ inputs.rounds }}
+        run: |
+          case "$ROUNDS" in
+            '' | *[!0-9]* | 0)
+              echo "::error::rounds must be a whole number of at least 1, not \`$ROUNDS\`"
+              exit 1 ;;
+          esac
+          if ! base=$(git rev-parse --verify --quiet "$BASE_INPUT^{commit}"); then
+            echo "::error::the base \`$BASE_INPUT\` is not a commit of this repository"
+            exit 1
+          fi
+          echo "BASE=$base" >> "$GITHUB_ENV"
+          {
+            echo "# Bench: \`$GITHUB_SHA\` against \`$base\`"
+            echo
+            echo "Runner: \`ubuntu-24.04\` x86-64 (D-1035); $ROUNDS round(s)."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Build both
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          # From inside the worktree, so the base's own rust-toolchain.toml
+          # and cargo config apply.
+          (cd "$RUNNER_TEMP/base" && cargo build --release --locked \
+            --package cheby_cli --target-dir "$GITHUB_WORKSPACE/target/bench-base")
+          cargo build --release --locked --package cheby_cli
+      - name: Rounds of bench-run against the base
+        env:
+          ROUNDS: ${{ inputs.rounds }}
+        run: |
+          mkdir -p bench-results
+          for i in $(seq 1 "$ROUNDS"); do
+            echo "::group::Round $i of $ROUNDS"
+            cargo xtask bench-run --cheby target/release/cheby \
+              --against target/bench-base/release/cheby --commit "$GITHUB_SHA" \
+              --json "bench-results/round-$(printf '%03d' "$i").json"
+            echo "::endgroup::"
+          done
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          shopt -s nullglob
+          python3 -I .github/scripts/bench_rounds.py \
+            --title "Run time against \`$BASE\` (D-1035)" bench-results/round-*.json \
+            >> "$GITHUB_STEP_SUMMARY"
+      # K7 (wave 10) adds the other two readings of D-1035 here, each with
+      # its own steps and its own section of the step summary, and its files
+      # under bench-results/: OQ-P11's edit-to-run latency (D-974: a release
+      # `cheby`, a fresh `CHEBY_CACHE` per shape, `bench/gen` projects of 1M
+      # lines with seed 1 in the shapes `wide` and `deep`, one cold run, then
+      # five rounds of each edit, `CHEBY_PHASES` for the breakdown) and
+      # D-247's compile throughput.
+      - name: Upload the rounds
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.run_id }}
+          path: bench-results/
+          if-no-files-found: warn
