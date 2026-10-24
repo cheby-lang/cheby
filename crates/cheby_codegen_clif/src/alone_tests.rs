@@ -715,7 +715,7 @@ fn alone_compiles_the_same_twice() {
 
 /// A unit alone asks for no layout id: its `LayoutIds` refuses. Since the
 /// JIT registers through module records (D-919, D-920,
-/// GAP(jit-record-registration)), the JIT's `define` of the same unit
+/// D-1169), the JIT's `define` of the same unit
 /// asks for none either: with a table that refuses every id it defines
 /// the unit, its layout word holding 0 where registration writes the id.
 #[test]
@@ -742,7 +742,7 @@ fn alone_consults_no_layout_ids() {
 /// The JIT's mode keeps its linkage: one module holds both units, every
 /// symbol is local, and `a` calls `b`'s slot, which `b` defines. Its
 /// layout words hold 0 where the id goes, whatever the layout table says,
-/// until registration writes them (D-920, GAP(jit-record-registration)).
+/// until registration writes them (D-920, D-1169).
 #[test]
 #[cfg_attr(
     windows,

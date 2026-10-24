@@ -888,7 +888,7 @@ fn net_handles_print_and_refuse_equality() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// D-981, `net.md`, GAP(net-error-mapping): the system's errors map to the
+/// D-981, `net.md`, D-1184: the system's errors map to the
 /// kinds: refused 8; reset, aborted and a broken pipe 9 (and macOS's
 /// `EPROTOTYPE`); in use 10; `EACCES` and `EPERM` from `bind` 2, from any
 /// other call 0; a closed handle 12; every other code 0 with the system's

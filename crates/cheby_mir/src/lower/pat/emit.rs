@@ -68,7 +68,7 @@ pub(super) struct ArmPlan {
     /// The names it binds, sorted by id.
     pub locals: Vec<LocalId>,
     /// Its first pattern's span: the position of the code that binds its
-    /// names (D-938, GAP(mir-positions)); the shared tests keep the
+    /// names (D-938, D-1170); the shared tests keep the
     /// `case`'s.
     pub span: Option<Span>,
 }

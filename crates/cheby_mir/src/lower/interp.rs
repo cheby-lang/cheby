@@ -99,7 +99,7 @@ impl BodyCx<'_, '_> {
                 acc = Operand::Local(self.split_cut(&mut chain, k, acc, Items::Interp(parts))?);
             }
             // A value part's `show` call and append take the part's
-            // position (D-938, GAP(mir-positions)); a text part's, the
+            // position (D-938, D-1170); a text part's, the
             // interpolation's.
             let part_span = match part {
                 InterpPart::Text(_) => None,
@@ -151,7 +151,7 @@ impl BodyCx<'_, '_> {
 
     /// The text of the value `expr`: its debug text for `{x:?}`, else the
     /// result of its type's `show` function `show`, at the part's position
-    /// (D-938, GAP(mir-positions)).
+    /// (D-938, D-1170).
     fn interp_value(
         &mut self,
         expr: ExprId,

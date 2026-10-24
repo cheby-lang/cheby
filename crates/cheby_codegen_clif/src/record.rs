@@ -18,7 +18,7 @@
 //!   and each function's rows ([`crate::SourceRow`]), from which
 //!   `cheby_link` writes DWARF line tables when it replays the record
 //!   (D-915). Both are empty with positions off (`CHEBY_POSITIONS=off`,
-//!   GAP(positions-switch)).
+//!   D-1173).
 //!
 //! Nothing in a record is an address, an absolute path, a hash-map order
 //! or an id other than a declaration index, so its bytes follow from the

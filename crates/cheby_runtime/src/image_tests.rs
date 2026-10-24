@@ -870,7 +870,7 @@ fn register(records: &[&'static ModuleRecord]) -> Result<u64, ImageError> {
 }
 
 /// A record's external types are registered after its user layouts, in
-/// table order (GAP(record-externals-order)), each a handle layout with
+/// table order (D-1168), each a handle layout with
 /// its name and key, so a value prints as `<Db>` (D-233); an external type
 /// with a drop function is refused before anything is registered (D-703).
 #[test]
@@ -928,7 +928,7 @@ fn image_register_records_external_types_with_names_and_keys() {
 }
 
 /// A free-shape word that is not the one registration derives (D-907) is
-/// refused before anything is registered (GAP(free-shapes-checked)): the
+/// refused before anything is registered (D-1167): the
 /// good record before it keeps its words, and its call site is not
 /// located.
 #[test]

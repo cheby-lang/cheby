@@ -1,4 +1,4 @@
-//! Tests of source positions in MIR (D-938, GAP(mir-positions)): lowering
+//! Tests of source positions in MIR (D-938, D-1170): lowering
 //! gives every statement and terminator the line and column (D-421) of the
 //! construct it lowers, the passes keep them, the dumps never show them,
 //! and positions change nothing else in MIR.
@@ -310,7 +310,7 @@ fn positions_of_a_statement_the_rc_pass_inserts() {
 
 /// Positions change nothing else (D-938): the units counted with
 /// positions off equal those counted with them once their positions are
-/// cleared, and the dumps are the same (GAP(dumps-without-positions)).
+/// cleared, and the dumps are the same (D-1171).
 #[test]
 fn positions_change_no_mir_and_no_dump() {
     for src in [CALLS, CASES] {

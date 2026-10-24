@@ -40,7 +40,7 @@ pub(super) fn lower_body(
     b.set_entry_loc(&cx.location(span)?)?;
     b.set_record_sites(pending.records_sites());
     b.set_record_call_locs(pending.records_call_locs());
-    // D-938: the entry takes the name's position (GAP(mir-positions)).
+    // D-938: the entry takes the name's position (D-1170).
     if pending.records_positions() {
         b.set_record_positions();
         if let Some(pos) = pending.position(cx, span) {
@@ -181,7 +181,7 @@ impl<'a> BodyCx<'a, '_> {
     }
 
     /// Makes the start of `span` the position of what follows (D-938,
-    /// GAP(mir-positions)) and returns the position it replaces, for
+    /// D-1170) and returns the position it replaces, for
     /// [`BodyCx::leave_position`]. A span outside the unit's file, or a
     /// unit without positions, keeps the current one.
     pub(super) fn enter_position(&mut self, span: Span) -> Result<Option<Pos>, Ice> {

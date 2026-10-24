@@ -8,7 +8,7 @@
 //! under both modes (D-702, D-718); the name, the values and that release
 //! builds honor it are D-746's. `CHEBY_UNWIND_EDGES=off` turns the unwind
 //! pass off for D-702's measurement (D-742). `CHEBY_POSITIONS=off` turns
-//! source positions off (D-938's measurement, GAP(positions-switch)): no
+//! source positions off (D-938's measurement, D-1173): no
 //! position in MIR, no source location in code, no rows in code records
 //! and no DWARF in objects; the machine code is the same either way.
 
@@ -95,7 +95,7 @@ pub struct MirOptions {
     /// [`crate::MirModule::source`]), which code generation turns into
     /// source locations, code records into rows and objects into DWARF
     /// line tables (D-938); `true` by default. `CHEBY_POSITIONS=off` turns
-    /// it off ([`MirOptions::positions_from_env`], GAP(positions-switch)),
+    /// it off ([`MirOptions::positions_from_env`], D-1173),
     /// for D-938's measurement: lowering then records no position, and
     /// [`count_lowered_with`] clears any a unit holds. It changes no code
     /// and no dump.
@@ -196,11 +196,11 @@ impl MirOptions {
     }
 
     /// The environment variable that turns source positions off, for
-    /// D-938's measurement of their cost (GAP(positions-switch)).
+    /// D-938's measurement of their cost (D-1173).
     pub const POSITIONS_ENV: &'static str = "CHEBY_POSITIONS";
 
     /// Reads `CHEBY_POSITIONS`: `off` turns positions off, `on`, unset or
-    /// empty keeps them (GAP(positions-switch), as `CHEBY_RC` and
+    /// empty keeps them (D-1173, as `CHEBY_RC` and
     /// `CHEBY_UNWIND_EDGES` read their variables, D-742, D-746).
     ///
     /// # Errors
@@ -348,7 +348,7 @@ pub fn check_lowered(module: &MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] listing the validator's findings.
 pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Result<(), Ice> {
-    // D-938's switch (GAP(positions-switch)): with positions off, a unit
+    // D-938's switch (D-1173): with positions off, a unit
     // keeps none, whatever lowering recorded.
     if !options.positions {
         crate::positions::clear(module);
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn positions_switch_parses_on_off_or_empty() {
-        // GAP(positions-switch): `off` turns positions off; `on`, unset
+        // D-1173: `off` turns positions off; `on`, unset
         // or empty keeps them; anything else is an error, as for
         // `CHEBY_RC` (D-746).
         assert_eq!(MirOptions::parse_positions(""), Ok(true));

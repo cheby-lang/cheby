@@ -36,12 +36,12 @@
 //! - **Listening** (D-998, D-1036): through `socket2`, with `IPV6_V6ONLY`
 //!   cleared for an IPv6 wildcard, `SO_REUSEADDR` on Unix and never on
 //!   Windows, and a backlog of 128, as Rust's `std` and `mio` do
-//!   (GAP(net-listen-options)). `TCP_NODELAY` is set on every connection
+//!   (D-1183). `TCP_NODELAY` is set on every connection
 //!   from `accept` and `connect` (D-1002).
 //! - **Errors** (D-981, D-484): each kernel returns `Err((kind, message))`
 //!   ([`NetError`]): 8 `ECONNREFUSED`; 9 `ECONNRESET`, `ECONNABORTED` and a
 //!   socket's `EPIPE`, with macOS's `EPROTOTYPE` on a write that races the
-//!   peer's reset (GAP(net-error-mapping)); 10 `EADDRINUSE`; 11 every
+//!   peer's reset (D-1184); 10 `EADDRINUSE`; 11 every
 //!   failure of name lookup; 12 a closed handle; 13 a port outside 0 to
 //!   65535 or a host that is empty or holds U+0000; 2 `EACCES` and `EPERM`
 //!   from `bind`; every other failure 0 with the system's message.
@@ -96,7 +96,7 @@ const KIND_CLOSED: i64 = 12;
 /// `io::is_invalid_input` (D-981).
 const KIND_INVALID_INPUT: i64 = 13;
 
-/// The listen backlog (GAP(net-listen-options)): Rust's `std` and `mio`'s
+/// The listen backlog (D-1183): Rust's `std` and `mio`'s
 /// `TcpListener::bind` use 128.
 const BACKLOG: i32 = 128;
 
@@ -168,7 +168,7 @@ impl NetError {
     }
 }
 
-/// GAP(net-error-mapping): a platform's variant of a named case maps with
+/// D-1184: a platform's variant of a named case maps with
 /// that case. macOS answers a write that races the peer's reset with
 /// `EPROTOTYPE` (41) where other systems give `EPIPE` or `ECONNRESET`, so
 /// it is kind 9 there.
@@ -340,7 +340,7 @@ impl<S: mio::event::Source> NetSocket<S> {
 
 /// A `Listener`'s payload: the socket and the port it listens on, kept so
 /// that `local_port` answers after a close too, with the port the
-/// listener had (GAP(net-local-port-after-close): `local_port` cannot
+/// listener had (D-1186: `local_port` cannot
 /// fail, D-998).
 #[derive(Debug)]
 pub(crate) struct ListenerState {
@@ -442,7 +442,7 @@ fn resolve(
     Ok(lookup.into_addresses())
 }
 
-/// A listening socket on `address` (GAP(net-listen-options)).
+/// A listening socket on `address` (D-1183).
 fn bind_listener(runtime: &Shared, address: SocketAddr) -> Result<ListenerState, NetError> {
     let other = |error: io::Error| NetError::of(&error, Op::Other);
     let socket = Socket::new(
@@ -625,7 +625,7 @@ pub(crate) fn write_on(
 }
 
 /// `shutdown_write`'s work, under the write turn, so it follows every
-/// write that reached the connection first (GAP(net-shutdown-turn): it
+/// write that reached the connection first (D-1185: it
 /// waits for a write in progress, which may itself wait on the peer, and
 /// never cuts one short).
 pub(crate) fn shutdown_on(
@@ -894,7 +894,7 @@ pub unsafe extern "C" fn cheby_net_sys_close_listener(ctx: *mut ExecCtx, listene
 }
 
 /// The package-visible `sys_connect_tls`'s kernel (D-985, D-1011):
-/// GAP(net-tls-stub): until S6 implements TLS it answers an error of kind
+/// D-1182: until S6 implements TLS it answers an error of kind
 /// 0, after the checks every socket kernel makes.
 ///
 /// # Safety

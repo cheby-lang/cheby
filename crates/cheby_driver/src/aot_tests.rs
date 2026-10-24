@@ -617,11 +617,11 @@ fn check_records(
         let defined = symbols(&object);
         let decoded = decode_record(&object, &mangle::module_record(path));
         // Constants are K5a's; no external type names a drop function
-        // yet (GAP(record-externals-order)).
+        // yet (D-1168).
         assert_eq!(decoded.counts[6], 0, "{path}");
         assert!(decoded.externals.iter().all(|e| !e.2), "{path}");
         // One free-shape word per constructor, the one registration
-        // derives (D-907, GAP(free-shapes-checked)).
+        // derives (D-907, D-1167).
         let mut shapes = Vec::new();
         let mut order = Vec::new();
         for desc in &unit.layouts {

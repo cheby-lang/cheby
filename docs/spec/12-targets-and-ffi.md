@@ -17,7 +17,7 @@ There are no operating-system targets in v1: `native` covers macOS, Linux and Wi
 
 Native debug info is DWARF on every platform in v1, including Windows. CodeView/PDB is added when the bundled linker lands ([§13.1](13-tooling.md#131-the-cheby-command)) (D-184, D-088). By default only line tables are emitted, for debuggers and profilers, and full debug info is opt-in ([§13.12.5](13-tooling.md#13125-build-profiles)) (D-259). The panic backtrace of [§11.6](11-errors-and-panics.md#116-panic-and-todo) needs no debug info (D-939).
 
-_Note:_ the reference implementation writes line tables into every object file it links. Linux executables keep them. Until the bundled linker, macOS executables are linked without a debug map, which would name the link's temporary object files by absolute path, so debuggers find no line tables in them there (D-264, D-938).
+_Note:_ the reference implementation writes line tables into the object file of every Cheby module it links (D-1172). Linux executables keep them. Until the bundled linker, macOS executables are linked without a debug map, which would name the link's temporary object files by absolute path, so debuggers find no line tables in them there (D-264, D-938).
 
 ## 12.2 Native
 

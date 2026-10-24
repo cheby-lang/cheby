@@ -26,7 +26,7 @@ impl BodyCx<'_, '_> {
         // gives this one back.
         let outer = self.site.replace(e.span);
         // Likewise its position is the one of the statements it emits
-        // itself (D-938, GAP(mir-positions)).
+        // itself (D-938, D-1170).
         let outer_pos = self.enter_position(e.span)?;
         let lowered = self.expr_kind(e, tail);
         self.site = outer;

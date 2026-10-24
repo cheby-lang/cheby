@@ -180,7 +180,7 @@ impl BodyCx<'_, '_> {
         b.set_record_call_locs(self.pending.records_call_locs());
         // D-938: the continuation's entry is the literal's position, and
         // its statements go on at the position lowering is at
-        // (GAP(mir-positions)).
+        // (D-1170).
         if self.pending.records_positions() {
             b.set_record_positions();
             if let Some(pos) = self.pending.position(self.cx, chain.span) {

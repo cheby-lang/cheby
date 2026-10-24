@@ -271,7 +271,7 @@ pub struct Jit {
     /// ([`Jit::module_records`]).
     records: Vec<JitRecord>,
     /// The external types this JIT's records registered, so a later
-    /// batch registers only the others (GAP(jit-record-registration)).
+    /// batch registers only the others (D-1169).
     externals: rustc_hash::FxHashSet<DefId>,
 }
 
@@ -534,7 +534,7 @@ impl Jit {
     }
 
     /// Registers the finalized batch's module records `records` with the
-    /// runtime's one routine (D-919, GAP(jit-record-registration)): its
+    /// runtime's one routine (D-919, D-1169): its
     /// user layouts, writing their layout words and constructor statics,
     /// then its external types, hooks and the call-site ranges of its
     /// functions under this JIT's code owner (D-867), all before any code
@@ -719,7 +719,7 @@ impl Jit {
         for (def, name) in names {
             // A new generation of an external type is registered anew,
             // as `Decls::set_session_name` forgets a constructor's layout
-            // (GAP(jit-record-registration)).
+            // (D-1169).
             let previous = self.decls.session_name(def).map(|old| old.generation);
             let changed = previous.map_or(name.generation > 0, |old| old != name.generation);
             if changed {

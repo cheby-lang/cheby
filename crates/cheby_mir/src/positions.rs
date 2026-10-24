@@ -9,11 +9,11 @@
 //! ([`crate::Block::pos`]); the unit names its source file once
 //! ([`crate::MirModule::source`]). They are side tables, as the call
 //! locations of D-856 are: validation checks their shape, the dumps never
-//! print them (GAP(dumps-without-positions)) and code generation only sets
+//! print them (D-1171) and code generation only sets
 //! source locations from them, so the code and every dump are the same
 //! with and without them.
 //!
-//! Which position (GAP(mir-positions)): lowering gives each statement and
+//! Which position (D-1170): lowering gives each statement and
 //! terminator the position of the start of the innermost expression being
 //! lowered when it is emitted (`BodyCx::expr`): a call's own statement
 //! gets the call expression's, after its arguments got theirs; an
@@ -29,10 +29,10 @@
 //! the block's first position, an edge's drops the branch's, and an
 //! unwind pad the position of the first site that unwinds to it.
 //! Positions are only recorded for spans in the unit's own file, since a
-//! line table names one file (GAP(dwarf-minimal-info)).
+//! line table names one file (D-1172).
 //!
 //! With positions off (`CHEBY_POSITIONS=off`, [`crate::MirOptions::positions`],
-//! GAP(positions-switch)) a unit holds none: every table and every
+//! D-1173) a unit holds none: every table and every
 //! block's list is empty and its source is `None`.
 
 use cheby_iface::Ice;
@@ -283,7 +283,7 @@ impl Block {
 }
 
 /// Drops every position of `module`: its source, each function's table
-/// and each block's list, as with positions off (GAP(positions-switch)).
+/// and each block's list, as with positions off (D-1173).
 pub fn clear(module: &mut MirModule) {
     module.source = None;
     for f in &mut module.functions {

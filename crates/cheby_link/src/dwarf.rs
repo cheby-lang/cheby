@@ -2,7 +2,7 @@
 //!
 //! When [`crate::object::replay`] turns a code record with positions into
 //! an object, [`write`] adds, through `gimli::write`, a minimal DWARF 4
-//! description of the record's code (GAP(dwarf-minimal-info)):
+//! description of the record's code (D-1172):
 //!
 //! - `.debug_line`: one line program whose only file is the record's
 //!   source, D-421's diagnostic path split into a relative directory and a

@@ -1,5 +1,5 @@
 //! Tests of the DWARF line tables in replayed objects (D-938,
-//! GAP(dwarf-minimal-info)): a record with positions replayed into an ELF
+//! D-1172): a record with positions replayed into an ELF
 //! and a Mach-O object, its sections relocated and read back with
 //! `gimli`'s reader, each row found at its function's address, an offset
 //! mapped to its line, no absolute path and no `DW_AT_comp_dir`, two

@@ -815,7 +815,7 @@ fn record_modrec_is_hidden_read_only_data() {
         SymbolKind::Data { writable: true }
     );
     // One free-shape word, the one registration derives for `Pair`'s
-    // layout (D-907, GAP(free-shapes-checked)).
+    // layout (D-907, D-1167).
     assert_eq!(u64_at(bytes, 64), 1);
     let (target, shapes_at) = reloc_at(72).unwrap();
     assert_eq!(target, "cb$mod$app");

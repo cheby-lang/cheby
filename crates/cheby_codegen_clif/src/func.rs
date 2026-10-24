@@ -795,7 +795,7 @@ impl Translator<'_, '_> {
     /// its bits as the location, so the rows need no other table. A
     /// function without positions (positions off, generated code) never
     /// gets a source location, so its CLIF is what it is without them;
-    /// [`Decls::describe`] prints none anyway (GAP(dumps-without-positions)).
+    /// [`Decls::describe`] prints none anyway (D-1171).
     fn set_pos(&mut self, pos: PosRef) {
         if self.func.positions.is_empty() {
             return;

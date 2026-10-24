@@ -365,7 +365,7 @@ Each kind of failure that has a predicate below has a fixed text, the same on ev
 | `is_connection_reset`    | `connection reset`    | `net::read_bytes`, `write_bytes` and `shutdown_write`, `http::get` and `http::send` |
 | `is_address_in_use`      | `address in use`      | `net::listen` and `http::serve`                                                     |
 | `is_host_not_found`      | `host not found`      | `net::listen`, `net::connect`, `http::get` and `http::send`                         |
-| `is_closed`              | `closed`              | every `std::file` function on a handle, and every `std::net` function on a socket   |
+| `is_closed`              | `closed`              | all `std::file` functions on a handle, `std::net` ones on a socket but `local_port` |
 | `is_invalid_input`       | `invalid input`       | `std::file`, `std::net`, `http::serve` and this module's file functions             |
 
 `std::http` returns these through `http::io_error` (D-1016). Every other failure keeps the operating system's own message, or the text given to [`other`](#other) (D-1072).
@@ -397,7 +397,7 @@ These three are the predicates of tier 1 (D-367). The ten after [`is_invalid_dat
 pub fn is_permission_denied(error: Error) -> Bool
 ```
 
-Tells whether `error` means that the operating system refused the program access to a file or a directory.
+Tells whether `error` means that the operating system refused the program access to a file or a directory, or, for `net::listen`, to a port (D-1184).
 
 - **Cost:** O(1). Informative.
 

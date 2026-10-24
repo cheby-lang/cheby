@@ -36,7 +36,7 @@
 //! `cb$layout$…` word, `cb$ctor$…` static and `cb$fnval$…` values. An
 //! empty table is count 0 and pointer 0, a constructor with fields has
 //! `ctor_static` 0, and an external type's `drop` is 0 (user drop
-//! functions come later, D-101, D-703, GAP(record-externals-order)). A
+//! functions come later, D-101, D-703, D-1168). A
 //! unit without user layouts or external types writes no type, external
 //! or shape, so its record is the call-site table and the string table
 //! alone.
@@ -45,7 +45,7 @@
 //! hooks (D-482), the external types (std's handle types aside, which are
 //! runtime kinds, D-647, D-982) and the free-shape words (D-907, computed
 //! with `cheby_runtime::layout::free_shape_word`, which registration
-//! checks them against, GAP(free-shapes-checked)) are filled. The
+//! checks them against, D-1167) are filled. The
 //! constants are K5a's: they stay empty, and registration refuses what it
 //! cannot register yet. A record of a unit alone is a pure function of its
 //! unit (D-915): it holds no layout id, which registration assigns
@@ -365,7 +365,7 @@ impl std::fmt::Debug for BatchNew<'_> {
 /// Defines in `module` the module record of each code and tests unit of
 /// a JIT batch, `mirs`, whose functions [`crate::define_with_stats`]
 /// defined as `defined` with `decls` (D-919, D-1107,
-/// GAP(jit-record-registration)): the JIT registers them with
+/// D-1169): the JIT registers them with
 /// `cheby_runtime::image::register_records` once the batch is finalized,
 /// as an executable's start registers its records. An entries unit gets no
 /// record (D-1107, D-1111), so its entry thunks and trampolines are in no
@@ -667,8 +667,8 @@ fn write_types<M: Module>(
 
 /// Writes the `externals` and `free_shapes` tables of the record `this`
 /// (module documentation) at the offsets `layout` gives: one entry per
-/// external type, its `drop` 0 (GAP(record-externals-order)), and one
-/// free-shape word per constructor (D-907, GAP(free-shapes-checked)).
+/// external type, its `drop` 0 (D-1168), and one
+/// free-shape word per constructor (D-907, D-1167).
 fn write_externals(
     desc: &mut DataDescription,
     this: GlobalValue,
@@ -712,7 +712,7 @@ fn write_externals(
 /// each type's constructors in tag order: what registration derives for
 /// the layout it makes from the record's facts (D-907, D-1163), computed
 /// with the runtime's own function, so `register_records` finds the words
-/// it derives (GAP(free-shapes-checked)).
+/// it derives (D-1167).
 fn free_shapes(types: &[RecordType]) -> Result<Vec<u64>, RecordError> {
     let mut words = Vec::new();
     for ty in types {

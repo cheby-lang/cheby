@@ -13,7 +13,7 @@
 
 import std::duration
 
-// GAP(instant-field-name): the page does not name the field, which debug
+// D-1181: the page does not name the field, which debug
 // printing shows; `since_origin` mirrors `Timestamp`'s `since_epoch`.
 
 /// A reading of the monotonic clock, as the span since the clock's origin

@@ -1,5 +1,5 @@
 //! The JIT registers through the one routine (D-919, D-1163,
-//! GAP(jit-record-registration)): each batch defines a module record for
+//! D-1169): each batch defines a module record for
 //! each code and tests unit and registers them with
 //! `cheby_runtime::image::register_records` once finalized, so layout
 //! words and constructor statics hold their headers before any entry runs

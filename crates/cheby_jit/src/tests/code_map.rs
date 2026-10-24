@@ -193,7 +193,7 @@ fn code_map_offsets_are_return_addresses_of_calls() {
 /// A function whose only call is a tail call has no site; every function
 /// of the code unit is registered; the entry thunk, which the entries
 /// unit defines and no module record lists, is in no range, as in an
-/// executable (D-1111, GAP(jit-record-registration)).
+/// executable (D-1111, D-1169).
 #[test]
 #[cfg_attr(
     windows,

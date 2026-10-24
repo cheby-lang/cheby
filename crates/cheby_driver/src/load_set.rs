@@ -15,13 +15,13 @@
 //! item or a constructor reached code mentions, compiled whole (D-966),
 //! and, since a whole module's unreached items are compiled too, every
 //! module that any item of a loaded module mentions, and so on until
-//! nothing is added (GAP(load-set-closure): their code names those
+//! nothing is added (D-1177: their code names those
 //! modules' slots and layouts). A module that only lends constructors is loaded and
-//! compiled whole like any other (GAP(load-set-constructor-modules)).
+//! compiled whole like any other (D-1176).
 //! A module's tests unit is whole too (D-970), so the tests of a module
 //! with a selected test count as its items.
 //!
-//! GAP(reach-summaries-source): until `cheby run`, `cheby test` and `cheby
+//! D-1178: until `cheby run`, `cheby test` and `cheby
 //! build` skip parsing unchanged modules, every module they load is
 //! checked in the command, and its summary is made here from its THIR, in
 //! the front record's form with two differences that keep the walk equal

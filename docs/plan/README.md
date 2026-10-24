@@ -342,6 +342,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1145    | The program differential compares standard error only where the reference evaluator fixes it        |
 | D-1150    | `cheby fmt` uses 100 columns until the user chooses the width at CP2                                |
 | D-1162    | Executables hold the toolchain's source paths until M6's distributed toolchain remaps them          |
+| D-1173    | The hidden `CHEBY_POSITIONS=off` turns source positions off until CP2 decides on positions          |
+| D-1174    | Linux executables hold the runtime archive's debug paths, the toolchain checkout's too, until M6    |
+| D-1180    | `cheby check` compiles std without borrow masks until std's code comes from the cache (K6)          |
 
 ## Open questions
 

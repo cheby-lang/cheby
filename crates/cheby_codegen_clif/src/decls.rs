@@ -855,7 +855,7 @@ impl Decls {
         // metadata too: Cranelift's writer prints `@<loc>` before each
         // instruction and indents every instruction once any is set, so
         // the printed copy clears them and a dump is the same with
-        // positions on and off (GAP(dumps-without-positions)).
+        // positions on and off (D-1171).
         if func.debug_tags.is_empty() && func.srclocs.is_empty() {
             let _ = write!(out, "{}", func.display());
         } else {
@@ -1289,7 +1289,7 @@ impl Decls {
         // D-920: the one registration routine patches the `cb$ctor$`
         // header after the batch or the executable is loaded (D-919), so
         // the static is writable in a unit alone and in the JIT alike
-        // (GAP(jit-record-registration)).
+        // (D-1169).
         let ctor = if desc.fields.is_empty() {
             Some(self.data(module, &mangle::item(Kind::Ctor, &name), linkage, true)?)
         } else {

@@ -8,9 +8,9 @@ pub type Instant
 
 `Instant` is a reading of the monotonic clock, as a span since an origin that the runtime fixes once per process and does not reveal. Readings of the system clock never go backwards within one process, and the clock does not change when someone sets the wall clock. An `Instant` means nothing in another process or on another machine (D-1018, D-1021).
 
-- **Representation.** `Instant` is opaque plain data: a record written in Cheby that holds a [`duration::Duration`](../duration.md), so it has the same nanosecond resolution and range. `==` and hashing are the built-in structural ones (D-650, D-1018).
+- **Representation.** `Instant` is opaque plain data: a record written in Cheby that holds a [`duration::Duration`](../duration.md) in its one field, `since_origin`, so it has the same nanosecond resolution and range. `==` and hashing are the built-in structural ones (D-650, D-1018, D-1181).
 - **Comparing.** It satisfies `Compare` through [`compare`](#compare), so `<`, `<=`, `>` and `>=` work on instants ([§8.7](../../spec/08-interfaces.md#87-operator-interfaces), D-045). That is why the type has a module of its own: `time::compare` is `Timestamp`'s, and a module satisfies an interface for one type only (D-1057).
-- **No `Show`.** Its origin is hidden, so an `Instant` has no text that means anything. Debug printing is the built-in one for records (§3.13, D-1057).
+- **No `Show`.** Its origin is hidden, so an `Instant` has no text that means anything. Debug printing is the built-in one for records, such as `Instant { since_origin: Duration { seconds: 90, nanoseconds: 0 } }` for the reading 90 seconds after the origin (§3.13, D-1057, D-1181).
 - **Written in Cheby.** The module imports only `std::duration`. None of its functions has a kernel or reads the context, so all of them run in constants and give the same result on every target (D-090, D-232, D-650, D-1057): `const origin: instant::Instant = instant::from_origin(duration::zero)` works. The functions that read the clock or wait are in `std::time`, which imports this module, because the clock in context, `time::clock`, is declared there and imports are acyclic (D-145, D-1047).
 - **Importing it.** A program writes `import std::time::instant`, which binds the name `instant` (D-351). `std::time` alone does not bring it into scope.
 

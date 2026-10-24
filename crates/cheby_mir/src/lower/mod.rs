@@ -187,7 +187,7 @@ impl Pending {
         let info = cx.defs.modules.try_get(module)?;
         self.outside_std = info.package != PackageId::STD;
         // D-938: positions in the module's own file, unless
-        // `CHEBY_POSITIONS=off` (GAP(positions-switch)).
+        // `CHEBY_POSITIONS=off` (D-1173).
         self.positions = info
             .file
             .filter(|_| crate::MirOptions::lowering_records_positions());
@@ -207,7 +207,7 @@ impl Pending {
 
     /// The position of the start of `span` (D-421: line and column from
     /// 1, the column in code points), if the unit records positions and
-    /// `span` lies in its file (GAP(mir-positions)).
+    /// `span` lies in its file (D-1170).
     pub(crate) fn position(&self, cx: &LowerCx<'_>, span: Span) -> Option<Pos> {
         let file = self.positions.filter(|&f| f == span.file)?;
         let at = cx.sources.file(file)?.line_col(span.range.start());
@@ -678,7 +678,7 @@ fn finish_unit(
 /// The unit's source path when it records positions (D-938,
 /// [`MirModule::source`]), after giving each function lowering generated
 /// (a wrapper, a value shim, an intrinsic body) its entry position
-/// everywhere when its span lies in the unit's file (GAP(mir-positions)).
+/// everywhere when its span lies in the unit's file (D-1170).
 fn unit_positions(
     functions: &mut [Function],
     pending: &Pending,

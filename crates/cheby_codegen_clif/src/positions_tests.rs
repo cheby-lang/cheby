@@ -1,7 +1,7 @@
 //! Source positions in code generation (D-938): `set_srcloc` from each
 //! statement's position, the rows of each function, and positions in the
 //! code record (version 2). Positions change no machine code, no
-//! relocation and no CLIF dump (GAP(dumps-without-positions)).
+//! relocation and no CLIF dump (D-1171).
 
 #![expect(
     clippy::arithmetic_side_effects,
@@ -103,7 +103,7 @@ fn positions_change_no_machine_code() {
 
 /// `Decls::describe` prints no source location (D-869's debug tags and
 /// D-938's locations are metadata): a function's CLIF text is the same
-/// with positions on and off (GAP(dumps-without-positions)).
+/// with positions on and off (D-1171).
 #[test]
 fn positions_dump_unchanged() {
     for unit in units() {

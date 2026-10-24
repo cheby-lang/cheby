@@ -732,7 +732,7 @@ fn fast_fixed(size: u64, count: u64, reusable: bool) -> u64 {
 /// 0 when the layout has none: the word a module record's `free_shapes`
 /// table holds for each of its user layouts, which
 /// `image::register_records` checks against this function before it
-/// registers anything (GAP(free-shapes-checked)). Code generation calls it
+/// registers anything (D-1167). Code generation calls it
 /// too, so a record carries the words of the runtime it was built with.
 #[must_use]
 pub fn free_shape_word(info: &LayoutInfo) -> u64 {

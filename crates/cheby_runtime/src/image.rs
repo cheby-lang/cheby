@@ -104,7 +104,7 @@
 //! into each layout word the header that allocation copies and into each
 //! constructor static its static header (D-454, D-920), then the record's
 //! external types in table order (`layout::register_external`,
-//! GAP(record-externals-order)); then the hooks of every record on every
+//! D-1168); then the hooks of every record on every
 //! constructor of each hooked type (D-482, D-585), and the call-site
 //! ranges under the caller's code owner (D-867).
 //!
@@ -706,7 +706,7 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
 /// user layouts in D-1163's order and with D-1163's facts and writes each
 /// layout word's and constructor static's header (D-454), registers its
 /// external types (`layout::register_external`, after the record's user
-/// layouts, GAP(record-externals-order)), then sets every record's hooks
+/// layouts, D-1168), then sets every record's hooks
 /// (D-585) and registers the call-site ranges under `owner` (D-867). The
 /// one routine of D-919: an executable's start calls it through
 /// [`install`], and every JIT host after each batch.
@@ -716,7 +716,7 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
 /// [`ImageError::Malformed`] before anything is registered, for a table,
 /// string, reference or word that is not what the module documentation
 /// says, a free-shape word that is not the one registration derives
-/// (GAP(free-shapes-checked)), or an external type with a drop function,
+/// (D-1167), or an external type with a drop function,
 /// which no host passes until user drop functions are registered (D-703);
 /// [`ImageError::NotYet`] for a non-empty constant slot table (K5a). The
 /// one failure after registration has begun is a full layout table (2^24
@@ -752,7 +752,7 @@ pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<
     // Then the layouts, record by record in build order: each type's
     // constructors with consecutive ids in tag order (D-522), in the
     // order of the record's `types` (D-1163), then the record's external
-    // types in table order (GAP(record-externals-order)).
+    // types in table order (D-1168).
     let mut hooks: Vec<(LayoutId, [Word; 3])> = Vec::new();
     for (index, record) in checked.into_iter().enumerate() {
         let mut ids: Vec<Vec<LayoutId>> = Vec::with_capacity(record.types.len());
@@ -794,7 +794,7 @@ struct CheckedRecord {
 /// type's constructors in tag order, each equal to the word registration
 /// derives for the layout ([`layout::free_shape_word`], D-907), so a
 /// stale or foreign record never sets a wrong shape
-/// (GAP(free-shapes-checked)).
+/// (D-1167).
 fn check_free_shapes(
     index: usize,
     record: &ModuleRecord,
@@ -831,7 +831,7 @@ fn check_free_shapes(
 /// Checks the external types of `record` and returns each one's name and
 /// key, in table order. A drop function is refused until user drop
 /// functions are registered (D-101, D-703): no code generation writes one
-/// yet (GAP(record-externals-order)).
+/// yet (D-1168).
 fn external_types(index: usize, record: &ModuleRecord) -> Result<Vec<(String, u64)>, ImageError> {
     let malformed = |what| ImageError::malformed(index, what);
     let strings = record

@@ -37,6 +37,8 @@ Starts listening for TCP connections on `host` and `port`. `host` is the address
 - **Fails:** `Err` for which `io::is_invalid_input` holds when `port` is outside 0 to 65535 or `host` is empty or contains U+0000, `io::is_host_not_found` when `host` cannot be resolved, `io::is_address_in_use` when another socket already listens there, and `io::is_permission_denied` when the program may not use the port. `Err` for every other failure of the operating system.
 - **Cost:** O(1), plus the system calls, and a name lookup when `host` is a name. Informative.
 
+_Note:_ the reference implementation sets `SO_REUSEADDR` on Unix and never on Windows, so a restarted server can listen on its port at once, and listens with a backlog of 128 (D-1183).
+
 ```cheby
 test "listen rejects a port out of range" {
   let assert Err(reason) = net::listen("127.0.0.1", 70_000)
@@ -59,7 +61,7 @@ test "a listener on port 0 gets a port of its own" {
 pub fn local_port(listener: Listener) -> Int
 ```
 
-Returns the port `listener` listens on. After `listen` with port 0, it is the port the operating system chose.
+Returns the port `listener` listens on. After `listen` with port 0, it is the port the operating system chose. After [`close_listener`](#close_listener), it still returns that port, so it never fails (D-1186).
 
 - **Cost:** O(1). Informative.
 
@@ -181,10 +183,10 @@ The test of [`read_bytes`](#read_bytes) uses it.
 pub fn shutdown_write(connection: Connection) -> Result<Nil, io::Error>
 ```
 
-Closes the writing side of `connection`, so the peer's reads reach the end of the stream once it has read everything written before. Reading stays possible. A later `write_bytes` fails.
+Closes the writing side of `connection`, so the peer's reads reach the end of the stream once it has read everything written before. It waits for a `write_bytes` in progress on `connection` and never cuts one short. A cancelled `shutdown_write` that was still waiting has shut nothing down (D-1001, D-1185). Reading stays possible. A later `write_bytes` fails.
 
 - **Fails:** `Err` for which `io::is_connection_reset` holds when the peer has already reset the connection, and `io::is_closed` when `connection` was closed (D-1063). `Err` for every other failure of the operating system.
-- **Cost:** O(1), plus the system call. Informative.
+- **Cost:** O(1), plus the system call and the wait for a write in progress. Informative.
 
 The test of [`read_bytes`](#read_bytes) uses it.
 
@@ -192,7 +194,7 @@ The test of [`read_bytes`](#read_bytes) uses it.
 
 A socket closes on its own after its last use (D-205). These two functions close it now, which is how one fiber stops another's `accept` or `read_bytes`, as Go's `Close` does, with no new kind of cancellation (D-1063).
 
-- **Waking.** A fiber parked in `accept`, `read_bytes` or `write_bytes` on the closed handle wakes and gets `Err` for which `io::is_closed` holds, and so does every later operation on the handle, another close included. Releasing a closed handle does nothing more, as for `file::close` (D-1063).
+- **Waking.** A fiber parked in `accept`, `read_bytes` or `write_bytes` on the closed handle wakes and gets `Err` for which `io::is_closed` holds, and so does every later operation on the handle that returns a `Result`, another close included. [`local_port`](#local_port) still returns the port. Releasing a closed handle does nothing more, as for `file::close` (D-1063, D-1186).
 - **No parking.** The handle keeps its descriptor until a system call that another worker is making on it returns, so a descriptor number is never reused under a running call (D-1001). Those calls never block, so a close never parks (D-1063).
 - **No scoped forms.** There are no `net::with_*` functions. A socket's close reports nothing useful, so a scoped form would add only a hard end to the handle's life, which `close` gives (D-1063).
 

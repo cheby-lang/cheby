@@ -33,7 +33,7 @@ const WORD_BYTES: u32 = 8;
 ///   ([`crate::compile_unit`]) and in the JIT alike, and both are
 ///   writable: the one registration routine writes their headers when it
 ///   registers the unit's module record, before any code that uses them
-///   runs (D-919, D-920, GAP(jit-record-registration)).
+///   runs (D-919, D-920, D-1169).
 /// - A constant slot `cb$const$…` is a writable word, 0 until the
 ///   constant is evaluated (E6).
 /// - A static object (D-523) is a header with count 0, then its fields:

@@ -219,7 +219,7 @@ fn hello_world() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/001_hello_world")
 }
 
-/// GAP(golden-dumps-scope): the dumps of `001_hello_world` keep D-510's
+/// D-1175: the dumps of `001_hello_world` keep D-510's
 /// view, whatever the commands lower: `dump_mir` prints the units of
 /// [`Scope::Reached`], and whole modules compile more of `std::io`.
 #[test]
@@ -272,7 +272,7 @@ fn whole_dumps_of_001_keep_the_reached_view() {
     assert_eq!(whole.reach, reached.reach);
 }
 
-/// GAP(load-set-constructor-modules): a module that only lends a
+/// D-1176: a module that only lends a
 /// constructor to reached code is in the load set and compiled whole.
 #[test]
 fn whole_module_that_lends_a_constructor_is_compiled_whole() {
@@ -353,7 +353,7 @@ test \"third\" {
 }
 ";
 
-/// D-970, GAP(tests-numbering): a whole tests unit holds every test of its
+/// D-970, D-1179: a whole tests unit holds every test of its
 /// module, so in the JIT the test symbols and their closures number all
 /// tests in source order, whatever the filter selects; only the selected
 /// test gets an entry thunk. D-510's view numbered the selected ones.

@@ -20,7 +20,7 @@
 //! The dumps for goldens (`dump_mir`, `dump_clif`) keep D-510's view:
 //! they lower only the reachable items, found by `cheby_mir::reach`'s walk
 //! over THIR, with their borrow masks inferred over those units alone
-//! (GAP(golden-dumps-scope)); `CHEBY_DUMP_DIR` dumps what the build
+//! (D-1175); `CHEBY_DUMP_DIR` dumps what the build
 //! compiled.
 //!
 //! Lowering reports no diagnostics: every construct the front end accepts
@@ -101,7 +101,7 @@ const DUMP_DIR_VAR: &str = "CHEBY_DUMP_DIR";
 pub(crate) enum Scope {
     /// D-510's view: only the items the roots reach, found by walking
     /// THIR, with their masks inferred over those units alone; the dumps
-    /// for goldens (GAP(golden-dumps-scope)).
+    /// for goldens (D-1175).
     Reached,
     /// Whole modules (D-966): every module of the load set, found by
     /// walking summaries (D-967, D-922), with all its items, and every
@@ -399,7 +399,7 @@ pub(crate) fn build_scoped(
 /// modules it infers no masks; every other build keeps `mir`. Until std's
 /// code comes from the cache (K6), std's units of a check build are
 /// compiled without masks too, rather than with std's own
-/// (GAP(check-std-plain)).
+/// (D-1180).
 pub(crate) const fn kind_options(roots: &Roots<'_>, mir: MirOptions, scope: Scope) -> MirOptions {
     if matches!(roots, Roots::Constants) && matches!(scope, Scope::Whole) {
         MirOptions {
@@ -659,7 +659,7 @@ struct UnitLogs {
 /// which also holds the thunks of the constants `main` reaches. A dump for
 /// goldens, so it lowers with the default MIR options, whatever the
 /// environment says (D-264), and keeps D-510's view: only the reachable
-/// items, with masks inferred over those units (GAP(golden-dumps-scope)).
+/// items, with masks inferred over those units (D-1175).
 pub(crate) fn lower_program(
     front: &Frontend,
     sources: &SourceMap,
@@ -820,7 +820,7 @@ pub(crate) fn lower_scoped(
 /// on native replaces the selection in `tests` (D-970); the selection
 /// decides only which entries run. In the JIT, where a build's units share
 /// one `Decls`, `cb$test$<module>$<n>` then numbers all of a module's
-/// tests in source order, whatever the filter (GAP(tests-numbering)); a
+/// tests in source order, whatever the filter (D-1179); a
 /// unit compiled alone still ranks the tests it imports among those it
 /// names, which K4c makes agree when it caches tests units.
 fn reach_in<'a>(

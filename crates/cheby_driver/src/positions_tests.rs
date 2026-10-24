@@ -1,5 +1,5 @@
 //! Source positions through the driver (D-938): the switch
-//! `CHEBY_POSITIONS` (GAP(positions-switch)), tested in a child process
+//! `CHEBY_POSITIONS` (D-1173), tested in a child process
 //! with the variable on its `Command`, since no test sets the environment;
 //! records with positions identical from two package paths; and the
 //! records' sizes with positions on and off for CP2 (gate item 25, an
@@ -160,7 +160,7 @@ fn field<'a>(line: &'a str, name: &str) -> &'a str {
 /// `CHEBY_POSITIONS=off` turns positions off for the whole build:
 /// lowering records none, the records hold no rows and name no source;
 /// `on` and unset keep them; the code is the same either way
-/// (GAP(positions-switch), D-938).
+/// (D-1173, D-938).
 #[test]
 #[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
 fn positions_switch_off_keeps_the_code() {
