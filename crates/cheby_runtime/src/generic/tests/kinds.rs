@@ -500,7 +500,7 @@ static TABLE: CustomKind = CustomKind {
 };
 
 /// An id unused by every runtime module.
-const TABLE_ID: abi::LayoutId = 47;
+const TABLE_ID: abi::LayoutId = 61;
 
 fn table(items: &[Word]) -> Word {
     layout::register_builtin(TABLE_ID, LayoutInfo::custom(&TABLE)).unwrap();

@@ -17,6 +17,7 @@ use crate::ir::{
     Abi, BlockId, Const, FnKey, Function, Local, Operand, Rvalue, Stmt, StrId, Terminator,
 };
 use crate::lower::{LowerCx, Pending};
+use crate::positions::Pos;
 use crate::repr::{Repr, repr_of};
 
 /// Lowers a function, constant or test body into a Cheby-ABI function.
@@ -39,6 +40,13 @@ pub(super) fn lower_body(
     b.set_entry_loc(&cx.location(span)?)?;
     b.set_record_sites(pending.records_sites());
     b.set_record_call_locs(pending.records_call_locs());
+    // D-938: the entry takes the name's position (GAP(mir-positions)).
+    if pending.records_positions() {
+        b.set_record_positions();
+        if let Some(pos) = pending.position(cx, span) {
+            b.set_entry_position(pos)?;
+        }
+    }
     let mut lx = BodyCx {
         cx,
         body,
@@ -93,12 +101,20 @@ impl<'a> BodyCx<'a, '_> {
         }
         let value = self.expr(body.value, true)?;
         if let Some(value) = value {
-            // Every Cheby-ABI function returns a uniform word (D-453).
-            let ty = self.ty(body.value)?;
-            let value = self.to_uniform(value, ty)?;
-            self.terminate(Terminator::Return(value))?;
+            self.return_value(value, body.value)?;
         }
         Ok(())
+    }
+
+    /// Returns `value`, the value of the body expression `body`, as a
+    /// uniform word (D-453), at the position of the body's innermost tail
+    /// (D-938).
+    pub(super) fn return_value(&mut self, value: Operand, body: ExprId) -> Result<(), Ice> {
+        let outer = self.enter_position(self.tail_span(body)?)?;
+        let ty = self.ty(body)?;
+        let value = self.to_uniform(value, ty)?;
+        self.terminate(Terminator::Return(value))?;
+        self.leave_position(outer)
     }
 
     /// Binds THIR local `id` to MIR local `local`.
@@ -162,6 +178,23 @@ impl<'a> BodyCx<'a, '_> {
             }
         }
         Ok(local)
+    }
+
+    /// Makes the start of `span` the position of what follows (D-938,
+    /// GAP(mir-positions)) and returns the position it replaces, for
+    /// [`BodyCx::leave_position`]. A span outside the unit's file, or a
+    /// unit without positions, keeps the current one.
+    pub(super) fn enter_position(&mut self, span: Span) -> Result<Option<Pos>, Ice> {
+        match self.pending.position(self.cx, span) {
+            Some(pos) => self.b.set_position(pos),
+            None => Ok(self.b.position()),
+        }
+    }
+
+    /// Makes `previous`, which [`BodyCx::enter_position`] returned, the
+    /// position of what follows again.
+    pub(super) fn leave_position(&mut self, previous: Option<Pos>) -> Result<(), Ice> {
+        self.b.restore_position(previous)
     }
 
     /// Appends a statement to the current block.

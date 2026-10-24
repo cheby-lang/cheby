@@ -54,7 +54,7 @@ mod split_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cheby_diag::{SourceMap, Span};
+use cheby_diag::{FileId, SourceMap, Span};
 use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, PackageId, Ty, display};
 use cheby_types::thir;
 
@@ -69,6 +69,7 @@ use crate::ir::{
     StaticId, StaticObject, Stmt, TagType, Terminator, UnitKind,
 };
 use crate::layout::{LayoutDesc, ctor_layout, module_layouts, type_layouts};
+use crate::positions::{Pos, PosRef, Positions};
 
 /// What lowering reads besides THIR.
 #[derive(Clone, Copy, Debug)]
@@ -150,6 +151,10 @@ pub(crate) struct Pending {
     /// waits of [`crate::waits::FRAME_KEEPING_WAITS`] keep their frames
     /// (D-861; [`Pending::for_module`]).
     outside_std: bool,
+    /// The unit's source file when its functions record positions (D-938,
+    /// [`Pending::for_module`]); only spans in it get one, since a line
+    /// table names one file.
+    positions: Option<FileId>,
 }
 
 impl Pending {
@@ -179,7 +184,13 @@ impl Pending {
     ///
     /// An [`Ice`] if `module` is unknown.
     fn for_module(mut self, module: ModuleId, tests: bool, cx: &LowerCx<'_>) -> Result<Self, Ice> {
-        self.outside_std = cx.defs.modules.try_get(module)?.package != PackageId::STD;
+        let info = cx.defs.modules.try_get(module)?;
+        self.outside_std = info.package != PackageId::STD;
+        // D-938: positions in the module's own file, unless
+        // `CHEBY_POSITIONS=off` (GAP(positions-switch)).
+        self.positions = info
+            .file
+            .filter(|_| crate::MirOptions::lowering_records_positions());
         // D-870: when std's own tests run (`cargo xtask
         // test-std`), the calls of its test blocks and their closures are
         // located like user code's, so a deadlocking std test names the
@@ -187,6 +198,23 @@ impl Pending {
         // never lowers std's tests, so this costs nothing there.
         self.call_locs = self.outside_std || tests;
         Ok(self)
+    }
+
+    /// Whether the unit's functions record positions (D-938).
+    pub(crate) const fn records_positions(&self) -> bool {
+        self.positions.is_some()
+    }
+
+    /// The position of the start of `span` (D-421: line and column from
+    /// 1, the column in code points), if the unit records positions and
+    /// `span` lies in its file (GAP(mir-positions)).
+    pub(crate) fn position(&self, cx: &LowerCx<'_>, span: Span) -> Option<Pos> {
+        let file = self.positions.filter(|&f| f == span.file)?;
+        let at = cx.sources.file(file)?.line_col(span.range.start());
+        Some(Pos {
+            line: at.line,
+            column: at.col,
+        })
     }
 
     /// The size at which a literal's piece is cut (D-780).
@@ -566,6 +594,7 @@ fn finish_unit(
         functions.push(dict::dyn_forward(iface_fn, dyn_iface, cx)?);
     }
     functions.extend(closure::trampolines(pending.trampolines())?);
+    let source = unit_positions(&mut functions, &pending, cx);
     // Field reads move up to the consumption of a sibling projection, so
     // every RC mode and borrowing inference see them there (D-911).
     for f in &mut functions {
@@ -635,10 +664,49 @@ fn finish_unit(
         functions,
         callees,
         layouts,
+        externals: match unit {
+            UnitKind::Code(module) => crate::layout::module_externals(module, &cx.defs)?,
+            UnitKind::Tests(_) | UnitKind::Entries => Vec::new(),
+        },
         foreign_layouts: foreign,
         statics,
         names,
+        source,
     })
+}
+
+/// The unit's source path when it records positions (D-938,
+/// [`MirModule::source`]), after giving each function lowering generated
+/// (a wrapper, a value shim, an intrinsic body) its entry position
+/// everywhere when its span lies in the unit's file (GAP(mir-positions)).
+fn unit_positions(
+    functions: &mut [Function],
+    pending: &Pending,
+    cx: &LowerCx<'_>,
+) -> Option<Box<str>> {
+    let file = pending.positions?;
+    for f in functions.iter_mut() {
+        if f.positions.is_empty()
+            && matches!(f.key, FnKey::Item(_) | FnKey::ValueShim(_))
+            && let Some(pos) = pending.position(cx, f.span)
+        {
+            give_entry_position(f, pos);
+        }
+    }
+    cx.sources.file(file).map(|f| Box::<str>::from(f.path()))
+}
+
+/// Gives every statement and terminator of `f`, which has no positions,
+/// and its entry, the position `pos` (D-938).
+fn give_entry_position(f: &mut Function, pos: Pos) {
+    let entry = PosRef::from_bits(1);
+    f.positions = Positions {
+        table: vec![pos],
+        entry,
+    };
+    for block in &mut f.blocks {
+        block.pos = vec![entry; block.stmts.len().saturating_add(1)];
+    }
 }
 
 /// The direct callees of `f`, and every other def, constructor layout and

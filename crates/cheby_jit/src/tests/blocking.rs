@@ -689,6 +689,7 @@ extern "C" fn blocking_t6_after() -> i64 {
 ///   bb2:
 ///     resume
 /// ```
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR function")]
 fn timed_call() -> Function {
     let runtime = |func, args| Rvalue::CallRuntime { func, args };
     let mut f = function(
@@ -707,6 +708,7 @@ fn timed_call() -> Function {
         Repr::Value,
         vec![
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     plain_call("blocking_t6_note"),
@@ -749,6 +751,7 @@ fn timed_call() -> Function {
                 unwind: vec![(0, bb(2)), (1, bb(2)), (2, bb(1)), (3, bb(2)), (4, bb(2))],
             },
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     Stmt::ClearUnwind,

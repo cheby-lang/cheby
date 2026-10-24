@@ -218,6 +218,13 @@ impl BodyCx<'_, '_> {
         b.set_entry_loc(&self.cx.location(span)?)?;
         b.set_record_sites(self.pending.records_sites());
         b.set_record_call_locs(self.pending.records_call_locs());
+        // D-938: the closure's entry takes its own position.
+        if self.pending.records_positions() {
+            b.set_record_positions();
+            if let Some(pos) = self.pending.position(self.cx, span) {
+                b.set_entry_position(pos)?;
+            }
+        }
         let mut inner = BodyCx {
             cx: self.cx,
             body: self.body,
@@ -299,9 +306,7 @@ impl BodyCx<'_, '_> {
             self.bind_param(&param.pat, Operand::Local(arg))?;
         }
         if let Some(value) = self.expr(body, true)? {
-            let ty = self.ty(body)?;
-            let value = self.to_uniform(value, ty)?;
-            self.terminate(Terminator::Return(value))?;
+            self.return_value(value, body)?;
         }
         Ok(())
     }

@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-1058, D-858, D-891
+// @milestone: M3
+//! A sleep past the cap of 2⁶³ − 1 nanoseconds never ends and arms no
+//! timer, so a program whose only fiber sleeps that long is deadlocked.
+//! The report lists the fiber as `time::sleep`, at the call in `main`,
+//! which is not a tail call here. A sleep up to the cap before it is
+//! pending work and is never reported.
+
+import std::duration
+import std::io
+import std::time
+
+fn main() {
+  time::sleep(duration::milliseconds(20))
+  time::sleep(duration::hours(3_000_000))
+  io::println("never printed")
+}

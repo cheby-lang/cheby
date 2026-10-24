@@ -22,23 +22,38 @@ pub type Error {
   message: String,
 }
 
-/// The kinds of failure: one per predicate, and every other kind (D-367).
+/// The kinds of failure: one per predicate, and every other kind (D-367,
+/// D-981).
 type Kind {
   NotFound,
   PermissionDenied,
   InvalidData,
+  ConnectionRefused,
+  ConnectionReset,
+  AddressInUse,
+  HostNotFound,
+  Closed,
+  InvalidInput,
   Other,
 }
 
 /// The `Error` for the kernels' pair: `1` not found, `2` permission
-/// denied, `3` invalid UTF-8, anything else another kind with the
-/// operating system's message. A kind with a predicate drops the message,
-/// so its text is the same on every platform (D-345).
+/// denied, `3` invalid UTF-8, `8` connection refused, `9` connection
+/// reset, `10` address in use, `11` host not found, `12` closed, `13`
+/// invalid input, anything else another kind with the operating system's
+/// message. A kind with a predicate drops the message, so its text is the
+/// same on every platform (D-345, D-981).
 fn from_os(code: Int, message: String) -> Error {
   case code {
     1 => Error { kind: NotFound, message: "" }
     2 => Error { kind: PermissionDenied, message: "" }
     3 => Error { kind: InvalidData, message: "" }
+    8 => Error { kind: ConnectionRefused, message: "" }
+    9 => Error { kind: ConnectionReset, message: "" }
+    10 => Error { kind: AddressInUse, message: "" }
+    11 => Error { kind: HostNotFound, message: "" }
+    12 => Error { kind: Closed, message: "" }
+    13 => Error { kind: InvalidInput, message: "" }
     _ => Error { kind: Other, message }
   }
 }
@@ -58,6 +73,12 @@ fn hash(error: Error) -> (Int, String) {
     NotFound => (1, "")
     PermissionDenied => (2, "")
     InvalidData => (3, "")
+    ConnectionRefused => (8, "")
+    ConnectionReset => (9, "")
+    AddressInUse => (10, "")
+    HostNotFound => (11, "")
+    Closed => (12, "")
+    InvalidInput => (13, "")
     Other => (0, error.message)
   }
 }
@@ -195,14 +216,106 @@ pub fn is_invalid_data(error: Error) -> Bool {
   }
 }
 
+/// Tells whether `error` means that nothing listens at the address a
+/// connection was made to (D-981).
+pub fn is_connection_refused(error: Error) -> Bool {
+  case error.kind {
+    ConnectionRefused => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that the peer of a connection reset it,
+/// aborted it or went away while it was written to (D-981).
+pub fn is_connection_reset(error: Error) -> Bool {
+  case error.kind {
+    ConnectionReset => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that another socket already listens on an
+/// address and port (D-981).
+pub fn is_address_in_use(error: Error) -> Bool {
+  case error.kind {
+    AddressInUse => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a host name could not be resolved.
+/// Every failure of name lookup is this one kind (D-981).
+pub fn is_host_not_found(error: Error) -> Bool {
+  case error.kind {
+    HostNotFound => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a handle was used after it was
+/// closed, or was closed while a fiber waited on it (D-981, D-1063).
+pub fn is_closed(error: Error) -> Bool {
+  case error.kind {
+    Closed => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that an argument could not be used, such
+/// as a port outside 0 to 65535 (D-981).
+pub fn is_invalid_input(error: Error) -> Bool {
+  case error.kind {
+    InvalidInput => True
+    _ => False
+  }
+}
+
+test "the network kinds have their predicates and fixed texts" {
+  let kinds = [
+    (8, "connection refused"),
+    (9, "connection reset"),
+    (10, "address in use"),
+    (11, "host not found"),
+    (12, "closed"),
+    (13, "invalid input"),
+  ]
+  fn check(rest: List<(Int, String)>) {
+    case rest {
+      [] => Nil
+      [(code, text), ..tail] => {
+        let error = from_os(code, "the system's own words")
+        assert show(error) == text
+        assert "{error:?}" == text
+        assert error == from_os(code, "other words")
+        assert error != from_os(0, "the system's own words")
+        assert is_connection_refused(error) == (code == 8)
+        assert is_connection_reset(error) == (code == 9)
+        assert is_address_in_use(error) == (code == 10)
+        assert is_host_not_found(error) == (code == 11)
+        assert is_closed(error) == (code == 12)
+        assert is_invalid_input(error) == (code == 13)
+        assert !is_not_found(error)
+        check(tail)
+      }
+    }
+  }
+  check(kinds)
+}
+
 /// Returns the text of `error`: a fixed message for each kind with a
-/// predicate, and the operating system's message otherwise (D-345). It
-/// makes `Error` satisfy `Show`.
+/// predicate, and the operating system's message otherwise (D-345,
+/// D-981). It makes `Error` satisfy `Show`.
 pub fn show(error: Error) -> String {
   case error.kind {
     NotFound => "not found"
     PermissionDenied => "permission denied"
     InvalidData => "invalid UTF-8"
+    ConnectionRefused => "connection refused"
+    ConnectionReset => "connection reset"
+    AddressInUse => "address in use"
+    HostNotFound => "host not found"
+    Closed => "closed"
+    InvalidInput => "invalid input"
     Other => error.message
   }
 }

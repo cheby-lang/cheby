@@ -30,6 +30,13 @@
 //! only; the result is made of sets, so lowering order stays `DefIndex`
 //! order and the output is deterministic (D-264).
 //!
+//! Since whole modules (D-966), the driver walks reference summaries
+//! instead (D-967): [`body_mentions`] and [`entry_mentions`] give what one
+//! body or entry mentions as this walk reads it, the driver names them in
+//! summaries, and builds the same [`Reach`] with [`Reach::insert_item`]
+//! and its siblings. This walk stays for what reads THIR directly: the
+//! dumps for goldens (D-510's view), the REPL and the comparison test.
+//!
 //! [`DictFn`]: cheby_types::thir::DictFn
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -302,6 +309,96 @@ impl Reach {
         modules.remove(&ModuleId::BUILTIN);
         modules.into_iter().collect()
     }
+
+    /// The modules that get a code unit ([`Reach::needs_module`]), sorted.
+    pub fn modules(&self) -> impl Iterator<Item = ModuleId> + '_ {
+        self.modules.iter().copied()
+    }
+
+    /// For a walk outside this module, such as the driver's walk over
+    /// reference summaries (D-967): marks `def` reachable, a constant if
+    /// `is_const`. Returns whether it was new.
+    pub fn insert_item(&mut self, def: DefId, is_const: bool) -> bool {
+        if is_const {
+            self.consts.insert(def);
+        }
+        self.items.insert(def)
+    }
+
+    /// For a walk outside this module: `module` gets a code unit. Returns
+    /// whether it was new.
+    pub fn insert_module(&mut self, module: ModuleId) -> bool {
+        self.modules.insert(module)
+    }
+
+    /// For a walk outside this module: the body of `owner` refers to
+    /// `def` directly.
+    pub fn insert_edge(&mut self, owner: DefId, def: DefId) {
+        self.edges.entry(owner).or_default().insert(def);
+    }
+
+    /// For a walk outside this module: the body of `owner` mentions a
+    /// constructor of `module`.
+    pub fn insert_ctor_module(&mut self, owner: DefId, module: ModuleId) {
+        self.ctor_modules.entry(owner).or_default().insert(module);
+    }
+}
+
+/// One thing a body or an entry mentions, as the walk of [`reachable`]
+/// meets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Mention {
+    /// A function or constant it marks reachable: a callee, a function
+    /// value, a dictionary's function, an operator's or interpolation's
+    /// callee, a constant.
+    Item(DefId),
+    /// A constructor outside the builtin module, whose module it loads:
+    /// built, matched, read through a field or updated.
+    Ctor(DefId),
+}
+
+/// What a body or an entry mentions, each thing once, in the order the
+/// walk of [`reachable`] first meets it. The driver's reference summaries
+/// are built from it (D-967) and its walk over them follows this order,
+/// so it reaches what this module's walk reaches, down to which item a
+/// module's hooks are reached from (an edge [`Reach::const_modules`]
+/// reads).
+pub type Mentions = Vec<Mention>;
+
+/// What `body` mentions, every expression reachable from its value,
+/// closures and local functions included, as [`reachable`] walks it.
+///
+/// # Errors
+///
+/// An [`Ice`] if the body refers to an expression it does not have.
+pub fn body_mentions(body: &thir::Body) -> Result<Mentions, Ice> {
+    let mut walk = collector();
+    walk.body(body)?;
+    Ok(walk.met.unwrap_or_default())
+}
+
+/// What an entry's `Show` dictionary mentions (D-182), as [`reachable`]
+/// walks a root's entry.
+#[must_use]
+pub fn entry_mentions(entry: &EntryInfo) -> Mentions {
+    let mut walk = collector();
+    walk.entry(entry);
+    walk.met.unwrap_or_default()
+}
+
+/// A walk with no program, no hooks and no owner: it only records what it
+/// meets.
+fn collector() -> Walk<'static, 'static> {
+    Walk {
+        index: BTreeMap::new(),
+        reach: Reach::default(),
+        queue: Vec::new(),
+        owner: None,
+        hooks: None,
+        error: None,
+        met: Some(Vec::new()),
+        ctors: BTreeSet::new(),
+    }
 }
 
 /// A set of small numbers, one bit each.
@@ -492,6 +589,10 @@ struct Walk<'a, 'h> {
     hooks: Option<&'h HooksOf<'h>>,
     /// The first failure of `hooks`.
     error: Option<Ice>,
+    /// For a [`collector`]: what it met, in order ([`Mentions`]).
+    met: Option<Mentions>,
+    /// For a [`collector`]: the constructors met so far.
+    ctors: BTreeSet<DefId>,
 }
 
 /// The items of `program` reachable from `roots`.
@@ -540,6 +641,8 @@ fn walk<'h>(
         owner: None,
         hooks,
         error: None,
+        met: None,
+        ctors: BTreeSet::new(),
     };
     for root in roots {
         walk.owner = None;
@@ -589,6 +692,11 @@ impl Walk<'_, '_> {
         if let Some(owner) = self.owner {
             self.reach.edges.entry(owner).or_default().insert(def);
         }
+        if let Some(met) = &mut self.met
+            && !self.reach.items.contains(&def)
+        {
+            met.push(Mention::Item(def));
+        }
         if self.reach.items.insert(def) {
             self.module(def.module);
             self.queue.push(def);
@@ -621,6 +729,11 @@ impl Walk<'_, '_> {
     fn ctor(&mut self, ctor: DefId) {
         if ctor.module == ModuleId::BUILTIN {
             return;
+        }
+        if let Some(met) = &mut self.met
+            && self.ctors.insert(ctor)
+        {
+            met.push(Mention::Ctor(ctor));
         }
         self.module(ctor.module);
         if let Some(owner) = self.owner {

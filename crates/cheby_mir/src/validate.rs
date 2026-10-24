@@ -167,6 +167,11 @@ fn validate_with(
         if let Err(ice) = cx.check(stage) {
             cx.errors.push(format!("internal: {ice}"));
         }
+        // D-938: every pass keeps the positions in step with the
+        // statements.
+        if let Err(e) = crate::positions::check(f) {
+            cx.errors.push(format!("positions: {e}"));
+        }
         if !cx.errors.is_empty() {
             let name = key_label(f.key);
             errors.extend(cx.errors.into_iter().map(|e| format!("{name}: {e}")));

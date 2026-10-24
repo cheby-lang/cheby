@@ -7,7 +7,10 @@
 //! release included, so that `bench-run` can measure a release `cheby`
 //! under both modes (D-702, D-718); the name, the values and that release
 //! builds honor it are D-746's. `CHEBY_UNWIND_EDGES=off` turns the unwind
-//! pass off for D-702's measurement (D-742).
+//! pass off for D-702's measurement (D-742). `CHEBY_POSITIONS=off` turns
+//! source positions off (D-938's measurement, GAP(positions-switch)): no
+//! position in MIR, no source location in code, no rows in code records
+//! and no DWARF in objects; the machine code is the same either way.
 
 use cheby_iface::Ice;
 
@@ -87,6 +90,16 @@ pub struct MirOptions {
     /// for `--reuse-report` (D-717); `false` by default. It changes no
     /// code and no dump.
     pub record_sites: bool,
+    /// Whether units keep the source position of every statement and
+    /// terminator ([`crate::Block::pos`], [`crate::Function::positions`],
+    /// [`crate::MirModule::source`]), which code generation turns into
+    /// source locations, code records into rows and objects into DWARF
+    /// line tables (D-938); `true` by default. `CHEBY_POSITIONS=off` turns
+    /// it off ([`MirOptions::positions_from_env`], GAP(positions-switch)),
+    /// for D-938's measurement: lowering then records no position, and
+    /// [`count_lowered_with`] clears any a unit holds. It changes no code
+    /// and no dump.
+    pub positions: bool,
 }
 
 impl Default for MirOptions {
@@ -99,6 +112,7 @@ impl Default for MirOptions {
             reuse: true,
             fuse: true,
             record_sites: false,
+            positions: true,
         }
     }
 }
@@ -176,7 +190,63 @@ impl MirOptions {
         Ok(Self {
             rc,
             unwind_edges: Self::unwind_edges_from_env()?,
+            positions: Self::positions_from_env()?,
             ..Self::default()
+        })
+    }
+
+    /// The environment variable that turns source positions off, for
+    /// D-938's measurement of their cost (GAP(positions-switch)).
+    pub const POSITIONS_ENV: &'static str = "CHEBY_POSITIONS";
+
+    /// Reads `CHEBY_POSITIONS`: `off` turns positions off, `on`, unset or
+    /// empty keeps them (GAP(positions-switch), as `CHEBY_RC` and
+    /// `CHEBY_UNWIND_EDGES` read their variables, D-742, D-746).
+    ///
+    /// # Errors
+    ///
+    /// The message to report when the variable holds any other value
+    /// (including one that is not Unicode).
+    pub fn positions_from_env() -> Result<bool, String> {
+        let value = std::env::var_os(Self::POSITIONS_ENV);
+        match value.as_deref().map(std::ffi::OsStr::to_str) {
+            None => Ok(true),
+            Some(Some(text)) => Self::parse_positions(text),
+            Some(None) => Err(format!(
+                "{} must be `on` or `off`, not a value that is not Unicode",
+                Self::POSITIONS_ENV
+            )),
+        }
+    }
+
+    /// Whether the value `text` of `CHEBY_POSITIONS` keeps positions.
+    fn parse_positions(text: &str) -> Result<bool, String> {
+        match text {
+            "" | "on" => Ok(true),
+            "off" => Ok(false),
+            _ => Err(format!(
+                "{} must be `on` or `off`, not `{}`",
+                Self::POSITIONS_ENV,
+                text.escape_debug()
+            )),
+        }
+    }
+
+    /// Whether lowering records positions in this process: `false` only
+    /// when `CHEBY_POSITIONS` is `off`. Lowering's entry points take no
+    /// [`MirOptions`] (they keep their signatures, so the driver's calls do
+    /// not change), so it reads the variable itself, once per process, as
+    /// [`MirOptions::from_env`] reads it once per build: with positions
+    /// off, lowering then spends nothing on them, which D-938's measurement
+    /// needs. A value [`MirOptions::from_env`] refuses never gets this far
+    /// in a build; here it keeps positions. [`count_lowered_with`] clears
+    /// the positions of a unit whenever its options say so, whatever
+    /// lowering recorded.
+    #[must_use]
+    pub fn lowering_records_positions() -> bool {
+        static RECORDS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *RECORDS.get_or_init(|| {
+            std::env::var_os(Self::POSITIONS_ENV).is_none_or(|value| value != "off")
         })
     }
 
@@ -278,6 +348,11 @@ pub fn check_lowered(module: &MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] listing the validator's findings.
 pub fn count_lowered_with(module: &mut MirModule, options: &MirOptions) -> Result<(), Ice> {
+    // D-938's switch (GAP(positions-switch)): with positions off, a unit
+    // keeps none, whatever lowering recorded.
+    if !options.positions {
+        crate::positions::clear(module);
+    }
     if !options.borrows() && crate::borrow::borrows_anything(module) {
         return Err(Ice::new(format!(
             "a unit of {} borrows, but its options do not (D-715)",
@@ -371,6 +446,25 @@ mod tests {
             MirOptions::parse_unwind_edges("on").unwrap_err(),
             "CHEBY_UNWIND_EDGES must be off or empty, not \"on\""
         );
+    }
+
+    #[test]
+    fn positions_switch_parses_on_off_or_empty() {
+        // GAP(positions-switch): `off` turns positions off; `on`, unset
+        // or empty keeps them; anything else is an error, as for
+        // `CHEBY_RC` (D-746).
+        assert_eq!(MirOptions::parse_positions(""), Ok(true));
+        assert_eq!(MirOptions::parse_positions("on"), Ok(true));
+        assert_eq!(MirOptions::parse_positions("off"), Ok(false));
+        for bogus in ["On", "OFF", "0", "false", " off"] {
+            let err = MirOptions::parse_positions(bogus).unwrap_err();
+            assert!(err.starts_with("CHEBY_POSITIONS must be `on` or `off`, not `"));
+        }
+        assert_eq!(
+            MirOptions::parse_positions("no").unwrap_err(),
+            "CHEBY_POSITIONS must be `on` or `off`, not `no`"
+        );
+        assert!(MirOptions::default().positions);
     }
 
     #[test]

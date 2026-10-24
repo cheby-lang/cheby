@@ -2,13 +2,16 @@
 //! batches of MIR units, the runtime's symbol registry, the indirection
 //! table of top-level functions (D-043), and the way into generated code.
 //!
-//! - [`Jit::compile`] is incremental: each batch registers its layouts,
-//!   declares its functions (extending the persistent declaration table),
-//!   defines them and finalizes. Later batches call earlier code through
-//!   the existing slots, and use the static objects, layout words and
-//!   constant slots earlier batches defined (D-523). `cheby run` compiles
-//!   one batch; constant evaluation (E6) and the REPL (G5) compile one per
-//!   step.
+//! - [`Jit::compile`] is incremental: each batch declares its functions
+//!   (extending the persistent declaration table), defines them and a
+//!   module record for each of its code and tests units, finalizes, and
+//!   registers the records with `cheby_runtime::image::register_records`,
+//!   the one routine an executable's start calls too (D-919): layouts,
+//!   external types, hooks and call-site ranges. The JIT registers
+//!   nothing itself. Later batches call earlier code through the existing
+//!   slots, and use the static objects, layout words and constant slots
+//!   earlier batches defined (D-523). `cheby run` compiles one batch;
+//!   constant evaluation (E6) and the REPL (G5) compile one per step.
 //! - Every call of a top-level function loads the callee's slot, a
 //!   writable data object holding its address (D-043). The REPL (E4)
 //!   registers its items' session names first ([`Jit::set_session_names`]):
@@ -67,15 +70,15 @@ use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
 use cheby_codegen_clif::{
-    CodegenCx, CodegenError, CodegenOptions, Decls, DefineStats, LayoutIds, SessionName,
-    builtin_layout_id,
+    BatchNew, BatchRecord, BuiltinLayouts, CodegenCx, CodegenError, CodegenOptions, Decls,
+    DefineStats, SessionName,
 };
 use cheby_iface::{DefId, Ice};
-use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
+use cheby_mir::{AbiSig, EntryKind, FnKey, MirModule, UnitKind};
 use cheby_runtime::abi::sym;
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
-use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
+use cheby_runtime::image::{self, ModuleRecord};
 use cheby_runtime::{
     Callbacks, CodeToken, DetachedGroup, EntryConfig, EntryFn, EntryOutcome, RootDone, RootHandle,
     RunConfig, Runtime, RuntimeError,
@@ -172,75 +175,6 @@ impl JitOptions {
     }
 }
 
-/// Runtime layout ids of the layouts registered so far: the fixed builtin
-/// ids, plus user constructors registered per batch before any of its
-/// code is defined (D-454).
-#[derive(Debug, Default)]
-pub struct JitLayouts {
-    ids: FxHashMap<LayoutRef, u32>,
-}
-
-impl LayoutIds for JitLayouts {
-    fn id(&self, layout: &LayoutRef) -> Result<u32, Ice> {
-        builtin_layout_id(layout)
-            .or_else(|| self.ids.get(layout).copied())
-            .ok_or_else(|| Ice::new(format!("layout {layout:?} was not registered")))
-    }
-}
-
-/// How a constructor field of `repr` is stored in the runtime's layout
-/// table.
-const fn field_kind(repr: Repr) -> FieldKind {
-    match repr {
-        Repr::Value => FieldKind::Value,
-        Repr::Int => FieldKind::Int,
-        Repr::Float => FieldKind::Float,
-        Repr::Bool => FieldKind::Bool,
-        Repr::I8 => FieldKind::I8,
-        Repr::I16 => FieldKind::I16,
-        Repr::I32 => FieldKind::I32,
-        Repr::I64 => FieldKind::I64,
-        Repr::U8 => FieldKind::U8,
-        Repr::U16 => FieldKind::U16,
-        Repr::U32 => FieldKind::U32,
-        Repr::U64 => FieldKind::U64,
-        Repr::F32 => FieldKind::F32,
-    }
-}
-
-/// The runtime's entry for a MIR layout. MIR computes offsets from
-/// interfaces and the runtime from field kinds; they must agree, or
-/// generated code and freeing would disagree on where fields are.
-fn layout_info(desc: &LayoutDesc) -> Result<LayoutInfo, Ice> {
-    let fields: Vec<(FieldKind, Option<&str>)> = desc
-        .fields
-        .iter()
-        .map(|f| (field_kind(f.repr), f.name.as_deref()))
-        .collect();
-    let info = LayoutInfo::ctor(&desc.name, desc.tag, &fields).named(
-        &desc.type_name,
-        &desc.ctor_name,
-        desc.record,
-        desc.type_key,
-    );
-    let agree = info.value_fields == desc.value_fields
-        && info.raw_fields == desc.raw_fields
-        && info.fields.len() == desc.fields.len()
-        && info
-            .fields
-            .iter()
-            .zip(&desc.fields)
-            .all(|(rt, mir)| i64::from(rt.offset) == i64::from(mir.offset));
-    if agree {
-        Ok(info)
-    } else {
-        Err(Ice::new(format!(
-            "MIR and the runtime disagree on the layout of `{}`",
-            desc.name
-        )))
-    }
-}
-
 /// The memory a [`Jit`] holds for code and data, in bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodeMemory {
@@ -304,8 +238,8 @@ impl Drop for CodeKeepAlive {
 }
 
 /// A JIT session: the module, the declarations of every batch so far, and
-/// the registered layouts. Dropping it frees its code and data, or hands
-/// them to its outstanding [`CodeToken`]s (D-708).
+/// the module records it registered. Dropping it frees its code and data,
+/// or hands them to its outstanding [`CodeToken`]s (D-708).
 pub struct Jit {
     /// Taken only by `Drop`, which moves it into `keep_alive`.
     module: ManuallyDrop<JITModule>,
@@ -313,7 +247,6 @@ pub struct Jit {
     /// gone.
     keep_alive: Arc<CodeKeepAlive>,
     decls: Decls,
-    layouts: JitLayouts,
     codegen: CodegenOptions,
     options: JitOptions,
     clif: Vec<String>,
@@ -334,10 +267,28 @@ pub struct Jit {
     pending: Vec<(cranelift_module::DataId, u64, DefId)>,
     /// The code every batch that compiled defined ([`Jit::code_stats`]).
     code_stats: DefineStats,
-    /// Every range this JIT registered in the code map, in order, for the
-    /// tests of the map (`code_map_*`).
-    #[cfg(test)]
-    registered: Vec<cheby_runtime::locate::CodeRangeDesc>,
+    /// The module records of every batch that compiled, in order
+    /// ([`Jit::module_records`]).
+    records: Vec<JitRecord>,
+    /// The external types this JIT's records registered, so a later
+    /// batch registers only the others (GAP(jit-record-registration)).
+    externals: rustc_hash::FxHashSet<DefId>,
+}
+
+/// A module record one batch of a [`Jit`] defined in its memory (D-919):
+/// the record of a code or tests unit, in the layout of
+/// [`cheby_runtime::image::ModuleRecord`], listing that unit's functions,
+/// the user types and external types the batch registered, their hooks
+/// and free-shape words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JitRecord {
+    /// The unit's kind.
+    pub unit: UnitKind,
+    /// The unit's module path.
+    pub path: Box<str>,
+    /// The record's address in the JIT's memory, valid while the [`Jit`]
+    /// (or a [`CodeToken`] of it) lives.
+    pub address: usize,
 }
 
 /// An indirection slot of a [`Jit`] (D-043): a writable word holding the
@@ -351,7 +302,7 @@ impl fmt::Debug for Jit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Jit")
             .field("decls", &self.decls)
-            .field("layouts", &self.layouts)
+            .field("records", &self.records)
             .field("codegen", &self.codegen)
             .field("options", &self.options)
             .finish_non_exhaustive()
@@ -426,7 +377,6 @@ impl Jit {
                 code_owner: cheby_runtime::locate::new_code_owner(),
             }),
             decls,
-            layouts: JitLayouts::default(),
             codegen: options,
             options: jit,
             clif: Vec::new(),
@@ -437,9 +387,18 @@ impl Jit {
             repointed: Vec::new(),
             pending: Vec::new(),
             code_stats: DefineStats::default(),
-            #[cfg(test)]
-            registered: Vec::new(),
+            records: Vec::new(),
+            externals: rustc_hash::FxHashSet::default(),
         })
+    }
+
+    /// The module records of every batch compiled so far, in order: one
+    /// per code and tests unit, none for an entries unit (D-919, D-1107,
+    /// D-1111). Each lists what its batch registered (tests and tools read
+    /// them; they live as long as the `Jit`'s memory).
+    #[must_use]
+    pub fn module_records(&self) -> &[JitRecord] {
+        &self.records
     }
 
     /// The machine code defined so far: its bytes and its functions, summed
@@ -485,9 +444,13 @@ impl Jit {
         table.insert(name.into(), address.expose_provenance());
     }
 
-    /// Compiles a batch of units, in order: registers their layouts,
-    /// declares and defines their functions and data, and finalizes. Units
-    /// may call functions of earlier batches.
+    /// Compiles a batch of units, in order: declares and defines their
+    /// functions and data and a module record for each code and tests
+    /// unit, finalizes, and registers the records with the runtime's one
+    /// routine, `cheby_runtime::image::register_records` (D-919): the
+    /// layouts, external types, hooks and call-site ranges, before any
+    /// code of the batch runs. Units may call functions of earlier
+    /// batches.
     ///
     /// A batch is all or nothing: if it fails, the JIT is as it was before
     /// it, so a corrected batch with the same items can be compiled next
@@ -516,23 +479,25 @@ impl Jit {
     /// As [`Jit::compile`]; a failed batch leaves nothing pending.
     pub fn compile_unpublished(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
         let decls = self.decls.clone();
-        let layouts = self.layouts.ids.clone();
-        let result = self.compile_batch(mirs);
+        let result = self.compile_batch(mirs, &decls);
         if result.is_err() {
             // Nothing of the batch was defined in the module (`define`
-            // compiles everything first), so restoring the tables undoes
+            // compiles everything first), so restoring the table undoes
             // it; its declarations stay in the module, unused.
             self.decls = decls;
-            self.layouts.ids = layouts;
             self.pending.clear();
         }
         result
     }
 
-    fn compile_batch(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
-        self.register_layouts(mirs)?;
+    /// Compiles the batch `mirs`; `before` is the declaration table as it
+    /// was before the batch, which tells the layouts this batch declares.
+    fn compile_batch(&mut self, mirs: &[MirModule], before: &Decls) -> Result<(), JitError> {
+        // No layout id is known before registration: layout words and
+        // constructor statics hold 0 until the records are registered
+        // (D-454, D-920).
         let cx = CodegenCx {
-            layouts: &self.layouts,
+            layouts: &BuiltinLayouts,
         };
         cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.codegen)?;
         self.check_symbols()?;
@@ -543,48 +508,95 @@ impl Jit {
             &cx,
             &self.codegen,
         )?;
+        // The batch's module records (D-919), defined last, so no id of
+        // the code before them moves (D-264).
+        let known_externals = &self.externals;
+        let records = cheby_codegen_clif::define_batch_records(
+            &mut *self.module,
+            &self.decls,
+            mirs,
+            &defined,
+            &BatchNew {
+                layout: &|layout| !before.has_layout(layout),
+                external: &|def| !known_externals.contains(&def),
+            },
+        )
+        .map_err(|e| JitError::ice(format!("cannot define the batch's module records: {e}")))?;
         self.clif.extend(clif);
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        self.register_records(mirs, &records)?;
         self.take_repoints()?;
         self.callbacks = self.find_callbacks();
-        self.register_hooks(mirs)?;
-        // Last: a batch that failed registers nothing.
-        self.register_code(defined)?;
         self.code_stats = self.code_stats.add(stats);
         Ok(())
     }
 
-    /// Adds the batch's functions, finalized, to the process-wide code map
-    /// under this JIT's owner (D-856, D-867): each one's
-    /// address, length, ABI and call locations, so a deadlock report can
-    /// map a return address to its call. Ranges of earlier batches stay,
-    /// REPL redefinitions included, since their code stays while the JIT's
-    /// memory lives (D-712).
-    fn register_code(
+    /// Registers the finalized batch's module records `records` with the
+    /// runtime's one routine (D-919, GAP(jit-record-registration)): its
+    /// user layouts, writing their layout words and constructor statics,
+    /// then its external types, hooks and the call-site ranges of its
+    /// functions under this JIT's code owner (D-867), all before any code
+    /// of the batch runs, as an executable's start registers its records.
+    /// Ranges of earlier batches stay, REPL redefinitions included, since
+    /// their code stays while the JIT's memory lives (D-712). The entries
+    /// unit has no record, so its thunks and trampolines are in no range
+    /// (D-1111). A refused record registers nothing.
+    fn register_records(
         &mut self,
-        defined: Vec<cheby_codegen_clif::DefinedCode>,
+        mirs: &[MirModule],
+        records: &[BatchRecord],
     ) -> Result<(), JitError> {
-        let mut ranges = Vec::with_capacity(defined.len());
-        for code in defined {
-            let start = self
-                .module
-                .get_finalized_function(code.id)
-                .expose_provenance();
-            if start == 0 {
-                return Err(JitError::ice("a defined function without its code"));
+        let mut batch = Vec::with_capacity(records.len());
+        let mut pointers: Vec<&ModuleRecord> = Vec::with_capacity(records.len());
+        for record in records {
+            let (address, size) = self.module.get_finalized_data(record.data);
+            let unit = mirs
+                .get(record.unit)
+                .ok_or_else(|| JitError::ice("a module record of no unit"))?;
+            #[expect(
+                clippy::cast_ptr_alignment,
+                reason = "code generation defines every data object with alignment 8; checked below"
+            )]
+            let pointer = address.cast::<ModuleRecord>();
+            if pointer.is_null()
+                || !pointer.is_aligned()
+                || size < std::mem::size_of::<ModuleRecord>()
+            {
+                return Err(JitError::ice("a module record without its bytes"));
             }
-            ranges.push(cheby_runtime::locate::CodeRangeDesc {
-                start,
-                len: code.len,
-                cheby_abi: code.cheby_abi,
-                sites: code.sites,
+            // SAFETY: the record is a finalized, read-only, 8-aligned data
+            // object of this JIT's module, at least as large as a
+            // `ModuleRecord`, laid out as `cheby_runtime::image` documents
+            // (`define_batch_records`); it stays mapped while the JIT's
+            // memory lives, and nothing writes it.
+            pointers.push(unsafe { &*pointer });
+            batch.push(JitRecord {
+                unit: unit.unit,
+                path: unit.path.clone(),
+                address: address.expose_provenance(),
             });
         }
-        #[cfg(test)]
-        self.registered.extend(ranges.iter().cloned());
-        cheby_runtime::locate::register_code(self.keep_alive.code_owner, ranges);
+        // SAFETY: every record and every table, word, static, function
+        // value and function it points to lives in this JIT's memory,
+        // which stays mapped for as long as anything registered may be
+        // used: the code owner's ranges are unregistered before the memory
+        // is freed (`CodeKeepAlive`), and the layouts' hooks are static
+        // function values in this memory, called only on values of these
+        // layouts, which only this JIT's code makes and which a runtime
+        // keeps alive with its code token (D-708), as the JIT's own
+        // registration of hooks did. The layout words and constructor statics are
+        // writable data of this batch, which no code has run yet and
+        // nothing else writes.
+        unsafe { image::register_records(&pointers, self.keep_alive.code_owner) }.map_err(|e| {
+            JitError::ice(format!("cannot register the batch's module records: {e}"))
+        })?;
+        for unit in mirs {
+            self.externals
+                .extend(unit.externals.iter().map(|external| external.def));
+        }
+        self.records.extend(batch);
         Ok(())
     }
 
@@ -705,11 +717,15 @@ impl Jit {
     /// ([`Decls::set_session_name`]).
     pub fn set_session_names(&mut self, names: impl IntoIterator<Item = (DefId, SessionName)>) {
         for (def, name) in names {
-            self.decls.set_session_name(def, name);
-            let layout = LayoutRef::Ctor(def);
-            if !self.decls.has_layout(layout) {
-                self.layouts.ids.remove(&layout);
+            // A new generation of an external type is registered anew,
+            // as `Decls::set_session_name` forgets a constructor's layout
+            // (GAP(jit-record-registration)).
+            let previous = self.decls.session_name(def).map(|old| old.generation);
+            let changed = previous.map_or(name.generation > 0, |old| old != name.generation);
+            if changed {
+                self.externals.remove(&def);
             }
+            self.decls.set_session_name(def, name);
         }
     }
 
@@ -798,7 +814,7 @@ impl Jit {
             self.decls.declare_session_const(&mut *self.module, def)?;
         }
         let cx = CodegenCx {
-            layouts: &self.layouts,
+            layouts: &BuiltinLayouts,
         };
         cheby_codegen_clif::define_data(&mut *self.module, &mut self.decls, &cx)?;
         self.module
@@ -806,41 +822,6 @@ impl Jit {
             .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
         for &(def, word) in values {
             self.set_const(def, word)?;
-        }
-        Ok(())
-    }
-
-    /// Registers the `@std_hooks(equal, hash, debug)` functions of the
-    /// batch's types with the runtime's layout table, for every
-    /// constructor of each such type (D-482): the words are the hooks'
-    /// static function values `cb$fnval$…`, which the runtime calls through
-    /// the trampolines. A type whose hooks have no function value (no value
-    /// shim was lowered) keeps structural equality and printing.
-    fn register_hooks(&self, mirs: &[MirModule]) -> Result<(), JitError> {
-        for unit in mirs {
-            for desc in &unit.layouts {
-                let Some(hooks) = desc.hooks else {
-                    continue;
-                };
-                let mut words = [0_u64; 3];
-                let mut complete = true;
-                for (word, def) in words.iter_mut().zip(hooks) {
-                    let Some(id) = self.decls.fn_value(unit, def)? else {
-                        complete = false;
-                        break;
-                    };
-                    let (address, _) = self.module.get_finalized_data(id);
-                    *word = u64::try_from(address.expose_provenance())
-                        .map_err(|_| JitError::ice("an address does not fit in a word"))?;
-                }
-                if !complete {
-                    continue;
-                }
-                let id = self.layouts.id(&desc.layout)?;
-                rt_layout::set_hooks(id, words).map_err(|e| {
-                    JitError::ice(format!("cannot register the hooks of `{}`: {e}", desc.name))
-                })?;
-            }
         }
         Ok(())
     }
@@ -970,64 +951,6 @@ impl Jit {
         // `self` guarantees for every use of it.
         let thunk = unsafe { std::mem::transmute::<*const u8, EntryFn>(address) };
         Ok(Entry { thunk, jit: self })
-    }
-
-    /// Registers the constructor layouts of `mirs`, units in order and
-    /// types in `DefIndex` order of their first constructor, so ids do not
-    /// depend on scheduling. The constructors of one type get consecutive
-    /// ids in tag order (D-522), so a tag is a layout id minus the first
-    /// constructor's.
-    ///
-    /// The ids come from the runtime's process-wide table, so they also
-    /// depend on what earlier `Jit`s in the process registered. Generated
-    /// code therefore never embeds one (D-264): it loads the header from
-    /// the layout's `cb$layout$…` data symbol, which code generation fills
-    /// from these ids (D-454).
-    fn register_layouts(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
-        for unit in mirs {
-            let mut types: Vec<DefId> = Vec::new();
-            for desc in &unit.layouts {
-                if !types.contains(&desc.type_def) {
-                    types.push(desc.type_def);
-                }
-            }
-            for ty in types {
-                let mut ctors: Vec<&LayoutDesc> =
-                    unit.layouts.iter().filter(|d| d.type_def == ty).collect();
-                ctors.sort_by_key(|d| d.tag);
-                let known = ctors
-                    .iter()
-                    .filter(|d| self.layouts.ids.contains_key(&d.layout))
-                    .count();
-                if known == ctors.len() {
-                    continue;
-                }
-                if known != 0 {
-                    return Err(JitError::ice(format!(
-                        "some constructors of the type {ty:?} are registered and some are not"
-                    )));
-                }
-                let in_order = ctors
-                    .iter()
-                    .enumerate()
-                    .all(|(n, d)| usize::try_from(d.tag).is_ok_and(|tag| tag == n));
-                if !in_order {
-                    return Err(JitError::ice(format!(
-                        "the constructors of the type {ty:?} do not have the tags 0, 1, …"
-                    )));
-                }
-                let infos = ctors
-                    .iter()
-                    .map(|d| layout_info(d))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let first = rt_layout::register_consecutive(infos)
-                    .map_err(|e| JitError::ice(format!("cannot register a layout: {e}")))?;
-                for (desc, id) in ctors.iter().zip(first..) {
-                    self.layouts.ids.insert(desc.layout, id);
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Checks that every native symbol resolves, because Cranelift's JIT

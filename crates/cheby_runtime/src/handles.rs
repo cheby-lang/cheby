@@ -1,6 +1,9 @@
 //! The handle kinds of `std::channel`, `std::fiber` and `std::selector`
 //! (D-647, D-703): `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector`
-//! values are the runtime kinds 40 to 44 ([`abi::layout`]).
+//! values are the runtime kinds 40 to 44 ([`abi::layout`]); `std::net`'s
+//! `Listener` and `Connection` are 46 and 47 (D-982), handles with a
+//! payload as 40 to 43 are, whose finalizers close their sockets
+//! (`net.rs`). 45 stays reserved for `std::file`'s `File`.
 //!
 //! They are handles: `==` and hashing stop on them with the catchable
 //! panic of a function value, and their debug text is `<Sender>`,
@@ -8,7 +11,7 @@
 //! value of an external type (D-233, D-590), through the kinds' `handle`
 //! flag ([`CustomKind::handle`]).
 //!
-//! (D-750) The objects of kinds 40 to 43 are 24 bytes:
+//! (D-750) The objects of kinds 40 to 43, 46 and 47 are 24 bytes:
 //! the header, a pointer to the boxed Rust payload ([`HandlePayload`]), and
 //! a pointer to the payload's vtable. The payload is shared by every copy
 //! of the value (copies share the object), so it is `Send + Sync`. When the
@@ -54,7 +57,8 @@ use crate::object::{self, scan_and_layout, word_to_ptr};
 use crate::panic::fatal;
 
 /// The Rust state behind a `Sender`, `Receiver`, `Fiber` or `Scope` handle
-/// (kinds 40 to 43), owned by the handle object and shared by every copy
+/// (kinds 40 to 43), or a `Listener` or `Connection` (46, 47), owned by
+/// the handle object and shared by every copy
 /// of the value.
 pub(crate) trait HandlePayload: Send + Sync + 'static {
     /// Runs once, when the last reference to the handle goes away, on the
@@ -66,7 +70,7 @@ pub(crate) trait HandlePayload: Send + Sync + 'static {
     fn finalize(self: Box<Self>, release: &mut dyn FnMut(Word));
 }
 
-/// The handle kinds with a payload: 40 to 43.
+/// The handle kinds with a payload: 40 to 43, 46 and 47.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HandleKind {
     /// A channel's sending handle, `std::channel.Sender` (40).
@@ -77,6 +81,10 @@ pub(crate) enum HandleKind {
     Fiber,
     /// A scope handle, `std::fiber.Scope` (43).
     Scope,
+    /// A TCP listener, `std::net.Listener` (46, D-982).
+    Listener,
+    /// A TCP connection, `std::net.Connection` (47, D-982).
+    Connection,
 }
 
 impl HandleKind {
@@ -87,11 +95,13 @@ impl HandleKind {
             Self::Receiver => ids::RECEIVER,
             Self::Fiber => ids::FIBER,
             Self::Scope => ids::SCOPE,
+            Self::Listener => ids::LISTENER,
+            Self::Connection => ids::CONNECTION,
         }
     }
 }
 
-/// The size of a handle object of kinds 40 to 43: the header, the payload
+/// The size of a handle object with a payload: the header, the payload
 /// pointer and the vtable pointer.
 const HANDLE_SIZE: u64 = 24;
 
@@ -206,7 +216,7 @@ unsafe fn finalize_payload<P: HandlePayload>(data: *mut (), release: &mut dyn Fn
 ///
 /// # Safety
 ///
-/// `obj` points to a live (or dying) handle object of kinds 40 to 43 made
+/// `obj` points to a live (or dying) handle object with a payload made
 /// by [`new_handle`].
 #[expect(
     clippy::cast_ptr_alignment,
@@ -289,7 +299,7 @@ pub(crate) unsafe fn payload<'a, P: HandlePayload>(word: Word, kind: HandleKind)
             ));
         }
     }
-    // SAFETY: forwarded from the caller: a live handle of kinds 40 to 43.
+    // SAFETY: forwarded from the caller: a live handle with a payload.
     let (data, vtable) = unsafe { parts(obj) };
     if cfg!(debug_assertions) && (vtable.type_id)() != TypeId::of::<P>() {
         fatal(format_args!(
@@ -306,13 +316,13 @@ unsafe fn handle_size(_: Word) -> u64 {
     HANDLE_SIZE
 }
 
-/// Kinds 40 to 43 hold no Cheby word in the object itself; what their
+/// Kinds with a payload hold no Cheby word in the object itself; what their
 /// payload owns it gives up when finalized.
 unsafe fn handle_children(_: Word, _: &mut dyn FnMut(Word)) {}
 
-/// The finalizer of kinds 40 to 43: finalizes and frees the payload.
+/// The finalizer of the kinds with a payload: finalizes and frees it.
 ///
-/// Safety: `word` is a dying handle of kinds 40 to 43 made by
+/// Safety: `word` is a dying handle with a payload made by
 /// [`new_handle`], finalized once.
 unsafe fn handle_finalize(word: Word, release: &mut dyn FnMut(Word)) {
     // SAFETY: forwarded from the caller.
@@ -358,6 +368,8 @@ static SENDER_KIND: CustomKind = handle_kind("Sender");
 static RECEIVER_KIND: CustomKind = handle_kind("Receiver");
 static FIBER_KIND: CustomKind = handle_kind("Fiber");
 static SCOPE_KIND: CustomKind = handle_kind("Scope");
+static LISTENER_KIND: CustomKind = handle_kind("Listener");
+static CONNECTION_KIND: CustomKind = handle_kind("Connection");
 
 /// The selector node kind.
 static SELECTOR_KIND: CustomKind = CustomKind {
@@ -372,7 +384,7 @@ static SELECTOR_KIND: CustomKind = CustomKind {
     shape: layout::KindShape::Opaque,
 };
 
-/// Registers the five kinds once per process. The layout table's builtin
+/// Registers the seven kinds once per process. The layout table's builtin
 /// initialization calls it, so they are known before any object exists.
 pub(crate) fn register() {
     static ONCE: Once = Once::new();
@@ -383,6 +395,8 @@ pub(crate) fn register() {
             (ids::FIBER, &FIBER_KIND),
             (ids::SCOPE, &SCOPE_KIND),
             (ids::SELECTOR, &SELECTOR_KIND),
+            (ids::LISTENER, &LISTENER_KIND),
+            (ids::CONNECTION, &CONNECTION_KIND),
         ] {
             if let Err(error) = layout::register_builtin(id, LayoutInfo::custom(kind)) {
                 fatal(format_args!("cannot register handle layout {id}: {error}"));

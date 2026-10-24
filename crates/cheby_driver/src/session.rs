@@ -157,9 +157,10 @@ impl std::fmt::Debug for Start {
 /// A REPL session.
 pub struct Session {
     options: SessionOptions,
-    /// The MIR options every entry is lowered with, read once when the
-    /// session starts (`CHEBY_RC`, plan §2.3), with borrowing off
-    /// (D-808).
+    /// The MIR options every entry and package module is lowered with,
+    /// read once when the session starts (`CHEBY_RC`, plan §2.3), with
+    /// borrowing off (D-808, D-971); std's units borrow
+    /// ([`Session::lower_std`]).
     mir: MirOptions,
     sources: SourceMap,
     front: Frontend,
@@ -308,11 +309,12 @@ impl Session {
     /// runtime cannot start its threads.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
-        // No borrowing in any unit a session lowers, std and package
-        // modules included (D-715, D-808): a later batch
-        // could tail-call a function compiled with a mask its slot could
-        // not change. Each unit is counted on its own anyway, which never
-        // infers; the switch says so where the options are made.
+        // No borrowing in any package unit a session lowers (D-715, D-808):
+        // a later batch could tail-call a function compiled with a mask
+        // its slot could not change. Each such unit is counted on its own,
+        // which never infers; the switch says so where the options are
+        // made. Std runs its normal code, its masks inferred once over
+        // all of std (D-971, `Session::lower_std`).
         let mir = MirOptions {
             borrow: false,
             ..crate::backend::mir_options_from_env()?
@@ -1860,6 +1862,102 @@ struct Built {
 }
 
 impl Session {
+    /// D-971: the REPL runs std's normal code. The first batch that needs
+    /// a std module lowers every std module whole (D-966), infers borrowing
+    /// over std's units alone, the scope D-968 gives std, and counts them
+    /// with borrowing on; no later batch lowers a std item again, so no
+    /// entry can change a std mask. Package modules stay `plain` (D-808):
+    /// an entry calls only std's `pub` functions, which are never borrowed
+    /// (D-787). Under `CHEBY_RC=naive` nothing borrows (D-746).
+    fn lower_std(&self) -> Result<Vec<MirModule>, Error> {
+        let std_mir = MirOptions {
+            borrow: true,
+            ..self.mir
+        };
+        let mut units = Vec::new();
+        for &module in &self.front.order {
+            if self
+                .front
+                .modules
+                .get(module)
+                .is_none_or(|info| info.package != PackageId::STD)
+            {
+                continue;
+            }
+            let c = self
+                .front
+                .checked(module)
+                .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
+            let own = self
+                .front
+                .set
+                .get(module)
+                .ok_or_else(|| Ice::new(format!("module {module:?} has no interface")))?;
+            let view = DepView::new(&self.front.set, &c.deps);
+            let cx = LowerCx {
+                defs: Defs {
+                    own: Some(own),
+                    deps: &view,
+                    modules: &self.front.modules,
+                    globals: &self.front.globals,
+                },
+                sources: &self.sources,
+            };
+            let unit = lower_items(&c.thir, &|_| true, &cx)?;
+            cheby_mir::check_lowered(&unit)?;
+            units.push(unit);
+        }
+        if std_mir.borrows() {
+            crate::backend::infer_units(&self.front, &mut units)?;
+        }
+        for unit in &mut units {
+            cheby_mir::count_lowered_with(unit, &std_mir)?;
+        }
+        Ok(units)
+    }
+
+    /// Whether `module` is a std module.
+    fn is_std(&self, module: ModuleId) -> bool {
+        self.front
+            .modules
+            .get(module)
+            .is_some_and(|info| info.package == PackageId::STD)
+    }
+
+    /// When a batch first needs std (`reach` needs one of `needed`'s std
+    /// modules and no std module is compiled yet) under whole modules:
+    /// [`Session::lower_std`]'s units, with every item and module they
+    /// compile added to `items` and `lowered`. `None` otherwise.
+    fn std_batch(
+        &self,
+        reach: &Reach,
+        needed: &[ModuleId],
+        items: &mut Vec<DefId>,
+        lowered: &mut Vec<ModuleId>,
+    ) -> Result<Option<Vec<MirModule>>, Error> {
+        let first = crate::backend::command_scope() == crate::backend::Scope::Whole
+            && needed
+                .iter()
+                .any(|&m| self.is_std(m) && reach.needs_module(m))
+            && !self.units.iter().any(|&m| self.is_std(m));
+        if !first {
+            return Ok(None);
+        }
+        let units = self.lower_std()?;
+        for unit in &units {
+            if let Some(module) = unit.module() {
+                lowered.push(module);
+                let c = self
+                    .front
+                    .checked(module)
+                    .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
+                items.extend(c.thir.fns.iter().map(|f| f.def));
+                items.extend(c.thir.consts.iter().map(|c| c.def));
+            }
+        }
+        Ok(Some(units))
+    }
+
     /// Lowers what `entry` reaches that is not compiled yet. MIR lowering
     /// reports no diagnostics (D-554), so every error is an `Ice`.
     fn lower(&self, entry: &Entry) -> Result<Built, Error> {
@@ -1887,9 +1985,11 @@ impl Session {
         let mut units = Vec::new();
         let mut items = Vec::new();
         let mut lowered_modules = Vec::new();
+        let std_first = self.std_batch(&reach, &modules, &mut items, &mut lowered_modules)?;
+        let std_first = std_first.map(|std| units.extend(std)).is_some();
         let wanted = |def: DefId| reach.contains(def) && !self.compiled.contains(&def);
         for module in modules {
-            if !reach.needs_module(module) {
+            if !reach.needs_module(module) || (std_first && self.is_std(module)) {
                 continue;
             }
             let new: Vec<DefId> = reach
@@ -2637,7 +2737,7 @@ mod tests {
         assert!(printed[8].contains("<repl:9>:1:1"), "{}", printed[8]);
     }
 
-    /// No unit a session lowers borrows (D-715, D-808):
+    /// No package unit a session lowers borrows (D-715, D-808, D-971):
     /// the session's options turn borrowing off whatever `CHEBY_RC` says,
     /// and a function that a build would borrow in (a package-visible
     /// function that only reads its `String`) runs, then is redefined with
@@ -2667,6 +2767,54 @@ mod tests {
                 }
                 assert_eq!(printed[1], "True : Bool\n");
                 assert_eq!(printed[3], "False : Bool\n");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// D-971: the REPL runs std's normal code. Std's units are every std
+    /// module, whole, with masks inferred over std (some of its functions
+    /// borrow); the first entry that needs std compiles all of them, and
+    /// the session's package code stays `plain`.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn kinds_repl_runs_std_borrowed_and_package_plain() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut session = start(options());
+                let units = session.lower_std().unwrap();
+                let std: BTreeSet<ModuleId> = session
+                    .front
+                    .order
+                    .iter()
+                    .copied()
+                    .filter(|&m| {
+                        session.front.modules.get(m).map(|i| i.package) == Some(PackageId::STD)
+                    })
+                    .collect();
+                let lowered: BTreeSet<ModuleId> =
+                    units.iter().filter_map(MirModule::module).collect();
+                assert_eq!(lowered, std);
+                assert!(
+                    units
+                        .iter()
+                        .flat_map(|u| &u.functions)
+                        .any(|f| !f.borrow.is_owned()),
+                    "std borrows somewhere"
+                );
+                assert!(!session.mir.borrows());
+                let mut out = Buffer::default();
+                session.eval("import std::list", &mut out).unwrap();
+                session.eval("list::length([1, 2, 3])", &mut out).unwrap();
+                assert_eq!(out.text, "3 : Int\n");
+                if crate::backend::command_scope() == crate::backend::Scope::Whole {
+                    assert!(std.iter().all(|m| session.units.contains(m)));
+                }
             })
             .unwrap()
             .join()

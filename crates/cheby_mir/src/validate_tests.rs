@@ -103,6 +103,8 @@ fn module(functions: Vec<Function>, statics: Vec<StaticObject>) -> MirModule {
         item: format!("f{n}").into(),
     }));
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(MODULE),
         path: "app".into(),
         functions,
@@ -1574,6 +1576,7 @@ fn borrow_validate_entry_pad_drops_a_borrowed_parameter() {
     let pad = f
         .blocks
         .push(crate::ir::Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts: vec![Stmt::Drop(Local::from_u32(0))],
             term: Terminator::Goto {

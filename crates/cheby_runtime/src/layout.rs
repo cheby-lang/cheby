@@ -8,7 +8,8 @@
 //!   list and map nodes, registered by their modules with
 //!   [`register_builtin`] before first use (plan §4.3.2).
 //! - User constructors are registered from id 64 on, in call order, before
-//!   any code that uses them is defined (D-454). The constructors of one
+//!   any code that uses them runs (D-454), by the one routine that
+//!   registers module records (`image::register_records`, D-919). The constructors of one
 //!   type are registered together with [`register_consecutive`], so their
 //!   ids are consecutive in tag order (D-522). The values of each external
 //!   type get a layout of their own there too ([`register_external`]).
@@ -725,6 +726,17 @@ fn fast_fixed(size: u64, count: u64, reusable: bool) -> u64 {
     }
     let flag = if reusable { fast::REUSABLE } else { 0 };
     fast::FIXED | (size << 8) | (count << 48) | flag
+}
+
+/// The free-shape word of D-907 that registration derives for `info`, or
+/// 0 when the layout has none: the word a module record's `free_shapes`
+/// table holds for each of its user layouts, which
+/// `image::register_records` checks against this function before it
+/// registers anything (GAP(free-shapes-checked)). Code generation calls it
+/// too, so a record carries the words of the runtime it was built with.
+#[must_use]
+pub fn free_shape_word(info: &LayoutInfo) -> u64 {
+    derive_fast_word(info)
 }
 
 /// The free-shape word of a layout, or 0 when it has none.

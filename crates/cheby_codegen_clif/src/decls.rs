@@ -851,13 +851,18 @@ impl Decls {
         }
         // D-869: the text leaves out the calls' location tags
         // (D-856), which are metadata, so a dump is the same with and
-        // without them (D-551).
-        if func.debug_tags.is_empty() {
+        // without them (D-551). The source locations of D-938 are
+        // metadata too: Cranelift's writer prints `@<loc>` before each
+        // instruction and indents every instruction once any is set, so
+        // the printed copy clears them and a dump is the same with
+        // positions on and off (GAP(dumps-without-positions)).
+        if func.debug_tags.is_empty() && func.srclocs.is_empty() {
             let _ = write!(out, "{}", func.display());
         } else {
-            let mut untagged = func.clone();
-            untagged.debug_tags.clear();
-            let _ = write!(out, "{}", untagged.display());
+            let mut plain = func.clone();
+            plain.debug_tags.clear();
+            plain.srclocs.clear();
+            let _ = write!(out, "{}", plain.display());
         }
         out
     }
@@ -1281,16 +1286,12 @@ impl Decls {
         let name = self.def_name(unit, def)?;
         let linkage = self.owned_data_linkage();
         let word = self.data(module, &mangle::item(Kind::Layout, &name), linkage, true)?;
-        // D-920: an executable's start patches the `cb$ctor$` header, so
-        // in a unit alone the static is writable; the JIT fills it before
-        // any code runs and keeps it read-only.
+        // D-920: the one registration routine patches the `cb$ctor$`
+        // header after the batch or the executable is loaded (D-919), so
+        // the static is writable in a unit alone and in the JIT alike
+        // (GAP(jit-record-registration)).
         let ctor = if desc.fields.is_empty() {
-            Some(self.data(
-                module,
-                &mangle::item(Kind::Ctor, &name),
-                linkage,
-                self.is_alone(),
-            )?)
+            Some(self.data(module, &mangle::item(Kind::Ctor, &name), linkage, true)?)
         } else {
             None
         };

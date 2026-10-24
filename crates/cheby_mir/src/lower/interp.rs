@@ -98,10 +98,24 @@ impl BodyCx<'_, '_> {
             if self.split_due(&chain) {
                 acc = Operand::Local(self.split_cut(&mut chain, k, acc, Items::Interp(parts))?);
             }
+            // A value part's `show` call and append take the part's
+            // position (D-938, GAP(mir-positions)); a text part's, the
+            // interpolation's.
+            let part_span = match part {
+                InterpPart::Text(_) => None,
+                InterpPart::Value { expr, .. } => Some(self.expr_data(*expr)?.span),
+            };
+            let outer_pos = match part_span {
+                Some(span) => Some(self.enter_position(span)?),
+                None => None,
+            };
             let piece = match part {
                 InterpPart::Text(text) => self.string_const(text)?,
                 InterpPart::Value { expr, debug, show } => {
                     let Some(piece) = self.interp_value(*expr, *debug, show.as_ref())? else {
+                        if let Some(outer) = outer_pos {
+                            self.leave_position(outer)?;
+                        }
                         return self.split_finish(chain, None);
                     };
                     piece
@@ -114,6 +128,9 @@ impl BodyCx<'_, '_> {
                     args: vec![acc, piece],
                 },
             )?);
+            if let Some(outer) = outer_pos {
+                self.leave_position(outer)?;
+            }
         }
         self.split_finish(chain, Some(acc))
     }
@@ -133,8 +150,22 @@ impl BodyCx<'_, '_> {
     }
 
     /// The text of the value `expr`: its debug text for `{x:?}`, else the
-    /// result of its type's `show` function `show`.
+    /// result of its type's `show` function `show`, at the part's position
+    /// (D-938, GAP(mir-positions)).
     fn interp_value(
+        &mut self,
+        expr: ExprId,
+        debug: bool,
+        show: Option<&Callee>,
+    ) -> Result<Option<Operand>, Ice> {
+        let outer = self.enter_position(self.expr_data(expr)?.span)?;
+        let text = self.interp_value_here(expr, debug, show);
+        self.leave_position(outer)?;
+        text
+    }
+
+    /// [`BodyCx::interp_value`] at the current position.
+    fn interp_value_here(
         &mut self,
         expr: ExprId,
         debug: bool,

@@ -25,6 +25,7 @@ mio = { workspace = true, features = ["net"] }
 parking_lot.workspace = true
 ryu.workspace = true
 siphasher.workspace = true
+socket2.workspace = true
 unicode-segmentation.workspace = true
 
 [build-dependencies]

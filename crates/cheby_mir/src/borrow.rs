@@ -1042,7 +1042,7 @@ fn apply_to_calls(f: &mut Function, masks: &BTreeMap<DefId, BorrowMask>) {
         }
     }
     for block in &mut f.blocks {
-        block.stmts.retain(|s| match s {
+        block.retain_stmts(|s| match s {
             Stmt::Assign { dst, .. } => !replaced.contains(dst) || read.contains(dst),
             _ => true,
         });

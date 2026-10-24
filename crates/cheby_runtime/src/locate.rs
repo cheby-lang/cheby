@@ -4,11 +4,14 @@
 //!
 //! # The code map
 //!
-//! D-867: one map serves the whole process. A JIT
-//! registers each batch's functions with [`register_code`] after
-//! `finalize_definitions`, under an owner id from [`new_code_owner`], and
-//! removes them with [`unregister_code`] when its code memory is freed
-//! (D-708's last token holder). A REPL redefinition keeps its old code
+//! D-867: one map serves the whole process. Every host registers code
+//! through the one routine of D-919, `image::register_records`, which
+//! calls [`register_code`] with the functions its module records list: a
+//! JIT after each batch's `finalize_definitions`, under an owner id from
+//! [`new_code_owner`], removed with [`unregister_code`] when its code
+//! memory is freed (D-708's last token holder); an executable at its start,
+//! under an owner never removed. An entries unit has no record, so entry
+//! thunks and trampolines are in no range (D-1111). A REPL redefinition keeps its old code
 //! (D-712), so its old ranges stay and a fiber still in old code is
 //! located. Each range has its start, its end, whether the function has the
 //! Cheby ABI, and its call sites sorted by return offset as 16-byte
@@ -279,6 +282,32 @@ impl CodeMap {
         }
     }
 
+    /// `range` as a [`CodeRangeDesc`], its sites' locations written as
+    /// `path:line:column` (empty for a site without a path).
+    fn describe(&self, range: &CodeRange) -> CodeRangeDesc {
+        let sites = range
+            .sites
+            .iter()
+            .map(|site| {
+                let path = usize::try_from(site.path)
+                    .ok()
+                    .and_then(|path| self.paths.get(path));
+                CallSiteDesc {
+                    ret_offset: site.ret_offset,
+                    location: path.map_or_else(String::new, |path| {
+                        format!("{path}:{}:{}", site.line, site.column)
+                    }),
+                }
+            })
+            .collect();
+        CodeRangeDesc {
+            start: range.start,
+            len: u32::try_from(range.end.saturating_sub(range.start)).unwrap_or(u32::MAX),
+            cheby_abi: range.cheby_abi,
+            sites,
+        }
+    }
+
     /// The registered ranges as `(start, end, owner)`, in order.
     #[cfg(test)]
     pub(crate) fn spans(&self) -> Vec<(usize, usize, u64)> {
@@ -382,6 +411,29 @@ pub fn unregister_code(owner: u64) {
         .write()
         .unwrap_or_else(PoisonError::into_inner)
         .unregister(owner);
+}
+
+/// The ranges registered under `owner`, sorted by start, each with its
+/// sites sorted by return offset: what the map holds, for tests and
+/// tools that check what a host registered (D-867, D-919).
+#[must_use]
+pub fn owner_ranges(owner: u64) -> Vec<CodeRangeDesc> {
+    let map = CODE_MAP.read().unwrap_or_else(PoisonError::into_inner);
+    map.ranges
+        .iter()
+        .filter(|range| range.owner == owner)
+        .map(|range| map.describe(range))
+        .collect()
+}
+
+/// The owner and the range of the registered function holding the byte at
+/// `address`, or `None` outside every registered range: an entry thunk's
+/// or a trampoline's address, which no module record lists (D-1111).
+#[must_use]
+pub fn range_at(address: usize) -> Option<(u64, CodeRangeDesc)> {
+    let map = CODE_MAP.read().unwrap_or_else(PoisonError::into_inner);
+    map.find(address)
+        .map(|range| (range.owner, map.describe(range)))
 }
 
 /// The innermost recorded call site above `frame` (a published frame

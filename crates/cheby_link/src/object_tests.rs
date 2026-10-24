@@ -107,12 +107,14 @@ fn function(
     call_loc_strings: &[&str],
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi: Abi::Cheby,
         params,
         ret: Repr::Value,
         locals: locals(reprs),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -206,6 +208,8 @@ fn code_model_unit() -> MirModule {
         item: item.into(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![f_body, g_body],

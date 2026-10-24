@@ -67,6 +67,7 @@ mod aot;
 mod backend;
 pub mod cache;
 mod frontend;
+mod load_set;
 mod reuse_report;
 pub mod session;
 pub mod std_lib;
@@ -1190,6 +1191,12 @@ mod cache_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
+mod load_set_tests;
+#[cfg(test)]
+mod positions_tests;
+#[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod whole_tests;

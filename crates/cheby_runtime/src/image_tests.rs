@@ -7,7 +7,7 @@ use crate::entry::Callbacks;
 use crate::image::{
     CallSiteEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry, FunctionEntry,
     HookEntry, ImageError, ImageParts, ModuleParts, ModuleRecord, NO_STRING, ProgramImage, Table,
-    TypeEntry, check_version, install,
+    TypeEntry, check_version, install, register_records,
 };
 use crate::layout::{self, FieldKind};
 use crate::locate::{self, Location};
@@ -187,43 +187,54 @@ fn image_keeps_the_abi_flag_and_sites_without_a_path() {
     assert_eq!(locate_return(user.as_ptr().addr() + 0x10), None);
 }
 
-/// The table a `NotYet` names, and how a record gets a non-empty one.
-type Case = (&'static str, fn(&mut ModuleParts));
+/// How a record gets a table, and the error installing it gives.
+type Case = (fn(&mut ModuleParts), ImageError);
 
-/// Each table a later package fills (external types and free shapes,
-/// N5b; constants, K5a) is refused with `NotYet` while it is not empty,
-/// before any call site of the image is registered.
+/// The constants (K5a) are refused with `NotYet` while their table is not
+/// empty; an external type without a name, and a free-shape word for a
+/// record without user layouts, are malformed now that both tables are
+/// registered (N5b, D-919). Each is refused before any call site of the
+/// image is registered.
 #[test]
 fn image_refuses_tables_it_cannot_install_yet() {
     let (path_strings, offsets) = strings(&["src/main.cheby"]);
     let path = offsets[0];
+    let malformed = |what| ImageError::Malformed {
+        module: Some(0),
+        what,
+    };
     let cases: [Case; 3] = [
-        ("external types", |parts| {
-            parts.externals = table(vec![ExternalEntry {
-                type_name: NO_STRING,
-                pad: 0,
-                type_key: 2,
-                drop: std::ptr::null(),
-            }]);
-        }),
-        ("free shapes", |parts| parts.free_shapes = table(vec![0])),
-        ("constant slots", |parts| {
-            parts.constants = table(vec![std::ptr::null_mut()]);
-        }),
+        (
+            |parts| {
+                parts.externals = table(vec![ExternalEntry {
+                    type_name: NO_STRING,
+                    pad: 0,
+                    type_key: 2,
+                    drop: std::ptr::null(),
+                }]);
+            },
+            malformed("an external type's name"),
+        ),
+        (
+            |parts| parts.free_shapes = table(vec![0]),
+            malformed("a free-shape table that does not hold one word per user layout"),
+        ),
+        (
+            |parts| {
+                parts.constants = table(vec![std::ptr::null_mut()]);
+            },
+            ImageError::NotYet("constant slots"),
+        ),
     ];
-    for (what, with) in cases {
+    for (with, error) in cases {
         let body = code(0x40);
         let record = record(
             path_strings,
             vec![function(body, vec![site(0x10, path, 3, 4)])],
             with,
         );
-        assert_eq!(
-            install(&image(&[record])),
-            Err(ImageError::NotYet(what)),
-            "{what}"
-        );
-        assert_eq!(locate_return(body.as_ptr().addr() + 0x10), None, "{what}");
+        assert_eq!(install(&image(&[record])), Err(error.clone()), "{error}");
+        assert_eq!(locate_return(body.as_ptr().addr() + 0x10), None, "{error}");
     }
     // The image's constant image.
     let mut constants = image(&[]);
@@ -363,8 +374,8 @@ fn image_version_and_error_messages() {
         )
     );
     assert_eq!(
-        ImageError::NotYet("free shapes").to_string(),
-        "the program image holds free shapes, which this runtime cannot install yet"
+        ImageError::NotYet("constant slots").to_string(),
+        "the program image holds constant slots, which this runtime cannot install yet"
     );
     assert_eq!(
         ImageError::Malformed {
@@ -426,13 +437,45 @@ type Words = Vec<Vec<(*mut u64, *mut u64)>>;
 /// fields).
 type Tweak<'a> = &'a dyn Fn(usize, usize, &mut CtorEntry, &mut Vec<FieldEntry>);
 
+/// The free-shape words registration derives for `types`' constructors,
+/// types in order and constructors in tag order (D-907): the record's
+/// `free_shapes` table.
+fn free_shapes(types: &[TestType]) -> Vec<u64> {
+    let mut words = Vec::new();
+    for ty in types {
+        for (tag, ctor) in ty.ctors.iter().enumerate() {
+            let fields: Vec<(FieldKind, Option<&str>)> = ctor
+                .fields
+                .iter()
+                .map(|&(kind, name, _)| (kind, name))
+                .collect();
+            let info = layout::LayoutInfo::ctor(ctor.name, u32::try_from(tag).unwrap(), &fields)
+                .named(ty.name, ctor.ctor_name, ctor.record, ty.key);
+            words.push(layout::free_shape_word(&info));
+        }
+    }
+    words
+}
+
 /// A module record listing `types` and `hooks` (type index, three
-/// values), with fresh words, after `tweak` changed each constructor's
-/// entry; and the words.
+/// values), with fresh words and the derived free-shape words, after
+/// `tweak` changed each constructor's entry; and the words.
 fn types_record(
     types: &[TestType],
     hooks: Vec<(u32, [*const u8; 3])>,
     tweak: Tweak<'_>,
+) -> (&'static ModuleRecord, Words) {
+    types_record_with(types, hooks, tweak, &[], |_| {})
+}
+
+/// [`types_record`] that also lists the external types `externals` (name
+/// and key, no drop function); then `with` changes the record's tables.
+fn types_record_with(
+    types: &[TestType],
+    hooks: Vec<(u32, [*const u8; 3])>,
+    tweak: Tweak<'_>,
+    externals: &[(&'static str, u64)],
+    with: impl FnOnce(&mut ModuleParts),
 ) -> (&'static ModuleRecord, Words) {
     let mut texts: Vec<&str> = Vec::new();
     for ty in types {
@@ -442,7 +485,17 @@ fn types_record(
             texts.extend(ctor.fields.iter().filter_map(|(_, name, _)| *name));
         }
     }
+    texts.extend(externals.iter().map(|&(name, _)| name));
     let (strings, offsets) = strings(&texts);
+    let external_entries: Vec<ExternalEntry> = externals
+        .iter()
+        .map(|&(name, type_key)| ExternalEntry {
+            type_name: offsets[texts.iter().position(|t| *t == name).unwrap()],
+            pad: 0,
+            type_key,
+            drop: std::ptr::null(),
+        })
+        .collect();
     let at = |text: &str| offsets[texts.iter().position(|t| *t == text).unwrap()];
     let mut words: Words = Vec::new();
     let mut entries = Vec::new();
@@ -499,9 +552,13 @@ fn types_record(
             debug,
         })
         .collect();
+    let shapes = free_shapes(types);
     let record = record(strings, Vec::new(), |parts| {
         parts.types = table(entries);
         parts.hooks = table(hooks);
+        parts.free_shapes = table(shapes);
+        parts.externals = table(external_entries);
+        with(parts);
     });
     (record, words)
 }
@@ -552,8 +609,8 @@ fn shape_and_pair() -> Vec<TestType> {
 }
 
 /// Installing a record with two types registers each type's constructors
-/// with consecutive ids in tag order (D-522), with the facts the JIT's
-/// `layout_info` gives (names, type key, record flag, field kinds, names
+/// with consecutive ids in tag order (D-522), with D-1163's facts (names,
+/// type key, record flag, field kinds, names
 /// and offsets); writes each layout word's header (count 1, the value
 /// fields as scan count, the id) and the nullary constructor's static
 /// header (count 0, scan 0, the id); and sets the hooked type's hooks on
@@ -788,4 +845,211 @@ fn image_install_registers_types_refuses_malformed_with_nothing_registered() {
         );
         assert_eq!(read(words[0][0].0), SENTINEL, "{what}");
     }
+}
+
+// ---- The one routine (D-919, D-920, D-1163) ----
+
+/// The ids `words` were given: per type, per constructor.
+fn ids_of(words: &Words) -> Vec<Vec<abi::LayoutId>> {
+    words
+        .iter()
+        .map(|ty| {
+            ty.iter()
+                .map(|&(layout_word, _)| abi::header_layout(read(layout_word)))
+                .collect()
+        })
+        .collect()
+}
+
+/// `register_records` with a fresh owner, as a JIT host calls it.
+fn register(records: &[&'static ModuleRecord]) -> Result<u64, ImageError> {
+    let owner = locate::new_code_owner();
+    // SAFETY: every record of these tests is leaked, its words are leaked
+    // boxes nothing else writes, and its hooks are never called.
+    unsafe { register_records(records, owner) }.map(|()| owner)
+}
+
+/// A record's external types are registered after its user layouts, in
+/// table order (GAP(record-externals-order)), each a handle layout with
+/// its name and key, so a value prints as `<Db>` (D-233); an external type
+/// with a drop function is refused before anything is registered (D-703).
+#[test]
+fn image_register_records_external_types_with_names_and_keys() {
+    let externals = [
+        ("Db", layout::type_key("app::store", "Db")),
+        ("Conn", layout::type_key("app::store", "Conn")),
+    ];
+    let (with_externals, words) = types_record_with(
+        &shape_and_pair(),
+        Vec::new(),
+        &|_, _, _, _| {},
+        &externals,
+        |_| {},
+    );
+    register(&[with_externals]).unwrap();
+    let ids = ids_of(&words);
+    let last = *ids.last().unwrap().last().unwrap();
+    let mut id = last;
+    for (name, key) in externals {
+        // Other tests register layouts concurrently, so the external
+        // types come after the record's last constructor, in order.
+        let found = loop {
+            id += 1;
+            let info = layout::get(id).unwrap();
+            if info.is_external() && info.type_key == key {
+                break info;
+            }
+        };
+        assert_eq!(&*found.type_name, name);
+        assert_eq!(&*found.name, name);
+        assert_eq!(found.tag, 0);
+    }
+    // A drop function: refused, nothing of either record registered.
+    let (good, good_words) = types_record(&shape_and_pair(), Vec::new(), &|_, _, _, _| {});
+    let (names, offsets) = strings(&["Db"]);
+    let bad = record(names, Vec::new(), |parts| {
+        parts.externals = table(vec![ExternalEntry {
+            type_name: offsets[0],
+            pad: 0,
+            type_key: externals[0].1,
+            drop: fn_value(),
+        }]);
+    });
+    assert_eq!(
+        register(&[good, bad]),
+        Err(ImageError::Malformed {
+            module: Some(1),
+            what: "an external type's drop function, which this runtime does not register yet",
+        })
+    );
+    for &(layout_word, _) in good_words.iter().flatten() {
+        assert_eq!(read(layout_word), SENTINEL);
+    }
+}
+
+/// A free-shape word that is not the one registration derives (D-907) is
+/// refused before anything is registered (GAP(free-shapes-checked)): the
+/// good record before it keeps its words, and its call site is not
+/// located.
+#[test]
+fn image_register_records_refuses_a_free_shape_word_that_differs() {
+    let (good, good_words) = types_record(&shape_and_pair(), Vec::new(), &|_, _, _, _| {});
+    let mut shapes = free_shapes(&shape_and_pair());
+    shapes[2] ^= 1 << 8;
+    let (bad, bad_words) = types_record_with(
+        &shape_and_pair(),
+        vec![(0, [fn_value(), fn_value(), fn_value()])],
+        &|_, _, _, _| {},
+        &[("Db", 7)],
+        |parts| parts.free_shapes = table(shapes),
+    );
+    let (path_strings, offsets) = strings(&["src/main.cheby"]);
+    let body = code(0x40);
+    let located = record(
+        path_strings,
+        vec![function(body, vec![site(0x10, offsets[0], 3, 4)])],
+        |_| {},
+    );
+    assert_eq!(
+        register(&[good, located, bad]),
+        Err(ImageError::Malformed {
+            module: Some(2),
+            what: "a free-shape word that is not the one registration derives (D-907)",
+        })
+    );
+    for &(layout_word, ctor_static) in good_words.iter().chain(&bad_words).flatten() {
+        assert_eq!(read(layout_word), SENTINEL);
+        if !ctor_static.is_null() {
+            assert_eq!(read(ctor_static), SENTINEL);
+        }
+    }
+    assert_eq!(locate_return(body.as_ptr().addr() + 0x10), None);
+    // One word too few is refused too.
+    let mut short = free_shapes(&shape_and_pair());
+    short.pop();
+    let (bad, _) = types_record_with(
+        &shape_and_pair(),
+        Vec::new(),
+        &|_, _, _, _| {},
+        &[],
+        |parts| parts.free_shapes = table(short),
+    );
+    assert_eq!(
+        register(&[bad]),
+        Err(ImageError::Malformed {
+            module: Some(0),
+            what: "a free-shape table that does not hold one word per user layout",
+        })
+    );
+}
+
+/// Two calls register disjoint ids: each type's constructors consecutive
+/// in tag order (D-522), and every id of the second call above every id
+/// of the first, since ids are assigned only at registration (D-920).
+/// Each record's layouts get the free-shape word it lists.
+#[test]
+fn image_register_records_two_calls_give_disjoint_consecutive_id_ranges() {
+    let (first, first_words) = types_record(&shape_and_pair(), Vec::new(), &|_, _, _, _| {});
+    let (second, second_words) = types_record(&shape_and_pair(), Vec::new(), &|_, _, _, _| {});
+    register(&[first]).unwrap();
+    register(&[second]).unwrap();
+    let first_ids = ids_of(&first_words);
+    let second_ids = ids_of(&second_words);
+    for ty in first_ids.iter().chain(&second_ids) {
+        for pair in ty.windows(2) {
+            assert_eq!(pair[1], pair[0] + 1, "{ty:?}");
+        }
+    }
+    let first_max = first_ids.iter().flatten().max().unwrap();
+    let second_min = second_ids.iter().flatten().min().unwrap();
+    assert!(first_max < second_min, "{first_ids:?} {second_ids:?}");
+    let shapes = free_shapes(&shape_and_pair());
+    for (id, word) in second_ids.iter().flatten().zip(shapes) {
+        let info = layout::get(*id).unwrap();
+        assert_eq!(layout::free_shape_word(info), word);
+    }
+}
+
+/// A record that names a constant slot is `NotYet` until constants reach
+/// executables (K5a), with nothing registered.
+#[test]
+fn image_register_records_constant_slot_is_not_yet() {
+    let (record, words) = types_record_with(
+        &shape_and_pair(),
+        Vec::new(),
+        &|_, _, _, _| {},
+        &[],
+        |parts| parts.constants = table(vec![word()]),
+    );
+    assert_eq!(
+        register(&[record]),
+        Err(ImageError::NotYet("constant slots"))
+    );
+    assert_eq!(read(words[0][0].0), SENTINEL);
+}
+
+/// The call-site ranges go under the caller's owner (D-867): located
+/// while registered, gone once the owner is unregistered, as a JIT's when
+/// its code memory is freed.
+#[test]
+fn image_register_records_owner_ranges_go_when_unregistered() {
+    let (path_strings, offsets) = strings(&["src/main.cheby"]);
+    let body = code(0x40);
+    let located = record(
+        path_strings,
+        vec![function(body, vec![site(0x10, offsets[0], 3, 4)])],
+        |_| {},
+    );
+    let owner = register(&[located]).unwrap();
+    let ra = body.as_ptr().addr() + 0x10;
+    assert_eq!(locate_return(ra), Some(location("src/main.cheby", 3, 4)));
+    let ranges = locate::owner_ranges(owner);
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].start, body.as_ptr().addr());
+    assert_eq!(ranges[0].sites[0].location, "src/main.cheby:3:4");
+    assert_eq!(locate::range_at(ra).map(|(o, _)| o), Some(owner));
+    locate::unregister_code(owner);
+    assert_eq!(locate_return(ra), None);
+    assert_eq!(locate::owner_ranges(owner), Vec::new());
+    assert_eq!(locate::range_at(ra), None);
 }

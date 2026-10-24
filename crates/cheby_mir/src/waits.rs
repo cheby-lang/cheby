@@ -8,9 +8,10 @@
 //! stack through it. `selector::select` is not here: it calls the chosen
 //! arm's function in tail position, and select-driven loops rely on that.
 //! D-1059 extends the rule to every public std wait that calls no function
-//! value, such as `channel::to_list` and `channel::send_all` (D-1100). A
-//! test reads each module's source and checks that the function exists and
-//! calls no function value.
+//! value, such as `channel::to_list` and `channel::send_all` (D-1100), and
+//! `time::sleep` and `time::sleep_until`, which wait on a timer (D-1057,
+//! D-1058). A test reads each module's source and checks that the function
+//! exists and calls no function value.
 
 /// `(module, function)`, sorted by module and function.
 pub const FRAME_KEEPING_WAITS: &[(&str, &str)] = &[
@@ -19,6 +20,8 @@ pub const FRAME_KEEPING_WAITS: &[(&str, &str)] = &[
     ("std::channel", "send_all"),
     ("std::channel", "to_list"),
     ("std::fiber", "join"),
+    ("std::time", "sleep"),
+    ("std::time", "sleep_until"),
 ];
 
 /// Whether `module::function` (as `std::channel` and `receive`) is a wait
@@ -185,5 +188,10 @@ mod tests {
         assert!(!keeps_frame("std::selector", "select"));
         assert!(!keeps_frame("std::fiber", "scope"));
         assert!(!keeps_frame("app", "receive"));
+        // The sleeps keep their caller's frame (D-1059); a clock reading
+        // does not wait.
+        assert!(keeps_frame("std::time", "sleep"));
+        assert!(keeps_frame("std::time", "sleep_until"));
+        assert!(!keeps_frame("std::time", "monotonic"));
     }
 }

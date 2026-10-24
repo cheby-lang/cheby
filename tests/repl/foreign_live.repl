@@ -34,17 +34,17 @@ error[E0042]: cannot find value `magnitude_wide` in this scope
 > @external(native, "cheby_io_println")
 . fn say(n: Int)
 error[E0054]: the native symbol `cheby_io_println` is bound with two different C signatures
-  --> <repl:8>:1:19
-   |
-1  | @external(native, "cheby_io_println")
-   |                   ^^^^^^^^^^^^^^^^^^ bound here with another signature
-   |
-  ::: std/io.cheby:84:19
-   |
-84 | @external(native, "cheby_io_println")
-   |                   ------------------ first bound here
-   |
-   = note: every `@external` of one symbol must give it the same C signature; in the REPL, only the session's current definitions count
+   --> <repl:8>:1:19
+    |
+1   | @external(native, "cheby_io_println")
+    |                   ^^^^^^^^^^^^^^^^^^ bound here with another signature
+    |
+   ::: std/io.cheby:105:19
+    |
+105 | @external(native, "cheby_io_println")
+    |                   ------------------ first bound here
+    |
+    = note: every `@external` of one symbol must give it the same C signature; in the REPL, only the session's current definitions count
 
 > @external(native, "cheby_io_println")
 . fn say(text: String)

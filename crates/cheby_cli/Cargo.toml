@@ -25,6 +25,8 @@ mimalloc.workspace = true
 
 [dev-dependencies]
 cheby_test_support.workspace = true
+# `tests/build_dwarf.rs` reads an executable's line tables (D-938).
+gimli = { workspace = true, features = ["read"] }
 libtest-mimic.workspace = true
 # `tests/build.rs` compares the load commands of two executables (D-934,
 # D-1036).

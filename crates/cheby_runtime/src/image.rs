@@ -86,25 +86,32 @@
 //! (`u32` string, or [`NO_STRING`] for a site without a printable
 //! location) at 4, `line` (`u32`) at 8, `column` (`u32`) at 12.
 //!
-//! # Installing
+//! # Registering
 //!
-//! [`install`] registers the builtin list and map kinds, then checks every
-//! record (tables readable, strings in range, field kinds known, field
-//! offsets equal to the runtime's own, a layout word for every
-//! constructor, a constructor static exactly for each constructor without
-//! fields, every hook naming a listed type once with three non-null
-//! values) before it registers anything. It then registers, record by
-//! record in build order, each type's constructors with consecutive ids in
-//! tag order (D-522), writing into each layout word the header that
-//! allocation copies and into each constructor static its static header
-//! (D-454, D-920); then the hooks of every record on every constructor of
-//! each hooked type (D-482, D-585), and the call-site ranges under one
-//! code owner that is never unregistered (D-867). The order and the facts
-//! are those of `cheby_jit`'s `register_layouts`, `layout_info` and
-//! `register_hooks` (D-1163), so an executable
-//! and `cheby run` register the same layouts. The external types and free
-//! shapes (N5b) and the constants (K5a) are not installed yet: a
-//! non-empty table of them is refused with [`ImageError::NotYet`], before
+//! [`register_records`] is the one routine that registers module records
+//! (D-919): an executable's start calls it through [`install`], and every
+//! JIT host calls it after each batch with the records the batch defined,
+//! so `cheby run`, `cheby test`, the REPL and an executable register the
+//! same facts the same way. It checks every record (tables readable,
+//! strings in range, field kinds known, field offsets equal to the
+//! runtime's own, a layout word for every constructor, a constructor
+//! static exactly for each constructor without fields, one free-shape word
+//! per user layout equal to the one registration derives, every external
+//! type named and without a drop function, every hook naming a listed type
+//! once with three non-null values) before it registers anything. It then
+//! registers, record by record in the order given, each type's
+//! constructors with consecutive ids in tag order (D-522, D-1163), writing
+//! into each layout word the header that allocation copies and into each
+//! constructor static its static header (D-454, D-920), then the record's
+//! external types in table order (`layout::register_external`,
+//! GAP(record-externals-order)); then the hooks of every record on every
+//! constructor of each hooked type (D-482, D-585), and the call-site
+//! ranges under the caller's code owner (D-867).
+//!
+//! [`install`] registers the builtin list and map kinds and then the
+//! image's records under one code owner that is never unregistered. The
+//! constants (K5a) are not installed yet: a non-empty constant image or
+//! constant slot table is refused with [`ImageError::NotYet`], before
 //! anything of the image is registered.
 
 use std::fmt;
@@ -617,9 +624,9 @@ pub enum ImageError {
         /// What is malformed.
         what: &'static str,
     },
-    /// The image holds a table this runtime does not install yet: external
-    /// types, free shapes or constants, which later packages add (N5b,
-    /// K5a).
+    /// The image holds a table this runtime does not install yet: a
+    /// constant image or constant slots, which constants reaching
+    /// executables add (K5a).
     NotYet(&'static str),
 }
 
@@ -661,22 +668,18 @@ impl ImageError {
 }
 
 /// Installs `image` (module documentation): registers the builtin list
-/// and map kinds, checks every module record, and only then registers
-/// each record's user layouts in build order, writing each layout word's
-/// and constructor static's header (D-920), then every record's hooks
-/// (D-585) and call-site ranges. Runs before any worker of the program
-/// starts.
+/// and map kinds, then the image's module records in build order with
+/// [`register_records`], under a fresh code owner that is never
+/// unregistered (D-867). Runs before any worker of the program starts.
 ///
 /// # Errors
 ///
-/// [`ImageError::NotYet`] for a non-empty table of external types, free
-/// shapes or constants, and [`ImageError::Malformed`] for a table, string
-/// or reference that is not what the module documentation says; nothing
-/// of the image is registered and no word is written then, except the
-/// builtin kinds, which every process registers anyway. The one failure
-/// after registration has begun is a full layout table (2^24 ids), also
-/// [`ImageError::Malformed`]. The version is not checked here
-/// (`cheby_rt_main` checks it in debug builds, D-925).
+/// [`ImageError::NotYet`] for a non-empty constant image or constant slot
+/// table (K5a), and [`ImageError::Malformed`] as [`register_records`]
+/// says; nothing of the image is registered and no word is written then,
+/// except the builtin kinds, which every process registers anyway. The
+/// version is not checked here (`cheby_rt_main` checks it in debug
+/// builds, D-925).
 pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     crate::list::register_kinds();
     crate::hamt::register_kinds();
@@ -684,35 +687,84 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     if !image.constants.is_empty() {
         return Err(ImageError::NotYet("a constant image"));
     }
+    // One owner for the whole program, never unregistered: an
+    // executable's code lives as long as the process (D-867).
+    //
+    // SAFETY: `ProgramImage::new`'s caller guarantees that every record
+    // of the image satisfies `ModuleRecord::new`'s contract for as long as
+    // the image or what it installs is used: its tables, words, statics,
+    // function values and code stay valid, and its layout words and
+    // constructor statics are writable data nothing else writes while the
+    // image is installed, before any worker starts (D-920).
+    unsafe { register_records(&modules, locate::new_code_owner()) }
+}
+
+/// Registers module records (D-919, D-920, D-1163): checks every record
+/// first (its tables, strings, field kinds and offsets, layout words,
+/// constructor statics, hooks, free-shape words and external entries),
+/// then, record by record in the order given (build order), registers its
+/// user layouts in D-1163's order and with D-1163's facts and writes each
+/// layout word's and constructor static's header (D-454), registers its
+/// external types (`layout::register_external`, after the record's user
+/// layouts, GAP(record-externals-order)), then sets every record's hooks
+/// (D-585) and registers the call-site ranges under `owner` (D-867). The
+/// one routine of D-919: an executable's start calls it through
+/// [`install`], and every JIT host after each batch.
+///
+/// # Errors
+///
+/// [`ImageError::Malformed`] before anything is registered, for a table,
+/// string, reference or word that is not what the module documentation
+/// says, a free-shape word that is not the one registration derives
+/// (GAP(free-shapes-checked)), or an external type with a drop function,
+/// which no host passes until user drop functions are registered (D-703);
+/// [`ImageError::NotYet`] for a non-empty constant slot table (K5a). The
+/// one failure after registration has begun is a full layout table (2^24
+/// ids), also [`ImageError::Malformed`].
+///
+/// # Safety
+///
+/// Every record, its tables and every word, static, function value and
+/// code range they point to stay valid for as long as anything registered
+/// may be used; the layout words and constructor statics are writable,
+/// no code has used them yet (an executable's before its workers start, a
+/// JIT batch's before any code of the batch runs), and nothing else writes
+/// them meanwhile.
+pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<(), ImageError> {
     // Every record is checked before anything is registered.
-    let mut checked: Vec<(Vec<CheckedType>, Vec<TypeHooks>)> = Vec::with_capacity(modules.len());
+    let mut checked: Vec<CheckedRecord> = Vec::with_capacity(records.len());
     let mut ranges: Vec<CodeRangeDesc> = Vec::new();
-    for (index, record) in modules.iter().enumerate() {
-        if !record.externals.is_empty() {
-            return Err(ImageError::NotYet("external types"));
-        }
-        if !record.free_shapes.is_empty() {
-            return Err(ImageError::NotYet("free shapes"));
-        }
+    for (index, record) in records.iter().enumerate() {
         if !record.constants.is_empty() {
             return Err(ImageError::NotYet("constant slots"));
         }
         let types = user_types(index, record)?;
+        check_free_shapes(index, record, &types)?;
+        let externals = external_types(index, record)?;
         let hooks = record_hooks(index, record, types.len())?;
         code_ranges(index, record, &mut ranges)?;
-        checked.push((types, hooks));
+        checked.push(CheckedRecord {
+            types,
+            externals,
+            hooks,
+        });
     }
-    // Then the layouts, record by record in build order, each type's
-    // constructors with consecutive ids in tag order (D-522), as
-    // `cheby_jit`'s `register_layouts` registers them
-    // (D-1163).
+    // Then the layouts, record by record in build order: each type's
+    // constructors with consecutive ids in tag order (D-522), in the
+    // order of the record's `types` (D-1163), then the record's external
+    // types in table order (GAP(record-externals-order)).
     let mut hooks: Vec<(LayoutId, [Word; 3])> = Vec::new();
-    for (index, (types, record_hooks)) in checked.into_iter().enumerate() {
-        let mut ids: Vec<Vec<LayoutId>> = Vec::with_capacity(types.len());
-        for ty in types {
+    for (index, record) in checked.into_iter().enumerate() {
+        let mut ids: Vec<Vec<LayoutId>> = Vec::with_capacity(record.types.len());
+        for ty in record.types {
             ids.push(register_type(index, ty)?);
         }
-        for (type_index, words) in record_hooks {
+        for (type_name, type_key) in record.externals {
+            layout::register_external(&type_name, type_key).map_err(|_| {
+                ImageError::malformed(index, "more user layouts than the layout table holds")
+            })?;
+        }
+        for (type_index, words) in record.hooks {
             let type_ids = ids.get(type_index).map_or(&[][..], Vec::as_slice);
             hooks.extend(type_ids.iter().map(|&id| (id, words)));
         }
@@ -724,11 +776,84 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
         })?;
     }
     if !ranges.is_empty() {
-        // One owner for the whole program, never unregistered: an
-        // executable's code lives as long as the process (D-867).
-        locate::register_code(locate::new_code_owner(), ranges);
+        locate::register_code(owner, ranges);
     }
     Ok(())
+}
+
+/// One record, checked: its user types, its external types (name and
+/// key) and its hooks.
+struct CheckedRecord {
+    types: Vec<CheckedType>,
+    externals: Vec<(String, u64)>,
+    hooks: Vec<TypeHooks>,
+}
+
+/// Checks the `free_shapes` table of `record`, whose user types are
+/// `types`: one word per user constructor layout, types in order and each
+/// type's constructors in tag order, each equal to the word registration
+/// derives for the layout ([`layout::free_shape_word`], D-907), so a
+/// stale or foreign record never sets a wrong shape
+/// (GAP(free-shapes-checked)).
+fn check_free_shapes(
+    index: usize,
+    record: &ModuleRecord,
+    types: &[CheckedType],
+) -> Result<(), ImageError> {
+    let words = record
+        .free_shapes
+        .items()
+        .ok_or(ImageError::malformed(index, "the free-shape table"))?;
+    let mut derived = types
+        .iter()
+        .flat_map(|ty| ty.infos.iter().map(layout::free_shape_word));
+    let mut given = words.iter();
+    loop {
+        match (derived.next(), given.next()) {
+            (None, None) => return Ok(()),
+            (Some(derived), Some(&given)) if derived == given => {}
+            (Some(_), Some(_)) => {
+                return Err(ImageError::malformed(
+                    index,
+                    "a free-shape word that is not the one registration derives (D-907)",
+                ));
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(ImageError::malformed(
+                    index,
+                    "a free-shape table that does not hold one word per user layout",
+                ));
+            }
+        }
+    }
+}
+
+/// Checks the external types of `record` and returns each one's name and
+/// key, in table order. A drop function is refused until user drop
+/// functions are registered (D-101, D-703): no code generation writes one
+/// yet (GAP(record-externals-order)).
+fn external_types(index: usize, record: &ModuleRecord) -> Result<Vec<(String, u64)>, ImageError> {
+    let malformed = |what| ImageError::malformed(index, what);
+    let strings = record
+        .strings
+        .items()
+        .ok_or(malformed("the string table"))?;
+    let externals = record
+        .externals
+        .items()
+        .ok_or(malformed("the external type table"))?;
+    let mut out = Vec::with_capacity(externals.len());
+    for external in externals {
+        let name =
+            string(strings, external.type_name).ok_or(malformed("an external type's name"))?;
+        if !external.drop.is_null() {
+            return Err(malformed(
+                "an external type's drop function, which this runtime does not register yet",
+            ));
+        }
+        out.push((name.to_owned(), external.type_key));
+    }
+    Ok(out)
 }
 
 /// The hooks of one type of a record: its index in the record's `types`,
@@ -745,10 +870,11 @@ struct CheckedType {
 }
 
 /// Checks the user types of `record` and makes each constructor's
-/// [`LayoutInfo`] as `cheby_jit`'s `layout_info` makes it from the same
-/// `LayoutDesc`: [`LayoutInfo::ctor`] of its name, tag and fields, then
-/// [`LayoutInfo::named`] with its type's name and key and its record
-/// flag. The record's field offsets must be the runtime's own (D-454).
+/// [`LayoutInfo`] from the facts code generation writes from MIR's
+/// `LayoutDesc` (D-1163): [`LayoutInfo::ctor`] of its name, tag and
+/// fields, then [`LayoutInfo::named`] with its type's name and key and its
+/// record flag. The record's field offsets must be the runtime's own
+/// (D-454).
 fn user_types(index: usize, record: &ModuleRecord) -> Result<Vec<CheckedType>, ImageError> {
     let malformed = |what| ImageError::malformed(index, what);
     let strings = record
@@ -847,14 +973,17 @@ fn register_type(index: usize, ty: CheckedType) -> Result<Vec<LayoutId>, ImageEr
     let ids: Vec<LayoutId> = (0..count).map(|k| first.saturating_add(k)).collect();
     for ((&id, &scan), &(word, ctor_static)) in ids.iter().zip(&scans).zip(&ty.words) {
         // SAFETY: `user_types` checked that `word` is non-null and
-        // aligned, and `ModuleRecord::new`'s contract (or code
-        // generation's, D-920: `cb$layout$…` is writable data of the
-        // executable) makes it a writable word no other thread uses while
-        // the image is installed, before any worker starts.
+        // aligned, and `register_records`' contract (code generation's
+        // for both of its callers, D-920: `cb$layout$…` is writable data)
+        // makes it a writable word that nothing else writes and that no
+        // code has used yet: an executable's, before its workers start
+        // (`install`), or a JIT batch's, before any code of the batch
+        // runs, whatever other fibers run meanwhile.
         unsafe { word.write(abi::header(abi::RC_UNIQUE, scan, id)) };
         if !ctor_static.is_null() {
             // SAFETY: as for `word`: a checked, writable `cb$ctor$…` static
-            // (writable in a unit compiled alone, D-920).
+            // (writable in a unit compiled alone and in a JIT batch,
+            // D-920) that no code has used yet and nothing else writes.
             unsafe { ctor_static.write(abi::header(abi::RC_STATIC, 0, id)) };
         }
     }

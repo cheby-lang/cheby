@@ -1,40 +1,55 @@
-//! The module record `cb$mod$<path>` of a unit compiled alone (D-919), in
-//! the layout of `cheby_runtime::image::ModuleRecord` (that module's
-//! documentation is the contract: 8-byte words that one absolute data
-//! relocation fills, little-endian counts, length-prefixed strings).
+//! The module record `cb$mod$<path>` of a unit (D-919), in the layout of
+//! `cheby_runtime::image::ModuleRecord` (that module's documentation is
+//! the contract: 8-byte words that one absolute data relocation fills,
+//! little-endian counts, length-prefixed strings). A unit compiled alone
+//! gets one in its code record ([`define_unit`]); a JIT batch defines one
+//! for each of its code and tests units ([`define_batch_records`]), which
+//! the JIT registers through the same runtime routine as an executable's
+//! start, `cheby_runtime::image::register_records`.
 //!
 //! The record is one read-only data object, 8-byte aligned, laid out as:
 //!
-//! | Offset           | Contents                                                      |
-//! | ---------------- | ------------------------------------------------------------- |
-//! | 0                | the seven tables of `ModuleRecord`, 16 bytes each             |
-//! | 112              | one `FunctionEntry` (32 bytes) per function, definition order |
-//! | after them       | each function's `CallSiteEntry`s (16 bytes), in its order     |
-//! | after the sites  | one `TypeEntry` (32 bytes) per user type, in [`RecordType`]   |
-//! |                  | order                                                         |
-//! | after the types  | every type's `CtorEntry`s (48 bytes), types in order, each    |
-//! |                  | type's constructors in tag order                              |
-//! | after the ctors  | every constructor's `FieldEntry`s (16 bytes), constructors in |
-//! |                  | order, each constructor's fields in declaration order         |
-//! | after the fields | one `HookEntry` (32 bytes) per hooked type, in type order     |
-//! | after the hooks  | the string table: each string once, `u32` length then UTF-8:  |
-//! |                  | the call sites' paths first, then the types' strings          |
+//! | Offset              | Contents                                                      |
+//! | ------------------- | ------------------------------------------------------------- |
+//! | 0                   | the seven tables of `ModuleRecord`, 16 bytes each             |
+//! | 112                 | one `FunctionEntry` (32 bytes) per function, definition order |
+//! | after them          | each function's `CallSiteEntry`s (16 bytes), in its order     |
+//! | after the sites     | one `TypeEntry` (32 bytes) per user type, in [`RecordType`]   |
+//! |                     | order                                                         |
+//! | after the types     | every type's `CtorEntry`s (48 bytes), types in order, each    |
+//! |                     | type's constructors in tag order                              |
+//! | after the ctors     | every constructor's `FieldEntry`s (16 bytes), constructors in |
+//! |                     | order, each constructor's fields in declaration order         |
+//! | after the fields    | one `HookEntry` (32 bytes) per hooked type, in type order     |
+//! | after the hooks     | one `ExternalEntry` (24 bytes) per external type, `DefIndex`  |
+//! |                     | order                                                         |
+//! | after the externals | one free-shape word (8 bytes) per constructor, in the order   |
+//! |                     | of the `CtorEntry`s                                           |
+//! | after the shapes    | the string table: each string once, `u32` length then UTF-8:  |
+//! |                     | the call sites' paths first, then the types' strings, then    |
+//! |                     | the external types' names                                     |
 //!
 //! Its table pointers are relocations to the record itself with the
 //! table's offset as addend; each function's code pointer is a relocation
 //! to the function; a constructor's `layout_word` and `ctor_static` and a
 //! hook's three function values are data relocations to the unit's own
 //! `cb$layout$…` word, `cb$ctor$…` static and `cb$fnval$…` values. An
-//! empty table is count 0 and pointer 0, and a constructor with fields
-//! has `ctor_static` 0. A unit without user layouts writes no type, so its
-//! record is the call-site table and the string table alone.
+//! empty table is count 0 and pointer 0, a constructor with fields has
+//! `ctor_static` 0, and an external type's `drop` is 0 (user drop
+//! functions come later, D-101, D-703, GAP(record-externals-order)). A
+//! unit without user layouts or external types writes no type, external
+//! or shape, so its record is the call-site table and the string table
+//! alone.
 //!
-//! The call-site table (D-856, D-867), the types (D-919, D-522) and the
-//! hooks (D-482) are filled. The external types and free shapes are
-//! N5b's, and the constants K5a's: they stay empty, and `image::install`
-//! refuses what it cannot register yet. A record is a pure function of its
-//! unit (D-915): it holds no layout id, which an executable's start
-//! assigns (D-920).
+//! The call-site table (D-856, D-867), the types (D-919, D-522), the
+//! hooks (D-482), the external types (std's handle types aside, which are
+//! runtime kinds, D-647, D-982) and the free-shape words (D-907, computed
+//! with `cheby_runtime::layout::free_shape_word`, which registration
+//! checks them against, GAP(free-shapes-checked)) are filled. The
+//! constants are K5a's: they stay empty, and registration refuses what it
+//! cannot register yet. A record of a unit alone is a pure function of its
+//! unit (D-915): it holds no layout id, which registration assigns
+//! (D-920).
 
 use std::collections::BTreeMap;
 use std::mem::{offset_of, size_of};
@@ -43,21 +58,25 @@ use cranelift_codegen::ir::GlobalValue;
 use cranelift_module::{DataDescription, DataId, Linkage, Module};
 
 use cheby_iface::DefId;
-use cheby_mir::{LayoutDesc, MirModule, Repr};
+use cheby_mir::layout::ExternalDesc;
+use cheby_mir::{LayoutDesc, LayoutRef, MirModule, Repr, UnitKind};
 use cheby_runtime::image::{
-    CallSiteEntry, CtorEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry, FunctionEntry, HookEntry,
-    ModuleRecord, NO_STRING, TypeEntry,
+    CallSiteEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry, FunctionEntry,
+    HookEntry, ModuleRecord, NO_STRING, TypeEntry,
 };
-use cheby_runtime::layout::FieldKind;
+use cheby_runtime::layout::{FieldKind, LayoutInfo, free_shape_word};
 
 use crate::record::RecordError;
+use crate::unit::UnitCode;
 use crate::{CodegenError, Decls, DefinedCode};
 
 /// The offsets of `ModuleRecord`'s tables (its fields are private; the
 /// module documentation gives them).
 const STRINGS: u32 = 0;
 const TYPES: u32 = 16;
+const EXTERNALS: u32 = 32;
 const HOOKS: u32 = 48;
+const FREE_SHAPES: u32 = 64;
 const FUNCTIONS: u32 = 80;
 /// Every table of the header: strings, types, externals, hooks, free
 /// shapes, functions, constants.
@@ -98,6 +117,11 @@ const HOOK_ENTRY: u32 = 32;
 const HOOK_TYPE: u32 = 0;
 /// The `equal`, `hash` and `debug` values, in that order.
 const HOOK_VALUES: [u32; 3] = [8, 16, 24];
+const EXTERNAL_ENTRY: u32 = 24;
+const EXTERNAL_NAME: u32 = 0;
+const EXTERNAL_KEY: u32 = 8;
+const EXTERNAL_DROP: u32 = 16;
+const SHAPE_WORD: u32 = 8;
 
 // The layout written here is `image.rs`'s, checked against its structs.
 #[expect(
@@ -139,11 +163,19 @@ const _: () = {
     assert!(HOOK_VALUES[0] as usize == offset_of!(HookEntry, equal));
     assert!(HOOK_VALUES[1] as usize == offset_of!(HookEntry, hash));
     assert!(HOOK_VALUES[2] as usize == offset_of!(HookEntry, debug));
+    assert!(EXTERNALS == TABLES[2] && FREE_SHAPES == TABLES[4]);
+    assert!(EXTERNAL_ENTRY as usize == size_of::<ExternalEntry>());
+    assert!(EXTERNAL_NAME as usize == offset_of!(ExternalEntry, type_name));
+    assert!(EXTERNAL_KEY as usize == offset_of!(ExternalEntry, type_key));
+    assert!(EXTERNAL_DROP as usize == offset_of!(ExternalEntry, drop));
+    assert!(SHAPE_WORD as usize == size_of::<u64>());
 };
 
 /// One user type of the unit, as its record lists it (D-919, D-522).
 #[derive(Clone, Debug)]
 pub(crate) struct RecordType {
+    /// The type (not written into the record).
+    pub def: DefId,
     /// The type's name as debug printing shows it (D-463).
     pub name: String,
     /// The type's key (D-559): `cheby_runtime::layout::type_key(<module
@@ -153,8 +185,8 @@ pub(crate) struct RecordType {
     pub ctors: Vec<RecordCtor>,
     /// The static function values of `equal`, `hash` and `debug` (D-482):
     /// `Some` only when the type has `@std_hooks` and the unit defines all
-    /// three `cb$fnval$…` values (`Decls::fn_value` is `Some` for each), as
-    /// `cheby_jit`'s `register_hooks` decides; never a partial or null set.
+    /// three `cb$fnval$…` values (`Decls::fn_value` is `Some` for each)
+    /// (D-1163); never a partial or null set.
     pub hooks: Option<[DataId; 3]>,
 }
 
@@ -176,13 +208,11 @@ pub(crate) struct RecordCtor {
     pub ctor_static: Option<DataId>,
 }
 
-/// The user types of `unit`, compiled alone with `decls`, in the order
-/// `cheby_jit`'s `register_layouts` registers them
-/// (D-1163): types in the order of their first
-/// constructor in `MirModule::layouts` (`DefIndex` order), each type's
-/// constructors in tag order, with the facts its `layout_info` reads from
-/// each `LayoutDesc`, and hooks exactly where its `register_hooks` sets
-/// them (all three function values present).
+/// The user types of `unit`, compiled with `decls`, in D-1163's order:
+/// types in the order of their first constructor in `MirModule::layouts`
+/// (`DefIndex` order), each type's constructors in tag order, with the
+/// facts of each `LayoutDesc`, and hooks only where all three function
+/// values are present.
 ///
 /// # Errors
 ///
@@ -238,6 +268,7 @@ pub(crate) fn record_types(
             None => None,
         };
         types.push(RecordType {
+            def: ty,
             name: first.type_name.to_string(),
             type_key: first.type_key,
             ctors,
@@ -247,7 +278,7 @@ pub(crate) fn record_types(
     Ok(types)
 }
 
-/// The record's facts of one constructor (`cheby_jit`'s `layout_info`).
+/// The record's facts of one constructor, from its `LayoutDesc` (D-1163).
 fn record_ctor(desc: &LayoutDesc, decls: &Decls) -> Result<RecordCtor, CodegenError> {
     let decl = decls.layout(desc.layout)?;
     let fields = desc
@@ -305,27 +336,192 @@ fn field_kind_index(repr: Repr) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
+/// One module record of a JIT batch ([`define_batch_records`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BatchRecord {
+    /// The unit's index in the batch.
+    pub unit: usize,
+    /// The record, a read-only anonymous data object of the batch's
+    /// module, whose address the module gives once finalized.
+    pub data: DataId,
+}
+
+/// What a JIT batch registers that no earlier batch registered
+/// ([`define_batch_records`]).
+pub struct BatchNew<'a> {
+    /// Whether the user constructor layout was declared by this batch,
+    /// not by an earlier one.
+    pub layout: &'a dyn Fn(LayoutRef) -> bool,
+    /// Whether no earlier batch registered the external type.
+    pub external: &'a dyn Fn(DefId) -> bool,
+}
+
+impl std::fmt::Debug for BatchNew<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchNew").finish_non_exhaustive()
+    }
+}
+
+/// Defines in `module` the module record of each code and tests unit of
+/// a JIT batch, `mirs`, whose functions [`crate::define_with_stats`]
+/// defined as `defined` with `decls` (D-919, D-1107,
+/// GAP(jit-record-registration)): the JIT registers them with
+/// `cheby_runtime::image::register_records` once the batch is finalized,
+/// as an executable's start registers its records. An entries unit gets no
+/// record (D-1107, D-1111), so its entry thunks and trampolines are in no
+/// registered range, as in an executable.
+///
+/// Each record lists the unit's functions of `defined`, in definition
+/// order: a function belongs to the first unit of the batch that lists
+/// it, as [`crate::define_with_stats`] defines it once; a large frame's
+/// inner body `cb$big$…` to its outer function's unit (it follows it);
+/// a `@blocking` shim `cb$blk$…`, which the batch defines once, to the
+/// batch's first code or tests unit. Its types are the unit's user types
+/// ([`record_types`]) whose layouts this batch declared (`new.layout`),
+/// and its external types those no earlier batch registered
+/// (`new.external`), so a REPL batch registers only what earlier batches
+/// did not. Records are anonymous: a module's units may be compiled in
+/// several batches of one JIT, and nothing links to a JIT record by name.
+///
+/// # Errors
+///
+/// [`RecordError::Codegen`] if a type has constructors this batch
+/// declared and constructors an earlier batch declared, a function was
+/// not declared, or the module refuses a definition, and
+/// [`RecordError::Unsupported`] if a record would not fit 4 GiB.
+pub fn define_batch_records<M: Module>(
+    module: &mut M,
+    decls: &Decls,
+    mirs: &[MirModule],
+    defined: &[DefinedCode],
+    new: &BatchNew<'_>,
+) -> Result<Vec<BatchRecord>, RecordError> {
+    let units = batch_function_units(decls, mirs, defined)?;
+    let mut out = Vec::new();
+    for (index, unit) in mirs.iter().enumerate() {
+        if matches!(unit.unit, UnitKind::Entries) {
+            continue;
+        }
+        let functions: Vec<DefinedCode> = defined
+            .iter()
+            .zip(&units)
+            .filter(|&(_, &owner)| owner == Some(index))
+            .map(|(code, _)| code.clone())
+            .collect();
+        let mut types = Vec::new();
+        for ty in record_types(unit, decls)? {
+            let ctors = unit.layouts.iter().filter(|desc| desc.type_def == ty.def);
+            let fresh = ctors
+                .clone()
+                .filter(|desc| (new.layout)(desc.layout))
+                .count();
+            if fresh == 0 {
+                continue;
+            }
+            if fresh != ctors.count() {
+                return Err(CodegenError::ice(format!(
+                    "some constructors of the type `{}` are registered and some are not",
+                    ty.name
+                ))
+                .into());
+            }
+            types.push(ty);
+        }
+        let externals: Vec<ExternalDesc> = unit
+            .externals
+            .iter()
+            .filter(|external| (new.external)(external.def))
+            .cloned()
+            .collect();
+        let data = define_record(module, None, &functions, &types, &externals)?;
+        out.push(BatchRecord { unit: index, data });
+    }
+    Ok(out)
+}
+
+/// The index of the unit each function of `defined` belongs to
+/// ([`define_batch_records`]), `None` for none.
+fn batch_function_units(
+    decls: &Decls,
+    mirs: &[MirModule],
+    defined: &[DefinedCode],
+) -> Result<Vec<Option<usize>>, RecordError> {
+    let mut owners: rustc_hash::FxHashMap<cranelift_module::FuncId, usize> =
+        rustc_hash::FxHashMap::default();
+    for (index, unit) in mirs.iter().enumerate() {
+        for function in &unit.functions {
+            let id = decls.func(function.key)?.id;
+            owners.entry(id).or_insert(index);
+        }
+    }
+    let first_module_unit = mirs
+        .iter()
+        .position(|unit| !matches!(unit.unit, UnitKind::Entries));
+    let shim_prefix = crate::mangle::blocking_shim("", 0);
+    let mut out = Vec::with_capacity(defined.len());
+    let mut previous = None;
+    for code in defined {
+        let owner = match owners.get(&code.id) {
+            Some(&index) => Some(index),
+            None if decls.func_name(code.id).starts_with(&shim_prefix) => first_module_unit,
+            // A large frame's inner body, right after its outer function.
+            None => previous,
+        };
+        out.push(owner);
+        previous = owner;
+    }
+    Ok(out)
+}
+
 /// Declares the read-only data object `name` with `Linkage::Hidden`
-/// (D-917) in `module` and defines it as the module record of a unit whose
-/// functions are `defined`, in definition order (`UnitCode::defined`), and
-/// whose user types are `types` ([`record_types`]).
+/// (D-917) in `module` and defines it as the module record of `code`, a
+/// unit compiled alone ([`crate::compile_unit`]): its functions in
+/// definition order, its user types ([`record_types`]), its external
+/// types and the free-shape words of its user layouts (D-919).
 ///
 /// # Errors
 ///
 /// [`RecordError::Codegen`] if the module refuses the declaration or the
 /// definition, and [`RecordError::Unsupported`] if the record would not
 /// fit 4 GiB.
-pub(crate) fn define<M: Module>(
+pub(crate) fn define_unit<M: Module>(
     module: &mut M,
     name: &str,
+    code: &UnitCode,
+) -> Result<DataId, RecordError> {
+    define_record(
+        module,
+        Some(name),
+        &code.defined,
+        &code.types,
+        &code.externals,
+    )
+}
+
+/// Declares a read-only data object in `module`, `name` with
+/// `Linkage::Hidden` (D-917) or an anonymous one for `None` (a JIT
+/// batch's record, which nothing names), and defines it as the module
+/// record of a unit whose functions are `defined`, in definition order,
+/// whose user types are `types` ([`record_types`]) and whose external
+/// types are `externals`.
+///
+/// # Errors
+///
+/// As [`define_unit`].
+fn define_record<M: Module>(
+    module: &mut M,
+    name: Option<&str>,
     defined: &[DefinedCode],
     types: &[RecordType],
+    externals: &[ExternalDesc],
 ) -> Result<DataId, RecordError> {
     let module_error = |e: cranelift_module::ModuleError| CodegenError::module(&e);
-    let id = module
-        .declare_data(name, Linkage::Hidden, false, false)
-        .map_err(module_error)?;
-    let layout = Layout::new(defined, types)?;
+    let id = match name {
+        Some(name) => module.declare_data(name, Linkage::Hidden, false, false),
+        None => module.declare_anonymous_data(false, false),
+    }
+    .map_err(module_error)?;
+    let layout = Layout::new(defined, types, externals)?;
     let mut bytes = Bytes(vec![
         0;
         usize::try_from(layout.size).map_err(|_| too_large())?
@@ -372,6 +568,7 @@ pub(crate) fn define<M: Module>(
         entry = add(entry, FUNCTION_ENTRY)?;
     }
     write_types(module, &mut desc, this, &mut bytes, &layout, types)?;
+    write_externals(&mut desc, this, &mut bytes, &layout, externals)?;
     let strings_at = usize::try_from(layout.strings_at).map_err(|_| too_large())?;
     bytes
         .0
@@ -468,6 +665,82 @@ fn write_types<M: Module>(
     Ok(())
 }
 
+/// Writes the `externals` and `free_shapes` tables of the record `this`
+/// (module documentation) at the offsets `layout` gives: one entry per
+/// external type, its `drop` 0 (GAP(record-externals-order)), and one
+/// free-shape word per constructor (D-907, GAP(free-shapes-checked)).
+fn write_externals(
+    desc: &mut DataDescription,
+    this: GlobalValue,
+    bytes: &mut Bytes,
+    layout: &Layout,
+    externals: &[ExternalDesc],
+) -> Result<(), RecordError> {
+    let count = |n: usize| u64::try_from(n).map_err(|_| too_large());
+    bytes.u64(EXTERNALS, count(externals.len())?)?;
+    if !externals.is_empty() {
+        desc.write_data_addr(
+            add(EXTERNALS, TABLE_PTR)?,
+            this,
+            i64::from(layout.externals_at),
+        );
+    }
+    let mut at = layout.externals_at;
+    for (external, &name) in externals.iter().zip(&layout.external_names) {
+        bytes.u32(add(at, EXTERNAL_NAME)?, name)?;
+        bytes.u64(add(at, EXTERNAL_KEY)?, external.type_key)?;
+        bytes.u64(add(at, EXTERNAL_DROP)?, 0)?;
+        at = add(at, EXTERNAL_ENTRY)?;
+    }
+    bytes.u64(FREE_SHAPES, count(layout.shapes.len())?)?;
+    if !layout.shapes.is_empty() {
+        desc.write_data_addr(
+            add(FREE_SHAPES, TABLE_PTR)?,
+            this,
+            i64::from(layout.shapes_at),
+        );
+    }
+    let mut at = layout.shapes_at;
+    for &word in &layout.shapes {
+        bytes.u64(at, word)?;
+        at = add(at, SHAPE_WORD)?;
+    }
+    Ok(())
+}
+
+/// The free-shape word of each constructor of `types`, types in order and
+/// each type's constructors in tag order: what registration derives for
+/// the layout it makes from the record's facts (D-907, D-1163), computed
+/// with the runtime's own function, so `register_records` finds the words
+/// it derives (GAP(free-shapes-checked)).
+fn free_shapes(types: &[RecordType]) -> Result<Vec<u64>, RecordError> {
+    let mut words = Vec::new();
+    for ty in types {
+        for (tag, ctor) in ty.ctors.iter().enumerate() {
+            let tag = u32::try_from(tag).map_err(|_| too_large())?;
+            let fields = ctor
+                .fields
+                .iter()
+                .map(|(kind, name, _)| {
+                    let kind = usize::try_from(*kind)
+                        .ok()
+                        .and_then(|kind| FIELD_KINDS.get(kind))
+                        .ok_or(RecordError::Malformed("a field kind of a module record"))?;
+                    Ok((*kind, name.as_deref()))
+                })
+                .collect::<Result<Vec<(FieldKind, Option<&str>)>, RecordError>>()?;
+            let info = LayoutInfo::ctor(&ctor.name, tag, &fields).named(
+                &ty.name,
+                &ctor.ctor_name,
+                ctor.record,
+                ty.type_key,
+            );
+            words.push(free_shape_word(&info));
+        }
+    }
+    Ok(words)
+}
+
 /// The string offsets of one [`RecordType`].
 struct TypeStrings {
     name: u32,
@@ -515,8 +788,15 @@ struct Layout {
     ctors_at: u32,
     fields_at: u32,
     hooks_at: u32,
+    /// The offsets of the external entries and of the free-shape words.
+    externals_at: u32,
+    shapes_at: u32,
     /// Each type's strings, in the order of the types.
     type_strings: Vec<TypeStrings>,
+    /// Each external type's name.
+    external_names: Vec<u32>,
+    /// The free-shape words ([`free_shapes`]).
+    shapes: Vec<u64>,
     /// The string table's bytes.
     strings: Vec<u8>,
     /// The string table's offset.
@@ -526,7 +806,11 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(defined: &[DefinedCode], types: &[RecordType]) -> Result<Self, RecordError> {
+    fn new(
+        defined: &[DefinedCode],
+        types: &[RecordType],
+        externals: &[ExternalDesc],
+    ) -> Result<Self, RecordError> {
         let mut table = Strings::default();
         let mut sites = Vec::with_capacity(defined.len());
         let mut site_count: u32 = 0;
@@ -581,14 +865,25 @@ impl Layout {
             }
             type_strings.push(TypeStrings { name, ctors });
         }
+        // The external types' names last, so a unit without them keeps
+        // the string table it had before records listed them.
+        let external_names = externals
+            .iter()
+            .map(|external| table.intern(&external.name))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shapes = free_shapes(types)?;
         let functions = u32::try_from(defined.len()).map_err(|_| too_large())?;
         let type_count = u32::try_from(types.len()).map_err(|_| too_large())?;
+        let external_count = u32::try_from(externals.len()).map_err(|_| too_large())?;
+        let shape_count = u32::try_from(shapes.len()).map_err(|_| too_large())?;
         let sites_at = add(HEADER, mul(functions, FUNCTION_ENTRY)?)?;
         let types_at = add(sites_at, mul(site_count, SITE_ENTRY)?)?;
         let ctors_at = add(types_at, mul(type_count, TYPE_ENTRY)?)?;
         let fields_at = add(ctors_at, mul(ctor_count, CTOR_ENTRY)?)?;
         let hooks_at = add(fields_at, mul(field_count, FIELD_ENTRY)?)?;
-        let strings_at = add(hooks_at, mul(hook_count, HOOK_ENTRY)?)?;
+        let externals_at = add(hooks_at, mul(hook_count, HOOK_ENTRY)?)?;
+        let shapes_at = add(externals_at, mul(external_count, EXTERNAL_ENTRY)?)?;
+        let strings_at = add(shapes_at, mul(shape_count, SHAPE_WORD)?)?;
         let strings = table.bytes;
         let size = add(
             strings_at,
@@ -601,7 +896,11 @@ impl Layout {
             ctors_at,
             fields_at,
             hooks_at,
+            externals_at,
+            shapes_at,
             type_strings,
+            external_names,
+            shapes,
             strings,
             strings_at,
             size,

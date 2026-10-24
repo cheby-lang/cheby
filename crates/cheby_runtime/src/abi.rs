@@ -226,9 +226,14 @@ pub mod layout {
     pub const SCOPE: LayoutId = 43;
     /// A selector node (D-695, D-703).
     pub const SELECTOR: LayoutId = 44;
+    /// A TCP listener (`std::net`, D-982). 45 stays reserved for
+    /// `std::file`'s `File`.
+    pub const LISTENER: LayoutId = 46;
+    /// A TCP connection (`std::net`, D-982).
+    pub const CONNECTION: LayoutId = 47;
     /// The first id of the runtime-defined kinds registered with
     /// `layout::register_builtin` (list and map nodes, the handle kinds 40
-    /// to 44, then 45 to 63 reserved).
+    /// to 44, 46 and 47, the others to 63 reserved).
     pub const CUSTOM_FIRST: LayoutId = LIST_FIRST;
     /// The last id reserved for builtin collection nodes (F3, F4).
     pub const BUILTIN_RESERVED_END: LayoutId = 63;
@@ -969,6 +974,8 @@ mod tests {
             ],
             [40, 41, 42, 43, 44]
         );
+        // D-982: `File` will be 45.
+        assert_eq!((layout::LISTENER, layout::CONNECTION), (46, 47));
         // Intrinsics get generated bodies and are never registered (D-693).
         for intrinsic in sym::INTRINSICS {
             assert!(intrinsic.starts_with("cheby_rt_"));

@@ -22,7 +22,18 @@
 //! - an import of the runtime ID's symbol `cheby_rt_id$<hex>` through the
 //!   import word `cb$imp$cheby_rt_id$<hex>`, which `main` loads, so that a
 //!   linker that drops unreferenced sections still needs the symbol and an
-//!   archive of other runtime sources cannot link (D-930).
+//!   archive of other runtime sources cannot link (D-930);
+//! - D-943's stubs, one per native symbol that only unreached functions of
+//!   whole modules (D-966) name and the link cannot resolve
+//!   ([`ProgramSpec::stubs`]): a function of that name, global with hidden
+//!   visibility (`Linkage::Hidden`: `STV_HIDDEN` on ELF, private extern on
+//!   Mach-O), so the modules' import words resolve to it while the
+//!   executable does not export it. It calls `cheby_rt_unresolved`
+//!   through the local import word `cb$imp$cheby_rt_unresolved` and
+//!   returns its result, as if the import word named `cheby_rt_unresolved`
+//!   itself: like it, the stub takes no `ctx` and ignores its arguments
+//!   (D-532). A program without stubs gets none of this, not even the
+//!   import word.
 //!
 //! The module records `cb$mod$<path>` are imports: each module's object
 //! defines its own hidden (D-917). Nothing in the object depends on a path
@@ -84,6 +95,17 @@ pub struct ProgramSpec<'a> {
     pub fiber_stack: u64,
     /// Whether the code was compiled with unwind edges (D-742).
     pub unwind_edges: bool,
+    /// D-943: the symbols only unreached functions of whole modules
+    /// (D-966) name and the link cannot resolve; each becomes a hidden
+    /// function of the program object (a global symbol with hidden
+    /// visibility, `Linkage::Hidden`: `STV_HIDDEN` on ELF, private extern on
+    /// Mach-O) that calls `cheby_rt_unresolved` through an import word, so
+    /// the linker resolves the modules' undefined references to it and the
+    /// executable does not export it. Never `Linkage::Local`, since a
+    /// local symbol cannot satisfy another object's reference. Sorted,
+    /// without repeats; empty for a program without one, whose object is
+    /// then the same bytes as before stubs existed.
+    pub stubs: &'a [String],
 }
 
 /// The program object for `isa` (D-915): the entries unit's record
@@ -96,8 +118,9 @@ pub struct ProgramSpec<'a> {
 ///
 /// [`LinkError::Record`] if `entries` is malformed or does not fit the
 /// target, [`LinkError::Object`] if it does not define `spec.entry`, if it
-/// defines a symbol that is not local, or if `cranelift-object` refuses
-/// the object.
+/// defines a symbol that is not local, if the stubs are not sorted and
+/// distinct or name a generated or runtime symbol, or if
+/// `cranelift-object` refuses the object.
 pub fn program_object(
     isa: OwnedTargetIsa,
     spec: &ProgramSpec<'_>,
@@ -105,6 +128,7 @@ pub fn program_object(
 ) -> Result<Vec<u8>, LinkError> {
     check_record(entries, &isa)?;
     check_entries(entries, spec)?;
+    check_stubs(spec.stubs)?;
     let mut module = new_module(isa, PROGRAM_OBJECT_NAME)?;
     replay_into(&mut module, entries)?;
     let image = module
@@ -122,7 +146,73 @@ pub fn program_object(
     let rt_main = import_word(&mut module, RT_MAIN, true)?;
     let runtime_id = import_word(&mut module, abi::sym::RUNTIME_ID_SYMBOL, false)?;
     define_main(&mut module, image, rt_main, runtime_id)?;
+    // After everything else, so a program without stubs keeps its bytes.
+    if !spec.stubs.is_empty() {
+        let unresolved = import_word(&mut module, abi::sym::UNRESOLVED, true)?;
+        for name in spec.stubs {
+            define_stub(&mut module, name, unresolved)?;
+        }
+    }
     emit(module)
+}
+
+/// D-943's stubs are sorted and distinct, and none names a generated
+/// symbol (`cb$…`), the C `main` or a runtime internal (`cheby_rt_…`,
+/// which E0055 keeps out of packages): such a name would clash with a
+/// definition or import of the object or of the runtime.
+fn check_stubs(stubs: &[String]) -> Result<(), LinkError> {
+    if let Some(pair) = stubs.windows(2).find(|w| w.first() >= w.get(1)) {
+        return Err(LinkError::Object(format!(
+            "the stubs are not sorted and distinct: {pair:?}"
+        )));
+    }
+    if let Some(name) = stubs.iter().find(|name| {
+        name.is_empty()
+            || name.starts_with(mangle::PREFIX)
+            || name.starts_with("cheby_rt_")
+            || *name == "main"
+    }) {
+        return Err(LinkError::Object(format!(
+            "`{name}` cannot be a stub of an unresolved symbol"
+        )));
+    }
+    Ok(())
+}
+
+/// Defines the stub `name` (module documentation): global with hidden
+/// visibility, it loads `cheby_rt_unresolved` from the import word
+/// `unresolved`, calls it without arguments and returns its result.
+fn define_stub(module: &mut ObjectModule, name: &str, unresolved: DataId) -> Result<(), LinkError> {
+    let pointer = module.target_config().pointer_type();
+    let mut signature = Signature::new(module.isa().default_call_conv());
+    signature.returns.push(AbiParam::new(types::I64));
+    let stub = module
+        .declare_function(name, Linkage::Hidden, &signature)
+        .map_err(object_error)?;
+    let mut ctx = module.make_context();
+    ctx.func.signature = signature.clone();
+    let mut fctx = FunctionBuilderContext::new();
+    {
+        let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        let block = b.create_block();
+        b.switch_to_block(block);
+        b.seal_block(block);
+        let word = module.declare_data_in_func(unresolved, b.func);
+        let word = b.ins().symbol_value(pointer, word);
+        let callee = b
+            .ins()
+            .load(pointer, MemFlagsData::trusted().with_readonly(), word, 0);
+        let signature = b.import_signature(signature);
+        let call = b.ins().call_indirect(signature, callee, &[]);
+        let result = b
+            .inst_results(call)
+            .first()
+            .copied()
+            .ok_or_else(|| LinkError::Object("`cheby_rt_unresolved` returns a word".into()))?;
+        b.ins().return_(&[result]);
+        b.finalize(module.target_config());
+    }
+    module.define_function(stub, &mut ctx).map_err(object_error)
 }
 
 /// The entries record defines `spec.entry`, and every definition of it

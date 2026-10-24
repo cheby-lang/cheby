@@ -25,8 +25,12 @@ impl BodyCx<'_, '_> {
         // calls it makes itself (D-717); a subexpression sets its own and
         // gives this one back.
         let outer = self.site.replace(e.span);
+        // Likewise its position is the one of the statements it emits
+        // itself (D-938, GAP(mir-positions)).
+        let outer_pos = self.enter_position(e.span)?;
         let lowered = self.expr_kind(e, tail);
         self.site = outer;
+        self.leave_position(outer_pos)?;
         lowered
     }
 

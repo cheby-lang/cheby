@@ -265,12 +265,14 @@ fn function(
     strings: &[&str],
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi: Abi::Cheby,
         params,
         ret: Repr::Value,
         locals: locals(reprs),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -400,6 +402,8 @@ fn unit_b() -> MirModule {
         &["b.cheby:3:1"],
     );
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(B),
         path: "b".into(),
         functions: vec![get_body, helper_body, get_shim()],
@@ -442,6 +446,8 @@ fn unit_a() -> MirModule {
         &["a.cheby:1:1"],
     );
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(A),
         path: "a".into(),
         functions: vec![run_body, get_shim()],
@@ -707,8 +713,11 @@ fn alone_compiles_the_same_twice() {
     }
 }
 
-/// A unit alone asks for no layout id: its `LayoutIds` refuses, and the
-/// JIT's `define` of the same unit with that table fails.
+/// A unit alone asks for no layout id: its `LayoutIds` refuses. Since the
+/// JIT registers through module records (D-919, D-920,
+/// GAP(jit-record-registration)), the JIT's `define` of the same unit
+/// asks for none either: with a table that refuses every id it defines
+/// the unit, its layout word holding 0 where registration writes the id.
 #[test]
 #[cfg_attr(
     windows,
@@ -724,11 +733,16 @@ fn alone_consults_no_layout_ids() {
     let units = [unit_b()];
     let opts = CodegenOptions::default();
     declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
-    assert!(define_with_stats(&mut m, &units, &mut decls, &cx, &opts).is_err());
+    define_with_stats(&mut m, &units, &mut decls, &cx, &opts).unwrap();
+    let word = m.definition("cb$layout$b$Empty");
+    let header = u64::from_le_bytes(word.bytes[..8].try_into().unwrap());
+    assert_eq!(abi::header_layout(header), 0);
 }
 
-/// The JIT's mode is unchanged: one module holds both units, every
-/// symbol is local, and `a` calls `b`'s slot, which `b` defines.
+/// The JIT's mode keeps its linkage: one module holds both units, every
+/// symbol is local, and `a` calls `b`'s slot, which `b` defines. Its
+/// layout words hold 0 where the id goes, whatever the layout table says,
+/// until registration writes them (D-920, GAP(jit-record-registration)).
 #[test]
 #[cfg_attr(
     windows,
@@ -754,7 +768,7 @@ fn alone_jit_mode_keeps_every_symbol_local() {
     }
     let word = m.definition("cb$layout$b$Empty");
     let header = u64::from_le_bytes(word.bytes[..8].try_into().unwrap());
-    assert_eq!(abi::header_layout(header), 77);
+    assert_eq!(abi::header_layout(header), 0);
 }
 
 /// Layout ids that are never given.
@@ -838,6 +852,8 @@ fn mask_code_unit() -> MirModule {
         &["m.cheby:2:1"],
     );
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(M),
         path: "m".into(),
         functions: vec![h_body, f_body],
@@ -864,6 +880,8 @@ fn mask_tests_unit() -> MirModule {
         &["m.cheby:3:1"],
     );
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Tests(M),
         path: "m".into(),
         functions: vec![body],
@@ -893,6 +911,8 @@ fn mask_entries_unit() -> MirModule {
     thunk.abi = Abi::C;
     thunk.ret = cheby_mir::entry_sig(kind).ret;
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Entries,
         path: "".into(),
         functions: vec![thunk],
@@ -1069,6 +1089,7 @@ fn alone_check_accepts_only_generated_imports() {
         frame_size: 0,
         call_sites: Vec::new(),
         cheby_abi: true,
+        srclocs: Vec::new(),
     };
     let pc = text_kinds()[0];
     let imported = ModuleRelocTarget::user(1, slot.as_u32());

@@ -170,7 +170,12 @@ fn pool_detached_a_job_returns_its_result() {
         !probe.marked_at_wake.load(Ordering::SeqCst),
         "woken with the mark set"
     );
-    assert_eq!(runtime.shared.pool_waiting.load(Ordering::SeqCst), 0);
+    // The completion lowers the runtime's count only after its wake
+    // (`blocking::leave`, D-815: the fiber is queued before the count
+    // falls), so the root may report while the pool thread has still to
+    // lower it: wait for it rather than read it once (wave 5's amd64 gate
+    // read 1 under emulation).
+    wait_until(|| runtime.shared.pool_waiting.load(Ordering::SeqCst) == 0);
     runtime.shutdown();
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }

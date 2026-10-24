@@ -48,6 +48,7 @@ use crate::ir::{
     UseKind,
 };
 use crate::liveness::{Liveness, LocalSet, counted, is_borrowed_local, stmt_def};
+use crate::positions::{PosRef, StmtsOut};
 
 /// Inserts `dup` and `drop` into every function of `module`.
 ///
@@ -90,7 +91,9 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
     let mut edge_drops: Vec<(BlockId, BlockId, Vec<Local>)> = Vec::new();
     for (id, block) in f.blocks.iter_enumerated() {
         let bl = live.block(f, id)?;
-        let mut stmts = Vec::new();
+        // Each count takes the position of the statement or terminator it
+        // belongs to, a leading drop the block's first (D-938).
+        let mut stmts = StmtsOut::new(block.has_positions(), block.stmts.len());
         // Unused parameters: the function's in the entry block, the
         // block's own everywhere. A borrowed one holds nothing to drop.
         let mut params: Vec<Local> = block.params.clone();
@@ -99,13 +102,14 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         }
         for p in params {
             if held(p)? && !bl.start.contains(&p) {
-                stmts.push(Stmt::Drop(p));
+                stmts.push(Stmt::Drop(p), block.first_pos());
             }
         }
         // What goes after a `list_uncons`, held until its
-        // `list_uncons_head` is placed.
-        let mut held_post: Vec<Stmt> = Vec::new();
-        for (stmt, after) in block.stmts.iter().zip(&bl.after) {
+        // `list_uncons_head` is placed, with its position.
+        let mut held_post: Vec<(Stmt, PosRef)> = Vec::new();
+        for (i, (stmt, after)) in block.stmts.iter().zip(&bl.after).enumerate() {
+            let here = block.pos_at(i);
             let uses = match stmt {
                 Stmt::Assign { value, .. } | Stmt::Eval(value) => value.uses(),
                 Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } => {
@@ -115,8 +119,8 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                 Stmt::ClearUnwind => Vec::new(),
             };
             let (before, mut post) = place(f, &borrowed, &uses, after)?;
-            stmts.extend(before);
-            stmts.push(own_dying_list(stmt, &mut post));
+            stmts.extend(before, here);
+            stmts.push(own_dying_list(stmt, &mut post), here);
             if let (Some(dst), Stmt::Assign { value, .. }) = (stmt_def(stmt), stmt)
                 && held(dst)?
             {
@@ -129,11 +133,11 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                 }
             }
             if is_uncons(stmt) {
-                held_post.extend(post);
+                held_post.extend(post.into_iter().map(|s| (s, here)));
                 continue;
             }
             stmts.append(&mut held_post);
-            stmts.extend(post);
+            stmts.extend(post, here);
         }
         stmts.append(&mut held_post);
         match &block.term {
@@ -142,7 +146,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
                 if !post.is_empty() {
                     return Err(Ice::new("a borrowed use in a moving terminator"));
                 }
-                stmts.extend(before);
+                stmts.extend(before, block.term_pos());
             }
             Terminator::Branch { .. } | Terminator::Switch { .. } => {
                 let mut succs = block.term.successors();
@@ -165,11 +169,13 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
             // pads (D-698).
             Terminator::Panic { .. } | Terminator::Unreachable | Terminator::Resume => {}
         }
+        let (stmts, pos) = stmts.finish(block.term_pos());
         new_blocks.push(Block {
             params: block.params.clone(),
             stmts,
             term: block.term.clone(),
             unwind: Vec::new(),
+            pos,
         });
     }
     place_edge_drops(f, new_blocks, edge_drops)
@@ -284,23 +290,32 @@ fn place_edge_drops(
     for (from, to, drops) in edge_drops {
         let only_pred = preds.get(&to).is_some_and(|p| p.as_slice() == [from]);
         let drops = drops.into_iter().map(Stmt::Drop);
+        // An edge's drops take the branch's position (D-938).
+        let source = blocks
+            .get(from.index())
+            .ok_or_else(|| Ice::new("edge from an unknown block"))?;
+        let (branch_pos, keep) = (source.term_pos(), source.has_positions());
         if only_pred {
             let target = blocks
                 .get_mut(to.index())
                 .ok_or_else(|| Ice::new("edge into an unknown block"))?;
-            target.stmts.splice(0..0, drops);
+            target.insert_stmts(0, drops, branch_pos);
         } else {
             let split = BlockId::from_u32(
                 u32::try_from(blocks.len()).map_err(|_| Ice::new("too many MIR blocks"))?,
             );
+            let mut out = StmtsOut::new(keep, 0);
+            out.extend(drops, branch_pos);
+            let (stmts, pos) = out.finish(branch_pos);
             blocks.push(Block {
                 params: Vec::new(),
-                stmts: drops.collect(),
+                stmts,
                 term: Terminator::Goto {
                     target: to,
                     args: Vec::new(),
                 },
                 unwind: Vec::new(),
+                pos,
             });
             blocks
                 .get_mut(from.index())

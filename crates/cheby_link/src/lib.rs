@@ -5,7 +5,9 @@
 //!   replayed into one relocatable object ([`object::replay`]): ELF for
 //!   Linux targets, Mach-O for macOS. Replay is serialization, never a
 //!   second code generation, so an executable runs the bytes `cheby run`
-//!   runs (ADR-0047).
+//!   runs (ADR-0047). A record with source positions also gets DWARF line
+//!   tables (`dwarf.rs`, D-938), which Linux executables keep and macOS
+//!   ones drop with `-Wl,-S` until M6.
 //! - The program object ([`program::program_object`]) holds the entries
 //!   unit, the program image `cb$image`, the C `main` and the import of
 //!   the runtime ID's symbol (D-915, D-925, D-930).
@@ -25,6 +27,9 @@ use std::path::PathBuf;
 use cheby_codegen_clif::record::RecordError;
 
 pub mod archive;
+mod dwarf;
+#[cfg(test)]
+mod dwarf_tests;
 pub mod link;
 pub mod native_libs;
 pub mod object;

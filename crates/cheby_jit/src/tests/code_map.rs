@@ -1,10 +1,11 @@
-//! The JIT's part of the code map (D-856, D-867): after
-//! each batch is finalized, every function it defined is registered with
-//! its address, length, ABI and the return offsets of its located calls;
-//! a failed batch registers nothing; a later batch adds ranges and moves
-//! none; a large frame's inner body carries the sites (D-679). The last
-//! test runs a deadlocking program and reads the location its report
-//! names.
+//! The JIT's part of the code map (D-856, D-867): after each batch is
+//! finalized, every function of its code units is registered, through
+//! its module records and the one routine (D-919), with its address,
+//! length, ABI and the return offsets of its located calls; the entries
+//! unit's thunks are not (D-1111); a failed batch registers nothing; a
+//! later batch adds ranges and moves none; a large frame's inner body
+//! carries the sites (D-679). The last test runs a deadlocking program
+//! and reads the location its report names.
 
 use std::sync::Arc;
 
@@ -109,12 +110,19 @@ fn start_of(jit: &Jit, f: DefId) -> usize {
     jit.module.get_finalized_function(id).expose_provenance()
 }
 
+/// The ranges the code map holds under `jit`'s owner, sorted by start.
+fn registered(jit: &Jit) -> Vec<CodeRangeDesc> {
+    cheby_runtime::locate::owner_ranges(jit.keep_alive.code_owner)
+}
+
 /// The range `jit` registered at `start`.
-fn range_at(jit: &Jit, start: usize) -> &CodeRangeDesc {
-    jit.registered
+fn range_at(jit: &Jit, start: usize) -> CodeRangeDesc {
+    let ranges = registered(jit);
+    ranges
         .iter()
         .find(|r| r.start == start)
-        .unwrap_or_else(|| panic!("no range at {start:#x} in {:#?}", jit.registered))
+        .cloned()
+        .unwrap_or_else(|| panic!("no range at {start:#x} in {ranges:#?}"))
 }
 
 /// The registered ranges are sorted by nothing in particular, but never
@@ -146,14 +154,14 @@ fn code_map_offsets_are_return_addresses_of_calls() {
     let units = p.units();
     let mut jit = Jit::new().unwrap();
     jit.compile(&units).unwrap();
-    let range = range_at(&jit, start_of(&jit, def(1, CALLER))).clone();
+    let range = range_at(&jit, start_of(&jit, def(1, CALLER)));
     assert!(range.cheby_abi);
     let locations: Vec<&str> = range.sites.iter().map(|s| &*s.location).collect();
     assert_eq!(locations, [LOC_A, LOC_B]);
     // The same function translated again with the JIT's declarations
     // compiles to the same code; its call sites are Cranelift's own.
     let cx = CodegenCx {
-        layouts: &jit.layouts,
+        layouts: &BuiltinLayouts,
     };
     let caller = units[0]
         .functions
@@ -182,8 +190,10 @@ fn code_map_offsets_are_return_addresses_of_calls() {
     assert_eq!(returned(run_const(&jit, target)), static_nil());
 }
 
-/// A function whose only call is a tail call has no site; the entry
-/// thunk is a C-ABI range; every function of the batch is registered.
+/// A function whose only call is a tail call has no site; every function
+/// of the code unit is registered; the entry thunk, which the entries
+/// unit defines and no module record lists, is in no range, as in an
+/// executable (D-1111, GAP(jit-record-registration)).
 #[test]
 #[cfg_attr(
     windows,
@@ -202,11 +212,17 @@ fn code_map_tail_calls_and_thunks_have_no_sites() {
     let thunk = jit.entry(EntryKind::Const(target)).unwrap().thunk;
     #[expect(clippy::as_conversions, reason = "a function's address")]
     let thunk = thunk as usize;
-    let thunk = range_at(&jit, thunk);
-    assert!(!thunk.cheby_abi && thunk.sites.is_empty(), "{thunk:?}");
-    // Four functions and the thunk, at least, and no overlap.
-    assert!(jit.registered.len() >= 5, "{:#?}", jit.registered);
-    assert_disjoint(&jit.registered);
+    let ranges = registered(&jit);
+    assert!(
+        ranges
+            .iter()
+            .all(|r| thunk < r.start || thunk >= r.start + usize::try_from(r.len).unwrap()),
+        "{ranges:#?}"
+    );
+    assert_eq!(cheby_runtime::locate::range_at(thunk), None);
+    // Four functions, at least, and no overlap.
+    assert!(ranges.len() >= 4, "{ranges:#?}");
+    assert_disjoint(&ranges);
 }
 
 /// `extra(x)` with index `index`, which runs `stmts` and returns `x`, and
@@ -239,12 +255,15 @@ fn extra_batch(index: u32, base: u32, stmts: Vec<Stmt>) -> Prog {
 fn code_map_second_batch_adds_ranges_and_moves_none() {
     let (p, _) = program();
     let mut jit = p.compile();
-    let first = jit.registered.clone();
+    let first = registered(&jit);
     jit.compile(&extra_batch(20, 100, Vec::new()).units())
         .unwrap();
-    assert!(jit.registered.len() > first.len());
-    assert_eq!(jit.registered[..first.len()], first[..]);
-    assert_disjoint(&jit.registered);
+    let now = registered(&jit);
+    assert!(now.len() > first.len());
+    for range in &first {
+        assert!(now.contains(range), "{range:?} moved");
+    }
+    assert_disjoint(&now);
     let extra = range_at(&jit, start_of(&jit, def(1, 20)));
     assert!(extra.cheby_abi && extra.sites.is_empty());
 }
@@ -258,7 +277,7 @@ fn code_map_second_batch_adds_ranges_and_moves_none() {
 fn code_map_failed_batch_adds_none() {
     let (p, _) = program();
     let mut jit = p.compile();
-    let before = jit.registered.clone();
+    let before = registered(&jit);
     // An unresolved native symbol fails the batch (D-532).
     let failing = extra_batch(
         25,
@@ -275,7 +294,7 @@ fn code_map_failed_batch_adds_none() {
     );
     let err = jit.compile(&failing.units()).unwrap_err();
     assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
-    assert_eq!(jit.registered, before);
+    assert_eq!(registered(&jit), before);
     // A batch whose code generation fails registers nothing either: a
     // call of a function no unit declares.
     let broken = extra_batch(
@@ -290,10 +309,10 @@ fn code_map_failed_batch_adds_none() {
         )],
     );
     assert!(jit.compile(&broken.units()).is_err());
-    assert_eq!(jit.registered, before);
+    assert_eq!(registered(&jit), before);
     jit.compile(&extra_batch(40, 400, Vec::new()).units())
         .unwrap();
-    assert!(jit.registered.len() > before.len());
+    assert!(registered(&jit).len() > before.len());
 }
 
 /// A large frame (D-679): the outer function, which tail-calls its inner
@@ -314,14 +333,11 @@ fn code_map_large_frame_inner_body_has_the_sites() {
     jit.compile(&p.units()).unwrap();
     let clif = jit.take_clif().join("\n");
     assert!(clif.contains("; cb$big$fn$app$caller\n"), "{clif}");
-    let outer = range_at(&jit, start_of(&jit, def(1, CALLER))).clone();
+    let outer = range_at(&jit, start_of(&jit, def(1, CALLER)));
     assert!(outer.cheby_abi && outer.sites.is_empty(), "{outer:?}");
-    let inner: Vec<&CodeRangeDesc> = jit
-        .registered
-        .iter()
-        .filter(|r| r.sites.len() == 2)
-        .collect();
-    assert_eq!(inner.len(), 1, "{:#?}", jit.registered);
+    let ranges = registered(&jit);
+    let inner: Vec<&CodeRangeDesc> = ranges.iter().filter(|r| r.sites.len() == 2).collect();
+    assert_eq!(inner.len(), 1, "{ranges:#?}");
     assert!(inner[0].cheby_abi);
     assert_ne!(inner[0].start, outer.start);
     let locations: Vec<&str> = inner[0].sites.iter().map(|s| &*s.location).collect();

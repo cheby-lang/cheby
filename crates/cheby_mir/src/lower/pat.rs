@@ -72,6 +72,7 @@ impl BodyCx<'_, '_> {
                     ty,
                 },
                 locals: bound_locals(a.pats.iter()),
+                span: a.pats.first().map(|p| p.span),
             })
             .collect();
         self.emit_decision(&decision, &locals, plans, OnFail::Unreachable, span)
@@ -170,6 +171,7 @@ impl BodyCx<'_, '_> {
             guard: None,
             then: Then::Continue,
             locals: bound_locals([pat]),
+            span: Some(pat.span),
         };
         let done = self.emit_decision(&decision, &[value], vec![plan], on_fail, pat.span)?;
         Ok(done.map(|_| ()))

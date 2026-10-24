@@ -75,12 +75,14 @@ fn function(
     strings: &[&str],
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi: Abi::Cheby,
         params,
         ret: Repr::Value,
         locals: locals(reprs),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -210,6 +212,8 @@ fn unit_b() -> MirModule {
         &["b.cheby:3:1"],
     );
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(B),
         path: "b".into(),
         functions: vec![get_body, helper_body, get_shim()],
@@ -252,6 +256,8 @@ fn unit_a() -> MirModule {
         &["a.cheby:1:1"],
     );
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(A),
         path: "a".into(),
         functions: vec![run_body, get_shim()],

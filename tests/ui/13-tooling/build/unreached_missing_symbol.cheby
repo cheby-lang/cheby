@@ -1,0 +1,19 @@
+// @mode: run-pass
+// @command: build
+// @milestone: M3
+// @decisions: D-943
+//! `cheby build` links a program whose only missing native symbol is named
+//! by a function that nothing calls (§12.5.1): the function's module is
+//! compiled whole, and the program object defines a hidden stub of that
+//! name. The executable prints what `cheby run` prints.
+
+@!target(native)
+
+import std::io
+
+@external(native, "app_build_unreached_missing")
+pub fn unused() -> Int
+
+fn main() {
+  io::println("linked with an unreached missing symbol")
+}

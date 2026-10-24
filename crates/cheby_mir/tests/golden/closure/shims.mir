@@ -39,7 +39,7 @@ bb3:
 
 fn shim std::io::println(_0: value, _1: value) -> value check str#0 {
   entry unwind bb3
-  str#0 = "std/io.cheby:86:8"
+  str#0 = "std/io.cheby:107:8"
 bb0:
   drop _0
   tail_call std::io::println(_1)

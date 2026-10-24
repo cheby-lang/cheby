@@ -183,12 +183,14 @@ fn function(
     strings: &[&str],
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi: Abi::Cheby,
         params,
         ret: Repr::Value,
         locals: locals(reprs),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -279,6 +281,8 @@ fn code_model_unit() -> MirModule {
         item: item.into(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![f_body, g_body],
@@ -528,6 +532,7 @@ fn code_model_check_rejects_absolute_libcall_and_imported_targets() {
         frame_size: 0,
         call_sites: Vec::new(),
         cheby_abi: true,
+        srclocs: Vec::new(),
     };
     let pc = text_kinds()[0];
     let data = ModuleRelocTarget::user(1, generated.as_u32());

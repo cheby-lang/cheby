@@ -34,6 +34,8 @@
 //! | `Pending::release`         | `sched/deadlock.rs` `IoPending::release`                         |
 //! | the canceller              | `fiber_ops/cancel.rs` `reach` (`WaitHeader::try_cancel`), `cancel` |
 //! | `survey`                   | `sched/deadlock.rs` `pass`, `survey` (steps 3 and 4)             |
+//! | the closer, `Owner`        | `sched/io.rs` `IoHandle::close`; `net.rs` `NetSocket::close`, `Owned` |
+//! | `release_turn`, the takes  | `sched/turn.rs` `Turn::release`, `Turn::take`                    |
 //!
 //! The models, each with `#[should_panic]` twins that break one rule:
 //!
@@ -53,6 +55,28 @@
 //!    `deadlock_models` does for the pool. Twins: the dispatcher lowers the
 //!    count before its wake (a false deadlock), and a token released by
 //!    every caller instead of once (the count falls below 0).
+//! 3. (D-1063) A fiber waits to read while a closer closes the handle
+//!    (`IoHandle::close` and `NetSocket::close`: the entry marked closed
+//!    and its waiter taken under the entry's lock, the handle's reference
+//!    to the descriptor's owner dropped) and a dispatcher delivers an
+//!    event: the fiber is woken exactly once, whether the close comes
+//!    before its arming, between its try and its arming, or after it
+//!    parked, and ends with the closed handle's error; the count is back to
+//!    0; and the descriptor closes only after the fiber's call, which
+//!    holds its own reference, has returned. Twins: a close that leaves
+//!    the waiter armed (the fiber parks for good), and a close that shuts
+//!    the descriptor at once (under a running call).
+//! 4. (D-1001) Two fibers accept on one listener through its read turn
+//!    (`sched/turn.rs`): the second parks behind the first and is handed
+//!    the turn, at most one holds it at a time, and each takes exactly one
+//!    of two connections. Twin: a take that does not queue behind the
+//!    holder (two fibers hold the turn).
+//! 5. (D-670, D-1000) A fiber queued for a turn, its header published,
+//!    against the holder's release and the cancellation walk at once:
+//!    exactly one wakes it, it holds the turn exactly when the release won
+//!    and then releases it, a cancelled fiber takes nothing, and the turn
+//!    ends free. Twin: a release that stores `Claimed` without the swap
+//!    (the turn stays held by a fiber that left).
 //!
 //! What the models leave out: the system's poller (the dispatcher thread is
 //! the poll holder after its poll returned an event), the token table and
@@ -567,4 +591,475 @@ fn io_model_2_twin_lowering_the_count_before_the_wake_declares_a_false_deadlock(
 #[should_panic(expected = "a domain's armed IO wait count fell below 0")]
 fn io_model_2_twin_releasing_at_every_caller_lowers_the_count_twice() {
     cancel_against_dispatch(Dispatch::WakeThenRelease, Release::EveryCaller);
+}
+
+/// Model 3's descriptor: closed once the last reference to its owner goes
+/// (`net.rs` `Owned`'s drop, after the deregistration).
+#[derive(Debug)]
+struct Descriptor {
+    closed: AtomicBool,
+}
+
+/// The descriptor's owner (`net.rs` `Owned`): the handle holds one
+/// reference, and each running system call one more.
+#[derive(Debug)]
+struct Owner {
+    fd: Arc<Descriptor>,
+}
+
+impl Drop for Owner {
+    fn drop(&mut self) {
+        self.fd.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// What model 3's entry lock guards (`EntryState`, the read direction).
+#[derive(Debug, Default)]
+struct ClosingSlot {
+    ready: bool,
+    closed: bool,
+    waiter: Option<Waiter>,
+}
+
+/// How model 3's close works.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseRule {
+    /// The runtime's (`IoHandle::close`, `NetSocket::close`): the entry
+    /// marked closed and its waiter taken under the entry's lock, the
+    /// dispatcher's wake after it, and the handle's reference to the
+    /// descriptor's owner dropped.
+    Runtime,
+    /// A twin: the entry marked closed, its waiter left armed.
+    NoWake,
+    /// A twin: the descriptor closed at once, whatever call runs on it.
+    CloseNow,
+}
+
+/// Model (3), D-1063: a fiber reads a socket with no data through
+/// `IoHandle::wait`'s loop, each try holding its own reference to the
+/// descriptor's owner during the call (`NetSocket::wait_on`), while a
+/// closer closes the handle and a dispatcher delivers an event (the peer's
+/// data or error) at once. The fiber always ends, woken once, and returns
+/// the closed handle's error; the count is back to 0; the descriptor is
+/// closed at the end, and never while the fiber's call runs. Twins: a
+/// close that leaves the waiter armed loses its wake, and a close that
+/// shuts the descriptor at once does so under a running call.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one model: the closer, the dispatcher, the waiting fiber and the checks read best together"
+)]
+fn close_against_wait(rule: CloseRule) {
+    explore(move || {
+        let count = Arc::new(AtomicUsize::new(0));
+        let fd = Arc::new(Descriptor {
+            closed: AtomicBool::new(false),
+        });
+        let handle: Arc<Mutex<Option<Arc<Owner>>>> = Arc::new(Mutex::new(Some(Arc::new(Owner {
+            fd: Arc::clone(&fd),
+        }))));
+        let entry = Arc::new(Mutex::new(ClosingSlot::default()));
+        let fiber = Arc::new(Fiber::new(state::RUNNING, NO_SITE));
+        let closer = {
+            let (handle, entry, fiber, fd) = (
+                Arc::clone(&handle),
+                Arc::clone(&entry),
+                Arc::clone(&fiber),
+                Arc::clone(&fd),
+            );
+            thread::spawn(move || {
+                let taken = handle.lock().unwrap().take();
+                let waiter = {
+                    let mut slot = entry.lock().unwrap();
+                    slot.closed = true;
+                    match rule {
+                        CloseRule::NoWake => None,
+                        CloseRule::Runtime | CloseRule::CloseNow => slot.waiter.take(),
+                    }
+                };
+                if let Some(waiter) = waiter {
+                    dispatch(&fiber, &waiter, Dispatch::WakeThenRelease);
+                }
+                if rule == CloseRule::CloseNow {
+                    fd.closed.store(true, Ordering::SeqCst);
+                }
+                drop(taken);
+            })
+        };
+        let dispatcher = {
+            let (entry, fiber) = (Arc::clone(&entry), Arc::clone(&fiber));
+            thread::spawn(move || {
+                let waiter = {
+                    let mut slot = entry.lock().unwrap();
+                    slot.ready = true;
+                    slot.waiter.take()
+                };
+                if let Some(waiter) = waiter {
+                    dispatch(&fiber, &waiter, Dispatch::WakeThenRelease);
+                }
+            })
+        };
+        let waiting = {
+            let (count, handle, entry, fiber, fd) = (
+                Arc::clone(&count),
+                Arc::clone(&handle),
+                Arc::clone(&entry),
+                Arc::clone(&fiber),
+                Arc::clone(&fd),
+            );
+            thread::spawn(move || {
+                loop {
+                    // Try: a closed entry ends the wait; else the bit is
+                    // cleared and the call runs on its own reference.
+                    {
+                        let mut slot = entry.lock().unwrap();
+                        if slot.closed {
+                            return None;
+                        }
+                        slot.ready = false;
+                    }
+                    let call = handle.lock().unwrap().clone();
+                    let call = call?;
+                    assert!(
+                        !fd.closed.load(Ordering::SeqCst),
+                        "the descriptor closed under a running call"
+                    );
+                    drop(call);
+                    // `WouldBlock`: arm, re-check, park.
+                    let waiter = Waiter {
+                        header: Arc::new(AtomicU8::new(header::WAITING)),
+                        pending: Pending::armed(&count, Release::Once),
+                    };
+                    fiber.begin_park();
+                    let mut slot = entry.lock().unwrap();
+                    slot.waiter = Some(waiter.clone());
+                    if slot.closed || slot.ready {
+                        slot.waiter = None;
+                        drop(slot);
+                        fiber.cancel_park();
+                        waiter.pending.release();
+                        continue;
+                    }
+                    drop(slot);
+                    fiber.end_park();
+                    return Some(waiter);
+                }
+            })
+        };
+        closer.join().unwrap();
+        dispatcher.join().unwrap();
+        if let Some(waiter) = waiting.join().unwrap() {
+            assert!(
+                *fiber.queued.lock().unwrap(),
+                "a close lost its wake: the fiber parked for good"
+            );
+            fiber.resume();
+            {
+                let mut slot = entry.lock().unwrap();
+                if slot
+                    .waiter
+                    .as_ref()
+                    .is_some_and(|armed| Arc::ptr_eq(&armed.header, &waiter.header))
+                {
+                    slot.waiter = None;
+                }
+            }
+            waiter.pending.release();
+        }
+        // The next try finds the entry closed.
+        assert!(entry.lock().unwrap().closed);
+        assert_eq!(count.load(Ordering::SeqCst), 0, "a count was left");
+        assert!(
+            fd.closed.load(Ordering::SeqCst),
+            "the descriptor was never closed"
+        );
+    });
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+fn io_model_3_close_wakes_once_and_keeps_the_descriptor_under_a_call() {
+    close_against_wait(CloseRule::Runtime);
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+#[should_panic(expected = "a close lost its wake: the fiber parked for good")]
+fn io_model_3_twin_a_close_that_leaves_the_waiter_loses_its_wake() {
+    close_against_wait(CloseRule::NoWake);
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+#[should_panic(expected = "the descriptor closed under a running call")]
+fn io_model_3_twin_closing_at_once_closes_under_a_running_call() {
+    close_against_wait(CloseRule::CloseNow);
+}
+
+/// What a turn's lock guards (`sched/turn.rs` `TurnState`): whether it is
+/// held, and the queued fibers' headers with their fiber's index.
+#[derive(Debug, Default)]
+struct TurnSlot {
+    held: bool,
+    queue: Vec<(Arc<AtomicU8>, usize)>,
+}
+
+/// How model 4's fibers take the turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Take {
+    /// The runtime's (`Turn::take`): a fiber that finds the turn held
+    /// queues and parks until it is handed over.
+    Runtime,
+    /// A twin: a fiber that finds the turn held goes on, as one direction
+    /// slot of the seam alone would let a second accepter do.
+    NoQueue,
+}
+
+/// `Turn::release`: hands the turn to the first queued fiber whose header
+/// it settles `Waiting -> Claimed` and wakes it after the lock, or frees
+/// the turn.
+fn release_turn(turn: &Mutex<TurnSlot>, fibers: &[Arc<Fiber>]) {
+    let next = {
+        let mut slot = turn.lock().unwrap();
+        loop {
+            if slot.queue.is_empty() {
+                slot.held = false;
+                break None;
+            }
+            let (header, index) = slot.queue.remove(0);
+            if header
+                .compare_exchange(
+                    header::WAITING,
+                    header::CLAIMED,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                break Some(index);
+            }
+        }
+    };
+    if let Some(index) = next {
+        let fiber = fibers.get(index).unwrap();
+        assert!(fiber.try_wake(), "a turn's waiter was not parking");
+    }
+}
+
+/// Model (4), D-1001 (`net.md` §`accept`): two fibers accept on one
+/// listener through its read turn while two connections wait: each takes
+/// the turn (the second parks behind the first, which hands it over), at
+/// most one holds it at a time, and each takes exactly one connection.
+/// Twin: a take that does not wait behind the holder lets both hold it.
+fn two_accepters(take: Take) {
+    explore(move || {
+        let turn = Arc::new(Mutex::new(TurnSlot::default()));
+        let fibers: Arc<Vec<Arc<Fiber>>> = Arc::new(vec![
+            Arc::new(Fiber::new(state::RUNNING, NO_SITE)),
+            Arc::new(Fiber::new(state::RUNNING, NO_SITE)),
+        ]);
+        let connections = Arc::new(Mutex::new(vec![1_u8, 2]));
+        let inside = Arc::new(AtomicUsize::new(0));
+        let accepters: Vec<_> = (0..2)
+            .map(|index| {
+                let (turn, fibers, connections, inside) = (
+                    Arc::clone(&turn),
+                    Arc::clone(&fibers),
+                    Arc::clone(&connections),
+                    Arc::clone(&inside),
+                );
+                thread::spawn(move || {
+                    let fiber = Arc::clone(fibers.get(index).unwrap());
+                    match take {
+                        Take::Runtime => {
+                            let mut slot = turn.lock().unwrap();
+                            if slot.held {
+                                let header = Arc::new(AtomicU8::new(header::WAITING));
+                                fiber.begin_park();
+                                slot.queue.push((Arc::clone(&header), index));
+                                drop(slot);
+                                fiber.end_park();
+                                fiber.resume();
+                                assert_eq!(header.load(Ordering::SeqCst), header::CLAIMED);
+                            } else {
+                                slot.held = true;
+                            }
+                        }
+                        Take::NoQueue => {
+                            let held = turn.lock().unwrap().held;
+                            if !held {
+                                turn.lock().unwrap().held = true;
+                            }
+                        }
+                    }
+                    // Holding the turn: one `accept` call.
+                    assert_eq!(
+                        inside.fetch_add(1, Ordering::SeqCst),
+                        0,
+                        "two fibers held one turn"
+                    );
+                    let connection = connections.lock().unwrap().pop();
+                    inside.fetch_sub(1, Ordering::SeqCst);
+                    release_turn(&turn, &fibers);
+                    connection
+                })
+            })
+            .collect();
+        let mut got: Vec<u8> = accepters
+            .into_iter()
+            .map(|accepter| accepter.join().unwrap().unwrap())
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, [1, 2], "a connection went to both or to neither");
+        let slot = turn.lock().unwrap();
+        assert!(
+            !slot.held && slot.queue.is_empty(),
+            "the turn was left held"
+        );
+    });
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+fn io_model_4_two_accepters_take_the_turn_in_turn() {
+    two_accepters(Take::Runtime);
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+#[should_panic(expected = "two fibers held one turn")]
+fn io_model_4_twin_a_take_that_does_not_queue_lets_two_fibers_hold_the_turn() {
+    two_accepters(Take::NoQueue);
+}
+
+/// How model 5's release hands the turn over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Handover {
+    /// The runtime's: a compare-and-swap that skips a cancelled header.
+    Settle,
+    /// A twin: the header stored `Claimed` blindly.
+    Blind,
+}
+
+/// Model (5), D-670, D-1000: a fiber holds a turn while another is queued
+/// for it, parked with its header published; the holder releases the turn
+/// while the walk cancels the queued fiber. Exactly one of them wakes it;
+/// the queued fiber holds the turn exactly when the release won, and then
+/// releases it; a cancelled fiber takes nothing, and the turn ends free.
+/// Twin: a release that stores `Claimed` without the swap hands the turn
+/// to a fiber that already left, so the turn stays held for good.
+fn cancel_against_handover(handover: Handover) {
+    explore(move || {
+        let header = Arc::new(AtomicU8::new(header::WAITING));
+        let turn = Arc::new(Mutex::new(TurnSlot {
+            held: true,
+            queue: vec![(Arc::clone(&header), 0)],
+        }));
+        let fibers: Arc<Vec<Arc<Fiber>>> =
+            Arc::new(vec![Arc::new(Fiber::new(state::PARKED, NO_SITE))]);
+        let holder = {
+            let (turn, fibers) = (Arc::clone(&turn), Arc::clone(&fibers));
+            thread::spawn(move || match handover {
+                Handover::Settle => release_turn(&turn, &fibers),
+                Handover::Blind => {
+                    let next = {
+                        let mut slot = turn.lock().unwrap();
+                        if slot.queue.is_empty() {
+                            slot.held = false;
+                            None
+                        } else {
+                            Some(slot.queue.remove(0))
+                        }
+                    };
+                    if let Some((header, index)) = next {
+                        header.store(header::CLAIMED, Ordering::SeqCst);
+                        let _ = fibers.get(index).unwrap().try_wake();
+                    }
+                }
+            })
+        };
+        let walk = {
+            let (header, fibers) = (Arc::clone(&header), Arc::clone(&fibers));
+            thread::spawn(move || {
+                let won = header
+                    .compare_exchange(
+                        header::WAITING,
+                        header::CANCELLED,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok();
+                if won {
+                    assert!(
+                        fibers.first().unwrap().try_wake(),
+                        "the walk's fiber was not parked"
+                    );
+                }
+                won
+            })
+        };
+        let queued = {
+            let (header, turn, fibers) =
+                (Arc::clone(&header), Arc::clone(&turn), Arc::clone(&fibers));
+            thread::spawn(move || {
+                let fiber = Arc::clone(fibers.first().unwrap());
+                fiber.resume();
+                if header.load(Ordering::SeqCst) == header::CLAIMED {
+                    // Holding the turn: its call, then the release.
+                    release_turn(&turn, &fibers);
+                    false
+                } else {
+                    // Cancelled: out of the queue if still there.
+                    let mut slot = turn.lock().unwrap();
+                    slot.queue
+                        .retain(|(queued, _)| !Arc::ptr_eq(queued, &header));
+                    true
+                }
+            })
+        };
+        holder.join().unwrap();
+        let won = walk.join().unwrap();
+        let cancelled = queued.join().unwrap();
+        if handover == Handover::Settle {
+            assert_eq!(cancelled, won, "the wait's result is not its winner's");
+        }
+        let slot = turn.lock().unwrap();
+        assert!(
+            !slot.held && slot.queue.is_empty(),
+            "the turn was left held or handed to a cancelled fiber"
+        );
+    });
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+fn io_model_5_a_cancelled_turn_waiter_takes_nothing() {
+    cancel_against_handover(Handover::Settle);
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+#[should_panic(expected = "the turn was left held or handed to a cancelled fiber")]
+fn io_model_5_twin_a_blind_handover_leaves_the_turn_held() {
+    cancel_against_handover(Handover::Blind);
 }

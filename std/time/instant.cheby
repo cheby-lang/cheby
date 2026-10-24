@@ -1,0 +1,91 @@
+//! Readings of the monotonic clock, and the arithmetic on them (D-1057).
+//!
+//! An `Instant` is a span since an origin that the runtime fixes once per
+//! process and does not reveal (D-1018, D-1021). The clock itself is read
+//! in `std::time`, with `time::monotonic`, which builds its readings with
+//! `from_origin`, and a timer waits for a reading with `time::sleep_until`.
+//!
+//! The module imports only `std::duration`. None of its functions has a
+//! kernel or reads the context, so all of them run in constants and give
+//! the same result on every target (D-090, D-232, D-650, D-1057). It is a
+//! module of its own so that `compare` makes `Instant` satisfy `Compare`
+//! while `time::compare` stays `Timestamp`'s (D-045, D-1057).
+
+import std::duration
+
+// GAP(instant-field-name): the page does not name the field, which debug
+// printing shows; `since_origin` mirrors `Timestamp`'s `since_epoch`.
+
+/// A reading of the monotonic clock, as the span since the clock's origin
+/// (D-1018, D-1057). It is opaque plain data, so `==` and hashing are the
+/// built-in structural ones, which compare readings because a `Duration`
+/// has one representation (D-650). It satisfies `Compare` through
+/// `compare`, and has no `Show`, since its origin is hidden.
+pub type Instant { since_origin: duration::Duration }
+
+// Building readings
+
+/// Returns the reading `span` after the monotonic clock's origin (D-1057).
+/// `time::monotonic` builds the system clock's readings with it.
+pub fn from_origin(span: duration::Duration) -> Instant {
+  Instant { since_origin: span }
+}
+
+test "from_origin counts from the origin" {
+  let first = from_origin(duration::seconds(1))
+  let second = from_origin(duration::seconds(3))
+  assert between(first, second) == duration::seconds(2)
+  assert first == from_origin(duration::milliseconds(1_000))
+}
+
+/// Returns the reading `span` after `at`, or before it when `span` is
+/// negative. It panics where `Duration` arithmetic overflows, as
+/// `time::add` does (D-025, D-650, D-1057).
+pub fn add(at: Instant, span: duration::Duration) -> Instant {
+  Instant { since_origin: at.since_origin + span }
+}
+
+test "add moves a reading by a span" {
+  let start = from_origin(duration::seconds(10))
+  assert add(start, duration::seconds(5)) == from_origin(duration::seconds(15))
+  assert add(start, duration::milliseconds(-500)) == from_origin(duration::milliseconds(9_500))
+}
+
+test "add before the origin gives a reading before it" {
+  let origin = from_origin(duration::zero)
+  let before = add(origin, duration::seconds(-2))
+  assert before < origin
+  assert between(before, origin) == duration::seconds(2)
+}
+
+// Comparing and measuring
+
+/// Orders two readings by time, earlier first. It makes `Instant` satisfy
+/// `Compare`, so `<`, `<=`, `>` and `>=` work on readings (§8.7, D-045,
+/// D-1057).
+pub fn compare(a: Instant, b: Instant) -> Order {
+  duration::compare(a.since_origin, b.since_origin)
+}
+
+test "compare orders readings by time" {
+  let first = from_origin(duration::milliseconds(999))
+  let second = from_origin(duration::seconds(1))
+  assert compare(first, second) == Less
+  assert compare(second, first) == Greater
+  assert compare(second, from_origin(duration::milliseconds(1_000))) == Equal
+  assert first <= second
+  assert second >= first
+}
+
+/// Returns the span from `earlier` to `later`, which is negative when
+/// `later` is the earlier reading (D-1018, D-1057).
+pub fn between(earlier: Instant, later: Instant) -> duration::Duration {
+  later.since_origin - earlier.since_origin
+}
+
+test "between measures from the first reading to the second" {
+  let first = from_origin(duration::seconds(2))
+  let second = from_origin(duration::seconds(7))
+  assert between(first, second) == duration::seconds(5)
+  assert between(second, first) == -between(first, second)
+}

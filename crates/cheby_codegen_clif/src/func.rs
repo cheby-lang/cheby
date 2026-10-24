@@ -17,7 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_mir::{
     Abi, AbiSig, BlockId, Callee, Const, FnKey, ForeignSig, Function, Local, MirModule, Operand,
-    PanicKind, Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
+    PanicKind, PosRef, Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
 };
 use cheby_runtime::abi;
 
@@ -173,8 +173,16 @@ pub(crate) struct Translator<'a, 'f> {
     pub(crate) import_sigs: FxHashMap<DataId, SigRef>,
     /// The cold blocks that panic with a kind at a location, created by
     /// checked operations and filled after the function's blocks, one per
-    /// kind, location and unwind pad (`None` for a check without an edge).
-    panics: Vec<(PanicKind, StrId, Option<ir::Block>, ir::Block)>,
+    /// kind, location and unwind pad (`None` for a check without an edge),
+    /// each with the source location of the statement that made it
+    /// (D-938).
+    panics: Vec<(
+        PanicKind,
+        StrId,
+        Option<ir::Block>,
+        ir::Block,
+        ir::SourceLoc,
+    )>,
     /// The block of each entry of `panics`, by kind, location and pad, so
     /// a function with many checked operations finds them in constant
     /// time.
@@ -430,6 +438,8 @@ impl Translator<'_, '_> {
         } else {
             (None, None)
         };
+        // D-938: the prologue and the entry check at the function's name.
+        self.set_pos(self.func.positions.entry);
         self.entry(check, entry_pad, release.as_ref())?;
         // Reverse postorder translates a definition before its uses, as a
         // block's dominators come before it. Unreachable blocks are never
@@ -462,15 +472,22 @@ impl Translator<'_, '_> {
             };
             for (i, stmt) in block.stmts.iter().enumerate() {
                 self.pad = pad_of(i, self).transpose()?;
+                // D-938: every instruction a statement emits at its
+                // position.
+                self.set_pos(block.pos_at(i));
                 self.stmt(stmt)?;
             }
             self.pad = pad_of(block.stmts.len(), self).transpose()?;
+            self.set_pos(block.term_pos());
             self.terminator(&block.term)?;
             self.pad = None;
             self.in_pad = false;
         }
-        for (kind, loc, pad, block) in std::mem::take(&mut self.panics) {
+        for (kind, loc, pad, block, srcloc) in std::mem::take(&mut self.panics) {
             self.b.switch_to_block(block);
+            if !self.func.positions.is_empty() {
+                self.b.set_srcloc(srcloc);
+            }
             self.panic(kind, None, loc, pad)?;
         }
         Ok(())
@@ -585,6 +602,8 @@ impl Translator<'_, '_> {
         if self.func.abi != Abi::Cheby {
             return Err(CodegenError::ice("a large frame outside a Cheby function"));
         }
+        // D-938: the outer function at the function's name.
+        self.set_pos(self.func.positions.entry);
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
         self.b.switch_to_block(entry);
@@ -765,9 +784,28 @@ impl Translator<'_, '_> {
         }
         let block = self.b.create_block();
         self.b.set_cold_block(block);
-        self.panics.push((kind, loc, self.pad, block));
+        let srcloc = self.b.srcloc();
+        self.panics.push((kind, loc, self.pad, block, srcloc));
         self.panic_blocks.insert(key, block);
         block
+    }
+
+    /// Makes `pos`, a position of the function's table (D-938), the source
+    /// location of the instructions that follow ([`FunctionBuilder::set_srcloc`]),
+    /// its bits as the location, so the rows need no other table. A
+    /// function without positions (positions off, generated code) never
+    /// gets a source location, so its CLIF is what it is without them;
+    /// [`Decls::describe`] prints none anyway (GAP(dumps-without-positions)).
+    fn set_pos(&mut self, pos: PosRef) {
+        if self.func.positions.is_empty() {
+            return;
+        }
+        let loc = if pos.is_none() {
+            ir::SourceLoc::default()
+        } else {
+            ir::SourceLoc::new(pos.bits())
+        };
+        self.b.set_srcloc(loc);
     }
 
     /// Branches to the panic block of `kind` at `loc` when `cond` is

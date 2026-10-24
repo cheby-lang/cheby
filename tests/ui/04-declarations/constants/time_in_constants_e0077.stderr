@@ -1,0 +1,48 @@
+error[E0077]: evaluating the constant `started` reached an effect
+  --> tests/ui/04-declarations/constants/time_in_constants_e0077.cheby:17:7
+   |
+17 | const started: time::Timestamp = time::now()
+   |       ^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_now`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `reading` reached an effect
+  --> tests/ui/04-declarations/constants/time_in_constants_e0077.cheby:19:7
+   |
+19 | const reading: instant::Instant = time::monotonic()
+   |       ^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_monotonic`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `so_far` reached an effect
+  --> tests/ui/04-declarations/constants/time_in_constants_e0077.cheby:21:7
+   |
+21 | const so_far: duration::Duration = time::elapsed(origin)
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_monotonic`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `left` reached an effect
+  --> tests/ui/04-declarations/constants/time_in_constants_e0077.cheby:23:7
+   |
+23 | const left: duration::Duration = time::until(origin)
+   |       ^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_monotonic`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `slept` reached an effect
+  --> tests/ui/04-declarations/constants/time_in_constants_e0077.cheby:25:7
+   |
+25 | const slept: Nil = time::sleep(duration::zero)
+   |       ^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_sleep`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `slept_until` reached an effect
+  --> tests/ui/04-declarations/constants/time_in_constants_e0077.cheby:27:7
+   |
+27 | const slept_until: Nil = time::sleep_until(origin)
+   |       ^^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_monotonic`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

@@ -5,9 +5,10 @@ use cheby_mir::{BuiltinLayout, LayoutRef};
 use cheby_runtime::abi::layout;
 
 /// Maps symbolic layouts to runtime layout ids. Read-only during
-/// translation: every layout a unit uses is registered before its
-/// functions are translated, never on first use, because first-use order
-/// would depend on scheduling (D-263, D-264). A missing id is an [`Ice`].
+/// translation. Code generation asks it for no user constructor: their
+/// ids are assigned only when a module record is registered (D-919,
+/// D-920), and code loads them from layout words, so every host passes
+/// [`BuiltinLayouts`]. A missing id is an [`Ice`].
 pub trait LayoutIds: Sync {
     /// The runtime layout id of `layout`.
     ///

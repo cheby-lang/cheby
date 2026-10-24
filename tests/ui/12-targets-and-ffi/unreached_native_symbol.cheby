@@ -1,0 +1,23 @@
+// @mode: run-fail
+// @exit: 1
+// @milestone: M3
+// @decisions: D-943
+//! A run reports E0053 only for the native symbols that the externals of
+//! reached functions name (§12.5.1). `unused` names a missing symbol too,
+//! and its module is compiled whole, but nothing calls it, so its symbol
+//! is bound to the runtime's stub instead.
+
+@!target(native)
+
+import std::io
+
+@external(native, "app_unreached_missing")
+pub fn unused() -> Int
+
+@external(native, "app_reached_missing")
+fn used() -> Int
+
+fn main() {
+  io::println("never printed")
+  let _ = used()
+}

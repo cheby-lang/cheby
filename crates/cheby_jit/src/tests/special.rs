@@ -926,6 +926,8 @@ fn closures_of_a_test_and_a_function_of_the_same_name() {
     let target = p.call(spin, Vec::new());
     let [code, entries] = p.units();
     let tests = MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Tests(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![calls_closure(FnKey::Test(test), test), nil_closure(test)],

@@ -2,8 +2,8 @@
 //! through the build cache's front records and in-memory code records.
 //!
 //! The front end runs as `cheby run` runs it (D-955), `main` is chosen by
-//! `cheby run`'s rules (D-137, D-464), and what `main` reaches is lowered
-//! as `cheby run` lowers it (D-510). Each code unit is then compiled alone
+//! `cheby run`'s rules (D-137, D-464), and the modules `main` needs are
+//! lowered whole as `cheby run` lowers them (D-966). Each code unit is then compiled alone
 //! into a code record (D-914, D-917), every record is replayed into one
 //! object under its module path, in build order (D-915), and the entries
 //! unit, compiled alone too, goes into the program object with `cb$image`
@@ -19,7 +19,10 @@
 //! - E0053 for every native symbol that a reached `@external` names and
 //!   D-943's build resolver cannot find: the runtime's exported names,
 //!   then each system library of the archive opened by its recorded file
-//!   name ([`cheby_link::native_libs`]);
+//!   name ([`cheby_link::native_libs`]); a symbol that it cannot find and
+//!   that only unreached functions of whole modules name gets a hidden
+//!   stub in the program object, which calls `cheby_rt_unresolved`
+//!   (D-943, [`ProgramSpec::stubs`]);
 //! - the runtime archive is found and its runtime ID checked (D-929,
 //!   D-930).
 //!
@@ -244,7 +247,14 @@ pub(crate) fn build_objects(
         )));
     }
     let compiled = compile_records(&front, &lowered.units, main.def, mir)?;
-    let missing = unresolved_symbols(&compiled.records, &compiled.entries);
+    // D-943: E0053 for the symbols reached functions name and the build
+    // resolver cannot find; a stub in the program object for each one
+    // only unreached functions of whole modules name.
+    let reached = backend::reached_symbols(&lowered);
+    let (missing, stubs): (Vec<String>, Vec<String>) =
+        unresolved_symbols(&compiled.records, &compiled.entries)
+            .into_iter()
+            .partition(|symbol| reached.contains(symbol));
     if !missing.is_empty() {
         let diagnostics = backend::unresolved(&front, &missing)?;
         crate::report_back_end(&mut out, diagnostics);
@@ -255,7 +265,12 @@ pub(crate) fn build_objects(
         fiber_stack: front.fiber_stack,
         unwind_edges: mir.unwind_edges,
     };
-    let objects = write_objects(&compiled, &mangle::entry_main(&path.to_string()), stacks)?;
+    let objects = write_objects(
+        &compiled,
+        &mangle::entry_main(&path.to_string()),
+        stacks,
+        &stubs,
+    )?;
     Ok(Objects::Ready {
         output: out,
         built: Built {
@@ -320,12 +335,14 @@ struct Stacks {
 }
 
 /// The objects of the link: each record replayed under its module path,
-/// in build order, then the program object (D-915). Debug toolchains first
-/// run D-918's check over the local copies.
+/// in build order, then the program object (D-915) with D-943's `stubs`
+/// (sorted). Debug toolchains first run D-918's check over the local
+/// copies.
 fn write_objects(
     compiled: &Compiled<'_>,
     entry: &str,
     stacks: Stacks,
+    stubs: &[String],
 ) -> Result<Vec<(String, Vec<u8>)>, Error> {
     if cfg!(debug_assertions) {
         let mut copies: Vec<(&str, &CodeRecord)> = compiled
@@ -351,6 +368,7 @@ fn write_objects(
         main_stack: stacks.main_stack,
         fiber_stack: stacks.fiber_stack,
         unwind_edges: stacks.unwind_edges,
+        stubs,
     };
     let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
     let program =

@@ -68,12 +68,14 @@ fn function(
     call_loc_strings: &[&str],
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi: Abi::Cheby,
         params,
         ret: Repr::Value,
         locals: locals(reprs),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -100,7 +102,7 @@ fn function(
 /// kind of data object a unit without constants has: import words, a
 /// string, slots, a layout word, a `@blocking` shim.
 #[expect(clippy::too_many_lines, reason = "one hand-built MIR unit")]
-fn code_model_unit() -> MirModule {
+pub(crate) fn code_model_unit() -> MirModule {
     let (f, g, pair, pair_type) = (def(0), def(1), def(2), def(3));
     let f_body = function(
         FnKey::Item(f),
@@ -169,6 +171,8 @@ fn code_model_unit() -> MirModule {
         item: item.into(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![f_body, g_body],
@@ -219,7 +223,7 @@ fn call_f1(arg: u32) -> Rvalue {
 /// `f0(x)` calls `f1` twice, at `src/main.cheby:3:5` and at
 /// `<repl:2>:4:7` (a path with a colon), and tail-calls it; `f1(x)`
 /// returns `x`.
-fn located_unit(kind: UnitKind) -> MirModule {
+pub(crate) fn located_unit(kind: UnitKind) -> MirModule {
     let f0 = function(
         FnKey::Item(def(0)),
         vec![local(0)],
@@ -257,6 +261,8 @@ fn located_unit(kind: UnitKind) -> MirModule {
     );
     let sig = AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: kind,
         path: "app::sub".into(),
         functions: vec![f0, f1],
@@ -280,16 +286,16 @@ fn located_unit(kind: UnitKind) -> MirModule {
     }
 }
 
-fn code() -> UnitKind {
+pub(crate) fn code() -> UnitKind {
     UnitKind::Code(ModuleId::from_u32(1))
 }
 
 /// `f0` is named by other units, `f1` is not (D-1110).
-fn named(def: DefId) -> bool {
+pub(crate) fn named(def: DefId) -> bool {
     def.index == DefIndex::from_u32(0)
 }
 
-fn record(unit: &MirModule) -> CodeRecord {
+pub(crate) fn record(unit: &MirModule) -> CodeRecord {
     record_unit(
         isa::host_isa().unwrap(),
         unit,
@@ -420,6 +426,8 @@ fn record_alignment_bounded() {
 fn record_decode_checks_counts() {
     let mut bytes = b"cbcr".to_vec();
     bytes.extend_from_slice(&RECORD_VERSION.to_le_bytes());
+    // No source (version 2, D-938).
+    bytes.push(0);
     let mut huge = bytes.clone();
     huge.extend_from_slice(&u32::MAX.to_le_bytes());
     assert!(CodeRecord::decode(&huge).is_err());
@@ -439,6 +447,7 @@ fn record_decode_checks_counts() {
             symbols: Vec::new(),
             functions: Vec::new(),
             data: Vec::new(),
+            source: None,
         })
     );
     let mut trailing = empty.clone();
@@ -805,8 +814,26 @@ fn record_modrec_is_hidden_read_only_data() {
         r.symbol("cb$layout$app$Pair").unwrap().kind,
         SymbolKind::Data { writable: true }
     );
-    // No hooks, external types, free shapes or constants.
-    for table in [32, 48, 64, 96] {
+    // One free-shape word, the one registration derives for `Pair`'s
+    // layout (D-907, GAP(free-shapes-checked)).
+    assert_eq!(u64_at(bytes, 64), 1);
+    let (target, shapes_at) = reloc_at(72).unwrap();
+    assert_eq!(target, "cb$mod$app");
+    let pair = cheby_runtime::layout::LayoutInfo::ctor(
+        "app::Pair",
+        0,
+        &[
+            (cheby_runtime::layout::FieldKind::Value, None),
+            (cheby_runtime::layout::FieldKind::Value, None),
+        ],
+    )
+    .named("Pair", "Pair", false, 0);
+    assert_eq!(
+        u64_at(bytes, shapes_at as usize),
+        cheby_runtime::layout::free_shape_word(&pair)
+    );
+    // No hooks, external types or constants.
+    for table in [32, 48, 96] {
         assert_eq!(u64_at(bytes, table), 0, "table at {table}");
         assert_eq!(reloc_at(table + 8), None, "table at {table}");
     }

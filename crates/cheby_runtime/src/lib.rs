@@ -25,7 +25,8 @@
 //!   pool, D-683, whose fiber side is `sched::blocking`).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env`, `random` (D-656), `runtime_info` (`std::runtime`,
-//!   D-657) and [`hamt`], each registering its symbols in [`symbols`] (plan
+//!   D-657), `net` (`std::net`'s sockets on the poller, D-984) and
+//!   [`hamt`], each registering its symbols in [`symbols`] (plan
 //!   §4.3.3).
 //!
 //! Every C-ABI entry point is `extern "C"`, so an internal Rust panic
@@ -59,6 +60,7 @@ pub mod list;
 pub mod locate;
 #[cfg(test)]
 mod locate_tests;
+mod net;
 mod num;
 pub mod object;
 pub mod panic;
@@ -80,6 +82,9 @@ pub mod stats;
 pub mod string;
 mod symbols;
 mod text;
+mod time;
+#[cfg(test)]
+mod time_tests;
 mod tls;
 #[doc(hidden)]
 pub mod unwind;

@@ -1,74 +1,140 @@
 module std::io
 
 fn std::io::hash(_0: value) -> value check str#0 {
-  entry unwind bb7
-  str#0 = "std/io.cheby:56:4"
+  entry unwind bb13
+  str#0 = "std/io.cheby:71:4"
   str#1 = ""
 bb0:
   _1: value = field _0.0 of ctor std::io::Error
   _2: int = read_tag _1 of std::io::Kind
-  switch _2 [0 => bb1, 1 => bb2, 2 => bb3, _ => bb4]
+  switch _2 [0 => bb1, 1 => bb2, 2 => bb3, 3 => bb4, 4 => bb5, 5 => bb6, 6 => bb7, 7 => bb8, 8 => bb9, _ => bb10]
 bb1:
-  _16: value = drop_reuse _0 of ctor std::io::Error
+  _34: value = drop_reuse _0 of ctor std::io::Error
   _3: value = box int const int 1
-  _5: value = alloc_reuse _16, tuple/2(_3, const str#1) ; unwind bb9
-  goto bb5(_5)
+  _5: value = alloc_reuse _34, tuple/2(_3, const str#1) ; unwind bb15
+  goto bb11(_5)
 bb2:
-  _17: value = drop_reuse _0 of ctor std::io::Error
+  _35: value = drop_reuse _0 of ctor std::io::Error
   _7: value = box int const int 2
-  _9: value = alloc_reuse _17, tuple/2(_7, const str#1) ; unwind bb11
-  goto bb5(_9)
+  _9: value = alloc_reuse _35, tuple/2(_7, const str#1) ; unwind bb17
+  goto bb11(_9)
 bb3:
-  _18: value = drop_reuse _0 of ctor std::io::Error
+  _36: value = drop_reuse _0 of ctor std::io::Error
   _10: value = box int const int 3
-  _12: value = alloc_reuse _18, tuple/2(_10, const str#1) ; unwind bb13
-  goto bb5(_12)
+  _12: value = alloc_reuse _36, tuple/2(_10, const str#1) ; unwind bb19
+  goto bb11(_12)
 bb4:
-  _13: value = box int const int 0
-  _14: value = field _0.1 of ctor std::io::Error
-  _19: value = drop_reuse _0 of ctor std::io::Error keep [_14 @1]
-  _15: value = alloc_reuse _19, tuple/2(_13, _14) ; unwind bb16
-  goto bb5(_15)
-bb5(_6: value):
-  return _6
+  _37: value = drop_reuse _0 of ctor std::io::Error
+  _13: value = box int const int 8
+  _15: value = alloc_reuse _37, tuple/2(_13, const str#1) ; unwind bb21
+  goto bb11(_15)
+bb5:
+  _38: value = drop_reuse _0 of ctor std::io::Error
+  _16: value = box int const int 9
+  _18: value = alloc_reuse _38, tuple/2(_16, const str#1) ; unwind bb23
+  goto bb11(_18)
 bb6:
-  resume
+  _39: value = drop_reuse _0 of ctor std::io::Error
+  _19: value = box int const int 10
+  _21: value = alloc_reuse _39, tuple/2(_19, const str#1) ; unwind bb25
+  goto bb11(_21)
 bb7:
-  drop _0
-  goto bb6()
+  _40: value = drop_reuse _0 of ctor std::io::Error
+  _22: value = box int const int 11
+  _24: value = alloc_reuse _40, tuple/2(_22, const str#1) ; unwind bb27
+  goto bb11(_24)
 bb8:
-  drop _3
-  goto bb6()
+  _41: value = drop_reuse _0 of ctor std::io::Error
+  _25: value = box int const int 12
+  _27: value = alloc_reuse _41, tuple/2(_25, const str#1) ; unwind bb29
+  goto bb11(_27)
 bb9:
-  drop _16
-  goto bb8()
+  _42: value = drop_reuse _0 of ctor std::io::Error
+  _28: value = box int const int 13
+  _30: value = alloc_reuse _42, tuple/2(_28, const str#1) ; unwind bb31
+  goto bb11(_30)
 bb10:
-  drop _7
-  goto bb6()
-bb11:
-  drop _17
-  goto bb10()
+  _31: value = box int const int 0
+  _32: value = field _0.1 of ctor std::io::Error
+  _43: value = drop_reuse _0 of ctor std::io::Error keep [_32 @1]
+  _33: value = alloc_reuse _43, tuple/2(_31, _32) ; unwind bb34
+  goto bb11(_33)
+bb11(_6: value):
+  return _6
 bb12:
-  drop _10
-  goto bb6()
+  resume
 bb13:
-  drop _18
+  drop _0
   goto bb12()
 bb14:
-  drop _13
-  goto bb6()
+  drop _3
+  goto bb12()
 bb15:
-  drop _14
+  drop _34
   goto bb14()
 bb16:
+  drop _7
+  goto bb12()
+bb17:
+  drop _35
+  goto bb16()
+bb18:
+  drop _10
+  goto bb12()
+bb19:
+  drop _36
+  goto bb18()
+bb20:
+  drop _13
+  goto bb12()
+bb21:
+  drop _37
+  goto bb20()
+bb22:
+  drop _16
+  goto bb12()
+bb23:
+  drop _38
+  goto bb22()
+bb24:
   drop _19
-  goto bb15()
+  goto bb12()
+bb25:
+  drop _39
+  goto bb24()
+bb26:
+  drop _22
+  goto bb12()
+bb27:
+  drop _40
+  goto bb26()
+bb28:
+  drop _25
+  goto bb12()
+bb29:
+  drop _41
+  goto bb28()
+bb30:
+  drop _28
+  goto bb12()
+bb31:
+  drop _42
+  goto bb30()
+bb32:
+  drop _31
+  goto bb12()
+bb33:
+  drop _32
+  goto bb32()
+bb34:
+  drop _43
+  goto bb33()
 }
 
 fn std::io::equal(_0: value, _1: value) -> value check str#0 {
   entry unwind bb3
-  str#0 = "std/io.cheby:67:4"
-  str#1 = "std/io.cheby:68:3"
+  str#0 = "std/io.cheby:88:4"
+  str#1 = "std/io.cheby:89:3"
 bb0:
   _2: value = call std::io::hash(_0) ; unwind bb4
   _3: value = call std::io::hash(_1) ; unwind bb5
@@ -98,7 +164,7 @@ bb6:
 
 fn std::io::debug(_0: value) -> value check str#0 {
   entry unwind bb2
-  str#0 = "std/io.cheby:72:4"
+  str#0 = "std/io.cheby:93:4"
 bb0:
   tail_call std::io::show(_0)
 bb1:
@@ -110,7 +176,7 @@ bb2:
 
 fn std::io::print(_0: value) -> value check str#0 {
   entry unwind bb2
-  str#0 = "std/io.cheby:81:8"
+  str#0 = "std/io.cheby:102:8"
   str#1 = "cheby_io_print"
 bb0:
   call_runtime effect_check(borrow const str#1) ; unwind bb2
@@ -126,7 +192,7 @@ bb2:
 
 fn std::io::println(_0: value) -> value check str#0 {
   entry unwind bb2
-  str#0 = "std/io.cheby:86:8"
+  str#0 = "std/io.cheby:107:8"
   str#1 = "cheby_io_println"
 bb0:
   call_runtime effect_check(borrow const str#1) ; unwind bb2
@@ -142,7 +208,7 @@ bb2:
 
 fn std::io::eprintln(_0: value) -> value check str#0 {
   entry unwind bb2
-  str#0 = "std/io.cheby:96:8"
+  str#0 = "std/io.cheby:117:8"
   str#1 = "cheby_io_eprintln"
 bb0:
   call_runtime effect_check(borrow const str#1) ; unwind bb2
@@ -157,40 +223,64 @@ bb2:
 }
 
 fn std::io::show(_0: value) -> value check str#0 {
-  entry unwind bb7
-  str#0 = "std/io.cheby:201:8"
+  entry unwind bb13
+  str#0 = "std/io.cheby:308:8"
   str#1 = "not found"
   str#2 = "permission denied"
   str#3 = "invalid UTF-8"
+  str#4 = "connection refused"
+  str#5 = "connection reset"
+  str#6 = "address in use"
+  str#7 = "host not found"
+  str#8 = "closed"
+  str#9 = "invalid input"
 bb0:
   _1: value = field _0.0 of ctor std::io::Error
   _2: int = read_tag _1 of std::io::Kind
-  switch _2 [0 => bb1, 1 => bb2, 2 => bb3, _ => bb4]
+  switch _2 [0 => bb1, 1 => bb2, 2 => bb3, 3 => bb4, 4 => bb5, 5 => bb6, 6 => bb7, 7 => bb8, 8 => bb9, _ => bb10]
 bb1:
   drop _0
-  goto bb5(const str#1)
+  goto bb11(const str#1)
 bb2:
   drop _0
-  goto bb5(const str#2)
+  goto bb11(const str#2)
 bb3:
   drop _0
-  goto bb5(const str#3)
+  goto bb11(const str#3)
 bb4:
-  _7: value = field _0.1 of ctor std::io::Error
-  drop _0 of ctor std::io::Error keep [_7 @1]
-  goto bb5(_7)
-bb5(_4: value):
-  return _4
+  drop _0
+  goto bb11(const str#4)
+bb5:
+  drop _0
+  goto bb11(const str#5)
 bb6:
-  resume
+  drop _0
+  goto bb11(const str#6)
 bb7:
   drop _0
-  goto bb6()
+  goto bb11(const str#7)
+bb8:
+  drop _0
+  goto bb11(const str#8)
+bb9:
+  drop _0
+  goto bb11(const str#9)
+bb10:
+  _13: value = field _0.1 of ctor std::io::Error
+  drop _0 of ctor std::io::Error keep [_13 @1]
+  goto bb11(_13)
+bb11(_4: value):
+  return _4
+bb12:
+  resume
+bb13:
+  drop _0
+  goto bb12()
 }
 
 fn shim std::io::hash(_0: value, _1: value) -> value check str#0 {
   entry unwind bb3
-  str#0 = "std/io.cheby:56:4"
+  str#0 = "std/io.cheby:71:4"
 bb0:
   drop _0
   tail_call std::io::hash(_1)
@@ -206,7 +296,7 @@ bb3:
 
 fn shim std::io::equal(_0: value, _1: value, _2: value) -> value check str#0 {
   entry unwind bb4
-  str#0 = "std/io.cheby:67:4"
+  str#0 = "std/io.cheby:88:4"
 bb0:
   drop _0
   tail_call std::io::equal(_1, _2)
@@ -225,7 +315,7 @@ bb4:
 
 fn shim std::io::debug(_0: value, _1: value) -> value check str#0 {
   entry unwind bb3
-  str#0 = "std/io.cheby:72:4"
+  str#0 = "std/io.cheby:93:4"
 bb0:
   drop _0
   tail_call std::io::debug(_1)
@@ -243,7 +333,13 @@ layout ctor std::io::Error: Error.Error tag 0 key f8879bc7f612847b record [kind:
 layout ctor std::io::NotFound: Kind.NotFound tag 0 key 5565b57f5c6dbf52 []
 layout ctor std::io::PermissionDenied: Kind.PermissionDenied tag 1 key 5565b57f5c6dbf52 []
 layout ctor std::io::InvalidData: Kind.InvalidData tag 2 key 5565b57f5c6dbf52 []
-layout ctor std::io::Other: Kind.Other tag 3 key 5565b57f5c6dbf52 []
+layout ctor std::io::ConnectionRefused: Kind.ConnectionRefused tag 3 key 5565b57f5c6dbf52 []
+layout ctor std::io::ConnectionReset: Kind.ConnectionReset tag 4 key 5565b57f5c6dbf52 []
+layout ctor std::io::AddressInUse: Kind.AddressInUse tag 5 key 5565b57f5c6dbf52 []
+layout ctor std::io::HostNotFound: Kind.HostNotFound tag 6 key 5565b57f5c6dbf52 []
+layout ctor std::io::Closed: Kind.Closed tag 7 key 5565b57f5c6dbf52 []
+layout ctor std::io::InvalidInput: Kind.InvalidInput tag 8 key 5565b57f5c6dbf52 []
+layout ctor std::io::Other: Kind.Other tag 9 key 5565b57f5c6dbf52 []
 callee std::io::hash(value) -> value
 callee std::io::equal(value, value) -> value
 callee std::io::debug(value) -> value

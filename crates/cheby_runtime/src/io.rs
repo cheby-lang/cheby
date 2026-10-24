@@ -188,7 +188,7 @@ fn kind_code(error: &io::Error) -> i64 {
 
 /// The operating system's message of an IO error, without the
 /// ` (os error N)` that Rust appends to it (D-573).
-fn os_message(error: &io::Error) -> String {
+pub(crate) fn os_message(error: &io::Error) -> String {
     let text = error.to_string();
     match error.raw_os_error() {
         Some(code) => text
@@ -199,7 +199,7 @@ fn os_message(error: &io::Error) -> String {
 }
 
 /// `Err((kind, message))`, the failure of a `std::io` kernel (D-484).
-fn err_pair(kind: i64, message: &str) -> Word {
+pub(crate) fn err_pair(kind: i64, message: &str) -> Word {
     values::err(values::tuple(&[
         values::int_word(kind),
         values::string(message),

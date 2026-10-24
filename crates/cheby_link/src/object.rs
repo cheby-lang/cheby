@@ -19,6 +19,11 @@
 //! checked first ([`CodeRecord::check`]) and against the target, since
 //! `cranelift-object` panics on a relocation kind the format or the
 //! architecture does not have, and on a definition it cannot place.
+//!
+//! A record with positions (D-938) also gets its DWARF line tables,
+//! `.debug_line` and a minimal `.debug_info` with their sections
+//! (`crate::dwarf`); a record without them, as with
+//! `CHEBY_POSITIONS=off`, and the program object get none.
 
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::isa::OwnedTargetIsa;
@@ -37,7 +42,8 @@ use crate::LinkError;
 /// build runs (D-264).
 ///
 /// The bytes depend only on the record, `isa` and `name`: two replays of
-/// one record are identical.
+/// one record are identical. A record with positions gets its DWARF line
+/// tables (D-938, `crate::dwarf`).
 ///
 /// # Errors
 ///
@@ -49,7 +55,23 @@ pub fn replay(record: &CodeRecord, isa: OwnedTargetIsa, name: &str) -> Result<Ve
     check_record(record, &isa)?;
     let mut module = new_module(isa, name)?;
     replay_into(&mut module, record)?;
-    emit(module)
+    // D-938: a record with positions gets its line tables.
+    if record.source.is_none() {
+        return emit(module);
+    }
+    let mut funcs = Vec::with_capacity(record.functions.len());
+    for function in &record.functions {
+        let symbol = record
+            .symbol_at(function.symbol)
+            .ok_or(RecordError::Malformed("a symbol index out of range"))?;
+        match module.get_name(&symbol.name) {
+            Some(FuncOrDataId::Func(id)) => funcs.push(id),
+            _ => return Err(RecordError::Malformed("a definition of the wrong kind").into()),
+        }
+    }
+    let mut product = module.finish();
+    crate::dwarf::write(&mut product, record, &funcs)?;
+    product.emit().map_err(|e| LinkError::Object(e.to_string()))
 }
 
 /// Checks `record` and that `isa` is a target replay writes, with the

@@ -53,6 +53,9 @@ mod lower_tests;
 pub mod never_raise;
 pub mod options;
 mod ownership;
+pub mod positions;
+#[cfg(test)]
+mod positions_tests;
 pub mod rc;
 pub mod reach;
 pub mod repr;
@@ -90,6 +93,7 @@ pub use lower::{
     EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
 };
 pub use options::{MirOptions, RcMode, check_lowered, count_and_check_with, count_lowered_with};
+pub use positions::{Pos, PosRef, Positions};
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};
 pub use validate::{Stage, validate};

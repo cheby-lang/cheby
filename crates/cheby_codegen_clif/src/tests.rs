@@ -269,6 +269,7 @@ fn unit() -> MirModule {
     }])
     .unwrap();
     let block = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![
             Stmt::Eval(cheby_mir::Rvalue::CallForeign {
@@ -286,6 +287,7 @@ fn unit() -> MirModule {
         unwind: Vec::new(),
     };
     let function = Function {
+        positions: cheby_mir::Positions::default(),
         key: FnKey::Item(f),
         abi: Abi::Cheby,
         params: vec![cheby_mir::Local::from_u32(0)],
@@ -303,6 +305,8 @@ fn unit() -> MirModule {
         call_loc_strings: IndexVec::new(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![function],
@@ -393,6 +397,7 @@ fn builtin_layout_ids() {
 fn labs_unit(index: u32, params: &[CType]) -> MirModule {
     let g = def(1, index);
     let block = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![Stmt::Eval(cheby_mir::Rvalue::CallForeign {
             symbol: "labs".into(),
@@ -416,9 +421,12 @@ fn labs_unit(index: u32, params: &[CType]) -> MirModule {
     };
     let item = format!("g{index}");
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![Function {
+            positions: cheby_mir::Positions::default(),
             key: FnKey::Item(g),
             abi: Abi::Cheby,
             params: Vec::new(),
@@ -563,8 +571,10 @@ fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirMod
         ],
         term: Terminator::Return(Operand::Local(Local::from_u32(boxed))),
         unwind: vec![(0, BlockId::from_u32(1)), (1, BlockId::from_u32(1))],
+        pos: Vec::new(),
     };
     let resume = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: Vec::new(),
         term: Terminator::Resume,
@@ -577,6 +587,7 @@ fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirMod
         ret: Repr::Value,
         locals,
         blocks: IndexVec::from_raw(vec![bb0, resume]).unwrap(),
+        positions: cheby_mir::Positions::default(),
         span: Span::new(FileId::new(0), TextRange::new(0, 0)),
         strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
         entry_loc: Some(StrId::from_u32(0)),
@@ -588,6 +599,8 @@ fn blocking_fn(index: u32, symbol: &str, params: &[CType], ret: CType) -> MirMod
         call_loc_strings: IndexVec::new(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![function],
@@ -866,6 +879,7 @@ fn slice_forms_unit() -> MirModule {
     .unwrap();
     let runtime = |func, args| Rvalue::CallRuntime { func, args };
     let bb0 = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![
             Stmt::Assign {
@@ -908,12 +922,14 @@ fn slice_forms_unit() -> MirModule {
         unwind: vec![(0, BlockId::from_u32(2)), (1, BlockId::from_u32(2))],
     };
     let bb1 = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: Vec::new(),
         term: Terminator::Return(Operand::Const(Const::ErrNil)),
         unwind: Vec::new(),
     };
     let pad = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![Stmt::Assign {
             dst: local(4),
@@ -923,6 +939,7 @@ fn slice_forms_unit() -> MirModule {
         unwind: Vec::new(),
     };
     let bb3 = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: Vec::new(),
         term: Terminator::Resume,
@@ -935,6 +952,7 @@ fn slice_forms_unit() -> MirModule {
         ret: Repr::Value,
         locals,
         blocks: IndexVec::from_raw(vec![bb0, bb1, pad, bb3]).unwrap(),
+        positions: cheby_mir::Positions::default(),
         span: Span::new(FileId::new(0), TextRange::new(0, 0)),
         strings: IndexVec::from_raw(vec!["a.cheby:1:4".into()]).unwrap(),
         entry_loc: Some(StrId::from_u32(0)),
@@ -946,6 +964,8 @@ fn slice_forms_unit() -> MirModule {
         call_loc_strings: IndexVec::new(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![function],
@@ -1098,6 +1118,7 @@ fn unwind_pads_are_translated_as_cold_blocks() {
     function
         .blocks
         .push(Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts: vec![Stmt::Drop(cheby_mir::Local::from_u32(0))],
             term: Terminator::Goto {
@@ -1110,6 +1131,7 @@ fn unwind_pads_are_translated_as_cold_blocks() {
     function
         .blocks
         .push(Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts: Vec::new(),
             term: Terminator::Resume,
@@ -1175,6 +1197,7 @@ fn edges_unit() -> MirModule {
         args: Vec::new(),
     };
     let bb0 = Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![
             Stmt::Dup(local(0)),
@@ -1226,6 +1249,7 @@ fn edges_unit() -> MirModule {
         ],
     };
     let pad = |drop: u32, term| Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![Stmt::Drop(local(drop))],
         term,
@@ -1236,6 +1260,7 @@ fn edges_unit() -> MirModule {
         pad(1, goto(2)),
         pad(0, goto(3)),
         Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts: Vec::new(),
             term: Terminator::Resume,
@@ -1351,6 +1376,7 @@ fn counted_params_unit(n: u32) -> MirModule {
     .unwrap();
     function.params = (0..=n).map(local).collect();
     function.blocks = IndexVec::from_raw(vec![Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: (1..=n).map(|l| Stmt::Drop(local(l))).collect(),
         term: Terminator::Return(Operand::Const(Const::Nil)),
@@ -1590,6 +1616,7 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         Const::Int(0)
     };
     let caller = Function {
+        positions: cheby_mir::Positions::default(),
         key: FnKey::Item(f),
         abi: Abi::Cheby,
         params: Vec::new(),
@@ -1597,6 +1624,7 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         locals: IndexVec::from_raw(vec![decl(ret)]).unwrap(),
         blocks: IndexVec::from_raw(vec![
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![Stmt::Assign {
                     dst: Local::from_u32(0),
@@ -1609,6 +1637,7 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
                 unwind: vec![(0, BlockId::from_u32(1))],
             },
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: Vec::new(),
                 term: Terminator::Resume,
@@ -1627,12 +1656,14 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
         call_loc_strings: IndexVec::new(),
     };
     let g_fn = Function {
+        positions: cheby_mir::Positions::default(),
         key: FnKey::Item(g),
         abi: Abi::Cheby,
         params: Vec::new(),
         ret,
         locals: IndexVec::from_raw(Vec::new()).unwrap(),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts: Vec::new(),
             term: Terminator::Return(Operand::Const(zero)),
@@ -1651,6 +1682,8 @@ fn unboxed_call_unit(ret: Repr) -> MirModule {
     };
     let sig = |ret| AbiSig::owned(Abi::Cheby, Vec::new(), ret);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![caller, g_fn],
@@ -1764,6 +1797,7 @@ fn placeholder_unit(arity: u32) -> MirModule {
     .unwrap();
     let layout = LayoutRef::Tuple(arity);
     function.blocks = IndexVec::from_raw(vec![Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![
             Stmt::Assign {
@@ -1843,6 +1877,7 @@ fn uncons_unit() -> MirModule {
         value: Rvalue::CallRuntime { func, args },
     };
     function.blocks = IndexVec::from_raw(vec![Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts: vec![
             call(1, RuntimeFn::ListLength, vec![Operand::Local(l(0))]),

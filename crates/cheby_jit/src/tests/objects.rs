@@ -69,6 +69,17 @@ fn t_layouts() -> Vec<LayoutDesc> {
     ]
 }
 
+/// The layout ids registration gave `A`, `B` and `C`, read from their
+/// layout words through the batch's module record (D-919, D-920).
+fn t_ids(jit: &Jit) -> [u32; 3] {
+    let records = jit.module_records();
+    let words = super::records::ctor_words(&records[0]);
+    let [a, b, c] = words[0].as_slice() else {
+        panic!("{words:?}");
+    };
+    [a, b, c].map(|&(word, _)| super::records::id_at(word))
+}
+
 /// A `Prog` that declares `T`.
 fn with_t() -> Prog {
     let mut p = Prog {
@@ -196,15 +207,9 @@ fn user_constructors_allocate_through_their_layout_words() {
     );
     let whole = p.call(whole, Vec::new());
     let jit = p.compile();
-    let a_id = jit.layouts.id(&LayoutRef::Ctor(at(A))).unwrap();
-    assert_eq!(
-        jit.layouts.id(&LayoutRef::Ctor(at(B))),
-        Ok(a_id.checked_add(1).unwrap())
-    );
-    assert_eq!(
-        jit.layouts.id(&LayoutRef::Ctor(at(C))),
-        Ok(a_id.checked_add(2).unwrap())
-    );
+    let [a_id, b_id, c_id] = t_ids(&jit);
+    assert_eq!(b_id, a_id.checked_add(1).unwrap());
+    assert_eq!(c_id, a_id.checked_add(2).unwrap());
     let object = returned(run_const(&jit, whole));
     let header = read_word(object, 0);
     assert_eq!(abi::header_layout(header), a_id);
@@ -344,7 +349,7 @@ fn tags_come_from_layout_ids() {
     }
     let word = returned(run_const(&jit, b));
     assert_eq!(rc_of(word), abi::RC_STATIC);
-    assert_eq!(Ok(layout_of(word)), jit.layouts.id(&LayoutRef::Ctor(at(B))));
+    assert_eq!(layout_of(word), t_ids(&jit)[1]);
     if cheby_runtime::LEAK_CHECK_ENABLED {
         assert_eq!(jit.domain().live_objects(), 0);
     }

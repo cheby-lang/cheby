@@ -19,8 +19,13 @@ cranelift-codegen.workspace = true
 cranelift-frontend.workspace = true
 cranelift-module.workspace = true
 cranelift-object.workspace = true
-# The runtime archive's symbol index (D-930, D-1036).
-object.workspace = true
+# `.debug_line` and a minimal `.debug_info` in every object replayed from a
+# record with positions (D-938, D-1036).
+gimli.workspace = true
+# The runtime archive's symbol index (D-930, D-1036); `write` for the DWARF
+# sections and their relocations in a replayed object (D-938), the feature
+# cranelift-object already turns on.
+object = { workspace = true, features = ["write"] }
 
 # The build resolver of E0053 opens the archive's system libraries (D-943).
 [target.'cfg(unix)'.dependencies]
@@ -30,6 +35,8 @@ libc.workspace = true
 cheby_diag.workspace = true
 cheby_iface.workspace = true
 cheby_mir.workspace = true
+# The `dwarf_*` tests read the line tables back (D-938).
+gimli = { workspace = true, features = ["read"] }
 object.workspace = true
 
 [lints]

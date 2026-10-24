@@ -98,7 +98,8 @@
 //! root's catch point takes the report ([`cancel::take_deadlock_report`]).
 //!
 //! **Wait sites** (D-856, D-858): the five waiting kernels (`send`,
-//! `receive`, `join`, `select` and a scope's close) record the operation
+//! `receive`, `join`, `select` and a scope's close), and `std::time`'s
+//! `sys_sleep` (`crate::time`, D-1058), record the operation
 //! and the published wait frame (`ExecCtx::wait_frame`) in the fiber's
 //! scheduler block before they park (`FiberSched::note_wait`), copied at
 //! the park, and clear them when they resume; the blocking pool's park
@@ -473,6 +474,8 @@ mod root_scope_tests;
 mod select_models;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod sleep_models;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

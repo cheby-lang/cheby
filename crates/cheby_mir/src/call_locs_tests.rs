@@ -255,6 +255,8 @@ fn located(locs: impl FnOnce(&mut Function, crate::ir::Local, crate::ir::Local))
     let mut f = b.finish().unwrap();
     locs(&mut f, called, copied);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(MODULE),
         path: "app".into(),
         functions: vec![f],

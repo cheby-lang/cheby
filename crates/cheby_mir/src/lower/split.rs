@@ -178,6 +178,18 @@ impl BodyCx<'_, '_> {
         b.set_entry_loc(&self.cx.location(chain.span)?)?;
         b.set_record_sites(self.pending.records_sites());
         b.set_record_call_locs(self.pending.records_call_locs());
+        // D-938: the continuation's entry is the literal's position, and
+        // its statements go on at the position lowering is at
+        // (GAP(mir-positions)).
+        if self.pending.records_positions() {
+            b.set_record_positions();
+            if let Some(pos) = self.pending.position(self.cx, chain.span) {
+                b.set_entry_position(pos)?;
+            }
+            if let Some(pos) = self.b.position() {
+                b.set_position(pos)?;
+            }
+        }
         let fresh_locals = vec![None; self.body.locals.len()];
         let fresh_dicts = vec![None; self.dict_params.len()];
         let callee = Callee::Code(key);

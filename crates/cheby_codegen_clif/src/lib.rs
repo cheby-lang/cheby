@@ -125,6 +125,8 @@ mod unwind;
 mod values;
 
 #[cfg(test)]
+mod positions_tests;
+#[cfg(test)]
 mod record_tests;
 #[cfg(test)]
 mod scale_tests;
@@ -143,6 +145,7 @@ pub use decls::{Decls, FuncDecl, SlotDecl, SlotKey};
 pub use error::CodegenError;
 pub use func::translate;
 pub use layout::{BuiltinLayouts, LayoutIds, builtin_ctor_layout, builtin_layout_id};
+pub use modrec::{BatchNew, BatchRecord, define_batch_records};
 pub use session::{SESSION_MODULE, SessionName};
 pub use unit::{UnitCode, UnitCx, compile_unit};
 
@@ -308,6 +311,21 @@ pub struct DefinedCode {
     /// Its calls with a location, by return offset, sorted
     /// ([`CompiledFunction::call_sites`]).
     pub sites: Vec<CallSiteDesc>,
+    /// The function's source rows (D-938): each a code offset and the line
+    /// and column (D-421) of the statement whose code starts there, sorted
+    /// by offset, a row only where the line or column changes; empty with
+    /// positions off and for code without MIR positions (shims).
+    pub positions: Vec<SourceRow>,
+}
+
+/// One row of a function's line table (D-938): the code from `offset` on,
+/// up to the next row, comes from `line` and `column` (D-421: from 1,
+/// code points) of the unit's source file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceRow {
+    pub offset: u32,
+    pub line: u32,
+    pub column: u32,
 }
 
 /// Defines the data objects declared by [`declare`] and every function of
@@ -610,12 +628,57 @@ fn defined_code<M: Module>(
             location: location.to_string(),
         });
     }
+    let positions = function.map_or_else(Vec::new, |f| {
+        source_rows(
+            |bits| {
+                f.positions
+                    .get(cheby_mir::PosRef::from_bits(bits))
+                    .map(|p| (p.line, p.column))
+            },
+            &code.srclocs,
+        )
+    });
     Ok(DefinedCode {
         id,
         len,
         cheby_abi: code.cheby_abi,
         sites,
+        positions,
     })
+}
+
+/// The rows of a function's line table (D-938) from its compiled code's
+/// source locations `srclocs` (`(start offset, location)`, sorted by
+/// offset, as Cranelift gives them): `lookup` gives the line and column of
+/// a location's bits, a [`cheby_mir::PosRef`] into the function's table
+/// ([`cheby_mir::Function::positions`]). A row starts only where the line
+/// or column changes; a location the table does not hold is skipped.
+fn source_rows(
+    lookup: impl Fn(u32) -> Option<(u32, u32)>,
+    srclocs: &[(u32, u32)],
+) -> Vec<SourceRow> {
+    let mut rows: Vec<SourceRow> = Vec::new();
+    for &(offset, bits) in srclocs {
+        let Some((line, column)) = lookup(bits) else {
+            continue;
+        };
+        // An empty range at the same offset gives way to the next one.
+        if rows.last().is_some_and(|r| r.offset == offset) {
+            rows.pop();
+        }
+        if rows
+            .last()
+            .is_some_and(|r| r.line == line && r.column == column)
+        {
+            continue;
+        }
+        rows.push(SourceRow {
+            offset,
+            line,
+            column,
+        });
+    }
+    rows
 }
 
 /// Defines the data objects declared since the last [`define`] outside any
@@ -704,6 +767,11 @@ pub struct CompiledFunction {
     /// and stops at a C-ABI one (entry thunks, trampolines, `@blocking`
     /// shims).
     pub cheby_abi: bool,
+    /// The start offset of each range of code with a source location, and
+    /// the location's bits, a [`cheby_mir::PosRef`] (D-938), sorted by
+    /// offset, as Cranelift records them; empty when translation set none
+    /// (positions off, shims).
+    pub srclocs: Vec<(u32, u32)>,
 }
 
 impl std::fmt::Debug for CompiledFunction {
@@ -715,6 +783,7 @@ impl std::fmt::Debug for CompiledFunction {
             .field("frame_size", &self.frame_size)
             .field("call_sites", &self.call_sites.len())
             .field("cheby_abi", &self.cheby_abi)
+            .field("srclocs", &self.srclocs.len())
             .finish()
     }
 }
@@ -803,6 +872,13 @@ pub fn compile_function(
         });
         pair_call_sites(&returns, tags)?
     };
+    let srclocs = compiled
+        .buffer
+        .get_srclocs_sorted()
+        .iter()
+        .filter(|s| !s.loc.is_default())
+        .map(|s| (s.start, s.loc.bits()))
+        .collect();
     Ok(CompiledFunction {
         bytes,
         align,
@@ -810,5 +886,6 @@ pub fn compile_function(
         frame_size,
         call_sites,
         cheby_abi,
+        srclocs,
     })
 }

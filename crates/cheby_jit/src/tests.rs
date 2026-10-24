@@ -7,13 +7,14 @@
 
 use std::sync::Mutex;
 
+use cheby_codegen_clif::builtin_layout_id;
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId, builtin};
 use cheby_mir::{
     Abi, AbiSig, ArithOp, BitOp, Block, BlockId, Callee, CalleeDecl, CmpOp, Const, DefName,
-    EntryKind, FieldDesc, FnKey, Function, LayoutDesc, LocalDecl, MirModule, Operand, PanicKind,
-    Repr, RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType, Terminator,
-    UnitKind,
+    EntryKind, FieldDesc, FnKey, Function, LayoutDesc, LayoutRef, LocalDecl, MirModule, Operand,
+    PanicKind, Repr, RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType,
+    Terminator, UnitKind,
 };
 use cheby_runtime::abi::{self, sym};
 use cheby_runtime::{EntryConfig, EntryMode, EntryOutcome};
@@ -67,6 +68,7 @@ fn function(
     }
     table.extend(strings.iter().map(|s| Box::<str>::from(*s)));
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi,
         params: (0..params.len())
@@ -101,6 +103,7 @@ fn bb(n: u32) -> BlockId {
 
 fn block(stmts: Vec<Stmt>, term: Terminator) -> Block {
     Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts,
         term,
@@ -133,6 +136,8 @@ fn code_unit(
     names.sort_by_key(|n| n.def);
     names.dedup_by_key(|n| n.def);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(module)),
         path: path.into(),
         functions,
@@ -152,6 +157,8 @@ fn entries_unit(
     names.sort_by_key(|n| n.def);
     names.dedup_by_key(|n| n.def);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Entries,
         path: "".into(),
         functions,
@@ -1191,6 +1198,7 @@ mod entry_unwind;
 mod large_frame;
 mod literals;
 mod objects;
+mod records;
 mod repl;
 mod reuse;
 mod scalars;

@@ -67,6 +67,10 @@ pub(super) struct ArmPlan {
     pub then: Then,
     /// The names it binds, sorted by id.
     pub locals: Vec<LocalId>,
+    /// Its first pattern's span: the position of the code that binds its
+    /// names (D-938, GAP(mir-positions)); the shared tests keep the
+    /// `case`'s.
+    pub span: Option<Span>,
 }
 
 /// The state of lowering one decision.
@@ -166,7 +170,16 @@ impl BodyCx<'_, '_> {
             for (&id, &param) in locals.iter().zip(&params) {
                 self.bind_local(id, Operand::Local(param))?;
             }
+            // The shared arm's code takes the arm's position (D-938).
+            let span = m.arms.get(arm).and_then(|a| a.span);
+            let outer = match span {
+                Some(span) => Some(self.enter_position(span)?),
+                None => None,
+            };
             self.finish_arm(&mut m, arm)?;
+            if let Some(outer) = outer {
+                self.leave_position(outer)?;
+            }
         }
         if let Some(block) = m.fail_block {
             self.switch_to(block)?;
@@ -266,8 +279,30 @@ impl BodyCx<'_, '_> {
     }
 
     /// Lowers a leaf; the tree taken when its guard is `False` goes on
-    /// `work`.
+    /// `work`. Its code takes the arm's position (D-938).
     fn emit_leaf<'t>(
+        &mut self,
+        m: &mut Match<'t>,
+        arm: usize,
+        bindings: &[(LocalId, OccId)],
+        otherwise: Option<&'t Tree>,
+        env: Env,
+        work: &mut Vec<Emit<'t>>,
+    ) -> Result<(), Ice> {
+        let span = m.arms.get(arm).and_then(|a| a.span);
+        let outer = match span {
+            Some(span) => Some(self.enter_position(span)?),
+            None => None,
+        };
+        let done = self.emit_leaf_here(m, arm, bindings, otherwise, env, work);
+        if let Some(outer) = outer {
+            self.leave_position(outer)?;
+        }
+        done
+    }
+
+    /// [`BodyCx::emit_leaf`] at the current position.
+    fn emit_leaf_here<'t>(
         &mut self,
         m: &mut Match<'t>,
         arm: usize,

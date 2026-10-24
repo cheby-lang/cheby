@@ -36,6 +36,16 @@
 //!   ([`IoPending::release`]): by the dispatcher after its wake, or by the
 //!   fiber once it runs again, whichever comes first; both come after the
 //!   wake the wait stands for.
+//! - **Closing** (D-1063, [`IoHandle::close`]): `net::close` and
+//!   `net::close_listener` mark the entry closed and take both directions'
+//!   waiters under the entry's lock, then wake each with the dispatcher's
+//!   wake; a wait that tries, arms or re-checks after that finds the entry
+//!   closed and returns the error [`is_closed_error`] recognizes. A
+//!   cancellation is checked before every try, so a fiber that a
+//!   dispatcher woke after the walk targeted it tries nothing more.
+//!   `std::net`'s kernels (`net.rs`) serialize their waits per socket and
+//!   direction with turns (`sched/turn.rs`), since the entry parks one
+//!   fiber per direction.
 //! - **The deadlock count** (D-724, D-857, D-860, D-984): only an armed
 //!   wait counts, never a registered socket, so an idle listener does not
 //!   hide a deadlock. A fiber parked here records no wait site (D-858): it
@@ -388,12 +398,30 @@ impl fmt::Debug for IoHandle {
     }
 }
 
-/// The error a wait on a deregistered handle returns.
+/// What [`deregistered`]'s error carries, so that a kernel can tell a
+/// closed handle from the system's own `ENOTCONN` ([`is_closed_error`]).
+#[derive(Debug)]
+struct ClosedEntry;
+
+impl fmt::Display for ClosedEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the socket was closed or deregistered from its runtime's poller")
+    }
+}
+
+impl std::error::Error for ClosedEntry {}
+
+/// The error a wait on a closed or deregistered handle returns.
 fn deregistered() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::NotConnected,
-        "the socket was deregistered from its runtime's poller",
-    )
+    io::Error::new(io::ErrorKind::NotConnected, ClosedEntry)
+}
+
+/// Whether `error` is the one a wait on a closed or deregistered handle
+/// returns ([`IoHandle::close`], D-1063).
+pub(crate) fn is_closed_error(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(<dyn std::error::Error + Send + Sync>::is::<ClosedEntry>)
 }
 
 /// The error a second wait in a direction that a fiber already waits in
@@ -462,6 +490,11 @@ impl IoHandle {
         op: &mut dyn FnMut() -> io::Result<T>,
     ) -> Result<io::Result<T>, Cancelled> {
         loop {
+            // A fiber targeted by a cancellation tries nothing more, also
+            // after a dispatcher's wake that won the header first: a
+            // cancelled `accept` or read takes nothing (D-670, D-816,
+            // D-1000).
+            cancel::check(me)?;
             // Try: the bit is cleared first, so an event that comes during
             // the call is kept for the re-check.
             {
@@ -541,6 +574,19 @@ impl IoHandle {
     /// kernel leaves behind, is woken and finds it deregistered.
     pub(crate) fn deregister(&self, source: &mut dyn mio::event::Source) {
         self.io.remove(&self.entry);
+        self.close();
+        // The socket is closed right after; an error leaves nothing to do.
+        let _ = self.io.registry.deregister(source);
+    }
+
+    /// Marks the entry closed and wakes the fibers parked on it in either
+    /// direction, each with the dispatcher's wake (one wake per wait, the
+    /// count after it, D-857); a later wait returns at once with the error
+    /// [`is_closed_error`] recognizes (D-1063). Never waits: it takes only
+    /// the entry's leaf lock. The caller closes the descriptor once no
+    /// system call on it is running; the registration stays until
+    /// [`IoHandle::deregister`].
+    pub(crate) fn close(&self) {
         let woken = {
             let mut state = self.entry.state.lock();
             state.closed = true;
@@ -549,8 +595,16 @@ impl IoHandle {
         for waiter in woken.into_iter().flatten() {
             waiter.wake();
         }
-        // The socket is closed right after; an error leaves nothing to do.
-        let _ = self.io.registry.deregister(source);
+    }
+
+    /// Another handle on the same entry and poller, for the owner of the
+    /// socket's descriptor, which deregisters it when the last system call
+    /// on it has returned (`net.rs`).
+    pub(crate) fn share(&self) -> Self {
+        Self {
+            entry: Arc::clone(&self.entry),
+            io: Arc::clone(&self.io),
+        }
     }
 
     /// The handle's token (for tests).
@@ -571,20 +625,6 @@ impl IoHandle {
         self.entry.state.lock().slot(dir).is_some()
     }
 }
-
-// The seam's first callers are S2's `std::net` kernels (M3 wave 5); until
-// then these keep it compiled and linted as live code (D-984).
-const _: fn(&Shared, &mut dyn mio::event::Source) -> io::Result<IoHandle> = IoHandle::register;
-const _: fn(&IoHandle, &mut dyn mio::event::Source) = IoHandle::deregister;
-const _: WaitFn = IoHandle::wait::<()>;
-
-/// [`IoHandle::wait`]'s type at `()`.
-type WaitFn = fn(
-    &IoHandle,
-    &ExecCtx,
-    Direction,
-    &mut dyn FnMut() -> io::Result<()>,
-) -> Result<io::Result<()>, Cancelled>;
 
 #[cfg(test)]
 mod tests {

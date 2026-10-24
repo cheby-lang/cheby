@@ -40,6 +40,7 @@ fn function(
     call_loc_strings: Vec<Box<str>>,
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key: FnKey::Item(key),
         abi: Abi::Cheby,
         params: vec![local(0)],
@@ -56,6 +57,7 @@ fn function(
         )
         .unwrap(),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -153,6 +155,8 @@ fn unit() -> MirModule {
     );
     let sig = AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![f0, f1],

@@ -313,6 +313,66 @@ pub fn module_layouts(module: ModuleId, defs: &Defs<'_>) -> Result<Vec<LayoutDes
     Ok(out)
 }
 
+/// An external type of a module (§12.5.3): what its module record lists
+/// (D-919), so that both hosts register a layout for its values
+/// (`cheby_runtime::layout::register_external`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalDesc {
+    /// The type.
+    pub def: DefId,
+    /// The type's name as debug printing shows it (D-463): `Db` prints as
+    /// `<Db>`.
+    pub name: Box<str>,
+    /// D-559's key of the module path and the type's bare name.
+    pub type_key: u64,
+}
+
+/// Std's handle types (D-647, D-982): external types of their modules
+/// whose values are runtime kinds 40 to 47, which the runtime registers
+/// itself (D-703), so no module record lists them.
+const STD_HANDLE_TYPES: [(&str, &str); 8] = [
+    ("std::channel", "Sender"),
+    ("std::channel", "Receiver"),
+    ("std::fiber", "Fiber"),
+    ("std::fiber", "Scope"),
+    ("std::selector", "Selector"),
+    ("std::file", "File"),
+    ("std::net", "Listener"),
+    ("std::net", "Connection"),
+];
+
+/// The external types `module`'s interface declares (§12.5.3), in
+/// `DefIndex` order, without std's handle types (runtime kinds 40 to 47,
+/// D-647, D-703, D-982), each with its name and type key (D-559): the
+/// `externals` table of the module's record (D-919, D-920).
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` is not `module`'s own view, or its interface is
+/// inconsistent.
+pub fn module_externals(module: ModuleId, defs: &Defs<'_>) -> Result<Vec<ExternalDesc>, Ice> {
+    let Some(own) = defs.own.filter(|own| own.module == module) else {
+        return Err(Ice::new("module externals need the module's own interface"));
+    };
+    let mut out = Vec::new();
+    for (index, item) in own.items.iter_enumerated() {
+        if !matches!(&item.sig, ItemSig::Type(t) if matches!(t.kind, TypeDefKind::External)) {
+            continue;
+        }
+        let def = DefId::new(module, index);
+        let path = defs.name(def)?;
+        if STD_HANDLE_TYPES.contains(&(&*path.module, &*path.item)) {
+            continue;
+        }
+        out.push(ExternalDesc {
+            def,
+            type_key: type_key(&path.module, &path.item),
+            name: path.item,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_support::lower_source;

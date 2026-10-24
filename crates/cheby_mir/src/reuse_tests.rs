@@ -33,6 +33,8 @@ fn span() -> Span {
 /// to `app::f3`; `app::f1` takes one value and is declared as a callee.
 fn module(functions: Vec<Function>) -> MirModule {
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(MODULE),
         path: "app".into(),
         functions,

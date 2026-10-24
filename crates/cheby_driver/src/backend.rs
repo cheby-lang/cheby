@@ -1,17 +1,27 @@
 //! MIR lowering, code generation, constant evaluation and running (G3,
 //! E6).
 //!
-//! A build lowers only what its roots need (D-510, D-534): the items
-//! reachable from the `main` being run, the selected tests, or every
-//! constant of the package for `cheby check`, across modules, with the
-//! constructor layouts of every module that reachable code uses and the
-//! `@std_hooks` functions of their types (D-482). Each such module is
-//! lowered to its own MIR unit, in build order with items in `DefIndex`
-//! order; the selected tests of a module form its tests unit, and the
-//! entry thunks, those of every reachable constant included, a separate
-//! unit (D-453). The JIT compiles all units in one batch, then evaluates
-//! the reachable constants in that JIT (D-535), so code that runs later
-//! reads their values from their slots.
+//! A build starts from its roots (D-510, D-534): the `main` being run, the
+//! selected tests, or every constant of the package for `cheby check`.
+//! Reach walks the modules' reference summaries ([`crate::load_set`],
+//! D-967) to the items the roots need, across modules, with the modules
+//! whose constructors reachable code uses and the `@std_hooks` functions
+//! of their types (D-482, D-585). Every module of the load set (D-922)
+//! is then lowered whole (D-966): every function and constant initializer
+//! into its code unit, in `DefIndex` order, and every test into its tests
+//! unit when one of them is selected (D-970); the entry thunks, of the
+//! selected tests and of every reachable constant, form a separate unit
+//! (D-453). Reach selects the constants that are evaluated and the native
+//! symbols E0053 covers (D-943); a symbol only unreached functions name
+//! binds to `cheby_rt_unresolved`. The JIT compiles all units in one
+//! batch, then evaluates the reachable constants in that JIT (D-535), so
+//! code that runs later reads their values from their slots.
+//!
+//! The dumps for goldens (`dump_mir`, `dump_clif`) keep D-510's view:
+//! they lower only the reachable items, found by `cheby_mir::reach`'s walk
+//! over THIR, with their borrow masks inferred over those units alone
+//! (GAP(golden-dumps-scope)); `CHEBY_DUMP_DIR` dumps what the build
+//! compiled.
 //!
 //! Lowering reports no diagnostics: every construct the front end accepts
 //! lowers (D-554), so E0038 remains only for imports of unshipped std
@@ -80,10 +90,38 @@ use rayon::prelude::*;
 
 use crate::Error;
 use crate::frontend::{Frontend, hidden_reads};
+use crate::load_set::{Start, Summaries};
 
 /// The environment variable naming the directory of the determinism dumps
 /// (plan §4.5).
 const DUMP_DIR_VAR: &str = "CHEBY_DUMP_DIR";
+
+/// What a build lowers (D-966, D-510).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// D-510's view: only the items the roots reach, found by walking
+    /// THIR, with their masks inferred over those units alone; the dumps
+    /// for goldens (GAP(golden-dumps-scope)).
+    Reached,
+    /// Whole modules (D-966): every module of the load set, found by
+    /// walking summaries (D-967, D-922), with all its items, and every
+    /// test of a module with a selected one (D-970).
+    Whole,
+}
+
+/// Whether `cheby run`, `cheby test`, `cheby build`, `cheby check` and the
+/// REPL's std lower whole modules (D-966, D-971): on since K4a's
+/// switch-over; off, they keep D-510's view, as the dumps for goldens do.
+const WHOLE_MODULES: bool = true;
+
+/// The scope of a build that is not a dump for goldens.
+pub(crate) const fn command_scope() -> Scope {
+    if WHOLE_MODULES {
+        Scope::Whole
+    } else {
+        Scope::Reached
+    }
+}
 
 /// What a build starts from.
 pub(crate) enum Roots<'a> {
@@ -216,16 +254,54 @@ fn build_dumping(
     dump: Option<&Path>,
     reuse_report: bool,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
+    // A CLIF dump for goldens keeps D-510's view (D-966).
+    let scope = if codegen.capture_clif {
+        Scope::Reached
+    } else {
+        command_scope()
+    };
+    build_scoped(
+        front,
+        sources,
+        roots,
+        codegen,
+        mir,
+        dump,
+        reuse_report,
+        scope,
+    )
+}
+
+/// [`build_dumping`] in `scope`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "build_dumping's arguments and the scope its tests choose"
+)]
+pub(crate) fn build_scoped(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    codegen: CodegenOptions,
+    mir: MirOptions,
+    dump: Option<&Path>,
+    reuse_report: bool,
+    scope: Scope,
+) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
     let capture_clif = codegen.capture_clif;
-    let lowered = lower(front, sources, roots, mir)?;
+    let mir = kind_options(roots, mir, scope);
+    let lowered = lower_scoped(front, sources, roots, mir, scope)?;
     if let Some(dir) = dump {
         write_mir_dumps(dir, &lowered.units)?;
     }
     let rc_ops = matches!(roots, Roots::AllFunctions).then(|| rc_ops(&lowered.units));
     let reuse_report = if reuse_report {
         let local: BTreeSet<ModuleId> = local_modules(front).into_iter().collect();
+        // The report reads the reachable functions, as before whole
+        // modules (D-717, D-966): a whole module's unreached ones run
+        // never.
+        let reached = reached_units(&lowered.units, &lowered);
         Some(crate::reuse_report::report(
-            &lowered.units,
+            &reached,
             &local,
             sources,
             &front.globals.names,
@@ -239,8 +315,19 @@ fn build_dumping(
         None
     };
     let check = matches!(roots, Roots::Constants);
+    // D-943: E0053 for the symbols reached functions name, decided here,
+    // before anything runs; the JIT binds the rest, which only unreached
+    // functions of whole modules name, to `cheby_rt_unresolved`.
+    if scope == Scope::Whole && !check {
+        let missing = missing_reached_symbols(&lowered);
+        if !missing.is_empty() {
+            let mut diagnostics = unresolved(front, &missing)?;
+            sources.sort(&mut diagnostics);
+            return Ok(Err(diagnostics));
+        }
+    }
     let options = JitOptions {
-        stub_unresolved: check,
+        stub_unresolved: check || scope == Scope::Whole,
         ..jit_options(capture_clif)
     };
     // The dump captures CLIF too; code generation is the same either way.
@@ -305,6 +392,23 @@ fn build_dumping(
         rc_ops,
         reuse_report,
     }))
+}
+
+/// The MIR options of a build's kind (D-971, D-978): `cheby check`
+/// (`Roots::Constants`) evaluates constants on `plain` code, so with whole
+/// modules it infers no masks; every other build keeps `mir`. Until std's
+/// code comes from the cache (K6), std's units of a check build are
+/// compiled without masks too, rather than with std's own
+/// (GAP(check-std-plain)).
+pub(crate) const fn kind_options(roots: &Roots<'_>, mir: MirOptions, scope: Scope) -> MirOptions {
+    if matches!(roots, Roots::Constants) && matches!(scope, Scope::Whole) {
+        MirOptions {
+            borrow: false,
+            ..mir
+        }
+    } else {
+        mir
+    }
 }
 
 /// D-759's RC operations of every function of `units`: `dup`, `drop` and
@@ -411,6 +515,94 @@ pub(crate) fn unresolved(front: &Frontend, symbols: &[String]) -> Result<Vec<Dia
         .collect()
 }
 
+/// The native symbols that the externals of reached functions name
+/// (D-943, D-510's set): what E0053 covers. These are the symbols the
+/// foreign calls of [`reached_units`] make, exactly what a build lowered
+/// before whole modules declared: a reached function's wrapper calls its
+/// symbol, while an intrinsic, whose body the compiler generates (D-693),
+/// and a function whose only external is for another target call none.
+/// Reached external types have no drop functions yet (N8b), so they add
+/// none.
+pub(crate) fn reached_symbols(lowered: &Lowered) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for unit in reached_units(&lowered.units, lowered) {
+        for function in &unit.functions {
+            for block in &function.blocks {
+                for stmt in &block.stmts {
+                    if let cheby_mir::Stmt::Assign {
+                        value: cheby_mir::Rvalue::CallForeign { symbol, .. },
+                        ..
+                    }
+                    | cheby_mir::Stmt::Eval(cheby_mir::Rvalue::CallForeign {
+                        symbol, ..
+                    }) = stmt
+                    {
+                        out.insert(symbol.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The symbols of [`reached_symbols`] that neither the runtime nor the
+/// process defines, sorted: what `cheby run` and `cheby test` report as
+/// E0053 (D-943, D-532), looked up as the JIT looks them up.
+fn missing_reached_symbols(lowered: &Lowered) -> Vec<String> {
+    let runtime = cheby_runtime::symbols();
+    reached_symbols(lowered)
+        .into_iter()
+        .filter(|symbol| {
+            !runtime.iter().any(|(name, _)| name == symbol) && !process_defines(symbol)
+        })
+        .collect()
+}
+
+/// Whether the process defines `symbol`, as the JIT's last lookup does
+/// (D-455).
+#[cfg(unix)]
+fn process_defines(symbol: &str) -> bool {
+    let Ok(name) = std::ffi::CString::new(symbol) else {
+        return false;
+    };
+    // SAFETY: `name` is a valid NUL-terminated string that outlives the
+    // call, and `RTLD_DEFAULT` is a valid handle; `dlsym` only reads.
+    let address = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+    !address.is_null()
+}
+
+/// Whether the process defines `symbol`: only the runtime's symbols are
+/// known off Unix, as in the JIT.
+#[cfg(not(unix))]
+fn process_defines(_symbol: &str) -> bool {
+    false
+}
+
+/// Copies of `units` with only the functions of reached items and of the
+/// selected tests, their closures and continuations included, and every
+/// other generated function: what a build lowered before whole modules
+/// (D-510), for `--reuse-report` (D-717).
+fn reached_units(units: &[MirModule], lowered: &Lowered) -> Vec<MirModule> {
+    let keep = |def: DefId| lowered.reach.contains(def) || lowered.selected.contains(&def);
+    units
+        .iter()
+        .map(|unit| {
+            let mut copy = unit.clone();
+            copy.functions.retain(|f| match f.key {
+                cheby_mir::FnKey::Item(def)
+                | cheby_mir::FnKey::ValueShim(def)
+                | cheby_mir::FnKey::ConstInit(def)
+                | cheby_mir::FnKey::Test(def)
+                | cheby_mir::FnKey::Closure { owner: def, .. }
+                | cheby_mir::FnKey::Continuation { owner: def, .. } => keep(def),
+                _ => true,
+            });
+            copy
+        })
+        .collect()
+}
+
 /// A JIT failure that is not about the program.
 fn jit_ice(e: JitError) -> Ice {
     match e {
@@ -434,6 +626,8 @@ pub(crate) struct Lowered {
         )
     )]
     pub reads: BTreeMap<ModuleId, UnitReads>,
+    /// The selected tests, whose entries run (D-970).
+    pub selected: BTreeSet<DefId>,
 }
 
 /// The hidden reads of one module's units in lowering and borrow
@@ -464,30 +658,51 @@ struct UnitLogs {
 /// validation: one per needed module in build order, then the entry unit,
 /// which also holds the thunks of the constants `main` reaches. A dump for
 /// goldens, so it lowers with the default MIR options, whatever the
-/// environment says (D-264).
+/// environment says (D-264), and keeps D-510's view: only the reachable
+/// items, with masks inferred over those units (GAP(golden-dumps-scope)).
 pub(crate) fn lower_program(
     front: &Frontend,
     sources: &SourceMap,
     main: &thir::FnDef,
 ) -> Result<Vec<MirModule>, Ice> {
-    Ok(lower(front, sources, &Roots::Main(main), MirOptions::default())?.units)
+    Ok(lower_scoped(
+        front,
+        sources,
+        &Roots::Main(main),
+        MirOptions::default(),
+        Scope::Reached,
+    )?
+    .units)
 }
 
-/// Lowers what `roots` reach, counting and checking each unit with the
-/// MIR options `mir`. Each unit of a module outside std reads other
-/// modules through a recording view, and [`Lowered::reads`] holds what
-/// it read beyond its imports and its front end's reads (D-955).
+/// Lowers what a command lowers from `roots` ([`command_scope`]), counting
+/// and checking each unit with the MIR options `mir`: [`lower_scoped`].
 pub(crate) fn lower(
     front: &Frontend,
     sources: &SourceMap,
     roots: &Roots<'_>,
     mir: MirOptions,
 ) -> Result<Lowered, Ice> {
-    let mut program = Program::new();
-    for &module in &front.order {
-        program.insert(module, &checked(front, module)?.thir);
-    }
+    lower_scoped(front, sources, roots, mir, command_scope())
+}
+
+/// Lowers what `roots` need in `scope`, counting and checking each unit
+/// with the MIR options `mir`: under [`Scope::Reached`] the reachable
+/// items of the modules that need a code unit and the selected tests;
+/// under [`Scope::Whole`] every item of every module of the load set and
+/// every test of a module with a selected one. Each unit of a module
+/// outside std reads other modules through a recording view, and
+/// [`Lowered::reads`] holds what it read beyond its imports and its front
+/// end's reads (D-955).
+pub(crate) fn lower_scoped(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+    scope: Scope,
+) -> Result<Lowered, Ice> {
     let local = local_modules(front);
+    let mut starts: Vec<Start<'_>> = Vec::new();
     let mut walk_roots: Vec<Root<'_>> = Vec::new();
     let mut entries: Vec<EntryRequest<'_>> = Vec::new();
     // The selected tests of each module, by module.
@@ -495,6 +710,7 @@ pub(crate) fn lower(
     match roots {
         Roots::Main(main) => {
             walk_roots.push(Root::Fn(main));
+            starts.push(Start::Main(main));
             entries.push(EntryRequest {
                 kind: EntryKind::Main(main.def),
                 info: main.entry.as_ref(),
@@ -503,6 +719,7 @@ pub(crate) fn lower(
         Roots::Tests(selected) => {
             for t in selected {
                 walk_roots.push(Root::Test(t.test));
+                starts.push(Start::Test(t.test));
                 entries.push(EntryRequest {
                     kind: EntryKind::Test(t.test.def),
                     info: Some(&t.test.entry),
@@ -512,17 +729,21 @@ pub(crate) fn lower(
         }
         Roots::Constants => {
             for &module in &local {
-                walk_roots.extend(checked(front, module)?.thir.consts.iter().map(Root::Const));
+                let consts = &checked(front, module)?.thir.consts;
+                walk_roots.extend(consts.iter().map(Root::Const));
+                starts.extend(consts.iter().map(|c| Start::Const(c.def)));
             }
         }
         Roots::AllFunctions => {
             for &module in &local {
-                walk_roots.extend(checked(front, module)?.thir.fns.iter().map(Root::Fn));
+                let fns = &checked(front, module)?.thir.fns;
+                walk_roots.extend(fns.iter().map(Root::Fn));
+                starts.extend(fns.iter().map(|f| Start::Fn(f.def)));
             }
         }
     }
-    let hooks = |module: ModuleId| hooks_of(front, module);
-    let reach = reachable_with_hooks(&program, &walk_roots, &hooks)?;
+    let selected: BTreeSet<DefId> = tests.values().flatten().map(|t| t.def).collect();
+    let (reach, code_modules) = reach_in(front, &walk_roots, &starts, &mut tests, scope)?;
     if !matches!(roots, Roots::AllFunctions) {
         for def in reach.constant_order() {
             entries.push(EntryRequest {
@@ -539,9 +760,11 @@ pub(crate) fn lower(
         .order
         .iter()
         .map(|&module| (module, tests.get(&module)))
-        .filter(|&(module, selected)| reach.needs_module(module) || selected.is_some())
+        .filter(|&(module, selected)| code_modules.contains(&module) || selected.is_some())
         .collect();
     let logs = read_logs(front, &jobs);
+    // D-510 lowers the reachable items of a module, D-966 all of them.
+    let wanted = |def: DefId| scope == Scope::Whole || reach.contains(def);
     // Only the package's own modules record their sites for the reuse
     // report (D-717); std and dependencies never do.
     let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
@@ -551,8 +774,9 @@ pub(crate) fn lower(
             lower_module(
                 front,
                 sources,
-                &reach,
+                &wanted,
                 module,
+                code_modules.contains(&module),
                 selected,
                 record_sites,
                 logs.get(&module),
@@ -580,12 +804,59 @@ pub(crate) fn lower(
     for result in counted {
         result?;
     }
-    let reads = unit_reads(front, &jobs, &reach, &logs)?;
+    let reads = unit_reads(front, &jobs, &code_modules, &logs)?;
     Ok(Lowered {
         units,
         reach,
         reads,
+        selected,
     })
+}
+
+/// What the roots reach in `scope`, and the modules that get a code unit:
+/// D-510's reachable modules over THIR (`walk_roots`), or the load set
+/// over summaries (`starts`, D-967, D-922), where every module with a
+/// selected test gets its whole tests unit: every test of it that exists
+/// on native replaces the selection in `tests` (D-970); the selection
+/// decides only which entries run. In the JIT, where a build's units share
+/// one `Decls`, `cb$test$<module>$<n>` then numbers all of a module's
+/// tests in source order, whatever the filter (GAP(tests-numbering)); a
+/// unit compiled alone still ranks the tests it imports among those it
+/// names, which K4c makes agree when it caches tests units.
+fn reach_in<'a>(
+    front: &'a Frontend,
+    walk_roots: &[Root<'_>],
+    starts: &[Start<'_>],
+    tests: &mut BTreeMap<ModuleId, Vec<&'a thir::TestDef>>,
+    scope: Scope,
+) -> Result<(Reach, BTreeSet<ModuleId>), Ice> {
+    match scope {
+        Scope::Reached => {
+            let mut program = Program::new();
+            for &module in &front.order {
+                program.insert(module, &checked(front, module)?.thir);
+            }
+            let hooks = |module: ModuleId| hooks_of(front, module);
+            let reach = reachable_with_hooks(&program, walk_roots, &hooks)?;
+            let modules: BTreeSet<ModuleId> = reach.modules().collect();
+            Ok((reach, modules))
+        }
+        Scope::Whole => {
+            let summaries = Summaries::new(front)?;
+            let reach = summaries.reach(starts)?;
+            let with_tests: BTreeSet<ModuleId> = tests.keys().copied().collect();
+            let modules = summaries.load_set(&reach, &with_tests)?;
+            for (&module, chosen) in tests.iter_mut() {
+                *chosen = checked(front, module)?
+                    .thir
+                    .tests
+                    .iter()
+                    .filter(|t| crate::test::on_native(front, t))
+                    .collect();
+            }
+            Ok((reach, modules.into_iter().collect()))
+        }
+    }
 }
 
 /// An empty read log per module of `jobs` outside std (D-955); std
@@ -611,7 +882,7 @@ fn read_logs(
 fn unit_reads(
     front: &Frontend,
     jobs: &[(ModuleId, Option<&Vec<&thir::TestDef>>)],
-    reach: &Reach,
+    code_modules: &BTreeSet<ModuleId>,
     logs: &BTreeMap<ModuleId, UnitLogs>,
 ) -> Result<BTreeMap<ModuleId, UnitReads>, Ice> {
     let mut reads = BTreeMap::new();
@@ -636,7 +907,7 @@ fn unit_reads(
         reads.insert(
             module,
             UnitReads {
-                code: reach.needs_module(module).then(|| hidden(&log.code)),
+                code: code_modules.contains(&module).then(|| hidden(&log.code)),
                 tests: selected.map(|_| hidden(&log.tests)),
             },
         );
@@ -682,6 +953,16 @@ fn infer_borrowing(
     applied.into_iter().collect()
 }
 
+/// [`infer_borrowing`] over `units` alone, recording no reads: the REPL's
+/// std units (D-971).
+///
+/// # Errors
+///
+/// An [`Ice`] if a unit's module was not checked.
+pub(crate) fn infer_units(front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice> {
+    infer_borrowing(front, units, &BTreeMap::new())
+}
+
 /// The masks [`borrow::infer`] gives `unit` if it is a code unit, read
 /// with its module's interfaces (D-246) and THIR, through a view that
 /// records into `log` when one is given (D-955).
@@ -714,17 +995,22 @@ fn view_of<'a>(front: &'a Frontend, deps: &'a [ModuleId], log: Option<&'a ReadLo
 /// checked; `None` where the build needs no such unit.
 type ModuleUnits = [Option<Result<MirModule, Ice>>; 2];
 
-/// Lowers `module`: its items that `reach` contains into its code unit,
-/// and its `selected` tests into its tests unit, each checked as lowered
-/// ([`check_lowered`]); counting waits for the whole build (D-779). With
-/// `record_sites`, both units record the sites of `--reuse-report`
-/// (D-717). With `logs`, each unit reads other modules through a view
-/// that records into its own log (D-955).
+/// Lowers `module`: if `code`, its items that `wanted` selects into its
+/// code unit, and its `selected` tests into its tests unit, each checked
+/// as lowered ([`check_lowered`]); counting waits for the whole build
+/// (D-779). With `record_sites`, both units record the sites of
+/// `--reuse-report` (D-717). With `logs`, each unit reads other modules
+/// through a view that records into its own log (D-955).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one module's job of `lower_scoped`, called in one place"
+)]
 fn lower_module(
     front: &Frontend,
     sources: &SourceMap,
-    reach: &Reach,
+    wanted: &(dyn Fn(DefId) -> bool + Sync),
     module: ModuleId,
+    code: bool,
     selected: Option<&Vec<&thir::TestDef>>,
     record_sites: bool,
     logs: Option<&UnitLogs>,
@@ -753,17 +1039,18 @@ fn lower_module(
             Ok(unit)
         })
     };
-    let code = reach.needs_module(module).then(|| {
+    let code = code.then(|| {
         counted(lower_items_recording(
             &checked.thir,
-            &|def| reach.contains(def),
+            wanted,
             &cx,
             record_sites,
         ))
     });
     let tests = selected.map(|selected| {
-        // Only the selected tests: the others may reach items this build
-        // does not lower.
+        // Only the tests given: the selected ones under D-510, whose
+        // others may reach items this build does not lower, or every test
+        // on native of a whole tests unit (D-970).
         let only = thir::Module {
             module,
             fns: Vec::new(),
@@ -857,7 +1144,7 @@ fn own_defs<'a>(
 /// The `@std_hooks` functions of every type `module` declares (D-482),
 /// read from its interface: a module's code unit registers the layouts of
 /// all its types, so their hooks must be compiled too.
-fn hooks_of(front: &Frontend, module: ModuleId) -> Result<Vec<DefId>, Ice> {
+pub(crate) fn hooks_of(front: &Frontend, module: ModuleId) -> Result<Vec<DefId>, Ice> {
     let none = DepView::new(&front.set, &[]);
     let defs = own_defs(front, module, &none)?;
     let Some(own) = defs.own else {

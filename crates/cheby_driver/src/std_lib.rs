@@ -109,6 +109,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/multimap.cheby"),
     },
     StdModule {
+        path: "net",
+        source: include_str!("../../../std/net.cheby"),
+    },
+    StdModule {
         path: "nil",
         source: include_str!("../../../std/nil.cheby"),
     },
@@ -173,6 +177,14 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/string.cheby"),
     },
     StdModule {
+        path: "time",
+        source: include_str!("../../../std/time.cheby"),
+    },
+    StdModule {
+        path: "time::instant",
+        source: include_str!("../../../std/time/instant.cheby"),
+    },
+    StdModule {
         path: "u16",
         source: include_str!("../../../std/u16.cheby"),
     },
@@ -200,16 +212,7 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Modules the standard-library spec plans that `std/` does not ship yet:
 /// the rest of tier 2 and tier 3 (`docs/plan/stdlib.md`). Importing one is
 /// E0038, not E0039 (D-451). Sorted.
-pub const PLANNED_STD_MODULES: &[&str] = &[
-    "context",
-    "file",
-    "http",
-    "net",
-    "process",
-    "time",
-    "time::instant",
-    "url",
-];
+pub const PLANNED_STD_MODULES: &[&str] = &["context", "file", "http", "process", "url"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -334,6 +337,12 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     // `channel::receive_now` (D-1099).
     ("fiber", "a loop that yields lets other fibers run", "M4"),
     ("fiber", "a cancellation is delivered at yield_now", "M4"),
+    // The clocks in context of `std::time` (`Clock`, the key `time::clock`,
+    // `fixed_clock` and `custom_clock`) need `std::context`, M4's
+    // workstream 4.6 (D-1047, D-1049).
+    ("time", "a fixed clock fixes now", "M4"),
+    ("time", "a clock in context does not change sleep", "M4"),
+    ("time", "a custom clock calls its functions", "M4"),
 ];
 
 include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
@@ -576,7 +585,9 @@ mod tests {
     /// takes a `Duration` (D-645, D-646), and with timers and selectors
     /// `std::selector`, `std::random` and `std::runtime` (D-653, D-657,
     /// D-673). The rest of tier 2 stays planned, and `std::http` is the
-    /// unshipped module of the probes (D-729).
+    /// unshipped module of the probes (D-729). M3 ships `std::time` and its
+    /// submodule `std::time::instant` (D-985, D-1057), and `std::net`
+    /// (D-998), so they are no longer planned.
     #[test]
     fn m2_tier2_modules_ship() {
         // The modules of timers and selectors first, then the first slice's.
@@ -586,9 +597,17 @@ mod tests {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
         }
-        for path in ["file", "http", "net", "process", "time"] {
+        for path in ["file", "http", "process"] {
             assert!(is_planned(path), "std::{path} is not planned");
             assert!(find(path).is_none(), "std::{path} is shipped");
+        }
+        // D-998, D-985: `std::net` ships in M3.
+        assert!(find("net").is_some(), "std::net is not shipped");
+        assert!(!is_planned("net"), "std::net is still planned");
+        // D-1057, D-985: `std::time` and `std::time::instant` ship in M3.
+        for path in ["time", "time::instant"] {
+            assert!(find(path).is_some(), "std::{path} is not shipped");
+            assert!(!is_planned(path), "std::{path} is still planned");
         }
     }
 

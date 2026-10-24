@@ -12,32 +12,48 @@
 //!   machine code and relocations, each naming its target by symbol index;
 //! - each data object defined, in definition order: its symbol,
 //!   alignment, bytes or zero-filled size, and its pointer-sized absolute
-//!   relocations.
+//!   relocations;
+//! - the unit's source positions (D-938, D-914): the unit's source path
+//!   once, D-421's diagnostic path (`src/main.cheby`, `std/io.cheby`),
+//!   and each function's rows ([`crate::SourceRow`]), from which
+//!   `cheby_link` writes DWARF line tables when it replays the record
+//!   (D-915). Both are empty with positions off (`CHEBY_POSITIONS=off`,
+//!   GAP(positions-switch)).
 //!
 //! Nothing in a record is an address, an absolute path, a hash-map order
 //! or an id other than a declaration index, so its bytes follow from the
-//! order in which code generation declares and defines (D-264).
+//! order in which code generation declares and defines (D-264); a unit
+//! compiled from two package paths gives one record.
 //!
 //! # Encoding
 //!
 //! [`CodeRecord::encode`] writes, little-endian, with no padding:
 //!
-//! | Field     | Encoding                                                                                   |
-//! | --------- | ------------------------------------------------------------------------------------------ |
-//! | magic     | the 4 bytes `cbcr`                                                                         |
-//! | version   | `u32`, [`RECORD_VERSION`]                                                                  |
-//! | symbols   | `u32` count, then each: kind `u8`, linkage `u8`, name (`u32` length, UTF-8 bytes)          |
-//! | functions | `u32` count, then each: symbol `u32`, align `u64`, code (`u32` length, bytes), relocations |
-//! | data      | `u32` count, then each: symbol `u32`, align `u64` (0: none), contents, relocations         |
+//! | Field     | Encoding                                                                                              |
+//! | --------- | ----------------------------------------------------------------------------------------------------- |
+//! | magic     | the 4 bytes `cbcr`                                                                                    |
+//! | version   | `u32`, [`RECORD_VERSION`]                                                                             |
+//! | source    | 0 for none, or 1 then the path (`u32` length, UTF-8 bytes)                                            |
+//! | symbols   | `u32` count, then each: kind `u8`, linkage `u8`, name (`u32` length, UTF-8 bytes)                     |
+//! | functions | `u32` count, then each: symbol `u32`, align `u64`, code (`u32` length, bytes), relocations, positions |
+//! | data      | `u32` count, then each: symbol `u32`, align `u64` (0: none), contents, relocations                    |
 //!
 //! A symbol's kind is 0 for a function, 1 for read-only data and 2 for
 //! writable data; its linkage 0 `Local`, 1 `Hidden`, 2 `Import`, 3
 //! `Export`. A function's relocations are a `u32` count, then each:
 //! offset `u32`, kind `u8` ([`RECORD_RELOCS`]), symbol `u32`, addend
-//! `i64`. A data object's contents are 0 then its bytes (`u32` length,
-//! bytes), or 1 then the zero-filled size (`u64`); its relocations are a
-//! `u32` count, then each: offset `u32`, symbol `u32`, addend `i64`, every
-//! one an absolute pointer-sized word. Nothing follows the data.
+//! `i64`. Its positions are a `u32` count of rows, then each row as three
+//! unsigned LEB128 numbers, relative to the row before (the first to
+//! offset 0, line 1, column 1): the offset's increase (at least 1 after
+//! the first row), the line's change zigzag-encoded (`2n` for an increase
+//! of `n`, `2n - 1` for a decrease of `n`), and the column itself. A data
+//! object's contents are 0 then its bytes (`u32` length, bytes), or 1
+//! then the zero-filled size (`u64`); its relocations are a `u32` count,
+//! then each: offset `u32`, symbol `u32`, addend `i64`, every one an
+//! absolute pointer-sized word. Nothing follows the data.
+//!
+//! Version 2 (D-938) added the source and the positions; version 1, which
+//! had neither, is refused like every other ([`RecordError::Version`]).
 //!
 //! [`CodeRecord::decode`] reads exactly this form and never panics
 //! (D-422): every length and count is checked against the bytes that
@@ -56,11 +72,11 @@ use cranelift_module::{
     ModuleReloc, ModuleRelocTarget, ModuleResult,
 };
 
-use crate::CodegenError;
+use crate::{CodegenError, SourceRow};
 
 /// The version of [`CodeRecord`]'s encoding. A record of another version
-/// is refused, never read.
-pub const RECORD_VERSION: u32 = 1;
+/// is refused, never read. Version 2 holds the source positions of D-938.
+pub const RECORD_VERSION: u32 = 2;
 
 /// The first bytes of an encoded record.
 const MAGIC: [u8; 4] = *b"cbcr";
@@ -220,6 +236,11 @@ pub struct RecordFunction {
     pub bytes: Vec<u8>,
     /// Its relocations, in the order code generation gave them.
     pub relocs: Vec<RecordReloc>,
+    /// Its source rows (D-938), sorted by strictly increasing offset, each
+    /// inside the code, lines and columns from 1, in the record's
+    /// [`CodeRecord::source`]; empty with positions off and for code
+    /// without positions.
+    pub positions: Vec<SourceRow>,
 }
 
 /// A data object's contents.
@@ -282,6 +303,11 @@ pub struct CodeRecord {
     pub functions: Vec<RecordFunction>,
     /// The data objects defined, in definition order.
     pub data: Vec<RecordData>,
+    /// The unit's source path, D-421's diagnostic path (`src/main.cheby`,
+    /// `std/io.cheby`), relative and `/`-separated, never absolute
+    /// (D-938); `None` with positions off and for units without source
+    /// (the entries unit). A record whose functions have rows names one.
+    pub source: Option<String>,
 }
 
 /// Why a record could not be made, read or replayed.
@@ -343,6 +369,8 @@ pub struct RecordingModule {
     /// The first request a record cannot hold; [`RecordingModule::finish`]
     /// returns it.
     failed: Option<String>,
+    /// The record's [`CodeRecord::source`].
+    source: Option<String>,
 }
 
 impl fmt::Debug for RecordingModule {
@@ -370,7 +398,38 @@ impl RecordingModule {
             functions: Vec::new(),
             data: Vec::new(),
             failed: None,
+            source: None,
         }
+    }
+
+    /// Names the unit's source file (D-421's diagnostic path) in the
+    /// record ([`CodeRecord::source`]).
+    pub fn set_source(&mut self, source: Option<&str>) {
+        self.source = source.map(str::to_owned);
+    }
+
+    /// Gives the function `func`, defined already, its source rows
+    /// (D-938), as [`crate::DefinedCode::positions`] holds them.
+    ///
+    /// # Errors
+    ///
+    /// [`RecordError::Malformed`] if `func` is not a function the record
+    /// defines.
+    pub fn set_positions(&mut self, func: FuncId, rows: Vec<SourceRow>) -> Result<(), RecordError> {
+        let symbol = usize::try_from(func.as_u32())
+            .ok()
+            .and_then(|i| self.funcs.get(i))
+            .copied()
+            .ok_or(RecordError::Malformed(
+                "positions of an undeclared function",
+            ))?;
+        let function = self
+            .functions
+            .iter_mut()
+            .find(|f| f.symbol == symbol)
+            .ok_or(RecordError::Malformed("positions of an undefined function"))?;
+        function.positions = rows;
+        Ok(())
     }
 
     /// The record, symbols in declaration order.
@@ -389,6 +448,7 @@ impl RecordingModule {
             symbols: self.symbols,
             functions: self.functions,
             data: self.data,
+            source: self.source,
         };
         record.check()?;
         Ok(record)
@@ -635,6 +695,7 @@ impl Module for RecordingModule {
             align: alignment,
             bytes: bytes.to_vec(),
             relocs: recorded,
+            positions: Vec::new(),
         });
         Ok(())
     }
@@ -737,7 +798,23 @@ pub fn record_unit(
     };
     let mut module = RecordingModule::new(isa);
     let code = crate::compile_unit(&mut module, unit, ucx, opts)?;
-    crate::modrec::define(&mut module, &name, &code.defined, &code.types)?;
+    crate::modrec::define_unit(&mut module, &name, &code)?;
+    // D-938: the rows of each function, and the unit's file once, when it
+    // has any. A unit whose file has no diagnostic path (D-421; a file
+    // outside the package would show an absolute one) keeps no rows, so no
+    // absolute path reaches a record.
+    if let Some(source) = unit.source.as_deref().filter(|s| is_diagnostic_path(s)) {
+        let mut any = false;
+        for defined in &code.defined {
+            if !defined.positions.is_empty() {
+                any = true;
+                module.set_positions(defined.id, defined.positions.clone())?;
+            }
+        }
+        if any {
+            module.set_source(Some(source));
+        }
+    }
     module.finish()
 }
 
@@ -881,6 +958,43 @@ impl CodeRecord {
                 return Err(RecordError::Undefined(symbol.name.clone()));
             }
         }
+        self.check_positions()
+    }
+
+    /// Checks the positions (D-938): the source, when named, is a
+    /// relative `/`-separated path (D-421), never absolute; a record whose
+    /// functions have rows names one; and each function's rows have
+    /// strictly increasing offsets inside its code, and lines and columns
+    /// from 1.
+    fn check_positions(&self) -> Result<(), RecordError> {
+        if let Some(source) = &self.source
+            && !is_diagnostic_path(source)
+        {
+            return Err(RecordError::Malformed(
+                "a source that is not a relative diagnostic path",
+            ));
+        }
+        for function in &self.functions {
+            if function.positions.is_empty() {
+                continue;
+            }
+            if self.source.is_none() {
+                return Err(RecordError::Malformed("positions without a source"));
+            }
+            let len = u64::try_from(function.bytes.len()).unwrap_or(u64::MAX);
+            let mut last: Option<u32> = None;
+            for row in &function.positions {
+                if last.is_some_and(|l| row.offset <= l) || u64::from(row.offset) >= len {
+                    return Err(RecordError::Malformed(
+                        "a source row out of order or outside its function",
+                    ));
+                }
+                if row.line == 0 || row.column == 0 {
+                    return Err(RecordError::Malformed("a source row at line or column 0"));
+                }
+                last = Some(row.offset);
+            }
+        }
         Ok(())
     }
 
@@ -897,6 +1011,13 @@ impl CodeRecord {
         let mut out = Writer(Vec::new());
         out.bytes(&MAGIC);
         out.u32(RECORD_VERSION);
+        match &self.source {
+            None => out.u8(0),
+            Some(source) => {
+                out.u8(1);
+                out.blob(source.as_bytes());
+            }
+        }
         out.count(self.symbols.len());
         for symbol in &self.symbols {
             out.u8(symbol.kind.code());
@@ -915,6 +1036,7 @@ impl CodeRecord {
                 out.u32(reloc.symbol);
                 out.i64(reloc.addend);
             }
+            out.rows(&function.positions);
         }
         out.count(self.data.len());
         for object in &self.data {
@@ -956,6 +1078,15 @@ impl CodeRecord {
         if version != RECORD_VERSION {
             return Err(RecordError::Version(version));
         }
+        let source = match input.u8()? {
+            0 => None,
+            1 => Some(
+                std::str::from_utf8(input.blob()?)
+                    .map_err(|_| RecordError::Malformed("a source that is not UTF-8"))?
+                    .to_owned(),
+            ),
+            _ => return Err(RecordError::Malformed("an unknown kind of source")),
+        };
         let mut symbols = Vec::new();
         for _ in 0..input.u32()? {
             let kind = SymbolKind::from_code(input.u8()?)
@@ -988,11 +1119,13 @@ impl CodeRecord {
                     addend: input.i64()?,
                 });
             }
+            let positions = input.rows()?;
             functions.push(RecordFunction {
                 symbol,
                 align,
                 bytes: code,
                 relocs,
+                positions,
             });
         }
         let mut data = Vec::new();
@@ -1029,10 +1162,34 @@ impl CodeRecord {
             symbols,
             functions,
             data,
+            source,
         };
         record.check()?;
         Ok(record)
     }
+}
+
+/// Whether `path` is a diagnostic path a record may name (D-421, D-938):
+/// relative, `/`-separated, without empty, `.` or `..` components, a NUL
+/// or a backslash, and with no drive or root, so no absolute path of the
+/// machine that compiled it reaches a record or a line table.
+#[must_use]
+pub fn is_diagnostic_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains(['\0', '\\', ':'])
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+/// `n` zigzag-encoded: `2n` for `n >= 0`, `-2n - 1` otherwise.
+const fn zigzag(n: i64) -> u64 {
+    ((n << 1) ^ (n >> 63)).cast_unsigned()
+}
+
+/// The number [`zigzag`] encoded as `z`.
+const fn unzigzag(z: u64) -> i64 {
+    (z >> 1).cast_signed() ^ 0_i64.wrapping_sub((z & 1).cast_signed())
 }
 
 /// The encoder's output.
@@ -1070,6 +1227,32 @@ impl Writer {
     fn blob(&mut self, bytes: &[u8]) {
         self.count(bytes.len());
         self.bytes(bytes);
+    }
+
+    /// A function's source rows (module documentation): the count, then
+    /// each row relative to the one before.
+    fn rows(&mut self, rows: &[SourceRow]) {
+        self.count(rows.len());
+        let (mut offset, mut line) = (0_u32, 1_u32);
+        for row in rows {
+            self.uleb(u64::from(row.offset.wrapping_sub(offset)));
+            self.uleb(zigzag(i64::from(row.line).wrapping_sub(i64::from(line))));
+            self.uleb(u64::from(row.column));
+            (offset, line) = (row.offset, row.line);
+        }
+    }
+
+    /// `value` as unsigned LEB128, in its shortest form.
+    fn uleb(&mut self, mut value: u64) {
+        loop {
+            let low = u8::try_from(value & 0x7f).unwrap_or(0);
+            value >>= 7;
+            if value == 0 {
+                self.u8(low);
+                return;
+            }
+            self.u8(low | 0x80);
+        }
     }
 }
 
@@ -1114,5 +1297,55 @@ impl<'a> Reader<'a> {
         let len = usize::try_from(self.u32()?)
             .map_err(|_| RecordError::Malformed("a length out of range"))?;
         self.take(len)
+    }
+
+    /// A function's source rows, as [`Writer::rows`] writes them; a row
+    /// out of range is malformed ([`CodeRecord::check`] checks the rest).
+    fn rows(&mut self) -> Result<Vec<SourceRow>, RecordError> {
+        let mut rows = Vec::new();
+        let (mut offset, mut line) = (0_u32, 1_u32);
+        for _ in 0..self.u32()? {
+            let too_large = || RecordError::Malformed("a source row out of range");
+            offset = u32::try_from(self.uleb()?)
+                .ok()
+                .and_then(|step| offset.checked_add(step))
+                .ok_or_else(too_large)?;
+            line = i64::from(line)
+                .checked_add(unzigzag(self.uleb()?))
+                .and_then(|l| u32::try_from(l).ok())
+                .ok_or_else(too_large)?;
+            let column = u32::try_from(self.uleb()?).map_err(|_| too_large())?;
+            rows.push(SourceRow {
+                offset,
+                line,
+                column,
+            });
+        }
+        Ok(rows)
+    }
+
+    /// An unsigned LEB128 number in its shortest form (what
+    /// [`Writer::uleb`] writes), so that a record re-encodes to its bytes;
+    /// a longer form or one beyond 64 bits is malformed.
+    fn uleb(&mut self) -> Result<u64, RecordError> {
+        let bad = RecordError::Malformed("a number not in its shortest LEB128 form");
+        let mut value = 0_u64;
+        for shift in (0_u32..64).step_by(7) {
+            let byte = self.u8()?;
+            let low = u64::from(byte & 0x7f);
+            if shift == 63 && low > 1 {
+                return Err(bad);
+            }
+            value |= low << shift;
+            if byte & 0x80 == 0 {
+                // A last byte of 0 after another is a longer form.
+                return if byte == 0 && shift > 0 {
+                    Err(bad)
+                } else {
+                    Ok(value)
+                };
+            }
+        }
+        Err(bad)
     }
 }

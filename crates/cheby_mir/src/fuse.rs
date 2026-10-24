@@ -58,6 +58,7 @@ use crate::ir::{
     BlockId, Function, LayoutRef, Local, MirModule, Operand, Rvalue, Stmt, Terminator, UseKind,
 };
 use crate::liveness::is_borrowed_local;
+use crate::positions::StmtsOut;
 use crate::repr::Repr;
 use crate::validate::dom::Dominance;
 
@@ -344,22 +345,26 @@ fn sink(f: &mut Function, facts: &Facts, cap: usize) -> Result<(), Ice> {
         let mut here = inserted.remove(&id).unwrap_or_default();
         // Stable: dups for one position keep the order of the moves.
         here.sort_by_key(|&(before, _)| before);
+        // A moved `dup` takes the position of the statement it now
+        // precedes, or the terminator's (D-938).
+        let term = block.term_pos();
         let old = std::mem::take(&mut block.stmts);
-        let mut stmts = Vec::with_capacity(old.len().saturating_add(here.len()));
+        let mut stmts = StmtsOut::new(block.has_positions(), old.len().saturating_add(here.len()));
         let mut next = here.iter().peekable();
         for (i, stmt) in old.into_iter().enumerate() {
+            let at = block.pos_at(i);
             while let Some(&&(_, p)) = next.peek().filter(|&&&(before, _)| before == i) {
-                stmts.push(Stmt::Dup(p));
+                stmts.push(Stmt::Dup(p), at);
                 next.next();
             }
             if !removed.contains(&(id, i)) {
-                stmts.push(stmt);
+                stmts.push(stmt, at);
             }
         }
         for &(_, p) in next {
-            stmts.push(Stmt::Dup(p));
+            stmts.push(Stmt::Dup(p), term);
         }
-        block.stmts = stmts;
+        block.set_stmts(stmts.finish(term));
     }
     Ok(())
 }
@@ -572,8 +577,8 @@ fn cancel(f: &mut Function, facts: &Facts) {
                 }
             }
             if let Some(k) = pair {
-                block.stmts.remove(k);
-                block.stmts.remove(i);
+                block.remove_stmt(k);
+                block.remove_stmt(i);
             } else {
                 i = i.saturating_add(1);
             }
@@ -686,7 +691,7 @@ fn keep(module: &MirModule, function: &mut Function, facts: &Facts) -> Result<()
             let mut dups: Vec<usize> = picked.iter().map(|&(k, _, _)| k).collect();
             dups.sort_unstable();
             for k in dups.into_iter().rev() {
-                block.stmts.remove(k);
+                block.remove_stmt(k);
                 at = at.saturating_sub(1);
             }
             at = at.saturating_add(1);

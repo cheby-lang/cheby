@@ -44,7 +44,8 @@ use crate::reuse::{
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
 use crate::{
-    bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, random, runtime_info, text,
+    bytes, consteval, desc, env, fiber_ops, hamt, io, list, net, num, random, runtime_info, text,
+    time,
 };
 
 /// The address of a static object.
@@ -153,6 +154,8 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     fiber_ops::kernels(&mut out);
     random::kernels(&mut out);
     runtime_info::kernels(&mut out);
+    time::kernels(&mut out);
+    net::kernels(&mut out);
     out
 }
 
@@ -172,6 +175,8 @@ pub fn complete_modules() -> Vec<&'static str> {
         fiber_ops::COMPLETE,
         random::COMPLETE,
         runtime_info::COMPLETE,
+        time::COMPLETE,
+        net::COMPLETE,
     ]
     .concat()
 }
@@ -369,6 +374,7 @@ mod tests {
         let line = line.trim();
         let rest = line
             .strip_prefix("pub fn ")
+            .or_else(|| line.strip_prefix("priv fn "))
             .or_else(|| line.strip_prefix("fn "))?;
         let (_, rest) = rest.split_once('(')?;
         let mut depth = 0_u32;
@@ -482,7 +488,10 @@ mod tests {
                     pending = Some(symbol);
                     continue;
                 }
-                if !trimmed.starts_with("fn ") && !trimmed.starts_with("pub fn ") {
+                if !["fn ", "pub fn ", "priv fn "]
+                    .iter()
+                    .any(|start| trimmed.starts_with(start))
+                {
                     continue;
                 }
             }
@@ -584,6 +593,30 @@ mod tests {
         assert_eq!(registered_context.len(), 8 + 5 + 2);
     }
 
+    /// Every kernel of `std::net` has the C signature of its `@external`
+    /// declaration in `std/net.cheby`, after the context pointer, and every
+    /// one is `@std_context` (D-985, D-692): ten, the package-visible
+    /// `sys_connect_tls` among them.
+    #[test]
+    fn net_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("net.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            assert!(context, "{symbol} is not `@std_context`");
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> = net::signatures()
+            .into_iter()
+            .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+            .collect();
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 10);
+    }
+
     #[test]
     fn signatures_are_read_from_declarations() {
         assert_eq!(
@@ -597,6 +630,10 @@ mod tests {
         assert_eq!(
             c_signature("pub fn print(text: String)"),
             Some((vec!["Word"], "()"))
+        );
+        assert_eq!(
+            c_signature("priv fn sys_local_port(listener: Listener) -> Int"),
+            Some((vec!["Word"], "i64"))
         );
         assert_eq!(c_signature("pub type Error {"), None);
     }

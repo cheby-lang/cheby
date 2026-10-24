@@ -26,10 +26,14 @@ const WORD_BYTES: u32 = 8;
 ///   (D-043); the REPL repoints it later.
 /// - A layout word `cb$layout$…` holds the header allocation copies:
 ///   count 1, the scan count (escaped above 254 value fields, D-279), and
-///   the runtime layout id registered for the constructor (D-454). A nullary constructor's static `cb$ctor$…` is a
-///   header with count 0. Only these objects hold user layout ids; code
-///   loads them. In a unit alone ([`crate::compile_unit`]) both hold 0
-///   where the id goes, which an executable's start fills (D-920).
+///   the runtime layout id of the constructor (D-454). A nullary
+///   constructor's static `cb$ctor$…` is a header with count 0. Only
+///   these objects hold user layout ids; code loads them. Both are
+///   defined with 0 where the id goes, in a unit alone
+///   ([`crate::compile_unit`]) and in the JIT alike, and both are
+///   writable: the one registration routine writes their headers when it
+///   registers the unit's module record, before any code that uses them
+///   runs (D-919, D-920, GAP(jit-record-registration)).
 /// - A constant slot `cb$const$…` is a writable word, 0 until the
 ///   constant is evaluated (E6).
 /// - A static object (D-523) is a header with count 0, then its fields:
@@ -38,7 +42,7 @@ const WORD_BYTES: u32 = 8;
 pub(crate) fn define_pending<M: Module>(
     module: &mut M,
     decls: &mut Decls,
-    cx: &CodegenCx<'_>,
+    _cx: &CodegenCx<'_>,
 ) -> Result<(), CodegenError> {
     check_pending(decls)?;
     for (id, target) in std::mem::take(&mut decls.pending_imports) {
@@ -77,12 +81,11 @@ pub(crate) fn define_pending<M: Module>(
             .define_data(id, &desc)
             .map_err(|e| CodegenError::module(&e))?;
     }
-    let alone = decls.is_alone();
-    for (layout, decl, value_fields) in std::mem::take(&mut decls.pending_layouts) {
-        // D-920: in a unit alone the layout id is 0, and no id is looked
-        // up: an executable's start registers the layout and writes the
-        // whole header, so the unit's bytes depend on no layout id.
-        let id = if alone { 0 } else { cx.layouts.id(&layout)? };
+    for (_, decl, value_fields) in std::mem::take(&mut decls.pending_layouts) {
+        // D-920: the layout id is 0, and no id is looked up: registration
+        // assigns it and writes the whole header (D-919), so the bytes
+        // depend on no layout id.
+        let id = 0;
         let word = ctor_header(abi::RC_UNIQUE, u64::from(value_fields), id);
         define_words(module, decl.word, &[word])?;
         if let Some(ctor) = decl.ctor {

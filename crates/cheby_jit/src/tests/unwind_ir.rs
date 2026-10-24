@@ -91,6 +91,7 @@ fn lowered_edges_lead_to_untaken_pads() {
         &[Repr::Value, Repr::Value],
         vec![
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     assign(

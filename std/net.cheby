@@ -1,0 +1,426 @@
+//! TCP connections: listening, accepting, connecting, and reading and
+//! writing bytes (D-998, D-999, D-1062, D-1063).
+//!
+//! `Listener` and `Connection` are handles: external types whose drop
+//! functions the runtime supplies, runtime kinds 46 and 47 (D-647, D-703,
+//! D-982). A socket closes at `close` or `close_listener`, which wake the
+//! fibers waiting on it, or else after the last use of its last reference.
+//!
+//! Every public function is written in Cheby over a private kernel that
+//! receives the running fiber's context (D-692, D-985). On native targets
+//! a fiber that waits to accept, connect, read or write is suspended on
+//! the runtime's event poller, and a cancellation interrupts the wait;
+//! looking up a host name runs on the blocking pool, and a cancellation
+//! abandons it (D-983, D-984, D-1000, D-1065). Failures are `io::Error`s,
+//! built by `std::io` from the kernels' kind codes (D-484, D-981). Each
+//! kernel also declares its JS binding, with `@async` where the host's API
+//! returns a `Promise` (D-986).
+//!
+//! The tests talk to themselves over the loopback address, with ports the
+//! operating system chooses, and their servers run in detached fibers
+//! that `cheby test` tears down when the test ends (D-723, D-990).
+
+import std::bytes
+import std::duration
+import std::fiber
+import std::io
+import std::time
+
+// Handles
+
+/// A socket that listens for TCP connections. It prints as `<Listener>`,
+/// and `==` and hashing panic when they reach one (D-233, D-982).
+pub type Listener
+
+/// A TCP connection. It prints as `<Connection>`, and `==` and hashing
+/// panic when they reach one (D-233, D-982).
+pub type Connection
+
+// Listening
+
+/// Starts listening for TCP connections on `host` and `port`. A name is
+/// resolved, and the first address it gives is used. A `port` of 0 lets
+/// the operating system choose a free port (D-998).
+pub fn listen(host: String, port: Int) -> Result<Listener, io::Error> {
+  io::lift(sys_listen(host, port))
+}
+
+test "listen rejects a port out of range" {
+  let assert Err(reason) = listen("127.0.0.1", 70_000)
+  assert io::is_invalid_input(reason)
+  let assert Err(negative) = listen("127.0.0.1", -1)
+  assert io::is_invalid_input(negative)
+}
+
+test "a listener on port 0 gets a port of its own" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let port = local_port(listener)
+  assert port > 0 && port <= 65_535
+  assert "{listener:?}" == "<Listener>"
+}
+
+test "listen rejects an empty host and a host with U+0000" {
+  let assert Err(empty) = listen("", 0)
+  assert io::is_invalid_input(empty)
+  let assert Err(nul) = listen("127.0.0.1\u{0}", 0)
+  assert io::is_invalid_input(nul)
+}
+
+test "a port that another socket listens on is in use" {
+  let assert Ok(first) = listen("127.0.0.1", 0)
+  let assert Err(reason) = listen("127.0.0.1", local_port(first))
+  assert io::is_address_in_use(reason)
+  assert "{reason}" == "address in use"
+  // The first listener is used to the end, so it listens until here.
+  let assert Ok(Nil) = close_listener(first)
+}
+
+/// Returns the port `listener` listens on: after `listen` with port 0, the
+/// one the operating system chose.
+pub fn local_port(listener: Listener) -> Int {
+  sys_local_port(listener)
+}
+
+/// Waits for the next connection to `listener` and returns it, with
+/// Nagle's algorithm off. Several fibers may wait on one listener, and
+/// each connection goes to exactly one of them. A cancelled `accept` has
+/// taken no connection (D-1000, D-1001, D-1002).
+pub fn accept(listener: Listener) -> Result<Connection, io::Error> {
+  // No call may follow the kernel on success: a call's entry check would
+  // deliver a pending cancellation and drop the connection just taken.
+  case sys_accept(listener) {
+    Ok(connection) => Ok(connection)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "a cancelled accept takes no connection" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let port = local_port(listener)
+  // The dialer keeps every connection open until the test ends, and its
+  // connections arrive while the server's accepts keep timing out.
+  fiber::spawn_detached(fn() {
+    fn dial(left: Int) -> Nil {
+      case left {
+        0 => time::sleep(duration::seconds(60))
+        _ => {
+          let assert Ok(connection) = connect("127.0.0.1", port)
+          time::sleep(duration::microseconds(200))
+          dial(left - 1)
+          let _ = close(connection)
+          Nil
+        }
+      }
+    }
+    dial(100)
+  })
+  // An attempt waits 25 us after an accept and a quarter longer after each
+  // timeout, so some time out while their accept completes. A connection
+  // that is lost leaves the server waiting until an attempt waits a second.
+  fn serve(accepted: Int, wait: Int) -> Int {
+    case {
+      accepted == 100 || wait > 1_000_000 => accepted
+      _ => {
+        let attempt = fiber::timeout(duration::microseconds(wait), fn() { accept(listener) })
+        case attempt {
+          Ok(Ok(connection)) => {
+            let assert Ok(Nil) = close(connection)
+            serve(accepted + 1, 25)
+          }
+          Ok(Err(_)) => accepted
+          Err(_) => serve(accepted, wait + wait / 4 + 1)
+        }
+      }
+    }
+  }
+  assert serve(0, 25) == 100
+}
+
+// Connecting
+
+/// Opens a TCP connection to `host` and `port`. A name is resolved on the
+/// blocking pool, and its addresses are tried in the order the operating
+/// system gives them, until one connects; when every one fails, the error
+/// is the last one's. A cancelled `connect` leaves no connection (D-998,
+/// D-1000, D-1002).
+pub fn connect(host: String, port: Int) -> Result<Connection, io::Error> {
+  io::lift(sys_connect(host, port))
+}
+
+test "connect rejects a port out of range" {
+  let assert Err(reason) = connect("127.0.0.1", 65_536)
+  assert io::is_invalid_input(reason)
+}
+
+test "connect rejects an empty host and a host with U+0000" {
+  let assert Err(reason) = connect("", 80)
+  assert io::is_invalid_input(reason)
+  assert "{reason}" == "invalid input"
+  let assert Err(nul) = connect("local\u{0}host", 80)
+  assert io::is_invalid_input(nul)
+}
+
+test "a closed listener's port refuses a connection" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let port = local_port(listener)
+  let assert Ok(Nil) = close_listener(listener)
+  let assert Err(reason) = connect("127.0.0.1", port)
+  assert io::is_connection_refused(reason)
+}
+
+// Reading and writing
+
+/// Waits until `connection` has data, then returns at least one and at
+/// most `limit` bytes of it, or `None` once the peer has closed its side
+/// and every byte before that has been read. `limit` caps the result and
+/// never sizes an allocation: a read takes at most the kernel's own block.
+/// A cancelled `read_bytes` has taken nothing (D-999, D-1000, D-1062).
+@std_clamped(limit)
+pub fn read_bytes(connection: Connection, limit: Int) -> Result<Option<bytes::Bytes>, io::Error> {
+  // As in `accept`: no call follows the kernel on success, so a pending
+  // cancellation cannot drop the bytes just read.
+  case sys_read_bytes(connection, limit) {
+    Ok(read) => Ok(read)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "a connection carries bytes both ways over loopback" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let port = local_port(listener)
+  // The server echoes everything it reads, then closes its side when
+  // the client has closed its own.
+  fiber::spawn_detached(fn() {
+    let assert Ok(peer) = accept(listener)
+    fn echo() {
+      case read_bytes(peer, 1_024) {
+        Ok(Some(chunk)) => {
+          let assert Ok(Nil) = write_bytes(peer, chunk)
+          echo()
+        }
+        Ok(None) => Nil
+        Err(_) => Nil
+      }
+    }
+    echo()
+  })
+  let assert Ok(client) = connect("127.0.0.1", port)
+  let assert Ok(Nil) = write_bytes(client, bytes::from_string("ping"))
+  let assert Ok(Nil) = shutdown_write(client)
+  fn collect(received) {
+    case read_bytes(client, 1_024) {
+      Ok(Some(chunk)) => collect(bytes::append(received, chunk))
+      Ok(None) => received
+      Err(_) => received
+    }
+  }
+  assert collect(bytes::new()) == bytes::from_string("ping")
+  assert "{client:?}" == "<Connection>"
+}
+
+test "a cancelled read takes no bytes" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let text = bytes::from_string("abcdefghijklmnopqrstuvwxyz0123456789")
+  // The peer writes slowly, so reads keep timing out between its writes.
+  fiber::spawn_detached(fn() {
+    let assert Ok(peer) = accept(listener)
+    fn send(left: Int) -> Nil {
+      case left {
+        0 => Nil
+        _ => {
+          let assert Ok(Nil) = write_bytes(peer, text)
+          time::sleep(duration::microseconds(300))
+          send(left - 1)
+        }
+      }
+    }
+    send(40)
+    let assert Ok(Nil) = shutdown_write(peer)
+    time::sleep(duration::seconds(60))
+    let _ = close(peer)
+    Nil
+  })
+  let assert Ok(client) = connect("127.0.0.1", local_port(listener))
+  // As in the accept test: an attempt waits 25 us after a read and a
+  // quarter longer after each timeout.
+  fn collect(received: bytes::Bytes, wait: Int) -> bytes::Bytes {
+    let attempt = fiber::timeout(duration::microseconds(wait), fn() { read_bytes(client, 3) })
+    case attempt {
+      Ok(Ok(Some(chunk))) => collect(bytes::append(received, chunk), 25)
+      Ok(Ok(None)) => received
+      Ok(Err(_)) => received
+      Err(_) => case wait > 1_000_000 {
+        True => received
+        False => collect(received, wait + wait / 4 + 1)
+      }
+    }
+  }
+  fn expected(left: Int, sent: bytes::Bytes) -> bytes::Bytes {
+    case left {
+      0 => sent
+      _ => expected(left - 1, bytes::append(sent, text))
+    }
+  }
+  assert collect(bytes::new(), 25) == expected(40, bytes::new())
+}
+
+/// Writes all of `data` to `connection`, waiting while the operating
+/// system's buffer is full. Each write is atomic with respect to other
+/// writes on the connection. A cancelled `write_bytes` may have sent a
+/// prefix of `data` (D-999, D-1000, D-1001, D-1062).
+pub fn write_bytes(connection: Connection, data: bytes::Bytes) -> Result<Nil, io::Error> {
+  io::lift(sys_write_bytes(connection, data))
+}
+
+/// Closes the writing side of `connection`, so the peer's reads reach the
+/// end of the stream once it has read everything written before. Reading
+/// stays possible.
+pub fn shutdown_write(connection: Connection) -> Result<Nil, io::Error> {
+  io::lift(sys_shutdown_write(connection))
+}
+
+// Closing
+
+/// Closes `connection` now. A fiber waiting on it wakes with an `Err` for
+/// which `io::is_closed` holds, and so does every later operation on it,
+/// another close included. Never waits (D-1063).
+pub fn close(connection: Connection) -> Result<Nil, io::Error> {
+  io::lift(sys_close(connection))
+}
+
+test "close wakes a reader, and the peer sees the end" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let assert Ok(client) = connect("127.0.0.1", local_port(listener))
+  let assert Ok(peer) = accept(listener)
+  let outcome = {
+    use owner <- fiber::scope()
+    let waiting = fiber::spawn(owner, fn() { read_bytes(client, 16) })
+    let assert Ok(Nil) = close(client)
+    fiber::join(waiting)
+  }
+  // Whether the read parked before the close or started after it, it
+  // fails the same way.
+  let assert Ok(Err(reason)) = outcome
+  assert io::is_closed(reason)
+  assert read_bytes(peer, 16) == Ok(None)
+  let assert Err(again) = close(client)
+  assert io::is_closed(again)
+}
+
+test "a closed connection refuses every operation" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let assert Ok(client) = connect("127.0.0.1", local_port(listener))
+  let assert Ok(Nil) = close(client)
+  let assert Err(read) = read_bytes(client, 16)
+  assert io::is_closed(read)
+  let assert Err(written) = write_bytes(client, bytes::from_string("late"))
+  assert io::is_closed(written)
+  let assert Err(shut) = shutdown_write(client)
+  assert io::is_closed(shut)
+  assert "{shut}" == "closed"
+  // The listener is used to the end, so it listens until here.
+  let assert Ok(Nil) = close_listener(listener)
+}
+
+/// Closes `listener` now, so it accepts no more connections. A fiber
+/// waiting to accept wakes with an `Err` for which `io::is_closed` holds.
+/// Connections it has already accepted stay open (D-1063).
+pub fn close_listener(listener: Listener) -> Result<Nil, io::Error> {
+  io::lift(sys_close_listener(listener))
+}
+
+test "close_listener wakes a fiber that waits to accept" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let waiting = fiber::spawn(owner, fn() { accept(listener) })
+    let assert Ok(Nil) = close_listener(listener)
+    fiber::join(waiting)
+  }
+  let assert Ok(Err(reason)) = outcome
+  assert io::is_closed(reason)
+}
+
+test "a closed listener refuses accept and a second close" {
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let port = local_port(listener)
+  let assert Ok(Nil) = close_listener(listener)
+  assert local_port(listener) == port
+  let assert Err(accepted) = accept(listener)
+  assert io::is_closed(accepted)
+  let assert Err(again) = close_listener(listener)
+  assert io::is_closed(again)
+}
+
+// Kernels: each reports a failure as a kind code and the operating
+// system's message, which `io::lift` turns into an `io::Error`.
+
+/// Listens on the first address of `host` and `port`.
+@std_context
+@external(native, "cheby_net_sys_listen")
+@external(js, "./net.mjs", "sys_listen")
+@async
+priv fn sys_listen(host: String, port: Int) -> Result<Listener, (Int, String)>
+
+/// The port a listener listens on.
+@std_context
+@external(native, "cheby_net_sys_local_port")
+@external(js, "./net.mjs", "sys_local_port")
+priv fn sys_local_port(listener: Listener) -> Int
+
+/// Waits for and accepts the next connection.
+@std_context
+@external(native, "cheby_net_sys_accept")
+@external(js, "./net.mjs", "sys_accept")
+@async
+priv fn sys_accept(listener: Listener) -> Result<Connection, (Int, String)>
+
+/// Resolves `host` and connects to the first address that accepts.
+@std_context
+@external(native, "cheby_net_sys_connect")
+@external(js, "./net.mjs", "sys_connect")
+@async
+priv fn sys_connect(host: String, port: Int) -> Result<Connection, (Int, String)>
+
+/// Waits for data and reads at most `limit` bytes of it.
+@std_context
+@external(native, "cheby_net_sys_read_bytes")
+@external(js, "./net.mjs", "sys_read_bytes")
+@async
+priv fn sys_read_bytes(
+  connection: Connection,
+  limit: Int,
+) -> Result<Option<bytes::Bytes>, (Int, String)>
+
+/// Writes all of `data`, waiting while the buffer is full.
+@std_context
+@external(native, "cheby_net_sys_write_bytes")
+@external(js, "./net.mjs", "sys_write_bytes")
+@async
+priv fn sys_write_bytes(connection: Connection, data: bytes::Bytes) -> Result<Nil, (Int, String)>
+
+/// Closes the writing side.
+@std_context
+@external(native, "cheby_net_sys_shutdown_write")
+@external(js, "./net.mjs", "sys_shutdown_write")
+priv fn sys_shutdown_write(connection: Connection) -> Result<Nil, (Int, String)>
+
+/// Closes a connection now, waking the fibers that wait on it.
+@std_context
+@external(native, "cheby_net_sys_close")
+@external(js, "./net.mjs", "sys_close")
+priv fn sys_close(connection: Connection) -> Result<Nil, (Int, String)>
+
+/// Closes a listener now, waking the fibers that wait to accept.
+@std_context
+@external(native, "cheby_net_sys_close_listener")
+@external(js, "./net.mjs", "sys_close_listener")
+priv fn sys_close_listener(listener: Listener) -> Result<Nil, (Int, String)>
+
+/// A TLS connection to `host` and `port`, for `std::http` only (D-985,
+/// D-1011). It answers an error until TLS lands.
+@std_context
+@external(native, "cheby_net_sys_connect_tls")
+@external(js, "./net.mjs", "sys_connect_tls")
+@async
+fn sys_connect_tls(host: String, port: Int) -> Result<Connection, (Int, String)>

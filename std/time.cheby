@@ -1,0 +1,676 @@
+//! Reading the clocks, and waiting (D-1018 to D-1021, D-1057).
+//!
+//! The wall clock says what time it is, as a `Timestamp`, and the
+//! monotonic clock measures how long something took, as an
+//! `instant::Instant` of the submodule `std::time::instant`. Spans of time
+//! are `duration::Duration` values.
+//!
+//! Every public function is written in Cheby (D-985). Only `now`,
+//! `monotonic`, `sleep` and `sleep_until` reach kernels: `sys_now` and
+//! `sys_monotonic` return a reading as whole seconds and the nanoseconds
+//! after them, and the `@std_context` kernel `sys_sleep` waits on the
+//! runtime's timer heap (D-682, D-983). Everything else runs in constants
+//! and gives the same result on every target (D-090, D-232, D-991), and a
+//! constant that reaches a clock or a sleep is E0077 (D-537). Dates before
+//! 1970 are computed with `int::floor_div` and `int::modulo` (D-1056).
+//!
+//! The clocks in context of `docs/stdlib/time.md` (`Clock`, the key
+//! `clock`, `system_clock`, `fixed_clock` and `custom_clock`) come in M4
+//! with `std::context` (D-1049). Until then `now` and `monotonic` read the
+//! system's clocks directly. Timers never read a clock in context
+//! (D-1047), so `sleep_until` waits on the runtime's monotonic clock.
+
+import std::duration
+import std::fiber
+import std::int
+import std::string
+import std::time::instant
+
+/// A point in time on the wall clock, as the span since the Unix epoch,
+/// 1970-01-01T00:00:00Z, in UTC, ignoring leap seconds as Unix time does
+/// (D-650, D-1018). It is opaque plain data, and a point before 1970 is a
+/// negative span. `==` and hashing are the built-in structural ones,
+/// which compare points because a `Duration` has one representation. It
+/// satisfies `Compare` and `Show` through `compare` and `show`.
+pub type Timestamp { since_epoch: duration::Duration }
+
+// Kernels
+
+/// The wall clock now: the whole seconds since the Unix epoch and the
+/// nanoseconds after them, from 0 to `999_999_999`, so a point before
+/// 1970 has negative seconds (D-1021).
+@external(native, "cheby_time_sys_now")
+@external(js, "./time.mjs", "sys_now")
+fn sys_now() -> (Int, Int)
+
+/// The monotonic clock now: the whole seconds since the process's origin
+/// and the nanoseconds after them. The origin is taken when the runtime
+/// first needs it, and the clock is the one the runtime's timers use
+/// (D-1021).
+@external(native, "cheby_time_sys_monotonic")
+@external(js, "./time.mjs", "sys_monotonic")
+fn sys_monotonic() -> (Int, Int)
+
+/// Suspends the calling fiber for the span of `seconds` and `nanoseconds`
+/// on the runtime's timer heap, and can be cancelled (D-652, D-682,
+/// D-983). A span of zero or less returns at once. A span longer than
+/// 2⁶³ − 1 nanoseconds arms no timer and waits as `time::sleep`, which a
+/// deadlock report lists (D-891, D-1058).
+@std_context
+@external(native, "cheby_time_sys_sleep")
+@external(js, "./time.mjs", "sys_sleep")
+@async
+fn sys_sleep(seconds: Int, nanoseconds: Int)
+
+/// The span of a kernel's reading, whose nanoseconds are from 0 to
+/// `999_999_999` (D-650).
+fn reading(parts: (Int, Int)) -> duration::Duration {
+  let (seconds, nanoseconds) = parts
+  duration::Duration { seconds: seconds, nanoseconds: nanoseconds }
+}
+
+// The wall clock
+
+/// Returns the current time on the system's real-time clock (D-1021). The
+/// clock can jump when someone sets it, so the difference of two readings
+/// is not a duration: measure that with `monotonic`.
+pub fn now() -> Timestamp {
+  Timestamp { since_epoch: reading(sys_now()) }
+}
+
+test "now is after 2020" {
+  assert now() > from_unix(duration::seconds(1_577_836_800))
+}
+
+/// Returns the point `since_epoch` after the Unix epoch. A negative span
+/// gives a point before 1970.
+pub fn from_unix(since_epoch: duration::Duration) -> Timestamp {
+  Timestamp { since_epoch: since_epoch }
+}
+
+test "from_unix counts from the Unix epoch" {
+  assert show(from_unix(duration::zero)) == "1970-01-01T00:00:00Z"
+  assert show(from_unix(duration::seconds(946_684_800))) == "2000-01-01T00:00:00Z"
+  assert show(from_unix(duration::seconds(-1))) == "1969-12-31T23:59:59Z"
+}
+
+/// Returns the span from the Unix epoch to `stamp`, the inverse of
+/// `from_unix`.
+pub fn to_unix(stamp: Timestamp) -> duration::Duration {
+  stamp.since_epoch
+}
+
+test "to_unix is the inverse of from_unix" {
+  let stamp = from_unix(duration::milliseconds(1_792_585_800_250))
+  assert to_unix(stamp) == duration::milliseconds(1_792_585_800_250)
+  assert duration::to_seconds(to_unix(stamp)) == 1_792_585_800
+}
+
+/// Returns the point `span` after `stamp`, or before it when `span` is
+/// negative. It panics where `Duration` arithmetic overflows (D-025,
+/// D-650).
+pub fn add(stamp: Timestamp, span: duration::Duration) -> Timestamp {
+  Timestamp { since_epoch: stamp.since_epoch + span }
+}
+
+test "add moves a point by a span" {
+  let start = from_unix(duration::seconds(946_684_800))
+  assert show(add(start, duration::hours(36))) == "2000-01-02T12:00:00Z"
+  assert show(add(start, duration::milliseconds(-500))) == "1999-12-31T23:59:59.5Z"
+}
+
+/// Orders two points by time, earlier first. It makes `Timestamp` satisfy
+/// `Compare`, so `<`, `<=`, `>` and `>=` work (§8.7).
+pub fn compare(a: Timestamp, b: Timestamp) -> Order {
+  duration::compare(a.since_epoch, b.since_epoch)
+}
+
+test "earlier points compare as less" {
+  let first = from_unix(duration::seconds(10))
+  let second = from_unix(duration::seconds(20))
+  assert compare(first, second) == Less
+  assert first < second
+  assert compare(second, second) == Equal
+}
+
+test "points before 1970 compare as earlier" {
+  let before = from_unix(duration::milliseconds(-1))
+  assert before < from_unix(duration::zero)
+  assert compare(from_unix(duration::seconds(-10)), before) == Less
+}
+
+// Text
+
+/// Seconds in a day: Unix time has no leap seconds.
+const seconds_per_day: Int = 86_400
+
+/// Days from 0000-03-01 to 1970-01-01 in the proleptic Gregorian calendar.
+const days_to_epoch: Int = 719_468
+
+/// Days in 400 years of the Gregorian calendar.
+const days_per_era: Int = 146_097
+
+/// The date `days` after 1970-01-01, as `(year, month, day)` in the
+/// proleptic Gregorian calendar. Years count from March, so that the leap
+/// day ends a year, and `int::floor_div` finds the 400-year era of a date
+/// before 1970 too (D-1056).
+fn civil_from_days(days: Int) -> (Int, Int, Int) {
+  let shifted = days + days_to_epoch
+  let era = int::floor_div(shifted, days_per_era)
+  let day_of_era = shifted - era * days_per_era
+  let leap_days = day_of_era / 1_460 - day_of_era / 36_524 + day_of_era / 146_096
+  let year_of_era = (day_of_era - leap_days) / 365
+  let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+  let month_from_march = (5 * day_of_year + 2) / 153
+  let day = day_of_year - (153 * month_from_march + 2) / 5 + 1
+  let month = case month_from_march < 10 {
+    True => month_from_march + 3
+    False => month_from_march - 9
+  }
+  let year = year_of_era + era * 400
+  case month <= 2 {
+    True => (year + 1, month, day)
+    False => (year, month, day)
+  }
+}
+
+/// The days from 1970-01-01 to the date `year`-`month`-`day`, negative
+/// before it, the inverse of `civil_from_days`.
+fn days_from_civil(year: Int, month: Int, day: Int) -> Int {
+  let march_year = case month <= 2 {
+    True => year - 1
+    False => year
+  }
+  let era = int::floor_div(march_year, 400)
+  let year_of_era = march_year - era * 400
+  let month_from_march = case month > 2 {
+    True => month - 3
+    False => month + 9
+  }
+  let day_of_year = (153 * month_from_march + 2) / 5 + day - 1
+  let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year
+  era * days_per_era + day_of_era - days_to_epoch
+}
+
+/// `n`, from 0 to 99, as two digits.
+fn two_digits(n: Int) -> String {
+  string::pad_start("{n}", 2, "0")
+}
+
+/// The year as RFC 3339 writes it, with four digits, from 0 to 9999, and
+/// otherwise with a sign and at least five digits, as ISO 8601's expanded
+/// form does (D-1019).
+fn year_text(year: Int) -> String {
+  case {
+    year < 0 => {
+      let before_zero = -year
+      let magnitude = string::pad_start("{before_zero}", 5, "0")
+      "-{magnitude}"
+    }
+    year > 9_999 => {
+      let magnitude = string::pad_start("{year}", 5, "0")
+      "+{magnitude}"
+    }
+    _ => string::pad_start("{year}", 4, "0")
+  }
+}
+
+/// `nanoseconds`, from 0 to `999_999_999`, as a fraction of a second: `""`
+/// for 0, otherwise a `.` and up to nine digits without trailing zeros.
+fn fraction_text(nanoseconds: Int) -> String {
+  fraction_digits_text(nanoseconds, 9)
+}
+
+/// The fraction `value / 10^width` after the decimal point, with its
+/// trailing zeros left out.
+fn fraction_digits_text(value: Int, width: Int) -> String {
+  case value, value % 10 {
+    0, _ => ""
+    _, 0 => fraction_digits_text(value / 10, width - 1)
+    _, _ => {
+      let digits = string::pad_start("{value}", width, "0")
+      ".{digits}"
+    }
+  }
+}
+
+/// Makes `Timestamp` satisfy `Show` (§8.8). It writes `stamp` in RFC 3339
+/// form in UTC with `Z`, with a fraction of a second only when it is not
+/// zero, without trailing zeros (D-1019). Years outside 0 to 9999, which
+/// RFC 3339 cannot write, have a sign and at least five digits, and
+/// `parse` does not read them.
+pub fn show(stamp: Timestamp) -> String {
+  let since_epoch = stamp.since_epoch
+  let days = int::floor_div(since_epoch.seconds, seconds_per_day)
+  let of_day = int::modulo(since_epoch.seconds, seconds_per_day)
+  let (year, month, day) = civil_from_days(days)
+  let year_part = year_text(year)
+  let month_part = two_digits(month)
+  let day_part = two_digits(day)
+  let hour_part = two_digits(of_day / 3_600)
+  let minute_part = two_digits(of_day % 3_600 / 60)
+  let second_part = two_digits(of_day % 60)
+  let fraction = fraction_text(since_epoch.nanoseconds)
+  "{year_part}-{month_part}-{day_part}T{hour_part}:{minute_part}:{second_part}{fraction}Z"
+}
+
+test "show writes RFC 3339 in UTC" {
+  let stamp = from_unix(duration::milliseconds(1_792_585_800_250))
+  assert show(stamp) == "2026-10-21T12:30:00.25Z"
+  assert "{stamp}" == "2026-10-21T12:30:00.25Z"
+}
+
+test "show writes up to nine fraction digits without trailing zeros" {
+  assert show(from_unix(duration::nanoseconds(1))) == "1970-01-01T00:00:00.000000001Z"
+  assert show(from_unix(duration::nanoseconds(123_456_789))) == "1970-01-01T00:00:00.123456789Z"
+  assert show(from_unix(duration::microseconds(10))) == "1970-01-01T00:00:00.00001Z"
+}
+
+test "show counts dates before 1970 back from the epoch" {
+  assert show(from_unix(duration::milliseconds(-1))) == "1969-12-31T23:59:59.999Z"
+  assert show(from_unix(duration::seconds(-2_208_988_800))) == "1900-01-01T00:00:00Z"
+  assert show(from_unix(duration::seconds(-62_135_596_800))) == "0001-01-01T00:00:00Z"
+  assert show(from_unix(duration::seconds(-62_162_121_600))) == "0000-02-29T00:00:00Z"
+}
+
+test "show writes years outside 0 to 9999 with a sign and five digits" {
+  assert show(from_unix(duration::seconds(253_402_300_800))) == "+10000-01-01T00:00:00Z"
+  assert show(from_unix(duration::seconds(253_402_300_799))) == "9999-12-31T23:59:59Z"
+  assert show(from_unix(duration::seconds(-62_167_219_200))) == "0000-01-01T00:00:00Z"
+  assert show(from_unix(duration::seconds(-62_167_219_201))) == "-00001-12-31T23:59:59Z"
+}
+
+@target(native)
+test "show writes the points at the ends of Int" {
+  assert show(from_unix(duration::seconds(int::max_value))) == "+292277026596-12-04T15:30:07Z"
+  assert show(from_unix(duration::seconds(int::min_value))) == "-292277022657-01-27T08:29:52Z"
+}
+
+/// The value of `digits`, code points that must all be ASCII decimal
+/// digits, or `Err(Nil)`.
+fn number(digits: List<Int>) -> Result<Int, Nil> {
+  number_from(digits, 0)
+}
+
+/// `value` followed by the decimal `digits`, or `Err(Nil)` for a code
+/// point that is not an ASCII digit.
+fn number_from(digits: List<Int>, value: Int) -> Result<Int, Nil> {
+  case digits {
+    [] => Ok(value)
+    [digit, ..rest] when digit >= 48 && digit <= 57 => number_from(rest, value * 10 + digit - 48)
+    _ => Err(Nil)
+  }
+}
+
+/// Whether `year` has a 29th of February in the Gregorian calendar.
+fn is_leap_year(year: Int) -> Bool {
+  year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// The number of days in `month` of `year`, for a month from 1 to 12.
+fn days_in_month(year: Int, month: Int) -> Int {
+  case month {
+    2 => case is_leap_year(year) {
+      True => 29
+      False => 28
+    }
+    4 | 6 | 9 | 11 => 30
+    _ => 31
+  }
+}
+
+/// The offset after the time, `Z`, `z` or `+HH:MM` and `-HH:MM`, as seconds
+/// east of UTC, or `Err(Nil)` for any other text.
+fn offset(rest: List<Int>) -> Result<Int, Nil> {
+  case rest {
+    [zone] when zone == 90 || zone == 122 => Ok(0)
+    [sign, h1, h2, 58, m1, m2] when sign == 43 || sign == 45 => {
+      case number([h1, h2]), number([m1, m2]) {
+        Ok(hours), Ok(minutes) when hours <= 23 && minutes <= 59 => {
+          let east = hours * 3_600 + minutes * 60
+          case sign {
+            43 => Ok(east)
+            _ => Ok(-east)
+          }
+        }
+        _, _ => Err(Nil)
+      }
+    }
+    _ => Err(Nil)
+  }
+}
+
+/// The fraction of a second after a `.`, as nanoseconds, and the offset
+/// after it: `value` holds the `count` digits read so far, of which there
+/// are one to nine.
+fn fraction_and_offset(rest: List<Int>, value: Int, count: Int) -> Result<(Int, Int), Nil> {
+  case rest, count {
+    [digit, ..], 9 when digit >= 48 && digit <= 57 => Err(Nil)
+    [digit, ..more], _ when digit >= 48 && digit <= 57 => {
+      fraction_and_offset(more, value * 10 + digit - 48, count + 1)
+    }
+    _, 0 => Err(Nil)
+    _, _ => {
+      case offset(rest) {
+        Ok(east) => Ok((value * int::pow(10, 9 - count), east))
+        Err(Nil) => Err(Nil)
+      }
+    }
+  }
+}
+
+/// What follows the seconds: an optional fraction, then the offset, as
+/// `(nanoseconds, seconds east of UTC)`.
+fn after_seconds(rest: List<Int>) -> Result<(Int, Int), Nil> {
+  case rest {
+    [46, ..more] => fraction_and_offset(more, 0, 0)
+    _ => {
+      case offset(rest) {
+        Ok(east) => Ok((0, east))
+        Err(Nil) => Err(Nil)
+      }
+    }
+  }
+}
+
+/// The part of an RFC 3339 text after the date's `T`, as read: the time of
+/// day, the nanoseconds of its fraction and its offset in seconds east of
+/// UTC.
+type TimeText { hour: Int, minute: Int, second: Int, nanoseconds: Int, east: Int }
+
+/// The part after the date's `T`: `HH:MM:SS`, then what `after_seconds`
+/// reads, or `Err(Nil)` for any other text.
+fn time_text(text: List<Int>) -> Result<TimeText, Nil> {
+  case text {
+    [h1, h2, 58, mi1, mi2, 58, s1, s2, ..rest] => {
+      case number([h1, h2]), number([mi1, mi2]), number([s1, s2]), after_seconds(rest) {
+        Ok(hour), Ok(minute), Ok(second), Ok((nanoseconds, east)) => {
+          Ok(TimeText {
+            hour: hour,
+            minute: minute,
+            second: second,
+            nanoseconds: nanoseconds,
+            east: east,
+          })
+        }
+        _, _, _, _ => Err(Nil)
+      }
+    }
+    _ => Err(Nil)
+  }
+}
+
+/// The point of the date `year`-`month`-`day` at the time `at`, if the
+/// date exists and the time is one that Unix time can represent, which
+/// has no leap second (D-1019).
+fn point(year: Int, month: Int, day: Int, at: TimeText) -> Result<Timestamp, Nil> {
+  // `&&` stops at a month out of range, before `days_in_month` reads it.
+  let exists = month >= 1 && month <= 12 && day >= 1 && day <= days_in_month(year, month)
+  let representable = at.hour <= 23 && at.minute <= 59 && at.second <= 59
+  case exists && representable {
+    True => {
+      let days = days_from_civil(year, month, day)
+      let of_day = at.hour * 3_600 + at.minute * 60 + at.second
+      let seconds = days * seconds_per_day + of_day - at.east
+      let since_epoch = duration::Duration { seconds: seconds, nanoseconds: at.nanoseconds }
+      Ok(Timestamp { since_epoch: since_epoch })
+    }
+    False => Err(Nil)
+  }
+}
+
+/// Reads a point written in RFC 3339 form: `YYYY-MM-DDTHH:MM:SS`, an
+/// optional fraction of one to nine digits after a `.`, and `Z` or an
+/// offset such as `+02:00`, applied so that the result is the same point in
+/// UTC. `T` and `Z` may be lower case (D-1019). Any other text is
+/// `Err(Nil)`, including a fraction of more than nine digits, a date that
+/// does not exist and a leap second `:60`, which Unix time cannot
+/// represent.
+pub fn parse(text: String) -> Result<Timestamp, Nil> {
+  case string::to_code_point_values(text) {
+    [y1, y2, y3, y4, 45, mo1, mo2, 45, d1, d2, t, ..rest] when t == 84 || t == 116 => {
+      case number([y1, y2, y3, y4]), number([mo1, mo2]), number([d1, d2]), time_text(rest) {
+        Ok(year), Ok(month), Ok(day), Ok(at) => point(year, month, day, at)
+        _, _, _, _ => Err(Nil)
+      }
+    }
+    _ => Err(Nil)
+  }
+}
+
+test "parse reads RFC 3339 with any offset" {
+  let assert Ok(stamp) = parse("2026-10-21T14:30:00+02:00")
+  assert show(stamp) == "2026-10-21T12:30:00Z"
+  assert parse("2026-10-21t12:30:00.25z") ==
+    Ok(from_unix(duration::milliseconds(1_792_585_800_250)))
+  assert parse("2026-10-21") == Err(Nil)
+  assert parse("2026-10-21 12:30:00Z") == Err(Nil)
+  assert parse("2026-02-30T00:00:00Z") == Err(Nil)
+}
+
+test "parse reads T and Z in either case" {
+  let expected = Ok(from_unix(duration::seconds(1_792_585_800)))
+  assert parse("2026-10-21T12:30:00Z") == expected
+  assert parse("2026-10-21t12:30:00Z") == expected
+  assert parse("2026-10-21T12:30:00z") == expected
+  assert parse("2026-10-21t12:30:00z") == expected
+  assert parse("2026-10-21x12:30:00Z") == Err(Nil)
+}
+
+test "parse reads one to nine fraction digits" {
+  assert parse("1970-01-01T00:00:00.5Z") == Ok(from_unix(duration::milliseconds(500)))
+  assert parse("1970-01-01T00:00:00.000000001Z") == Ok(from_unix(duration::nanoseconds(1)))
+  assert parse("1970-01-01T00:00:00.123456789Z") ==
+    Ok(from_unix(duration::nanoseconds(123_456_789)))
+  assert parse("1970-01-01T00:00:00.0000000001Z") == Err(Nil)
+  assert parse("1970-01-01T00:00:00.1234567890Z") == Err(Nil)
+  assert parse("1970-01-01T00:00:00.Z") == Err(Nil)
+}
+
+test "parse refuses a date that does not exist" {
+  assert parse("2023-02-29T00:00:00Z") == Err(Nil)
+  assert parse("1900-02-29T00:00:00Z") == Err(Nil)
+  assert parse("2026-04-31T00:00:00Z") == Err(Nil)
+  assert parse("2026-13-01T00:00:00Z") == Err(Nil)
+  assert parse("2026-00-10T00:00:00Z") == Err(Nil)
+  assert parse("2026-10-00T00:00:00Z") == Err(Nil)
+  assert parse("2026-10-21T24:00:00Z") == Err(Nil)
+  assert parse("2026-10-21T12:60:00Z") == Err(Nil)
+  let assert Ok(leap_day) = parse("2024-02-29T00:00:00Z")
+  assert show(leap_day) == "2024-02-29T00:00:00Z"
+  let assert Ok(century_leap_day) = parse("2000-02-29T00:00:00Z")
+  assert show(century_leap_day) == "2000-02-29T00:00:00Z"
+}
+
+test "parse refuses a leap second" {
+  assert parse("2016-12-31T23:59:60Z") == Err(Nil)
+  assert parse("2016-12-31T23:59:60.5Z") == Err(Nil)
+  assert parse("2016-12-31T23:59:59Z") == Ok(from_unix(duration::seconds(1_483_228_799)))
+}
+
+test "parse refuses text outside RFC 3339's form" {
+  assert parse("") == Err(Nil)
+  assert parse("2026-10-21T12:30:00") == Err(Nil)
+  assert parse("2026-10-21T12:30:00Z ") == Err(Nil)
+  assert parse(" 2026-10-21T12:30:00Z") == Err(Nil)
+  assert parse("2026-10-21T12:30Z") == Err(Nil)
+  assert parse("26-10-21T12:30:00Z") == Err(Nil)
+  assert parse("2026-1-21T12:30:00Z") == Err(Nil)
+  assert parse("2026-10-21T12:30:00+0200") == Err(Nil)
+  assert parse("2026-10-21T12:30:00+02") == Err(Nil)
+  assert parse("2026-10-21T12:30:00+24:00") == Err(Nil)
+  assert parse("2026-10-21T12:30:00+02:60") == Err(Nil)
+  assert parse("2026-10-21T12:30:00UTC") == Err(Nil)
+  assert parse("2026-10-21T12:30:0\u{661}Z") == Err(Nil)
+}
+
+test "parse applies offsets east and west of UTC" {
+  let expected = Ok(from_unix(duration::seconds(1_792_585_800)))
+  assert parse("2026-10-21T12:30:00+00:00") == expected
+  assert parse("2026-10-21T12:30:00-00:00") == expected
+  assert parse("2026-10-21T07:00:00-05:30") == expected
+  assert parse("2026-10-22T12:29:00+23:59") == expected
+  let assert Ok(next_day) = parse("2026-12-31T23:30:00-01:00")
+  assert show(next_day) == "2027-01-01T00:30:00Z"
+}
+
+test "parse reads dates before 1970 and the ends of its years" {
+  assert parse("1969-12-31T23:59:59.999Z") == Ok(from_unix(duration::milliseconds(-1)))
+  assert parse("1900-01-01T00:00:00Z") == Ok(from_unix(duration::seconds(-2_208_988_800)))
+  assert parse("0000-01-01T00:00:00Z") == Ok(from_unix(duration::seconds(-62_167_219_200)))
+  assert parse("9999-12-31T23:59:59Z") == Ok(from_unix(duration::seconds(253_402_300_799)))
+  assert parse("+10000-01-01T00:00:00Z") == Err(Nil)
+  assert parse("-00001-12-31T23:59:59Z") == Err(Nil)
+}
+
+test "show and parse agree for years from 0 to 9999" {
+  fn round_trips(seconds: List<Int>) -> Bool {
+    case seconds {
+      [] => True
+      [first, ..rest] => {
+        let nanoseconds = int::modulo(first, 1_000)
+        let stamp = from_unix(duration::seconds(first) + duration::nanoseconds(nanoseconds))
+        parse(show(stamp)) == Ok(stamp) && round_trips(rest)
+      }
+    }
+  }
+  assert round_trips([
+    0,
+    -1,
+    1,
+    951_782_400,
+    -62_167_219_200,
+    253_402_300_799,
+    -12_219_292_800,
+    4_107_542_400,
+    1_709_164_799,
+  ])
+}
+
+// The monotonic clock
+
+/// Returns the current reading of the monotonic clock, the clock the
+/// runtime's timers use, so a timer of one second and the time `elapsed`
+/// measures across it agree (D-682, D-1021). It builds its reading with
+/// `instant::from_origin` (D-1057).
+pub fn monotonic() -> instant::Instant {
+  instant::from_origin(reading(sys_monotonic()))
+}
+
+test "instants compare with the operators" {
+  let first = monotonic()
+  let later = instant::add(first, duration::seconds(1))
+  assert first < later
+  assert instant::compare(later, later) == Equal
+  assert instant::between(first, later) == duration::seconds(1)
+}
+
+test "monotonic never goes backwards" {
+  let first = monotonic()
+  let second = monotonic()
+  assert first <= second
+}
+
+/// Returns the span from `start` to now on the monotonic clock, as
+/// `instant::between(start, monotonic())` (D-1057). It is never negative
+/// for an instant read earlier in the same process.
+pub fn elapsed(start: instant::Instant) -> duration::Duration {
+  instant::between(start, monotonic())
+}
+
+test "elapsed is never negative" {
+  let start = monotonic()
+  assert elapsed(start) >= duration::zero
+}
+
+/// Returns the span from now on the monotonic clock to `deadline`, as
+/// `instant::between(monotonic(), deadline)`. It is negative once
+/// `deadline` has passed (D-1057).
+pub fn until(deadline: instant::Instant) -> duration::Duration {
+  instant::between(monotonic(), deadline)
+}
+
+test "until counts down to a deadline" {
+  let start = monotonic()
+  let deadline = instant::add(start, duration::hours(1))
+  assert until(deadline) <= duration::hours(1)
+  assert until(deadline) > duration::minutes(59)
+  assert until(start) <= duration::zero
+}
+
+// Waiting
+
+/// Suspends the calling fiber for at least `span` on the runtime's timer
+/// heap, while other fibers run (D-1020). A span of zero or less returns
+/// at once (D-652). A sleeping fiber can be cancelled, and then unwinds at
+/// once (D-983). A span longer than 2⁶³ − 1 nanoseconds never ends: it
+/// arms no timer, so a deadlock report lists the fiber as `blocked in
+/// time::sleep` (D-891, D-1058). A tail call to `sleep` keeps its caller's
+/// frame (D-1059).
+pub fn sleep(span: duration::Duration) {
+  // A `Duration`'s seconds carry its sign and its nanoseconds are never
+  // negative, which is the pair the runtime reads (D-652, D-682).
+  sys_sleep(span.seconds, span.nanoseconds)
+}
+
+test "sleep waits at least its span" {
+  let start = monotonic()
+  sleep(duration::milliseconds(10))
+  assert elapsed(start) >= duration::milliseconds(10)
+}
+
+test "a sleep is cancelled by a timeout" {
+  let outcome = fiber::timeout(duration::milliseconds(10), fn() { sleep(duration::hours(1)) })
+  assert outcome == Err(fiber::TimedOut)
+}
+
+test "a sleep of zero or less returns at once" {
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    sleep(duration::zero)
+    sleep(duration::milliseconds(-5))
+  })
+  assert outcome == Ok(Nil)
+}
+
+/// Suspends the calling fiber until the runtime's monotonic clock reaches
+/// `deadline`, while other fibers run (D-1057). A deadline that has passed
+/// returns at once (D-652). As a timer it never reads a clock in context
+/// (D-1047). It can be cancelled, a deadline more than 2⁶³ − 1
+/// nanoseconds away is an endless sleep (D-1058), and a tail call to it
+/// keeps its caller's frame (D-1059).
+pub fn sleep_until(deadline: instant::Instant) {
+  let clock_now = reading(sys_monotonic())
+  // Only a deadline still ahead is subtracted, so the span never
+  // overflows.
+  case deadline.since_origin > clock_now {
+    True => {
+      let left = deadline.since_origin - clock_now
+      sys_sleep(left.seconds, left.nanoseconds)
+    }
+    False => Nil
+  }
+}
+
+test "sleep_until waits until its deadline" {
+  let deadline = instant::add(monotonic(), duration::milliseconds(10))
+  sleep_until(deadline)
+  assert until(deadline) <= duration::zero
+}
+
+test "sleep_until returns at once for a deadline that has passed" {
+  let outcome = fiber::timeout(duration::seconds(10), fn() { sleep_until(monotonic()) })
+  assert outcome == Ok(Nil)
+}
+
+test "sleep_until is cancelled by a timeout" {
+  let far = instant::add(monotonic(), duration::hours(1))
+  let outcome = fiber::timeout(duration::milliseconds(10), fn() { sleep_until(far) })
+  assert outcome == Err(fiber::TimedOut)
+}
+
+@target(native)
+test "sleep_until of the earliest reading returns at once" {
+  let earliest = instant::from_origin(duration::seconds(int::min_value))
+  sleep_until(earliest)
+  assert earliest < monotonic()
+}

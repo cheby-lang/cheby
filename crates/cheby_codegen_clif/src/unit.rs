@@ -46,6 +46,9 @@ pub struct UnitCode {
     /// The unit's user types with their layout words, constructor statics
     /// and hooks, as the module record lists them (D-919).
     pub(crate) types: Vec<crate::modrec::RecordType>,
+    /// The unit's external types, as the module record lists them (D-919):
+    /// `MirModule::externals`.
+    pub(crate) externals: Vec<cheby_mir::layout::ExternalDesc>,
 }
 
 /// Compiles `unit` alone into `module`, which holds nothing else (D-917,
@@ -90,6 +93,7 @@ pub fn compile_unit<M: Module>(
         stats,
         clif,
         types,
+        externals: unit.externals.clone(),
     })
 }
 
