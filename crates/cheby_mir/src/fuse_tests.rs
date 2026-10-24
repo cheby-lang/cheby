@@ -401,12 +401,18 @@ fn fuse_cancels_a_dup_against_the_next_drop() {
 }
 
 /// String literals and static constructors are operands, never counted
-/// locals, under Perceus; naive counting keeps the locals (D-808).
+/// locals, under Perceus; naive counting keeps the locals (D-808). The
+/// literal leads `greet`'s interpolation, so it is the buffer, the owned
+/// first operand of `str_append`, which copies a static text (D-1055,
+/// D-849).
 #[test]
 fn fuse_propagates_static_constants_before_counting() {
     let text = function_of(PROGRAM, "greet");
     assert!(!text.contains("= const str#1"), "{text}");
-    assert!(text.contains("borrow const str#1)"), "{text}");
+    assert!(
+        text.contains("str_append(const str#1, borrow _0)"),
+        "{text}"
+    );
     let text = function_with(PROGRAM, "greet", naive());
     assert!(text.contains("= const str#1"), "{text}");
     let text = function_with(PROGRAM, "greet", no_fusion());

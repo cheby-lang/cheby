@@ -1445,6 +1445,10 @@ impl Drop for Runtime {
 }
 
 #[cfg(test)]
+mod blocking_models;
+#[cfg(test)]
+mod blocking_tests;
+#[cfg(test)]
 mod deadlock_models;
 #[cfg(test)]
 mod deadlock_tests;

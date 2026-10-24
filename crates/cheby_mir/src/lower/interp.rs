@@ -12,6 +12,20 @@
 //! evaluated left to right (§5.3.2), each right before it is appended. A
 //! large string continues in continuations that take the buffer (D-780,
 //! `split.rs`).
+//!
+//! A literal of two or more parts whose first part is `{x}` without
+//! `:?` of a `String` value (its `show` is `std::string::show`, D-447)
+//! starts from that value instead (D-1055): the value, evaluated first
+//! as before, is the buffer, with no `str_with_capacity`, and the other
+//! parts are appended to it. The buffer is taken owned, as `+` takes its
+//! left operand: reference counting moves it at its last use and
+//! duplicates it otherwise, so `str_append` appends in place only when
+//! nothing else refers to it (D-577) and copies it otherwise (D-849).
+//! `"{acc}{piece}"` therefore costs what `acc + piece` costs. A
+//! `String` parameter that leads such a literal is consumed, so it is
+//! no longer borrowed (D-806). Every other literal (a leading text, a
+//! leading `{x:?}`, a leading value of another type, a single part, an
+//! empty literal) starts from a fresh buffer as above.
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
@@ -45,27 +59,44 @@ impl BodyCx<'_, '_> {
             }
             _ => {}
         }
-        let mut capacity: usize = 0;
-        for part in parts {
-            let len = match part {
-                InterpPart::Text(text) => text.len(),
-                InterpPart::Value { .. } => VALUE_ESTIMATE,
-            };
-            capacity = capacity.saturating_add(len);
-        }
-        let capacity = i64::try_from(capacity).map_err(|_| Ice::new("string too long"))?;
         // A large string continues in continuations (D-780, `split.rs`).
         let mut chain = self.chain(span);
-        let mut acc = self.define(
-            Repr::Value,
-            Rvalue::CallRuntime {
-                func: RuntimeFn::StrWithCapacity,
-                args: vec![Operand::Const(Const::Int(capacity))],
-            },
-        )?;
-        for (k, part) in parts.iter().enumerate() {
+        // The buffer, and the index of the first part appended to it.
+        let (mut acc, first) = match parts.first() {
+            // A leading `String` value is the buffer (D-1055).
+            Some(InterpPart::Value {
+                expr,
+                debug: false,
+                show: Some(show),
+            }) if self.is_string_value(*expr, show)? => {
+                let Some(value) = self.interp_value(*expr, false, Some(show))? else {
+                    return self.split_finish(chain, None);
+                };
+                (value, 1)
+            }
+            _ => {
+                let mut capacity: usize = 0;
+                for part in parts {
+                    let len = match part {
+                        InterpPart::Text(text) => text.len(),
+                        InterpPart::Value { .. } => VALUE_ESTIMATE,
+                    };
+                    capacity = capacity.saturating_add(len);
+                }
+                let capacity = i64::try_from(capacity).map_err(|_| Ice::new("string too long"))?;
+                let buffer = self.define(
+                    Repr::Value,
+                    Rvalue::CallRuntime {
+                        func: RuntimeFn::StrWithCapacity,
+                        args: vec![Operand::Const(Const::Int(capacity))],
+                    },
+                )?;
+                (Operand::Local(buffer), 0)
+            }
+        };
+        for (k, part) in parts.iter().enumerate().skip(first) {
             if self.split_due(&chain) {
-                acc = self.split_cut(&mut chain, k, Operand::Local(acc), Items::Interp(parts))?;
+                acc = Operand::Local(self.split_cut(&mut chain, k, acc, Items::Interp(parts))?);
             }
             let piece = match part {
                 InterpPart::Text(text) => self.string_const(text)?,
@@ -76,15 +107,29 @@ impl BodyCx<'_, '_> {
                     piece
                 }
             };
-            acc = self.define(
+            acc = Operand::Local(self.define(
                 Repr::Value,
                 Rvalue::CallRuntime {
                     func: RuntimeFn::StrAppend,
-                    args: vec![Operand::Local(acc), piece],
+                    args: vec![acc, piece],
                 },
-            )?;
+            )?);
         }
-        self.split_finish(chain, Some(Operand::Local(acc)))
+        self.split_finish(chain, Some(acc))
+    }
+
+    /// Whether the interpolated value `expr` with `show` is a `String`
+    /// that is its own text (`std::string::show`, D-447): the case in
+    /// which a leading value is the buffer (D-1055), and in which
+    /// [`Self::interp_value`] calls no `show`.
+    fn is_string_value(&self, expr: ExprId, show: &Callee) -> Result<bool, Ice> {
+        if self.expr_data(expr)?.ty != Ty::STRING {
+            return Ok(false);
+        }
+        match show {
+            Callee::Fn { def, .. } => self.is_string_show(*def),
+            _ => Ok(false),
+        }
     }
 
     /// The text of the value `expr`: its debug text for `{x:?}`, else the

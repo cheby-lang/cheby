@@ -588,22 +588,6 @@ pub(crate) fn lower(
     })
 }
 
-/// What `main` reaches over the program [`lower`] walks, without D-482's
-/// hook roots: `cheby build` reads it to tell the code that only a type's
-/// `@std_hooks` bring into a build (GAP(aot-layouts-not-yet)).
-///
-/// # Errors
-///
-/// An [`Ice`] if a module of the build order was not checked, or a body
-/// refers to an expression it does not have.
-pub(crate) fn reach_without_hooks(front: &Frontend, main: &thir::FnDef) -> Result<Reach, Ice> {
-    let mut program = Program::new();
-    for &module in &front.order {
-        program.insert(module, &checked(front, module)?.thir);
-    }
-    cheby_mir::reach::reachable(&program, &[Root::Fn(main)])
-}
-
 /// An empty read log per module of `jobs` outside std (D-955); std
 /// records nothing, since the build ID fixes it.
 fn read_logs(

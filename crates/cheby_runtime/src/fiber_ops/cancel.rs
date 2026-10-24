@@ -122,7 +122,16 @@ pub(super) fn reach(fiber: &ExecCtx, target: &Arc<ScopeState>) -> bool {
     locked.wait.as_ref().is_some_and(|node| {
         // SAFETY: a published node is live while its fiber's lock is held
         // (module documentation).
-        unsafe { node.0.as_ref() }.try_cancel()
+        let header = unsafe { node.0.as_ref() };
+        let won = header.try_cancel();
+        if won && header.is_on_pool() {
+            // A fiber waiting on a detached pool job (D-1065): its mark is
+            // cleared before the wake, as the job's completion clears it
+            // (D-814), so a teardown never counts the woken fiber as
+            // blocked while it waits in a run queue.
+            fiber.sched.set_blocking(false);
+        }
+        won
     })
 }
 
@@ -145,6 +154,8 @@ pub(crate) fn cancel(target: &Arc<ScopeState>) {
     while let Some(scope) = scopes.pop() {
         scope.cancel_step(target, &mut won, &mut scopes);
         // The scope's lock is released: wake outside every lock.
+        #[cfg(test)]
+        hooks::before_wakes(&won);
         for fiber in won.drain(..) {
             // SAFETY: the walk won the fiber's node, so the fiber is parked
             // or parking on it and nothing else wakes it: it cannot run, so
@@ -325,9 +336,41 @@ pub(crate) mod hooks {
     //! What the crate's tests read of the fiber lock.
 
     use std::sync::Arc;
+    use std::thread::{self, ThreadId};
+    use std::time::Duration;
+
+    use parking_lot::Mutex;
 
     use super::super::scope::ScopeState;
     use crate::ctx::ExecCtx;
+    use crate::sched::FiberRef;
+
+    /// The one thread whose walks wait, once a scope's lock is released,
+    /// before they wake the fibers whose nodes they won, and how long
+    /// ([`delay_wakes`]). A static keyed by the thread, not a thread-local,
+    /// which only `tls.rs` may declare (D-686).
+    static DELAY_WAKES: Mutex<Option<(ThreadId, Duration)>> = Mutex::new(None);
+
+    /// Delays the wakes of every walk the calling thread runs from now on
+    /// by `delay`: a legal interleaving made wide, for a test that checks
+    /// that a fiber whose node the walk won waits for that wake (review
+    /// finding SOUND-W4B-1). Only the calling thread's walks wait; a
+    /// thread's id is never reused, so no other test's walk is delayed.
+    pub(crate) fn delay_wakes(delay: Duration) {
+        *DELAY_WAKES.lock() = Some((thread::current().id(), delay));
+    }
+
+    /// [`super::cancel`]'s hook before it wakes `won`.
+    pub(super) fn before_wakes(won: &[FiberRef]) {
+        if won.is_empty() {
+            return;
+        }
+        let delay = match *DELAY_WAKES.lock() {
+            Some((walker, delay)) if walker == thread::current().id() => delay,
+            _ => return,
+        };
+        thread::sleep(delay);
+    }
 
     /// The fiber's target.
     pub(crate) fn target(fiber: &ExecCtx) -> Option<Arc<ScopeState>> {

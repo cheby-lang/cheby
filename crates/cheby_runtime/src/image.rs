@@ -51,7 +51,8 @@
 //! printing shows it) at 0, `pad` (`u32`) at 4, `type_key` (`u64`, D-559)
 //! at 8, `ctors` (table of [`CtorEntry`], tag order) at 16.
 //!
-//! [`CtorEntry`] (48 bytes): `name` (`u32` string, `Type.Ctor`) at 0,
+//! [`CtorEntry`] (48 bytes): `name` (`u32` string, the constructor's path
+//! `module::Ctor`, MIR's `LayoutDesc::name`, as the JIT registers it) at 0,
 //! `ctor_name` (`u32` string) at 4, `record` (`u32`, 1 when the fields are
 //! named) at 8, `pad` (`u32`) at 12, `fields` (table of [`FieldEntry`],
 //! declaration order) at 16, `layout_word` (pointer to the writable word
@@ -87,13 +88,23 @@
 //!
 //! # Installing
 //!
-//! [`install`] registers the builtin list and map kinds, then each record
-//! in build order: its user layouts and external types, writing the ids
-//! into the layout words and constructor statics (D-920), its hooks and
-//! free shapes, and its call-site ranges under one code owner that is
-//! never unregistered (D-867); then the constant image. Until those
-//! packages land, a non-empty table of user layouts, external types, free
-//! shapes or constants is refused with [`ImageError::NotYet`], before
+//! [`install`] registers the builtin list and map kinds, then checks every
+//! record (tables readable, strings in range, field kinds known, field
+//! offsets equal to the runtime's own, a layout word for every
+//! constructor, a constructor static exactly for each constructor without
+//! fields, every hook naming a listed type once with three non-null
+//! values) before it registers anything. It then registers, record by
+//! record in build order, each type's constructors with consecutive ids in
+//! tag order (D-522), writing into each layout word the header that
+//! allocation copies and into each constructor static its static header
+//! (D-454, D-920); then the hooks of every record on every constructor of
+//! each hooked type (D-482, D-585), and the call-site ranges under one
+//! code owner that is never unregistered (D-867). The order and the facts
+//! are those of `cheby_jit`'s `register_layouts`, `layout_info` and
+//! `register_hooks` (GAP(aot-layout-registration-order)), so an executable
+//! and `cheby run` register the same layouts. The external types and free
+//! shapes (N5b) and the constants (K5a) are not installed yet: a
+//! non-empty table of them is refused with [`ImageError::NotYet`], before
 //! anything of the image is registered.
 
 use std::fmt;
@@ -102,7 +113,7 @@ use std::ptr;
 
 use crate::abi::{self, LayoutId, Word};
 use crate::entry::{Callbacks, EntryFn, Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
-use crate::layout::{self, FieldKind};
+use crate::layout::{self, FieldKind, LayoutInfo};
 use crate::locate::{self, CallSiteDesc, CodeRangeDesc};
 
 /// The string offset that names no string.
@@ -427,7 +438,8 @@ pub struct TypeEntry {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CtorEntry {
-    /// `Type.Ctor` (a string).
+    /// The constructor's path, `module::Ctor` (a string): MIR's
+    /// `LayoutDesc::name`, which the JIT registers too.
     pub name: u32,
     /// The constructor's name as debug printing shows it (a string).
     pub ctor_name: u32,
@@ -605,9 +617,9 @@ pub enum ImageError {
         /// What is malformed.
         what: &'static str,
     },
-    /// The image holds a table this runtime does not install yet: user
-    /// layouts, external types, free shapes or constants, which later
-    /// packages add.
+    /// The image holds a table this runtime does not install yet: external
+    /// types, free shapes or constants, which later packages add (N5b,
+    /// K5a).
     NotYet(&'static str),
 }
 
@@ -649,17 +661,22 @@ impl ImageError {
 }
 
 /// Installs `image` (module documentation): registers the builtin list
-/// and map kinds, then each module record in build order, then the
-/// constant image. Runs before any worker of the program starts.
+/// and map kinds, checks every module record, and only then registers
+/// each record's user layouts in build order, writing each layout word's
+/// and constructor static's header (D-920), then every record's hooks
+/// (D-585) and call-site ranges. Runs before any worker of the program
+/// starts.
 ///
 /// # Errors
 ///
-/// [`ImageError::NotYet`] for a non-empty table of user layouts, external
-/// types, free shapes or constants, and [`ImageError::Malformed`] for a
-/// table, string or reference that is not what the module documentation
-/// says; nothing of the image is registered then, except the builtin
-/// kinds, which every process registers anyway. The version is not
-/// checked here (`cheby_rt_main` checks it in debug builds, D-925).
+/// [`ImageError::NotYet`] for a non-empty table of external types, free
+/// shapes or constants, and [`ImageError::Malformed`] for a table, string
+/// or reference that is not what the module documentation says; nothing
+/// of the image is registered and no word is written then, except the
+/// builtin kinds, which every process registers anyway. The one failure
+/// after registration has begun is a full layout table (2^24 ids), also
+/// [`ImageError::Malformed`]. The version is not checked here
+/// (`cheby_rt_main` checks it in debug builds, D-925).
 pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     crate::list::register_kinds();
     crate::hamt::register_kinds();
@@ -667,10 +684,10 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     if !image.constants.is_empty() {
         return Err(ImageError::NotYet("a constant image"));
     }
-    let mut hooks: Vec<(LayoutId, [Word; 3])> = Vec::new();
+    // Every record is checked before anything is registered.
+    let mut checked: Vec<(Vec<CheckedType>, Vec<TypeHooks>)> = Vec::with_capacity(modules.len());
     let mut ranges: Vec<CodeRangeDesc> = Vec::new();
     for (index, record) in modules.iter().enumerate() {
-        let types = user_layouts(record)?;
         if !record.externals.is_empty() {
             return Err(ImageError::NotYet("external types"));
         }
@@ -680,8 +697,25 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
         if !record.constants.is_empty() {
             return Err(ImageError::NotYet("constant slots"));
         }
-        record_hooks(index, record, &types, &mut hooks)?;
+        let types = user_types(index, record)?;
+        let hooks = record_hooks(index, record, types.len())?;
         code_ranges(index, record, &mut ranges)?;
+        checked.push((types, hooks));
+    }
+    // Then the layouts, record by record in build order, each type's
+    // constructors with consecutive ids in tag order (D-522), as
+    // `cheby_jit`'s `register_layouts` registers them
+    // (GAP(aot-layout-registration-order)).
+    let mut hooks: Vec<(LayoutId, [Word; 3])> = Vec::new();
+    for (index, (types, record_hooks)) in checked.into_iter().enumerate() {
+        let mut ids: Vec<Vec<LayoutId>> = Vec::with_capacity(types.len());
+        for ty in types {
+            ids.push(register_type(index, ty)?);
+        }
+        for (type_index, words) in record_hooks {
+            let type_ids = ids.get(type_index).map_or(&[][..], Vec::as_slice);
+            hooks.extend(type_ids.iter().map(|&id| (id, words)));
+        }
     }
     for (id, words) in hooks {
         layout::set_hooks(id, words).map_err(|_| ImageError::Malformed {
@@ -697,36 +731,165 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     Ok(())
 }
 
-/// Registers the user layouts of `record`, returning each type's layout
-/// ids in tag order. None yet: a record that lists a type is refused.
-fn user_layouts(record: &ModuleRecord) -> Result<Vec<Vec<LayoutId>>, ImageError> {
-    if record.types.is_empty() {
-        Ok(Vec::new())
-    } else {
-        Err(ImageError::NotYet("user layouts"))
-    }
+/// The hooks of one type of a record: its index in the record's `types`,
+/// and the `equal`, `hash` and `debug` words.
+type TypeHooks = (usize, [Word; 3]);
+
+/// A user type of a record, checked: each constructor's runtime layout,
+/// in tag order, with the words registration writes.
+struct CheckedType {
+    infos: Vec<LayoutInfo>,
+    /// Per constructor: its layout word and its constructor static (null
+    /// for a constructor with fields).
+    words: Vec<(*mut u64, *mut u64)>,
 }
 
-/// Collects the hooks of `record` for every constructor of each hooked
-/// type (D-585), whose layout ids `types` gives.
+/// Checks the user types of `record` and makes each constructor's
+/// [`LayoutInfo`] as `cheby_jit`'s `layout_info` makes it from the same
+/// `LayoutDesc`: [`LayoutInfo::ctor`] of its name, tag and fields, then
+/// [`LayoutInfo::named`] with its type's name and key and its record
+/// flag. The record's field offsets must be the runtime's own (D-454).
+fn user_types(index: usize, record: &ModuleRecord) -> Result<Vec<CheckedType>, ImageError> {
+    let malformed = |what| ImageError::malformed(index, what);
+    let strings = record
+        .strings
+        .items()
+        .ok_or(malformed("the string table"))?;
+    let text = |offset: u32, what| string(strings, offset).ok_or(malformed(what));
+    let types = record.types.items().ok_or(malformed("the type table"))?;
+    let mut out = Vec::with_capacity(types.len());
+    for ty in types {
+        let type_name = text(ty.name, "a type's name")?;
+        let ctors = ty
+            .ctors
+            .items()
+            .ok_or(malformed("a type's constructor table"))?;
+        if ctors.is_empty() {
+            return Err(malformed("a type without constructors"));
+        }
+        let mut infos = Vec::with_capacity(ctors.len());
+        let mut words = Vec::with_capacity(ctors.len());
+        for (tag, ctor) in ctors.iter().enumerate() {
+            let tag = u32::try_from(tag).map_err(|_| malformed("a constructor's tag"))?;
+            let name = text(ctor.name, "a constructor's name")?;
+            let ctor_name = text(ctor.ctor_name, "a constructor's name")?;
+            let record_flag = match ctor.record {
+                0 => false,
+                1 => true,
+                _ => return Err(malformed("a constructor's record flag")),
+            };
+            let entries = ctor
+                .fields
+                .items()
+                .ok_or(malformed("a constructor's field table"))?;
+            let mut fields: Vec<(FieldKind, Option<&str>)> = Vec::with_capacity(entries.len());
+            for field in entries {
+                let kind = usize::try_from(field.kind)
+                    .ok()
+                    .and_then(|kind| FIELD_KINDS.get(kind))
+                    .ok_or(malformed("a field kind"))?;
+                let field_name = if field.name == NO_STRING {
+                    None
+                } else {
+                    Some(text(field.name, "a field's name")?)
+                };
+                fields.push((*kind, field_name));
+            }
+            let info = LayoutInfo::ctor(name, tag, &fields).named(
+                type_name,
+                ctor_name,
+                record_flag,
+                ty.type_key,
+            );
+            let offsets_agree = info.fields.len() == entries.len()
+                && info
+                    .fields
+                    .iter()
+                    .zip(entries)
+                    .all(|(runtime, entry)| runtime.offset == entry.offset);
+            if !offsets_agree {
+                return Err(malformed(
+                    "a field offset that is not the runtime's own (D-454)",
+                ));
+            }
+            info.validate()
+                .map_err(|_| malformed("a constructor layout the runtime refuses"))?;
+            if ctor.layout_word.is_null() || !ctor.layout_word.is_aligned() {
+                return Err(malformed("a constructor without a layout word"));
+            }
+            if entries.is_empty() == ctor.ctor_static.is_null() || !ctor.ctor_static.is_aligned() {
+                return Err(malformed(
+                    "a constructor static that is not there exactly for a constructor without fields",
+                ));
+            }
+            infos.push(info);
+            words.push((ctor.layout_word, ctor.ctor_static));
+        }
+        out.push(CheckedType { infos, words });
+    }
+    Ok(out)
+}
+
+/// Registers the constructors of one checked type of record `index` with
+/// consecutive ids in tag order (D-522) and writes each layout word's and
+/// constructor static's header, as code generation writes them in the
+/// JIT (`decls::ctor_header` and `decls::header`): the layout word holds
+/// count 1, the constructor's value-field count as scan count, escaped
+/// above [`abi::SCAN_MAX`] (D-279, D-555), and the id; the static holds
+/// count 0, scan count 0 and the id. Returns the ids in tag order.
+fn register_type(index: usize, ty: CheckedType) -> Result<Vec<LayoutId>, ImageError> {
+    let scans: Vec<u8> = ty.infos.iter().map(LayoutInfo::scan_count).collect();
+    let count = u32::try_from(ty.infos.len())
+        .map_err(|_| ImageError::malformed(index, "a type with too many constructors"))?;
+    let first = layout::register_consecutive(ty.infos).map_err(|_| {
+        ImageError::malformed(index, "more user layouts than the layout table holds")
+    })?;
+    let ids: Vec<LayoutId> = (0..count).map(|k| first.saturating_add(k)).collect();
+    for ((&id, &scan), &(word, ctor_static)) in ids.iter().zip(&scans).zip(&ty.words) {
+        // SAFETY: `user_types` checked that `word` is non-null and
+        // aligned, and `ModuleRecord::new`'s contract (or code
+        // generation's, D-920: `cb$layout$…` is writable data of the
+        // executable) makes it a writable word no other thread uses while
+        // the image is installed, before any worker starts.
+        unsafe { word.write(abi::header(abi::RC_UNIQUE, scan, id)) };
+        if !ctor_static.is_null() {
+            // SAFETY: as for `word`: a checked, writable `cb$ctor$…` static
+            // (writable in a unit compiled alone, D-920).
+            unsafe { ctor_static.write(abi::header(abi::RC_STATIC, 0, id)) };
+        }
+    }
+    Ok(ids)
+}
+
+/// Checks the hooks of `record`, whose `types` table lists `type_count`
+/// types: each names a listed type, at most once, with three non-null
+/// static function values (D-482). Returns each hooked type's index with
+/// its three words, which installation sets on every constructor of the
+/// type (D-585).
 fn record_hooks(
     index: usize,
     record: &ModuleRecord,
-    types: &[Vec<LayoutId>],
-    out: &mut Vec<(LayoutId, [Word; 3])>,
-) -> Result<(), ImageError> {
+    type_count: usize,
+) -> Result<Vec<TypeHooks>, ImageError> {
     let hooks = record
         .hooks
         .items()
         .ok_or(ImageError::malformed(index, "the hook table"))?;
+    let mut out: Vec<TypeHooks> = Vec::with_capacity(hooks.len());
     for hook in hooks {
-        let ids = usize::try_from(hook.type_index)
+        let type_index = usize::try_from(hook.type_index)
             .ok()
-            .and_then(|type_index| types.get(type_index))
+            .filter(|&type_index| type_index < type_count)
             .ok_or(ImageError::malformed(
                 index,
                 "a hook names a type the record does not list",
             ))?;
+        if out.iter().any(|&(seen, _)| seen == type_index) {
+            return Err(ImageError::malformed(
+                index,
+                "two hook entries for one type",
+            ));
+        }
         let mut words = [0; 3];
         for (word, value) in words.iter_mut().zip([hook.equal, hook.hash, hook.debug]) {
             if value.is_null() {
@@ -735,9 +898,9 @@ fn record_hooks(
             *word = u64::try_from(value.expose_provenance())
                 .map_err(|_| ImageError::malformed(index, "a hook address"))?;
         }
-        out.extend(ids.iter().map(|&id| (id, words)));
+        out.push((type_index, words));
     }
-    Ok(())
+    Ok(out)
 }
 
 /// Appends the call-site ranges of `record`'s functions to `out`.

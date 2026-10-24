@@ -20,26 +20,27 @@
 //!   D-943's build resolver cannot find: the runtime's exported names,
 //!   then each system library of the archive opened by its recorded file
 //!   name ([`cheby_link::native_libs`]);
-//! - a program whose lowered code units use user types is a "not
-//!   available yet" tool error (GAP(aot-layouts-not-yet)): module records
-//!   carry no layouts yet, so its layout words would hold 0;
 //! - the runtime archive is found and its runtime ID checked (D-929,
 //!   D-930).
 //!
 //! On Windows `cheby build --target native` is a "not available yet (M6)"
-//! tool error (D-935).
+//! tool error (D-935). Those two are what remains of D-924's refusals:
+//! constants until K5a, Windows until M6.
+//!
+//! User layouts and `@std_hooks` reach executables through the module
+//! records (D-919): each record lists its unit's types, constructors,
+//! layout words, constructor statics and hooks, and the executable's
+//! start registers them and writes the layout words and constructor
+//! statics before `main` runs (D-920).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use cheby_codegen_clif::record::{
-    CodeRecord, RecordSymbol, RecordingModule, SymbolLinkage, record_unit,
-};
+use cheby_codegen_clif::record::{CodeRecord, RecordingModule, SymbolLinkage, record_unit};
 use cheby_codegen_clif::{UnitCx, compile_unit, isa, mangle};
 use cheby_iface::{DefId, Vis};
 use cheby_link::program::{PROGRAM_OBJECT_NAME, ProgramSpec};
-use cheby_mir::reach::Reach;
-use cheby_mir::{FnKey, MirModule, UnitKind};
+use cheby_mir::{MirModule, UnitKind};
 use cheby_package::{Manifest, ModulePath, Target};
 use rayon::prelude::*;
 
@@ -110,8 +111,9 @@ pub fn build_target(root: &Path, requested: Option<Target>) -> Result<Target, Er
 /// A tool error for a malformed or missing module path or `main` (as
 /// `prepare_run`), a missing or stale runtime archive (D-929, D-930), a
 /// missing `cc` or a failed link (D-933), a program `cheby build` cannot
-/// build yet (D-924, GAP(aot-layouts-not-yet)), Windows (D-935); an
-/// [`Error`] for internal failures.
+/// build yet (D-924: one that reaches a constant, until K5a), Windows
+/// (D-935, until M6); an [`Error`] for internal failures. User layouts and
+/// hooks are no refusal: the module records carry them (D-919, D-920).
 pub fn build_cached(
     root: &Path,
     options: &BuildOptions,
@@ -247,13 +249,6 @@ pub(crate) fn build_objects(
         let diagnostics = backend::unresolved(&front, &missing)?;
         crate::report_back_end(&mut out, diagnostics);
         return Ok(Objects::CompileFailed(out));
-    }
-    let plain = backend::reach_without_hooks(&front, main)?;
-    if let Some(what) = user_types(&compiled, &lowered.reach, &plain)? {
-        return Err(Error::new(format!(
-            "`cheby build` is not available yet for programs that use user-defined types, such \
-             as {what} (planned for a later step of M3)"
-        )));
     }
     let stacks = Stacks {
         main_stack: front.main_stack,
@@ -444,168 +439,6 @@ fn unresolved_symbols(records: &[CodeRecord], entries: &CodeRecord) -> Vec<Strin
         .into_iter()
         .map(str::to_owned)
         .collect()
-}
-
-/// What makes a program use user types (GAP(aot-layouts-not-yet)): code
-/// that can run uses a user layout word or a `cb$ctor$` static, read over
-/// the records as compiled. Module records carry no layouts yet, so such
-/// a word would hold 0.
-///
-/// Code that can run is what relocations reach from the roots: every
-/// function and data object of the entries record, which the program
-/// object refers to, and every function of the code records but those
-/// that only D-482's hook roots bring into the build (their owner is in
-/// `reach` but not in `plain`, the walk from `main` without hook roots;
-/// see [`hook_only_symbols`]). A hook-only function, or its slot, that
-/// reached code refers to is reached all the same. A module record's
-/// function table is not followed: the runtime reads it to walk stacks,
-/// never to call through it (D-919); nothing else of an executable is
-/// found other than through a relocation. The hooks of a user type are compiled, as `cheby run`
-/// compiles them, but nothing registers them before N5 (the hooks table
-/// is empty), so they run only on values of their type, which only
-/// reached code could create, and that is refused here. A layout word a
-/// module defines that no reached code uses does not count. External
-/// types reach code only with `[native]` (N8a), which the manifest still
-/// refuses. The first symbol found, in record and relocation order, for
-/// the message.
-fn user_types(
-    compiled: &Compiled<'_>,
-    reach: &Reach,
-    plain: &Reach,
-) -> Result<Option<String>, Error> {
-    let hook_only = hook_only_symbols(&compiled.code, reach, plain)?;
-    let layout = format!("{}{}$", mangle::PREFIX, mangle::Kind::Layout.word());
-    let ctor = format!("{}{}$", mangle::PREFIX, mangle::Kind::Ctor.word());
-    let is_user = |name: &str| name.starts_with(&layout) || name.starts_with(&ctor);
-    let module_records: BTreeSet<String> = compiled
-        .code
-        .iter()
-        .map(|unit| mangle::module_record(&unit.path))
-        .collect();
-    let records: Vec<&CodeRecord> = compiled
-        .records
-        .iter()
-        .chain(std::iter::once(&compiled.entries))
-        .collect();
-    let entries_at = compiled.records.len();
-    let ice = |what: &str| Error::from(cheby_iface::Ice::new(format!("a code record {what}")));
-    // Where each global symbol is defined, and what each definition
-    // refers to.
-    let mut global: BTreeMap<&str, (usize, u32)> = BTreeMap::new();
-    let mut edges: BTreeMap<(usize, u32), Vec<u32>> = BTreeMap::new();
-    for (r, record) in records.iter().enumerate() {
-        for (s, symbol) in record.symbols.iter().enumerate() {
-            if matches!(
-                symbol.linkage,
-                SymbolLinkage::Hidden | SymbolLinkage::Export
-            ) {
-                let s = u32::try_from(s).map_err(|_| ice("has too many symbols"))?;
-                global.insert(&symbol.name, (r, s));
-            }
-        }
-        for function in &record.functions {
-            edges.insert(
-                (r, function.symbol),
-                function.relocs.iter().map(|reloc| reloc.symbol).collect(),
-            );
-        }
-        for data in &record.data {
-            edges.insert(
-                (r, data.symbol),
-                data.relocs.iter().map(|reloc| reloc.symbol).collect(),
-            );
-        }
-    }
-    let name_of = |(r, s): (usize, u32)| -> Result<&RecordSymbol, Error> {
-        records
-            .get(r)
-            .and_then(|record| record.symbol_at(s))
-            .ok_or_else(|| ice("refers to a symbol it does not declare"))
-    };
-    // An import resolves to its definition in another record, if any.
-    let resolve = |node: (usize, u32)| -> Result<(usize, u32), Error> {
-        let symbol = name_of(node)?;
-        Ok(if symbol.linkage == SymbolLinkage::Import {
-            global.get(symbol.name.as_str()).copied().unwrap_or(node)
-        } else {
-            node
-        })
-    };
-    let mut roots: Vec<(usize, u32)> = Vec::new();
-    for (r, record) in records.iter().enumerate() {
-        for function in &record.functions {
-            let name = &name_of((r, function.symbol))?.name;
-            if r == entries_at || !hook_only.contains(name) {
-                roots.push((r, function.symbol));
-            }
-        }
-        if r == entries_at {
-            roots.extend(record.data.iter().map(|data| (r, data.symbol)));
-        }
-    }
-    let mut seen: BTreeSet<(usize, u32)> = BTreeSet::new();
-    roots.reverse();
-    let mut stack = roots;
-    while let Some(node) = stack.pop() {
-        let node = resolve(node)?;
-        if !seen.insert(node) {
-            continue;
-        }
-        let symbol = name_of(node)?;
-        if is_user(&symbol.name) {
-            return Ok(Some(format!("`{}`", symbol.name)));
-        }
-        if module_records.contains(&symbol.name) {
-            continue;
-        }
-        if let Some(targets) = edges.get(&node) {
-            stack.extend(targets.iter().rev().map(|&target| (node.0, target)));
-        }
-    }
-    Ok(None)
-}
-
-/// The function symbols of the code that only D-482's hook roots bring
-/// into a build: every function of `units` whose owner item `reach` (the
-/// build's walk, hooks included) holds but `plain` (the walk from `main`
-/// without hook roots) does not, as code generation names it, with its
-/// large-frame body (D-679). Functions without an owner item (dictionary
-/// functions, trampolines) are never hook-only.
-///
-/// # Errors
-///
-/// An internal error if a unit has no name for a function's owner.
-fn hook_only_symbols(
-    units: &[&MirModule],
-    reach: &Reach,
-    plain: &Reach,
-) -> Result<BTreeSet<String>, Error> {
-    let mut out = BTreeSet::new();
-    for unit in units {
-        for function in &unit.functions {
-            let (FnKey::Item(owner)
-            | FnKey::ValueShim(owner)
-            | FnKey::Closure { owner, .. }
-            | FnKey::Continuation { owner, .. }) = function.key
-            else {
-                continue;
-            };
-            if !reach.contains(owner) || plain.contains(owner) {
-                continue;
-            }
-            let name = unit.name(owner)?;
-            let symbol = match function.key {
-                FnKey::Item(_) => mangle::item(mangle::Kind::Fn, name),
-                FnKey::ValueShim(_) => mangle::item(mangle::Kind::Shim, name),
-                FnKey::Closure { index, .. } => mangle::closure(name, index),
-                FnKey::Continuation { index, .. } => mangle::continuation(name, index),
-                _ => continue,
-            };
-            out.insert(mangle::large_frame_body(&symbol));
-            out.insert(symbol);
-        }
-    }
-    Ok(out)
 }
 
 /// A failure of `cheby_link`: a tool error's text as it is, an internal

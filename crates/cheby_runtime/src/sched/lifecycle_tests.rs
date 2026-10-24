@@ -499,9 +499,39 @@ fn child_within_limit(name: &str, child: &str) -> (std::process::ExitStatus, Str
     (status, stderr)
 }
 
+/// An `@blocking` shim (D-818) that reads a line of this process's
+/// standard input, which [`child_within_limit`] keeps open and never
+/// writes: it does not return while the test runs. The teardown tests
+/// below block in it. They blocked in `io::read_line` before D-1065, which
+/// refines D-670: a cancellation now abandons a refill of standard input's
+/// reader, so a reader is cancelled rather than skipped
+/// (`io::stdin_tests`), while an `@blocking` call, like a file write,
+/// still cannot be interrupted, and the rules these tests pin (D-786,
+/// D-804, D-814) still apply to it.
+unsafe extern "C" fn stdin_shim(_args: *const u64, out: *mut u64) {
+    let mut line = String::new();
+    let read = std::io::stdin().read_line(&mut line).unwrap_or(0);
+    // SAFETY: the runtime's result cell.
+    unsafe { out.write(u64::try_from(read).unwrap_or(0)) };
+}
+
+/// Blocks the fiber `me` on the blocking pool in [`stdin_shim`], as an
+/// `@blocking` call does, and returns as a fiber's body would: 0 with the
+/// flag set once a cancellation is delivered after the call, `Nil` if it
+/// ever returns.
+fn blocked_in_a_call(me: &ExecCtx) -> Word {
+    // SAFETY: the running fiber's context, no argument words, and a shim
+    // in this binary's static code.
+    let _ = unsafe {
+        super::blocking::cheby_rt_blocking_call(ctx_ptr(me), stdin_shim, std::ptr::null(), 0)
+    };
+    if unwinding(me) { 0 } else { values::nil() }
+}
+
 /// D-786, D-814: a detached fiber waiting on the
-/// blocking pool in `io::read_line` on a pipe that stays open cannot be
-/// stopped: it stays marked while the job runs, so the teardown skips it
+/// blocking pool in an `@blocking` call reading standard input, a pipe
+/// that stays open, cannot be stopped (D-670, which D-1065 keeps for such
+/// calls): it stays marked while the job runs, so the teardown skips it
 /// and counts it; `shutdown` joins every worker (the fiber holds none),
 /// the job's completion later wakes nothing (D-815),
 /// and the process exits promptly with status 0 (debug and release
@@ -516,12 +546,7 @@ fn lifecycle_teardown_skips_inline_io() {
         let domain = Domain::new();
         let group = DetachedGroup::new();
         let outcome = testing::start_root_in(&runtime, &config(&domain), &group, |me| {
-            detach(me, |me| {
-                // SAFETY: the running fiber's context.
-                let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
-                release(line);
-                if unwinding(me) { 0 } else { values::nil() }
-            });
+            detach(me, blocked_in_a_call);
             values::nil()
         })
         .recv_timeout(testing::hang())
@@ -544,8 +569,9 @@ fn lifecycle_teardown_skips_inline_io() {
 
 /// D-786, D-804 (review finding CONC-W2-1 of gate 2): the blocked fiber is
 /// not a member but a scoped child of one. The detached fiber waits in its
-/// scope's close for a child blocked in `io::read_line` (on the blocking
-/// pool, marked, D-814) on a pipe that stays open, and a
+/// scope's close for a child blocked in an `@blocking` call reading
+/// standard input (on the blocking pool, marked, D-814; `io::read_line`
+/// before D-1065) on a pipe that stays open, and a
 /// spinning sibling is cancelled and leaves. The
 /// teardown skips the member, counts the blocked child, and the process
 /// exits promptly with status 0. Before the fix the teardown polled until
@@ -563,12 +589,7 @@ fn lifecycle_teardown_skips_a_scoped_child_blocked_in_inline_io() {
         let outcome = testing::start_root_in(&runtime, &config(&domain), &group, |me| {
             detach(me, |me| {
                 let scope = open_scope(me);
-                release(spawn_into(me, scope, |me| {
-                    // SAFETY: the running fiber's context.
-                    let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
-                    release(line);
-                    if unwinding(me) { 0 } else { values::nil() }
-                }));
+                release(spawn_into(me, scope, blocked_in_a_call));
                 release(spawn_into(me, scope, until_cancelled));
                 assert!(!close_scope(me, scope), "the close returned to user code");
                 0
@@ -596,7 +617,8 @@ fn lifecycle_teardown_skips_a_scoped_child_blocked_in_inline_io() {
 
 /// D-786, D-804: a teardown does not skip a member whose subtree still
 /// makes progress. The detached fiber waits in its scope's close for a
-/// child blocked in `io::read_line` (on the blocking pool, marked) and for
+/// child blocked in an `@blocking` call reading standard input (on the
+/// blocking pool, marked; `io::read_line` before D-1065) and for
 /// a sibling that, once cancelled,
 /// keeps running for 100 ms before it unwinds; the teardown waits for the
 /// sibling to leave (it ran past the 100 ms) before it skips the member.
@@ -620,12 +642,7 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
         let outcome = testing::start_root_in(&runtime, &config(&domain), &group, move |me| {
             detach(me, move |me| {
                 let scope = open_scope(me);
-                release(spawn_into(me, scope, |me| {
-                    // SAFETY: the running fiber's context.
-                    let line = unsafe { crate::io::cheby_io_sys_read_line(ctx_ptr(me)) };
-                    release(line);
-                    if unwinding(me) { 0 } else { values::nil() }
-                }));
+                release(spawn_into(me, scope, blocked_in_a_call));
                 release(spawn_into(me, scope, move |me| {
                     started.store(true, Ordering::SeqCst);
                     until_cancelled(me);
@@ -666,7 +683,9 @@ fn lifecycle_teardown_waits_for_a_busy_sibling_of_a_blocked_fiber() {
 
 /// D-817, D-786: when the system refuses a blocking-pool
 /// thread and none runs, `io::read_line` runs inline on its worker, marked,
-/// with the hand-off: the teardown skips the reader and counts it,
+/// with the hand-off, where nothing can abandon its refill (the fiber
+/// claims its own wait before it runs the job, D-1065): the teardown skips
+/// the reader and counts it,
 /// `shutdown` leaves that worker running, never joined, and the process
 /// exits promptly with status 0.
 #[test]

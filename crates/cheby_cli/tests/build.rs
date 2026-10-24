@@ -1,8 +1,9 @@
 //! `cheby build` (D-924, D-937): executables of small packages that reach
-//! no constant and register no user type, run and compared with `cheby
-//! run` of the same package (D-925, D-926, D-474, D-306); the runtime
-//! archive's tool errors (D-929, D-930); the "not available yet" errors
-//! (D-924, GAP(aot-layouts-not-yet)); and determinism (D-934).
+//! no constant, run and compared with `cheby run` of the same package
+//! (D-925, D-926, D-474, D-306, D-1025), user types among them, which the
+//! module records carry and the executable's start registers (D-919,
+//! D-920); the runtime archive's tool errors (D-929, D-930); the "not
+//! available yet" error of constants (D-924); and determinism (D-934).
 //!
 //! Every test links against the runtime archive next to `cheby`
 //! (`target/<profile>/libcheby_rt_exe.a`): `cargo build -p cheby_rt_exe`
@@ -353,33 +354,105 @@ fn build_not_yet_constants() {
     assert!(!exe.exists());
 }
 
-/// A program whose code uses a user type is refused before anything
-/// links, until module records carry layouts (GAP(aot-layouts-not-yet)).
+/// The package of the user-type tests: a type with one constructor.
+const SHAPES: &str = "//! Prints the area of a square.\n\nimport std::io\n\ntype Shape { Square(Int) }\n\nfn area(shape: Shape) -> Int {\n  case shape {\n    Square(side) => side * side\n  }\n}\n\nfn main() {\n  let size = area(Square(3))\n  io::println(\"{size}\")\n}\n";
+
+/// A program whose code uses a user type builds (D-919, D-920): its
+/// executable prints `9` and exits 0, as `cheby run` does (D-1025).
 #[test]
 #[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
-fn build_not_yet_user_types() {
+fn build_user_types_run() {
     let tmp = FreshDir::create("cheby-build-types").unwrap();
+    let root = package(tmp.path(), "shapes", SHAPES);
+    let (build, exe) = built(&root, tmp.path(), "shapes");
+    let cache = fresh_cache();
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stdout, "9\n");
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    let run = cheby(&root, &["run"], &cache, &[]);
+    assert_same(&build, &ran, &run);
+}
+
+/// D-934 with user types: the shapes package built from two copies at two
+/// absolute paths, with two fresh caches, under one basename gives
+/// byte-identical executables; the module records hold no layout id
+/// (D-915, D-920).
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_user_types_twice_identical() {
+    let tmp = FreshDir::create("cheby-build-types-twice").unwrap();
+    let a = package(&tmp.path().join("a"), "shapes", SHAPES);
+    let b = package(&tmp.path().join("b/nested/deeper"), "shapes", SHAPES);
+    std::fs::create_dir_all(tmp.path().join("out-a")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("out-b/x")).unwrap();
+    let (_, exe_a) = built(&a, &tmp.path().join("out-a"), "shapes");
+    let (_, exe_b) = built(&b, &tmp.path().join("out-b/x"), "shapes");
+    let (x, y) = (std::fs::read(exe_a).unwrap(), std::fs::read(exe_b).unwrap());
+    assert!(
+        x == y,
+        "the executables differ ({} and {} bytes)",
+        x.len(),
+        y.len()
+    );
+}
+
+/// A type with a record constructor, a positional one and a nullary one
+/// (its `cb$ctor$` static, D-920), debug printed (D-463), compared with
+/// `==` and used as the key of a `std::map` (hashing by type key, D-559):
+/// the executable prints what `cheby run` prints (D-1025).
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_user_types_print_and_compare() {
+    let tmp = FreshDir::create("cheby-build-types-print").unwrap();
     let root = package(
         tmp.path(),
-        "shapes",
-        "//! Prints the area of a square.\n\nimport std::io\n\ntype Shape {\n  Square(Int)\n}\n\nfn area(shape: Shape) -> Int {\n  case shape {\n    Square(side) => side * side\n  }\n}\n\nfn main() {\n  let size = area(Square(3))\n  io::println(\"{size}\")\n}\n",
+        "places",
+        r#"//! Prints, compares and looks up user types.
+
+import std::io
+import std::map
+
+/// A place on a grid.
+type Place { Point { x: Int, y: Int }, Cell(Int, String), Nowhere }
+
+/// What `place` is called.
+fn describe(place: Place) -> String {
+  case place {
+    Point { x, y } => "point {x},{y}"
+    Cell(n, name) => "cell {n} {name}"
+    Nowhere => "nowhere"
+  }
+}
+
+fn main() {
+  let a = Point { x: 1, y: 2 }
+  let b = Cell(3, "c")
+  let c = Nowhere
+  io::println("{a:?} {b:?} {c:?}")
+  io::println(describe(a))
+  let same = a == Point { x: 1, y: 2 }
+  let mixed = a == b
+  let empty = c == Nowhere
+  io::println("{same} {mixed} {empty}")
+  let places = map::insert(map::insert(map::insert(map::new(), a, "a"), b, "b"), c, "c")
+  let found = map::get(places, Point { x: 1, y: 2 })
+  let none = map::get(places, Nowhere)
+  let missing = map::get(places, Cell(4, "c"))
+  let size = map::size(places)
+  io::println("{found:?} {none:?} {missing:?} {size}")
+}
+"#,
     );
-    let exe = tmp.path().join("exe/shapes");
-    let out = build(&root, &exe);
-    assert_eq!(out.status, Some(1), "{}", out.stderr);
-    assert!(
-        out.stderr.starts_with(
-            "error: `cheby build` is not available yet for programs that use user-defined types"
-        ),
-        "{}",
-        out.stderr
+    let (build, exe) = built(&root, tmp.path(), "places");
+    let cache = fresh_cache();
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(
+        ran.stdout,
+        "Point { x: 1, y: 2 } Cell(3, \"c\") Nowhere\npoint 1,2\nTrue False True\nSome(\"a\") Some(\"c\") None 3\n"
     );
-    assert!(
-        out.stderr.ends_with("(planned for a later step of M3)\n"),
-        "{}",
-        out.stderr
-    );
-    assert!(!exe.exists());
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    let run = cheby(&root, &["run"], &cache, &[]);
+    assert_same(&build, &ran, &run);
 }
 
 /// D-934: 001 built from two copies at two absolute paths, with two fresh

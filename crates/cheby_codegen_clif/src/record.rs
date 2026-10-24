@@ -737,7 +737,7 @@ pub fn record_unit(
     };
     let mut module = RecordingModule::new(isa);
     let code = crate::compile_unit(&mut module, unit, ucx, opts)?;
-    crate::modrec::define(&mut module, &name, &code.defined)?;
+    crate::modrec::define(&mut module, &name, &code.defined, &code.types)?;
     module.finish()
 }
 

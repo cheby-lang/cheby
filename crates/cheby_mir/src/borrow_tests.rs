@@ -408,13 +408,15 @@ priv fn run(op: Op) -> Bool {
 }
 
 priv fn text(s: String, n: Int) -> String {
-  \"{s}{n}\"
+  \"{n}{s}\"
 }
 ",
     );
     assert_eq!(of(&m, "app::apply"), BorrowMask::OWNED, "{m:?}");
     assert_eq!(of(&m, "app::run"), BorrowMask::OWNED, "{m:?}");
-    // A raw `Int` is never counted, so never in a mask.
+    // A raw `Int` is never counted, so never in a mask. `s` follows `n`
+    // in the literal: a leading `String` would be the buffer and consumed
+    // (D-1055, D-806).
     assert_eq!(of(&m, "app::text"), mask(&[0]), "{m:?}");
 }
 
@@ -438,12 +440,14 @@ priv fn count<T>(xs: List<T>) -> Int {
 }
 
 priv fn label<T: Show>(x: T, name: String) -> String {
-  \"{name}: {x}\"
+  \"{x}: {name}\"
 }
 ",
     );
     assert_eq!(of(&m, "app::count"), BorrowMask::OWNED, "{m:?}");
-    // The dictionary is parameter 0, `x` is 1 and `name` is 2.
+    // The dictionary is parameter 0, `x` is 1 and `name` is 2. `name`
+    // follows `x` in the literal: a leading `String` would be the buffer
+    // and consumed (D-1055, D-806).
     assert_eq!(of(&m, "app::label"), mask(&[2]), "{m:?}");
 }
 

@@ -94,6 +94,10 @@ pub(crate) struct WaitHeader {
     state: AtomicU64,
     /// The waiting fiber.
     fiber: FiberRef,
+    /// Whether the fiber waits on a detached blocking-pool job
+    /// ([`WaitHeader::on_pool`]): it carries D-786's blocking mark, which
+    /// whoever settles the header clears before its wake (D-814).
+    on_pool: bool,
 }
 
 /// The bits of [`WaitHeader`]'s word below the arm's index.
@@ -105,6 +109,7 @@ impl fmt::Debug for WaitHeader {
             .field("state", &self.state())
             .field("arm", &self.arm())
             .field("fiber", &self.fiber)
+            .field("on_pool", &self.on_pool)
             .finish()
     }
 }
@@ -115,7 +120,24 @@ impl WaitHeader {
         Self {
             state: AtomicU64::new(u64::from(WaitState::Waiting.bits())),
             fiber: FiberRef::from_ctx(fiber),
+            on_pool: false,
         }
+    }
+
+    /// A header of `fiber` waiting on a detached blocking-pool job
+    /// (`sched/blocking.rs`, D-1065): the job's completion claims it, or
+    /// the walk cancels it and then clears the fiber's blocking mark before
+    /// its wake (`cancel::reach`), as the completion does (D-814).
+    pub(crate) fn on_pool(fiber: &ExecCtx) -> Self {
+        Self {
+            on_pool: true,
+            ..Self::new(fiber)
+        }
+    }
+
+    /// Whether the fiber waits on a detached blocking-pool job.
+    pub(crate) fn is_on_pool(&self) -> bool {
+        self.on_pool
     }
 
     /// The state's low byte.

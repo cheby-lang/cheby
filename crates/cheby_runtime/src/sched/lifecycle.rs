@@ -41,15 +41,17 @@
 //! its cleanup pads, and every scope it has open passes the cancellation
 //! through (D-667), so none returns `Err` to user code. A detached spawn
 //! into a closing group starts cancelled and never calls its function
-//! (D-800). A fiber blocked in a system call (standard input, file IO,
-//! `@blocking`), waiting on the blocking pool with D-786's mark set or
-//! running the call inline, cannot be stopped: the teardown skips it and
-//! counts it (D-786, D-814), and with it the
+//! (D-800). A fiber blocked in a system call (file IO, `@blocking`, or
+//! standard input read inline, D-817), waiting on the blocking pool with D-786's
+//! mark set or running the call inline, cannot be stopped: the teardown
+//! skips it and counts it (D-786, D-814), and with it the
 //! fibers of the same member's subtree that wait for it, such as a
 //! detached fiber waiting in a scope's close for a scoped child blocked in
-//! `io::read_line`. It looks for that state by surveying each member's
-//! subtree, scope by scope, as cancellation walks it. A teardown that
-//! meets a started halt stops waiting, because a frozen fiber never leaves
+//! an `@blocking` call. A fiber waiting on a refill of standard input's
+//! reader is not blocked in this sense: the cancellation abandons the
+//! refill, and the fiber unwinds (D-1065). It looks for the blocked state
+//! by surveying each member's subtree, scope by scope, as cancellation
+//! walks it. A teardown that meets a started halt stops waiting, because a frozen fiber never leaves
 //! its group, and reports `halted`; its host completes the halt.
 //!
 //! # Locks

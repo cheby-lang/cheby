@@ -756,11 +756,60 @@ fn record_modrec_is_hidden_read_only_data() {
     assert!(r.defines("cb$mod$app"));
     assert!(r.symbol("cb$mod$test$app").is_none());
     // The code-model unit has functions without located calls: every
-    // entry's site table is empty, and so is the string table.
+    // entry's site table is empty, and the string table holds only its
+    // type's strings.
     let (bytes, relocs) = object(&r, "cb$mod$app");
-    assert_eq!(u64_at(bytes, 0), 0);
     assert_eq!(u64_at(bytes, 80) as usize, r.functions.len());
-    assert!(relocs.iter().all(|(offset, _, _)| *offset != 8));
+    let reloc_at = |at: usize| {
+        relocs
+            .iter()
+            .find(|(offset, _, _)| *offset as usize == at)
+            .map(|(_, target, addend)| (target.as_str(), *addend))
+    };
+    let (_, strings_at) = reloc_at(8).unwrap();
+    let strings_at = strings_at as usize;
+    assert_eq!(strings_at + u64_at(bytes, 0) as usize, bytes.len());
+    // D-919: one type, `Pair`, with its one constructor in tag order: its
+    // name, key, fields (two value fields at 8 and 16, declaration order),
+    // its layout word, and no constructor static, since it has fields.
+    assert_eq!(u64_at(bytes, 16), 1);
+    let (target, types_at) = reloc_at(24).unwrap();
+    assert_eq!(target, "cb$mod$app");
+    let ty = types_at as usize;
+    assert_eq!(string_at(bytes, strings_at, u32_at(bytes, ty)), "Pair");
+    assert_eq!(u64_at(bytes, ty + 8), 0);
+    assert_eq!(u64_at(bytes, ty + 16), 1);
+    let ctor = reloc_at(ty + 24).unwrap().1 as usize;
+    assert_eq!(
+        string_at(bytes, strings_at, u32_at(bytes, ctor)),
+        "app::Pair"
+    );
+    assert_eq!(
+        string_at(bytes, strings_at, u32_at(bytes, ctor + 4)),
+        "Pair"
+    );
+    assert_eq!(u32_at(bytes, ctor + 8), 0);
+    assert_eq!(u64_at(bytes, ctor + 16), 2);
+    let fields = reloc_at(ctor + 24).unwrap().1 as usize;
+    for (k, offset) in [8, 16].into_iter().enumerate() {
+        let field = fields + 16 * k;
+        assert_eq!(u32_at(bytes, field), 0, "a value field");
+        assert_eq!(u32_at(bytes, field + 4), NO_STRING);
+        assert_eq!(u32_at(bytes, field + 8), offset);
+    }
+    assert_eq!(reloc_at(ctor + 32), Some(("cb$layout$app$Pair", 0)));
+    assert_eq!(reloc_at(ctor + 40), None);
+    assert_eq!(u64_at(bytes, ctor + 40), 0);
+    // The layout word stays writable in a unit alone (D-920).
+    assert_eq!(
+        r.symbol("cb$layout$app$Pair").unwrap().kind,
+        SymbolKind::Data { writable: true }
+    );
+    // No hooks, external types, free shapes or constants.
+    for table in [32, 48, 64, 96] {
+        assert_eq!(u64_at(bytes, table), 0, "table at {table}");
+        assert_eq!(reloc_at(table + 8), None, "table at {table}");
+    }
 }
 
 /// A tests unit's record is `cb$mod$test$<path>`

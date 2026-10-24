@@ -26,8 +26,20 @@
 //!   directories are removed on every path that returns or unwinds; a
 //!   signal that takes its default action (Ctrl-C, SIGTERM) during the
 //!   link ends the process without removing them, as D-1127 says of
-//!   temporary caches. D-1112's sweep of the directories whose process is
-//!   dead is not implemented yet: it lands in wave 4b (package N4b).
+//!   temporary caches.
+//! - So, on D-1127's model, right before creating either directory the
+//!   link deletes the directories of that pattern whose process is dead
+//!   (`sweep_dead`): in the temporary directory every
+//!   `cheby-objects-<pid>-<n>`, and in the output directory every
+//!   `.cheby-link-<pid>-<n>`, that is a directory (a symbolic link is never
+//!   followed or deleted), that the effective user owns, whose `pid` is
+//!   not this process's, and whose process no longer exists (`kill(pid,
+//!   0)` fails with `ESRCH`). This process's directories, a live
+//!   process's, another user's and anything else are never touched, and
+//!   every failure is ignored: the sweep only tidies up, and runs on every
+//!   link, also one that fails later. A process in another pid namespace
+//!   that shares the directory looks dead, and its directories may go
+//!   (D-1127). Windows sweeps nothing until M6 (D-1127, D-935).
 //! - A `cc` that cannot be started and a failed link are tool errors that
 //!   show the linker's output, which is never parsed (D-933).
 //!
@@ -49,6 +61,13 @@ pub const REMOVED_VARS: [&str; 5] = ["CC", "LD", "CFLAGS", "LDFLAGS", "MACOSX_DE
 
 /// The C compiler that links, looked up in `PATH` (D-933).
 pub const CC: &str = "cc";
+
+/// The prefix of the objects' directory in the temporary directory
+/// (D-1112).
+pub(crate) const OBJECTS_PREFIX: &str = "cheby-objects";
+
+/// The prefix of the staging directory in the output directory (D-1112).
+pub(crate) const STAGING_PREFIX: &str = ".cheby-link";
 
 /// What one link takes.
 #[derive(Clone, Copy, Debug)]
@@ -119,7 +138,9 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
         .output
         .file_name()
         .ok_or_else(|| LinkError::Io(format!("`{}` has no file name", job.output.display())))?;
-    let objects = PrivateDir::create(&std::env::temp_dir(), "cheby-objects")?;
+    let tmp = std::env::temp_dir();
+    sweep_dead(&tmp, OBJECTS_PREFIX);
+    let objects = PrivateDir::create(&tmp, OBJECTS_PREFIX)?;
     let mut names = Vec::with_capacity(job.objects.len());
     for (module, bytes) in job.objects {
         let file = object_file(module);
@@ -127,7 +148,8 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
         std::fs::write(&path, bytes).map_err(|e| io("write", &path, e))?;
         names.push(file);
     }
-    let staging = PrivateDir::create(out_dir, ".cheby-link")?;
+    sweep_dead(out_dir, STAGING_PREFIX);
+    let staging = PrivateDir::create(out_dir, STAGING_PREFIX)?;
     let staged = staging.path.join(name);
     let mut cmd = Command::new(CC);
     for var in REMOVED_VARS {
@@ -202,6 +224,81 @@ fn create_private(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn create_private(path: &Path) -> std::io::Result<()> {
     std::fs::create_dir(path)
+}
+
+/// D-1112, on D-1127's model: deletes every `<prefix>-<pid>-<n>`
+/// directory directly under `parent` that the effective user owns and
+/// whose process is dead, ignoring every failure (module documentation).
+#[cfg(unix)]
+pub(crate) fn sweep_dead(parent: &Path, prefix: &str) {
+    use std::os::unix::fs::MetadataExt as _;
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    // SAFETY: `geteuid` takes no arguments, cannot fail and touches no
+    // memory of ours.
+    let euid = unsafe { libc::geteuid() };
+    let own = std::process::id();
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| leftover_pid(name, prefix))
+        else {
+            continue;
+        };
+        if pid == own {
+            continue;
+        }
+        let path = entry.path();
+        // `symlink_metadata` never follows a symbolic link, so a link is
+        // not a directory here and is never deleted.
+        let owned_dir =
+            std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir() && m.uid() == euid);
+        if !owned_dir || process_alive(pid) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(&path);
+    }
+}
+
+/// Windows: nothing is swept until M6 (D-1127, D-935).
+#[cfg(not(unix))]
+pub(crate) fn sweep_dead(_parent: &Path, _prefix: &str) {}
+
+/// The process id in a link directory's name `<prefix>-<pid>-<n>`, two
+/// non-empty runs of ASCII digits, or `None` for any other name.
+#[cfg(unix)]
+fn leftover_pid(name: &str, prefix: &str) -> Option<u32> {
+    let (pid, n) = name
+        .strip_prefix(prefix)?
+        .strip_prefix('-')?
+        .split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if digits(pid) && digits(n) {
+        pid.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Whether the process `pid` exists: `kill(pid, 0)` succeeds or fails
+/// with anything but `ESRCH`, such as `EPERM` for another user's process.
+/// A pid that `pid_t` cannot hold, or 0, counts as alive, so it is never
+/// swept.
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    if pid <= 0 {
+        return true;
+    }
+    // SAFETY: signal 0 sends nothing: `kill` only checks that the process
+    // exists and may be signalled, and touches no memory of ours. `pid` is
+    // positive, so it names one process, never a process group.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// D-918's check over the copies of a link: every name that several

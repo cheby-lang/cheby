@@ -37,6 +37,8 @@ mod entry;
 mod expr;
 mod external;
 mod interp;
+#[cfg(test)]
+mod interp_tests;
 mod intrinsic;
 #[cfg(test)]
 mod intrinsic_tests;

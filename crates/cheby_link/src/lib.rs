@@ -31,6 +31,8 @@ pub mod object;
 pub mod program;
 
 #[cfg(test)]
+mod link_tests;
+#[cfg(test)]
 mod object_tests;
 #[cfg(test)]
 mod program_tests;

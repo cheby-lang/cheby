@@ -43,6 +43,9 @@ pub struct UnitCode {
     /// The CLIF text of each function under
     /// [`CodegenOptions::capture_clif`].
     pub clif: Vec<String>,
+    /// The unit's user types with their layout words, constructor statics
+    /// and hooks, as the module record lists them (D-919).
+    pub(crate) types: Vec<crate::modrec::RecordType>,
 }
 
 /// Compiles `unit` alone into `module`, which holds nothing else (D-917,
@@ -81,10 +84,12 @@ pub fn compile_unit<M: Module>(
     let units = std::slice::from_ref(unit);
     crate::declare(module, &mut decls, units, &cx, opts)?;
     let (clif, stats, defined) = crate::define_with_stats(module, units, &mut decls, &cx, opts)?;
+    let types = crate::modrec::record_types(unit, &decls)?;
     Ok(UnitCode {
         defined,
         stats,
         clif,
+        types,
     })
 }
 

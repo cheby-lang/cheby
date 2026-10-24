@@ -309,10 +309,25 @@ fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>
 }
 
 /// The runnable examples `cheby build` must build in this milestone's
-/// state (D-924's first slice and what N4's not-yet criteria let through,
-/// the wave-3 gate): a refusal of one of them is a failure. The list grows
-/// as later packages lift the not-yet errors.
-const MUST_BUILD: [&str; 3] = ["001_hello_world", "003_fizzbuzz", "024_two_sum"];
+/// state (GAP(determinism-must-build)): D-1114's 001, 003 and 024 (D-924's
+/// first slice and what N4's not-yet criteria let through), and the
+/// examples whose only refusal was their user types or `std::io::Error`'s
+/// layout, which the module records now carry (D-919, D-920; N5a): 002,
+/// 004, 008, 025 and 032. A refusal of one of them is a failure; the
+/// others may still be refused with D-1114's set (a "not available yet"
+/// tool error or a compile error, status 1). The list grows as later
+/// packages lift the not-yet errors, up to every runnable example with
+/// N6.
+const MUST_BUILD: [&str; 8] = [
+    "001_hello_world",
+    "002_greet",
+    "003_fizzbuzz",
+    "004_tictactoe",
+    "008_json",
+    "024_two_sum",
+    "025_linked_list",
+    "032_aoc_2024_day_1",
+];
 
 /// Whether a `cheby build` that failed alike twice, as `log` records it,
 /// is a refusal module documentation item 4 allows: a "not available yet"
@@ -499,7 +514,9 @@ mod tests {
             "Some(1)",
             "error[E0053]: no symbol\n --> src/main.cheby:1:1\n",
         );
-        assert!(refusal("002_greet", &compile).is_ok());
+        assert!(refusal("029_csv_report", &compile).is_ok());
+        assert!(refusal("002_greet", &compile).is_err());
+        assert!(refusal("025_linked_list", &not_yet).is_err());
         for stderr in [
             "error: the runtime archive `/nonexistent/libcheby_rt_exe.a` does not exist\n",
             "error: the runtime archive `x` was built from another runtime\n",

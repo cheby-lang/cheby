@@ -253,7 +253,9 @@ pub struct FieldInfo {
 /// One entry of the layout table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutInfo {
-    /// The constructor's full name, such as `Option.Some`, for
+    /// The constructor's full name: `Type.Ctor` for a builtin one, such as
+    /// `Option.Some`, and the constructor's path, `module::Ctor`, for
+    /// generated code's layouts (MIR's `LayoutDesc::name`), for
     /// diagnostics.
     pub name: Box<str>,
     /// The type's name as debug printing shows it (`Option`, `Shape`).
@@ -305,9 +307,12 @@ impl LayoutInfo {
     /// value fields are laid out first, then raw fields, each in
     /// declaration order.
     ///
-    /// `name` is `Type.Ctor`; the type and constructor names are split at
-    /// its last `.`, `record` is whether any field has a name, and the type
-    /// key is that of a builtin type with the type's name. Generated code's
+    /// `name` is the constructor's full name: for generated code's layouts
+    /// `LayoutDesc::name`, the constructor's path `module::Ctor`, which the
+    /// JIT and an executable's start pass alike (D-920); the type and
+    /// constructor names are split at its last `.` (the whole name for a
+    /// path), `record` is whether any field has a name, and the type key is
+    /// that of a builtin type with the type's name. Generated code's
     /// layouts set the real values with [`LayoutInfo::named`].
     #[must_use]
     pub fn ctor(name: &str, tag: u32, fields: &[(FieldKind, Option<&str>)]) -> Self {
@@ -450,7 +455,11 @@ impl LayoutInfo {
         }
     }
 
-    fn validate(&self) -> Result<(), LayoutError> {
+    /// Checks that `self` is a well-formed constructor layout, as
+    /// [`register_consecutive`] does before it registers anything; the
+    /// program image's installation checks every record's layouts with it
+    /// first (D-920).
+    pub(crate) fn validate(&self) -> Result<(), LayoutError> {
         let LayoutKind::Ctor { unit, tag } = self.kind else {
             return Err(LayoutError::Invalid(
                 "only constructor layouts are registered as user layouts".into(),
