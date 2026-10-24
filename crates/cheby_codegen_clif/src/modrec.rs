@@ -178,7 +178,7 @@ pub(crate) struct RecordCtor {
 
 /// The user types of `unit`, compiled alone with `decls`, in the order
 /// `cheby_jit`'s `register_layouts` registers them
-/// (GAP(aot-layout-registration-order)): types in the order of their first
+/// (D-1163): types in the order of their first
 /// constructor in `MirModule::layouts` (`DefIndex` order), each type's
 /// constructors in tag order, with the facts its `layout_info` reads from
 /// each `LayoutDesc`, and hooks exactly where its `register_hooks` sets

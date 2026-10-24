@@ -586,7 +586,7 @@ fn main() {
 /// standard input stays open: well within [`PATIENCE`].
 const EXIT_LIMIT: Duration = Duration::from_secs(10);
 
-/// D-1065, GAP(pool-detached-pending): `main` returns after the timeout
+/// D-1065, D-1165: `main` returns after the timeout
 /// abandoned its read, while standard input stays open and unwritten and
 /// the abandoned refill still waits for it; the process exits with 0
 /// without waiting for the refill.

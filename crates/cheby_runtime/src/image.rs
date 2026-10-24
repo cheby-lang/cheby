@@ -101,7 +101,7 @@
 //! each hooked type (D-482, D-585), and the call-site ranges under one
 //! code owner that is never unregistered (D-867). The order and the facts
 //! are those of `cheby_jit`'s `register_layouts`, `layout_info` and
-//! `register_hooks` (GAP(aot-layout-registration-order)), so an executable
+//! `register_hooks` (D-1163), so an executable
 //! and `cheby run` register the same layouts. The external types and free
 //! shapes (N5b) and the constants (K5a) are not installed yet: a
 //! non-empty table of them is refused with [`ImageError::NotYet`], before
@@ -705,7 +705,7 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     // Then the layouts, record by record in build order, each type's
     // constructors with consecutive ids in tag order (D-522), as
     // `cheby_jit`'s `register_layouts` registers them
-    // (GAP(aot-layout-registration-order)).
+    // (D-1163).
     let mut hooks: Vec<(LayoutId, [Word; 3])> = Vec::new();
     for (index, (types, record_hooks)) in checked.into_iter().enumerate() {
         let mut ids: Vec<Vec<LayoutId>> = Vec::with_capacity(types.len());

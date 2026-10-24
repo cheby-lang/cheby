@@ -309,7 +309,7 @@ fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>
 }
 
 /// The runnable examples `cheby build` must build in this milestone's
-/// state (GAP(determinism-must-build)): D-1114's 001, 003 and 024 (D-924's
+/// state (D-1164): D-1114's 001, 003 and 024 (D-924's
 /// first slice and what N4's not-yet criteria let through), and the
 /// examples whose only refusal was their user types or `std::io::Error`'s
 /// layout, which the module records now carry (D-919, D-920; N5a): 002,

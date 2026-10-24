@@ -69,7 +69,7 @@
 //! gets in order; that read waits for a refill still running, since the
 //! refill holds the reader's lock. A read error met by a refill whose read
 //! was abandoned is kept in the reader for the next read
-//! (GAP(stdin-abandoned-refill-error)). Every other kernel here waits for
+//! (D-1166). Every other kernel here waits for
 //! its job (D-670).
 //!
 //! The `Result` kernels of `std::io` (`sys_*`) never end the program on an
@@ -731,7 +731,7 @@ struct LineReader {
     /// How the last read of the input ended, kept for the next read that
     /// takes it when no read was there to take it: the end of input, or a
     /// failure, after a refill whose read was abandoned (D-1065,
-    /// GAP(stdin-abandoned-refill-error)); also, for a moment, after any
+    /// D-1166); also, for a moment, after any
     /// read that met the end or failed, until its own read takes it.
     end: Option<End>,
     /// The bytes searched for `\n` so far (tests only).
@@ -1001,7 +1001,7 @@ fn serve_buffered_bytes(
 /// input ends ([`LineReader::fill_line`]), then claims `me`'s wait, and
 /// only then takes the line for this read; when the cancellation walk won
 /// the wait, the job takes nothing, and the line, the end or the failure
-/// stays in the reader for the next read (GAP(stdin-abandoned-refill-error)).
+/// stays in the reader for the next read (D-1166).
 /// The read counts in `waiters` from before the submit (D-548) until its
 /// refill has decided, before it releases the reader. `Err(Cancelled)`:
 /// cancelled before the refill started (D-816) or while it ran (D-1065).

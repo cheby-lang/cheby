@@ -702,7 +702,7 @@ fn facts_package(dir: &Path) -> PathBuf {
     root
 }
 
-/// D-919, D-920 and GAP(aot-layout-registration-order): an executable's
+/// D-919, D-920 and D-1163: an executable's
 /// module records list, in order, the layouts `cheby run` registers, with
 /// its facts (plan §2.1's first check). A program with user types in
 /// three modules (a record constructor, a positional one, a nullary one,

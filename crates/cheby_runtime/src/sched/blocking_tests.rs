@@ -2,7 +2,7 @@
 //! `run_blocking_detached`, `run_blocking_claiming`): a cancellation is
 //! delivered at once while the job runs on, its result is dropped on its
 //! pool thread, its pool token and the runtime's pool count are released
-//! when the fiber abandons it (GAP(pool-detached-pending)), so it holds
+//! when the fiber abandons it (D-1165), so it holds
 //! no stop and no deadlock report back, and the paths `run_blocking`
 //! shares (the entry check, a refused thread, no runtime). Every test is
 //! named `pool_detached_…`; `run_blocking`'s own tests, whose wait D-1065
@@ -175,7 +175,7 @@ fn pool_detached_a_job_returns_its_result() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// D-1065, GAP(pool-detached-pending): a teardown's cancellation reaches a
+/// D-1065, D-1165: a teardown's cancellation reaches a
 /// detached fiber waiting on a job that never returns on its own: the
 /// fiber unwinds at once (the teardown waits for it and skips nothing),
 /// while the job still runs; its pool token and the runtime's pool count
@@ -530,7 +530,7 @@ fn receive_forever(me: &ExecCtx) -> Word {
     }
 }
 
-/// D-857 under GAP(pool-detached-pending): a pending detached job holds
+/// D-857 under D-1165: a pending detached job holds
 /// detection off while its fiber waits for it; once a cancellation made
 /// the fiber abandon it, the job no longer counts, and the root, blocked
 /// for good, is reported while the job still runs.

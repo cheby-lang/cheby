@@ -260,7 +260,7 @@ impl Read for Scripted {
     }
 }
 
-/// GAP(stdin-abandoned-refill-error), D-1065: a refill whose read was
+/// D-1166, D-1065: a refill whose read was
 /// abandoned meets a read error; the reader keeps it, with the bytes of
 /// the unfinished line consumed (`hal`, as `BufRead::read_until`), and
 /// the next read, on another fiber, gets the error; the read after it gets

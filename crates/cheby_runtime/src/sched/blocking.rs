@@ -75,7 +75,7 @@
 //!    job: it takes the job out of its domain's pending count and out of
 //!    the runtime's pool count itself, and returns `Err(Cancelled)` at
 //!    once, while the job runs on to its end on its pool thread
-//!    (GAP(pool-detached-pending): an abandoned job holds no stop, D-815,
+//!    (D-1165: an abandoned job holds no stop, D-815,
 //!    no leak check, D-710, and no deadlock report back, D-857, since no
 //!    fiber waits for it any more).
 //!
@@ -492,7 +492,7 @@ fn wait_for_completion(me: &ExecCtx, hooks: &Hooks) {
 /// abandoned (D-692, D-817). `job` owns Rust data only and never touches a
 /// Cheby object (D-191, D-683). An abandoned job's pool token is released
 /// when the fiber abandons it, and it holds no stop and no leak check
-/// (GAP(pool-detached-pending)).
+/// (D-1165).
 ///
 /// Only jobs whose effect a cancelled fiber cannot miss are detached
 /// (D-1065): refills and lookups. Writes, opens, closes, directory
@@ -594,7 +594,7 @@ struct Detached<R> {
     runtime: Arc<Shared>,
     /// The job's place in its domain's pending count (D-857), released
     /// after the completion's wake or skip, or by the fiber when it
-    /// abandons the job (GAP(pool-detached-pending)).
+    /// abandons the job (D-1165).
     pending: Option<Arc<PoolPending>>,
     /// The test's probe.
     #[cfg(test)]
@@ -670,7 +670,7 @@ impl<R> Detached<R> {
 
     /// The fiber abandons the job, or never submitted it: takes it out of
     /// its domain's pending count and of the runtime's pool count, which
-    /// its completion then leaves alone (GAP(pool-detached-pending)).
+    /// its completion then leaves alone (D-1165).
     /// Called by the fiber while it runs, after the walk's wake.
     fn abandon(&self) {
         self.release_pending();
