@@ -15,9 +15,9 @@
 //! `CHEBY_TEST_KEEP_CACHE=<absolute directory>` makes the harness use that
 //! directory instead, creating it owner-only if needed, and never delete
 //! it, so two runs can share one cache, as the check that a second run of
-//! the UI suite writes no new record does (GAP(harness-kept-cache)).
+//! the UI suite writes no new record does (D-1144).
 //! `cargo xtask` and the `cheby_cli` tests that start `cheby` use
-//! [`HarnessCache`] too (GAP(cache-tests-isolated)).
+//! [`HarnessCache`] too (D-1128).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -114,7 +114,7 @@ fn owner_only_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// The variable that makes a harness use, and keep, a cache directory of
-/// the developer's choice (GAP(harness-kept-cache)).
+/// the developer's choice (D-1144).
 pub const KEEP_CACHE_ENV: &str = "CHEBY_TEST_KEEP_CACHE";
 
 /// The build cache of one harness process (D-959): a [`FreshDir`] in the
@@ -132,7 +132,7 @@ impl HarnessCache {
     /// the system's temporary directory. When `CHEBY_TEST_KEEP_CACHE`
     /// names an absolute directory, the harness uses that one instead,
     /// creating it owner-only if needed, and never deletes it, so two runs
-    /// can share one cache (GAP(harness-kept-cache)).
+    /// can share one cache (D-1144).
     ///
     /// # Errors
     ///

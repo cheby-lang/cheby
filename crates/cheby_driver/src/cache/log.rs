@@ -1,5 +1,5 @@
 //! `CHEBY_CACHE_LOG` (D-973): every lookup of a command as a hit or a
-//! miss, and every package module it parsed (GAP(cache-log-parses)),
+//! miss, and every package module it parsed (D-1135),
 //! written sorted when the command ends, for the cache-hit tests.
 
 use std::ffi::OsString;
@@ -55,7 +55,7 @@ impl CacheLog {
     }
 
     /// Records that the command parsed package module `module`, as a line
-    /// `parse <module>` (GAP(cache-log-parses)). Std modules are not
+    /// `parse <module>` (D-1135). Std modules are not
     /// listed (D-980).
     pub fn parsed(&self, module: &str) {
         if self.path.is_none() {

@@ -3,7 +3,7 @@
 //! lookups through `CHEBY_CACHE_LOG`'s file.
 //!
 //! Every test opens its own store in a fresh directory, so no test reads
-//! or fills the developer's cache (GAP(cache-tests-isolated)).
+//! or fills the developer's cache (D-1128).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -208,7 +208,7 @@ fn lines(log: &Path) -> Vec<String> {
 }
 
 /// The package modules the log says the command parsed
-/// (GAP(cache-log-parses)), sorted.
+/// (D-1135), sorted.
 fn parses(log: &Path) -> Vec<String> {
     std::fs::read_to_string(log)
         .unwrap()
@@ -408,7 +408,7 @@ fn cache_hit_moved_item() {
         .unwrap();
     let store = f.store();
     let f1 = front_key_of(&front, "app::a", A);
-    // No hidden reads: no hint (GAP(hint-empty-omitted)).
+    // No hidden reads: no hint (D-1137).
     assert_eq!(store.get_hint(&reads_key(f1, BUILD)).unwrap(), None);
     let f2 = front_identity(f1, BUILD, &[]);
     let mut record = FrontRecord::decode(&store.get_record(&f2).unwrap().unwrap()).unwrap();
@@ -584,7 +584,7 @@ fn front_import_change_misses() {
 /// A module with an error that reads a hit prints what a cold build
 /// prints: E0043 names `b`'s private `helper` and points at it, and the
 /// decoded interface of `b` holds no `priv` item (D-953), so the reader is
-/// checked again on fresh interfaces (GAP(warm-recheck-readers)), by
+/// checked again on fresh interfaces (D-1132), by
 /// `cheby check` and by `cheby run`, which stops after the front end.
 #[test]
 fn front_reader_with_error_prints_cold_diagnostics() {
@@ -651,7 +651,7 @@ fn front_error_writes_nothing() {
 /// prints what a cold check prints; after an edit of the root, which needs
 /// `b`'s interface, the front end starts again, decodes every hit at its
 /// lookup, finds every artifact bad, and checks every module from source
-/// (GAP(package-index-shape)), printing what a cold check prints.
+/// (D-1133), printing what a cold check prints.
 #[test]
 fn front_corrupt_record_or_artifact_misses() {
     let mut f = several("corrupt");
@@ -944,7 +944,7 @@ const CLEAN_UTIL: &str = "//! Util.\n\npub fn double(n: Int) -> Int {\n  n * 2\n
 
 /// D-962: a warm check with no edit reads its package index and nothing
 /// else (no record, hint or blob file is opened), and writes no file: an
-/// unchanged index is not rewritten (GAP(package-index-shape)).
+/// unchanged index is not rewritten (D-1133).
 #[test]
 fn index_warm_check_opens_and_writes_nothing() {
     let mut f = Fixture::new(
@@ -997,7 +997,7 @@ fn index_stale_or_corrupt_is_ignored() {
 
 /// An edit that closes an import cycle through modules the index let go
 /// unparsed: the front end starts again with every module parsed, and
-/// prints E0040 as a cold check does (GAP(package-index-shape)).
+/// prints E0040 as a cold check does (D-1133).
 #[test]
 fn index_cycle_after_edit_starts_again() {
     let mut f = several("index_cycle");
@@ -1324,7 +1324,7 @@ fn constants_fixture(name: &str) -> Fixture {
     )
 }
 
-/// GAP(check-constants-from-summaries): a warm check parses and checks
+/// D-1134: a warm check parses and checks
 /// exactly the constant's module and what it imports, on fresh
 /// interfaces, so constant evaluation runs, and prints what a cold check
 /// prints.
@@ -1364,7 +1364,7 @@ fn cache_hit_constants_body_edit_fails_evaluation() {
     assert_eq!(warm.checked, ["app::a", "app::b"]);
 }
 
-/// No module is checked twice (GAP(warm-recheck-readers)): a warm
+/// No module is checked twice (D-1132): a warm
 /// `cheby check` checks nothing, and a warm `cheby run`, `cheby test` and
 /// build-mode front end check each package module once.
 #[test]
@@ -1412,7 +1412,7 @@ fn cache_hit_no_module_checked_twice() {
     assert_eq!(edited.checked, ["app", "app::b", "app::c"]);
 }
 
-/// GAP(hint-empty-omitted): a package without hidden reads writes no
+/// D-1137: a package without hidden reads writes no
 /// read-set hint; the store's only hint file is the package index.
 #[test]
 fn hint_empty_none_written() {

@@ -131,7 +131,7 @@ impl Kind {
 pub const PROGRAM_IMAGE: &str = "cb$image";
 
 /// `cb$mod$<module path>`, the module record of a code unit (D-917,
-/// D-919), the path joined as D-456 joins it. GAP(module-record-per-unit):
+/// D-919), the path joined as D-456 joins it. D-1107:
 /// a tests unit's is [`tests_module_record`].
 #[must_use]
 pub fn module_record(module: &str) -> String {
@@ -140,7 +140,7 @@ pub fn module_record(module: &str) -> String {
 
 /// `cb$mod$test$<module path>`, the module record of a tests unit.
 ///
-/// GAP(module-record-per-unit): a code unit's record holds
+/// D-1107: a code unit's record holds
 /// `cb$mod$<path>` and a tests unit's `cb$mod$test$<path>`, as D-572 names
 /// tests' symbols, so a program that loads both has no clash. `test` is a
 /// keyword, which names no package or module (§2.4, §7.1), so no code
@@ -175,8 +175,8 @@ pub fn item(kind: Kind, name: &DefName) -> String {
 /// stale mask fails to resolve instead of calling with the wrong
 /// convention.
 ///
-/// GAP(slot-mask-hex): the mask is its `u64` (bit `i` is parameter `i`)
-/// in lowercase hex without leading zeros, after `$$b`, and the suffix
+/// D-1109: the mask is its `u64` (bit `i` is parameter `i`, dictionaries
+/// first) in lowercase hex without leading zeros, after `$$b`, and the suffix
 /// comes last, after a REPL item's `$r<generation>`, which is part of its
 /// item name ([`crate::SessionName::versioned`]); the REPL never borrows
 /// (D-715), so the two never meet today. An all-owned slot keeps D-456's

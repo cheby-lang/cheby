@@ -2,7 +2,7 @@
 //! objects, the program object and the runtime archive into an executable
 //! for the host.
 //!
-//! GAP(aot-link-line):
+//! D-1112:
 //!
 //! - `cc` is looked up in `PATH`, with `CC`, `LD`, `CFLAGS`, `LDFLAGS` and
 //!   `MACOSX_DEPLOYMENT_TARGET` removed from its environment, so nothing
@@ -13,7 +13,7 @@
 //! - Flags: on Linux `-pie -Wl,--gc-sections -Wl,--eh-frame-hdr
 //!   -Wl,-z,relro,-z,now -Wl,--build-id=sha1`; on macOS `-arch arm64
 //!   -mmacosx-version-min=<the archive's minimum> -Wl,-dead_strip -Wl,-S`
-//!   (no debug map).
+//!   (the minimum is 11.0; no debug map).
 //! - The objects are written into a fresh private temporary directory,
 //!   each named after its module path (`hello_world.o`, `std::io.o`; the
 //!   program object `cb$program.o`), and `cc` runs in that directory with
@@ -23,7 +23,11 @@
 //!   output directory, under the output's final basename, since ld64
 //!   derives `LC_UUID` and the signature's identifier from it (D-933,
 //!   D-934); the file is then renamed into place, on one file system. Both
-//!   directories are removed on every path.
+//!   directories are removed on every path that returns or unwinds; a
+//!   signal that takes its default action (Ctrl-C, SIGTERM) during the
+//!   link ends the process without removing them, as D-1127 says of
+//!   temporary caches. D-1112's sweep of the directories whose process is
+//!   dead is not implemented yet: it lands in wave 4b (package N4b).
 //! - A `cc` that cannot be started and a failed link are tool errors that
 //!   show the linker's output, which is never parsed (D-933).
 //!

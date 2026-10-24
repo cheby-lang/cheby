@@ -12,7 +12,7 @@
 //! `std/`, `Cargo.lock` and `rust-toolchain.toml`. No absolute path,
 //! modification time or directory order enters it (D-264).
 //!
-//! GAP(build-id-inputs): files and directories whose names start with `.`
+//! D-1116: files and directories whose names start with `.`
 //! (editor and Finder droppings such as `.DS_Store`) are not inputs.
 //!
 //! `src/build_id.rs`'s tests include this file through `#[path]`, so the

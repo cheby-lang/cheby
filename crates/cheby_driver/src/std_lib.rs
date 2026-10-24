@@ -340,7 +340,7 @@ include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
 
 /// The source hashes of the std module at `path` (under `std`), computed
 /// from its file when `cheby` was built (D-963,
-/// GAP(source-hash-width)); `None` for a path with no file.
+/// D-1130); `None` for a path with no file.
 #[must_use]
 pub fn source_hashes(path: &str) -> Option<crate::SourceHashes> {
     let at = STD_SOURCE_HASHES
@@ -430,7 +430,7 @@ mod tests {
     }
 
     /// Every std constant of `build.rs` is the hash of the text `cheby`
-    /// embeds, both widths (D-963, D-538, GAP(source-hash-width)), and
+    /// embeds, both widths (D-963, D-538, D-1130), and
     /// every embedded module has one.
     #[test]
     fn front_source_hash_std_constants_match_embedded_text() {

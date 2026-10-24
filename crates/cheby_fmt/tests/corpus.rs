@@ -3,7 +3,7 @@
 //! (`std/**/*.cheby`), formatted at 80, 100 and 120 columns.
 //!
 //! - Each formats without error, and a second pass changes nothing.
-//! - Formatting keeps the meaning (GAP(fmt-trivia-definition)): the tokens
+//! - Formatting keeps the meaning (D-1153): the tokens
 //!   without whitespace, line breaks and comments are unchanged, and so are
 //!   the comments' texts in order; the formatted text parses with no grammar
 //!   error into a tree whose node kinds, trivia aside, equal the original's.
@@ -12,7 +12,7 @@
 //!   set, and a list the printer lays out gains a trailing comma when it
 //!   breaks and loses it when it fits, so that comma is left out, except
 //!   the comma of a one-element tuple, which makes it a tuple and is
-//!   always compared (GAP(fmt-trailing-comma)).
+//!   always compared (D-1152).
 //!
 //! The same checks run over the UI test sources without a grammar error.
 //! The test only reads the repository.
@@ -541,7 +541,7 @@ fn keep_points(text: &str, original: &Parsed, kept: &mut Vec<Point>, group: &[Po
 }
 
 /// The node counts the printer may print verbatim in `text`, by rule: a
-/// gap between a unary `-` and a number (D-470, GAP(fmt-negative-literal-gap))
+/// gap between a unary `-` and a number (D-470, D-1158)
 /// and an attribute with no item after it (a top-level `ERROR` node), with
 /// everything inside them; and the number of such top-level nodes.
 #[expect(
@@ -614,7 +614,7 @@ fn check_no_fallback(text: &str, total: &mut Coverage) -> Result<(), String> {
     Ok(())
 }
 
-/// The corpus with comments everywhere (D-1031, GAP(fmt-comment-positions)):
+/// The corpus with comments everywhere (D-1031, D-1160):
 /// every example, std and UI source, with a comment at the end of every
 /// line and a comment line before every line, wherever that keeps the
 /// parse, formats at 80, 100 and 120 columns with no error, a second pass

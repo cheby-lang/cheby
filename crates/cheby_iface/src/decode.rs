@@ -15,7 +15,7 @@
 //!   constructors or interface functions ([`crate::encoded_order`]);
 //! - gives constructors and interface functions their parent's
 //!   visibility, targets and deprecation, as `cheby_resolve` does
-//!   (GAP(iface-decode-derived-fields): v1 does not encode them, and the
+//!   (D-1121: v1 does not encode them, and the
 //!   debug round trip of D-954 fails if they ever differ);
 //! - leaves every span `None`: spans live in the artifact's section S
 //!   ([`crate::artifact`], [`apply_spans`]).
@@ -25,7 +25,7 @@
 //! from a length read from the input (D-422). Types are read with an
 //! explicit stack into a flat arena, children before their parent, and
 //! resolved in arena order, so a type nests as deep as the encoder wrote
-//! it, with no limit (GAP(iface-decode-type-depth): a valid program's
+//! it, with no limit (D-1122: a valid program's
 //! types have no depth bound, since an alias chain adds one level per
 //! line). Signatures nest one level only: a type's children must be
 //! constructor signatures and an interface's children interface-function

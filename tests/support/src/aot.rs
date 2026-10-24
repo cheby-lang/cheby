@@ -87,7 +87,7 @@ pub struct Expected<'a> {
 /// What the build and one run of the executable printed together: the
 /// run's status, and each stream as the build's followed by the run's.
 ///
-/// GAP(aot-build-stdout): D-1025 names standard error; standard output is
+/// D-1140: D-1025 names standard error; standard output is
 /// joined the same way, so a build that prints anything on success, which
 /// D-937 rules out, shows as a mismatch instead of passing unseen.
 #[must_use]

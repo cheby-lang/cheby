@@ -53,7 +53,7 @@ pub struct Expected {
     /// (D-449) for a panic that ends `main` at a location the spec fixes.
     /// `None` when it does not predict it, as for a panic raised inside a
     /// standard-library function, whose location the spec leaves open
-    /// (GAP(progen-eval-compared-output)).
+    /// (D-1145).
     pub stderr: Option<String>,
 }
 

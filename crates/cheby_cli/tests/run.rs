@@ -35,7 +35,7 @@ fn cheby(dir: &Path, args: &[&str]) -> RunOutput {
 }
 
 /// A fresh build cache for one `cheby` this file starts, deleted when the
-/// value is dropped (GAP(cache-tests-isolated)).
+/// value is dropped (D-1128).
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: failing to create the directory fails the test"
@@ -113,7 +113,7 @@ fn a_named_module_runs() {
 }
 
 /// A slot whose mask is in its name never shares a symbol with another
-/// item's slot (D-456, D-917, GAP(slot-mask-hex)). `app::m::f`, package
+/// item's slot (D-456, D-917, D-1109). `app::m::f`, package
 /// visible and not `pub` (a `pub` function stays owned, D-812), borrows its
 /// parameter, and the module `app::m::f` (§7 lets a file and a directory
 /// share a name) holds an item `b1`. With D-917's one `$` before the mask,

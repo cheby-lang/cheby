@@ -284,7 +284,7 @@ fn code() -> UnitKind {
     UnitKind::Code(ModuleId::from_u32(1))
 }
 
-/// `f0` is named by other units, `f1` is not (GAP(unit-alone-visibility)).
+/// `f0` is named by other units, `f1` is not (D-1110).
 fn named(def: DefId) -> bool {
     def.index == DefIndex::from_u32(0)
 }
@@ -764,7 +764,7 @@ fn record_modrec_is_hidden_read_only_data() {
 }
 
 /// A tests unit's record is `cb$mod$test$<path>`
-/// (GAP(module-record-per-unit)).
+/// (D-1107).
 #[test]
 fn record_modrec_tests_unit_name() {
     let r = record(&located_unit(UnitKind::Tests(ModuleId::from_u32(1))));

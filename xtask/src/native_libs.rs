@@ -1,4 +1,4 @@
-//! `cargo xtask check-native-libs` (D-933, D-943; GAP(aot-native-libs)):
+//! `cargo xtask check-native-libs` (D-933, D-943; D-1113):
 //! checks the system-library list `cheby_link` records for the host
 //! against what Rust says the runtime archive needs, and that the system
 //! loader opens every recorded file, so the list never drifts from Rust

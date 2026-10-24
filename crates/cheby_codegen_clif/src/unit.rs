@@ -64,7 +64,7 @@ pub fn compile_unit<M: Module>(
     opts: &CodegenOptions,
 ) -> Result<UnitCode, CodegenError> {
     // The unit's own items that another unit may name: those whose
-    // function is global hidden (GAP(unit-alone-visibility)). Asked once
+    // function is global hidden (D-1110). Asked once
     // per item, in function order; the set is only looked up.
     let mut named = FxHashSet::default();
     for function in &unit.functions {

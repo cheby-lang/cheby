@@ -271,7 +271,7 @@ fn unit_a() -> MirModule {
     }
 }
 
-/// What the front end would answer (GAP(unit-alone-visibility)): every
+/// What the front end would answer (D-1110): every
 /// item but `b::helper`, which is `priv` and named by no test.
 fn named_outside(def: DefId) -> bool {
     def != helper()

@@ -84,7 +84,7 @@ fn run(dir: &Path, threads: &str) -> process::RunOutput {
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn run_with_input(dir: &Path, threads: &str, input: Option<&[u8]>) -> process::RunOutput {
-    // A fresh build cache of this command (GAP(cache-tests-isolated)).
+    // A fresh build cache of this command (D-1128).
     let cache = HarnessCache::create("cli-blocking-io").unwrap();
     let mut cmd = Command::new(cheby());
     cmd.args(["--color=never", "run"])

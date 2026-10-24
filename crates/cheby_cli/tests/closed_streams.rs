@@ -26,7 +26,7 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 )]
 fn run_with(redirects: &str) -> RunOutput {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cheby_driver/tests/packages/lets");
-    // A fresh build cache of this test (GAP(cache-tests-isolated)).
+    // A fresh build cache of this test (D-1128).
     let cache = HarnessCache::create("cli-closed-streams").unwrap();
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")

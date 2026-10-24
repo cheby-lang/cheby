@@ -710,7 +710,7 @@ impl Module for RecordingModule {
 /// `unit` compiled alone ([`crate::compile_unit`]) into a fresh recording
 /// module for `isa`, with its module record (D-919), captured (D-914):
 /// `cb$mod$<path>` for a code unit and `cb$mod$test$<path>` for a tests
-/// unit (GAP(module-record-per-unit), as D-572 names tests' symbols), each
+/// unit (D-1107, as D-572 names tests' symbols), each
 /// read-only and `Hidden` (D-917).
 ///
 /// # Errors

@@ -1,7 +1,7 @@
 //! The system libraries the runtime archive needs, per target (D-933),
 //! and the build resolver of E0053 over them (D-943).
 //!
-//! GAP(aot-native-libs): each target's list is what
+//! D-1113: each target's list is what
 //! `rustc --print native-static-libs` prints for `cheby_rt_exe`, in its
 //! order, each library as the linker takes it (`-l<name>`) with the file
 //! the system loader opens for it, and the macOS minimum version is the

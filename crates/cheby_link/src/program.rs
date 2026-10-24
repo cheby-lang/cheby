@@ -6,7 +6,7 @@
 //!
 //! - the entries unit (`main`'s entry thunk and the trampolines),
 //!   compiled alone into a code record and replayed here, every one of its
-//!   definitions local (GAP(aot-entries-in-program-object)): the entries
+//!   definitions local (D-1111): the entries
 //!   unit belongs to no module, so no module object holds it, and its code
 //!   is never cached or shared;
 //! - `cb$image`, local and read-only, in the exact layout of

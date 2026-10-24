@@ -7,7 +7,7 @@
 //! into a code record (D-914, D-917), every record is replayed into one
 //! object under its module path, in build order (D-915), and the entries
 //! unit, compiled alone too, goes into the program object with `cb$image`
-//! and the C `main` (GAP(aot-entries-in-program-object)). `cc` links them
+//! and the C `main` (D-1111). `cc` links them
 //! with the runtime archive (D-929, D-933). Code records are not cached
 //! yet: the cache gets them with K4c, and `cheby build` reads them from
 //! there with N9 (D-924).
@@ -375,7 +375,7 @@ fn executable_name(package: &str, module_given: bool, path: &ModulePath) -> Stri
     }
 }
 
-/// The front end's answer of GAP(unit-alone-visibility): an item that is
+/// The front end's answer of D-1110: an item that is
 /// not `priv` may be named by another unit; so may a def without an
 /// interface item (a test).
 fn front_named(front: &frontend::Frontend, def: DefId) -> bool {
@@ -387,7 +387,7 @@ fn front_named(front: &frontend::Frontend, def: DefId) -> bool {
 }
 
 /// The defs other units name besides [`front_named`]'s
-/// (GAP(unit-alone-visibility)): `main`, which the entries unit calls,
+/// (D-1110): `main`, which the entries unit calls,
 /// the constants the program reaches, whose initializers it calls, and
 /// every item of a module that the module's own tests unit names (a
 /// build has no tests unit today, D-924).

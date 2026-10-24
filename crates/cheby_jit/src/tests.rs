@@ -1078,7 +1078,7 @@ fn words_defined(jit: &Jit) -> (bool, Vec<String>) {
 /// import word declared and undefined (D-913): the next batch that uses
 /// the same symbol declares its word again and defines it, and a session's
 /// later batches share the words of its earlier ones
-/// (GAP(jit-import-words-per-session)).
+/// (D-1105).
 #[cfg(unix)]
 #[test]
 fn failed_batches_leave_no_import_word_undefined() {

@@ -26,11 +26,11 @@
 //! one blob or record write the same bytes (D-264), and hints are
 //! last-writer-wins.
 //!
-//! The writes run behind the command (GAP(cache-write-behind), the
+//! The writes run behind the command (D-1138, the
 //! [`writer`](super::writer) module): a put queues the file and returns,
 //! jobs on the `-j` pool write it, and [`Store::flush`] and `Drop` wait
 //! for them. Each entry is written at most once per process with the same
-//! payload (GAP(cache-write-once-per-process)). A shard directory is made
+//! payload (D-1139). A shard directory is made
 //! only when a rename finds it missing. A read opens the file once.
 
 use std::fs::{self, File};
@@ -124,7 +124,7 @@ pub struct Store {
 }
 
 /// The part of a store that its writes behind the command use, on any
-/// thread of the pool (GAP(cache-write-behind)).
+/// thread of the pool (D-1138).
 #[derive(Debug)]
 struct Shared {
     v1: PathBuf,
@@ -212,12 +212,12 @@ impl Store {
     }
 
     /// Waits until every write this store queued is in place or was
-    /// skipped (a failed write is skipped: GAP(cache-write-best-effort)).
+    /// skipped (a failed write is skipped: D-1129).
     /// `Drop` calls it before a temporary store deletes its root (D-959).
     ///
     /// The queued writes are taken and written on the calling thread; it
     /// then waits only for writes other threads have started
-    /// (GAP(cache-write-behind)), so it never waits for a job that sits in
+    /// (D-1138), so it never waits for a job that sits in
     /// its own worker's queue.
     pub fn flush(&self) {
         loop {
@@ -253,7 +253,7 @@ impl Store {
     /// [`StoreError::Io`] when the put writes on the calling thread, as it
     /// does when too many bytes are in flight, and the file cannot be
     /// written or renamed. A write behind the command that fails is
-    /// skipped (GAP(cache-write-best-effort)).
+    /// skipped (D-1129).
     pub fn put_blob(&self, bytes: &[u8]) -> Result<Hash128, StoreError> {
         let name = Hash128::of(bytes);
         self.put(FileKind::Blob, name, bytes)?;
@@ -320,11 +320,11 @@ impl Store {
         self.shared.entry_path(kind, name)
     }
 
-    /// Hands an entry to the writer (GAP(cache-write-behind)): written
+    /// Hands an entry to the writer (D-1138): written
     /// behind the command as a job on the pool, or now on this thread when
     /// too many bytes are in flight, and not at all when this process
-    /// already wrote or validly read the same payload
-    /// (GAP(cache-write-once-per-process)).
+    /// already wrote, queued or validly read the same payload
+    /// (D-1139).
     fn put(&self, kind: FileKind, name: Hash128, payload: &[u8]) -> Result<(), StoreError> {
         let id = (kind, name);
         let digest = match kind {
@@ -396,7 +396,7 @@ impl Shared {
     fn write_next(&self) -> bool {
         match self.writer.take() {
             Some((id, file)) => {
-                // A write that fails is skipped (GAP(cache-write-best-effort)).
+                // A write that fails is skipped (D-1129).
                 let _ = self.write_until_done(id, file);
                 true
             }
@@ -644,6 +644,6 @@ fn set_private_mode(builder: &mut fs::DirBuilder) {
 }
 
 /// On Windows a new directory inherits its parent's access list, which is
-/// the user's own under `%LocalAppData%` (GAP(cache-permissions-windows)).
+/// the user's own under `%LocalAppData%` (D-1118).
 #[cfg(not(unix))]
 fn set_private_mode(_builder: &mut fs::DirBuilder) {}

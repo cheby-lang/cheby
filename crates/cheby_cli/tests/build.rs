@@ -8,7 +8,7 @@
 //! (`target/<profile>/libcheby_rt_exe.a`): `cargo build -p cheby_rt_exe`
 //! comes first, and a missing or stale archive fails the tests, never
 //! skips them (D-929). Every `cheby` gets a fresh `CHEBY_CACHE` of its own
-//! (GAP(cache-tests-isolated)), and every build writes with `-o` into a
+//! (D-1128), and every build writes with `-o` into a
 //! temporary directory, so no test writes into the repository.
 
 #![expect(
@@ -59,7 +59,7 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// A fresh build cache (GAP(cache-tests-isolated)), never a kept one.
+/// A fresh build cache (D-1128), never a kept one.
 fn fresh_cache() -> HarnessCache {
     HarnessCache::create_with("cli-build", None).unwrap()
 }

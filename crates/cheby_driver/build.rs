@@ -5,7 +5,7 @@
 //! Std's sources are embedded in `cheby` (D-450), so their hashes are
 //! computed once, here, when `cheby` is built, never per command (D-963).
 //! Each module gets two hashes of its file's bytes, both SipHash-1-3 with
-//! zero keys (GAP(source-hash-width)): the 128-bit one that the cache's
+//! zero keys (D-1130): the 128-bit one that the cache's
 //! keys use (D-956), and the 64-bit one of D-538 that constant seeds use.
 //! The inputs are every `.cheby` file under `std/` at the workspace root,
 //! the files `src/std_lib.rs` embeds (a test of `std_lib` checks that the

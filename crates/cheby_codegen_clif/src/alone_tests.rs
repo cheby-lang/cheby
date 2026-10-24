@@ -461,7 +461,7 @@ fn unit_a() -> MirModule {
     }
 }
 
-/// What the front end would answer (GAP(unit-alone-visibility)): every
+/// What the front end would answer (D-1110): every
 /// item but `b::helper`, which is `priv` and named by no test.
 fn named_outside(def: DefId) -> bool {
     def != helper()
@@ -526,7 +526,7 @@ fn check_unit_rules(m: &Recording) {
                 assert_eq!(*kind, Reloc::Abs8, "`{symbol}` to `{target}`");
                 if !target.starts_with(mangle::PREFIX) {
                     // A runtime symbol, named by an import word, or by a
-                    // static object's field (GAP(static-fields-runtime-symbols)).
+                    // static object's field (D-1106).
                     assert_eq!(m.linkage(target), Linkage::Import, "{target}");
                 }
             }
@@ -905,7 +905,7 @@ fn mask_entries_unit() -> MirModule {
 }
 
 /// D-917's suffix: `$$b` and the mask in lowercase hex without leading
-/// zeros (GAP(slot-mask-hex)); an all-owned slot keeps D-456's name.
+/// zeros (D-1109); an all-owned slot keeps D-456's name.
 #[test]
 fn alone_slot_mask_names() {
     let n = name(h(), "m", "h");

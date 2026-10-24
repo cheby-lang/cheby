@@ -344,7 +344,7 @@ fn package_root(out: Out) -> Result<std::path::PathBuf, ExitCode> {
 
 /// The note of D-959, printed once on standard error before anything
 /// else the command prints, when the cache cannot be used and the command
-/// runs on a temporary one (GAP(cache-fallback-note)).
+/// runs on a temporary one (D-1126).
 fn fallback_note(fallback: &cheby_driver::cache::Fallback) -> String {
     format!(
         "note: the build cache cannot be used ({fallback}), so this command uses a temporary \
@@ -540,7 +540,7 @@ struct FmtTarget {
     /// The file, or `None` for standard input (`-`).
     path: Option<std::path::PathBuf>,
     /// How `--check` and errors name it: as given on the command line, or
-    /// relative to the package root (GAP(fmt-check-listing)).
+    /// relative to the package root (D-1146).
     display: String,
 }
 
@@ -658,7 +658,7 @@ fn fmt_one(out: Out, target: &FmtTarget, check: bool) -> Result<bool, ()> {
 /// same directory, renamed over it, so a reader never sees half a file.
 /// The temporary file takes the original's permissions. A symbolic link
 /// is followed: its target is rewritten and the link stays a link. A
-/// read-only file is an error and is left alone (GAP(fmt-write-target)).
+/// read-only file is an error and is left alone (D-1154).
 fn replace_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     let path = std::fs::canonicalize(path)?;
     if std::fs::metadata(&path)?.permissions().readonly() {
@@ -702,7 +702,7 @@ fn replace_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
 /// followed, but each directory and each file is visited once, under the
 /// first path that reaches it in sorted order, so a link cycle ends the
 /// walk instead of listing one file under many paths
-/// (GAP(fmt-source-walk)).
+/// (D-1151).
 fn package_sources(src: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();
     let mut seen_dirs = std::collections::BTreeSet::new();

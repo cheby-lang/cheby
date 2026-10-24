@@ -180,7 +180,7 @@ pub(crate) struct Checked {
     /// direct imports, nor std modules (the build ID fixes std), nor the
     /// builtin module; sorted by id. Empty for std modules, which record
     /// nothing, and for REPL entries and reloads, which are never cached
-    /// (GAP(repl-reads-unrecorded), D-964).
+    /// (D-1124, D-964).
     pub front_reads: Vec<ModuleId>,
     pub thir: thir::Module,
     /// The module's interface (also in [`Frontend::set`] for the package's
@@ -550,7 +550,7 @@ pub(crate) fn check_extra_module(
     }
     Ok(Ok(Checked {
         deps,
-        // GAP(repl-reads-unrecorded): REPL entries are never cached
+        // D-1124: REPL entries are never cached
         // (D-964), so their views record nothing.
         front_reads: Vec::new(),
         thir,
@@ -651,7 +651,7 @@ pub(crate) fn check_reloaded(
         if let Some(slot) = front.checked.get_mut(at) {
             *slot = Some(Checked {
                 deps,
-                // GAP(repl-reads-unrecorded): a reload is never cached
+                // D-1124: a reload is never cached
                 // (D-964), so its views record nothing.
                 front_reads: Vec::new(),
                 thir,
@@ -809,7 +809,7 @@ pub(crate) enum Stop {
     /// grammar error or an import that no longer resolves; a hit's
     /// interface that a checked module needs cannot be decoded): the
     /// command starts its front end again, parsing every module and
-    /// decoding each hit's interface at its lookup (GAP(package-index-shape)).
+    /// decoding each hit's interface at its lookup (D-1133).
     Restart,
 }
 
@@ -864,7 +864,7 @@ struct BuildInputs<'a> {
     local_targets: Targets,
     /// Per module id: whether it is checked from source even when its
     /// lookup hits: in `Build` mode every module, in `Check` mode those
-    /// constant evaluation needs (GAP(check-constants-from-summaries)).
+    /// constant evaluation needs (D-1134).
     must_check: &'a [bool],
     /// What the tasks of one pass share, filled as they run.
     shared: &'a Shared,
@@ -938,7 +938,7 @@ enum Pass {
     /// `cheby check`'s error path: checks again from source, on fresh
     /// interfaces, a module whose check against decoded interfaces
     /// reported an error, with the modules it read that were not checked
-    /// on fresh interfaces (GAP(warm-error-fresh-check)); looks nothing up
+    /// on fresh interfaces (D-1136); looks nothing up
     /// and writes nothing.
     Recheck,
 }
@@ -988,7 +988,7 @@ enum HintSeen {
     /// The hint was not looked at.
     Unknown,
     /// The hint's paths; `None` when there is no hint, which reads as the
-    /// empty set (GAP(hint-empty-omitted)).
+    /// empty set (D-1137).
     Seen(Option<Vec<String>>),
     /// The hint is malformed: it is written again.
     Bad,
@@ -1034,7 +1034,7 @@ impl BuildInputs<'_> {
             && let Some(lists) = self.replay(cx, id, &found.record)?
         {
             // A hit checked anyway prints what the cache replays, which
-            // must be what the check found (GAP(warm-recheck-debug-compare)).
+            // must be what the check found (D-1131).
             let [syntax, early, late] = lists;
             if cfg!(debug_assertions)
                 && (early != output.early
@@ -1375,7 +1375,7 @@ impl BuildInputs<'_> {
         // D-954: a debug toolchain decodes every interface it encodes and
         // compares it with the original. A module with an error in its
         // declarations is never cached (D-964), so it is not checked
-        // (GAP(roundtrip-error-free-only)).
+        // (D-1125).
         if cfg!(debug_assertions) && !early.iter().any(Diagnostic::is_error) {
             cheby_iface::check_roundtrip(&iface, &view.unrecorded(), self.modules, self.globals)?;
         }
@@ -1600,7 +1600,7 @@ impl BuildInputs<'_> {
     /// reads are the hint's and, when `F2` matches too, its record is the
     /// record, so no file is opened. Otherwise the hint under `F1` names
     /// the reads (a missing hint is the empty set,
-    /// GAP(hint-empty-omitted)) and the record is read under `F2`. Also
+    /// D-1137) and the record is read under `F2`. Also
     /// returns what was seen of the hint. A miss is `None`.
     fn find(
         &self,
@@ -1696,7 +1696,7 @@ impl BuildInputs<'_> {
     }
 
     /// The package index's entry of package module `id`, whose record
-    /// `record` lies under `f2` (GAP(package-index-shape)).
+    /// `record` lies under `f2` (D-1133).
     fn entry(
         &self,
         cx: FrontCx<'_>,
@@ -1726,11 +1726,11 @@ impl BuildInputs<'_> {
     /// summaries, under the key its reads give, and writes its hint when
     /// its reads differ from what the lookup saw (`hint`, so the hint is
     /// not read again); no hint is written for empty reads unless it
-    /// replaces a non-empty one (D-955, D-956, GAP(hint-empty-omitted)).
+    /// replaces a non-empty one (D-955, D-956, D-1137).
     /// Returns the module's entry for the package index. Nothing is written
     /// for a module with an error (D-964). A write that fails is skipped:
     /// the entry is a miss next time, and no output depends on it (D-268,
-    /// GAP(cache-write-best-effort)).
+    /// D-1129).
     #[expect(
         clippy::too_many_lines,
         reason = "the record's parts, then its hint, in order"
@@ -2027,7 +2027,7 @@ pub(crate) fn read_modules(
     use rayon::prelude::*;
 
     // Each file is read once and hashed in the same pass, on the worker
-    // pool (D-963, GAP(source-hash-width)).
+    // pool (D-963, D-1130).
     let bytes: Vec<std::io::Result<(Vec<u8>, crate::SourceHashes)>> = files
         .par_iter()
         .map(|file| {
@@ -2175,7 +2175,7 @@ pub(crate) fn run_cached(
 ///   module is checked once, from source, on fresh interfaces, hit or
 ///   miss; a hit prints its replayed diagnostics, its artifact is not
 ///   decoded and nothing is rewritten for it, and a miss is written
-///   (GAP(warm-recheck-readers)).
+///   (D-1132).
 /// - `Check`: a hit is neither parsed nor checked. Its interface hash comes
 ///   from its record, its interface is decoded only when a checked module
 ///   needs it (D-954), and its diagnostics, externals and use summary are
@@ -2183,20 +2183,20 @@ pub(crate) fn run_cached(
 ///   decoded or fresh. Constant evaluation reads bodies, so the package
 ///   modules holding constants, and every package module they import,
 ///   transitively, are checked from source on fresh interfaces whether
-///   they hit or not (GAP(check-constants-from-summaries)): decoded
+///   they hit or not (D-1134): decoded
 ///   interfaces number items in encoded order
-///   (GAP(iface-decode-derived-fields)) and are never lowered with bodies
+///   (D-1121) and are never lowered with bodies
 ///   checked from source. A module whose check against a decoded
 ///   interface reports an error is checked again on fresh interfaces,
 ///   with the modules it reads that were not checked on fresh interfaces,
-///   and prints that check (GAP(warm-error-fresh-check)): a decoded
+///   and prints that check (D-1136): a decoded
 ///   interface holds no `priv` item, which E0043 names (D-953).
 ///
 /// The whole-package pass of `cheby check` (W0005) runs over every
 /// module's use summary, and E0054 over every module's natives in build
 /// order, a hit's from its record (D-965). Debug toolchains compare a hit
 /// that is checked with its replayed diagnostics and interface hash
-/// (GAP(warm-recheck-debug-compare)).
+/// (D-1131).
 #[expect(
     clippy::too_many_lines,
     reason = "the front-end phases in order, each a few lines"
@@ -2532,7 +2532,7 @@ fn run_inner(
         built.push(id);
     }
 
-    // `cheby check`'s error path (GAP(warm-error-fresh-check)): a module
+    // `cheby check`'s error path (D-1136): a module
     // whose check against a decoded interface reported an error, and the
     // package modules it reads that were not checked on fresh interfaces,
     // are checked again from source on fresh interfaces. A hit among them
@@ -2623,7 +2623,7 @@ fn run_inner(
                 .ok_or_else(|| Ice::new("no warm result"))?;
             if hits.get(at).copied().unwrap_or(false) {
                 // A hit prints its replayed diagnostics, which must be the
-                // fresh ones (GAP(warm-recheck-debug-compare)).
+                // fresh ones (D-1131).
                 if cfg!(debug_assertions) && (slot.0 != output.early || slot.1 != output.late) {
                     return Err(Stop::Ice(Ice::new(format!(
                         "module `{}` checked from source gives other diagnostics than the cache's (D-954)",
@@ -2676,7 +2676,7 @@ fn run_inner(
         diagnostics.extend(unused_package_items(&modules, &built, &uses)?);
     }
     // The modules later phases may lower: std's and the package's checked
-    // on fresh interfaces (GAP(check-constants-from-summaries)).
+    // on fresh interfaces (D-1134).
     let lowerable: Vec<ModuleId> = built
         .iter()
         .copied()
@@ -2745,7 +2745,7 @@ fn first_failure(outputs: &mut [Option<Result<ModuleOutput, Stop>>]) -> Option<S
 /// `Check` mode the package modules constant evaluation needs, those that
 /// hold a constant (D-459, D-534) and every package module they import,
 /// transitively, which holds every module their reference summaries reach
-/// (D-967; GAP(check-constants-from-summaries)). Whether a module holds a
+/// (D-967; D-1134). Whether a module holds a
 /// constant is a fact of its source: its tree's, or for a module the index
 /// let go unparsed, its record's summary.
 fn must_check(
@@ -2852,9 +2852,9 @@ fn unused_package_items(
 }
 
 /// The end of a front end's use of the cache: the package index, written
-/// when its bytes differ from the one read (GAP(package-index-shape)); the
+/// when its bytes differ from the one read (D-1133); the
 /// log's lines, one hit or miss per package module and one `parse` per
-/// package module parsed (D-973, GAP(cache-log-parses)); and the driver's
+/// package module parsed (D-973, D-1135); and the driver's
 /// counts of parses and checks.
 #[expect(
     clippy::too_many_arguments,

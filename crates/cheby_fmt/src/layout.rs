@@ -83,7 +83,7 @@ pub(crate) enum Delims {
 /// How a laid-out list treats its trailing comma.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Comma {
-    /// A comma exactly when the list is broken (GAP(fmt-trailing-comma)).
+    /// A comma exactly when the list is broken (D-1152).
     WhenBroken,
     /// The comma of a one-element tuple, kept as written at every width:
     /// `(x,)` is a tuple and `(x)` is not.
@@ -98,7 +98,7 @@ pub(crate) struct ListStyle {
     /// Whether a last element that can break by itself (a closure, a
     /// block, a `case`, a list or a record literal) may hug the
     /// delimiters: the others stay on the line and only it breaks
-    /// (GAP(fmt-expression-breaks)).
+    /// (D-1157).
     pub(crate) hug: bool,
 }
 
@@ -305,7 +305,7 @@ impl<'t> Formatter<'t> {
 
     /// The whole file: its entries one per line, imports sorted within
     /// their blocks, single blank lines kept, and one final line break.
-    /// GAP(fmt-empty-file): a file with nothing but whitespace formats to
+    /// D-1147: a file with nothing but whitespace formats to
     /// the empty file, without a line break.
     pub(crate) fn file(&mut self, root: SyntaxNode<'t>) -> Doc {
         self.coverage.laid_out(root.kind());
@@ -382,7 +382,7 @@ impl<'t> Formatter<'t> {
     /// lists among them laid out at the width. A line break between two
     /// parts is the layout's to place; a comment or a blank line between
     /// them keeps its place and breaks the line there, and the parts after
-    /// it go one level deeper (GAP(fmt-comment-positions)). `None` only
+    /// it go one level deeper (D-1160). `None` only
     /// when a part cannot be laid out.
     fn header(&mut self, node: SyntaxNode<'t>, anchor: usize) -> Option<Doc> {
         self.coverage.laid_out(node.kind());
@@ -465,7 +465,7 @@ impl<'t> Formatter<'t> {
                     let mut part = self.part(part, anchor)?;
                     // A return type stays on the line of `)`, so a header
                     // that does not fit breaks its parameters first
-                    // (GAP(fmt-expression-breaks)).
+                    // (D-1157).
                     if kind == SyntaxKind::RET_TYPE && !part.has_hard_break() {
                         part = Doc::flat(part);
                     }
@@ -615,11 +615,11 @@ impl<'t> Formatter<'t> {
     /// for a list that hugs, with only its last element broken. `None`
     /// only for a shape the grammar does not produce.
     ///
-    /// GAP(fmt-trailing-comma): a laid-out list has a trailing comma exactly
+    /// D-1152: a laid-out list has a trailing comma exactly
     /// when it is broken over lines (AGENTS.md's style), so the formatter
     /// adds or removes that one comma; a one-element tuple, and a field
     /// pattern list that holds only `..`, keep their comma as written.
-    /// GAP(fmt-list-blank-lines): a blank line kept between two
+    /// D-1149: a blank line kept between two
     /// elements (D-1030) breaks the list.
     pub(crate) fn list(
         &mut self,
@@ -900,7 +900,7 @@ fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
                 newlines = 0;
             }
             SyntaxKind::COMMA => {
-                // GAP(fmt-comment-positions): a comment between an element
+                // D-1160: a comment between an element
                 // and its comma goes after the comma, the list's own
                 // separator, whose place the style decides (it adds or
                 // removes the last one): a comment on the element's line
@@ -966,7 +966,7 @@ pub(crate) fn entries<'t>(
 }
 
 /// Sorts each block of imports by its module path's text in byte order
-/// (D-1030). GAP(fmt-import-blocks): a block is a run of imports on
+/// (D-1030). D-1148: a block is a run of imports on
 /// consecutive lines with no blank line or comment between or after them;
 /// equal paths are ordered by the import's whole text.
 fn sort_import_blocks(entries: &mut [Entry<'_>]) {

@@ -8,7 +8,7 @@
 //! systems, `$HOME/Library/Caches/cheby` on macOS and `%LocalAppData%\cheby`
 //! on Windows.
 //!
-//! GAP(cache-location-env): an empty variable counts as unset, a relative
+//! D-1117: an empty variable counts as unset, a relative
 //! `XDG_CACHE_HOME` is ignored, and an environment that names no home
 //! directory (no `HOME`, or no `LocalAppData` on Windows) falls back to
 //! the temporary store like a root that cannot be created.
@@ -16,7 +16,7 @@
 //! On Unix the root must be owned by the effective user and writable by
 //! nobody else; anything else is a tool error, never a fallback, because
 //! `cheby run` executes code from the cache. On Windows that check waits
-//! for M6 (GAP(cache-permissions-windows)).
+//! for M6 (D-1118).
 
 use std::ffi::OsString;
 use std::fmt;
@@ -204,10 +204,10 @@ impl Store {
     }
 }
 
-/// GAP(cache-temporary-sweep): D-959 deletes a temporary store at exit,
-/// and the store's `Drop` does so on every exit that returns or unwinds.
-/// A signal such as SIGINT or SIGTERM ends the process without running
-/// it, and the directory stays. So a command that falls back first
+/// D-1127: D-959 deletes a temporary store at exit, and the store's
+/// `Drop` does so on every exit that returns or unwinds. A signal that
+/// takes its default action ends the process without running it, and the
+/// directory stays. So a command that falls back first
 /// deletes, under `base`, every `cheby-cache-<pid>-<n>` directory that the
 /// effective user owns, that holds the store's README, and whose process
 /// no longer exists (`kill(pid, 0)` fails with `ESRCH`). The process's
@@ -215,7 +215,7 @@ impl Store {
 /// `base` are never touched, and every failure is ignored: the sweep only
 /// tidies up. A process in another pid namespace that shares `base` looks
 /// dead, and its store may go; its writes are best effort and its reads
-/// then miss (GAP(cache-write-best-effort)). Windows sweeps nothing until
+/// then miss (D-1129). Windows sweeps nothing until
 /// M6 (D-935).
 #[cfg(unix)]
 fn sweep_dead_temporaries(base: &Path) {
@@ -247,7 +247,7 @@ fn sweep_dead_temporaries(base: &Path) {
     }
 }
 
-/// Windows: nothing is swept until M6 (GAP(cache-temporary-sweep)).
+/// Windows: nothing is swept until M6 (D-1127).
 #[cfg(not(unix))]
 fn sweep_dead_temporaries(_base: &Path) {}
 
@@ -290,7 +290,7 @@ fn set_private(builder: &mut fs::DirBuilder) {
     builder.mode(0o700);
 }
 
-/// Windows: the parent's access list applies (GAP(cache-permissions-windows)).
+/// Windows: the parent's access list applies (D-1118).
 #[cfg(not(unix))]
 fn set_private(_builder: &mut fs::DirBuilder) {}
 
@@ -310,7 +310,7 @@ pub(crate) fn check_root(root: &Path) -> Result<(), StoreError> {
     })
 }
 
-/// GAP(cache-permissions-windows): Windows checks no owner or access list
+/// D-1118: Windows checks no owner or access list
 /// until M6.
 #[cfg(not(unix))]
 #[expect(

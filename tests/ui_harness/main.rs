@@ -47,7 +47,7 @@
 //! `cheby_test_support::cache`). With `CHEBY_TEST_KEEP_CACHE=<absolute
 //! directory>` the harness uses that directory instead, creating it
 //! owner-only if needed, and never deletes it, so two runs share one cache
-//! (GAP(harness-kept-cache)).
+//! (D-1144).
 //!
 //! Every `cheby` inherits the harness's `CHEBY_RC`, so
 //! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive
@@ -135,7 +135,7 @@ fn main() -> ExitCode {
             let verdicts = verdicts.clone();
             let cache = Arc::clone(&cache);
             let name = test.name.clone();
-            // GAP(ui-build-bless): a build test is never blessed, so `cargo
+            // D-1141: a build test is never blessed, so `cargo
             // xtask bless` ignores it, as it ignores the `@aot` trials
             // (D-853, D-1025), and its goldens are written by hand.
             let skipped = (platform::runs_skipped() && test.builds_a_jit())
@@ -256,11 +256,11 @@ fn check_package(
 /// package's directory. The result is what both printed, standard error
 /// as the build's followed by the executable's, or the failed build's own
 /// status and output, so a test can pin an error that `cheby build`
-/// reports (`aot::build_then_run`): GAP(ui-build-failed-build), a
+/// reports (`aot::build_then_run`): D-1142, a
 /// `run-fail` test with `// @exit: 1` pins E0053 at build time, as D-1026
 /// asks, the way a run test pins it under `cheby run`.
 ///
-/// GAP(ui-build-output): the executable goes to a fresh temporary
+/// D-1143: the executable goes to a fresh temporary
 /// directory with `-o`, as the `@aot` trial's does (D-1025), never to
 /// `build/native/` of the copied package; the directory is removed at the
 /// end.

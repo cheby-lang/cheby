@@ -112,7 +112,7 @@ const AARCH64_V8_0: &[(&str, &str)] = &[
 ///
 /// macOS is aarch64 only (D-892): macOS on x86-64 is not here.
 ///
-/// GAP(isa-windows-targets): the two Windows targets use x86-64-v2 and
+/// D-1104: the two Windows targets use x86-64-v2 and
 /// Armv8.0 until M6 settles their sets (D-935).
 const TARGETS: &[(&str, &[(&str, &str)])] = &[
     ("x86_64-unknown-linux-gnu", X86_64_V2),
@@ -148,7 +148,7 @@ pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
 /// host's architecture is compiled into Cranelift (D-936), so a triple of
 /// another architecture is an error here, never a panic.
 ///
-/// GAP(isa-feature-flags): the exact Cranelift ISA flags per target, every
+/// D-1103: the exact Cranelift ISA flags per target, every
 /// other ISA flag at its default (off):
 ///
 /// - x86-64 (Linux, Windows): x86-64-v2, `has_sse3`, `has_ssse3`,

@@ -44,7 +44,7 @@
 //! transcripts, overriding the developer's own value (D-959,
 //! `cheby_test_support::cache`). With `CHEBY_TEST_KEEP_CACHE=<absolute
 //! directory>` the harness uses that directory instead, creating it
-//! owner-only if needed, and never deletes it (GAP(harness-kept-cache)).
+//! owner-only if needed, and never deletes it (D-1144).
 //!
 //! On Windows every transcript is ignored until M6 (D-545,
 //! `cheby_test_support::platform`).

@@ -11,7 +11,7 @@
 //!                          or 0xFFFFFFFF 0xFFFFFFFF for an item with no span
 //! ```
 //!
-//! Integers are little-endian. GAP(iface-artifact-layout): the section
+//! Integers are little-endian. D-1120: the section
 //! lengths are `u64` and an item without a span takes a whole entry of
 //! two `0xFFFFFFFF` words, so S is fixed-size per item. Section H is what the interface hash
 //! covers, so a reader checks it ([`read_artifact`]). Section S is not

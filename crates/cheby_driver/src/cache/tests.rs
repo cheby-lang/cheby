@@ -630,7 +630,7 @@ fn cache_location_unwritable_root_falls_back_to_a_temporary_store() {
 /// SIGTERM run no destructor) is deleted by the next command that falls
 /// back once its process is gone; a live process's store, a directory
 /// without the store's README and other names are kept
-/// (GAP(cache-temporary-sweep), wave 2 review SND-3).
+/// (D-1127, wave 2 review SND-3).
 #[cfg(unix)]
 #[test]
 fn cache_location_fallback_sweeps_dead_temporaries() {

@@ -276,7 +276,7 @@ fn build_dumping(
             memory_limit: front.const_eval_memory_limit,
             targets: front.package_targets,
         };
-        // GAP(reads-outside-module-phases): constant evaluation reads the
+        // D-1123: constant evaluation reads the
         // types of the constants it evaluates directly, outside any view;
         // constants are cached under their own keys (D-964, `cache.md` §6).
         let item = |def: DefId| {
@@ -1107,7 +1107,7 @@ fn main() {
 }
 ";
 
-    /// GAP(source-hash-width): constant seeds read the 64-bit hashes
+    /// D-1130: constant seeds read the 64-bit hashes
     /// computed when the files were read (package modules) or when `cheby`
     /// was built (std), and each equals the seed computed as before from
     /// the source map's texts (D-538), for a constant that reaches a

@@ -406,7 +406,7 @@ impl Decls {
 
     /// The linkage of the function and slot of the unit's own item `def`
     /// (D-917): global hidden in a unit alone when another unit may name
-    /// it (GAP(unit-alone-visibility)), local otherwise and always in the
+    /// it (D-1110), local otherwise and always in the
     /// JIT.
     fn item_linkage(&self, def: DefId) -> Linkage {
         match &self.alone {
@@ -667,7 +667,7 @@ impl Decls {
     /// per [`Decls`]: a JIT session's later batches use the words of its
     /// earlier ones.
     ///
-    /// GAP(jit-import-words-per-session): one JIT module holds every batch
+    /// D-1105: one JIT module holds every batch
     /// of a session, so its words are declared once and shared by later
     /// batches; objects get per-unit copies from wave 2 (D-917, D-918).
     ///
@@ -1686,7 +1686,7 @@ impl Decls {
     /// The word a constant field of a static object holds; a string is one
     /// of the static's own (`strings`).
     ///
-    /// GAP(static-fields-runtime-symbols): a field that holds a runtime
+    /// D-1106: a field that holds a runtime
     /// static (`Nil`, the empty list, a builtin constructor or descriptor)
     /// names it with the static object's own `Abs8` data relocation, as an
     /// import word does, since the field must hold the static's address

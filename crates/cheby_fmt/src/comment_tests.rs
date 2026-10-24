@@ -1,7 +1,6 @@
 //! Unit tests of comments and blank lines between the parts of a node
 //! (wave 3 of the formatter): each position at a narrow and a wide width,
-//! never printed verbatim (GAP(fmt-comment-positions),
-//! GAP(fmt-blank-lines-in-expressions)).
+//! never printed verbatim (D-1160, D-1161).
 
 use super::{coverage, format_source};
 
@@ -254,7 +253,7 @@ fn fmt_comment_in_item_headers() {
 
 #[test]
 fn fmt_blank_line_between_binary_operands() {
-    // GAP(fmt-blank-lines-in-expressions): kept as one blank line, the line
+    // D-1161: kept as one blank line, the line
     // broken there.
     let src = "  let x = alpha +\n\n\n    beta + gamma\n";
     let out = "  let x = alpha +\n\n    beta +\n    gamma\n";

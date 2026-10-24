@@ -13,7 +13,7 @@
 //!    extends `F1` with each read's path and interface hash, and the front
 //!    record lies under `F2` ([`FrontRecord`]). No hint is written for
 //!    empty reads, and a missing hint reads as the empty set: a lost
-//!    non-empty hint only causes a miss (GAP(hint-empty-omitted)).
+//!    non-empty hint only causes a miss (D-1137).
 //!
 //! The record holds the interface hash, the blob names of the interface
 //! artifact (D-953) and of the module's structured diagnostics

@@ -1,4 +1,4 @@
-//! The package index (D-962; GAP(package-index-shape)).
+//! The package index (D-962; D-1133).
 //!
 //! Each command keeps, per package root and command family
 //! ([`CommandFamily`]), one index under `v1/hint/`, keyed by
@@ -76,7 +76,7 @@ pub struct IndexEntry {
 
 /// A package's index (D-962): per module its front-key inputs, its hidden
 /// reads, its `F2` and its front record inline, sorted by module path. A
-/// hint: last writer wins, never in output (GAP(package-index-shape)).
+/// hint: last writer wins, never in output (D-1133).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PackageIndex {
     /// The modules, sorted by path, without repeats.

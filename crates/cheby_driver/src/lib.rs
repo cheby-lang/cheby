@@ -91,7 +91,7 @@ pub struct Cache {
     pub(crate) reads: bool,
     /// The driver's counts, never printed: the package modules each front
     /// end of the command parsed and checked from source, by path, once
-    /// per parse and per check (GAP(cache-log-parses)).
+    /// per parse and per check (D-1135).
     counts: std::sync::Mutex<Counts>,
 }
 
@@ -213,7 +213,7 @@ impl Cache {
     /// [`Cache::finish`] with the trim's clock at `now`. Every write the
     /// store queued is in place or skipped before the trim runs, so the
     /// trim never misses an index or an entry still queued (D-961,
-    /// GAP(cache-write-behind)); the trim keeps the blobs a recently used
+    /// D-1138); the trim keeps the blobs a recently used
     /// package index names.
     pub(crate) fn finish_at(
         self,
@@ -312,7 +312,7 @@ pub struct Module {
 /// one in the cache's front keys (D-956) and D-538's 64-bit one in
 /// constant seeds. One value cannot serve both: D-538's hash is 64-bit,
 /// and changing a seed's input would change constant maps' orders
-/// (GAP(source-hash-width)). Std's are computed when `cheby` is built
+/// (D-1130). Std's are computed when `cheby` is built
 /// ([`std_lib::source_hashes`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceHashes {
@@ -673,7 +673,7 @@ fn front_end_once(
     cache: Option<frontend::CacheUse<'_>>,
 ) -> Result<Attempt, Error> {
     // Only `cheby check` leaves modules unparsed: every other command
-    // lowers every module (GAP(warm-recheck-readers)).
+    // lowers every module (D-1132).
     let vouched = cache
         .filter(|use_| use_.lazy && mode == frontend::Mode::Check)
         .and_then(|use_| use_.index)
@@ -704,7 +704,7 @@ fn front_end_once(
         // The front end, which would replay the phase-A diagnostics of the
         // modules the index let go unparsed, does not run: start again,
         // parsing every module, so the output is a cold check's (D-268,
-        // D-965; GAP(package-index-shape)). Only the error path pays.
+        // D-965; D-1133). Only the error path pays.
         if vouched.is_some() && package.modules.iter().any(|module| !module.parsed) {
             return Ok(Attempt::Again);
         }

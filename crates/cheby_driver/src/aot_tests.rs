@@ -174,7 +174,7 @@ fn aot_001_objects() {
     }
 }
 
-/// GAP(aot-import-words-per-unit): the sizes of 001's two code records
+/// D-1115: the sizes of 001's two code records
 /// and the entries record, printed for the report (`--nocapture`); each
 /// unit alone keeps every runtime import word, as the JIT's first batch
 /// declares them.

@@ -42,7 +42,7 @@
 //!
 //! Every `cheby` a command starts gets one fresh `CHEBY_CACHE` of the
 //! `xtask` process ([`cache`]), so no command reads or fills the
-//! developer's cache (GAP(cache-tests-isolated)).
+//! developer's cache (D-1128).
 
 mod bench;
 mod bench_run;

@@ -11,7 +11,7 @@
 //! match the reference evaluator (`progen::evaluate`, D-719), which
 //! computes the program's output from the spec in process: standard
 //! output and the exit status, and standard error wherever the evaluator
-//! predicts it exactly (GAP(progen-eval-compared-output)).
+//! predicts it exactly (D-1145).
 //!
 //! An input whose program does not pass `cheby check`, or that the
 //! evaluator does not support (outside its subset, past its step budget),
@@ -20,7 +20,7 @@
 //! everything it emits, so neither should happen.
 //!
 //! Every `cheby` gets `CHEBY_CACHE` set to one fresh cache of this
-//! process (`progen::shared_cache`, GAP(cache-tests-isolated)), so a run
+//! process (`progen::shared_cache`, D-1128), so a run
 //! never reads or fills the developer's cache.
 //!
 //! The target runs a copy of a debug `cheby`, which no rebuild can swap

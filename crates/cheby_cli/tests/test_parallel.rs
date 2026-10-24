@@ -66,7 +66,7 @@ fn package(name: &str, source: &str) -> PathBuf {
     reason = "a test helper: failing to start the shell fails the test"
 )]
 fn cheby_test(dir: &Path, redirects: &str, threads: &str, stdin: Option<&[u8]>) -> RunOutput {
-    // A fresh build cache of this command (GAP(cache-tests-isolated)).
+    // A fresh build cache of this command (D-1128).
     let cache = HarnessCache::create("cli-test-parallel").unwrap();
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")

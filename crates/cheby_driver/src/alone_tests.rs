@@ -77,7 +77,7 @@ fn own_items(unit: &MirModule) -> Vec<String> {
 )]
 fn alone_001_units() {
     let (front, units) = units_of_001();
-    // What the front end says (GAP(unit-alone-visibility)): an item other
+    // What the front end says (D-1110): an item other
     // units may name is not `priv`; `main`, tests and constant
     // initializers are package-visible or named by the entries unit.
     let named_outside = |def: DefId| {

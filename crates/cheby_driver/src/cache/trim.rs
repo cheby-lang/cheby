@@ -11,7 +11,7 @@
 //! index names (D-961, D-962): the indexes in `hint/` are read only when a
 //! trim is due.
 //!
-//! GAP(cache-trim-scope): besides blobs and records, hints and files left
+//! D-1119: besides blobs and records, hints and files left
 //! in `tmp/` by a writer that died are deleted on the same five-day rule;
 //! directories are never removed, so a writer never races a deleted shard.
 

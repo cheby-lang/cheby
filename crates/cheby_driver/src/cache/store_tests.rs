@@ -1,7 +1,6 @@
 //! Tests of the store's writes behind the command, its shards, its
 //! write-once rule and its reads (K3c; D-956, D-959, D-960, D-961;
-//! GAP(cache-write-behind), GAP(cache-write-once-per-process),
-//! GAP(cache-write-best-effort)).
+//! D-1138, D-1139, D-1129).
 //!
 //! A test that needs writes to stay queued runs its puts inside a pool of
 //! its own with one worker: `rayon::spawn` from that worker queues the job

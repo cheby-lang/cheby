@@ -31,7 +31,7 @@
 //! output from the spec in process, without `cheby`: standard output and
 //! the exit status must be equal, and standard error too wherever the
 //! evaluator predicts it exactly (an empty one, or the report of a panic
-//! that ends `main`, GAP(progen-eval-compared-output)). Every one of the
+//! that ends `main`, D-1145). Every one of the
 //! 40 programs must be inside the evaluator's subset, so the three
 //! oracles agree on each.
 //!
@@ -44,7 +44,7 @@
 //! oracle of borrowing and reuse on generated programs (D-718, D-844).
 //! Every `cheby` it starts gets `CHEBY_CACHE` set to one fresh cache of
 //! the test process (`progen::shared_cache`, D-959,
-//! GAP(cache-tests-isolated)). The packages stay under
+//! D-1128). The packages stay under
 //! `CARGO_TARGET_TMPDIR/rc_differential/` for reproduction: run `cheby
 //! run` there with and without `CHEBY_RC=naive`, and with
 //! `CHEBY_RT_POISON=0`, and compare with `progen::evaluate` of
@@ -201,7 +201,7 @@ fn projection_runs_in_text(text: &str) -> usize {
 }
 
 /// The process's fresh `CHEBY_CACHE`, which the caller holds for its run
-/// (D-959, GAP(cache-tests-isolated)).
+/// (D-959, D-1128).
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: a cache that cannot be created fails the test"

@@ -18,7 +18,7 @@ const TIMEOUT: Duration = Duration::from_secs(60);
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn explain(code: &str) -> RunOutput {
-    // A fresh build cache of this test (GAP(cache-tests-isolated)).
+    // A fresh build cache of this test (D-1128).
     let cache = HarnessCache::create("cli-explain").unwrap();
     let mut cmd = Command::new(CHEBY);
     cmd.args(["--color=never", "explain", code])

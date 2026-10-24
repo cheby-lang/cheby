@@ -34,7 +34,7 @@ const COLOR_VARS: [&str; 4] = ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "TERM"]
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn cheby(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> RunOutput {
-    // A fresh build cache of this command (GAP(cache-tests-isolated)).
+    // A fresh build cache of this command (D-1128).
     let cache = HarnessCache::create("cli-color").unwrap();
     let mut cmd = Command::new(CHEBY);
     cmd.args(args).current_dir(dir);

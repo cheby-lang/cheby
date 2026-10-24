@@ -66,7 +66,7 @@ struct Repl {
     stdin: Option<ChildStdin>,
     stdout: Arc<Mutex<Vec<u8>>>,
     /// The session's build cache, deleted with this value
-    /// (GAP(cache-tests-isolated)).
+    /// (D-1128).
     _cache: HarnessCache,
 }
 

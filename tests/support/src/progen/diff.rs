@@ -16,14 +16,14 @@
 //! computes the program's output from the spec in process: standard
 //! output and the exit status must be equal, and standard error too
 //! wherever the evaluator predicts it exactly ([`Expected::stderr`],
-//! GAP(progen-eval-compared-output)). A difference is
+//! D-1145). A difference is
 //! [`DiffErrorKind::Oracle`]; a program outside the evaluator's subset is
 //! [`DiffErrorKind::NotEvaluated`], never a pass.
 //!
 //! Every `cheby` the differential starts gets `CHEBY_CACHE` set to the
 //! process's own fresh cache ([`shared_cache`], a
 //! [`HarnessCache`](crate::cache::HarnessCache)), so no run reads or fills
-//! the developer's cache (D-959, GAP(cache-tests-isolated)).
+//! the developer's cache (D-959, D-1128).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -265,7 +265,7 @@ fn not_evaluated(e: &EvalError) -> DiffError {
 /// `Err(Oracle)` naming the first difference between the run the modes
 /// agreed on and the evaluator's [`Expected`]: the status, then standard
 /// output, then standard error where the evaluator predicts it
-/// (GAP(progen-eval-compared-output)).
+/// (D-1145).
 fn against_oracle(
     status: i32,
     stdout: &str,

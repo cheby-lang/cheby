@@ -19,7 +19,7 @@ const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
 const TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The note's start (GAP(cache-fallback-note)).
+/// The note's start (D-1126).
 const NOTE: &str = "note: the build cache cannot be used (";
 
 /// A fresh directory of this test binary, removed on drop.

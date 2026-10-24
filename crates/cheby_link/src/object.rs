@@ -9,7 +9,7 @@
 //! an undefined one and `Export` a global default one, which only N4's
 //! program object has (`main`).
 //!
-//! GAP(object-local-symbol-names): every symbol keeps its recorded name in
+//! D-1108: every symbol keeps its recorded name in
 //! the object's symbol table, local ones included; only the JIT declares a
 //! record's local symbols anonymously (D-914), so copies in two records
 //! never clash there. In objects local names cannot clash, and they keep

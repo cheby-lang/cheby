@@ -757,7 +757,7 @@ bb18:
 
 fn shim std::int::show(_0: value, _1: value) -> value check str#0 {
   entry unwind bb3
-  str#0 = "std/int.cheby:137:8"
+  str#0 = "std/int.cheby:190:8"
 bb0:
   drop _0
   _2: int = unbox int _1

@@ -6,7 +6,7 @@
 //! lies between two of them into a [`Gap`], which the layout then prints
 //! in its place.
 //!
-//! GAP(fmt-comment-positions): a comment keeps its place relative to the
+//! D-1160: a comment keeps its place relative to the
 //! tokens around it. A comment on the line of the token before it stays at
 //! the end of that line; a comment on a line of its own stays on a line of
 //! its own before the token after it. Since a `//` comment ends its line
@@ -17,7 +17,7 @@
 //! the node after such a break go one level deeper, as a value after `=`
 //! does on the next line.
 //!
-//! GAP(fmt-blank-lines-in-expressions): a blank line between two parts of
+//! D-1161: a blank line between two parts of
 //! a node, where the layout has no list, statement or arm to separate, is
 //! kept as one blank line, as D-1030 keeps single blank lines; the line
 //! breaks there, and what follows goes one level deeper. A blank line
@@ -134,7 +134,7 @@ impl<'t> Gap<'t> {
 
 /// The parts of a node and the docs of its gaps, assembled: the parts up
 /// to the first gap that breaks the line as they are, and the rest one
-/// level deeper (GAP(fmt-comment-positions)).
+/// level deeper (D-1160).
 #[derive(Default)]
 pub(crate) struct Parts {
     docs: Vec<Doc>,

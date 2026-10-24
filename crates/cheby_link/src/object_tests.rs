@@ -245,7 +245,7 @@ fn code_model_unit() -> MirModule {
     }
 }
 
-/// `app` is named by other units in `f` only (GAP(unit-alone-visibility)).
+/// `app` is named by other units in `f` only (D-1110).
 fn named(def: DefId) -> bool {
     def.index == DefIndex::from_u32(0)
 }

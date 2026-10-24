@@ -1,6 +1,6 @@
 //! The store's writes behind the command (K3c; D-960, D-551).
 //!
-//! GAP(cache-write-behind): `Store::put_*` hand the file's bytes (header
+//! D-1138: `Store::put_*` hand the file's bytes (header
 //! and payload) to the [`Writer`] and return. Each queued entry gets one
 //! job on rayon's global pool, the pool that `-j` sizes (D-551, D-622):
 //! the store has no thread of its own, so `-j 1` stays one worker. A job
@@ -11,11 +11,11 @@
 //! entry is queued or being written, the process's own gets answer from
 //! its bytes. More than [`MAX_IN_FLIGHT`] bytes in flight make a put
 //! write on the calling thread. A write that fails is skipped
-//! (GAP(cache-write-best-effort)): the entry leaves the queue and the
+//! (D-1129): the entry leaves the queue and the
 //! next lookup misses.
 //!
-//! GAP(cache-write-once-per-process): the writer remembers, per entry, the
-//! hash of the payload that this process wrote or read and found valid,
+//! D-1139: the writer remembers, per entry, the hash of the payload that
+//! this process wrote, queued, or read and found valid,
 //! and a put of the same payload writes nothing. Blobs are named by that
 //! hash, and a record's key fixes its payload (D-264), so in a command
 //! each blob and record is written at most once; a hint is written again

@@ -1,9 +1,9 @@
 //! Expressions, statements, patterns and types laid out at the width
 //! (D-1030), below the item headers that [`crate::layout`] lays out.
 //!
-//! The rules, each a gap the log leaves to the formatter:
+//! The rules, each settled in the log for the formatter:
 //!
-//! - GAP(fmt-expression-breaks): a line break is added only where §2.8
+//! - D-1157: a line break is added only where §2.8
 //!   continues the line (D-231, D-107): inside an open `(`, `[` or type
 //!   `<`, after `{` and before `}`, after a binary operator or after `,`,
 //!   `=`, `=>` or `<-`, and before a leading `|>`, `&&` or `||`; never
@@ -28,7 +28,7 @@
 //!   it is itself a call whose last argument hugs (`Some(fold(xs, 0,
 //!   fn(acc, x) {`). A function's return type stays on the line of `)`, so
 //!   a header breaks its parameters first.
-//! - GAP(fmt-pipe-chains): a pipeline is flat when it fits; otherwise one
+//! - D-1159: a pipeline is flat when it fits; otherwise one
 //!   stage per line, each line starting with `|>`, at the indentation of
 //!   the pipeline's first line when the pipeline starts its line (a
 //!   statement, a list element, the value of `let`, `use`, `const` or an
@@ -37,23 +37,23 @@
 //!   does not fit after the operator. A pipeline whose last stage must
 //!   break (it holds a closure of several statements) stays on one line up
 //!   to that stage when that line fits.
-//! - GAP(fmt-block-layout): the block of an item, a test or a local
-//!   function is broken over lines unless empty (`{}`); any other block
-//!   with one statement is `{ statement }` when it fits; blocks with more
-//!   statements, and every `case`, have one statement or arm per line.
+//! - D-1155: the block of an item, a test or a local function is broken
+//!   over lines unless empty (`{}`); any other block with exactly one
+//!   statement and no comment is `{ statement }` when it fits; blocks with
+//!   more statements or a comment, and every `case`, have one statement or
+//!   arm per line.
 //!   Blank lines at the start and the end of a block are dropped; single
 //!   blank lines between statements and arms are kept (D-1030).
-//! - GAP(fmt-case-layout): `case` subjects and an arm's patterns and guard
+//! - D-1156: `case` subjects and an arm's patterns and guard
 //!   stay on the line of `case` and of the arm, breaking only inside their
 //!   own brackets; an arm is `patterns [when guard] => body`, the body
 //!   after `=>` laid out as a value after `=` is.
 //!
 //! A comment or a blank line between two parts of a node keeps its place
-//! and breaks the line there ([`crate::gap`], GAP(fmt-comment-positions),
-//! GAP(fmt-blank-lines-in-expressions)); a token that holds a line break
+//! and breaks the line there ([`crate::gap`], D-1160, D-1161); a token that holds a line break
 //! (a multi-line raw string in a literal pattern) is kept as written. A
 //! gap between a unary `-` and a number (D-470) keeps its node verbatim:
-//! the formatter does not close it (GAP(fmt-negative-literal-gap)).
+//! the formatter does not close it (D-1158).
 
 use cheby_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -203,7 +203,7 @@ fn ends_in_closure(node: SyntaxNode<'_>) -> bool {
 
 /// `doc`, the laid-out `value` after an assignment-like operator (`=`,
 /// `<-`, `=>`, or the one operator of a binary expression), with the
-/// space or line break before it (GAP(fmt-expression-breaks)). After
+/// space or line break before it (D-1157). After
 /// `=>` (`arm`), a value that fits flat on the next line goes there
 /// before it breaks on the arm's line.
 fn tail_doc(value: SyntaxNode<'_>, doc: Doc, arm: bool) -> Doc {
@@ -302,8 +302,8 @@ impl<'t> Formatter<'t> {
     /// `tail`, the node after that token (`=`, `<-` or `=>`) is the value
     /// of an assignment ([`Self::assign_tail`]). A comment or a blank line
     /// between two parts keeps its place and breaks the line there, and
-    /// the parts after it go one level deeper (GAP(fmt-comment-positions),
-    /// GAP(fmt-blank-lines-in-expressions)); a token that holds a line
+    /// the parts after it go one level deeper (D-1160, D-1161); a token
+    /// that holds a line
     /// break (a multi-line raw string) is kept as written.
     pub(crate) fn seq(&mut self, node: SyntaxNode<'t>, tail: Option<SyntaxKind>) -> Option<Doc> {
         self.laid_out(node);
@@ -352,7 +352,7 @@ impl<'t> Formatter<'t> {
     /// The value after `=`, `<-` or `=>`, with the space before it: on
     /// the operator's line, breaking inside where it must; a pipeline or
     /// an atom that does not fit there on the next line, one level deeper
-    /// (GAP(fmt-expression-breaks), GAP(fmt-pipe-chains)).
+    /// (D-1157, D-1159).
     pub(crate) fn assign_tail(&mut self, value: SyntaxNode<'t>) -> Doc {
         let kind = value.kind();
         if kind == SyntaxKind::BIN_EXPR
@@ -381,7 +381,7 @@ impl<'t> Formatter<'t> {
     }
 
     /// A unary operator glued to its operand, and a negative literal
-    /// pattern. GAP(fmt-negative-literal-gap): a gap between `-` and a
+    /// pattern. D-1158: a gap between `-` and a
     /// number is an error (D-470) the formatter does not close, so that
     /// node stays as written.
     fn prefix(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
@@ -411,7 +411,7 @@ impl<'t> Formatter<'t> {
 
     /// A binary expression: a pipeline, or a chain of operators of one
     /// precedence, broken at every operator together when it does not
-    /// fit (GAP(fmt-expression-breaks)).
+    /// fit (D-1157).
     fn binary(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
         let op = bin_parts(node)?.op.kind();
         if op == SyntaxKind::PIPE_GT {
@@ -470,7 +470,7 @@ impl<'t> Formatter<'t> {
         let first = docs.next()?;
         let mut rest = Vec::new();
         // A comment or a blank line around an operator keeps its place and
-        // breaks the line there (GAP(fmt-comment-positions)); the chain's
+        // breaks the line there (D-1160); the chain's
         // other operators then break too, as its group must.
         for ((before, op, after), doc) in ops.into_iter().zip(docs) {
             let before = before.doc(false);
@@ -499,10 +499,10 @@ impl<'t> Formatter<'t> {
         ])))
     }
 
-    /// A pipeline's layouts (GAP(fmt-pipe-chains)). A comment or a blank
+    /// A pipeline's layouts (D-1159). A comment or a blank
     /// line before a `|>` takes the place of the line break before it; one
     /// after a `|>` breaks the line there, and the stage goes one level
-    /// deeper (GAP(fmt-comment-positions)). Either way the pipeline is
+    /// deeper (D-1160). Either way the pipeline is
     /// broken, one stage per line.
     fn pipe_forms(&mut self, node: SyntaxNode<'t>) -> Option<PipeForms> {
         let mut stages = Vec::new();
@@ -608,7 +608,7 @@ impl<'t> Formatter<'t> {
         }
         let mut parts = Parts::default();
         parts.push(self.node(path?));
-        // A comment between the type and `{` (GAP(fmt-comment-positions)).
+        // A comment between the type and `{` (D-1160).
         if !parts.gap(&gap, false) {
             parts.push(Doc::text(" "));
         }
@@ -620,7 +620,7 @@ impl<'t> Formatter<'t> {
     /// A block: `{}` when empty; with `body` (an item's, a test's or a
     /// local function's), or with more than one statement or a comment,
     /// one statement per line; else `{ statement }` when it fits
-    /// (GAP(fmt-block-layout)).
+    /// (D-1155).
     pub(crate) fn block(&mut self, node: SyntaxNode<'t>, body: bool) -> Option<Doc> {
         if !body {
             let entries = entries(node, Some((SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)));

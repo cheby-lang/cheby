@@ -29,7 +29,7 @@ const FORMATTED: &str = "//! A test package.\n\nimport std::io\nimport std::list
 
 /// Runs `cheby --color=never <args>` in `dir` with `stdin`, with a fresh
 /// `CHEBY_CACHE` of this process, deleted afterwards, so no run reads or
-/// fills the developer's cache (GAP(cache-tests-isolated)).
+/// fills the developer's cache (D-1128).
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: failing to spawn `cheby` fails the test"
@@ -298,7 +298,7 @@ fn copy_dir(from: &Path, to: &Path) {
 /// Runs `cheby <args>` in `dir` as the conformance harness runs an
 /// example: the example's `env`, freed objects poisoned (D-544), the
 /// default thread count and counting, and the test's own cache, a
-/// [`HarnessCache`] (GAP(cache-tests-isolated)).
+/// [`HarnessCache`] (D-1128).
 fn cheby_like_harness(
     dir: &Path,
     args: &[&str],

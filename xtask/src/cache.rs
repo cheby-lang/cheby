@@ -1,8 +1,8 @@
 //! The build cache of every `cheby` that `cargo xtask` starts (D-959's
-//! harness rule; GAP(cache-tests-isolated)): one fresh owner-only
+//! harness rule; D-1128): one fresh owner-only
 //! directory per `xtask` process, shared by all its children, so no
 //! command reads or fills the developer's cache. `CHEBY_TEST_KEEP_CACHE`
-//! names a directory to use and keep instead (GAP(harness-kept-cache)).
+//! names a directory to use and keep instead (D-1144).
 //! The directory is created on the first child that needs it and deleted
 //! when the command ends ([`finish`]).
 //!

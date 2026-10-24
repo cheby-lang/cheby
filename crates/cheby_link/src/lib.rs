@@ -38,7 +38,7 @@ mod program_tests;
 /// Why an object could not be written or a program could not be linked.
 /// Every variant but [`LinkError::Record`], [`LinkError::Object`] and
 /// [`LinkError::Copies`] is a tool error of `cheby build`, whose text is
-/// its `Display` (GAP(aot-build-tool-errors)).
+/// its `Display` (D-1114).
 #[derive(Debug)]
 pub enum LinkError {
     /// The code record is malformed or does not fit the target.
