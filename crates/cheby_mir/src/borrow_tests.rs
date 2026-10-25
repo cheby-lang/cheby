@@ -315,7 +315,7 @@ priv fn describe(error: Oops) -> String {
         })
         .expect("the entries unit holds `show`'s value shim");
     assert!(facts.used_as_value(show));
-    // GAP(entries-unit-facts): only the entries unit makes `show` a
+    // D-1194: only the entries unit makes `show` a
     // value, through `main`'s error dictionary, which holds `fn app::show`
     // itself; without its facts `show` would borrow and the counting would
     // stop on that dictionary's call ("a borrowed use in a moving

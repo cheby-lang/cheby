@@ -345,6 +345,10 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1173    | The hidden `CHEBY_POSITIONS=off` turns source positions off until CP2 decides on positions          |
 | D-1174    | Linux executables hold the runtime archive's debug paths, the toolchain checkout's too, until M6    |
 | D-1180    | `cheby check` compiles std without borrow masks until std's code comes from the cache (K6)          |
+| D-1187    | Every command but the REPL evaluates constants on `plain` code, std without masks, until K6         |
+| D-1190    | The REPL evaluates constants in its session JIT, with std's masks, until K6                         |
+| D-1202    | `[native]` with sources or libraries is a tool error on Windows until M6                            |
+| D-1213    | E0038's probes import `std::process` until S7 moves them to a unit test                             |
 
 ## Open questions
 

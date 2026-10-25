@@ -17,7 +17,7 @@
 //! - the package's `[native]` C sources are compiled (cached) and its
 //!   shared library loaded by the front end, as for `cheby run` (D-940 to
 //!   D-942); the same C objects and the `libraries` go into the link
-//!   after the program object (GAP(native-link-order));
+//!   after the program object (D-1198);
 //! - E0053 for every native symbol that a reached `@external` names and
 //!   D-943's build resolver cannot find: the runtime's exported names,
 //!   then the package's shared library, then each system library of the

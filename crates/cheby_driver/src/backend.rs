@@ -134,7 +134,7 @@ pub(crate) enum Roots<'a> {
     Constants,
     /// The constants a build of `main` or of tests reaches, in their
     /// evaluation order: the evaluation module of `cheby run`, `cheby
-    /// test` and `cheby build` (D-978, GAP(const-eval-code)), their
+    /// test` and `cheby build` (D-978, D-1187), their
     /// module set closed under whole modules (D-593, D-1177), `plain`.
     Evaluate(&'a [DefId]),
     /// Every function of the local package, lowered and compiled, nothing
@@ -295,7 +295,7 @@ pub(crate) fn build_scoped(
     let capture_clif = codegen.capture_clif;
     let check = matches!(roots, Roots::Constants);
     // `cheby check`'s build is its evaluation module, whose MIR and CLIF
-    // go under `consteval/` as every command's do (GAP(const-eval-code)).
+    // go under `consteval/` as every command's do (D-1187).
     let code_dump: Option<PathBuf> = if check {
         dump.map(|dir| dir.join(CONSTEVAL_DIR))
     } else {
@@ -446,7 +446,7 @@ pub(crate) fn constant_images(
 }
 
 /// The directory of `CHEBY_DUMP_DIR` that holds the evaluation module's
-/// MIR and CLIF (GAP(const-eval-code)).
+/// MIR and CLIF (D-1187).
 const CONSTEVAL_DIR: &str = "consteval";
 
 /// Evaluates `infos` in `jit` (D-535) under the package's `[const-eval]`
@@ -489,7 +489,7 @@ fn evaluate_in(
 }
 
 /// The evaluation module of a build of `main` or of tests (D-978,
-/// GAP(const-eval-code)): the constants `infos` (the build's, in D-535's
+/// D-1187): the constants `infos` (the build's, in D-535's
 /// order, with the build's seeds), lowered from their module set closed
 /// under whole modules (D-593, D-1177) in `plain` code, std's units
 /// without masks too (D-1180), compiled in a JIT of its own that gets
@@ -556,7 +556,7 @@ fn evaluation_module(
 /// constants on `plain` code, so it infers no masks; every other build
 /// keeps `mir`. Until std's code comes from the cache (K6), std's units
 /// of an evaluation module are compiled without masks too, rather than
-/// with std's own (D-1180), in every command (GAP(const-eval-code)).
+/// with std's own (D-1180), in every command (D-1187).
 pub(crate) const fn kind_options(roots: &Roots<'_>, mir: MirOptions, scope: Scope) -> MirOptions {
     let plain = match roots {
         Roots::Constants => matches!(scope, Scope::Whole),
@@ -1884,7 +1884,7 @@ fn main() {
             "{consts}"
         );
         // `cheby check`'s build is its evaluation module, dumped under
-        // `consteval/` (GAP(const-eval-code)).
+        // `consteval/` (D-1187).
         let module = dumps.join(CONSTEVAL_DIR);
         let app = std::fs::read_to_string(module.join("mir/app.mir")).unwrap();
         assert!(app.contains("numbers"), "{app}");
@@ -1971,7 +1971,7 @@ fn main() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// GAP(const-eval-code): the evaluation module of a constant in a
+    /// D-1187: the evaluation module of a constant in a
     /// module that imports `std::list` holds `std::list`'s whole code unit
     /// (D-966, D-1177), as the program's whole-module build has it and more
     /// than D-510's reached view, and no unit of it carries a mask: the

@@ -122,7 +122,7 @@ pub struct Domain {
 /// The number of runtime kinds whose live objects debug builds count per
 /// domain (D-711): `Sender`, `Receiver`, `Fiber`, `Scope`, `Selector`,
 /// `File`, `Listener` and `Connection`, the layouts 40 to 47, in that
-/// order. GAP(leaked-kinds-tier3): tier 3's handles (D-982) are counted
+/// order. D-1208: tier 3's handles (D-982) are counted
 /// after `Selector`, in kind order, as D-711 asks for every runtime kind
 /// (the user's answer to wave 6's question Q6 (3)).
 pub const RUNTIME_KINDS: usize = 8;
@@ -2399,7 +2399,7 @@ pub(crate) mod tests {
             line([0, 0, 0, 3, 1, 0, 0, 0], 4).as_deref(),
             Some("note: leaked 3 <Scope>, 1 <Selector>")
         );
-        // GAP(leaked-kinds-tier3): tier 3's handles after `Selector`, in
+        // D-1208: tier 3's handles after `Selector`, in
         // kind order (D-982).
         assert_eq!(
             line([0, 1, 0, 0, 0, 2, 1, 3], 9).as_deref(),

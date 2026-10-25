@@ -542,7 +542,7 @@ impl TestProgram {
         err: &mut dyn Write,
         hooks: &mut Hooks,
     ) -> Result<TestReport, Error> {
-        // D-1067 (S3, GAP(test-temp-root-handoff)): the run's temporary
+        // D-1067 (S3, D-1206): the run's temporary
         // root, given to the runtime before any test runs and removed with
         // what the tests left when it drops, after the runtime, on every
         // path; without it, scratch directories use the host's directory.

@@ -128,7 +128,7 @@ impl Seen {
 /// are still `collect_facts` over every unit; `cargo test -p cheby_driver
 /// golden` and the gate's CLIF record pin the masks themselves). The
 /// functions whose masks only the entries unit's facts decide are listed
-/// (GAP(entries-unit-facts)).
+/// (D-1194).
 #[test]
 #[cfg_attr(
     windows,

@@ -50,7 +50,7 @@
 //! checks them against, D-1167) are filled. A unit alone's record lists
 //! its constants, each path beside a data relocation to its slot, which
 //! an executable's start reads to install the program's constant images
-//! (D-979, GAP(const-image-slots)); a JIT batch's records list none, since
+//! (D-979, D-1189); a JIT batch's records list none, since
 //! a JIT host finds slots through `Jit::const_slot`, and a unit without
 //! constants keeps the record it had. A record of a unit alone is a pure function of its
 //! unit (D-915): it holds no layout id, which registration assigns
@@ -447,7 +447,7 @@ pub fn define_batch_records<M: Module>(
             .cloned()
             .collect();
         // A JIT host finds a constant's slot by its def (`Jit::const_slot`),
-        // so a batch's records list no constant (GAP(const-image-slots)).
+        // so a batch's records list no constant (D-1189).
         let data = define_record(module, None, &functions, &types, &externals, &[])?;
         out.push(BatchRecord { unit: index, data });
     }
@@ -494,7 +494,7 @@ fn batch_function_units(
 /// definition order, its user types ([`record_types`]), its external
 /// types, the free-shape words of its user layouts (D-919) and the
 /// constants it initializes with their slots (D-979,
-/// GAP(const-image-slots)).
+/// D-1189).
 ///
 /// # Errors
 ///
@@ -731,7 +731,7 @@ fn write_externals(
 
 /// Writes the `constants` table of the record `this` at the offset
 /// `layout` gives: each constant's path string and a data relocation to
-/// its slot (GAP(const-image-slots)).
+/// its slot (D-1189).
 fn write_consts<M: Module>(
     module: &mut M,
     desc: &mut DataDescription,

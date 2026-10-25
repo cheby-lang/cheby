@@ -540,7 +540,7 @@ fn read_on(me: &ExecCtx, state: &FileState, want: Want) -> Work<Taken> {
             return claim.claim().then(|| Err(FileError::closed()));
         };
         let mut input = file;
-        // GAP(file-refill-failure-kept): as D-1166 has it for standard
+        // D-1209: as D-1166 has it for standard
         // input, the end of the file or a read error that an abandoned
         // refill meets stays in the buffer for the next read.
         want.fill(buffer, &mut input);
@@ -796,7 +796,7 @@ static TEMP_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Sets the temporary root of a `cheby test` run (D-1067), under which
 /// every `file::with_temp_dir` creates its directory; `None` (the default)
-/// means the host's temporary directory. GAP(test-temp-root-handoff):
+/// means the host's temporary directory. D-1206:
 /// `cheby test` sets it through [`TestRoot`] before any test runs.
 pub fn set_temp_root(root: Option<PathBuf>) {
     *TEMP_ROOT.lock() = root;
@@ -812,7 +812,7 @@ const NAME_TRIES: u32 = 64;
 
 /// Creates a new directory `<prefix><16 lower-case hex digits>` under
 /// `parent`, with mode 0700 on Unix, retrying on a name that exists
-/// (GAP(file-temp-names)).
+/// (D-1205).
 fn new_scratch_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
     let mut last = io::Error::from(io::ErrorKind::AlreadyExists);
     for _ in 0..NAME_TRIES {
@@ -828,7 +828,7 @@ fn new_scratch_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
 }
 
 /// Creates the directory `path`, with mode 0700 when `private` and the
-/// default 0777 before the umask otherwise (GAP(file-create-modes)).
+/// default 0777 before the umask otherwise (D-1207).
 fn new_dir(path: &Path, private: bool) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -863,7 +863,7 @@ pub(crate) fn create_temp_dir_on(me: &ExecCtx) -> Work<String> {
 /// host's temporary directory as `cheby-test-<16 hex digits>` with mode
 /// 0700, given to the runtime ([`set_temp_root`]), and removed with
 /// everything in it when the last guard of the process goes, after failed
-/// tests too (GAP(test-temp-root-handoff)). Runs that overlap in one
+/// tests too (D-1206). Runs that overlap in one
 /// process, such as the driver's own tests, share one root.
 #[derive(Debug)]
 pub struct TestRoot {

@@ -26,7 +26,7 @@
 //! [`HEADER`] is `cheby.h` (D-945), embedded here and written by the
 //! driver into the cache's include directory for every compile. Until N8b
 //! it holds only its include guard and `cheby_value`'s typedef
-//! (GAP(native-surface-before-n8b)).
+//! (D-1196).
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -37,7 +37,7 @@ use crate::link::{CC, OBJECTS_PREFIX, PrivateDir, REMOVED_VARS, sweep_dead};
 
 /// `cheby.h` (D-945): an include guard and `typedef struct cheby_value
 /// cheby_value;` until N8b adds the `cheby_ffi_` functions
-/// (GAP(native-surface-before-n8b)).
+/// (D-1196).
 pub const HEADER: &str = include_str!("../include/cheby.h");
 
 /// The header's file name in the include directory, and how a dependency

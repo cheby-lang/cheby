@@ -22,7 +22,7 @@ use cheby_test_support::example;
 /// 018, 022 and 028 left the list (D-729), and with `std::selector`,
 /// `std::random` and `std::runtime` 009, 013 and 019 left it too. M3 ships
 /// `std::http`'s client, so 031 left it last (D-1003): no example needs an
-/// unshipped module. GAP(unshipped-probe-interim): the E0038 probes use
+/// unshipped module. D-1213: the E0038 probes use
 /// `std::process` until it ships too (D-729, D-989).
 const LATER_TIER: [&str; 0] = [];
 

@@ -13,13 +13,13 @@
 //!   table of the running `cheby`'s `cheby_ffi_` functions that `cheby.h`'s
 //!   functions jump through. Until N8b the header declares no function and
 //!   the table has no entry, only the null word that ends it
-//!   (GAP(native-surface-before-n8b)).
+//!   (D-1196).
 //! - `cc` runs in a fresh private directory (`cheby-objects-<pid>-<n>`, as
 //!   the link's, D-1112) with relative names, under the output name
 //!   `lib<package>.so` or `lib<package>.dylib`, so no path of the machine
 //!   reaches the library (macOS takes its install name from it). The
 //!   library's bytes come back to the caller, which stores them
-//!   (GAP(native-library-files)).
+//!   (D-1197).
 //!
 //! [`defined_symbols`] reads the global names a C object defines, for
 //! D-944's check that no package defines a name the runtime exports.
@@ -32,7 +32,7 @@ use crate::link::{CC, OBJECTS_PREFIX, PrivateDir, REMOVED_VARS, native_object_fi
 
 /// The forwarder's C source (D-941): the table of the running `cheby`'s
 /// `cheby_ffi_` functions, which holds only its ending null word until
-/// N8b (GAP(native-surface-before-n8b)).
+/// N8b (D-1196).
 pub const FORWARDER_SOURCE: &str = "\
 /* The forwarder of a package's shared library (D-941): the functions of
    cheby.h jump through this table, which the running cheby fills. */
@@ -108,7 +108,7 @@ impl fmt::Display for ShlibError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoCc(message) | Self::Io(message) => write!(f, "{message}"),
-            // GAP(native-tool-errors): plan §7 Q6 (4)'s text.
+            // D-1201: plan §7 Q6 (4)'s text.
             Self::Failed {
                 package,
                 status,

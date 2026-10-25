@@ -7,7 +7,7 @@
 //! opens no library (D-532, D-941). [`prepare`]:
 //!
 //! 1. On Windows, a table that names sources or libraries is a tool error
-//!    until M6 (GAP(native-on-windows), plan §7 Q6 (2)).
+//!    until M6 (D-1202, plan §7 Q6 (2)).
 //! 2. Writes `cheby.h` ([`cheby_link::cc::HEADER`], D-945) into the
 //!    cache's include directory `v1/include/`.
 //! 3. Compiles each source once, in `sources` order ([`cheby_link::cc`],
@@ -15,7 +15,7 @@
 //!    [`KeyKind::CObj`] key of the source's package-relative path and
 //!    bytes, the compiler's identity (its resolved path and `cc
 //!    --version`), the flags in their fixed form and `cheby.h`'s hash,
-//!    never a machine path (GAP(native-object-key): the relative path is
+//!    never a machine path (D-1199: the relative path is
 //!    keyed since `__FILE__` and ELF's file symbol name it). The record
 //!    names the object's blob and every file the compile read, in D-942's
 //!    three forms, each with its hash; a hit needs every hash unchanged
@@ -27,7 +27,7 @@
 //!    plain file `v1/lib/<key>.so` (`.dylib` on macOS) under a
 //!    [`KeyKind::NativeLib`] key of its inputs, so changed C code gets a
 //!    new path (D-712), and opens it with `dlopen(RTLD_NOW | RTLD_LOCAL)`,
-//!    never to close it (GAP(native-library-files)). A package that names
+//!    never to close it (D-1197). A package that names
 //!    only `libraries` gets the forwarder alone.
 //!
 //! Without a cache (some tests), the objects stay in memory and the
@@ -36,7 +36,7 @@
 //!
 //! `CHEBY_CACHE_LOG` lists `cobj <source>` and `nlib <package>` lookups
 //! (D-973). The tool errors' texts are plan §7 Q6 (4)'s
-//! (GAP(native-tool-errors)).
+//! (D-1201).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -51,7 +51,7 @@ use crate::cache::{Hash128, Key, KeyKind, Store};
 use crate::{Cache, Error};
 
 /// The directory of packages' shared libraries under `v1/`
-/// (GAP(native-library-files)): plain files, trimmed on D-961's rule.
+/// (D-1197): plain files, trimmed on D-961's rule.
 pub(crate) const LIB_DIR: &str = "lib";
 
 /// The directory under `v1/` that holds `cheby.h` for C compiles (D-945).
@@ -61,13 +61,13 @@ pub(crate) const INCLUDE_DIR: &str = "include";
 const COBJ_MAGIC: &[u8; 8] = b"chcobj01";
 
 /// E0053's note in every command (the user's answer to plan §7 Q5 (5) (b),
-/// GAP(e0053-note-with-libraries)): package code takes part in every
+/// D-1203): package code takes part in every
 /// resolver since D-941 and D-943.
 pub(crate) const E0053_NOTE: &str = "the symbol must be defined by the Cheby runtime, the \
      package's native code or libraries, or the running process";
 
 /// The tool error of a `[native]` table on Windows until M6
-/// (GAP(native-on-windows), plan §7 Q6 (2)).
+/// (D-1202, plan §7 Q6 (2)).
 pub(crate) const WINDOWS_NOT_YET: &str =
     "`[native]` is not available yet on Windows (planned for M6)";
 
@@ -354,7 +354,7 @@ impl<'a> Place<'a> {
 }
 
 /// The key of a C object (module documentation, D-942,
-/// GAP(native-object-key)).
+/// D-1199).
 fn object_key(
     build: crate::cache::BuildId,
     source: &str,
@@ -373,7 +373,7 @@ fn object_key(
 }
 
 /// The key of a package's shared library: everything that goes into its
-/// link (D-941, GAP(native-library-files)).
+/// link (D-941, D-1197).
 fn library_key(
     build: crate::cache::BuildId,
     package: &str,

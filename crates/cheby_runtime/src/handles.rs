@@ -731,7 +731,7 @@ pub(crate) mod tests {
             ]);
             words.push(empty);
             // Tier 3's handles (D-982), counted after `Selector`
-            // (GAP(leaked-kinds-tier3)).
+            // (D-1208).
             for kind in [
                 HandleKind::File,
                 HandleKind::Listener,

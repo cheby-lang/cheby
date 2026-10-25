@@ -3,7 +3,7 @@
 //! images before `main` in every host: `cheby run`, `cheby test`, the
 //! REPL and executables.
 //!
-//! # The bytes (GAP(const-image-format))
+//! # The bytes (D-1188)
 //!
 //! An image is `"CHBV"`, the format version [`IMAGE_FORMAT`] (one byte),
 //! the constant's path `module::name` (a string), the object count (a
@@ -25,7 +25,7 @@
 //!
 //! Tag 4 appears only in an in-process image, which
 //! [`serialize_in_process`] writes and only [`install_in_process`] reads
-//! (GAP(repl-constant-images)): the REPL's, whose static objects (an
+//! (D-1190): the REPL's, whose static objects (an
 //! earlier entry's installed constants, the session's code data) outlive
 //! every slot of the session, so an entry's image refers to them instead
 //! of copying them, and sharing survives across entries as D-539 asks.
@@ -368,7 +368,7 @@ pub unsafe fn serialize(roots: &[(&str, Word)]) -> Result<Vec<ConstImage>, Const
 }
 
 /// [`serialize`] for an image that stays in this process (the REPL's,
-/// GAP(repl-constant-images)): a static object that is no runtime static
+/// D-1190): a static object that is no runtime static
 /// (an earlier entry's installed constant, a literal of the session's
 /// code) is written by its address (tag 4) instead of being copied, so
 /// an entry that names a large earlier constant costs a word, and the
@@ -1041,7 +1041,7 @@ pub unsafe fn install(
 }
 
 /// [`install`] for the images [`serialize_in_process`] wrote in this
-/// process (the REPL's, GAP(repl-constant-images)): a static object named
+/// process (the REPL's, D-1190): a static object named
 /// by its address (tag 4) is that object, shared, never a copy.
 ///
 /// # Errors

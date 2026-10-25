@@ -690,7 +690,7 @@ impl Reader<'_> {
     /// ending in `.c` that stays inside the package once `..` is resolved
     /// and, when the package directory is known, a file that exists and
     /// stays inside the package once symbolic links are resolved.
-    /// GAP(native-table-details): an absolute path and a directory are
+    /// D-1200: an absolute path and a directory are
     /// E0036 too, `..` is judged lexically before the file is looked up,
     /// an empty table is valid and asks for nothing, and a source listed
     /// twice is not checked.

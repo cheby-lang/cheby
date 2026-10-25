@@ -15,7 +15,7 @@
 //!   ([`cheby_mir::borrow::BuildFacts::about_module`]). It holds the masks
 //!   of the module's functions that borrow something, by item
 //!   ([`MasksRecord`]).
-//! - A unit's code key ([`code_key`], GAP(code-key-contents)): the build
+//! - A unit's code key ([`code_key`], D-1193): the build
 //!   ID, the settings of D-958 with the kind, whether positions are on
 //!   (`CHEBY_POSITIONS`, D-1173), the unit's identity, the module's own
 //!   masks by item, and each callee of the package in another module by
@@ -55,7 +55,7 @@ impl UnitPart {
 
 /// The key of the lowering read-set hint of `part` under the front
 /// identity `f2` (D-955): the hint names the unit's hidden reads, sorted
-/// module paths, in the front end's hint format. GAP(lowering-read-hints):
+/// module paths, in the front end's hint format. D-1195:
 /// it is written only when the reads are not empty, as D-1137 does for the
 /// front end's hint; a hint left non-empty after the reads became empty
 /// is not rewritten here, since nothing reads it until K4c, whose lookup
@@ -133,7 +133,7 @@ pub(crate) struct CodeKeyInputs<'a> {
     pub callees: &'a [String],
 }
 
-/// A unit's code key (D-969, D-958; GAP(code-key-contents)): under
+/// A unit's code key (D-969, D-958; D-1193): under
 /// `KeyKind::Code` for a code unit and `KeyKind::Tests` for a tests unit,
 /// the build ID, the identity, the settings, the positions switch, the
 /// own masks and the callees' slot symbols, in that order.

@@ -313,7 +313,7 @@ test "close closes the handle now" {
 
 ## Reading
 
-A `File` opened for reading reads ahead in blocks of 64 KiB, and serves `read_line` and `read_bytes` from that buffer on the calling fiber's thread, as standard input's reader does. Only a read that empties the buffer is a blocking-pool job, so a run of `read_line` calls costs one job per buffer, not one per line. The block size is informative (D-548, D-823, D-995). `read_line` and `read_bytes` read from the same buffer and may be mixed. A cancelled refill leaves its bytes in that buffer for the next read (D-1065).
+A `File` opened for reading reads ahead in blocks of 64 KiB, and serves `read_line` and `read_bytes` from that buffer on the calling fiber's thread, as standard input's reader does. Only a read that empties the buffer is a blocking-pool job, so a run of `read_line` calls costs one job per buffer, not one per line. The block size is informative (D-548, D-823, D-995). `read_line` and `read_bytes` read from the same buffer and may be mixed. A cancelled refill leaves its bytes in that buffer for the next read (D-1065). An end of the file or a read error that it meets stays there too, and the next read on the handle returns it; a failure consumes the unfinished line's bytes (D-1209).
 
 ### `read_line`
 

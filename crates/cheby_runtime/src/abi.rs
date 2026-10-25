@@ -472,7 +472,7 @@ pub use crate::runtime_id::{RUNTIME_ID, RUNTIME_ID_HEX};
 /// `cb$mod$<path>` (D-919), whose layout `crate::image` documents field
 /// by field. It goes up with every change of that layout: 2 since the
 /// module records' `constants` tables name each constant beside its slot
-/// (K5a, GAP(const-image-slots)).
+/// (K5a, D-1189).
 pub const IMAGE_VERSION: u32 = 2;
 
 /// Names of the C-ABI symbols generated code imports.

@@ -7,7 +7,7 @@
 //! nor takes anything, so they run on the calling fiber's thread with no
 //! context (D-983, D-985) and a cancellation never meets them.
 //!
-//! GAP(http-head-kernel): the kernels' shapes.
+//! D-1210: the kernels' shapes.
 //!
 //! - `sys_parse_response_head(head: Bytes)` returns `Ok(None)` until the
 //!   bytes hold a complete head, then `Ok(Some((status, headers,

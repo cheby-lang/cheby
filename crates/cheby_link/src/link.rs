@@ -12,7 +12,7 @@
 //!   archive, the package's `libraries` as `-l<name>` in manifest order,
 //!   then the archive's system libraries ([`crate::native_libs`]): the
 //!   package's native code comes where D-1112's line leaves room for it
-//!   (D-940, GAP(native-link-order)).
+//!   (D-940, D-1198).
 //! - Flags: on Linux `-pie -Wl,--gc-sections -Wl,--eh-frame-hdr
 //!   -Wl,-z,relro,-z,now -Wl,--build-id=sha1`; on macOS `-arch arm64
 //!   -mmacosx-version-min=<the archive's minimum> -Wl,-dead_strip -Wl,-S`
@@ -80,12 +80,12 @@ pub struct LinkJob<'a> {
     /// [`crate::program::PROGRAM_OBJECT_NAME`].
     pub objects: &'a [(String, Vec<u8>)],
     /// The package's C objects, in `sources` order, linked after the
-    /// program object (D-940, GAP(native-link-order)): `(source, object
+    /// program object (D-940, D-1198): `(source, object
     /// bytes)`, the source only naming nothing but the object's place in
     /// the list.
     pub c_objects: &'a [(String, Vec<u8>)],
     /// The package's `libraries`, as `-l<name>` before the archive's
-    /// system libraries (D-940, GAP(native-link-order)).
+    /// system libraries (D-940, D-1198).
     pub libraries: &'a [String],
     /// The runtime archive, checked with
     /// [`crate::archive::check_runtime_id`] by the caller.
@@ -130,7 +130,7 @@ fn object_file(module: &str) -> String {
 }
 
 /// The file name of the package's C object at `index` of `sources` in the
-/// temporary directory (GAP(native-link-order)).
+/// temporary directory (D-1198).
 pub(crate) fn native_object_file(index: usize) -> String {
     format!("native-{index}.o")
 }
@@ -167,7 +167,7 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
     }
     // The package's C objects follow the program object, each under its
     // place in `sources`: no module path holds `-`, so no name collides
-    // (GAP(native-link-order)).
+    // (D-1198).
     for (index, (_, bytes)) in job.c_objects.iter().enumerate() {
         let file = native_object_file(index);
         let path = objects.path.join(&file);

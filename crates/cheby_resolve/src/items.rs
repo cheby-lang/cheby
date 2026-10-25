@@ -83,7 +83,7 @@ const RESERVED_SYMBOL_PREFIXES: [&str; 2] = ["cheby_rt_", "cb$"];
 /// not export it, or when the symbol has a reserved prefix, which
 /// resolution reports already. The driver calls it after resolution with
 /// the runtime's names (`cheby_runtime::symbols()`), so this crate does
-/// not depend on the runtime. GAP(e0055-runtime-export-note): the note
+/// not depend on the runtime. D-1204: the note
 /// says the runtime exports the symbol, where the prefixes' note names the
 /// prefix.
 #[must_use]

@@ -68,7 +68,7 @@
 //! A build lowers every unit first. [`collect_facts`] then reads the
 //! units of its inference scope once (D-968): the code units, the tests
 //! units and the entries unit (whose statics may hold `main`'s error
-//! dictionary; GAP(entries-unit-facts)). The facts are the union of each unit's own
+//! dictionary; D-1194). The facts are the union of each unit's own
 //! ([`unit_facts`], D-969), so a cache can store them per unit by name
 //! and rebuild them ([`BuildFacts::union`]); a module's masks depend on
 //! the build only through [`BuildFacts::about_module`].
@@ -241,7 +241,7 @@ impl BorrowMask {
 /// names, and the positions that tail calls from other units (a tests
 /// unit, the entries unit) fill with something other than a constant.
 ///
-/// Every fact is a union of per-unit parts (D-969; GAP(facts-union)):
+/// Every fact is a union of per-unit parts (D-969; D-1191):
 /// [`collect_facts`] is the union of each unit's own facts, and
 /// [`BuildFacts::union`] rebuilds the same facts from [`UnitFacts`], which
 /// name functions by module path and item so they can be stored. No fact
@@ -301,7 +301,7 @@ impl BuildFacts {
 /// (D-969). A build passes the units of its inference scope (D-968): its
 /// code units and tests units, and the entries unit, whose statics may
 /// hold `main`'s error dictionary and so use a function as a value
-/// (GAP(entries-unit-facts): D-968 says it contributes no facts, but its
+/// (D-1194: D-968 says it contributes no facts, but its
 /// value facts keep rule 2 sound).
 #[must_use]
 pub fn collect_facts(units: &[&MirModule]) -> BuildFacts {

@@ -1,5 +1,5 @@
 //! Tests of the `std::http` head kernels (D-1003, D-1013, D-1074,
-//! GAP(http-head-kernel)): complete and partial heads, repeated and
+//! D-1210): complete and partial heads, repeated and
 //! mixed-case headers, heads over the limit and invalid bytes, for both
 //! kernels, then the Cheby values the kernels return and their C
 //! signatures against `std/http.cheby`. No test starts a runtime: the

@@ -45,7 +45,7 @@
 //!    check`), [`freeze`]s them.
 //!
 //! Every command evaluates in a JIT of its own on `plain` code (D-978,
-//! GAP(const-eval-code)), which the driver drops once [`images`] has
+//! D-1187), which the driver drops once [`images`] has
 //! written each result as an image that describes values (D-979,
 //! `cheby_runtime::consteval::image`) and [`release`] has freed the
 //! results, so a large constant costs its installed copy and nothing of
@@ -55,7 +55,7 @@
 //! (D-196): fresh results and, from K5b, cached ones take that one path.
 //! The REPL evaluates in its session JIT and replaces each result with an
 //! installed copy of its in-process image ([`replace_with_images`],
-//! GAP(repl-constant-images)). `cheby check` writes images and installs
+//! D-1190). `cheby check` writes images and installs
 //! nothing.
 
 mod range;
@@ -285,7 +285,7 @@ fn slots_of(jit: &Jit, order: &[ConstInfo]) -> Result<Vec<*mut u64>, Ice> {
         .collect()
 }
 
-/// The REPL's path (GAP(repl-constant-images)): replaces each evaluated
+/// The REPL's path (D-1190): replaces each evaluated
 /// result of `order` in its slot of `jit`, the session JIT, by its
 /// installed copy (D-979), then frees the results (R-1). The images are
 /// in-process ones: a static object a result holds, such as an earlier
@@ -371,7 +371,7 @@ pub fn install(jit: &Jit, images: &[ConstImage], order: &[ConstInfo]) -> Result<
     install_with(jit, images, order, false)
 }
 
-/// [`install`], of in-process images (GAP(repl-constant-images)) when
+/// [`install`], of in-process images (D-1190) when
 /// `in_process`.
 fn install_with(
     jit: &Jit,

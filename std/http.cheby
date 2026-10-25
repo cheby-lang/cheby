@@ -270,8 +270,10 @@ priv fn is_redirect(status: Int) -> Bool {
 /// (D-1008): 303, and 301 or 302 after a method other than `GET` or `HEAD`,
 /// continue as `GET` without the body and the headers that describe it, as
 /// `fetch` does; `authorization` and `cookie` are dropped when the
-/// redirect leaves the origin. GAP(http-redirect-details): `HEAD` stays
-/// `HEAD` after a 303, as in `fetch`.
+/// redirect leaves the origin. D-1212: `HEAD` stays
+/// `HEAD` after a 303, as in `fetch`. D-1212 also has a 301 or 302 rewrite
+/// only `POST`; this function still follows D-1008's text there until the
+/// next package that edits this file changes it.
 priv fn redirected(outgoing: Outgoing, status: Int, target: Target) -> Outgoing {
   let to_get = (status == 301 || status == 302 || status == 303)
     && outgoing.method != Get
@@ -379,7 +381,7 @@ priv fn open(target: Target) -> Result<net::Connection, Error> {
   case target.secure {
     False => result::map_error(net::connect(target.host, target.port), from_io)
     // A connection that a cancellation drops here is closed with it, as
-    // `net::connect`'s is (D-1000). GAP(http-tls-stub-error): until TLS
+    // `net::connect`'s is (D-1000). D-1211: until TLS
     // lands, the kernel answers an error, which is a TLS failure with no
     // IO failure underneath (D-1182).
     True => case net::sys_connect_tls(target.host, target.port) {
@@ -1412,7 +1414,7 @@ priv fn reply(status: Int, headers: List<(String, String)>, body: String) -> byt
 /// head is complete, then its status, its headers in wire order with
 /// lower-case names, and its length in bytes; `Err` for a head that is not
 /// valid HTTP/1.1 (kind 400) or is over 64 KiB (kind 431). It never waits
-/// (D-983, D-985, GAP(http-head-kernel)).
+/// (D-983, D-985, D-1210).
 @external(native, "cheby_http_sys_parse_response_head")
 @external(js, "./http.mjs", "sys_parse_response_head")
 priv fn sys_parse_response_head(
@@ -1423,7 +1425,7 @@ priv fn sys_parse_response_head(
 /// `sys_parse_response_head` parses a response's, with the request line in
 /// place of the status: `<method> <target> HTTP/1.<minor>`. For the
 /// server, which calls it; bound before it, as `std::net` bound
-/// `sys_connect_tls` (D-985, D-1182, GAP(http-head-kernel)).
+/// `sys_connect_tls` (D-985, D-1182, D-1210).
 @external(native, "cheby_http_sys_parse_request_head")
 @external(js, "./http.mjs", "sys_parse_request_head")
 fn sys_parse_request_head(

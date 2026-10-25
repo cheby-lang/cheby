@@ -45,7 +45,7 @@ pub struct TrimReport {
     /// Abandoned temporary files deleted.
     pub temporary: usize,
     /// Packages' shared libraries deleted from `v1/lib/` (D-941,
-    /// GAP(native-library-files)).
+    /// D-1197).
     pub libraries: usize,
     /// Old blobs the caller's predicate kept.
     pub kept: usize,
@@ -170,7 +170,7 @@ impl Store {
             }
         }
         // Packages' shared libraries, plain files that a read touches like
-        // an entry (GAP(native-library-files)). A process that loaded one
+        // an entry (D-1197). A process that loaded one
         // keeps its mapping when the file goes.
         for path in entries(&v1.join(crate::native::LIB_DIR)) {
             if old(&path) && fs::remove_file(&path).is_ok() {

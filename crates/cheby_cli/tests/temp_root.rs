@@ -89,7 +89,7 @@ fn entries(dir: &Path) -> Vec<String> {
     names
 }
 
-/// D-1067, GAP(test-temp-root-handoff): a test that fails inside its
+/// D-1067, D-1206: a test that fails inside its
 /// scratch directory had it under `TMPDIR/cheby-test-<16 hex>/`, and after
 /// `cheby test` nothing is left under `TMPDIR`; the test that passed in its
 /// own directory passed.

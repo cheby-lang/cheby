@@ -21,7 +21,7 @@
 //!   key ([`code_keys::code_key`]), logged as a `key` line under
 //!   `CHEBY_CACHE_LOG` (D-973); K4c stores code records under them.
 //!
-//! GAP(masks-records-before-code-cache): until K4c caches code, nothing
+//! D-1192: until K4c caches code, nothing
 //! reads a record to skip work. Every command still lowers and infers
 //! fresh, and writes the records behind the command (D-1138), at most once
 //! per process (D-1139). A record that hits is compared with the fresh
@@ -36,7 +36,7 @@
 //! load set's code units and, in a test build, the tests units of the
 //! modules with a selected test (`backend.rs` lowers exactly those); std's
 //! masks keep today's scope, the build's std units, until K6 infers them
-//! over every std module. GAP(entries-unit-facts): D-968 says the entries
+//! over every std module. D-1194: D-968 says the entries
 //! unit contributes no facts, but its statics may hold `main`'s error
 //! dictionary, which names a package function as a value; without that
 //! fact the function would borrow and the dictionary's call would break
@@ -150,7 +150,7 @@ pub(crate) const fn sink(front: &Frontend) -> Option<&RecordSink> {
 
 /// The facts of a build's inference scope (D-968, D-969): the union of
 /// every lowered unit's own facts, the entries unit's included
-/// (GAP(entries-unit-facts), module docs).
+/// (D-1194, module docs).
 pub(crate) fn scope_facts(units: &[MirModule]) -> BuildFacts {
     let refs: Vec<&MirModule> = units.iter().collect();
     borrow::collect_facts(&refs)
@@ -536,7 +536,7 @@ pub(crate) mod hook {
         /// How many functions borrow something.
         pub borrowing: usize,
         /// The functions whose masks would differ if the entries unit
-        /// contributed no facts (GAP(entries-unit-facts)), by path.
+        /// contributed no facts (D-1194), by path.
         pub without_entries: Vec<String>,
     }
 

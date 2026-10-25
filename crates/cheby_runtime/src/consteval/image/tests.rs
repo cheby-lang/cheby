@@ -234,7 +234,7 @@ fn const_image_shared_map_stays_one_collection_after_install() {
     });
 }
 
-/// GAP(repl-constant-images), the wave-6 review's R-2: an in-process
+/// D-1190, the wave-6 review's R-2: an in-process
 /// image (the REPL's) names an earlier entry's installed constant by its
 /// address, so a later constant that holds it costs a word, not a copy,
 /// and the installed value shares it (D-539). `install` refuses such an

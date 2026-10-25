@@ -231,7 +231,7 @@ sources = ["src/sqlite_ffi.c"]
 libraries = ["sqlite3"]
 ```
 
-- `sources` lists C source files by their paths relative to the package root. Each must end in `.c`, must exist, and must stay inside the package once `..` and symbolic links are resolved. A C file may sit under `src/` next to the module that binds it, and it is not a module ([§7.2](07-modules-and-packages.md#72-modules-and-files)).
+- `sources` lists C source files by their paths relative to the package root. Each must end in `.c`, must name a file that exists, and must stay inside the package once `..` and symbolic links are resolved (D-1200). A C file may sit under `src/` next to the module that binds it, and it is not a module ([§7.2](07-modules-and-packages.md#72-modules-and-files)).
 - `libraries` lists system libraries by the name that the linker takes after `-l`, such as `sqlite3` for `-lsqlite3`. Each is a non-empty string of ASCII letters, digits, `_`, `-`, `.` and `+`.
 - The table has no other keys. A violation of these rules is a compile error, like every error in the manifest, and so is a `[native]` table in a package whose `targets` leave out `native` (D-444, D-940).
 - Every command checks the table, but only the commands that run or link native code compile the C sources. `cheby check` compiles none (D-532, D-941).
@@ -246,7 +246,7 @@ _Note:_ the reference implementation compiles each C source once, with the packa
 cc -c -O2 -fPIC -g0 -ffile-prefix-map=<package root>=. -ffile-prefix-map=<header dir>=cheby -I<header dir> -o <object> <source>
 ```
 
-The compiler's output is shown only when it fails, which is a tool error that names the source. Compiled objects are cached, keyed by the source, the C compiler, the flags, `cheby.h` and every file the compile read (D-942). Under `cheby run`, each package with a `[native]` table becomes one shared library, built with `cc -shared -Wl,-z,defs` on Linux and `cc -dynamiclib` on macOS from the package's objects, its `libraries` and a small object that forwards the calls of `cheby.h` to the running `cheby`. It is loaded with `dlopen` and never unloaded (D-941).
+The compiler's output is shown only when it fails, which is a tool error that names the source. Compiled objects are cached, keyed by the source, the C compiler, the flags, `cheby.h` and every file the compile read (D-942). Under `cheby run`, each package with a `[native]` table becomes one shared library, built with `cc -shared -Wl,-z,defs` on Linux and `cc -dynamiclib` on macOS from the package's objects, its `libraries` and a small object that forwards the calls of `cheby.h` to the running `cheby`. It is loaded with `dlopen` and never unloaded (D-941). Until M6, on Windows, every command that would compile or load native code refuses a table that names sources or libraries with a tool error that says it is not available yet (D-1202).
 
 ## 12.6 Target-specific code
 

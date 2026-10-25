@@ -54,7 +54,7 @@ The tests that need a server start one on the loopback address, with a port the 
 
 ## Client
 
-Every status is `Ok`, so a caller such as 031 sees its `404` with its body (D-297). Redirects with status 301, 302, 303, 307 and 308 are followed, at most 10 in a row, as `fetch` does: 303, and 301 or 302 after a method other than `GET` or `HEAD`, continue as `GET` without a body, and `authorization` and `cookie` headers are dropped when a redirect leaves the origin. The client has no timeout of its own: a caller wraps it in `fiber::timeout`. Each request opens one connection and closes it afterwards. No content encoding is asked for, so bodies arrive uncompressed (D-232, D-1008).
+Every final status is `Ok`, so a caller such as 031 sees its `404` with its body (D-297). An interim `1xx` head other than `101` is skipped, a `101`, which the client never asks for, is an invalid response, and an HTTP/1.0 answer is read as an HTTP/1.1 one (D-1216). Redirects with status 301, 302, 303, 307 and 308 are followed, at most 10 in a row, as `fetch` does: a 303 after a method other than `GET` or `HEAD`, and a 301 or 302 after `POST`, continue as `GET` without a body and without the headers that describe it, while other methods keep their method and body and a `HEAD` stays `HEAD` (D-1212), and `authorization` and `cookie` headers are dropped for good when a redirect leaves the origin. A redirect without a `location` header is returned as the response. A `location` is resolved against the current URL as WHATWG resolves a reference, and one with a scheme other than `http` or `https` is an invalid URL. The client has no timeout of its own: a caller wraps it in `fiber::timeout`. Each request opens one connection and closes it afterwards. No content encoding is asked for, so bodies arrive uncompressed (D-232, D-1008, D-1212).
 
 The client reads a response head of at most 64 KiB, the server's own limit, and a longer head is `Err` for which [`is_invalid_response`](#is_invalid_response) holds. The number is informative. Node's own limit is 16 KiB, so on JS a head between 16 and 64 KiB may fail there first. A body has no limit in tier 3: a body larger than memory ends the program with `out of memory` ([§11.8.2](../spec/11-errors-and-panics.md#1182-out-of-memory), D-642, D-1074).
 
@@ -487,7 +487,7 @@ The first test of [`send`](#send) uses it.
 pub fn is_invalid_response(error: Error) -> Bool
 ```
 
-Tells whether `error` means that the server's answer was not valid HTTP/1.1, its head was over the client's limit of 64 KiB, or its body was not valid UTF-8 (D-1074). Its text is `invalid response`.
+Tells whether `error` means that the server's answer was not valid HTTP/1.1 or HTTP/1.0, was a `101`, had a head over the client's limit of 64 KiB, or had a body that was not valid UTF-8 (D-1074, D-1216). Its text is `invalid response`.
 
 - **Cost:** O(1). Informative.
 
@@ -661,7 +661,7 @@ A cancellation of the fiber that called `serve_on` cancels `accept_loop`'s scope
 - It never cancels the scope's body, which goes on to return `Ok(Nil)` for a closed listener or `Err` for any other failure that does not pass. The scope's close waits until the cancelled fibers have unwound, and a panic of one of them after the cancellation reached it is not recorded, so `scope` gives `Ok` with the body's value, and `serve_on` returns that value.
 - A handler that closes its own server's listener is one of the cancelled fibers, so it unwinds before its response is sent (D-1064).
 
-The head kernels are `sys_parse_request_head` and `sys_parse_response_head`. They take the bytes read so far and return the parsed head and how many bytes it used, or that more bytes are needed. With the TLS kernels, they are ordinary kernels that never wait, so they need no `@std_context` (D-983, D-985).
+The head kernels are `sys_parse_request_head` and `sys_parse_response_head`. They take the bytes read so far and return the parsed head and how many bytes it used, or that more bytes are needed: the response kernel gives the status and the request kernel the request line `<method> <target> HTTP/1.<minor>`, each with the headers in wire order and their names in lower case. A head that is not valid HTTP/1.1 or HTTP/1.0 is kind 400, and one over 64 KiB, or more than 64 KiB that holds no complete head, is kind 431: the statuses the server answers with, not `io` kinds (D-1013, D-1210). With the TLS kernels, they are ordinary kernels that never wait, so they need no `@std_context` (D-983, D-985).
 
 ## Not in tier 3
 

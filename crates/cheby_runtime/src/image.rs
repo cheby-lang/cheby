@@ -51,7 +51,7 @@
 //! | 80     | `functions`   | [`FunctionEntry`], 32 bytes each    | the call-site table (D-856, D-867)                                          |
 //! | 96     | `constants`   | [`ConstEntry`], 16 bytes each       | the module's constants with their slots `cb$const$…`, `DefIndex` order      |
 //!
-//! [`ConstEntry`] (16 bytes, GAP(const-image-slots)): `path` (`u32`
+//! [`ConstEntry`] (16 bytes, D-1189): `path` (`u32`
 //! string, the constant's path `module::name`, which names its image) at
 //! 0, `pad` (`u32`) at 4, `slot` (pointer to the writable slot
 //! `cb$const$…`) at 8. A record lists every constant its unit initializes
@@ -133,7 +133,7 @@
 //! (D-979) with the one routine every host calls,
 //! [`consteval::image::install`](crate::consteval::image::install): the
 //! table's images, in order, each root written into the slot that the
-//! records' constants tables give for its path (GAP(const-image-slots)),
+//! records' constants tables give for its path (D-1189),
 //! each user constructor's type key resolved to the layout id the records
 //! registered ([`type_layouts`], D-920), on an entry with the image's
 //! trampolines, since building a map may hash a key with `@std_hooks`.
@@ -555,7 +555,7 @@ pub struct FunctionEntry {
     pub sites: Table<CallSiteEntry>,
 }
 
-/// A constant of a module record and its slot (GAP(const-image-slots)).
+/// A constant of a module record and its slot (D-1189).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ConstEntry {

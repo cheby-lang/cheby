@@ -741,7 +741,7 @@ fn program_stubs_none_keeps_the_object() {
                 Format::MachO => PINNED_MACHO_AARCH64,
             };
             // The pins hold version 1 of the image; K5a raised it to 2 for
-            // the records' constants tables (GAP(const-image-slots)), the
+            // the records' constants tables (D-1189), the
             // only word of the object that changed.
             let content = fnv(&layout_free(format, &with_version_one(format, &bytes)));
             assert_eq!((bytes.len(), content), pinned, "{format:?}");

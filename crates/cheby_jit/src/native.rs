@@ -12,7 +12,7 @@
 //! A library is never unloaded: code compiled against it may run until
 //! the process exits (a REPL session's detached fibers, D-712), and the
 //! forwarder's table it holds is the running `cheby`'s
-//! (GAP(native-surface-before-n8b): the table has no entry until N8b, so
+//! (D-1196: the table has no entry until N8b, so
 //! nothing is filled yet).
 
 use std::path::{Path, PathBuf};
@@ -70,7 +70,7 @@ const GENERATION_MARK: &str = "$cheby$gen";
 /// every batch (D-1105), so the new code needs names of its own to reach
 /// the new library while old code keeps the old one. A JIT resolves it in
 /// the libraries of `generation` ([`crate::Jit::add_library_generation`])
-/// (GAP(native-library-files)). Generation 0 is the plain symbol.
+/// (D-1197). Generation 0 is the plain symbol.
 #[must_use]
 pub fn generation_symbol(symbol: &str, generation: u32) -> String {
     if generation == 0 {

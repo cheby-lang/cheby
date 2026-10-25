@@ -2,7 +2,7 @@
 //! in the working directory with the smallest package that runs, in the
 //! form `cheby fmt` produces at every width CP2 may choose (D-1150).
 //!
-//! GAP(cheby-new-skeleton): the files' texts, the silent success and the
+//! D-1214: the files' texts, the silent success and the
 //! error texts are the user's answer to the wave plan's §7 Q6 (1).
 
 use std::io::Write as _;
@@ -56,7 +56,7 @@ impl NewError {
                 "`{name}` is not a valid package name: package names are lower-case identifiers, \
                  such as `my_app`"
             ),
-            // GAP(cheby-new-reserved-name): the answer's form, with the
+            // D-1215: the answer's form, with the
             // manifest's reason (D-058).
             Self::ReservedName { name } => format!(
                 "`{name}` is not a valid package name: it is reserved for the standard library"

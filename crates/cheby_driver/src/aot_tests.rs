@@ -617,7 +617,7 @@ fn check_records(
         let defined = symbols(&object);
         let decoded = decode_record(&object, &mangle::module_record(path));
         // A unit alone lists every constant it initializes, beside its
-        // slot (D-979, GAP(const-image-slots)); no external type names a
+        // slot (D-979, D-1189); no external type names a
         // drop function yet (D-1168).
         let consts = unit
             .functions
@@ -752,7 +752,7 @@ impl RecordFacts {
             shapes: decoded.shapes.clone(),
             sites,
             // A JIT batch's records list no constant, since a JIT host finds
-            // slots by def (GAP(const-image-slots)); the object's count is
+            // slots by def (D-1189); the object's count is
             // checked against its unit in `check_records`.
             constants: 0,
         }

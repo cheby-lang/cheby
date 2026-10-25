@@ -52,7 +52,7 @@ pub struct UnitCode {
     /// The constants the unit initializes, in function (`DefIndex`)
     /// order: each one's path `module::name` and the slot the unit
     /// defines, which the module record lists (D-979,
-    /// GAP(const-image-slots)).
+    /// D-1189).
     pub(crate) consts: Vec<(String, cranelift_module::DataId)>,
 }
 

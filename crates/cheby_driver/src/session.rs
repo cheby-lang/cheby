@@ -1423,7 +1423,7 @@ impl Session {
         // D-712, D-941: a changed C source loads the package's native code
         // again beside the old, and the modules that bind native symbols
         // get new versions that call it; old code keeps the old library
-        // (GAP(native-library-files)).
+        // (D-1197).
         match self.reload_native() {
             Ok(true) => self.add_native_modules(&mut reloaded)?,
             Ok(false) => {}
@@ -1908,7 +1908,7 @@ struct Again {
 /// package's native code of `generation` (D-712, D-941,
 /// [`cheby_jit::generation_symbol`]): the JIT resolves a name once, so
 /// code compiled after a `:reload` that changed a C source reaches the new
-/// library only under names of its own (GAP(native-library-files)). Front
+/// library only under names of its own (D-1197). Front
 /// end and diagnostics keep the symbol itself; generation 0 changes
 /// nothing.
 fn name_native_generation(unit: &mut MirModule, generation: u32) {
@@ -2452,7 +2452,7 @@ impl Session {
             memory_limit: self.front.const_eval_memory_limit,
             targets: self.front.package_targets,
         };
-        // K5a, GAP(repl-constant-images): the entry's constants evaluate in
+        // K5a, D-1190: the entry's constants evaluate in
         // the session JIT (its package code is `plain`, D-971; std keeps
         // its masks, D-1180), then reach their slots from images, as in
         // every other host (D-979): a new generation gets a new image.
@@ -2877,7 +2877,7 @@ mod tests {
         assert!(printed[8].contains("<repl:9>:1:1"), "{}", printed[8]);
     }
 
-    /// GAP(repl-constant-images), the wave-6 review's R-2: a constant that
+    /// D-1190, the wave-6 review's R-2: a constant that
     /// holds an earlier entry's constant shares its installed value, as
     /// D-539 asks, instead of installing a copy of it, so entries that
     /// name a large constant cost a word each. Every installed value is

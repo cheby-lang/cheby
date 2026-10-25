@@ -34,7 +34,7 @@ pub enum KeyKind {
     /// A C object.
     CObj,
     /// A package's shared library (D-941): a plain file under `v1/lib/`,
-    /// named by the key (GAP(native-library-files)).
+    /// named by the key (D-1197).
     NativeLib,
     /// A package index (a hint, D-962), over the package root's absolute
     /// path and the command family.
