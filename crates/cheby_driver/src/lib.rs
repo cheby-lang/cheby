@@ -65,9 +65,11 @@ use cheby_syntax::SyntaxTree;
 
 mod aot;
 mod backend;
+mod borrowing;
 pub mod cache;
 mod frontend;
 mod load_set;
+mod native;
 mod reuse_report;
 pub mod session;
 pub mod std_lib;
@@ -75,6 +77,7 @@ mod test;
 
 pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_package::Target;
+pub use cheby_package::{is_valid_name, suggest_name};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
     TestResult, prepare_test, prepare_test_cached, test_std,
@@ -1187,11 +1190,15 @@ mod alone_tests;
 #[cfg(test)]
 mod aot_tests;
 #[cfg(test)]
+mod borrowing_tests;
+#[cfg(test)]
 mod cache_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
 mod load_set_tests;
+#[cfg(test)]
+mod native_tests;
 #[cfg(test)]
 mod positions_tests;
 #[cfg(test)]

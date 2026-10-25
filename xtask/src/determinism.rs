@@ -308,24 +308,41 @@ fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>
     )))
 }
 
-/// The runnable examples `cheby build` must build in this milestone's
-/// state (D-1164): D-1114's 001, 003 and 024 (D-924's
-/// first slice and what N4's not-yet criteria let through), and the
-/// examples whose only refusal was their user types or `std::io::Error`'s
-/// layout, which the module records now carry (D-919, D-920; N5a): 002,
-/// 004, 008, 025 and 032. A refusal of one of them is a failure; the
-/// others may still be refused with D-1114's set (a "not available yet"
-/// tool error or a compile error, status 1). The list grows as later
-/// packages lift the not-yet errors, up to every runnable example with
-/// N6.
-const MUST_BUILD: [&str; 8] = [
+/// The runnable examples `cheby build` must build (D-1164): every one
+/// since constants reach executables as images (K5a; D-924, D-979), the
+/// 29 that are not `skip-run`. A refusal of one of them is a failure; an
+/// example outside the list (none is runnable) may still be refused with
+/// D-1114's set (a "not available yet" tool error or a compile error,
+/// status 1).
+const MUST_BUILD: [&str; 29] = [
     "001_hello_world",
     "002_greet",
     "003_fizzbuzz",
     "004_tictactoe",
+    "005_prime_sieve",
+    "006_game_of_life",
+    "007_mandelbrot",
     "008_json",
+    "009_counter_actor",
+    "010_guess_number",
+    "011_json_codec",
+    "012_shapes",
+    "013_dining_philosophers",
+    "014_word_count",
+    "015_expression_evaluator",
+    "016_plugins",
+    "017_generic_containers",
+    "018_worker_pool",
+    "019_supervisor",
+    "021_base64",
+    "022_bank_accounts",
+    "023_vending_machine",
     "024_two_sum",
     "025_linked_list",
+    "026_route_planner",
+    "027_lru_cache",
+    "028_money_and_rationals",
+    "029_csv_report",
     "032_aoc_2024_day_1",
 ];
 
@@ -500,23 +517,26 @@ mod tests {
 
     /// Module documentation item 4: only a "not available yet" tool error
     /// or a compile error counts as a refusal, and never for an example
-    /// that must build.
+    /// that must build: since K5a every runnable example (D-1164, D-979).
     #[test]
     fn refusals_allowed_only_for_not_yet_and_compile_errors() {
         let not_yet = log(
             "Some(1)",
-            "error: `cheby build` is not available yet for programs that use constants, such as \
-             `x::y` (planned for a later milestone)\n",
+            "error: `cheby build --target native` is not available yet on Windows (planned for \
+             M6)\n",
         );
-        assert!(refusal("029_csv_report", &not_yet).is_ok());
+        assert!(refusal("020_ffi_handle", &not_yet).is_ok());
         assert!(refusal("001_hello_world", &not_yet).is_err());
+        assert!(refusal("029_csv_report", &not_yet).is_err());
         let compile = log(
             "Some(1)",
             "error[E0053]: no symbol\n --> src/main.cheby:1:1\n",
         );
-        assert!(refusal("029_csv_report", &compile).is_ok());
+        assert!(refusal("020_ffi_handle", &compile).is_ok());
         assert!(refusal("002_greet", &compile).is_err());
+        assert!(refusal("005_prime_sieve", &compile).is_err());
         assert!(refusal("025_linked_list", &not_yet).is_err());
+        assert_eq!(MUST_BUILD.len(), 29);
         for stderr in [
             "error: the runtime archive `/nonexistent/libcheby_rt_exe.a` does not exist\n",
             "error: the runtime archive `x` was built from another runtime\n",

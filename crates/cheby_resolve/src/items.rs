@@ -77,6 +77,40 @@ impl Placement {
 /// runtime's internal functions and data, and generated code (D-455, D-456).
 const RESERVED_SYMBOL_PREFIXES: [&str; 2] = ["cheby_rt_", "cb$"];
 
+/// E0055 for an `@external(native, …)` outside the standard library that
+/// names `symbol`, a name the runtime exports (D-944), at `span`, the
+/// symbol's string literal; `None` when `exported` says the runtime does
+/// not export it, or when the symbol has a reserved prefix, which
+/// resolution reports already. The driver calls it after resolution with
+/// the runtime's names (`cheby_runtime::symbols()`), so this crate does
+/// not depend on the runtime. GAP(e0055-runtime-export-note): the note
+/// says the runtime exports the symbol, where the prefixes' note names the
+/// prefix.
+#[must_use]
+pub fn runtime_export_reserved(
+    symbol: &str,
+    span: Span,
+    exported: &dyn Fn(&str) -> bool,
+) -> Option<Diagnostic> {
+    if RESERVED_SYMBOL_PREFIXES
+        .iter()
+        .any(|prefix| symbol.starts_with(prefix))
+        || !exported(symbol)
+    {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            codes::RESERVED_NATIVE_SYMBOL,
+            format!("the native symbol `{symbol}` is reserved for the toolchain"),
+        )
+        .with_primary(span, "")
+        .with_note(
+            "the Cheby runtime exports this symbol, so only the standard library may bind it",
+        ),
+    )
+}
+
 const ATTRIBUTE_LIST: &str =
     "the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`";
 

@@ -4,5 +4,5 @@ error[E0053]: the native symbol `app_reached_missing` is not defined
 17 | @external(native, "app_reached_missing")
    |                   ^^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
    |
-   = note: the symbol must be defined by the Cheby runtime or the running process
+   = note: the symbol must be defined by the Cheby runtime, the package's native code or libraries, or the running process
 

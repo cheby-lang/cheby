@@ -1,0 +1,992 @@
+//! Files through handles: opening a file, reading and writing it in
+//! pieces, closing it with a reported error, the standard streams as
+//! handles, directories, and scratch directories for tests (D-992 to
+//! D-997, D-1066, D-1071). Whole-file reads and writes stay in `std::io`
+//! (D-328).
+//!
+//! `File` is a handle: an external type whose drop function the runtime
+//! supplies, runtime kind 45 (D-647, D-703, D-982). It closes after the
+//! last use of its last reference, or at `close`, or when the `with_*`
+//! call that opened it returns (D-993, D-205). Writes are not buffered
+//! (D-994); a handle opened for reading reads ahead in blocks of 64 KiB
+//! (D-995).
+//!
+//! Every public function is written in Cheby over a private kernel that
+//! receives the running fiber's context where it suspends (D-692, D-985).
+//! Opening, closing, writing, the directory functions and a read that
+//! empties a handle's buffer run on the blocking pool; a cancellation
+//! meanwhile waits for the work, except a refill of a read's buffer, which
+//! it abandons, leaving the refill's bytes in the buffer for the next read
+//! (D-983, D-1065). Failures are `io::Error`s, built by `std::io` from the
+//! kernels' kind codes (D-484, D-981). Each kernel also declares its JS
+//! binding (D-986). No function here runs in constants (D-991).
+//!
+//! Every test that touches the file system works inside a fresh directory
+//! from `with_temp_dir`, which `cheby test` puts under the run's temporary
+//! root (D-1067, D-1068). `io.md`'s tests that need a file live here too,
+//! since `std::io` cannot import `std::file` (D-145).
+
+import std::bytes
+import std::duration
+import std::io
+import std::result
+import std::string
+import std::time
+
+// Handles
+
+/// An open file, or a handle for a standard stream. It prints as
+/// `<File>`, and `==` and hashing panic when they reach one (D-233,
+/// D-982).
+pub type File
+
+/// What `info` found about a path: opaque plain data with structural
+/// `==`, read through `size`, `is_file`, `is_dir` and `modified` (D-996).
+pub type Info { size: Int, kind: EntryKind, modified: time::Timestamp }
+
+/// What a path names.
+type EntryKind { RegularFile, Directory, OtherEntry }
+
+test "a file handle prints as File" {
+  use dir <- with_temp_dir()
+  use handle <- with_create(dir + "/shown.txt")
+  let input = stdin()
+  assert "{handle:?}" == "<File>"
+  assert "{input:?}" == "<File>"
+  Ok(Nil)
+}
+
+// Opening
+
+/// Opens the file at `path` for reading, from its start (D-992).
+pub fn open(path: String) -> Result<File, io::Error> {
+  // No call may follow the kernel on success: a call's entry check would
+  // deliver a pending cancellation and drop the file just opened (D-1065).
+  case sys_open(path, 0) {
+    Ok(file) => Ok(file)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "open reports a missing file" {
+  let assert Err(reason) = open("no/such/directory/file.txt")
+  assert io::is_not_found(reason)
+  assert "{reason}" == "not found"
+}
+
+test "a path with U+0000 is invalid input" {
+  let assert Err(reason) = open("bad\u{0}name.txt")
+  assert io::is_invalid_input(reason)
+}
+
+test "open reads a file from its start" {
+  use dir <- with_temp_dir()
+  let target = dir + "/notes.txt"
+  use _ <- result::try(io::write_file(target, "first\nsecond\n"))
+  use source <- result::try(open(target))
+  use line <- result::try(read_line(source))
+  assert line == Some("first")
+  Ok(Nil)
+}
+
+/// Opens the file at `path` for writing, creating it if it does not exist
+/// and truncating it to empty if it does (D-992).
+pub fn create(path: String) -> Result<File, io::Error> {
+  // As in `open`: no call follows the kernel on success.
+  case sys_open(path, 1) {
+    Ok(file) => Ok(file)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "create needs the directory to exist" {
+  let assert Err(reason) = create("no/such/directory/out.txt")
+  assert io::is_not_found(reason)
+}
+
+test "create truncates a file that exists" {
+  use dir <- with_temp_dir()
+  let target = dir + "/out.txt"
+  use _ <- result::try(io::write_file(target, "old text"))
+  use handle <- result::try(create(target))
+  use _ <- result::try(write(handle, "new"))
+  use text <- result::try(io::read_file(target))
+  assert text == "new"
+  Ok(Nil)
+}
+
+/// Opens the file at `path` for writing at its end, creating it if it
+/// does not exist (D-992).
+pub fn append(path: String) -> Result<File, io::Error> {
+  // As in `open`: no call follows the kernel on success.
+  case sys_open(path, 2) {
+    Ok(file) => Ok(file)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "append needs the directory to exist" {
+  let assert Err(reason) = append("no/such/directory/log.txt")
+  assert io::is_not_found(reason)
+}
+
+test "append writes after what the file holds" {
+  use dir <- with_temp_dir()
+  let target = dir + "/log.txt"
+  use _ <- result::try(io::write_file(target, "a\n"))
+  use log <- result::try(append(target))
+  use _ <- result::try(write_line(log, "b"))
+  use text <- result::try(io::read_file(target))
+  assert text == "a\nb\n"
+  Ok(Nil)
+}
+
+/// Creates the file at `path` and opens it for writing, only if nothing
+/// exists at `path` yet, in one atomic step (`O_CREAT | O_EXCL`, D-1066).
+pub fn create_new(path: String) -> Result<File, io::Error> {
+  // As in `open`: no call follows the kernel on success.
+  case sys_open(path, 3) {
+    Ok(file) => Ok(file)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "create_new refuses a path that exists" {
+  use dir <- with_temp_dir()
+  let target = dir + "/lock"
+  use _ <- result::try(create_new(target))
+  let assert Err(reason) = create_new(target)
+  assert io::is_already_exists(reason)
+  Ok(Nil)
+}
+
+// Scoped opening
+
+/// Calls `body` with `file` and closes `file` afterwards (D-993): a
+/// failure to close is returned only when `body` returned `Ok`, and a
+/// handle that `body` closed itself is not closed again.
+fn scoped<T>(file: File, body: fn(File) -> Result<T, io::Error>) -> Result<T, io::Error> {
+  case body(file) {
+    Ok(value) => case close(file) {
+      Ok(Nil) => Ok(value)
+      Err(reason) => case io::is_closed(reason) {
+        True => Ok(value)
+        False => Err(reason)
+      }
+    }
+    Err(reason) => {
+      let _ = close(file)
+      Err(reason)
+    }
+  }
+}
+
+/// Opens the file at `path` for reading as `open` does, calls `body` with
+/// it, and closes it afterwards (D-993).
+pub fn with_open<T>(path: String, body: fn(File) -> Result<T, io::Error>) -> Result<T, io::Error> {
+  case open(path) {
+    Ok(file) => scoped(file, body)
+    Err(reason) => Err(reason)
+  }
+}
+
+test "with_open does not call its body when the file cannot be opened" {
+  let outcome = with_open("no/such/directory/file.txt", fn(_) { Ok(1) })
+  let assert Err(reason) = outcome
+  assert io::is_not_found(reason)
+}
+
+test "with_open reads a file line by line" {
+  use dir <- with_temp_dir()
+  let target = dir + "/lines.txt"
+  use _ <- result::try(io::write_file(target, "a\nb\nc"))
+  use total <- result::try({
+    use source <- with_open(target)
+    fn step(count) {
+      case read_line(source) {
+        Ok(Some(_)) => step(count + 1)
+        Ok(None) => Ok(count)
+        Err(reason) => Err(reason)
+      }
+    }
+    step(0)
+  })
+  assert total == 3
+  Ok(Nil)
+}
+
+test "with_open closes a handle that escapes its body" {
+  use dir <- with_temp_dir()
+  let target = dir + "/lines.txt"
+  use _ <- result::try(io::write_file(target, "a\n"))
+  use kept <- result::try(with_open(target, fn(source) { Ok(source) }))
+  let assert Err(reason) = read_line(kept)
+  assert io::is_closed(reason)
+  Ok(Nil)
+}
+
+/// Opens the file at `path` as `create` does, calls `body` with it and
+/// closes it afterwards, with the rules of `with_open` (D-992, D-993).
+pub fn with_create<T>(
+  path: String,
+  body: fn(File) -> Result<T, io::Error>,
+) -> Result<T, io::Error> {
+  case create(path) {
+    Ok(file) => scoped(file, body)
+    Err(reason) => Err(reason)
+  }
+}
+
+test "with_create does not call its body when the directory is missing" {
+  let outcome = with_create("no/such/directory/out.txt", fn(_) { Ok(Nil) })
+  let assert Err(reason) = outcome
+  assert io::is_not_found(reason)
+}
+
+test "with_create writes a new file" {
+  use dir <- with_temp_dir()
+  let target = dir + "/log.txt"
+  use _ <- result::try({
+    use handle <- with_create(target)
+    write_line(handle, "started")
+  })
+  use text <- result::try(io::read_file(target))
+  assert text == "started\n"
+  Ok(Nil)
+}
+
+/// Opens the file at `path` as `append` does, calls `body` with it and
+/// closes it afterwards, with the rules of `with_open` (D-992, D-993).
+pub fn with_append<T>(
+  path: String,
+  body: fn(File) -> Result<T, io::Error>,
+) -> Result<T, io::Error> {
+  case append(path) {
+    Ok(file) => scoped(file, body)
+    Err(reason) => Err(reason)
+  }
+}
+
+test "with_append does not call its body when the directory is missing" {
+  let outcome = with_append("no/such/directory/log.txt", fn(_) { Ok(Nil) })
+  let assert Err(reason) = outcome
+  assert io::is_not_found(reason)
+}
+
+/// Creates and opens the file at `path` as `create_new` does, calls `body`
+/// with it and closes it afterwards, with the rules of `with_open`
+/// (D-1066).
+pub fn with_create_new<T>(
+  path: String,
+  body: fn(File) -> Result<T, io::Error>,
+) -> Result<T, io::Error> {
+  case create_new(path) {
+    Ok(file) => scoped(file, body)
+    Err(reason) => Err(reason)
+  }
+}
+
+test "with_create_new does not call its body when the file exists" {
+  use dir <- with_temp_dir()
+  let target = dir + "/lock"
+  use _ <- result::try(with_create_new(target, fn(handle) { write(handle, "1") }))
+  let outcome = with_create_new(target, fn(_) { Ok(Nil) })
+  let assert Err(reason) = outcome
+  assert io::is_already_exists(reason)
+  use text <- result::try(io::read_file(target))
+  assert text == "1"
+  Ok(Nil)
+}
+
+/// Closes `file` now and reports what the operating system says about
+/// it. Every later operation on the handle fails with `io::is_closed`
+/// (D-993).
+pub fn close(file: File) -> Result<Nil, io::Error> {
+  io::lift(sys_close(file))
+}
+
+test "close closes the handle now" {
+  use dir <- with_temp_dir()
+  let target = dir + "/saved.txt"
+  use handle <- result::try(create(target))
+  use _ <- result::try(write(handle, "saved"))
+  use _ <- result::try(close(handle))
+  let assert Err(again) = close(handle)
+  assert io::is_closed(again)
+  let assert Err(late) = write(handle, "late")
+  assert io::is_closed(late)
+  use text <- result::try(io::read_file(target))
+  assert text == "saved"
+  Ok(Nil)
+}
+
+test "closing a file twice is closed" {
+  use dir <- with_temp_dir()
+  let path = dir + "/notes.txt"
+  use _ <- result::try(io::write_file(path, "notes"))
+  use source <- result::try(open(path))
+  use _ <- result::try(close(source))
+  let assert Err(reason) = close(source)
+  assert io::is_closed(reason)
+  assert "{reason}" == "closed"
+  Ok(Nil)
+}
+
+// Reading
+
+/// Reads the next line from `file`, without its line ending, or `None` at
+/// the end of the file (D-305, D-311, D-995).
+pub fn read_line(file: File) -> Result<Option<String>, io::Error> {
+  // No call may follow the kernel on success: a pending cancellation
+  // would drop the line just taken from the handle's buffer (D-1065).
+  case sys_read_line(file) {
+    Ok(line) => Ok(line)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "read_line removes line endings" {
+  use dir <- with_temp_dir()
+  let target = dir + "/lines.txt"
+  use _ <- result::try(io::write_file(target, "one\r\ntwo\nthree"))
+  use source <- with_open(target)
+  assert read_line(source) == Ok(Some("one"))
+  assert read_line(source) == Ok(Some("two"))
+  assert read_line(source) == Ok(Some("three"))
+  assert read_line(source) == Ok(None)
+  assert read_line(source) == Ok(None)
+  Ok(Nil)
+}
+
+test "read_line consumes a line that is not UTF-8" {
+  use dir <- with_temp_dir()
+  let target = dir + "/mixed.txt"
+  use _ <- result::try(io::write_file_bytes(target, bytes::from_list([0xFF, 0x0A, 0x6F, 0x6B])))
+  use source <- with_open(target)
+  let assert Err(reason) = read_line(source)
+  assert io::is_invalid_data(reason)
+  assert read_line(source) == Ok(Some("ok"))
+  Ok(Nil)
+}
+
+/// Reads the next bytes of `file`, at least one and at most `limit`
+/// (below 1 counts as 1), or `None` at the end of the file. `limit` caps
+/// the result and never sizes an allocation (D-298, D-1062).
+@std_clamped(limit)
+pub fn read_bytes(file: File, limit: Int) -> Result<Option<bytes::Bytes>, io::Error> {
+  // As in `read_line`: no call follows the kernel on success.
+  case sys_read_bytes(file, limit) {
+    Ok(read) => Ok(read)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "read_bytes returns at most its limit" {
+  use dir <- with_temp_dir()
+  let target = dir + "/image.png"
+  let data = bytes::from_list([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
+  use _ <- result::try(io::write_file_bytes(target, data))
+  use source <- with_open(target)
+  assert read_bytes(source, 0) == Ok(Some(bytes::from_list([0x89])))
+  fn collect(acc) {
+    case read_bytes(source, 4) {
+      Ok(Some(chunk)) => {
+        assert bytes::length(chunk) <= 4
+        collect(bytes::append(acc, chunk))
+      }
+      Ok(None) => Ok(acc)
+      Err(reason) => Err(reason)
+    }
+  }
+  use whole <- result::try(collect(bytes::from_list([0x89])))
+  assert whole == data
+  Ok(Nil)
+}
+
+// Writing
+
+/// Writes `text` to `file` as UTF-8, with no line ending; the whole text
+/// is in the file when the call returns (D-994).
+pub fn write(file: File, text: String) -> Result<Nil, io::Error> {
+  io::lift(sys_write(file, text))
+}
+
+test "write writes text as it is" {
+  use dir <- with_temp_dir()
+  let target = dir + "/report.txt"
+  use _ <- result::try({
+    use handle <- with_create(target)
+    write(handle, string::join(["a", "b"], "\n") + "\n")
+  })
+  use text <- result::try(io::read_file(target))
+  assert text == "a\nb\n"
+  use source <- with_open(target)
+  let assert Err(reason) = write(source, "more")
+  assert io::is_invalid_input(reason)
+  Ok(Nil)
+}
+
+/// Writes `text` and the line ending `\n` to `file`, in one write
+/// (D-994).
+pub fn write_line(file: File, text: String) -> Result<Nil, io::Error> {
+  io::lift(sys_write(file, text + "\n"))
+}
+
+test "write_line ends each line with a newline" {
+  use dir <- with_temp_dir()
+  let target = dir + "/events.log"
+  fn log_event(event) {
+    use handle <- with_append(target)
+    write_line(handle, event)
+  }
+  use _ <- result::try(log_event("start"))
+  use _ <- result::try(log_event("stop"))
+  use text <- result::try(io::read_file(target))
+  assert text == "start\nstop\n"
+  Ok(Nil)
+}
+
+/// Writes `data` to `file` unchanged; all of it is in the file when the
+/// call returns (D-994).
+pub fn write_bytes(file: File, data: bytes::Bytes) -> Result<Nil, io::Error> {
+  io::lift(sys_write_bytes(file, data))
+}
+
+test "write_bytes writes bytes unchanged" {
+  use dir <- with_temp_dir()
+  let target = dir + "/header.bin"
+  let data = bytes::from_list([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF])
+  use _ <- result::try({
+    use handle <- with_create(target)
+    write_bytes(handle, data)
+  })
+  use written <- result::try(io::read_file_bytes(target))
+  assert written == data
+  Ok(Nil)
+}
+
+// Standard streams
+
+/// Returns a new handle for standard input. Its reads come from the
+/// runtime's one reader of standard input, as `io::read_line`'s do, after
+/// standard output is flushed (D-346, D-823, D-1071).
+pub fn stdin() -> File {
+  sys_std_stream(0)
+}
+
+test "a standard input handle does not write" {
+  let assert Err(reason) = write(stdin(), "text")
+  assert io::is_invalid_input(reason)
+}
+
+/// Returns a new handle for standard output. A write goes through
+/// standard output's buffer and then flushes it, as `io::write_stdout`
+/// does (D-365, D-574, D-1071).
+pub fn stdout() -> File {
+  sys_std_stream(1)
+}
+
+test "a standard output handle does not read" {
+  let assert Err(reason) = read_line(stdout())
+  assert io::is_invalid_input(reason)
+}
+
+/// Returns a new handle for standard error. A write is written at once
+/// (D-346, D-1071).
+pub fn stderr() -> File {
+  sys_std_stream(2)
+}
+
+test "closing a standard stream handle closes only that handle" {
+  let first = stderr()
+  use _ <- result::try(close(first))
+  let assert Err(reason) = write(first, "")
+  assert io::is_closed(reason)
+  write(stderr(), "")
+}
+
+// Directories
+
+/// Returns the names of the entries of the directory at `path`, sorted by
+/// their UTF-8 bytes, without `.` and `..` (D-997).
+pub fn list_dir(path: String) -> Result<List<String>, io::Error> {
+  io::lift(sys_list_dir(path))
+}
+
+test "list_dir reports a missing directory" {
+  let assert Err(reason) = list_dir("no/such/directory")
+  assert io::is_not_found(reason)
+}
+
+test "list_dir sorts names by their bytes" {
+  use dir <- with_temp_dir()
+  use _ <- result::try(io::write_file(dir + "/b.txt", ""))
+  use _ <- result::try(io::write_file(dir + "/Zed.txt", ""))
+  use _ <- result::try(create_dir(dir + "/a"))
+  use names <- result::try(list_dir(dir))
+  assert names == ["Zed.txt", "a", "b.txt"]
+  Ok(Nil)
+}
+
+test "listing a file is not a directory" {
+  use dir <- with_temp_dir()
+  let path = dir + "/plain.txt"
+  use _ <- result::try(io::write_file(path, "plain"))
+  let assert Err(reason) = list_dir(path)
+  assert io::is_not_a_directory(reason)
+  assert "{reason}" == "not a directory"
+  Ok(Nil)
+}
+
+/// Creates the directory `path`, whose parent must already exist.
+pub fn create_dir(path: String) -> Result<Nil, io::Error> {
+  io::lift(sys_create_dir(path))
+}
+
+test "create_dir needs its parent" {
+  let assert Err(reason) = create_dir("no/such/directory/child")
+  assert io::is_not_found(reason)
+}
+
+test "create_dir refuses a path that exists" {
+  use dir <- with_temp_dir()
+  use _ <- result::try(create_dir(dir + "/child"))
+  let assert Err(reason) = create_dir(dir + "/child")
+  assert io::is_already_exists(reason)
+  Ok(Nil)
+}
+
+test "creating a directory twice is already exists" {
+  fn ensure_dir(path: String) -> Result<Nil, io::Error> {
+    case create_dir(path) {
+      Ok(Nil) => Ok(Nil)
+      Err(reason) => case io::is_already_exists(reason) {
+        True => Ok(Nil)
+        False => Err(reason)
+      }
+    }
+  }
+  use dir <- with_temp_dir()
+  let path = dir + "/cache"
+  use _ <- result::try(create_dir(path))
+  let assert Err(reason) = create_dir(path)
+  assert io::is_already_exists(reason)
+  assert "{reason}" == "already exists"
+  assert ensure_dir(path) == Ok(Nil)
+  Ok(Nil)
+}
+
+/// Creates the directory `path` and every missing directory above it. A
+/// directory that already exists at `path` is not an error.
+pub fn create_dir_all(path: String) -> Result<Nil, io::Error> {
+  io::lift(sys_create_dir_all(path))
+}
+
+test "create_dir_all creates every missing directory" {
+  use dir <- with_temp_dir()
+  let daily = dir + "/reports/daily"
+  use _ <- result::try(create_dir_all(daily))
+  use _ <- result::try(create_dir_all(daily))
+  use found <- result::try(info(daily))
+  assert is_dir(found)
+  use _ <- result::try(io::write_file(dir + "/plain", ""))
+  let assert Err(reason) = create_dir_all(dir + "/plain")
+  assert io::is_already_exists(reason)
+  Ok(Nil)
+}
+
+/// Removes the file at `path`.
+pub fn remove_file(path: String) -> Result<Nil, io::Error> {
+  io::lift(sys_remove_file(path))
+}
+
+test "remove_file reports a missing file" {
+  let assert Err(reason) = remove_file("no/such/directory/file.txt")
+  assert io::is_not_found(reason)
+}
+
+test "remove_file removes a file" {
+  use dir <- with_temp_dir()
+  let target = dir + "/old.txt"
+  use _ <- result::try(io::write_file(target, "old"))
+  use _ <- result::try(remove_file(target))
+  let assert Err(reason) = info(target)
+  assert io::is_not_found(reason)
+  Ok(Nil)
+}
+
+/// Removes the directory at `path`, which must be empty.
+pub fn remove_dir(path: String) -> Result<Nil, io::Error> {
+  io::lift(sys_remove_dir(path))
+}
+
+test "remove_dir reports a missing directory" {
+  let assert Err(reason) = remove_dir("no/such/directory")
+  assert io::is_not_found(reason)
+}
+
+test "remove_dir removes only an empty directory" {
+  use dir <- with_temp_dir()
+  let child = dir + "/child"
+  use _ <- result::try(create_dir(child))
+  use _ <- result::try(io::write_file(child + "/kept.txt", ""))
+  let assert Err(reason) = remove_dir(child)
+  assert io::is_directory_not_empty(reason)
+  use _ <- result::try(remove_file(child + "/kept.txt"))
+  use _ <- result::try(remove_dir(child))
+  use names <- result::try(list_dir(dir))
+  assert names == []
+  Ok(Nil)
+}
+
+test "removing a directory with entries is directory not empty" {
+  use dir <- with_temp_dir()
+  let full = dir + "/full"
+  use _ <- result::try(create_dir(full))
+  use _ <- result::try(io::write_file(full + "/entry.txt", "entry"))
+  let assert Err(reason) = remove_dir(full)
+  assert io::is_directory_not_empty(reason)
+  assert "{reason}" == "directory not empty"
+  Ok(Nil)
+}
+
+/// Removes the directory at `path` and everything in it, never following
+/// a symbolic link: a link inside the tree is removed, not its target,
+/// and a link at `path` is removed itself (D-1066).
+pub fn remove_dir_all(path: String) -> Result<Nil, io::Error> {
+  io::lift(sys_remove_dir_all(path))
+}
+
+test "remove_dir_all removes a whole tree" {
+  use dir <- with_temp_dir()
+  let tree = dir + "/tree"
+  use _ <- result::try(create_dir_all(tree + "/a/b"))
+  use _ <- result::try(io::write_file(tree + "/a/b/leaf.txt", "leaf"))
+  use _ <- result::try(remove_dir_all(tree))
+  let assert Err(reason) = info(tree)
+  assert io::is_not_found(reason)
+  Ok(Nil)
+}
+
+test "remove_dir_all reports a missing path" {
+  use dir <- with_temp_dir()
+  let assert Err(reason) = remove_dir_all(dir + "/missing")
+  assert io::is_not_found(reason)
+  Ok(Nil)
+}
+
+test "remove_dir_all refuses a file" {
+  use dir <- with_temp_dir()
+  let target = dir + "/plain.txt"
+  use _ <- result::try(io::write_file(target, "plain"))
+  let assert Err(reason) = remove_dir_all(target)
+  assert io::is_not_a_directory(reason)
+  use text <- result::try(io::read_file(target))
+  assert text == "plain"
+  Ok(Nil)
+}
+
+/// Moves the file or directory at `old_path` to `new_path`, replacing a
+/// file already at `new_path`.
+pub fn rename(old_path: String, new_path: String) -> Result<Nil, io::Error> {
+  io::lift(sys_rename(old_path, new_path))
+}
+
+test "rename reports a missing source" {
+  let assert Err(reason) = rename("no/such/directory/a.txt", "no/such/directory/b.txt")
+  assert io::is_not_found(reason)
+}
+
+test "rename replaces a file at the new path" {
+  use dir <- with_temp_dir()
+  use _ <- result::try(io::write_file(dir + "/a.txt", "new"))
+  use _ <- result::try(io::write_file(dir + "/b.txt", "old"))
+  use _ <- result::try(rename(dir + "/a.txt", dir + "/b.txt"))
+  use names <- result::try(list_dir(dir))
+  assert names == ["b.txt"]
+  use text <- result::try(io::read_file(dir + "/b.txt"))
+  assert text == "new"
+  Ok(Nil)
+}
+
+// Scratch directories
+
+/// Creates a new, empty directory with a random name under the host's
+/// temporary directory, or under `cheby test`'s root for the run, calls
+/// `body` with its path, and removes it and everything in it when `body`
+/// returns. A failure to remove it is returned only when `body` returned
+/// `Ok`. When `body` panics or is cancelled, the directory stays (D-1066,
+/// D-1067).
+pub fn with_temp_dir<T>(body: fn(String) -> Result<T, io::Error>) -> Result<T, io::Error> {
+  case sys_create_temp_dir() {
+    Ok(dir) => case body(dir) {
+      Ok(value) => case remove_dir_all(dir) {
+        Ok(Nil) => Ok(value)
+        Err(reason) => Err(reason)
+      }
+      Err(reason) => {
+        let _ = remove_dir_all(dir)
+        Err(reason)
+      }
+    }
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "with_temp_dir gives a new, empty directory" {
+  use dir <- with_temp_dir()
+  use names <- result::try(list_dir(dir))
+  assert names == []
+  use other <- with_temp_dir()
+  assert other != dir
+  Ok(Nil)
+}
+
+test "with_temp_dir removes its directory afterwards" {
+  let assert Ok(kept) = with_temp_dir(fn(dir) {
+    use _ <- result::try(io::write_file(dir + "/left.txt", "left"))
+    Ok(dir)
+  })
+  let assert Err(reason) = info(kept)
+  assert io::is_not_found(reason)
+}
+
+// Information about a path
+
+/// Returns what the operating system knows about the file or directory at
+/// `path`, following symbolic links (D-996).
+pub fn info(path: String) -> Result<Info, io::Error> {
+  case sys_info(path) {
+    Ok((bytes_long, kind, since_epoch)) => {
+      let stamp = time::from_unix(duration::nanoseconds(since_epoch))
+      Ok(Info { size: bytes_long, kind: entry_kind(kind), modified: stamp })
+    }
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+/// The kind of entry of `sys_info`'s code: 1 a regular file, 2 a
+/// directory, anything else neither.
+fn entry_kind(code: Int) -> EntryKind {
+  case code {
+    1 => RegularFile
+    2 => Directory
+    _ => OtherEntry
+  }
+}
+
+test "info reports a missing path" {
+  let assert Err(reason) = info("no/such/directory/file.txt")
+  assert io::is_not_found(reason)
+}
+
+test "info is plain data with structural equality" {
+  use dir <- with_temp_dir()
+  use first <- result::try(info(dir))
+  use again <- result::try(info(dir))
+  assert first == again
+  Ok(Nil)
+}
+
+/// Returns the size in bytes of the file that `entry` describes.
+pub fn size(entry: Info) -> Int {
+  entry.size
+}
+
+test "size counts bytes" {
+  use dir <- with_temp_dir()
+  let target = dir + "/word.txt"
+  use _ <- result::try(io::write_file(target, "héllo"))
+  use found <- result::try(info(target))
+  assert size(found) == 6
+  assert is_file(found)
+  Ok(Nil)
+}
+
+/// Tells whether `entry` describes a regular file.
+pub fn is_file(entry: Info) -> Bool {
+  case entry.kind {
+    RegularFile => True
+    _ => False
+  }
+}
+
+/// Tells whether `entry` describes a directory.
+pub fn is_dir(entry: Info) -> Bool {
+  case entry.kind {
+    Directory => True
+    _ => False
+  }
+}
+
+test "is_dir tells a directory from a file" {
+  use dir <- with_temp_dir()
+  use _ <- result::try(io::write_file(dir + "/plain.txt", ""))
+  use folder <- result::try(info(dir))
+  assert is_dir(folder)
+  assert !is_file(folder)
+  use plain <- result::try(info(dir + "/plain.txt"))
+  assert !is_dir(plain)
+  Ok(Nil)
+}
+
+test "opening a directory as a file is a directory" {
+  use dir <- with_temp_dir()
+  let assert Err(reason) = open(dir)
+  assert io::is_a_directory(reason)
+  assert "{reason}" == "is a directory"
+  Ok(Nil)
+}
+
+/// Returns when the contents of the file or directory that `entry`
+/// describes were last changed, as the operating system recorded it.
+pub fn modified(entry: Info) -> time::Timestamp {
+  entry.modified
+}
+
+test "a new file was modified after 2020 began" {
+  use dir <- with_temp_dir()
+  let target = dir + "/new.txt"
+  use _ <- result::try(io::write_file(target, ""))
+  use found <- result::try(info(target))
+  assert modified(found) > time::from_unix(duration::seconds(1_577_836_800))
+  Ok(Nil)
+}
+
+// `io.md`'s tests that need a file (D-1068)
+
+test "read_file returns the text as stored" {
+  use dir <- with_temp_dir()
+  let path = dir + "/notes.txt"
+  let stored = bytes::from_list([0xEF, 0xBB, 0xBF, 0x61, 0x0D, 0x0A])
+  use _ <- result::try(io::write_file_bytes(path, stored))
+  assert io::read_file(path) == Ok("\u{FEFF}a\r\n")
+  use _ <- result::try(io::write_file(path, "one two"))
+  assert io::read_file(path) == Ok("one two")
+  Ok(Nil)
+}
+
+test "a file that is not UTF-8 is invalid data" {
+  use dir <- with_temp_dir()
+  let path = dir + "/latin1.txt"
+  use _ <- result::try(io::write_file_bytes(path, bytes::from_list([0x66, 0xFF])))
+  let assert Err(reason) = io::read_file(path)
+  assert io::is_invalid_data(reason)
+  assert "{reason}" == "invalid UTF-8"
+  Ok(Nil)
+}
+
+test "io's whole-file functions refuse a path with U+0000" {
+  let bad = "a\u{0}b"
+  let assert Err(read) = io::read_file(bad)
+  assert io::is_invalid_input(read)
+  let assert Err(raw) = io::read_file_bytes(bad)
+  assert io::is_invalid_input(raw)
+  let assert Err(written) = io::write_file(bad, "text")
+  assert io::is_invalid_input(written)
+  let assert Err(written_bytes) = io::write_file_bytes(bad, bytes::from_list([0x00]))
+  assert io::is_invalid_input(written_bytes)
+  assert "{written_bytes}" == "invalid input"
+}
+
+// Kernels: each reports a failure as a kind code and the operating
+// system's message, which `io::lift` turns into an `io::Error`.
+
+/// Opens `path` in `mode`: 0 for reading, 1 created or truncated for
+/// writing, 2 for appending, 3 created only if new (D-992, D-1066).
+@std_context
+@external(native, "cheby_file_sys_open")
+@external(js, "./file.mjs", "sys_open")
+priv fn sys_open(path: String, mode: Int) -> Result<File, (Int, String)>
+
+/// Closes a file now.
+@std_context
+@external(native, "cheby_file_sys_close")
+@external(js, "./file.mjs", "sys_close")
+priv fn sys_close(file: File) -> Result<Nil, (Int, String)>
+
+/// Takes the next line from the handle's buffer, refilling it if it must.
+@std_context
+@external(native, "cheby_file_sys_read_line")
+@external(js, "./file.mjs", "sys_read_line")
+priv fn sys_read_line(file: File) -> Result<Option<String>, (Int, String)>
+
+/// Takes at most `limit` bytes from the handle's buffer, refilling it if
+/// it must.
+@std_context
+@external(native, "cheby_file_sys_read_bytes")
+@external(js, "./file.mjs", "sys_read_bytes")
+priv fn sys_read_bytes(file: File, limit: Int) -> Result<Option<bytes::Bytes>, (Int, String)>
+
+/// Writes text as UTF-8.
+@std_context
+@external(native, "cheby_file_sys_write")
+@external(js, "./file.mjs", "sys_write")
+priv fn sys_write(file: File, text: String) -> Result<Nil, (Int, String)>
+
+/// Writes bytes unchanged.
+@std_context
+@external(native, "cheby_file_sys_write_bytes")
+@external(js, "./file.mjs", "sys_write_bytes")
+priv fn sys_write_bytes(file: File, data: bytes::Bytes) -> Result<Nil, (Int, String)>
+
+/// Lists a directory's names, sorted.
+@std_context
+@external(native, "cheby_file_sys_list_dir")
+@external(js, "./file.mjs", "sys_list_dir")
+priv fn sys_list_dir(path: String) -> Result<List<String>, (Int, String)>
+
+/// Creates a directory.
+@std_context
+@external(native, "cheby_file_sys_create_dir")
+@external(js, "./file.mjs", "sys_create_dir")
+priv fn sys_create_dir(path: String) -> Result<Nil, (Int, String)>
+
+/// Creates a directory and the missing ones above it.
+@std_context
+@external(native, "cheby_file_sys_create_dir_all")
+@external(js, "./file.mjs", "sys_create_dir_all")
+priv fn sys_create_dir_all(path: String) -> Result<Nil, (Int, String)>
+
+/// Removes a file.
+@std_context
+@external(native, "cheby_file_sys_remove_file")
+@external(js, "./file.mjs", "sys_remove_file")
+priv fn sys_remove_file(path: String) -> Result<Nil, (Int, String)>
+
+/// Removes an empty directory.
+@std_context
+@external(native, "cheby_file_sys_remove_dir")
+@external(js, "./file.mjs", "sys_remove_dir")
+priv fn sys_remove_dir(path: String) -> Result<Nil, (Int, String)>
+
+/// Removes a directory and everything in it, never following a link.
+@std_context
+@external(native, "cheby_file_sys_remove_dir_all")
+@external(js, "./file.mjs", "sys_remove_dir_all")
+priv fn sys_remove_dir_all(path: String) -> Result<Nil, (Int, String)>
+
+/// Moves a file or a directory.
+@std_context
+@external(native, "cheby_file_sys_rename")
+@external(js, "./file.mjs", "sys_rename")
+priv fn sys_rename(old_path: String, new_path: String) -> Result<Nil, (Int, String)>
+
+/// The size, the kind (1 a file, 2 a directory, 0 neither) and the
+/// modification time in nanoseconds since the Unix epoch.
+@std_context
+@external(native, "cheby_file_sys_info")
+@external(js, "./file.mjs", "sys_info")
+priv fn sys_info(path: String) -> Result<(Int, Int, Int), (Int, String)>
+
+/// Creates a new, empty directory under the temporary root and returns
+/// its path.
+@std_context
+@external(native, "cheby_file_sys_create_temp_dir")
+@external(js, "./file.mjs", "sys_create_temp_dir")
+priv fn sys_create_temp_dir() -> Result<String, (Int, String)>
+
+/// A new handle for a standard stream: 0 input, 1 output, 2 error.
+@external(native, "cheby_file_sys_std_stream")
+@external(js, "./file.mjs", "sys_std_stream")
+priv fn sys_std_stream(which: Int) -> File

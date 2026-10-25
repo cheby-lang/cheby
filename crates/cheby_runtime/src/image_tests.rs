@@ -3,11 +3,12 @@
 
 use crate::ExecCtx;
 use crate::abi::{self, layout as ids};
+use crate::consteval::{self, image::ConstImageError};
 use crate::entry::Callbacks;
 use crate::image::{
-    CallSiteEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry, FunctionEntry,
-    HookEntry, ImageError, ImageParts, ModuleParts, ModuleRecord, NO_STRING, ProgramImage, Table,
-    TypeEntry, check_version, install, register_records,
+    CallSiteEntry, ConstEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry,
+    FunctionEntry, HookEntry, ImageError, ImageParts, ModuleParts, ModuleRecord, NO_STRING,
+    ProgramImage, Table, TypeEntry, check_version, install, register_records,
 };
 use crate::layout::{self, FieldKind};
 use crate::locate::{self, Location};
@@ -190,13 +191,13 @@ fn image_keeps_the_abi_flag_and_sites_without_a_path() {
 /// How a record gets a table, and the error installing it gives.
 type Case = (fn(&mut ModuleParts), ImageError);
 
-/// The constants (K5a) are refused with `NotYet` while their table is not
-/// empty; an external type without a name, and a free-shape word for a
-/// record without user layouts, are malformed now that both tables are
-/// registered (N5b, D-919). Each is refused before any call site of the
-/// image is registered.
+/// An external type without a name, a free-shape word for a record
+/// without user layouts, and a constant without its slot are malformed
+/// (N5b, D-919; the constants since K5a, D-979, D-924); each is refused
+/// before any call site of the image is registered. A constants table
+/// that is not one is refused too.
 #[test]
-fn image_refuses_tables_it_cannot_install_yet() {
+fn image_refuses_malformed_tables() {
     let (path_strings, offsets) = strings(&["src/main.cheby"]);
     let path = offsets[0];
     let malformed = |what| ImageError::Malformed {
@@ -221,9 +222,13 @@ fn image_refuses_tables_it_cannot_install_yet() {
         ),
         (
             |parts| {
-                parts.constants = table(vec![std::ptr::null_mut()]);
+                parts.constants = table(vec![ConstEntry {
+                    path: 0,
+                    pad: 0,
+                    slot: std::ptr::null_mut(),
+                }]);
             },
-            ImageError::NotYet("constant slots"),
+            malformed("a constant without its slot"),
         ),
     ];
     for (with, error) in cases {
@@ -254,7 +259,10 @@ fn image_refuses_tables_it_cannot_install_yet() {
     assert!(!constants.unwind_edges());
     assert_eq!(
         install(&constants),
-        Err(ImageError::NotYet("a constant image"))
+        Err(ImageError::Constants(ConstImageError::Malformed {
+            path: "the constants table".into(),
+            what: "bytes past the end",
+        }))
     );
 }
 
@@ -374,8 +382,11 @@ fn image_version_and_error_messages() {
         )
     );
     assert_eq!(
-        ImageError::NotYet("constant slots").to_string(),
-        "the program image holds constant slots, which this runtime cannot install yet"
+        ImageError::Constants(ConstImageError::NoSlot {
+            path: "app::x".into()
+        })
+        .to_string(),
+        "the program's constants: the constant `app::x` has no slot"
     );
     assert_eq!(
         ImageError::Malformed {
@@ -561,6 +572,22 @@ fn types_record_with(
         with(parts);
     });
     (record, words)
+}
+
+/// The offset of `text` in the string table [`types_record_with`] makes
+/// for `types` (no external types): each type's name, then each
+/// constructor's path, name and field names.
+fn string_offset(types: &[TestType], text: &str) -> u32 {
+    let mut texts: Vec<&str> = Vec::new();
+    for ty in types {
+        texts.push(ty.name);
+        for ctor in &ty.ctors {
+            texts.extend([ctor.name, ctor.ctor_name]);
+            texts.extend(ctor.fields.iter().filter_map(|(_, name, _)| *name));
+        }
+    }
+    let (_, offsets) = strings(&texts);
+    offsets[texts.iter().position(|t| *t == text).unwrap()]
 }
 
 /// `Shape`, with a record constructor whose raw field follows its value
@@ -1010,22 +1037,131 @@ fn image_register_records_two_calls_give_disjoint_consecutive_id_ranges() {
     }
 }
 
-/// A record that names a constant slot is `NotYet` until constants reach
-/// executables (K5a), with nothing registered.
+/// A record that names its constants' slots registers its types as before
+/// (D-924, D-979: constants reach executables); registration only checks
+/// the constants, whose slots installation fills, and a constant whose
+/// path is not a string is malformed, with nothing registered.
 #[test]
-fn image_register_records_constant_slot_is_not_yet() {
+fn image_register_records_checks_constant_slots() {
+    let slot = word();
     let (record, words) = types_record_with(
         &shape_and_pair(),
         Vec::new(),
         &|_, _, _, _| {},
         &[],
-        |parts| parts.constants = table(vec![word()]),
+        |parts| {
+            parts.constants = table(vec![ConstEntry {
+                path: 0,
+                pad: 0,
+                slot,
+            }]);
+        },
+    );
+    assert!(register(&[record]).is_ok());
+    assert_ne!(read(words[0][0].0), SENTINEL);
+    assert_eq!(read(slot), SENTINEL);
+    let (bad, bad_words) = types_record_with(
+        &shape_and_pair(),
+        Vec::new(),
+        &|_, _, _, _| {},
+        &[],
+        |parts| {
+            parts.constants = table(vec![ConstEntry {
+                path: NO_STRING,
+                pad: 0,
+                slot: word(),
+            }]);
+        },
     );
     assert_eq!(
-        register(&[record]),
-        Err(ImageError::NotYet("constant slots"))
+        register(&[bad]),
+        Err(ImageError::Malformed {
+            module: Some(0),
+            what: "a constant's path",
+        })
     );
-    assert_eq!(read(words[0][0].0), SENTINEL);
+    assert_eq!(read(bad_words[0][0].0), SENTINEL);
+}
+
+/// An executable's start installs the constants table (D-979, D-924):
+/// each image's root goes into the slot that the records' constants
+/// tables give for its path, its user constructors get the layout ids
+/// these records registered (whatever ids the evaluation used), and every
+/// installed object is static.
+#[test]
+fn const_install_executable_image_fills_slots_from_records() {
+    let types = shape_and_pair();
+    let pair_key = types[1].key;
+    // The evaluation's own registration of `Pair`, another id.
+    let evaluated = layout::register_consecutive(vec![
+        layout::LayoutInfo::ctor(
+            "app::shapes::Pair",
+            0,
+            &[(FieldKind::Value, None), (FieldKind::Value, None)],
+        )
+        .named("Pair", "Pair", false, pair_key),
+    ])
+    .unwrap();
+    let domain = crate::alloc::Domain::new();
+    let images = crate::alloc::with_domain(std::sync::Arc::clone(&domain), || {
+        let obj = crate::alloc::alloc_object(24, abi::header(abi::RC_UNIQUE, 2, evaluated));
+        // SAFETY: a fresh `Pair` of two value fields.
+        unsafe {
+            crate::object::write_field(obj, 8, crate::values::string("left"));
+            crate::object::write_field(obj, 16, crate::values::int_word(5));
+        }
+        let pair = crate::object::ptr_to_word(obj);
+        let list = crate::list::from_iter([pair, crate::values::int_word(1)]);
+        // SAFETY: live values of this thread.
+        let images = unsafe { consteval::image::serialize(&[("app::shapes::Pair", list)]) };
+        // SAFETY: the owned list given up.
+        unsafe { crate::rc::drop(list) };
+        images.unwrap()
+    });
+    assert_eq!(domain.live_objects(), 0);
+    // The record's string table holds the constant's path: the
+    // constructor's name, which is the same text.
+    let slot = word();
+    let path = string_offset(&types, "app::shapes::Pair");
+    let (record, words) = types_record_with(&types, Vec::new(), &|_, _, _, _| {}, &[], |parts| {
+        parts.constants = table(vec![ConstEntry { path, pad: 0, slot }]);
+    });
+    let mut image = image(&[record]);
+    let encoded = consteval::image::encode_table(&images);
+    // SAFETY: the same image with the constants table, a leaked slice.
+    image = unsafe {
+        ProgramImage::new(ImageParts {
+            version: abi::IMAGE_VERSION,
+            unwind_edges: true,
+            modules: table(vec![std::ptr::from_ref(record)]),
+            entry: image.entry(),
+            callbacks: image.callbacks(),
+            main_stack: image.main_stack(),
+            fiber_stack: image.fiber_stack(),
+            constants: table(encoded),
+        })
+    };
+    assert_eq!(install(&image), Ok(()));
+    let root = read(slot);
+    assert_ne!(root, SENTINEL);
+    let registered = abi::header_layout(read(words[1][0].0));
+    assert_ne!(registered, evaluated);
+    // SAFETY: the installed value, static.
+    unsafe {
+        assert!(consteval::image::is_static(root));
+        let mut items = crate::list::iter(root);
+        let pair = items.next().unwrap();
+        assert_eq!(crate::values::layout_of(pair), Some(registered));
+        assert!(consteval::image::is_static(pair));
+        assert_eq!(
+            crate::values::str_of(crate::object::read_field(
+                crate::object::word_to_ptr(pair),
+                8
+            )),
+            "left"
+        );
+        assert_eq!(items.next(), Some(crate::values::int_word(1)));
+    }
 }
 
 /// The call-site ranges go under the caller's owner (D-867): located

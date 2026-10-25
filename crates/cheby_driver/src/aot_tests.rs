@@ -616,9 +616,15 @@ fn check_records(
         let object = cheby_link::object::replay(record, isa::host_isa().unwrap(), path).unwrap();
         let defined = symbols(&object);
         let decoded = decode_record(&object, &mangle::module_record(path));
-        // Constants are K5a's; no external type names a drop function
-        // yet (D-1168).
-        assert_eq!(decoded.counts[6], 0, "{path}");
+        // A unit alone lists every constant it initializes, beside its
+        // slot (D-979, GAP(const-image-slots)); no external type names a
+        // drop function yet (D-1168).
+        let consts = unit
+            .functions
+            .iter()
+            .filter(|f| matches!(f.key, cheby_mir::FnKey::ConstInit(_)))
+            .count();
+        assert_eq!(decoded.counts[6], u64::try_from(consts).unwrap(), "{path}");
         assert!(decoded.externals.iter().all(|e| !e.2), "{path}");
         // One free-shape word per constructor, the one registration
         // derives (D-907, D-1167).
@@ -745,7 +751,10 @@ impl RecordFacts {
             externals: decoded.externals.clone(),
             shapes: decoded.shapes.clone(),
             sites,
-            constants: decoded.counts[6],
+            // A JIT batch's records list no constant, since a JIT host finds
+            // slots by def (GAP(const-image-slots)); the object's count is
+            // checked against its unit in `check_records`.
+            constants: 0,
         }
     }
 

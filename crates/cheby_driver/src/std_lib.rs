@@ -51,12 +51,20 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/fiber.cheby"),
     },
     StdModule {
+        path: "file",
+        source: include_str!("../../../std/file.cheby"),
+    },
+    StdModule {
         path: "float",
         source: include_str!("../../../std/float.cheby"),
     },
     StdModule {
         path: "hex",
         source: include_str!("../../../std/hex.cheby"),
+    },
+    StdModule {
+        path: "http",
+        source: include_str!("../../../std/http.cheby"),
     },
     StdModule {
         path: "i16",
@@ -200,6 +208,10 @@ pub const STD_MODULES: &[StdModule] = &[
         path: "u8",
         source: include_str!("../../../std/u8.cheby"),
     },
+    StdModule {
+        path: "url",
+        source: include_str!("../../../std/url.cheby"),
+    },
 ];
 
 /// Modules written before the checker can check them (D-486):
@@ -212,7 +224,7 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Modules the standard-library spec plans that `std/` does not ship yet:
 /// the rest of tier 2 and tier 3 (`docs/plan/stdlib.md`). Importing one is
 /// E0038, not E0039 (D-451). Sorted.
-pub const PLANNED_STD_MODULES: &[&str] = &["context", "file", "http", "process", "url"];
+pub const PLANNED_STD_MODULES: &[&str] = &["context", "process"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -255,20 +267,31 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     ),
     ("fiber", "race of no contenders is None", "M3"),
     ("fiber", "a panic before the race is decided fails it", "M3"),
-    // `io.md`'s file examples became tests in a temporary directory, which
-    // need `file::with_temp_dir`, S3 (D-1066, D-1068). They live in
-    // `std/file.cheby`, since `std::io` cannot import `std::file`.
-    ("io", "read_file returns the text as stored", "M3"),
-    ("io", "a file that is not UTF-8 is invalid data", "M3"),
-    ("io", "creating a directory twice is already exists", "M3"),
-    ("io", "opening a directory as a file is a directory", "M3"),
-    ("io", "listing a file is not a directory", "M3"),
+    // `http.md`'s tests that start a server with `http::serve` or
+    // `http::serve_on`, which come with S5 (D-728, D-1012); the client's
+    // own tests are in `std/http.cheby` against fake servers over
+    // `std::net` (D-990).
+    ("http", "a server answers a client over loopback", "M3"),
     (
-        "io",
-        "removing a directory with entries is directory not empty",
+        "http",
+        "redirects are followed, and a loop of them ends",
         "M3",
     ),
-    ("io", "closing a file twice is closed", "M3"),
+    ("http", "the client encodes a URL as fetch does", "M3"),
+    ("http", "send carries a method, headers and a body", "M3"),
+    ("http", "serve rejects a port out of range", "M3"),
+    ("http", "segments and query are decoded", "M3"),
+    (
+        "http",
+        "a handler that panics gives that request a 500 and nothing else",
+        "M3",
+    ),
+    ("http", "closing the listener stops serve_on", "M3"),
+    (
+        "http",
+        "https to a server that does not speak TLS is a TLS failure",
+        "M3",
+    ),
     // `io::Source`, `io::Sink`, `copy` and `other`, S7 (D-1072). The `copy`
     // test also needs S3's `file::with_temp_dir`, so it lives in
     // `std/file.cheby`.
@@ -584,10 +607,11 @@ mod tests {
     /// `std::channel`, `std::duration` with them, because `fiber::timeout`
     /// takes a `Duration` (D-645, D-646), and with timers and selectors
     /// `std::selector`, `std::random` and `std::runtime` (D-653, D-657,
-    /// D-673). The rest of tier 2 stays planned, and `std::http` is the
-    /// unshipped module of the probes (D-729). M3 ships `std::time` and its
-    /// submodule `std::time::instant` (D-985, D-1057), and `std::net`
-    /// (D-998), so they are no longer planned.
+    /// D-673). The rest of tier 2 stays planned. M3 ships `std::time` and
+    /// its submodule `std::time::instant` (D-985, D-1057), `std::net`
+    /// (D-998), `std::file` (D-996), and `std::http`'s client with
+    /// `std::url` (D-1003, D-1069), so they are no longer planned; `std::process` is the unshipped
+    /// module of the probes since `std::http` ships (D-729, D-989).
     #[test]
     fn m2_tier2_modules_ship() {
         // The modules of timers and selectors first, then the first slice's.
@@ -597,9 +621,22 @@ mod tests {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
         }
-        for path in ["file", "http", "process"] {
-            assert!(is_planned(path), "std::{path} is not planned");
-            assert!(find(path).is_none(), "std::{path} is shipped");
+        assert!(is_planned("process"), "std::process is not planned");
+        assert!(find("process").is_none(), "std::process is shipped");
+        // D-996, D-992, D-1066: `std::file` ships in M3, with its file in
+        // `std/`, so importing it is no longer E0038 (D-480).
+        assert!(
+            repo().join(display_path("file")).exists(),
+            "std/file.cheby is missing"
+        );
+        assert!(find("file").is_some(), "std::file is not shipped");
+        assert!(!is_planned("file"), "std::file is still planned");
+        // D-1003, D-1069: `std::http`'s client and `std::url` ship in M3,
+        // and `std::process` is the unshipped module of the probes until
+        // it ships too (D-729, D-989).
+        for path in ["http", "url"] {
+            assert!(find(path).is_some(), "std::{path} is not shipped");
+            assert!(!is_planned(path), "std::{path} is still planned");
         }
         // D-998, D-985: `std::net` ships in M3.
         assert!(find("net").is_some(), "std::net is not shipped");

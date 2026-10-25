@@ -183,18 +183,18 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::http\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
+                "//! Unsupported.\n\nimport std::io\nimport std::process\n\nfn main() {\n  io::println(\"never\")\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
     // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
-    // of an unshipped std module stays E0038 (D-480), and `std::http`
-    // stays unshipped until tier 3 (D-729).
+    // of an unshipped std module stays E0038 (D-480), and since `std::http`
+    // ships (D-1003) `std::process` is the unshipped one (D-729, D-989).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: the module `std::http` is not supported yet"),
+            .starts_with("error[E0038]: the module `std::process` is not supported yet"),
         "{}",
         out.stderr
     );
@@ -216,7 +216,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             ),
             (
                 "src/pick.cheby",
-                "//! Reaches an unshipped module.\n\nimport std::http\n\npub fn pick(text: String) -> String {\n  text\n}\n",
+                "//! Reaches an unshipped module.\n\nimport std::process\n\npub fn pick(text: String) -> String {\n  text\n}\n",
             ),
         ],
     );
@@ -224,10 +224,11 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
     assert_eq!(out.stdout, "");
     // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
     // of an unshipped std module in a module `main` reaches stays E0038
-    // (D-480).
+    // (D-480), with `std::process` the unshipped one since `std::http`
+    // ships (D-1003, D-729, D-989).
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: the module `std::http` is not supported yet\n --> src/pick.cheby:3:8\n"
+            "error[E0038]: the module `std::process` is not supported yet\n --> src/pick.cheby:3:8\n"
         ),
         "{}",
         out.stderr
@@ -258,19 +259,21 @@ fn check_reports_resolution_errors() {
 /// A bodiless function with only a native external exists only on native
 /// (§12.5). In a package built for both targets the cross-target check
 /// (§12.6, C12) rejects its use from `main` with E0067, and nothing runs.
-/// In a native-only package it is fine.
+/// In a native-only package it is fine. The external binds libc's `labs`,
+/// which the process defines: a name the runtime exports would be E0055
+/// (D-944).
 #[test]
 fn native_only_externals_need_a_native_only_package() {
     let source = (
         "src/main.cheby",
-        "//! Native only.\n\n@external(native, \"cheby_io_println\")\nfn say(text: String)\n\nfn main() {\n  say(\"native only\")\n}\n",
+        "//! Native only.\n\nimport std::io\n\n@external(native, \"labs\")\nfn magnitude(n: Int) -> Int\n\nfn main() {\n  let m = magnitude(-7)\n  io::println(\"{m}\")\n}\n",
     );
     let dir = package("native_only_both", &[MANIFEST, source]);
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
     assert!(
         out.stderr.starts_with(
-            "error[E0067]: `say` exists only on `native`, but `main` also runs on `js`"
+            "error[E0067]: `magnitude` exists only on `native`, but `main` also runs on `js`"
         ),
         "{}",
         out.stderr
@@ -283,7 +286,7 @@ fn native_only_externals_need_a_native_only_package() {
     let dir = package("native_only_native", &[native, source]);
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stderr, "");
-    assert_eq!(out.stdout, "native only\n");
+    assert_eq!(out.stdout, "7\n");
     assert_eq!(out.status, Some(0));
 }
 
@@ -316,27 +319,47 @@ fn native_symbol_errors_are_diagnostics() {
         out.stderr
     );
     assert_eq!(out.status, Some(1));
-    // E0054: one symbol, two C signatures, even if neither is called; the
-    // std binding of `cheby_io_println` takes part too.
+    // E0055 for every other name the runtime exports (D-944): a std
+    // kernel's symbol, whatever the signature.
     let dir = package(
-        "native_conflict",
+        "native_runtime_export",
         &[
             NATIVE_MANIFEST,
             (
                 "src/main.cheby",
-                "//! Conflict.\n\nimport std::io\n\n@external(native, \"cheby_io_println\")\nfn second(text: String) -> String\n\nfn main() {\n  io::println(\"a\")\n}\n",
+                "//! Reserved too.\n\nimport std::io\n\n@external(native, \"cheby_io_println\")\nfn second(text: String) -> String\n\nfn main() {\n  io::println(\"a\")\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["check"]);
     assert!(
         out.stderr.starts_with(
-            "error[E0054]: the native symbol `cheby_io_println` is bound with two different C signatures"
+            "error[E0055]: the native symbol `cheby_io_println` is reserved for the toolchain"
         ),
         "{}",
         out.stderr
     );
-    assert!(out.stderr.contains("std/io.cheby"), "{}", out.stderr);
+    assert_eq!(out.status, Some(1));
+    // E0054: one symbol, two C signatures, even if neither is called.
+    let dir = package(
+        "native_conflict",
+        &[
+            NATIVE_MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Conflict.\n\nimport std::io\n\n@external(native, \"labs\")\npub fn first(n: Int) -> Int\n\n@external(native, \"labs\")\npub fn second(n: I32) -> I32\n\nfn main() {\n  io::println(\"a\")\n}\n",
+            ),
+        ],
+    );
+    let out = cheby(&dir, &["check"]);
+    assert!(
+        out.stderr.starts_with(
+            "error[E0054]: the native symbol `labs` is bound with two different C signatures"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("src/main.cheby"), "{}", out.stderr);
     assert_eq!(out.status, Some(1));
     // E0053: `cheby check` cannot know, `cheby run` reports it before the
     // program starts, at the `@external`.
@@ -1519,5 +1542,81 @@ fn deadlock_is_followed_by_no_leak_line_and_no_stats_report() {
         let out = cheby_env(&dir, &["run"], &env, None);
         assert_eq!(out.stderr, DEADLOCK_EXAMPLE_REPORT, "{env:?}");
         assert_eq!(out.status, Some(103), "{env:?}: {}", out.describe_status());
+    }
+}
+
+/// The `[const-eval]` memory limit of the verdict test.
+const VERDICT_LIMIT: &str = "256KiB";
+
+/// A list length whose constant's peak is a little under
+/// [`VERDICT_LIMIT`] on `plain` code, and one a little over it (D-617).
+/// At K5a the verdict turned at 28 945 elements (28 944 passed), on
+/// aarch64 macOS's debug toolchain: about 3% on each side.
+const VERDICT_UNDER: u32 = 28_000;
+const VERDICT_OVER: u32 = 30_000;
+
+/// The E0076 report in `stderr`: its lines from `error[E0076]` up to the
+/// first empty line, or `None` without one.
+fn e0076(stderr: &str) -> Option<String> {
+    let (_, from) = stderr.split_once("error[E0076]")?;
+    let block = from.split("\n\n").next().unwrap_or(from);
+    Some(format!("error[E0076]{block}"))
+}
+
+/// D-978 (wave 5's Open item): every command evaluates constants on the
+/// same `plain` code, so a constant near `[const-eval] memory-limit` gets
+/// one verdict from `cheby check` then `cheby run`, from `cheby run` then
+/// `cheby check`, and from `cheby test` and `cheby build`: none just under
+/// the limit, and the same E0076 text just over it. Each command gets a
+/// fresh cache (D-1128); until K5b caches results, the two orders are the
+/// two command orders.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn const_verdict_near_the_memory_limit_is_one_across_commands() {
+    for (n, over) in [(VERDICT_UNDER, false), (VERDICT_OVER, true)] {
+        let main = format!(
+            "//! A constant whose peak is near the memory limit.\n\nimport std::list\n\n\
+             const held: Int = list::length(list::range(0, {n}))\n\n\
+             fn main() {{\n  assert held == {n}\n}}\n\n\
+             test \"held\" {{\n  assert held == {n}\n}}\n"
+        );
+        let manifest = format!(
+            "name = \"app\"\nversion = \"0.1.0\"\n\n[const-eval]\nmemory-limit = \"{VERDICT_LIMIT}\"\n"
+        );
+        let dir = package(
+            &format!("const_verdict_{n}"),
+            &[("cheby.toml", &manifest), ("src/main.cheby", &main)],
+        );
+        let exe = dir.join("out").join("app");
+        let exe = exe.to_str().unwrap();
+        let mut verdicts = Vec::new();
+        for order in [
+            &[&["check"][..], &["run"][..]][..],
+            &[&["run"][..], &["check"][..]],
+            &[&["test"][..]],
+            &[&["build", "-o", exe][..]],
+        ] {
+            for args in order {
+                let out = cheby(&dir, args);
+                let verdict = e0076(&out.stderr);
+                let status = i32::from(verdict.is_some());
+                assert_eq!(out.status, Some(status), "{args:?} {n}: {}", out.stderr);
+                verdicts.push((args.first().copied().unwrap_or(""), verdict));
+            }
+        }
+        let first = verdicts.first().map(|(_, v)| v.clone()).unwrap();
+        assert_eq!(first.is_some(), over, "{n}: {first:?}");
+        for (command, verdict) in &verdicts {
+            assert_eq!(verdict, &first, "{command} {n}");
+        }
+        if let Some(text) = &first {
+            assert!(
+                text.contains(&format!("the memory limit of {VERDICT_LIMIT}")),
+                "{text}"
+            );
+        }
     }
 }

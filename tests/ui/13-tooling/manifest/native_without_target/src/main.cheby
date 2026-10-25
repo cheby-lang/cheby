@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-940, D-190
+// @milestone: M3
+//! `[native]` supplies native code, so a package whose `targets` leave out
+//! `native` must not have the table (§12.5.4, §13.3).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

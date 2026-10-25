@@ -31,11 +31,16 @@
 //!   their replay (D-965), and [`index`] the package index of each package
 //!   root and command family (D-962). The front end reads and writes them
 //!   (`frontend.rs`).
+//! - `code_keys` holds the code identities `C2` and `T2`, the keys of
+//!   borrowing's facts and masks records and of code (D-955, D-969), and
+//!   the masks record; `borrowing.rs` writes the records and logs the
+//!   keys (K4b), and K4c stores code under them.
 //!
 //! Nothing here depends on an absolute path, a modification time or
 //! hash-map order except the files' own locations (D-264): keys, blob
 //! names and file contents are functions of the bytes callers pass.
 
+pub(crate) mod code_keys;
 pub mod front;
 pub mod index;
 mod key;
@@ -61,6 +66,7 @@ pub use key::{BuildKind, Key, KeyBuilder, KeyKind, Settings};
 pub use location::{CacheEnv, Fallback, cache_root};
 pub use log::CacheLog;
 pub use store::Store;
+pub(crate) use store::StoreShare;
 pub use trim::TrimReport;
 
 /// The compiler's build ID (D-957), from `cheby_cli`'s build script: in

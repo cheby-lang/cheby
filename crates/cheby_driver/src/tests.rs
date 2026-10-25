@@ -52,8 +52,9 @@ fn examples_pass_the_syntax_layer() {
 /// (D-451, D-480). M2's first slice shipped `std::fiber`, `std::channel`
 /// and `std::duration`, so 005, 018, 022 and 028 left the list (D-729),
 /// and with `std::selector`, `std::random` and `std::runtime` 009, 013 and
-/// 019 left it too.
-const LATER_EXAMPLES: [&str; 1] = ["031_web_scraper"];
+/// 019 left it too. M3 ships `std::http`'s client, so 031 left it last
+/// (D-1003, D-729), and no example needs an unshipped module.
+const LATER_EXAMPLES: [&str; 0] = [];
 
 /// The one example allowed a diagnostic in the clean check: 022 keeps the
 /// `todo` of `money::apply_interest`, which warns with W0009 on purpose
@@ -88,11 +89,14 @@ fn examples_check_cleanly() {
         }
         checked += 1;
     }
-    assert_eq!(checked, 30);
+    // 31 since 031 checks with `std::http` shipped (D-1003, D-729).
+    assert_eq!(checked, 31);
 }
 
-/// An example that needs a std module of a later tier reports E0038 at
-/// each import of one, and nothing else: paths through such an import are
+/// No example needs a std module of a later tier since `std::http` ships
+/// (D-1003, D-729): no example reports E0038. An example that still did
+/// would be in `LATER_EXAMPLES` and report E0038 at each import of an
+/// unshipped module, and nothing else: paths through such an import are
 /// silent, and its other code checks. 030 still stops after phase A
 /// (D-446).
 #[test]
@@ -111,6 +115,12 @@ fn later_examples_report_only_unshipped_modules() {
             continue;
         }
         if !LATER_EXAMPLES.contains(&name.as_str()) {
+            assert!(
+                out.diagnostics
+                    .iter()
+                    .all(|d| d.code.to_string() != "E0038"),
+                "{name}:\n{rendered}"
+            );
             continue;
         }
         let mut imports = 0;
@@ -297,7 +307,8 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    assert_eq!(lowered, 30, "{}", failures.join("\n"));
+    // 31 since 031 checks with `std::http` shipped (D-1003, D-729).
+    assert_eq!(lowered, 31, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);
@@ -538,14 +549,15 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::http\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::ioo\nimport std::process\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
-    // D-729: `std::http` stays unshipped until tier 3.
+    // D-729, D-989: `std::http` shipped (D-1003), so `std::process` is the
+    // unshipped module of the probe until it ships too.
     assert!(
-        rendered.contains("error[E0038]: the module `std::http` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::process` is not supported yet"),
         "{rendered}"
     );
     assert!(

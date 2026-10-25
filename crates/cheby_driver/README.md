@@ -10,7 +10,7 @@ A build runs these steps, each in the crate named:
 
 1. **Phase A:** `cheby_package` reads `cheby.toml` and discovers the modules, and `cheby_syntax` lexes, parses and validates every file. An error here stops the later phases (D-452).
 2. **Front end:** `cheby_resolve` builds the import graph and resolves names, `cheby_types` builds interfaces in import order and checks bodies, independent modules in parallel on rayon's global pool (D-263), then the module-local and whole-package warnings run.
-3. **Back end**, for `run` and `test`: `cheby_mir` lowers the items reachable from `main` or the tests across modules (D-510), the RC passes run over all units, `cheby_codegen_clif` and `cheby_jit` compile one batch, and `cheby_consteval` evaluates the constants the code reaches. Unresolved native symbols (E0053) and constant errors are reported like compile errors before anything runs.
+3. **Back end**, for `run` and `test`: `cheby_mir` lowers the items reachable from `main` or the tests across modules (D-510), the RC passes run over all units, `cheby_codegen_clif` and `cheby_jit` compile one batch, and `cheby_consteval` evaluates the constants the code reaches in a JIT of their own on `plain` code (D-978), writes each result as an image and installs the images into the program's JIT before anything runs (D-979); `cheby build` puts the images into the program object instead. Unresolved native symbols (E0053) and constant errors are reported like compile errors before anything runs.
 4. **Running:** `main`, each test or each REPL entry runs as a root fiber of one `cheby_runtime::Runtime` per host run (D-690), with the exit statuses of §10.10 and the leak check of debug builds.
 
 Every phase that reads other modules' interfaces, outside std, reads them through a recording view (D-955): `Checked::front_reads` holds what resolution and checking read beyond a module's imports, and the back end's `Lowered::reads` what lowering and borrow inference read beyond those, per code unit and tests unit. Debug toolchains decode every interface they build and compare it with the original (D-954).
@@ -29,6 +29,7 @@ The standard library's sources in `std/` are embedded in the binary by `std_lib.
 | `build.rs`           | Std's source hashes, computed when `cheby` is built (D-963)                                                                                                            |
 | `frontend.rs`        | The build graph and the front-end phases                                                                                                                               |
 | `backend.rs`         | MIR lowering, code generation, constant evaluation and running                                                                                                         |
+| `borrowing.rs`       | Borrowing inference over a build's units and its records: facts and masks records, code keys (D-968, D-969)                                                            |
 | `cache/`             | The build cache (D-955 to D-965, D-973): the store, keys, location, trimming, `CHEBY_CACHE_LOG`; `front.rs`, front records; `replay.rs`, stored diagnostics; `index.rs`, package indexes |
 | `test.rs`            | `prepare_test`, `TestProgram` and `test_std`: `cheby test` (§13.6, D-541) and std's self-test                                                                          |
 | `session.rs`         | REPL sessions: checking each entry as the module `<repl:N>`, redefinition, `:module` and `:reload` (§13.5, D-606, D-625)                                               |
@@ -37,6 +38,7 @@ The standard library's sources in `std/` are embedded in the binary by `std_lib.
 | `lifecycle_tests.rs` | Tests of runtime creation and shutdown per host                                                                                                                        |
 | `reads_tests.rs`     | Tests of the recorded hidden reads (D-955)                                                                                                                             |
 | `cache_tests.rs`     | Tests of front records, their keys and replay, and the cache-hit tests (D-973)                                                                                         |
+| `borrowing_tests.rs` | Tests of per-unit facts, the facts and masks records and the code keys (D-969)                                                                                         |
 
 ## Tests
 

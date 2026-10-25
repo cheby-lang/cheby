@@ -45,11 +45,13 @@ pub mod entry;
 mod env;
 pub mod fiber;
 pub(crate) mod fiber_ops;
+pub mod file;
 pub mod generic;
 #[doc(hidden)]
 pub mod hamt;
 pub(crate) mod handles;
 mod helpers;
+mod http;
 pub mod image;
 #[cfg(test)]
 mod image_tests;

@@ -1754,3 +1754,51 @@ fn every_item_kind_has_a_node_view() {
         }
     }
 }
+
+/// The span of `needle` in `text`, a file of `sources`.
+fn span_of(sources: &mut SourceMap, text: &str, needle: &str) -> cheby_diag::Span {
+    let file = sources.add_file("src/main.cheby", text).unwrap();
+    let start = u32::try_from(text.find(needle).unwrap()).unwrap();
+    let end = start
+        .checked_add(u32::try_from(needle.len()).unwrap())
+        .unwrap();
+    cheby_diag::Span::new(file, cheby_diag::TextRange::new(start, end))
+}
+
+/// D-944: a name the runtime exports is E0055 outside std, with its own
+/// note; the driver passes the runtime's names.
+#[test]
+fn e0055_runtime_export() {
+    let text = "@external(native, \"cheby_io_println\")\nfn say(text: String)\n";
+    let mut sources = SourceMap::new();
+    let span = span_of(&mut sources, text, "\"cheby_io_println\"");
+    let exported = |s: &str| s == "cheby_io_println";
+    let diag = runtime_export_reserved("cheby_io_println", span, &exported).unwrap();
+    assert_eq!(
+        cheby_diag::render_all(&[diag], &sources),
+        "\
+error[E0055]: the native symbol `cheby_io_println` is reserved for the toolchain
+ --> src/main.cheby:1:19
+  |
+1 | @external(native, \"cheby_io_println\")
+  |                   ^^^^^^^^^^^^^^^^^^
+  |
+  = note: the Cheby runtime exports this symbol, so only the standard library may bind it
+
+"
+    );
+}
+
+/// A name the runtime does not export stays free (D-455), and a reserved
+/// prefix is resolution's own E0055, never reported twice.
+#[test]
+fn e0055_only_exported_names_without_a_reserved_prefix() {
+    let mut sources = SourceMap::new();
+    let span = span_of(&mut sources, "\"x\"", "\"x\"");
+    let everything = |_: &str| true;
+    let nothing = |_: &str| false;
+    assert!(runtime_export_reserved("cheby_sqlite_open", span, &nothing).is_none());
+    assert!(runtime_export_reserved("cheby_rt_alloc", span, &everything).is_none());
+    assert!(runtime_export_reserved("cb$fn$app$main", span, &everything).is_none());
+    assert!(runtime_export_reserved("cheby_list_length", span, &everything).is_some());
+}

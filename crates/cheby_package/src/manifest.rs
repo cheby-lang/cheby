@@ -21,6 +21,13 @@
 //!   size (D-796).
 //! - `[dependencies]`: each entry is checked, and then the table is
 //!   rejected, because dependencies arrive in M5 (§13.4).
+//! - `[native]`: the package's native code (D-940, §12.5.4), `sources`
+//!   (C files by package-relative path) and `libraries` (names the linker
+//!   takes after `-l`). A source must end in `.c`, and [`Manifest::load`]
+//!   also checks that it exists and stays inside the package once `..`
+//!   and symbolic links are resolved; [`Manifest::parse`], which has no
+//!   package directory, checks the rest. The table is E0036 in a package
+//!   whose `targets` leave out `native`.
 //!
 //! Any other key is an error (D-444).
 
@@ -70,9 +77,31 @@ pub struct Manifest {
     /// fiber running `main` and of each test (D-660);
     /// [`Manifest::DEFAULT_MAIN_STACK`] when not given.
     pub main_stack: u64,
+    /// `[native]` (D-940), validated; `None` without the table, or when
+    /// the table has an error.
+    pub native: Option<NativeTable>,
     /// The `cheby.toml` file in the source map, for diagnostics about the
     /// package as a whole.
     pub file: FileId,
+}
+
+/// The `[native]` table of a manifest (D-940, §12.5.4): the package's C
+/// sources and the system libraries it links.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeTable {
+    /// `sources`, package-relative, in manifest order.
+    pub sources: Vec<String>,
+    /// `libraries`, the names after `-l`, in manifest order.
+    pub libraries: Vec<String>,
+}
+
+impl NativeTable {
+    /// Whether the table names any source or library: a table with
+    /// neither asks for no native code.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.sources.is_empty() && self.libraries.is_empty()
+    }
 }
 
 /// A semantic version, `MAJOR.MINOR.PATCH[-PRE][+BUILD]` (D-097).
@@ -179,12 +208,25 @@ impl Manifest {
             );
             return Ok(None);
         }
-        Ok(Self::parse(file, &text, diagnostics))
+        Ok(Self::parse_in(file, &text, Some(root), diagnostics))
     }
 
-    /// Checks the manifest `text` of `file`. See [`Manifest::load`].
+    /// Checks the manifest `text` of `file`. See [`Manifest::load`]. With
+    /// no package directory, the sources of `[native]` are checked only
+    /// for their form, not for their files (D-940).
     #[must_use]
     pub fn parse(file: FileId, text: &str, diagnostics: &mut Vec<Diagnostic>) -> Option<Self> {
+        Self::parse_in(file, text, None, diagnostics)
+    }
+
+    /// [`Manifest::parse`], checking the files of `[native]`'s sources
+    /// against the package at `root` when it is given.
+    fn parse_in(
+        file: FileId,
+        text: &str,
+        root: Option<&Path>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<Self> {
         let table = match DeTable::parse(text) {
             Ok(table) => table,
             Err(e) => {
@@ -199,7 +241,12 @@ impl Manifest {
                 return None;
             }
         };
-        Reader { file, diagnostics }.manifest(table.get_ref())
+        Reader {
+            file,
+            root,
+            diagnostics,
+        }
+        .manifest(table.get_ref())
     }
 
     /// The module path of the root module, which is the package name
@@ -379,6 +426,68 @@ impl Default for Targets {
     }
 }
 
+/// What is wrong with an entry of `[native]`'s `sources` (D-940).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceProblem {
+    /// It does not end in `.c`.
+    NotC,
+    /// It is absolute or starts at a root.
+    NotRelative,
+    /// It leaves the package through `..` or a symbolic link.
+    Outside,
+    /// No file or directory has its path.
+    Missing,
+    /// It names a directory or another kind of file.
+    NotAFile,
+}
+
+/// Whether the relative `path` stays inside the directory it is relative
+/// to once its `..` components are resolved lexically.
+fn stays_inside(path: &Path) -> bool {
+    let mut depth = 0_usize;
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => depth = depth.saturating_add(1),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => match depth.checked_sub(1) {
+                Some(up) => depth = up,
+                None => return false,
+            },
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => return false,
+        }
+    }
+    true
+}
+
+/// The problem of the source `path`, relative to the package at `root`, on
+/// disk: missing, not a regular file, or outside the package once
+/// symbolic links are resolved; `None` when it is a file inside.
+fn source_on_disk(root: &Path, path: &Path) -> Option<SourceProblem> {
+    let Ok(full) = std::fs::canonicalize(root.join(path)) else {
+        return Some(SourceProblem::Missing);
+    };
+    // A root that cannot be resolved has no file inside it.
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return Some(SourceProblem::Missing);
+    };
+    if !full.starts_with(&root) {
+        return Some(SourceProblem::Outside);
+    }
+    if !full.is_file() {
+        return Some(SourceProblem::NotAFile);
+    }
+    None
+}
+
+/// Whether `name` is a library name of `[native]` (D-940): non-empty, of
+/// ASCII letters, digits, `_`, `-`, `.` and `+`.
+fn is_library_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'+'))
+}
+
 /// The span of a byte range of `cheby.toml`.
 fn span(file: FileId, range: Range<usize>) -> Span {
     let size = |n: usize| TextSize::try_from(n).unwrap_or(TextSize::MAX);
@@ -388,6 +497,9 @@ fn span(file: FileId, range: Range<usize>) -> Span {
 /// Checks a parsed manifest and reports into `diagnostics`.
 struct Reader<'d> {
     file: FileId,
+    /// The package directory, when the manifest was loaded from one: the
+    /// sources of `[native]` are then checked on disk (D-940).
+    root: Option<&'d Path>,
     diagnostics: &'d mut Vec<Diagnostic>,
 }
 
@@ -399,9 +511,13 @@ const TIME_UNITS: &[(&str, u64)] = &[("ms", 1), ("s", 1000)];
 /// (D-536).
 const MEMORY_UNITS: &[(&str, u64)] = &[("KiB", 1 << 10), ("MiB", 1 << 20), ("GiB", 1 << 30)];
 
-/// The top-level keys, in the order §13.3 lists them, for help lines.
+/// The top-level keys, in the order §13.3 lists them, for help lines
+/// (D-444, D-940).
 const KNOWN_KEYS: &str = "`name`, `version`, `description`, `licences`, `targets`, \
-     `[dependencies]`, `[const-eval]` and `[runtime]`";
+     `[dependencies]`, `[const-eval]`, `[runtime]` and `[native]`";
+
+/// The help line of an unknown key in `[native]` (D-940).
+const NATIVE_KEYS: &str = "the keys are `sources` and `libraries`";
 
 /// The help line of `[runtime]`'s errors (D-660).
 const RUNTIME_KEYS: &str = "the keys are `fiber-stack` and `main-stack`";
@@ -427,8 +543,10 @@ impl Reader<'_> {
         let mut memory_limit = Manifest::DEFAULT_MEMORY_LIMIT;
         let mut fiber_stack = Manifest::DEFAULT_FIBER_STACK;
         let mut main_stack = Manifest::DEFAULT_MAIN_STACK;
+        let mut native = None;
         for (key, value) in table {
             match key.get_ref().as_ref() {
+                "native" => native = Some((key.span(), self.native(value))),
                 "name" => name = self.name(value),
                 "version" => version = self.version(value),
                 "targets" => targets = self.targets(value).unwrap_or(Targets::ALL),
@@ -468,6 +586,21 @@ impl Reader<'_> {
         if let Some(name) = &name {
             self.dependency_keys(name, &dependency_keys);
         }
+        let native = match native {
+            Some((at, _)) if !targets.contains(Target::Native) => {
+                let diag = self
+                    .diag(
+                        "`[native]` is not allowed in a package that does not target `native`",
+                        at,
+                        "",
+                    )
+                    .with_help("add `\"native\"` to `targets`, or remove `[native]`");
+                self.push(diag);
+                None
+            }
+            Some((_, table)) => table,
+            None => None,
+        };
         Some(Manifest {
             name: name?,
             version: version?,
@@ -479,8 +612,156 @@ impl Reader<'_> {
             const_eval_memory_limit: memory_limit,
             fiber_stack,
             main_stack,
+            native,
             file: self.file,
         })
+    }
+
+    /// Reads `[native]` (D-940): `sources` and `libraries`, each a list of
+    /// strings, and no other key. Returns the table when it has no error.
+    fn native(&mut self, value: &Spanned<DeValue<'_>>) -> Option<NativeTable> {
+        let Some(table) = value.get_ref().as_table() else {
+            self.wrong_type(value, "`native`", "a table");
+            return None;
+        };
+        let mut ok = true;
+        let mut sources = Vec::new();
+        let mut libraries = Vec::new();
+        for (key, value) in table {
+            match key.get_ref().as_ref() {
+                "sources" => {
+                    let items = self.native_list(value, "`sources`", "a source", &mut ok);
+                    for (text, at) in items {
+                        ok &= self.native_source(&text, at);
+                        sources.push(text);
+                    }
+                }
+                "libraries" => {
+                    let items = self.native_list(value, "`libraries`", "a library", &mut ok);
+                    for (text, at) in items {
+                        ok &= self.native_library(&text, at);
+                        libraries.push(text);
+                    }
+                }
+                other => {
+                    let diag = self
+                        .diag(
+                            format!("unknown key `{other}` in `[native]`"),
+                            key.span(),
+                            "unknown key",
+                        )
+                        .with_help(NATIVE_KEYS);
+                    self.push(diag);
+                    ok = false;
+                }
+            }
+        }
+        ok.then_some(NativeTable { sources, libraries })
+    }
+
+    /// The strings of a list of `[native]`, each with its span; reports a
+    /// value that is not a list, and an item that is not a string, and
+    /// clears `ok` then.
+    fn native_list(
+        &mut self,
+        value: &Spanned<DeValue<'_>>,
+        what: &str,
+        item_what: &str,
+        ok: &mut bool,
+    ) -> Vec<(String, Range<usize>)> {
+        let Some(items) = value.get_ref().as_array() else {
+            self.wrong_type(value, what, "a list of strings");
+            *ok = false;
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            if let Some(text) = item.get_ref().as_str() {
+                out.push((text.to_owned(), item.span()));
+            } else {
+                self.wrong_type(item, item_what, "a string");
+                *ok = false;
+            }
+        }
+        out
+    }
+
+    /// Checks one entry of `sources` (D-940): a package-relative path
+    /// ending in `.c` that stays inside the package once `..` is resolved
+    /// and, when the package directory is known, a file that exists and
+    /// stays inside the package once symbolic links are resolved.
+    /// GAP(native-table-details): an absolute path and a directory are
+    /// E0036 too, `..` is judged lexically before the file is looked up,
+    /// an empty table is valid and asks for nothing, and a source listed
+    /// twice is not checked.
+    #[expect(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "D-940: a source ends in `.c`, in lower case"
+    )]
+    fn native_source(&mut self, text: &str, at: Range<usize>) -> bool {
+        let path = Path::new(text);
+        let problem = if !text.ends_with(".c") {
+            Some(SourceProblem::NotC)
+        } else if path.has_root() || path.is_absolute() {
+            Some(SourceProblem::NotRelative)
+        } else if !stays_inside(path) {
+            Some(SourceProblem::Outside)
+        } else {
+            self.root.and_then(|root| source_on_disk(root, path))
+        };
+        let Some(problem) = problem else {
+            return true;
+        };
+        let diag = match problem {
+            SourceProblem::NotC => self
+                .diag(format!("`{text}` is not a C source"), at, "")
+                .with_help(
+                    "list only the `.c` files to compile; the compiler finds headers through \
+                     `#include`",
+                ),
+            SourceProblem::NotRelative => self.diag(
+                format!("the C source `{text}` must be a path relative to the package root"),
+                at,
+                "",
+            ),
+            SourceProblem::Outside => self
+                .diag(
+                    format!("the C source `{text}` is outside the package"),
+                    at,
+                    "",
+                )
+                .with_note(
+                    "a C source must stay inside the package once `..` and symbolic links are \
+                     resolved",
+                ),
+            SourceProblem::Missing => {
+                self.diag(format!("the C source `{text}` does not exist"), at, "")
+            }
+            SourceProblem::NotAFile => {
+                self.diag(format!("the C source `{text}` is not a file"), at, "")
+            }
+        };
+        self.push(diag);
+        false
+    }
+
+    /// Checks one entry of `libraries` (D-940): a non-empty name of ASCII
+    /// letters, digits, `_`, `-`, `.` and `+`.
+    fn native_library(&mut self, text: &str, at: Range<usize>) -> bool {
+        if is_library_name(text) {
+            return true;
+        }
+        let message = if text.is_empty() {
+            "a library name must not be empty".to_owned()
+        } else {
+            format!("`{text}` is not a valid library name")
+        };
+        let diag = self.diag(message, at, "").with_help(
+            "write the name the linker takes after `-l`, such as `\"sqlite3\"`, in letters, \
+             digits, `_`, `-`, `.` and `+`; give each library its own string",
+        );
+        self.push(diag);
+        false
     }
 
     /// Reads `[const-eval]` (D-536, D-616): sets the

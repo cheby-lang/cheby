@@ -74,7 +74,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use cheby_codegen_clif::CodegenOptions;
-use cheby_consteval::{ConstEvalConfig, ConstInfo, ConstMode, ConstTypes};
+use cheby_consteval::{ConstEvalConfig, ConstImage, ConstInfo, ConstMode, ConstTypes};
 use cheby_diag::{Diagnostic, SourceMap, codes};
 use cheby_iface::{DefId, DepView, Ice, ModuleId, ReadLog};
 use cheby_jit::{Jit, JitError, JitOptions};
@@ -130,8 +130,13 @@ pub(crate) enum Roots<'a> {
     /// The tests to run (`cheby test`, plan §8.1).
     Tests(Vec<TestRoot<'a>>),
     /// Every constant of the local package (`cheby check`, plan §7.1,
-    /// D-534).
+    /// D-534): its build is the evaluation module (D-978).
     Constants,
+    /// The constants a build of `main` or of tests reaches, in their
+    /// evaluation order: the evaluation module of `cheby run`, `cheby
+    /// test` and `cheby build` (D-978, GAP(const-eval-code)), their
+    /// module set closed under whole modules (D-593, D-1177), `plain`.
+    Evaluate(&'a [DefId]),
     /// Every function of the local package, lowered and compiled, nothing
     /// evaluated or run (the code-generation benchmark of I1, plan §8.5).
     AllFunctions,
@@ -288,38 +293,31 @@ pub(crate) fn build_scoped(
     scope: Scope,
 ) -> Result<Result<Built, Vec<Diagnostic>>, Ice> {
     let capture_clif = codegen.capture_clif;
+    let check = matches!(roots, Roots::Constants);
+    // `cheby check`'s build is its evaluation module, whose MIR and CLIF
+    // go under `consteval/` as every command's do (GAP(const-eval-code)).
+    let code_dump: Option<PathBuf> = if check {
+        dump.map(|dir| dir.join(CONSTEVAL_DIR))
+    } else {
+        dump.map(Path::to_path_buf)
+    };
+    let mir_options = mir;
     let mir = kind_options(roots, mir, scope);
     let lowered = lower_scoped(front, sources, roots, mir, scope)?;
-    if let Some(dir) = dump {
+    if let Some(dir) = &code_dump {
         write_mir_dumps(dir, &lowered.units)?;
     }
     let rc_ops = matches!(roots, Roots::AllFunctions).then(|| rc_ops(&lowered.units));
     let reuse_report = if reuse_report {
-        let local: BTreeSet<ModuleId> = local_modules(front).into_iter().collect();
-        // The report reads the reachable functions, as before whole
-        // modules (D-717, D-966): a whole module's unreached ones run
-        // never.
-        let reached = reached_units(&lowered.units, &lowered);
-        Some(crate::reuse_report::report(
-            &reached,
-            &local,
-            sources,
-            &front.globals.names,
-            &crate::reuse_report::Types {
-                table: &front.globals.types,
-                interfaces: &front.set,
-            },
-            mir.rc == RcMode::Naive,
-        )?)
+        Some(reuse_report_of(front, sources, &lowered, mir)?)
     } else {
         None
     };
-    let check = matches!(roots, Roots::Constants);
     // D-943: E0053 for the symbols reached functions name, decided here,
     // before anything runs; the JIT binds the rest, which only unreached
     // functions of whole modules name, to `cheby_rt_unresolved`.
     if scope == Scope::Whole && !check {
-        let missing = missing_reached_symbols(&lowered);
+        let missing = missing_reached_symbols(front, &lowered);
         if !missing.is_empty() {
             let mut diagnostics = unresolved(front, &missing)?;
             sources.sort(&mut diagnostics);
@@ -335,7 +333,8 @@ pub(crate) fn build_scoped(
         capture_clif: capture_clif || dump.is_some(),
         ..codegen
     };
-    let mut jit = match compile_with(&lowered.units, codegen, options) {
+    let libraries = front.native_libraries();
+    let mut jit = match compile_with_libraries(&lowered.units, codegen, options, &libraries) {
         Ok(jit) => jit,
         Err(JitError::UnresolvedSymbols(symbols)) => {
             let mut diagnostics = unresolved(front, &symbols)?;
@@ -344,48 +343,50 @@ pub(crate) fn build_scoped(
         }
         Err(e) => return Err(jit_ice(e)),
     };
-    if let Some(dir) = dump
+    if let Some(dir) = &code_dump
         && !capture_clif
     {
         write_dump(&dir.join("clif.txt"), &jit.take_clif().join("\n"))?;
     }
-    let mut evaluated = Vec::new();
-    if !matches!(roots, Roots::AllFunctions) {
-        let infos = const_infos(front, sources, &lowered.reach)?;
-        let config = ConstEvalConfig {
-            mode: if check {
+    match roots {
+        Roots::AllFunctions => {
+            if let Some(dir) = dump {
+                write_dump(&dir.join("consts.txt"), "")?;
+            }
+        }
+        // `cheby check`: this build is the evaluation module; it writes the
+        // images and installs nothing (D-979).
+        Roots::Constants | Roots::Evaluate(_) => {
+            let infos = const_infos(front, sources, &lowered.reach)?;
+            let mode = if check {
                 ConstMode::Check
             } else {
                 ConstMode::Run
-            },
-            // The manifest's `[const-eval]` limits (D-536).
-            time_limit: front.const_eval_time_limit,
-            memory_limit: front.const_eval_memory_limit,
-            targets: front.package_targets,
-        };
-        // D-1123: constant evaluation reads the
-        // types of the constants it evaluates directly, outside any view;
-        // constants are cached under their own keys (D-964, `cache.md` §6).
-        let item = |def: DefId| {
-            front
-                .set
-                .get(def.module)
-                .and_then(|iface| iface.item(def.index))
-        };
-        let types = ConstTypes {
-            types: &front.globals.types,
-            item: &item,
-        };
-        let mut diagnostics =
-            cheby_consteval::evaluate_with(&mut jit, &infos, &config, Some(&types))?;
-        if !diagnostics.is_empty() {
-            sources.sort(&mut diagnostics);
-            return Ok(Err(diagnostics));
+            };
+            if let Err(diagnostics) = evaluate_in(front, sources, &mut jit, &infos, mode)? {
+                return Ok(Err(diagnostics));
+            }
+            // The images K5b will store; until then they are only written.
+            cheby_consteval::images(&jit, &infos)?;
+            if let Some(dir) = dump {
+                write_const_dump(front, &jit, dir, &infos)?;
+            }
+            // This JIT is returned with its constants' values, which
+            // nothing installs: they stay in place, static (D-539).
+            cheby_consteval::freeze(&jit, &infos)?;
         }
-        evaluated = infos;
-    }
-    if let Some(dir) = dump {
-        write_const_dump(front, &jit, dir, &evaluated)?;
+        // The constants `main` or the tests reach are evaluated in a JIT
+        // of their own on `plain` code, then installed here from their
+        // images before any entry runs (D-978, D-979).
+        Roots::Main(_) | Roots::Tests(_) => {
+            let infos = const_infos(front, sources, &lowered.reach)?;
+            let evaluated =
+                evaluation_module(front, sources, &infos, codegen, mir_options, dump, scope)?;
+            match evaluated {
+                Err(diagnostics) => return Ok(Err(diagnostics)),
+                Ok(images) => cheby_consteval::install(&jit, &images, &infos)?,
+            }
+        }
     }
     Ok(Ok(Built {
         jit,
@@ -394,14 +395,175 @@ pub(crate) fn build_scoped(
     }))
 }
 
-/// The MIR options of a build's kind (D-971, D-978): `cheby check`
-/// (`Roots::Constants`) evaluates constants on `plain` code, so with whole
-/// modules it infers no masks; every other build keeps `mir`. Until std's
-/// code comes from the cache (K6), std's units of a check build are
-/// compiled without masks too, rather than with std's own
-/// (D-1180).
+/// The text of `--reuse-report` for `lowered` (D-717): it reads the
+/// reachable functions, as before whole modules (D-966), since a whole
+/// module's unreached ones never run.
+fn reuse_report_of(
+    front: &Frontend,
+    sources: &SourceMap,
+    lowered: &Lowered,
+    mir: MirOptions,
+) -> Result<String, Ice> {
+    let local: BTreeSet<ModuleId> = local_modules(front).into_iter().collect();
+    let reached = reached_units(&lowered.units, lowered);
+    crate::reuse_report::report(
+        &reached,
+        &local,
+        sources,
+        &front.globals.names,
+        &crate::reuse_report::Types {
+            table: &front.globals.types,
+            interfaces: &front.set,
+        },
+        mir.rc == RcMode::Naive,
+    )
+}
+
+/// The images of the constants a lowered build of `main` reaches (D-979),
+/// evaluated in the evaluation module (D-978) with the MIR options `mir`
+/// as under `cheby run`: `cheby build`'s path to the program object
+/// (D-924). `Err` holds the constants' diagnostics, sorted.
+///
+/// # Errors
+///
+/// An internal compiler error.
+pub(crate) fn constant_images(
+    front: &Frontend,
+    sources: &SourceMap,
+    lowered: &Lowered,
+    mir: MirOptions,
+) -> Result<Result<Vec<ConstImage>, Vec<Diagnostic>>, Ice> {
+    let infos = const_infos(front, sources, &lowered.reach)?;
+    evaluation_module(
+        front,
+        sources,
+        &infos,
+        codegen_options(mir, false),
+        mir,
+        None,
+        command_scope(),
+    )
+}
+
+/// The directory of `CHEBY_DUMP_DIR` that holds the evaluation module's
+/// MIR and CLIF (GAP(const-eval-code)).
+const CONSTEVAL_DIR: &str = "consteval";
+
+/// Evaluates `infos` in `jit` (D-535) under the package's `[const-eval]`
+/// limits (D-536), with the JS range check of the constants that exist on
+/// `js` (D-540): the diagnostics, sorted, if any constant failed.
+fn evaluate_in(
+    front: &Frontend,
+    sources: &SourceMap,
+    jit: &mut Jit,
+    infos: &[ConstInfo],
+    mode: ConstMode,
+) -> Result<Result<(), Vec<Diagnostic>>, Ice> {
+    let config = ConstEvalConfig {
+        mode,
+        // The manifest's `[const-eval]` limits (D-536).
+        time_limit: front.const_eval_time_limit,
+        memory_limit: front.const_eval_memory_limit,
+        targets: front.package_targets,
+    };
+    // D-1123: constant evaluation reads the
+    // types of the constants it evaluates directly, outside any view;
+    // constants are cached under their own keys (D-964, `cache.md` §6).
+    let item = |def: DefId| {
+        front
+            .set
+            .get(def.module)
+            .and_then(|iface| iface.item(def.index))
+    };
+    let types = ConstTypes {
+        types: &front.globals.types,
+        item: &item,
+    };
+    let mut diagnostics = cheby_consteval::evaluate_with(jit, infos, &config, Some(&types))?;
+    if diagnostics.is_empty() {
+        Ok(Ok(()))
+    } else {
+        sources.sort(&mut diagnostics);
+        Ok(Err(diagnostics))
+    }
+}
+
+/// The evaluation module of a build of `main` or of tests (D-978,
+/// GAP(const-eval-code)): the constants `infos` (the build's, in D-535's
+/// order, with the build's seeds), lowered from their module set closed
+/// under whole modules (D-593, D-1177) in `plain` code, std's units
+/// without masks too (D-1180), compiled in a JIT of its own that gets
+/// the package's native libraries as the program's does (D-941),
+/// evaluated, and written as images (D-979). The JIT is dropped when this
+/// returns. With `dump`, its MIR and CLIF go under `consteval/` and the
+/// constants' debug texts into `consts.txt` (D-551).
+fn evaluation_module(
+    front: &Frontend,
+    sources: &SourceMap,
+    infos: &[ConstInfo],
+    codegen: CodegenOptions,
+    mir: MirOptions,
+    dump: Option<&Path>,
+    scope: Scope,
+) -> Result<Result<Vec<ConstImage>, Vec<Diagnostic>>, Ice> {
+    if infos.is_empty() {
+        if let Some(dir) = dump {
+            write_dump(&dir.join("consts.txt"), "")?;
+        }
+        return Ok(Ok(Vec::new()));
+    }
+    let defs: Vec<DefId> = infos.iter().map(|info| info.def).collect();
+    let roots = Roots::Evaluate(&defs);
+    let mir = kind_options(&roots, mir, scope);
+    let lowered = lower_scoped(front, sources, &roots, mir, scope)?;
+    let dir = dump.map(|dir| dir.join(CONSTEVAL_DIR));
+    if let Some(dir) = &dir {
+        write_mir_dumps(dir, &lowered.units)?;
+    }
+    // Unresolved native symbols bind to `cheby_rt_unresolved`: the
+    // program's build reported E0053 for every reached one (D-943), and a
+    // constant that calls one is E0077 (D-532).
+    let options = JitOptions {
+        stub_unresolved: true,
+        ..jit_options(codegen.capture_clif)
+    };
+    let codegen = CodegenOptions {
+        capture_clif: dir.is_some(),
+        ..codegen
+    };
+    let libraries = front.native_libraries();
+    let mut jit =
+        compile_with_libraries(&lowered.units, codegen, options, &libraries).map_err(jit_ice)?;
+    if let Some(dir) = &dir {
+        write_dump(&dir.join("clif.txt"), &jit.take_clif().join("\n"))?;
+    }
+    if let Err(diagnostics) = evaluate_in(front, sources, &mut jit, infos, ConstMode::Run)? {
+        return Ok(Err(diagnostics));
+    }
+    let images = cheby_consteval::images(&jit, infos)?;
+    if let Some(dir) = dump {
+        write_const_dump(front, &jit, dir, infos)?;
+    }
+    // The results are freed before the JIT goes: the program keeps only
+    // the copies its images install (the wave-6 review's R-1).
+    cheby_consteval::release(&jit, infos)?;
+    Ok(Ok(images))
+}
+
+/// The MIR options of a build's kind (D-971, D-978): every evaluation
+/// module (`cheby check`'s build, `Roots::Constants`, with whole modules,
+/// and the one of every other command, `Roots::Evaluate`) evaluates
+/// constants on `plain` code, so it infers no masks; every other build
+/// keeps `mir`. Until std's code comes from the cache (K6), std's units
+/// of an evaluation module are compiled without masks too, rather than
+/// with std's own (D-1180), in every command (GAP(const-eval-code)).
 pub(crate) const fn kind_options(roots: &Roots<'_>, mir: MirOptions, scope: Scope) -> MirOptions {
-    if matches!(roots, Roots::Constants) && matches!(scope, Scope::Whole) {
+    let plain = match roots {
+        Roots::Constants => matches!(scope, Scope::Whole),
+        Roots::Evaluate(_) => true,
+        Roots::Main(_) | Roots::Tests(_) | Roots::AllFunctions => false,
+    };
+    if plain {
         MirOptions {
             borrow: false,
             ..mir
@@ -510,7 +672,7 @@ pub(crate) fn unresolved(front: &Frontend, symbols: &[String]) -> Result<Vec<Dia
                 format!("the native symbol `{symbol}` is not defined"),
             )
             .with_primary(span, "nothing defines this symbol")
-            .with_note("the symbol must be defined by the Cheby runtime or the running process"))
+            .with_note(crate::native::E0053_NOTE))
         })
         .collect()
 }
@@ -546,37 +708,16 @@ pub(crate) fn reached_symbols(lowered: &Lowered) -> BTreeSet<String> {
     out
 }
 
-/// The symbols of [`reached_symbols`] that neither the runtime nor the
-/// process defines, sorted: what `cheby run` and `cheby test` report as
-/// E0053 (D-943, D-532), looked up as the JIT looks them up.
-fn missing_reached_symbols(lowered: &Lowered) -> Vec<String> {
-    let runtime = cheby_runtime::symbols();
+/// The symbols of [`reached_symbols`] that neither the runtime, the
+/// package libraries (in build order) nor the process defines, sorted:
+/// what `cheby run` and `cheby test` report as E0053 (D-943, D-532), looked
+/// up as the JIT looks them up ([`cheby_jit::resolve_native`], D-941).
+fn missing_reached_symbols(front: &Frontend, lowered: &Lowered) -> Vec<String> {
+    let libraries = front.native_libraries();
     reached_symbols(lowered)
         .into_iter()
-        .filter(|symbol| {
-            !runtime.iter().any(|(name, _)| name == symbol) && !process_defines(symbol)
-        })
+        .filter(|symbol| cheby_jit::resolve_native(symbol, &libraries).is_none())
         .collect()
-}
-
-/// Whether the process defines `symbol`, as the JIT's last lookup does
-/// (D-455).
-#[cfg(unix)]
-fn process_defines(symbol: &str) -> bool {
-    let Ok(name) = std::ffi::CString::new(symbol) else {
-        return false;
-    };
-    // SAFETY: `name` is a valid NUL-terminated string that outlives the
-    // call, and `RTLD_DEFAULT` is a valid handle; `dlsym` only reads.
-    let address = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-    !address.is_null()
-}
-
-/// Whether the process defines `symbol`: only the runtime's symbols are
-/// known off Unix, as in the JIT.
-#[cfg(not(unix))]
-fn process_defines(_symbol: &str) -> bool {
-    false
 }
 
 /// Copies of `units` with only the functions of reached items and of the
@@ -694,6 +835,10 @@ pub(crate) fn lower(
 /// outside std reads other modules through a recording view, and
 /// [`Lowered::reads`] holds what it read beyond its imports and its front
 /// end's reads (D-955).
+#[expect(
+    clippy::too_many_lines,
+    reason = "each root kind's starts, then lowering, inference and counting in their order"
+)]
 pub(crate) fn lower_scoped(
     front: &Frontend,
     sources: &SourceMap,
@@ -741,10 +886,30 @@ pub(crate) fn lower_scoped(
                 starts.extend(fns.iter().map(|f| Start::Fn(f.def)));
             }
         }
+        Roots::Evaluate(consts) => {
+            for &def in *consts {
+                let c = checked(front, def.module)?
+                    .thir
+                    .consts
+                    .iter()
+                    .find(|c| c.def == def)
+                    .ok_or_else(|| Ice::new(format!("the constant {def:?} has no body")))?;
+                walk_roots.push(Root::Const(c));
+                starts.push(Start::Const(def));
+            }
+        }
     }
     let selected: BTreeSet<DefId> = tests.values().flatten().map(|t| t.def).collect();
     let (reach, code_modules) = reach_in(front, &walk_roots, &starts, &mut tests, scope)?;
-    if !matches!(roots, Roots::AllFunctions) {
+    // The constants' entry thunks: in an evaluation module, and in the
+    // dumps for goldens, which keep D-1175's view. A command's own JIT
+    // runs no constant entry: its constants come from images (D-979).
+    let const_entries = match roots {
+        Roots::Constants | Roots::Evaluate(_) => true,
+        Roots::Main(_) | Roots::Tests(_) => scope == Scope::Reached,
+        Roots::AllFunctions => false,
+    };
+    if const_entries {
         for def in reach.constant_order() {
             entries.push(EntryRequest {
                 kind: EntryKind::Const(def),
@@ -794,9 +959,11 @@ pub(crate) fn lower_scoped(
     }
     // Every unit is lowered before any is counted: the borrow masks come
     // from the whole build (D-779).
-    if mir.borrows() {
-        infer_borrowing(front, &mut units, &logs)?;
-    }
+    let inferred = if mir.borrows() {
+        Some(infer_borrowing(front, &mut units, &logs)?)
+    } else {
+        None
+    };
     let counted: Vec<Result<(), Ice>> = units
         .par_iter_mut()
         .map(|unit| count_lowered_with(unit, &mir))
@@ -805,6 +972,8 @@ pub(crate) fn lower_scoped(
         result?;
     }
     let reads = unit_reads(front, &jobs, &code_modules, &logs)?;
+    // K4b: the facts and masks records and the code keys (D-969).
+    crate::borrowing::write_records(front, &units, &reads, inferred.as_ref(), roots, mir)?;
     Ok(Lowered {
         units,
         reach,
@@ -922,35 +1091,20 @@ fn unit_reads(
 /// and the entries unit included ([`cheby_mir::borrow::apply`]). A
 /// `cheby test` build infers over its tests units too, so its code units
 /// may get other masks than a `cheby run` build's; `cheby run`'s code
-/// never depends on tests (D-779).
+/// never depends on tests (D-779). [`crate::borrowing::infer`] runs the
+/// steps and keeps what the build's records need (D-968, D-969).
 fn infer_borrowing(
     front: &Frontend,
     units: &mut [MirModule],
     logs: &BTreeMap<ModuleId, UnitLogs>,
-) -> Result<(), Ice> {
-    let facts = {
-        let refs: Vec<&MirModule> = units.iter().collect();
-        borrow::collect_facts(&refs)
-    };
-    let found: Vec<Result<borrow::Masks, Ice>> = units
-        .par_iter()
-        .map(|unit| {
-            let log = match unit.unit {
-                UnitKind::Code(module) => logs.get(&module).map(|l| &l.code),
-                _ => None,
-            };
-            unit_masks(front, unit, &facts, log)
-        })
-        .collect();
-    let mut masks = borrow::Masks::new();
-    for result in found {
-        masks.extend(result?);
-    }
-    let applied: Vec<Result<(), Ice>> = units
-        .par_iter_mut()
-        .map(|unit| borrow::apply(unit, &masks))
-        .collect();
-    applied.into_iter().collect()
+) -> Result<crate::borrowing::Inferred, Ice> {
+    crate::borrowing::infer(front, units, &|unit, facts| {
+        let log = match unit.unit {
+            UnitKind::Code(module) => logs.get(&module).map(|l| &l.code),
+            _ => None,
+        };
+        unit_masks(front, unit, facts, log)
+    })
 }
 
 /// [`infer_borrowing`] over `units` alone, recording no reads: the REPL's
@@ -960,7 +1114,7 @@ fn infer_borrowing(
 ///
 /// An [`Ice`] if a unit's module was not checked.
 pub(crate) fn infer_units(front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice> {
-    infer_borrowing(front, units, &BTreeMap::new())
+    infer_borrowing(front, units, &BTreeMap::new()).map(|_| ())
 }
 
 /// The masks [`borrow::infer`] gives `unit` if it is a code unit, read
@@ -1265,6 +1419,7 @@ fn const_infos(
         infos.push(ConstInfo {
             def,
             name: name.as_str().into(),
+            path: format!("{module_path}::{name}").into(),
             name_span,
             seed,
             on_js,
@@ -1302,12 +1457,32 @@ fn jit_options(capture_clif: bool) -> JitOptions {
     }
 }
 
+/// [`compile_with_libraries`] without package libraries, for the tests:
+/// every command's JIT goes through [`compile_with_libraries`].
+#[cfg(test)]
 fn compile_with(
     units: &[MirModule],
     codegen: CodegenOptions,
     options: JitOptions,
 ) -> Result<Jit, JitError> {
+    compile_with_libraries(units, codegen, options, &[])
+}
+
+/// A JIT with `codegen` and `options` that also resolves native symbols in
+/// the package libraries `libraries` (D-941, build order), with `units`
+/// compiled: every JIT a command builds to run a package's code,
+/// constants' included, gets the package's native code this way
+/// ([`Frontend::native_libraries`]).
+fn compile_with_libraries(
+    units: &[MirModule],
+    codegen: CodegenOptions,
+    options: JitOptions,
+    libraries: &[std::sync::Arc<cheby_jit::NativeLibrary>],
+) -> Result<Jit, JitError> {
     let mut jit = Jit::configured(codegen, options)?;
+    for library in libraries {
+        jit.add_library(std::sync::Arc::clone(library))?;
+    }
     jit.compile(units)?;
     Ok(jit)
 }
@@ -1471,6 +1646,16 @@ fn main() {
             memory_limit: Manifest::DEFAULT_MEMORY_LIMIT,
             targets: Targets::ALL,
         };
+        // The evaluation module of these constants (D-978).
+        let defs: Vec<DefId> = infos.iter().map(|i| i.def).collect();
+        let roots = Roots::Evaluate(&defs);
+        let evaluation = lower(
+            &front,
+            &out.sources,
+            &roots,
+            kind_options(&roots, MirOptions::default(), Scope::Whole),
+        )
+        .unwrap();
         let mut texts = Vec::new();
         for order in [
             ["table", "keys", "size"],
@@ -1478,7 +1663,7 @@ fn main() {
             ["size", "keys", "table"],
         ] {
             let mut jit = compile_with(
-                &lowered.units,
+                &evaluation.units,
                 CodegenOptions::default(),
                 JitOptions::from_env(),
             )
@@ -1490,16 +1675,23 @@ fn main() {
                 // SAFETY: an evaluated constant's slot holds its value.
                 unsafe { *jit.const_slot(by_name(name).def).unwrap() }
             };
-            // SAFETY: frozen values that live as long as `jit`.
+            // SAFETY: values their slots own while `jit` lives.
             unsafe {
                 assert_eq!(
                     cheby_runtime::hamt::seed_of(read("table")),
                     Some(by_name("table").seed)
                 );
                 texts.push(cheby_runtime::generic::debug_string(read("keys")));
+                // The wave-6 review's R-1: the results are not frozen, so
+                // releasing them frees them.
+                assert!(!cheby_runtime::consteval::image::is_static(read("table")));
             }
-            // Frozen results left the build's domain.
+            assert!(jit.domain().live_objects() > 0);
+            cheby_consteval::release(&jit, &order).unwrap();
+            // Released results leave nothing in the build's domain, and
+            // their slots are empty.
             assert_eq!(jit.domain().live_objects(), 0);
+            assert_eq!(read("table"), 0);
         }
         assert_eq!(texts[0], texts[1]);
         assert_eq!(texts[0], texts[2]);
@@ -1691,12 +1883,16 @@ fn main() {
             lines[1].starts_with("app::table = map::from_list(["),
             "{consts}"
         );
-        let app = std::fs::read_to_string(dumps.join("mir/app.mir")).unwrap();
+        // `cheby check`'s build is its evaluation module, dumped under
+        // `consteval/` (GAP(const-eval-code)).
+        let module = dumps.join(CONSTEVAL_DIR);
+        let app = std::fs::read_to_string(module.join("mir/app.mir")).unwrap();
         assert!(app.contains("numbers"), "{app}");
-        assert!(dumps.join("mir/std::map.mir").is_file());
-        assert!(dumps.join("mir/entries.mir").is_file());
-        let clif = std::fs::read_to_string(dumps.join("clif.txt")).unwrap();
+        assert!(module.join("mir/std::map.mir").is_file());
+        assert!(module.join("mir/entries.mir").is_file());
+        let clif = std::fs::read_to_string(module.join("clif.txt")).unwrap();
         assert!(clif.contains("function"), "{clif}");
+        assert!(!dumps.join("clif.txt").exists());
         // A second build overwrites the files: the same text.
         let Ok(_) = build_dumping(
             &front,
@@ -1714,6 +1910,166 @@ fn main() {
             std::fs::read_to_string(dumps.join("consts.txt")).unwrap(),
             consts
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The root module's `main` of a package checked by [`front`].
+    fn main_of(front: &Frontend) -> &thir::FnDef {
+        let module = front
+            .local_module(&cheby_package::ModulePath::root("app"))
+            .unwrap();
+        front.main_of(module).unwrap()
+    }
+
+    /// D-978, D-979: `cheby run` evaluates its constants in a module of its
+    /// own, so the program's JIT compiles no constant entry thunk, and the
+    /// values it reads are installed from images: static, with maps built
+    /// with the process seed (D-196).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn const_plain_run_runs_no_thunk_in_the_program_jit() {
+        let dir = package("plainrun", "", FORCING);
+        let (front, out) = front(&dir);
+        let main = main_of(&front);
+        let Ok(built) = build(&front, &out.sources, Roots::Main(main), false).unwrap() else {
+            panic!("the package did not build");
+        };
+        let lowered = lower(
+            &front,
+            &out.sources,
+            &Roots::Main(main),
+            MirOptions::default(),
+        )
+        .unwrap();
+        let infos = const_infos(&front, &out.sources, &lowered.reach).unwrap();
+        assert_eq!(infos.len(), 3);
+        for info in &infos {
+            assert!(
+                built.jit.entry(EntryKind::Const(info.def)).is_err(),
+                "{}",
+                info.name
+            );
+            let slot = built.jit.const_slot(info.def).unwrap();
+            // SAFETY: an installed constant's slot, readable.
+            let word = unsafe { slot.read() };
+            assert_ne!(word, 0, "{}", info.name);
+            // SAFETY: an installed value.
+            let installed = cheby_runtime::abi::is_tagged_int(word)
+                || unsafe { cheby_runtime::consteval::image::is_static(word) };
+            assert!(installed, "{}", info.name);
+        }
+        let table = infos.iter().find(|i| &*i.name == "table").unwrap();
+        // SAFETY: the installed map.
+        let seed = unsafe {
+            cheby_runtime::hamt::seed_of(built.jit.const_slot(table.def).unwrap().read())
+        };
+        assert_eq!(seed, Some(cheby_runtime::generic::process_seed()));
+        assert!(built.jit.entry(EntryKind::Main(main.def)).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// GAP(const-eval-code): the evaluation module of a constant in a
+    /// module that imports `std::list` holds `std::list`'s whole code unit
+    /// (D-966, D-1177), as the program's whole-module build has it and more
+    /// than D-510's reached view, and no unit of it carries a mask: the
+    /// package's and std's code are `plain` (D-978, D-1180).
+    #[test]
+    fn const_plain_evaluation_module_holds_std_list_whole_without_masks() {
+        let dir = package("plainlist", "", FORCING);
+        let (front, out) = front(&dir);
+        let main = main_of(&front);
+        let program = lower(
+            &front,
+            &out.sources,
+            &Roots::Main(main),
+            MirOptions::default(),
+        )
+        .unwrap();
+        let infos = const_infos(&front, &out.sources, &program.reach).unwrap();
+        let defs: Vec<DefId> = infos.iter().map(|i| i.def).collect();
+        let roots = Roots::Evaluate(&defs);
+        let mir = kind_options(&roots, MirOptions::default(), Scope::Whole);
+        assert!(!mir.borrow);
+        let evaluation = lower(&front, &out.sources, &roots, mir).unwrap();
+        let reached = lower_scoped(
+            &front,
+            &out.sources,
+            &Roots::Main(main),
+            MirOptions::default(),
+            Scope::Reached,
+        )
+        .unwrap();
+        let items = |units: &[MirModule]| -> BTreeSet<cheby_mir::FnKey> {
+            units
+                .iter()
+                .filter(|u| matches!(u.unit, UnitKind::Code(_)) && &*u.path == "std::list")
+                .flat_map(|u| u.functions.iter().map(|f| f.key))
+                .collect()
+        };
+        let whole = items(&evaluation.units);
+        assert!(!whole.is_empty(), "no std::list unit");
+        assert_eq!(whole, items(&program.units));
+        assert!(whole.len() > items(&reached.units).len());
+        for unit in &evaluation.units {
+            for function in &unit.functions {
+                assert_eq!(
+                    function.borrow,
+                    borrow::BorrowMask::OWNED,
+                    "{}: {:?}",
+                    unit.path,
+                    function.key
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// D-978: `cheby check` and `cheby run` evaluate the same functions:
+    /// the evaluation modules' MIR and CLIF dumps are the same files with
+    /// the same text when `main` reaches every constant.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn const_plain_check_and_run_evaluate_the_same_functions() {
+        let dir = package("plainsame", "", FORCING);
+        let (front, out) = front(&dir);
+        let main = main_of(&front);
+        let mut texts = Vec::new();
+        for (name, roots) in [("check", Roots::Constants), ("run", Roots::Main(main))] {
+            let dumps = dir.join(name);
+            let Ok(_) = build_dumping(
+                &front,
+                &out.sources,
+                &roots,
+                CodegenOptions::default(),
+                MirOptions::default(),
+                Some(&dumps),
+                false,
+            )
+            .unwrap() else {
+                panic!("the package did not build");
+            };
+            let module = dumps.join(CONSTEVAL_DIR);
+            let mut mir: Vec<(String, String)> = std::fs::read_dir(module.join("mir"))
+                .unwrap()
+                .map(|e| {
+                    let path = e.unwrap().path();
+                    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                    (name, std::fs::read_to_string(&path).unwrap())
+                })
+                .collect();
+            mir.sort();
+            let clif = std::fs::read_to_string(module.join("clif.txt")).unwrap();
+            assert!(clif.contains("function"), "{clif}");
+            let consts = std::fs::read_to_string(dumps.join("consts.txt")).unwrap();
+            texts.push((mir, clif, consts));
+        }
+        assert_eq!(texts[0], texts[1]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

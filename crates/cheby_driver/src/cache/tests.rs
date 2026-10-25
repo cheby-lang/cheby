@@ -178,13 +178,15 @@ fn cache_key_kind_and_build_id_enter_the_key() {
         KeyKind::Reads,
         KeyKind::LReads,
         KeyKind::CObj,
+        KeyKind::NativeLib,
         KeyKind::Index,
     ];
     let tags: Vec<_> = kinds.iter().map(|k| k.tag()).collect();
     assert_eq!(
         tags,
         [
-            "front", "facts", "masks", "code", "tests", "const", "reads", "lreads", "cobj", "index"
+            "front", "facts", "masks", "code", "tests", "const", "reads", "lreads", "cobj", "nlib",
+            "index"
         ]
     );
     let mut keys: Vec<_> = kinds
@@ -811,6 +813,7 @@ fn cache_trim_deletes_entries_unused_for_five_days() {
             records: 1,
             hints: 1,
             temporary: 1,
+            libraries: 0,
             kept: 1,
         }
     );

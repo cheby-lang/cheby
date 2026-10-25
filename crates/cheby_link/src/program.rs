@@ -13,7 +13,9 @@
 //!   `cheby_runtime::image::ProgramImage` (that module's documentation is
 //!   the contract), with the table of module pointers right after its 104
 //!   bytes, the table's pointer a relocation to `cb$image` itself with
-//!   that offset as addend, as module records point at their own tables;
+//!   that offset as addend, as module records point at their own tables,
+//!   then the constants table's bytes ([`ProgramSpec::constants`], D-979),
+//!   pointed at the same way;
 //! - the C `int main(int argc, char **argv)`, the program's only exported
 //!   symbol (D-917), which returns `cheby_rt_main(argc, argv, &cb$image)`
 //!   (D-925). It reaches `cheby_rt_main` through a local import word
@@ -75,8 +77,12 @@ const ENTRY: u32 = 24;
 const TRAMP0: u32 = 32;
 const MAIN_STACK: usize = 72;
 const FIBER_STACK: usize = 80;
-/// The constants table at 88 stays count 0 and pointer 0.
-const _CONSTANTS: usize = 88;
+/// The constants table (D-979): its count at 88, its pointer at 96, a
+/// relocation to `cb$image` itself whose addend is where the table's bytes
+/// start, right after the table of module records. Count 0 and pointer 0
+/// for a program without constants.
+const CONSTANTS_COUNT: usize = 88;
+const CONSTANTS_PTR: u32 = 96;
 
 const _: () = assert!(std::mem::size_of::<ProgramImage>() == 104);
 
@@ -106,6 +112,10 @@ pub struct ProgramSpec<'a> {
     /// without repeats; empty for a program without one, whose object is
     /// then the same bytes as before stubs existed.
     pub stubs: &'a [String],
+    /// D-979: the encoded constant images (`encode_table`), empty for a
+    /// program without constants, whose object is then the same bytes as
+    /// before. They follow the table of module records inside `cb$image`.
+    pub constants: &'a [u8],
 }
 
 /// The program object for `isa` (D-915): the entries unit's record
@@ -257,11 +267,22 @@ fn define_image(
 ) -> Result<(), LinkError> {
     let count = u32::try_from(records.len())
         .map_err(|_| LinkError::Object("too many module records".into()))?;
-    let size = count
+    let constants_at = count
         .checked_mul(8)
         .and_then(|table| table.checked_add(IMAGE_SIZE))
         .ok_or_else(|| LinkError::Object("too many module records".into()))?;
+    let constants_len = u32::try_from(spec.constants.len()).map_err(|_| too_large())?;
+    let size = constants_at
+        .checked_add(constants_len)
+        .ok_or_else(too_large)?;
     let mut bytes = vec![0_u8; usize::try_from(size).map_err(|_| too_large())?];
+    let constants_start = usize::try_from(constants_at).map_err(|_| too_large())?;
+    put(&mut bytes, constants_start, spec.constants)?;
+    put(
+        &mut bytes,
+        CONSTANTS_COUNT,
+        &u64::from(constants_len).to_le_bytes(),
+    )?;
     put(&mut bytes, VERSION, &abi::IMAGE_VERSION.to_le_bytes())?;
     put(
         &mut bytes,
@@ -274,9 +295,14 @@ fn define_image(
     let mut desc = DataDescription::new();
     desc.define(bytes.into_boxed_slice());
     desc.set_align(8);
-    if count > 0 {
+    if count > 0 || constants_len > 0 {
         let this = desc.import_global_value(ModuleRelocTarget::from(FuncOrDataId::Data(image)));
-        desc.write_data_addr(MODULES_PTR, this, i64::from(IMAGE_SIZE));
+        if count > 0 {
+            desc.write_data_addr(MODULES_PTR, this, i64::from(IMAGE_SIZE));
+        }
+        if constants_len > 0 {
+            desc.write_data_addr(CONSTANTS_PTR, this, i64::from(constants_at));
+        }
     }
     let entry = defined_function(module, spec.entry).ok_or_else(|| {
         LinkError::Object(format!("the entry thunk `{}` is not defined", spec.entry))

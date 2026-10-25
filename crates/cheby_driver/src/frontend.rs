@@ -109,6 +109,15 @@ pub(crate) struct Frontend {
     /// warm `cheby run` or `cheby test` found an error and skipped checking
     /// its cache hits again, so nothing may lower it ([`run_inner`]).
     pub complete: bool,
+    /// The local package's native code (D-940, D-941): its C objects and
+    /// its loaded shared library, prepared by [`run_cached`] in `Build`
+    /// mode once the package checks; empty in `Check` mode, which compiles
+    /// no C (D-532), and for a package without `[native]`.
+    pub native: crate::native::PackageNative,
+    /// Where borrowing inference writes its records and logs its code
+    /// keys (K4b, D-969): the cache's store and lookup log and each
+    /// package module's front identity; `None` without a cache.
+    pub records: Option<crate::borrowing::RecordSink>,
 }
 
 /// An `@external(native, "symbol")` binding of a symbol.
@@ -137,6 +146,32 @@ pub(crate) fn native_bindings(
         out.push((symbol.into(), NativeBinding { sig, span }));
     }
     out
+}
+
+/// D-944: E0055 for each of `bindings`, a module's outside std, that names
+/// a symbol the runtime exports (`cheby_runtime::symbols()`), which only
+/// the standard library may bind; returns the other bindings, so a
+/// reserved one never meets std's binding in E0054. Resolution reports
+/// the reserved prefixes itself; the driver passes the runtime's names, so
+/// `cheby_resolve` does not depend on the runtime.
+pub(crate) fn reserve_exports(
+    bindings: Vec<(Box<str>, NativeBinding)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<(Box<str>, NativeBinding)> {
+    let runtime = cheby_runtime::symbols();
+    let exported = |symbol: &str| runtime.iter().any(|(name, _)| *name == symbol);
+    bindings
+        .into_iter()
+        .filter(|(symbol, binding)| {
+            match cheby_resolve::runtime_export_reserved(symbol, binding.span, &exported) {
+                Some(diagnostic) => {
+                    diagnostics.push(diagnostic);
+                    false
+                }
+                None => true,
+            }
+        })
+        .collect()
 }
 
 /// Records one module's native bindings (from [`native_bindings`]),
@@ -213,6 +248,13 @@ impl Frontend {
             .and_then(|n| self.source_hashes.get(n))
             .copied()
             .flatten()
+    }
+
+    /// The package libraries a JIT of this build resolves native symbols
+    /// in, in build order (D-941): the local package's, if it has native
+    /// code.
+    pub fn native_libraries(&self) -> Vec<Arc<cheby_jit::NativeLibrary>> {
+        self.native.libraries()
     }
 
     /// The local module at `path`, if the package has it.
@@ -538,11 +580,11 @@ pub(crate) fn check_extra_module(
     let (iface, iface_diags) = build_interface(&types)?;
     diags.extend(iface_diags);
     let mut natives = front.natives.clone();
-    bind_natives(
+    let bindings = reserve_exports(
         native_bindings(&resolved, &iface, &front.globals),
-        &mut natives,
         &mut diags,
     );
+    bind_natives(bindings, &mut natives, &mut diags);
     let (thir, body_diags) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
     diags.extend(body_diags);
     if diags.iter().any(Diagnostic::is_error) {
@@ -2157,12 +2199,27 @@ pub(crate) fn run_cached(
     diagnostics: &mut Vec<Diagnostic>,
     cache: Option<CacheUse<'_>>,
 ) -> Result<Option<Frontend>, Error> {
-    let front = match run_inner(package, mode, sources, diagnostics, cache) {
+    let native = package
+        .manifest
+        .native
+        .clone()
+        .map(|table| (package.root.clone(), package.manifest.name.clone(), table));
+    let mut front = match run_inner(package, mode, sources, diagnostics, cache) {
         Ok(front) => front,
         Err(Stop::Restart) => return Ok(None),
         Err(Stop::Ice(ice)) => return Err(ice.into()),
     };
     dump_interfaces(&front)?;
+    // D-941: the commands that run or build code compile the package's C
+    // and load its library once the package checks; `cheby check` does
+    // neither (D-532).
+    if mode != Mode::Check
+        && front.complete
+        && !diagnostics.iter().any(Diagnostic::is_error)
+        && let Some((root, name, table)) = native
+    {
+        front.native = crate::native::prepare(&root, &name, &table, cache.map(|use_| use_.cache))?;
+    }
     Ok(Some(front))
 }
 
@@ -2649,15 +2706,20 @@ fn run_inner(
         set = fresh_set;
     }
 
-    // The diagnostics in build order, with E0054 over every module's
-    // native bindings, a hit's from its record (D-965).
+    // The diagnostics in build order, with E0055 for the runtime's names
+    // bound outside std (D-944) and E0054 over every module's native
+    // bindings, a hit's from its record (D-965).
     diagnostics.extend(late_syntax);
     let mut natives = BTreeMap::new();
     for &id in &built {
         let at = index(id)?;
         let (early, late) = printed.get_mut(at).map(std::mem::take).unwrap_or_default();
         diagnostics.extend(early);
-        bind_natives(get(&module_natives, id)?.clone(), &mut natives, diagnostics);
+        let mut bindings = get(&module_natives, id)?.clone();
+        if modules.try_get(id)?.package != PackageId::STD {
+            bindings = reserve_exports(bindings, diagnostics);
+        }
+        bind_natives(bindings, &mut natives, diagnostics);
         diagnostics.extend(late);
     }
     // The whole-package pass (W0005, D-516) over every module's use
@@ -2688,6 +2750,7 @@ fn run_inner(
                 .unwrap_or(false)
         })
         .collect();
+    let records = cache.map(|use_| crate::borrowing::RecordSink::new(use_.cache, &entries));
     if let Some(use_) = cache {
         finish_cache(
             use_,
@@ -2718,6 +2781,8 @@ fn run_inner(
         module_natives,
         source_hashes,
         complete: true,
+        native: crate::native::PackageNative::default(),
+        records,
     })
 }
 

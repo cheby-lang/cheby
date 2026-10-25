@@ -31,9 +31,14 @@
 //! - [`find_out_of_js_range`]: the JS range check of a result (E0078,
 //!   D-540), walking the value by its type.
 //!
-//! Freezing results in place is [`crate::alloc::freeze`] (D-539).
+//! Freezing results in place is [`crate::alloc::freeze`] (D-539); it
+//! stays inside evaluation. Results reach running code only as images
+//! ([`image`], D-979): the host serializes them and installs them before
+//! `main`, fresh results included.
 //!
 //! [`EntryConfig::consts`]: crate::entry::EntryConfig::consts
+
+pub mod image;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hasher as _;

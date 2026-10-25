@@ -1,4 +1,4 @@
-// @decisions: D-475
+// @decisions: D-475, D-944
 > @external(native, "abs")
 . fn magnitude(n: I32) -> I32
 > magnitude(-5)
@@ -32,21 +32,16 @@ error[E0042]: cannot find value `magnitude_wide` in this scope
 > magnitude(-7)
 7 : I32
 > @external(native, "cheby_io_println")
-. fn say(n: Int)
-error[E0054]: the native symbol `cheby_io_println` is bound with two different C signatures
-   --> <repl:8>:1:19
-    |
-1   | @external(native, "cheby_io_println")
-    |                   ^^^^^^^^^^^^^^^^^^ bound here with another signature
-    |
-   ::: std/io.cheby:105:19
-    |
-105 | @external(native, "cheby_io_println")
-    |                   ------------------ first bound here
-    |
-    = note: every `@external` of one symbol must give it the same C signature; in the REPL, only the session's current definitions count
-
-> @external(native, "cheby_io_println")
 . fn say(text: String)
-> say("the std binding agrees")
-the std binding agrees
+error[E0055]: the native symbol `cheby_io_println` is reserved for the toolchain
+ --> <repl:8>:1:19
+  |
+1 | @external(native, "cheby_io_println")
+  |                   ^^^^^^^^^^^^^^^^^^
+  |
+  = note: the Cheby runtime exports this symbol, so only the standard library may bind it
+
+> @external(native, "labs")
+. fn say(n: Int) -> Int
+> say(-3)
+3 : Int

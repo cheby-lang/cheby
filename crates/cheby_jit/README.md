@@ -20,6 +20,7 @@ The JIT: a Cranelift `JITModule` that compiles batches of MIR units, the runtime
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lib.rs`              | `Jit`, `Entry`, the symbol registry, layout registration, slots and session names                                                                                                                 |
 | `memory.rs`           | The address-space reservation, its segments and their protection                                                                                                                                  |
+| `native.rs`           | `NativeLibrary` (a package's shared library, `dlopen`ed and never closed) and D-941's resolver: the runtime, the package libraries in order, the process; library generations of a REPL `:reload` |
 | `tests/`              | End-to-end tests that compile and run small programs: scalars, objects, control, closures, literals, reuse, borrowing, unwinding, large frames, `@blocking`, `@std_context` and REPL redefinition |
 | `start_root_tests.rs` | Running entries as root fibers                                                                                                                                                                    |
 

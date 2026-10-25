@@ -1,0 +1,4 @@
+q=a%26b%3Dc&lang=%C3%A9
+Ok("a/b c")
+Response { status: 200, headers: [("content-type", "text/plain; charset=utf-8"), ("set-cookie", "a=1"), ("set-cookie", "b=2")], body: "hi" }
+the same at run time: True

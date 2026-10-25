@@ -33,7 +33,11 @@
 //! | 32     | `tramp0`       | function pointer or 0        | `cb$tramp$0` (D-526), then `tramp1` at 40, `tramp2` at 48, `tramp3` at 56, `tramp4` at 64    |
 //! | 72     | `main_stack`   | `u64`                        | the root fiber's stack in bytes: `[runtime] main-stack` after D-660's default and rounding    |
 //! | 80     | `fiber_stack`  | `u64`                        | the default stack of other fibers in bytes: `[runtime] fiber-stack` likewise (D-660, D-927)  |
-//! | 88     | `constants`    | table of bytes               | the constant image; empty until constants reach executables (its format is added then)       |
+//! | 88     | `constants`    | table of bytes               | the constants table: the program's constant images (D-979), empty for a program without any |
+//!
+//! The constants table is `consteval::image::encode_table`'s bytes: every
+//! image of the constants the program reaches, in D-535's order (its format
+//! is documented in [`crate::consteval::image`]).
 //!
 //! # `cb$mod$<path>`: [`ModuleRecord`], 112 bytes
 //!
@@ -45,7 +49,16 @@
 //! | 48     | `hooks`       | [`HookEntry`], 32 bytes each        | the `@std_hooks` of the module's types (D-482, D-585)                       |
 //! | 64     | `free_shapes` | `u64` words                         | the free-shape word of each user layout, in the order of `types` (D-907)    |
 //! | 80     | `functions`   | [`FunctionEntry`], 32 bytes each    | the call-site table (D-856, D-867)                                          |
-//! | 96     | `constants`   | `*mut u64` slot pointers            | the module's constant slots `cb$const$…`                                     |
+//! | 96     | `constants`   | [`ConstEntry`], 16 bytes each       | the module's constants with their slots `cb$const$…`, `DefIndex` order      |
+//!
+//! [`ConstEntry`] (16 bytes, GAP(const-image-slots)): `path` (`u32`
+//! string, the constant's path `module::name`, which names its image) at
+//! 0, `pad` (`u32`) at 4, `slot` (pointer to the writable slot
+//! `cb$const$…`) at 8. A record lists every constant its unit initializes
+//! (a unit compiled alone defines their slots); a JIT batch's records list
+//! none, since a JIT host finds slots by constant (`Jit::const_slot`).
+//! Version 2 of the layout gave the table these entries; version 1 held
+//! bare slot pointers and was always empty.
 //!
 //! [`TypeEntry`] (32 bytes): `name` (`u32` string, the type's name as debug
 //! printing shows it) at 0, `pad` (`u32`) at 4, `type_key` (`u64`, D-559)
@@ -108,18 +121,40 @@
 //! constructor of each hooked type (D-482, D-585), and the call-site
 //! ranges under the caller's code owner (D-867).
 //!
+//! [`register_records`] also checks every record's constants (a path
+//! string and an aligned, non-null slot each) and registers nothing for
+//! them: slots are filled by installation.
+//!
+//! # Installing
+//!
 //! [`install`] registers the builtin list and map kinds and then the
-//! image's records under one code owner that is never unregistered. The
-//! constants (K5a) are not installed yet: a non-empty constant image or
-//! constant slot table is refused with [`ImageError::NotYet`], before
-//! anything of the image is registered.
+//! image's records under one code owner that is never unregistered. Then,
+//! when the constants table is not empty, it installs the constants
+//! (D-979) with the one routine every host calls,
+//! [`consteval::image::install`](crate::consteval::image::install): the
+//! table's images, in order, each root written into the slot that the
+//! records' constants tables give for its path (GAP(const-image-slots)),
+//! each user constructor's type key resolved to the layout id the records
+//! registered ([`type_layouts`], D-920), on an entry with the image's
+//! trampolines, since building a map may hash a key with `@std_hooks`.
+//! All before any worker of the program starts.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::mem::{offset_of, size_of};
 use std::ptr;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::abi::{self, LayoutId, Word};
-use crate::entry::{Callbacks, EntryFn, Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
+use crate::alloc::Domain;
+use crate::consteval::{
+    self,
+    image::{ConstImageError, TypeLayouts},
+};
+use crate::entry::{
+    self, Callbacks, EntryConfig, EntryFn, EntryMode, EntryOutcome, Tramp0, Tramp1, Tramp2, Tramp3,
+    Tramp4,
+};
 use crate::layout::{self, FieldKind, LayoutInfo};
 use crate::locate::{self, CallSiteDesc, CodeRangeDesc};
 
@@ -380,7 +415,7 @@ pub struct ModuleRecord {
     hooks: Table<HookEntry>,
     free_shapes: Table<u64>,
     functions: Table<FunctionEntry>,
-    constants: Table<*mut u64>,
+    constants: Table<ConstEntry>,
 }
 
 /// The parts of a [`ModuleRecord`] built in Rust ([`ModuleRecord::new`]).
@@ -398,8 +433,8 @@ pub struct ModuleParts {
     pub free_shapes: Table<u64>,
     /// The call-site table.
     pub functions: Table<FunctionEntry>,
-    /// The constant slots.
-    pub constants: Table<*mut u64>,
+    /// The constants with their slots.
+    pub constants: Table<ConstEntry>,
 }
 
 impl ModuleRecord {
@@ -520,6 +555,18 @@ pub struct FunctionEntry {
     pub sites: Table<CallSiteEntry>,
 }
 
+/// A constant of a module record and its slot (GAP(const-image-slots)).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ConstEntry {
+    /// The constant's path, `module::name` (a string).
+    pub path: u32,
+    /// 0.
+    pub pad: u32,
+    /// The constant's writable slot `cb$const$…`.
+    pub slot: *mut u64,
+}
+
 /// A call site: D-867's 16-byte record.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -600,6 +647,10 @@ const _: () = {
     assert!(offset_of!(FunctionEntry, flags) == 12);
     assert!(offset_of!(FunctionEntry, sites) == 16);
 
+    assert!(size_of::<ConstEntry>() == 16);
+    assert!(offset_of!(ConstEntry, path) == 0);
+    assert!(offset_of!(ConstEntry, slot) == 8);
+
     assert!(size_of::<CallSiteEntry>() == 16);
     assert!(offset_of!(CallSiteEntry, ret_offset) == 0);
     assert!(offset_of!(CallSiteEntry, path) == 4);
@@ -624,10 +675,10 @@ pub enum ImageError {
         /// What is malformed.
         what: &'static str,
     },
-    /// The image holds a table this runtime does not install yet: a
-    /// constant image or constant slots, which constants reaching
-    /// executables add (K5a).
-    NotYet(&'static str),
+    /// The constants table cannot be installed (D-979).
+    Constants(ConstImageError),
+    /// The entry that installs the constants failed: its message.
+    Entry(String),
 }
 
 impl fmt::Display for ImageError {
@@ -647,10 +698,10 @@ impl fmt::Display for ImageError {
             Self::Malformed { module: None, what } => {
                 write!(f, "the program image is malformed: {what}")
             }
-            Self::NotYet(what) => write!(
-                f,
-                "the program image holds {what}, which this runtime cannot install yet"
-            ),
+            Self::Constants(error) => write!(f, "the program's constants: {error}"),
+            Self::Entry(message) => {
+                write!(f, "installing the program's constants failed: {message}")
+            }
         }
     }
 }
@@ -670,23 +721,30 @@ impl ImageError {
 /// Installs `image` (module documentation): registers the builtin list
 /// and map kinds, then the image's module records in build order with
 /// [`register_records`], under a fresh code owner that is never
-/// unregistered (D-867). Runs before any worker of the program starts.
+/// unregistered (D-867), then the constants table's images into the slots
+/// the records name (D-979, D-535). Runs before any worker of the program
+/// starts.
 ///
 /// # Errors
 ///
-/// [`ImageError::NotYet`] for a non-empty constant image or constant slot
-/// table (K5a), and [`ImageError::Malformed`] as [`register_records`]
-/// says; nothing of the image is registered and no word is written then,
-/// except the builtin kinds, which every process registers anyway. The
-/// version is not checked here (`cheby_rt_main` checks it in debug
-/// builds, D-925).
+/// [`ImageError::Malformed`] as [`register_records`] says, or for a
+/// constants table that is not one; nothing of the image is registered and
+/// no word is written then, except the builtin kinds, which every process
+/// registers anyway. [`ImageError::Constants`] when an image cannot be
+/// installed (checked whole before any slot is written), and
+/// [`ImageError::Entry`] when its entry fails. The version is not checked
+/// here (`cheby_rt_main` checks it in debug builds, D-925).
 pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     crate::list::register_kinds();
     crate::hamt::register_kinds();
     let modules = image.modules()?;
-    if !image.constants.is_empty() {
-        return Err(ImageError::NotYet("a constant image"));
-    }
+    let table = image.constants.items().ok_or(ImageError::Malformed {
+        module: None,
+        what: "the constants table",
+    })?;
+    // The headers are checked here, before anything is registered; the
+    // images are read in place from the table when installed, never copied.
+    let images = consteval::image::table_len(table).map_err(ImageError::Constants)?;
     // One owner for the whole program, never unregistered: an
     // executable's code lives as long as the process (D-867).
     //
@@ -696,7 +754,187 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     // function values and code stay valid, and its layout words and
     // constructor statics are writable data nothing else writes while the
     // image is installed, before any worker starts (D-920).
-    unsafe { register_records(&modules, locate::new_code_owner()) }
+    unsafe { register_records(&modules, locate::new_code_owner()) }?;
+    if images == 0 {
+        return Ok(());
+    }
+    let mut slots: HashMap<String, usize> = HashMap::new();
+    for (index, record) in modules.iter().enumerate() {
+        for (path, slot) in record_constants(index, record)? {
+            slots.insert(path, slot.expose_provenance());
+        }
+    }
+    // SAFETY: the records were registered just above, so their layout
+    // words hold their ids; their statics live as long as the image.
+    let types = unsafe { type_layouts(&modules) }?;
+    let config = EntryConfig {
+        callbacks: image.callbacks(),
+        unwind_edges: image.unwind_edges(),
+        domain: Domain::new(),
+        ..EntryConfig::new(EntryMode::Run)
+    };
+    // SAFETY: the image's slots are writable data no code has read yet,
+    // the layouts and statics are the records' registered ones, the
+    // trampolines are the image's, valid for the process's life, and the
+    // table outlives this call, as `ProgramImage::new`'s caller
+    // guarantees.
+    unsafe { install_constants(&config, table, slots, types) }
+}
+
+/// Installs the images of the `constants` table `table` on an entry of
+/// `config`, reading them in place, finding each slot in `slots` by path,
+/// with `types`' layouts (D-979).
+///
+/// # Safety
+///
+/// As [`consteval::image::install`]: every slot of `slots` is a writable
+/// constant slot no code reads yet, and `types` names registered layouts
+/// and live statics; `config`'s trampolines are valid during the call,
+/// and `table` stays valid and unchanged until it returns.
+unsafe fn install_constants(
+    config: &EntryConfig,
+    table: &[u8],
+    slots: HashMap<String, usize>,
+    types: TypeLayouts,
+) -> Result<(), ImageError> {
+    let result: Arc<Mutex<Option<Result<(), ConstImageError>>>> = Arc::default();
+    let out = Arc::clone(&result);
+    // The entry's task must be `'static`: it gets the table's address and
+    // length, and reads it in place while this call waits for the entry.
+    let (address, len) = (table.as_ptr().expose_provenance(), table.len());
+    let task = move || {
+        let mut slot_of = |path: &str| {
+            slots
+                .get(path)
+                .map(|&address| ptr::with_exposed_provenance_mut::<u64>(address))
+        };
+        // SAFETY: the caller keeps `table` valid and unchanged until this
+        // function returns, and `run_task` returns only once the task has
+        // ended (an entry that ended the program never comes back to the
+        // table); `address` and `len` are its pointer and length.
+        let table =
+            unsafe { std::slice::from_raw_parts(ptr::with_exposed_provenance::<u8>(address), len) };
+        // SAFETY: forwarded from the caller.
+        let installed = unsafe { consteval::image::install_table(table, &mut slot_of, &types) };
+        *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(installed);
+        0
+    };
+    // SAFETY: forwarded from the caller: the trampolines stay valid while
+    // the entry runs.
+    match unsafe { entry::run_task(config, task) } {
+        Ok(EntryOutcome::Returned(_)) => {
+            match result.lock().unwrap_or_else(PoisonError::into_inner).take() {
+                Some(installed) => installed.map_err(ImageError::Constants),
+                None => Err(ImageError::Entry("it returned no result".to_owned())),
+            }
+        }
+        Ok(EntryOutcome::Panicked(report)) => Err(ImageError::Entry(report.message)),
+        Ok(EntryOutcome::Exited(status)) => {
+            Err(ImageError::Entry(format!("it ended with status {status}")))
+        }
+        Ok(EntryOutcome::Deadlocked(_)) => Err(ImageError::Entry("it deadlocked".to_owned())),
+        Err(error) => Err(ImageError::Entry(error.to_string())),
+    }
+}
+
+/// The constants of record `index` with their slots, checked: a path
+/// string and an aligned, non-null slot each.
+fn record_constants(
+    index: usize,
+    record: &ModuleRecord,
+) -> Result<Vec<(String, *mut u64)>, ImageError> {
+    let malformed = |what| ImageError::malformed(index, what);
+    let strings = record
+        .strings
+        .items()
+        .ok_or(malformed("the string table"))?;
+    let entries = record
+        .constants
+        .items()
+        .ok_or(malformed("the constants table"))?;
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let path = string(strings, entry.path).ok_or(malformed("a constant's path"))?;
+        if entry.slot.is_null() || !entry.slot.is_aligned() {
+            return Err(malformed("a constant without its slot"));
+        }
+        out.push((path.to_owned(), entry.slot));
+    }
+    Ok(out)
+}
+
+/// The user layouts `records` registered, by type key (D-920, D-559):
+/// each constructor's layout id, read from its layout word's header, and
+/// its constructor static. A later record's type replaces an earlier
+/// one's with the same key (a new REPL generation, D-1169).
+///
+/// # Errors
+///
+/// [`ImageError::Malformed`] for a record whose tables are not what the
+/// module documentation says.
+///
+/// # Safety
+///
+/// Every record was registered ([`register_records`]), so its layout
+/// words hold their ids, and its words and statics are live.
+pub unsafe fn type_layouts(records: &[&ModuleRecord]) -> Result<TypeLayouts, ImageError> {
+    let mut out = TypeLayouts::new();
+    for (index, record) in records.iter().enumerate() {
+        let malformed = |what| ImageError::malformed(index, what);
+        let types = record.types.items().ok_or(malformed("the type table"))?;
+        for ty in types {
+            let ctors = ty
+                .ctors
+                .items()
+                .ok_or(malformed("a type's constructor table"))?;
+            let mut layouts = Vec::with_capacity(ctors.len());
+            for ctor in ctors {
+                if ctor.layout_word.is_null() || !ctor.layout_word.is_aligned() {
+                    return Err(malformed("a constructor without a layout word"));
+                }
+                // SAFETY: a registered layout word, live and aligned
+                // (checked), written before this call.
+                let header = unsafe { ctor.layout_word.read() };
+                let static_word = if ctor.ctor_static.is_null() {
+                    0
+                } else {
+                    u64::try_from(ctor.ctor_static.expose_provenance())
+                        .map_err(|_| malformed("a constructor static's address"))?
+                };
+                layouts.push((abi::header_layout(header), static_word));
+            }
+            out.insert(ty.type_key, layouts);
+        }
+    }
+    Ok(out)
+}
+
+/// [`type_layouts`] of the records at `addresses`: a JIT's
+/// (`Jit::module_records`), whose addresses it keeps.
+///
+/// # Errors
+///
+/// As [`type_layouts`], and [`ImageError::Malformed`] for a null or
+/// misaligned address.
+///
+/// # Safety
+///
+/// Every address is that of a registered [`ModuleRecord`] that stays live
+/// during the call, as [`type_layouts`] requires.
+pub unsafe fn type_layouts_at(addresses: &[usize]) -> Result<TypeLayouts, ImageError> {
+    let mut records: Vec<&ModuleRecord> = Vec::with_capacity(addresses.len());
+    for (index, &address) in addresses.iter().enumerate() {
+        let pointer = ptr::with_exposed_provenance::<ModuleRecord>(address);
+        if !pointer.is_aligned() {
+            return Err(ImageError::malformed(index, "a misaligned module record"));
+        }
+        // SAFETY: the caller's contract: a live, registered record.
+        let record = unsafe { pointer.as_ref() }
+            .ok_or(ImageError::malformed(index, "a null module record"))?;
+        records.push(record);
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { type_layouts(&records) }
 }
 
 /// Registers module records (D-919, D-920, D-1163): checks every record
@@ -717,10 +955,10 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
 /// string, reference or word that is not what the module documentation
 /// says, a free-shape word that is not the one registration derives
 /// (D-1167), or an external type with a drop function,
-/// which no host passes until user drop functions are registered (D-703);
-/// [`ImageError::NotYet`] for a non-empty constant slot table (K5a). The
-/// one failure after registration has begun is a full layout table (2^24
-/// ids), also [`ImageError::Malformed`].
+/// which no host passes until user drop functions are registered (D-703),
+/// or a constant without a path or a slot. The one failure after
+/// registration has begun is a full layout table (2^24 ids), also
+/// [`ImageError::Malformed`].
 ///
 /// # Safety
 ///
@@ -735,9 +973,8 @@ pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<
     let mut checked: Vec<CheckedRecord> = Vec::with_capacity(records.len());
     let mut ranges: Vec<CodeRangeDesc> = Vec::new();
     for (index, record) in records.iter().enumerate() {
-        if !record.constants.is_empty() {
-            return Err(ImageError::NotYet("constant slots"));
-        }
+        // Slots are filled by installation (D-979); only checked here.
+        record_constants(index, record)?;
         let types = user_types(index, record)?;
         check_free_shapes(index, record, &types)?;
         let externals = external_types(index, record)?;

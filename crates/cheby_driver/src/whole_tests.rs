@@ -648,6 +648,8 @@ fn unreached_build_links_and_hides_the_stub() {
     cheby_link::archive::check_runtime_id(&archive).unwrap();
     cheby_link::link::link(&cheby_link::link::LinkJob {
         objects: &built.objects,
+        c_objects: &[],
+        libraries: &[],
         archive: &archive,
         output: &exe,
     })

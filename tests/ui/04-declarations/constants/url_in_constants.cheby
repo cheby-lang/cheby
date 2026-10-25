@@ -1,0 +1,34 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-1069, D-1052, D-991
+//! `std::url` is written in Cheby over no kernel, and so are `std::http`'s
+//! builders, so constants are computed with them at compile time, and each
+//! prints as the same call does when the program runs (§4.5).
+
+import std::http
+import std::io
+import std::url
+
+const query: String = url::encode_query([("q", "a&b=c"), ("lang", "é")])
+
+const segment: Result<String, Nil> = url::decode_segment("a%2Fb%20c")
+
+const cookies: http::Response =
+  http::text(200, "hi")
+  |> http::add_header(_, "Set-Cookie", "a=1")
+  |> http::add_header(_, "set-cookie", "b=2")
+
+fn main() {
+  io::println(query)
+  io::println("{segment:?}")
+  io::println("{cookies:?}")
+  let pairs = [("q", "a&b=c"), ("lang", "é")]
+  let response =
+    http::text(200, "hi")
+    |> http::add_header(_, "Set-Cookie", "a=1")
+    |> http::add_header(_, "set-cookie", "b=2")
+  let same = query == url::encode_query(pairs)
+    && segment == url::decode_segment("a%2Fb%20c")
+    && cookies == response
+  io::println("the same at run time: {same}")
+}

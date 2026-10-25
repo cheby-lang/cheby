@@ -31,7 +31,8 @@ use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
 use cheby_iface::DefId;
 
 use crate::borrow::{
-    BorrowMask, BuildFacts, IfaceEligibility, Masks, collect_facts, infer, infer_build,
+    BorrowMask, BuildFacts, IfaceEligibility, Masks, UnitFacts, collect_facts, infer, infer_build,
+    unit_facts,
 };
 use crate::lower::{lower_items_split, lower_tests_split};
 use crate::{
@@ -51,6 +52,22 @@ pub(crate) struct Lowered {
     /// every function that borrows something, by its path (`app::sum`).
     /// Empty for the `_uncounted` helpers.
     pub masks: BTreeMap<String, BorrowMask>,
+    /// The `_inferred` helpers' facts (D-968, D-969); `None` otherwise.
+    pub facts: Option<FactsCheck>,
+}
+
+/// The borrowing facts of an `_inferred` build, collected two ways.
+pub(crate) struct FactsCheck {
+    /// Each unit's own facts, by name, in unit order (the entries unit
+    /// last).
+    pub parts: Vec<UnitFacts>,
+    /// [`BuildFacts::union`] of `parts`.
+    pub union: BuildFacts,
+    /// [`collect_facts`] over every unit.
+    pub collected: BuildFacts,
+    /// [`BuildFacts::about_module`] of `union` for each code unit's module,
+    /// by module path.
+    pub about: BTreeMap<String, Vec<u8>>,
 }
 
 /// What the back end of a test build does after lowering each unit.
@@ -501,7 +518,7 @@ fn lower_package_with(
             package, &modules, &checked, &order, &set, &globals, &sources, with_tests, mode,
         )
     };
-    let (units, masks) = match back_end_thread {
+    let (units, masks, facts) = match back_end_thread {
         None => back_end(),
         Some((stack, setup)) => std::thread::scope(|scope| {
             std::thread::Builder::new()
@@ -516,7 +533,11 @@ fn lower_package_with(
                 .unwrap()
         }),
     };
-    Ok(Lowered { units, masks })
+    Ok(Lowered {
+        units,
+        masks,
+        facts,
+    })
 }
 
 /// The back end of [`lower_package_with`]: the units, each counted and
@@ -536,7 +557,11 @@ fn back_end(
     sources: &SourceMap,
     with_tests: bool,
     mode: Mode,
-) -> (Vec<MirModule>, BTreeMap<String, BorrowMask>) {
+) -> (
+    Vec<MirModule>,
+    BTreeMap<String, BorrowMask>,
+    Option<FactsCheck>,
+) {
     let root = modules.find(&ModulePath::root(package)).unwrap();
     let main = checked[&root]
         .0
@@ -632,11 +657,39 @@ fn back_end(
         info: Some(&t.entry),
     }));
     push(lower_entries(&requests, &cx).unwrap());
+    // The facts each unit contributes, named through the whole build's
+    // interfaces, and their union (D-969).
+    let facts = matches!(mode, Mode::Inferred { .. }).then(|| facts_check(&units, &cx.defs));
     let per_unit = |unit: &MirModule, facts: &BuildFacts| {
         Ok::<_, cheby_iface::Ice>(infer_unit(unit, facts, checked, set, modules, globals))
     };
     let masks = finish(&mut units, mode, &per_unit);
-    (units, masks)
+    (units, masks, facts)
+}
+
+/// The facts each unit of `units` contributes, named through `defs` (the
+/// whole build's interfaces), their union and what they say about each
+/// code unit's module (D-969).
+fn facts_check(units: &[MirModule], defs: &Defs<'_>) -> FactsCheck {
+    let all: Vec<&MirModule> = units.iter().collect();
+    let parts: Vec<UnitFacts> = all.iter().map(|u| unit_facts(u, defs).unwrap()).collect();
+    let refs: Vec<&UnitFacts> = parts.iter().collect();
+    let union = BuildFacts::union(&refs, defs).unwrap();
+    let about = all
+        .iter()
+        .filter_map(|u| match u.unit {
+            crate::UnitKind::Code(m) => {
+                Some((u.path.to_string(), union.about_module(m, defs).unwrap()))
+            }
+            _ => None,
+        })
+        .collect();
+    FactsCheck {
+        union,
+        collected: collect_facts(&all),
+        parts,
+        about,
+    }
 }
 
 /// After lowering every unit: the borrowing inference and the counting

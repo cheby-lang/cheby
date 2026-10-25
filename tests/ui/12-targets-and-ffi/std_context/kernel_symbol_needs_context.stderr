@@ -1,13 +1,8 @@
-error[E0054]: the native symbol `cheby_channel_send` is bound with two different C signatures
+error[E0055]: the native symbol `cheby_channel_send` is reserved for the toolchain
   --> tests/ui/12-targets-and-ffi/std_context/kernel_symbol_needs_context.cheby:13:19
    |
 13 | @external(native, "cheby_channel_send")
-   |                   ^^^^^^^^^^^^^^^^^^^^ bound here with another signature
+   |                   ^^^^^^^^^^^^^^^^^^^^
    |
-  ::: std/channel.cheby:66:19
-   |
-66 | @external(native, "cheby_channel_send")
-   |                   -------------------- first bound here
-   |
-   = note: every `@external` of one symbol must give it the same C signature
+   = note: the Cheby runtime exports this symbol, so only the standard library may bind it
 

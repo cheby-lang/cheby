@@ -942,6 +942,7 @@ fn lower_with_cap(name: &str, files: &[(&str, &str)], cap: usize) -> Lowered {
     Lowered {
         units,
         masks: inferred.masks,
+        facts: None,
     }
 }
 

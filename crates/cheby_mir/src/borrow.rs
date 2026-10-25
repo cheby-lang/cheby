@@ -21,13 +21,24 @@
 //!     pub const fn is_owned(self) -> bool;         // no parameter borrowed
 //!     pub fn indices(self) -> impl Iterator<Item = usize>;
 //! }
-//! pub struct BuildFacts { /* private */ }          // Debug Default
+//! pub struct BuildFacts { /* private */ }          // Clone Debug Default PartialEq Eq
 //! impl BuildFacts {
 //!     pub fn used_as_value(&self, def: DefId) -> bool;
 //!     pub fn named_by_other_module(&self, def: DefId) -> bool;
 //!     pub fn tail_owned(&self, def: DefId) -> BorrowMask;
+//!     pub fn union(parts: &[&UnitFacts], defs: &Defs<'_>) -> Result<BuildFacts, Ice>;
+//!     pub fn about_module(&self, module: ModuleId, defs: &Defs<'_>) -> Result<Vec<u8>, Ice>;
 //! }
 //! pub fn collect_facts(units: &[&MirModule]) -> BuildFacts;
+//! pub struct UnitFacts { /* private */ }           // Clone Debug Default PartialEq Eq
+//! impl UnitFacts {
+//!     pub fn encode(&self) -> Vec<u8>;
+//!     pub fn decode(bytes: &[u8]) -> Result<UnitFacts, Ice>;
+//!     pub fn callees_elsewhere(&self) -> Vec<String>;
+//!     pub fn values(&self) -> Vec<String>;
+//!     pub fn tail_owned(&self) -> Vec<(String, BorrowMask)>;
+//! }
+//! pub fn unit_facts(unit: &MirModule, defs: &Defs<'_>) -> Result<UnitFacts, Ice>;
 //! pub trait Eligibility {
 //!     fn is_private_item(&self, def: DefId) -> bool;
 //!     fn is_external_wrapper(&self, def: DefId) -> bool;
@@ -54,8 +65,13 @@
 //!
 //! # Use (D-779)
 //!
-//! A build lowers every unit first. [`collect_facts`] then reads all of
-//! them once: the code units, the tests units and the entries unit.
+//! A build lowers every unit first. [`collect_facts`] then reads the
+//! units of its inference scope once (D-968): the code units, the tests
+//! units and the entries unit (whose statics may hold `main`'s error
+//! dictionary; GAP(entries-unit-facts)). The facts are the union of each unit's own
+//! ([`unit_facts`], D-969), so a cache can store them per unit by name
+//! and rebuild them ([`BuildFacts::union`]); a module's masks depend on
+//! the build only through [`BuildFacts::about_module`].
 //! [`infer`] runs per code unit, with an [`Eligibility`] for that unit's
 //! module ([`IfaceEligibility`] over the unit's [`Defs`] and the module's
 //! THIR), and returns the masks of the functions that borrow something.
@@ -224,14 +240,34 @@ impl BorrowMask {
 /// values anywhere in the build, defs that a unit of another module
 /// names, and the positions that tail calls from other units (a tests
 /// unit, the entries unit) fill with something other than a constant.
-#[derive(Debug, Default)]
+///
+/// Every fact is a union of per-unit parts (D-969; GAP(facts-union)):
+/// [`collect_facts`] is the union of each unit's own facts, and
+/// [`BuildFacts::union`] rebuilds the same facts from [`UnitFacts`], which
+/// name functions by module path and item so they can be stored. No fact
+/// needs a fixed point across units: rule 7's fixed point runs inside one
+/// module's [`infer`], over facts that are already unions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildFacts {
     values: BTreeSet<DefId>,
     foreign: BTreeSet<DefId>,
+    /// Only positions some tail call fills with a non-constant: a def
+    /// missing here is all-owned for rule 7.
     tail_owned: BTreeMap<DefId, BorrowMask>,
 }
 
 impl BuildFacts {
+    /// Adds `other`'s facts to these: the union of sets, and of each
+    /// def's tail-owned positions.
+    fn merge(&mut self, other: Self) {
+        self.values.extend(other.values);
+        self.foreign.extend(other.foreign);
+        for (def, mask) in other.tail_owned {
+            let entry = self.tail_owned.entry(def).or_default();
+            *entry = BorrowMask(entry.0 | mask.0);
+        }
+    }
+
     /// Whether some unit uses `def` as a value: a value shim, a
     /// `Const::FnValue`, a `Const::Code` or a `Callee::Code` of it, in a
     /// body or a static.
@@ -261,64 +297,418 @@ impl BuildFacts {
 }
 
 /// Collects the build-wide facts from the build's lowered units
-/// (`Stage::Lowered`): every code unit, every tests unit and the entries
-/// unit, in any order.
+/// (`Stage::Lowered`), in any order: the union of each unit's own facts
+/// (D-969). A build passes the units of its inference scope (D-968): its
+/// code units and tests units, and the entries unit, whose statics may
+/// hold `main`'s error dictionary and so use a function as a value
+/// (GAP(entries-unit-facts): D-968 says it contributes no facts, but its
+/// value facts keep rule 2 sound).
 #[must_use]
 pub fn collect_facts(units: &[&MirModule]) -> BuildFacts {
     let mut facts = BuildFacts::default();
     for unit in units {
-        if let Some(own) = unit.module() {
-            for decl in &unit.callees {
-                if decl.def.module != own {
-                    facts.foreign.insert(decl.def);
-                }
+        facts.merge(own_facts(unit));
+    }
+    facts
+}
+
+/// The facts one lowered unit contributes, by `DefId`.
+fn own_facts(unit: &MirModule) -> BuildFacts {
+    let mut facts = BuildFacts::default();
+    if let Some(own) = unit.module() {
+        for decl in &unit.callees {
+            if decl.def.module != own {
+                facts.foreign.insert(decl.def);
             }
         }
-        for s in &unit.statics {
-            for c in &s.fields {
-                value_const(c, &mut facts.values);
-            }
+    }
+    for s in &unit.statics {
+        for c in &s.fields {
+            value_const(c, &mut facts.values);
         }
-        for f in &unit.functions {
-            if let FnKey::ValueShim(def) = f.key {
-                facts.values.insert(def);
-            }
-            let consts = const_locals(f);
-            for block in &f.blocks {
-                for stmt in &block.stmts {
-                    if let Stmt::Assign { value, .. } | Stmt::Eval(value) = stmt {
-                        if let Rvalue::Call { callee, .. } = value {
-                            value_callee(callee, &mut facts.values);
-                        }
-                        for op in value.operands() {
-                            value_operand(&op, &mut facts.values);
-                        }
+    }
+    for f in &unit.functions {
+        if let FnKey::ValueShim(def) = f.key {
+            facts.values.insert(def);
+        }
+        let consts = const_locals(f);
+        for block in &f.blocks {
+            for stmt in &block.stmts {
+                if let Stmt::Assign { value, .. } | Stmt::Eval(value) = stmt {
+                    if let Rvalue::Call { callee, .. } = value {
+                        value_callee(callee, &mut facts.values);
+                    }
+                    for op in value.operands() {
+                        value_operand(&op, &mut facts.values);
                     }
                 }
-                for op in term_operands(&block.term) {
-                    value_operand(op, &mut facts.values);
-                }
-                if let Terminator::TailCall { callee, args } = &block.term {
-                    value_callee(callee, &mut facts.values);
-                    if let Some(g) = callee.direct()
-                        && unit.unit != UnitKind::Code(g.module)
-                    {
-                        let entry = facts.tail_owned.entry(g).or_default();
-                        for (j, arg) in args.iter().enumerate() {
-                            let constant = match arg {
-                                Operand::Const(_) => true,
-                                Operand::Local(l) => consts.contains(l),
-                            };
-                            if !constant {
-                                *entry = entry.with(j);
-                            }
+            }
+            for op in term_operands(&block.term) {
+                value_operand(op, &mut facts.values);
+            }
+            if let Terminator::TailCall { callee, args } = &block.term {
+                value_callee(callee, &mut facts.values);
+                if let Some(g) = callee.direct()
+                    && unit.unit != UnitKind::Code(g.module)
+                {
+                    let mut owned = BorrowMask::OWNED;
+                    for (j, arg) in args.iter().enumerate() {
+                        let constant = match arg {
+                            Operand::Const(_) => true,
+                            Operand::Local(l) => consts.contains(l),
+                        };
+                        if !constant {
+                            owned = owned.with(j);
                         }
+                    }
+                    if !owned.is_owned() {
+                        let entry = facts.tail_owned.entry(g).or_default();
+                        *entry = BorrowMask(entry.0 | owned.0);
                     }
                 }
             }
         }
     }
     facts
+}
+
+/// A function as stored facts name it (D-969, D-264): its module's path
+/// (empty for the builtin module) and its item, `Parent::name` for an
+/// interface function or a constructor; never a `DefId`, which is
+/// build-local.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct FactName {
+    module: Box<str>,
+    item: Box<str>,
+}
+
+impl FactName {
+    /// The name of `def`, read through `defs`.
+    fn of(def: DefId, defs: &Defs<'_>) -> Result<Self, Ice> {
+        let item = defs.item(def)?;
+        let module = if def.module == cheby_iface::ModuleId::BUILTIN {
+            String::new()
+        } else {
+            defs.modules.try_get(def.module)?.path.to_string()
+        };
+        Ok(Self {
+            module: module.into(),
+            item: item_text(def, item, defs)?.into(),
+        })
+    }
+}
+
+/// The text of `item` (the item `def`) in a [`FactName`].
+fn item_text(def: DefId, item: &cheby_iface::IfaceItem, defs: &Defs<'_>) -> Result<String, Ice> {
+    let names = &defs.globals.names;
+    let mut text = String::new();
+    if let Some(parent) = item.parent {
+        text.push_str(names.get(defs.item(DefId::new(def.module, parent))?.name));
+        text.push_str("::");
+    }
+    text.push_str(names.get(item.name));
+    Ok(text)
+}
+
+/// The borrowing facts one unit's lowered MIR contributes (D-969): the
+/// functions it uses as values, those of other modules it names as
+/// callees, and the positions its tail calls into other modules fill with
+/// a non-constant, each function named by module path and item (never a
+/// `DefId`, which is build-local), so the facts can be stored
+/// ([`UnitFacts::encode`]). [`BuildFacts::union`] of every unit's facts
+/// is [`collect_facts`] over the units.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UnitFacts {
+    values: BTreeSet<FactName>,
+    foreign: BTreeSet<FactName>,
+    tail_owned: BTreeMap<FactName, BorrowMask>,
+}
+
+/// The first bytes of [`UnitFacts::encode`].
+const UNIT_FACTS_MAGIC: &[u8; 4] = b"CBUF";
+/// The version of [`UnitFacts::encode`]'s bytes.
+const UNIT_FACTS_VERSION: u8 = 1;
+
+impl UnitFacts {
+    /// The facts' canonical bytes: a magic, a version, then the values,
+    /// the callees elsewhere and the tail-owned positions, each list
+    /// sorted by module path and item, every string and count
+    /// length-prefixed (D-264: no order but the names').
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(UNIT_FACTS_MAGIC);
+        out.push(UNIT_FACTS_VERSION);
+        put_len(&mut out, self.values.len());
+        for name in &self.values {
+            put_name(&mut out, name);
+        }
+        put_len(&mut out, self.foreign.len());
+        for name in &self.foreign {
+            put_name(&mut out, name);
+        }
+        put_len(&mut out, self.tail_owned.len());
+        for (name, mask) in &self.tail_owned {
+            put_name(&mut out, name);
+            out.extend_from_slice(&mask.0.to_le_bytes());
+        }
+        out
+    }
+
+    /// The facts [`UnitFacts::encode`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] when the bytes are malformed: a cache record that
+    /// decodes wrongly after its seal matched is a compiler bug.
+    pub fn decode(bytes: &[u8]) -> Result<Self, Ice> {
+        let bad = || Ice::new("malformed borrowing facts (D-969)");
+        let mut r = bytes
+            .strip_prefix(UNIT_FACTS_MAGIC.as_slice())
+            .ok_or_else(bad)?;
+        let (&version, rest) = r.split_first().ok_or_else(bad)?;
+        if version != UNIT_FACTS_VERSION {
+            return Err(bad());
+        }
+        r = rest;
+        let mut facts = Self::default();
+        for _ in 0..take_len(&mut r).ok_or_else(bad)? {
+            facts.values.insert(take_name(&mut r).ok_or_else(bad)?);
+        }
+        for _ in 0..take_len(&mut r).ok_or_else(bad)? {
+            facts.foreign.insert(take_name(&mut r).ok_or_else(bad)?);
+        }
+        for _ in 0..take_len(&mut r).ok_or_else(bad)? {
+            let name = take_name(&mut r).ok_or_else(bad)?;
+            let (word, rest) = r.split_first_chunk::<8>().ok_or_else(bad)?;
+            r = rest;
+            facts
+                .tail_owned
+                .insert(name, BorrowMask(u64::from_le_bytes(*word)));
+        }
+        if r.is_empty() { Ok(facts) } else { Err(bad()) }
+    }
+
+    /// The functions of other modules the unit calls (D-969's list), as
+    /// `module::item` paths, sorted.
+    #[must_use]
+    pub fn callees_elsewhere(&self) -> Vec<String> {
+        self.foreign.iter().map(path_of).collect()
+    }
+
+    /// The functions the unit uses as values, as `module::item` paths,
+    /// sorted.
+    #[must_use]
+    pub fn values(&self) -> Vec<String> {
+        self.values.iter().map(path_of).collect()
+    }
+
+    /// The positions the unit's tail calls into other modules fill with a
+    /// non-constant, by `module::item` path.
+    #[must_use]
+    pub fn tail_owned(&self) -> Vec<(String, BorrowMask)> {
+        self.tail_owned
+            .iter()
+            .map(|(name, &mask)| (path_of(name), mask))
+            .collect()
+    }
+}
+
+/// `module::item`, or `item` for the builtin module.
+fn path_of(name: &FactName) -> String {
+    if name.module.is_empty() {
+        name.item.to_string()
+    } else {
+        format!("{}::{}", name.module, name.item)
+    }
+}
+
+/// Appends a count as four little-endian bytes (saturated).
+fn put_len(out: &mut Vec<u8>, len: usize) {
+    out.extend_from_slice(&u32::try_from(len).unwrap_or(u32::MAX).to_le_bytes());
+}
+
+/// Appends a string as its length and its bytes.
+fn put_str(out: &mut Vec<u8>, s: &str) {
+    put_len(out, s.len());
+    out.extend_from_slice(s.as_bytes());
+}
+
+fn put_name(out: &mut Vec<u8>, name: &FactName) {
+    put_str(out, &name.module);
+    put_str(out, &name.item);
+}
+
+/// Reads what [`put_len`] wrote.
+fn take_len(r: &mut &[u8]) -> Option<usize> {
+    let (word, rest) = r.split_first_chunk::<4>()?;
+    *r = rest;
+    usize::try_from(u32::from_le_bytes(*word)).ok()
+}
+
+/// Reads what [`put_str`] wrote.
+fn take_str(r: &mut &[u8]) -> Option<Box<str>> {
+    let len = take_len(r)?;
+    let (text, rest) = r.split_at_checked(len)?;
+    *r = rest;
+    std::str::from_utf8(text).ok().map(Box::from)
+}
+
+fn take_name(r: &mut &[u8]) -> Option<FactName> {
+    Some(FactName {
+        module: take_str(r)?,
+        item: take_str(r)?,
+    })
+}
+
+/// The facts `unit`, a lowered unit at `Stage::Lowered`, contributes
+/// (D-969), its functions named through `defs`, which must see every def
+/// the unit names (the whole build's interfaces do).
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see a def the facts name.
+pub fn unit_facts(unit: &MirModule, defs: &Defs<'_>) -> Result<UnitFacts, Ice> {
+    let own = own_facts(unit);
+    let mut facts = UnitFacts::default();
+    for def in own.values {
+        facts.values.insert(FactName::of(def, defs)?);
+    }
+    for def in own.foreign {
+        facts.foreign.insert(FactName::of(def, defs)?);
+    }
+    for (def, mask) in own.tail_owned {
+        facts.tail_owned.insert(FactName::of(def, defs)?, mask);
+    }
+    Ok(facts)
+}
+
+/// Finds the defs that [`FactName`]s name, through one [`Defs`].
+struct Resolver<'d, 'a> {
+    defs: &'d Defs<'a>,
+    /// Module paths to ids, the builtin module as the empty path.
+    modules: BTreeMap<String, cheby_iface::ModuleId>,
+    /// Per module read so far: each item's text, `None` when two items
+    /// share it.
+    items: BTreeMap<cheby_iface::ModuleId, BTreeMap<String, Option<cheby_iface::DefIndex>>>,
+}
+
+impl<'d, 'a> Resolver<'d, 'a> {
+    fn new(defs: &'d Defs<'a>) -> Self {
+        let mut modules: BTreeMap<String, cheby_iface::ModuleId> = defs
+            .modules
+            .iter()
+            .filter(|&(id, _)| id != cheby_iface::ModuleId::BUILTIN)
+            .map(|(id, info)| (info.path.to_string(), id))
+            .collect();
+        modules.insert(String::new(), cheby_iface::ModuleId::BUILTIN);
+        Self {
+            defs,
+            modules,
+            items: BTreeMap::new(),
+        }
+    }
+
+    /// The def `name` names.
+    fn find(&mut self, name: &FactName) -> Result<DefId, Ice> {
+        let missing = || {
+            Ice::new(format!(
+                "borrowing facts name `{}`, which this build cannot see",
+                path_of(name)
+            ))
+        };
+        let module = *self.modules.get(&*name.module).ok_or_else(missing)?;
+        if !self.items.contains_key(&module) {
+            let iface = self.defs.interface(module).ok_or_else(missing)?;
+            let mut texts: BTreeMap<String, Option<cheby_iface::DefIndex>> = BTreeMap::new();
+            for (index, item) in iface.items.iter_enumerated() {
+                let text = item_text(DefId::new(module, index), item, self.defs)?;
+                texts
+                    .entry(text)
+                    .and_modify(|seen| *seen = None)
+                    .or_insert(Some(index));
+            }
+            self.items.insert(module, texts);
+        }
+        self.items
+            .get(&module)
+            .and_then(|texts| texts.get(&*name.item))
+            .copied()
+            .flatten()
+            .map(|index| DefId::new(module, index))
+            .ok_or_else(missing)
+    }
+}
+
+/// The canonical bytes of the masks' inputs about one module's functions
+/// ([`BuildFacts::about_module`]).
+const ABOUT_MODULE_VERSION: u8 = 1;
+
+impl BuildFacts {
+    /// The build's facts: the union of its units' (D-969), each name found
+    /// through `defs`, which must see every module the facts name (the
+    /// whole build's interfaces do).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if a name is not a def `defs` can see, or names two.
+    pub fn union(parts: &[&UnitFacts], defs: &Defs<'_>) -> Result<Self, Ice> {
+        let mut resolver = Resolver::new(defs);
+        let mut facts = Self::default();
+        for part in parts {
+            let mut own = Self::default();
+            for name in &part.values {
+                own.values.insert(resolver.find(name)?);
+            }
+            for name in &part.foreign {
+                own.foreign.insert(resolver.find(name)?);
+            }
+            for (name, &mask) in &part.tail_owned {
+                own.tail_owned.insert(resolver.find(name)?, mask);
+            }
+            facts.merge(own);
+        }
+        Ok(facts)
+    }
+
+    /// The facts the masks of `module`'s functions depend on, as canonical
+    /// bytes (D-969's "digest of the build's facts about the module's own
+    /// functions"): which of its functions some unit uses as a value
+    /// (rule 2) and the positions of each that other units' tail calls
+    /// keep owned (rule 7), by item, sorted. Calls from other modules are
+    /// left out: under D-787 they change no mask. `defs` must see
+    /// `module`.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `defs` cannot see a def of `module` that the facts
+    /// name.
+    pub fn about_module(
+        &self,
+        module: cheby_iface::ModuleId,
+        defs: &Defs<'_>,
+    ) -> Result<Vec<u8>, Ice> {
+        let item = |def: DefId| FactName::of(def, defs).map(|name| name.item);
+        let mut values: BTreeSet<Box<str>> = BTreeSet::new();
+        for &def in self.values.iter().filter(|d| d.module == module) {
+            values.insert(item(def)?);
+        }
+        let mut owned: BTreeMap<Box<str>, BorrowMask> = BTreeMap::new();
+        for (&def, &mask) in self.tail_owned.iter().filter(|(d, _)| d.module == module) {
+            owned.insert(item(def)?, mask);
+        }
+        let mut out = vec![ABOUT_MODULE_VERSION];
+        put_len(&mut out, values.len());
+        for text in &values {
+            put_str(&mut out, text);
+        }
+        put_len(&mut out, owned.len());
+        for (text, mask) in &owned {
+            put_str(&mut out, text);
+            out.extend_from_slice(&mask.0.to_le_bytes());
+        }
+        Ok(out)
+    }
 }
 
 /// Records the def a constant makes a value of.

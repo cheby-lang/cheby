@@ -18,6 +18,13 @@
 //! - [`link::link`] runs `cc` with the fixed flags and input order of
 //!   D-933, and [`native_libs`] holds the archive's system libraries and
 //!   the build resolver of E0053 (D-943).
+//! - A package's `[native]` code (D-940): [`cc`] compiles each C source
+//!   with D-942's fixed flags and reports the files it read, with
+//!   `cheby.h` embedded ([`cc::HEADER`], D-945); [`shlib`] links the
+//!   package's shared library with its forwarder for the commands that run
+//!   code in the `cheby` process (D-941) and reads the names a C object
+//!   defines (D-944). The same C objects go into executables
+//!   ([`link::LinkJob::c_objects`]).
 //!
 //! See `docs/plan/architecture.md`.
 
@@ -27,6 +34,7 @@ use std::path::PathBuf;
 use cheby_codegen_clif::record::RecordError;
 
 pub mod archive;
+pub mod cc;
 mod dwarf;
 #[cfg(test)]
 mod dwarf_tests;
@@ -34,7 +42,10 @@ pub mod link;
 pub mod native_libs;
 pub mod object;
 pub mod program;
+pub mod shlib;
 
+#[cfg(test)]
+mod cc_tests;
 #[cfg(test)]
 mod link_tests;
 #[cfg(test)]

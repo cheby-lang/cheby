@@ -41,6 +41,7 @@
 //! | `Pending::release`      | `sched/deadlock.rs` `PoolPending::release`                              |
 //! | `Shared::leave`         | `sched/blocking.rs` `leave`                                             |
 //! | `refill`                | `io.rs` `read_line_on`'s job (`fill_line`, the claim, `read_line`)      |
+//! | `FileModel`, model 5    | `file.rs` `read_on`: the fast path's `try_lock`, the refill's job       |
 //!
 //! The models, each with `#[should_panic]` twins that break one rule:
 //!
@@ -85,6 +86,14 @@
 //!    before its claim and goes on whatever the claim found takes the
 //!    walk's late wake while it runs, or after it ended (review finding
 //!    SOUND-W4B-1).
+//! 5. A `File`'s refill against the next read (D-1065, D-995, M3 wave 6):
+//!    the first read waits for its refill while a cancellation races for
+//!    its wait, as in model 3; once it has returned and released the
+//!    handle's turn, a second read tries the buffer's lock (the fast path)
+//!    and otherwise waits for it behind the refill, which may still run or
+//!    not have started. The file's lines go out in order, each once. Twin:
+//!    a read that reads the file itself when the lock is held reads past
+//!    the line the refill left in the buffer.
 //!
 //! What the models leave out: the pool's queue and threads (the completion
 //! thread is the pool thread once it took the job), the inline paths
@@ -992,4 +1001,160 @@ fn blocking_model_4_after_a_refused_thread_the_fiber_waits_for_the_walks_wake() 
 #[should_panic(expected = "a wake found the fiber neither parked nor parking")]
 fn blocking_model_4_twin_a_fiber_that_goes_on_takes_a_late_wake() {
     refused_against_cancel(Refused::GoesOn);
+}
+
+/// How the next read on a `File` reaches the handle's buffer (model 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NextRead {
+    /// The runtime's (`file.rs`, `read_on`): tries the buffer's lock and
+    /// takes a line it holds at once; otherwise its own refill waits for
+    /// the lock, behind a refill still running, then reads the file only
+    /// when the buffer holds no line.
+    WaitsForTheLock,
+    /// When the lock is held, reads the file itself (twin).
+    SkipsTheLock,
+}
+
+/// A `File` opened for reading: its buffer under the buffer's lock, and
+/// the file under it, whose next line a read of the descriptor takes
+/// (lines 1 and 2, in order).
+#[derive(Debug)]
+struct FileModel {
+    buffer: Mutex<std::collections::VecDeque<u32>>,
+    next: Mutex<u32>,
+}
+
+/// The file's last line.
+const LAST_LINE: u32 = 2;
+
+impl FileModel {
+    /// One read of the descriptor: the file's next line, if any.
+    fn read_file(&self) -> Option<u32> {
+        let mut next = self.next.lock().unwrap();
+        (*next <= LAST_LINE).then(|| {
+            let line = *next;
+            *next = next.saturating_add(1);
+            line
+        })
+    }
+
+    /// A refill under the buffer's lock (`LineReader::fill_line`): the
+    /// file's next line when the buffer holds none.
+    fn fill(&self, buffer: &mut std::collections::VecDeque<u32>) {
+        if buffer.is_empty()
+            && let Some(line) = self.read_file()
+        {
+            buffer.push_back(line);
+        }
+    }
+}
+
+/// Model (5): a `File`'s refill against the next read (D-1065, D-995,
+/// `file.rs`). A first read waits for its refill (a detached job, as in
+/// model 3) while a cancellation races for its wait; once it has returned
+/// (its unwinding released the handle's turn), a second read on another
+/// fiber asks for the next line, while the abandoned refill may still be
+/// running, or not have started. The lines go out in the file's order, each
+/// once: the first read gets line 1 when its refill claimed its wait, and
+/// the second read the next line, never one after a line that the refill
+/// left in the buffer. Twin: a read that does not wait for the refill
+/// holding the lock reads past it.
+fn file_refill_against_the_next_read(next_read: NextRead) {
+    explore(move || {
+        let shared = Arc::new(Shared::new(false));
+        let file = Arc::new(FileModel {
+            buffer: Mutex::new(std::collections::VecDeque::new()),
+            next: Mutex::new(1),
+        });
+        let first = Arc::new(Mutex::new(None));
+        let pool = {
+            let (shared, file, first) =
+                (Arc::clone(&shared), Arc::clone(&file), Arc::clone(&first));
+            thread::spawn(move || {
+                // A refill whose wait was cancelled before it started does
+                // not run.
+                let skipped = shared.header.load(Ordering::SeqCst) == header::CANCELLED;
+                if shared.job_submitted() && !skipped {
+                    let mut buffer = file.buffer.lock().unwrap();
+                    file.fill(&mut buffer);
+                    let taken = shared.claim().then(|| buffer.pop_front());
+                    drop(buffer);
+                    if let Some(line) = taken {
+                        *first.lock().unwrap() = line;
+                        *shared.result.lock().unwrap() = Some(shared.result(true));
+                        shared.fiber.marked.store(false, Ordering::SeqCst);
+                        shared.fiber.wake();
+                        shared.release();
+                        shared.leave();
+                    }
+                }
+                shared.fiber.waker_ended();
+            })
+        };
+        let canceller = {
+            let shared = Arc::clone(&shared);
+            thread::spawn(move || {
+                walk(&shared, Walk::ClearsMark);
+                shared.fiber.waker_ended();
+            })
+        };
+        let outcome = fiber_thread(&shared);
+        let got_first = match outcome {
+            Outcome::Result => *first.lock().unwrap(),
+            Outcome::NoJob | Outcome::Cancelled => None,
+        };
+        // The second read, on the fiber that took the turn next.
+        let fast = file.buffer.try_lock().map(|mut buffer| buffer.pop_front());
+        let got_second = match (fast, next_read) {
+            (Ok(Some(line)), _) => Some(line),
+            (Ok(None), _) | (Err(_), NextRead::WaitsForTheLock) => {
+                let mut buffer = file.buffer.lock().unwrap();
+                file.fill(&mut buffer);
+                buffer.pop_front()
+            }
+            (Err(_), NextRead::SkipsTheLock) => file.read_file(),
+        };
+        pool.join().unwrap();
+        canceller.join().unwrap();
+        let left = {
+            let buffer = file.buffer.lock().unwrap();
+            let next = *file.next.lock().unwrap();
+            u32::try_from(buffer.len())
+                .unwrap()
+                .saturating_add(LAST_LINE.saturating_add(1).saturating_sub(next))
+        };
+        let got: Vec<u32> = got_first.into_iter().chain(got_second).collect();
+        assert_eq!(
+            got.len(),
+            usize::from(outcome == Outcome::Result).saturating_add(1),
+            "{BROKEN}: a read got no line"
+        );
+        let expected: Vec<u32> = (1..).take(got.len()).collect();
+        assert_eq!(got, expected, "{BROKEN}: a line was read out of order");
+        assert_eq!(
+            u32::try_from(got.len()).unwrap().saturating_add(left),
+            LAST_LINE,
+            "{BROKEN}: a line was lost or read twice"
+        );
+        check_end(&shared, outcome);
+    });
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+fn blocking_model_5_a_files_next_read_waits_for_the_refill_and_keeps_the_order() {
+    file_refill_against_the_next_read(NextRead::WaitsForTheLock);
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom models switch stacks; fibers on Windows are M6 (D-545, D-714)"
+)]
+#[should_panic(expected = "a line was read out of order")]
+fn blocking_model_5_twin_a_read_that_skips_the_refill_reads_past_it() {
+    file_refill_against_the_next_read(NextRead::SkipsTheLock);
 }

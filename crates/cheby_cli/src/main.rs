@@ -18,6 +18,8 @@
 //!   build, by default the available parallelism (D-551).
 //! - `cheby fmt [--check] [PATH…]` formats the package's sources, the
 //!   given files, or standard input for `-` (D-1031).
+//! - `cheby new <name>` creates a package in the working directory
+//!   (D-1032, [`new`]).
 //!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are `error:` lines
@@ -33,6 +35,7 @@
 
 mod build_id;
 mod color;
+mod new;
 
 use std::io::{IsTerminal as _, Write as _};
 use std::num::NonZeroUsize;
@@ -230,7 +233,7 @@ fn run_command() -> ExitCode {
         return out.error(e.message());
     }
     match cli.command {
-        Command::New { .. } => out.not_yet("new", "M5"),
+        Command::New { name } => new(out, &name),
         Command::Check {
             target,
             deny_warnings,
@@ -509,6 +512,23 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
         Ok(report) if report.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(e) => out.error(e.message()),
+    }
+}
+
+/// `cheby new <name>` (D-1032, spec §13.1): creates the package `name` in
+/// the working directory and prints nothing. An invalid name and an
+/// existing path are tool errors that write nothing, the first with a
+/// `help:` line when a valid name is close (D-464).
+fn new(out: Out, name: &str) -> ExitCode {
+    match new::new_package(std::path::Path::new(""), name) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            let code = out.error(&e.message());
+            if let Some(help) = e.help() {
+                out.help(&help);
+            }
+            code
+        }
     }
 }
 
@@ -982,6 +1002,15 @@ mod tests {
         assert_eq!(output, Some(std::path::PathBuf::from("out/app")));
         assert!(deny_warnings);
         assert!(Cli::try_parse_from(["cheby", "build", "--target", "wasm"]).is_err());
+    }
+
+    /// `cheby new <name>` takes exactly one name (D-1032).
+    #[test]
+    fn cheby_new_parses_one_name() {
+        let cli = Cli::try_parse_from(["cheby", "new", "my_app"]).unwrap();
+        assert!(matches!(cli.command, Command::New { name } if name == "my_app"));
+        assert!(Cli::try_parse_from(["cheby", "new"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "new", "a", "b"]).is_err());
     }
 
     /// `cheby fmt [--check] [PATH…]` with `-` for standard input

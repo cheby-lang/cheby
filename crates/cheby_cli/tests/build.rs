@@ -1,9 +1,10 @@
-//! `cheby build` (D-924, D-937): executables of small packages that reach
-//! no constant, run and compared with `cheby run` of the same package
-//! (D-925, D-926, D-474, D-306, D-1025), user types among them, which the
-//! module records carry and the executable's start registers (D-919,
-//! D-920); the runtime archive's tool errors (D-929, D-930); the "not
-//! available yet" error of constants (D-924); and determinism (D-934).
+//! `cheby build` (D-924, D-937): executables of small packages, run and
+//! compared with `cheby run` of the same package (D-925, D-926, D-474,
+//! D-306, D-1025), user types among them, which the module records carry
+//! and the executable's start registers (D-919, D-920), and constants,
+//! which the program object carries as images and the start installs
+//! (D-979); the runtime archive's tool errors (D-929, D-930); and
+//! determinism (D-934).
 //!
 //! Every test links against the runtime archive next to `cheby`
 //! (`target/<profile>/libcheby_rt_exe.a`): `cargo build -p cheby_rt_exe`
@@ -332,26 +333,206 @@ fn build_stale_archive() {
     assert!(!exe.exists());
 }
 
-/// A program that reaches a constant is refused before anything links,
-/// until constants reach executables (D-924).
+/// A program that reaches a constant builds (D-924's refusal of constants
+/// ended when constants reached executables as images, D-979): the
+/// executable prints the constant as `cheby run` does (D-1025).
 #[test]
 #[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
-fn build_not_yet_constants() {
+fn build_constants_reach_executables() {
     let tmp = FreshDir::create("cheby-build-const").unwrap();
     let root = package(
         tmp.path(),
         "limits",
         "//! Prints a constant.\n\nimport std::io\n\nconst limit: Int = 3\n\nfn main() {\n  io::println(\"{limit}\")\n}\n",
     );
-    let exe = tmp.path().join("exe/limits");
-    let out = build(&root, &exe);
-    assert_eq!(out.status, Some(1));
-    assert_eq!(
-        out.stderr,
-        "error: `cheby build` is not available yet for programs that use constants, such as \
-         `limits::limit` (planned for a later step of M3)\n"
+    let (build, exe) = built(&root, tmp.path(), "limits");
+    let cache = fresh_cache();
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stdout, "3\n");
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    let run = cheby(&root, &["run"], &cache, &[]);
+    assert_same(&build, &ran, &run);
+}
+
+/// D-539, D-979: two constants that share a map share one collection in
+/// an executable: the later constant's image refers to the earlier one's
+/// map by path and index, so the program object stores the map once, and
+/// installation gives both the one collection. The executable prints what
+/// `cheby run` prints.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_constants_shared_map_is_one_collection() {
+    let tmp = FreshDir::create("cheby-build-const-shared").unwrap();
+    let root = package(
+        tmp.path(),
+        "shared",
+        r#"//! Two constants that share a map.
+
+import std::io
+import std::map
+
+const base: map::Map<String, Int> = map::from_list([("a", 1), ("b", 2)])
+
+const pair: (map::Map<String, Int>, Int) = (base, 3)
+
+fn main() {
+  let (table, n) = pair
+  let same = table == base
+  let size = map::size(table)
+  let b = map::get(table, "b")
+  io::println("{same} {size} {n} {b:?}")
+}
+"#,
     );
-    assert!(!exe.exists());
+    let (build, exe) = built(&root, tmp.path(), "shared");
+    let bytes = std::fs::read(&exe).unwrap();
+    let count = |needle: &[u8]| bytes.windows(needle.len()).filter(|w| *w == needle).count();
+    // One image each, in D-535's order; the pair's refers to the base's
+    // map (an earlier image's object: tag 3, the path, the index).
+    assert_eq!(count(b"CHBV\x01\x0cshared::base"), 1);
+    assert_eq!(count(b"CHBV\x01\x0cshared::pair"), 1);
+    assert_eq!(count(b"\x03\x0cshared::base"), 1);
+    let cache = fresh_cache();
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stdout, "True 2 3 Some(2)\n");
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    let run = cheby(&root, &["run"], &cache, &[]);
+    assert_same(&build, &ran, &run);
+}
+
+/// A constant of a user record that holds a std type with `@std_hooks`
+/// (`sorted_map::SortedMap`; user code cannot write `@std_hooks`, §4.8)
+/// prints, compares and hashes in an executable as under `cheby run`
+/// (D-979, D-1025): installation registers the record's layout and
+/// `SortedMap`'s hooks first, and builds the set of records with the hooks'
+/// hashes (D-196).
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_constants_user_record_with_std_hooks() {
+    let tmp = FreshDir::create("cheby-build-const-hooks").unwrap();
+    let root = package(
+        tmp.path(),
+        "tables",
+        r#"//! A constant record that holds a sorted map, in a set.
+
+import std::io
+import std::set
+import std::sorted_map
+
+/// A named table.
+type Table { Table { name: String, rows: sorted_map::SortedMap<Int, String> } }
+
+const table: Table = Table { name: "t", rows: sorted_map::from_list([(2, "b"), (1, "a")]) }
+
+const tables: set::Set<Table> = set::from_list([table, Table { name: "u", rows: sorted_map::new() }])
+
+fn main() {
+  io::println("{table:?}")
+  let probe = Table { name: "t", rows: sorted_map::from_list([(1, "a"), (2, "b")]) }
+  let same = table == probe
+  let found = set::contains(tables, probe)
+  let size = set::size(tables)
+  io::println("{same} {found} {size}")
+}
+"#,
+    );
+    let (build, exe) = built(&root, tmp.path(), "tables");
+    let cache = fresh_cache();
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert!(ran.stdout.ends_with("True True 2\n"), "{}", ran.stdout);
+    let run = cheby(&root, &["run"], &cache, &[]);
+    assert_same(&build, &ran, &run);
+}
+
+/// A program that holds a list of two million integers while it waits
+/// for a line: `big` is a constant when `constant`, else built in `main`.
+/// It writes `ready` to standard error once the list exists.
+fn waiting_program(constant: bool) -> String {
+    let (top, local) = if constant {
+        ("const big: List<Int> = list::range(0, 2000000)\n\n", "")
+    } else {
+        ("", "  let big = list::range(0, 2000000)\n")
+    };
+    format!(
+        "//! Holds a large list while it waits for a line.\n\nimport std::io\nimport std::list\n\n\
+         {top}fn main() {{\n{local}  let n = list::length(big)\n  io::eprintln(\"ready\")\n  \
+         let _ = io::read_line()\n  let m = list::length(big)\n  io::println(\"{{n}} {{m}}\")\n}}\n"
+    )
+}
+
+/// The resident memory of process `pid` in KiB: `VmRSS` on Linux, `ps`
+/// elsewhere.
+fn resident_kib(pid: u32) -> u64 {
+    if cfg!(target_os = "linux") {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        let line = status.lines().find(|l| l.starts_with("VmRSS:")).unwrap();
+        line.split_whitespace().nth(1).unwrap().parse().unwrap()
+    } else {
+        let out = Command::new("ps")
+            .args(["-o", "rss=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+}
+
+/// Runs the executable `exe`, waits for its `ready`, and returns the
+/// memory it holds then; then lets it finish and checks its output.
+fn held_kib(exe: &Path) -> u64 {
+    use std::io::{BufRead as _, Write as _};
+    let mut child = Command::new(exe)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::BufReader::new(stderr).read_line(&mut line);
+        let _ = sender.send(line);
+    });
+    let ready = receiver.recv_timeout(process::scaled_timeout(TIMEOUT).unwrap());
+    let got_ready = ready.as_deref() == Ok("ready\n");
+    if !got_ready {
+        let _ = child.kill();
+    }
+    assert!(got_ready, "{} did not get ready: {ready:?}", exe.display());
+    let held = resident_kib(child.id());
+    child.stdin.take().unwrap().write_all(b"\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "2000000 2000000\n");
+    held
+}
+
+/// The wave-6 review's R-1: an executable whose constant is a large list
+/// holds about what the same list built at run time holds (D-979): the
+/// installer builds the list straight from the program object's image,
+/// with no decoded copy of every element and no copy of the table, so the
+/// image's bytes, mapped from the file, are its only extra (about 1.7
+/// times the run-time list's resident memory on macOS). Before the fix it
+/// held 6 times as much; the bound of 3 leaves room for the platforms'
+/// resident-memory accounting.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_constants_cost_about_their_value() {
+    let tmp = FreshDir::create("cheby-build-const-memory").unwrap();
+    let constant = package(tmp.path(), "constant", &waiting_program(true));
+    let runtime = package(tmp.path(), "runtime", &waiting_program(false));
+    let (_, constant) = built(&constant, tmp.path(), "constant");
+    let (_, runtime) = built(&runtime, tmp.path(), "runtime");
+    let (constant, runtime) = (held_kib(&constant), held_kib(&runtime));
+    assert!(
+        constant <= 3 * runtime,
+        "the constant's program holds {constant} KiB, the run-time list's {runtime} KiB"
+    );
 }
 
 /// The package of the user-type tests: a type with one constructor.

@@ -326,42 +326,99 @@ impl Store {
     /// already wrote, queued or validly read the same payload
     /// (D-1139).
     fn put(&self, kind: FileKind, name: Hash128, payload: &[u8]) -> Result<(), StoreError> {
-        let id = (kind, name);
-        let digest = match kind {
-            FileKind::Blob => name,
-            FileKind::Record | FileKind::Hint => Hash128::of(payload),
-        };
-        let writer = &self.shared.writer;
-        if writer.has(id, digest) {
-            return Ok(());
-        }
-        let mut file = Vec::with_capacity(HEADER_LEN.saturating_add(payload.len()));
-        file.extend_from_slice(&header(kind, self.build, payload.len()));
-        file.extend_from_slice(payload);
-        match writer.submit(id, digest, Arc::new(file)) {
-            Submit::Skip => Ok(()),
-            Submit::Queued => {
-                let shared = Arc::clone(&self.shared);
-                rayon::spawn(move || {
-                    shared.write_next();
-                });
-                Ok(())
-            }
-            Submit::Now(file) => self.shared.write_until_done(id, file),
-        }
+        put_entry(&self.shared, kind, name, payload)
     }
 
+    /// Reads an entry: [`Shared::get`].
+    fn get(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
+        self.shared.get(kind, name)
+    }
+
+    /// A handle that reads and writes this store's records and hints
+    /// through the same writer, so [`Store::flush`] and `Drop` wait for its
+    /// writes too (D-1138, D-1139): for borrowing's records, which the
+    /// front end hands to the back end without a borrow of the cache. It
+    /// never deletes the store; a write after a temporary store is gone is
+    /// skipped (D-1129).
+    pub(crate) fn share(&self) -> StoreShare {
+        StoreShare {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+/// What [`Store::share`] hands out.
+#[derive(Clone, Debug)]
+pub(crate) struct StoreShare {
+    shared: Arc<Shared>,
+}
+
+impl StoreShare {
+    /// The build ID every file of the store carries.
+    pub(crate) fn build_id(&self) -> BuildId {
+        self.shared.build
+    }
+
+    /// [`Store::put_record`].
+    pub(crate) fn put_record(&self, key: &Key, payload: &[u8]) -> Result<(), StoreError> {
+        put_entry(&self.shared, FileKind::Record, key.hash(), payload)
+    }
+
+    /// [`Store::get_record`].
+    pub(crate) fn get_record(&self, key: &Key) -> Option<Vec<u8>> {
+        self.shared.get(FileKind::Record, key.hash())
+    }
+
+    /// [`Store::put_hint`].
+    pub(crate) fn put_hint(&self, key: &Key, payload: &[u8]) -> Result<(), StoreError> {
+        put_entry(&self.shared, FileKind::Hint, key.hash(), payload)
+    }
+}
+
+/// Hands an entry to the writer: [`Store::put`].
+fn put_entry(
+    shared: &Arc<Shared>,
+    kind: FileKind,
+    name: Hash128,
+    payload: &[u8],
+) -> Result<(), StoreError> {
+    let id = (kind, name);
+    let digest = match kind {
+        FileKind::Blob => name,
+        FileKind::Record | FileKind::Hint => Hash128::of(payload),
+    };
+    let writer = &shared.writer;
+    if writer.has(id, digest) {
+        return Ok(());
+    }
+    let mut file = Vec::with_capacity(HEADER_LEN.saturating_add(payload.len()));
+    file.extend_from_slice(&header(kind, shared.build, payload.len()));
+    file.extend_from_slice(payload);
+    match writer.submit(id, digest, Arc::new(file)) {
+        Submit::Skip => Ok(()),
+        Submit::Queued => {
+            let shared = Arc::clone(shared);
+            rayon::spawn(move || {
+                shared.write_next();
+            });
+            Ok(())
+        }
+        Submit::Now(file) => shared.write_until_done(id, file),
+    }
+}
+
+impl Shared {
     /// Reads an entry, checking its header and, in debug builds, a blob's
     /// hash against its name; touches it when it is older than an hour
     /// (D-961). An entry this process has queued or is writing is answered
     /// from its bytes.
     fn get(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
         let id = (kind, name);
-        let writer = &self.shared.writer;
+        let writer = &self.writer;
         if let Some(file) = writer.pending(id) {
             return file.get(HEADER_LEN..).map(<[u8]>::to_vec);
         }
-        let payload = self.shared.read_entry(kind, name).filter(|bytes| {
+        let payload = self.read_entry(kind, name).filter(|bytes| {
             kind != FileKind::Blob || !cfg!(debug_assertions) || Hash128::of(bytes) == name
         });
         match (&payload, kind) {

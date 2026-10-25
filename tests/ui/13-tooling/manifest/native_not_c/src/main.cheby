@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-940
+// @milestone: M3
+//! Every source of `[native]` ends in `.c`: a header in `sources` is
+//! E0036, since the compiler finds headers through `#include` (§12.5.4).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

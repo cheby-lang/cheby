@@ -1,0 +1,6 @@
+error[E0036]: the C source `src/missing.c` does not exist
+ --> tests/ui/13-tooling/manifest/native_missing_source/cheby.toml:5:12
+  |
+5 | sources = ["src/missing.c"]
+  |            ^^^^^^^^^^^^^^^
+

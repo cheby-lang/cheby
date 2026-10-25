@@ -97,6 +97,21 @@ pub unsafe fn size(map: Word) -> usize {
     unsafe { any_root(map) }.0.count()
 }
 
+/// A map (every value `Some`) or a set (every value `None`) built under
+/// `seed` from owned entries, in order, a repeated key keeping the first
+/// key and the last value as `map::from_list` does (D-329): installing a
+/// constant's image builds its maps and sets this way (D-979, D-196),
+/// with no list of pairs and no second trie. Runs no Cheby code unless a
+/// key's hashing reaches `@std_hooks`. O(n).
+pub(crate) fn from_entries(
+    coll: Collection,
+    seed: u64,
+    entries: impl IntoIterator<Item = (Word, Option<Word>)>,
+) -> Word {
+    node::register();
+    ops::build(coll, seed, entries).word()
+}
+
 /// Consumes a map or set and returns an equal one built under `seed`
 /// (D-196, plan §7.6): itself when it is empty or already has that seed,
 /// otherwise a new trie of the same entries, whose keys and values gain a

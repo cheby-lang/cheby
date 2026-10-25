@@ -5,7 +5,9 @@
 //! timeout around a read abandons the read's refill, whose line stays in
 //! standard input's reader for the next read, and does not hold the exit
 //! (D-1065); a timeout around a file write waits for the write (D-670); one
-//! `println` is one write.
+//! `println` is one write. The `stdin_mix_*` tests read standard input
+//! through `file::stdin()` handles and `io::read_line` together (D-1071,
+//! D-823), and check that reads under timeouts lose no line (D-1065).
 //!
 //! Each test runs its program as a child at `CHEBY_THREADS` 1, 2 and 4. A
 //! test that waits ends through the child's output or through closing its
@@ -802,4 +804,244 @@ fn blocking_io_fibers_write_and_read_back_their_own_files() {
             out.describe_status()
         );
     }
+}
+
+/// Standard input through a `stdin()` handle and `io::read_line` in turn,
+/// then the rest as bytes; output through a `stdout()` handle and
+/// `io::print` in turn.
+const STDIN_MIX: &str = r#"//! Reads standard input through a `stdin()` handle and `io::read_line` in
+//! turn, then the rest as bytes, and writes what it read through a
+//! `stdout()` handle and `io::print` in turn.
+
+import std::bytes
+import std::file
+import std::io
+
+fn line_or(read: Result<Option<String>, io::Error>) -> String {
+  case read {
+    Ok(Some(line)) => line
+    Ok(None) => "end"
+    Err(_) => "failed"
+  }
+}
+
+fn count_rest(input: file::File, total: Int) -> Int {
+  case file::read_bytes(input, 65_536) {
+    Ok(Some(data)) => count_rest(input, total + bytes::length(data))
+    Ok(None) => total
+    Err(_) => -1
+  }
+}
+
+fn main() {
+  let input = file::stdin()
+  let output = file::stdout()
+  let first = line_or(file::read_line(input))
+  let second = line_or(io::read_line())
+  let third = line_or(file::read_line(input))
+  let fourth = line_or(io::read_line())
+  let rest = count_rest(input, 0)
+  let _ = file::write(output, "<{first}>")
+  io::print("<{second}>")
+  let _ = file::write(output, "<{third}>")
+  io::print("<{fourth}>")
+  let _ = file::write_line(output, "<{rest}>")
+  io::println("done")
+}
+"#;
+
+/// D-1071, D-823, D-365, D-574: `file::read_line(file::stdin())` and
+/// `io::read_line()` take lines from standard input's one reader in input
+/// order, a `stdin()` handle reads the rest as bytes, and text written
+/// through a `stdout()` handle and through `io::print` comes out in the
+/// order it was written.
+#[test]
+fn stdin_mix_handle_and_io_reads_keep_the_input_order() {
+    let dir = package("stdin_mix", STDIN_MIX);
+    for threads in THREADS {
+        let out = run_with_input(&dir, threads, Some(b"one\ntwo\r\nthree\nfour\nfive\nsix"));
+        assert_eq!(out.stderr, "", "CHEBY_THREADS={threads}");
+        assert_eq!(
+            out.stdout, "<one><two><three><four><8>\ndone\n",
+            "CHEBY_THREADS={threads}"
+        );
+        assert_eq!(
+            out.status,
+            Some(0),
+            "CHEBY_THREADS={threads}: {}",
+            out.describe_status()
+        );
+    }
+}
+
+/// A 100 ms timeout around `file::read_line(file::stdin())`, then a second
+/// read through `io::read_line`.
+const TIMED_HANDLE_READ: &str = r#"//! A 100 ms timeout around `file::read_line(file::stdin())`, then a
+//! second read through `io::read_line`.
+
+import std::duration
+import std::fiber
+import std::file
+import std::io
+
+fn main() {
+  io::println("waiting")
+  let input = file::stdin()
+  case fiber::timeout(duration::milliseconds(100), fn() { file::read_line(input) }) {
+    Err(fiber::TimedOut) => io::println("TimedOut")
+    Err(fiber::Panicked(_)) => io::println("panicked")
+    Ok(_) => io::println("returned in time")
+  }
+  case io::read_line() {
+    Ok(Some(line)) => io::println("next: {line}")
+    Ok(None) => io::println("next: end of input")
+    Err(_) => io::println("next: failed")
+  }
+}
+"#;
+
+/// D-1065, D-1071: a cancellation abandons the refill of a `stdin()`
+/// handle's read, which is standard input's one reader: `TimedOut` comes
+/// before the test writes anything, and the line written afterwards
+/// reaches the next read, made through `io::read_line`.
+#[test]
+fn stdin_mix_a_cancelled_handle_refill_loses_no_line() {
+    let dir = package("timed_handle_read", TIMED_HANDLE_READ);
+    for threads in THREADS {
+        let mut child = Running::start(&dir, threads);
+        let (waiting, first) = child.next_line_at("first line");
+        assert_eq!(first, "waiting");
+        let (timed_out, result) = child.next_line_at("timeout's result");
+        assert_eq!(result, "TimedOut", "CHEBY_THREADS={threads}");
+        let gap = timed_out.saturating_duration_since(waiting);
+        assert!(
+            gap >= TIMED_OUT_AFTER,
+            "CHEBY_THREADS={threads}: `TimedOut` {gap:?} after `waiting`"
+        );
+        child.write("first\n");
+        assert_eq!(
+            child.next_line("next read's line"),
+            "next: first",
+            "CHEBY_THREADS={threads}"
+        );
+        let (status, rest) = child.finish();
+        assert_eq!(rest, Vec::<String>::new(), "CHEBY_THREADS={threads}");
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}");
+    }
+}
+
+/// Reads standard input with `io::read_line` in a loop under
+/// `fiber::timeout`, and prints every line it gets.
+const TIMED_READ_LOOP: &str = r#"//! Reads standard input with `io::read_line` in a loop under
+//! `fiber::timeout`, waiting 25 us after a line and a quarter longer after
+//! each timeout, and prints every line it gets. A wait past a second ends
+//! the loop, so a lost line costs seconds, never a hang.
+
+import std::duration
+import std::fiber
+import std::io
+
+fn collect(count: Int, wait: Int) -> Int {
+  case wait > 1_000_000 {
+    True => count
+    False => {
+      let attempt = fiber::timeout(duration::microseconds(wait), fn() { io::read_line() })
+      case attempt {
+        Ok(Ok(Some(line))) => {
+          io::println("got {line}")
+          collect(count + 1, 25)
+        }
+        Ok(Ok(None)) => count
+        Ok(Err(_)) => count
+        Err(_) => collect(count, wait + wait / 4 + 1)
+      }
+    }
+  }
+}
+
+fn main() {
+  let total = collect(0, 25)
+  io::println("total {total}")
+}
+"#;
+
+/// [`TIMED_READ_LOOP`] through a `stdin()` handle.
+const TIMED_HANDLE_READ_LOOP: &str = r#"//! Reads standard input through a `stdin()` handle in a loop under
+//! `fiber::timeout`, waiting 25 us after a line and a quarter longer after
+//! each timeout, and prints every line it gets. A wait past a second ends
+//! the loop, so a lost line costs seconds, never a hang.
+
+import std::duration
+import std::fiber
+import std::file
+import std::io
+
+fn collect(input: file::File, count: Int, wait: Int) -> Int {
+  case wait > 1_000_000 {
+    True => count
+    False => {
+      let attempt = fiber::timeout(duration::microseconds(wait), fn() { file::read_line(input) })
+      case attempt {
+        Ok(Ok(Some(line))) => {
+          io::println("got {line}")
+          collect(input, count + 1, 25)
+        }
+        Ok(Ok(None)) => count
+        Ok(Err(_)) => count
+        Err(_) => collect(input, count, wait + wait / 4 + 1)
+      }
+    }
+  }
+}
+
+fn main() {
+  let total = collect(file::stdin(), 0, 25)
+  io::println("total {total}")
+}
+"#;
+
+/// How many lines the timed loops are given, one every
+/// [`SLOW_LINE_GAP`].
+const SLOW_LINES: usize = 40;
+
+/// The gap between two lines written to a timed loop: long enough that
+/// many timeouts fire while a read waits, some of them while its line
+/// arrives.
+const SLOW_LINE_GAP: Duration = Duration::from_millis(3);
+
+/// Runs a timed loop at every thread count, writing [`SLOW_LINES`] lines
+/// slowly, and checks that every line arrived once and in order.
+fn every_line_arrives_once(name: &str, program: &str) {
+    let dir = package(name, program);
+    for threads in THREADS {
+        let mut child = Running::start(&dir, threads);
+        for index in 1..=SLOW_LINES {
+            child.write(&format!("line {index}\n"));
+            std::thread::sleep(SLOW_LINE_GAP);
+        }
+        let (status, lines) = child.finish();
+        let mut expected: Vec<String> = (1..=SLOW_LINES)
+            .map(|index| format!("got line {index}"))
+            .collect();
+        expected.push(format!("total {SLOW_LINES}"));
+        assert_eq!(lines, expected, "CHEBY_THREADS={threads}");
+        assert_eq!(status, Some(0), "CHEBY_THREADS={threads}");
+    }
+}
+
+/// D-1065, D-1000 (the wave-5 session's Open item): `io::read_line`
+/// returns its kernel's `Ok` with no call after the kernel, so a timeout
+/// that fires while the kernel returns a line cannot drop it, and a timeout
+/// while a refill waits leaves the refill's line for the next read: every
+/// line written slowly to a loop of timed reads arrives once and in order.
+#[test]
+fn stdin_mix_timed_reads_lose_no_line() {
+    every_line_arrives_once("timed_read_loop", TIMED_READ_LOOP);
+}
+
+/// D-1065, D-1071: the same through a `stdin()` handle, whose wrapper
+/// calls nothing after its kernel either.
+#[test]
+fn stdin_mix_timed_handle_reads_lose_no_line() {
+    every_line_arrives_once("timed_handle_read_loop", TIMED_HANDLE_READ_LOOP);
 }

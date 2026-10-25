@@ -37,12 +37,26 @@
 //! 4. When everything evaluated, each constant that exists on `js` is
 //!    walked by its type for an `Int` outside ±(2⁵³ − 1) (E0078, D-540),
 //!    if the caller passed the types ([`evaluate_with`]).
-//! 5. When code runs afterwards ([`ConstMode::Run`]) and nothing failed,
-//!    every `Map` and `Set` in the results is rebuilt with the per-process
-//!    seed in one memoized, inner-first pass (D-196, D-539).
-//! 6. Every result is frozen in place (count 0, out of the build's
-//!    accounting domain, D-539, D-564), so code reads constants without
-//!    counting and they never show up as leaks.
+//! 5. When a constant failed, every result is frozen in place (count 0,
+//!    out of the build's accounting domain, D-539, D-564). Otherwise the
+//!    results stay counted in the JIT's domain, each slot owning its
+//!    value, until the caller writes their images and then either
+//!    [`release`]s them or, to keep them in a JIT it returns (`cheby
+//!    check`), [`freeze`]s them.
+//!
+//! Every command evaluates in a JIT of its own on `plain` code (D-978,
+//! GAP(const-eval-code)), which the driver drops once [`images`] has
+//! written each result as an image that describes values (D-979,
+//! `cheby_runtime::consteval::image`) and [`release`] has freed the
+//! results, so a large constant costs its installed copy and nothing of
+//! the evaluation (the wave-6 review's R-1). Code that runs reads constants
+//! only from images that [`install`] put into its JIT's slots before the
+//! entry runs, with every `Map` and `Set` built with the per-process seed
+//! (D-196): fresh results and, from K5b, cached ones take that one path.
+//! The REPL evaluates in its session JIT and replaces each result with an
+//! installed copy of its in-process image ([`replace_with_images`],
+//! GAP(repl-constant-images)). `cheby check` writes images and installs
+//! nothing.
 
 mod range;
 
@@ -56,13 +70,14 @@ use cheby_jit::{Jit, JitError};
 use cheby_mir::EntryKind;
 use cheby_package::{Target, Targets};
 use cheby_runtime::abi::PanicKind;
-use cheby_runtime::consteval::{Abandoned, ConstTable, Limit, UNRESOLVED_MESSAGE};
+use cheby_runtime::consteval::{Abandoned, ConstTable, Limit, UNRESOLVED_MESSAGE, image};
 use cheby_runtime::{ConstEvalLimits, EntryConfig, EntryMode, EntryOutcome, PanicReport};
 
+pub use cheby_runtime::consteval::image::ConstImage;
 pub use range::ConstTypes;
 
-/// Which command evaluates: `cheby check` skips the D-196 rebuild of maps
-/// and sets (D-539).
+/// Which command evaluates: `cheby check` installs nothing (D-979); the
+/// others install the images in the JIT that runs code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConstMode {
     /// `cheby check`: evaluates and reports, never runs code afterwards.
@@ -89,6 +104,8 @@ pub struct ConstInfo {
     pub def: DefId,
     /// The constant's name, for messages.
     pub name: Box<str>,
+    /// The constant's path, `module::name`, which names its image (D-979).
+    pub path: Box<str>,
     /// The span of the constant's name, where its diagnostics point.
     pub name_span: Span,
     /// Its D-269 hash seed (D-538).
@@ -98,9 +115,13 @@ pub struct ConstInfo {
 }
 
 /// Evaluates `order` (from `Reach::constant_order`) in `jit`, storing each
-/// result in its slot; returns the diagnostics (E0069, E0075-E0077). Every
-/// constant of `order` must have its slot and its constant entry thunk in
-/// `jit`. `Check` skips the D-196 rebuild (plan §7.6). Without the types
+/// result in its slot; returns the diagnostics (E0069, E0075-E0077). With
+/// no diagnostic, each slot owns its result, counted in `jit`'s domain:
+/// the caller writes the [`images`], then calls [`release`], [`freeze`]
+/// or [`replace_with_images`]. With diagnostics, every result is frozen.
+/// Every constant of `order` must have its slot and its
+/// constant entry thunk in `jit`. Maps and sets keep their constants'
+/// seeds: [`install`] builds them with the process seed (D-196). Without the types
 /// of [`evaluate_with`] there is no JS range check (E0078): a REPL session
 /// runs only on native.
 ///
@@ -192,11 +213,246 @@ pub fn evaluate_with(
             }
         }
     }
-    if diagnostics.is_empty() && config.mode == ConstMode::Run {
-        rebuild(jit, &slots)?;
+    // A failed evaluation keeps what it computed frozen, as before images
+    // (nothing installs it); a successful one leaves its results to the
+    // caller, who writes their images and then releases them (R-1).
+    if !diagnostics.is_empty() {
+        freeze_slots(jit, &slots);
     }
-    freeze(jit, &slots);
     Ok(diagnostics)
+}
+
+/// Makes the evaluated results of `order` static in place (D-539), for a
+/// JIT that keeps them after evaluation: `cheby check`'s, whose build is
+/// its evaluation module and whose caller reads the slots. Call it after
+/// [`images`].
+///
+/// # Errors
+///
+/// An [`Ice`] if a constant has no slot.
+pub fn freeze(jit: &Jit, order: &[ConstInfo]) -> Result<(), Ice> {
+    let slots = slots_of(jit, order)?;
+    freeze_slots(jit, &slots);
+    Ok(())
+}
+
+/// Frees the evaluated results of `order` (the wave-6 review's R-1): takes
+/// each one out of its slot, which becomes empty, and drops it in `jit`'s
+/// domain, so an evaluation module costs nothing once [`images`] wrote
+/// its results. Call it after [`images`] and any debug dump, before `jit`
+/// is dropped (freeing reads the layouts `jit` registered).
+///
+/// # Errors
+///
+/// An [`Ice`] if a constant has no slot.
+pub fn release(jit: &Jit, order: &[ConstInfo]) -> Result<(), Ice> {
+    let slots = slots_of(jit, order)?;
+    let words: Vec<u64> = slots
+        .iter()
+        .map(|&slot| {
+            // SAFETY: a constant's slot in `jit`, 8-aligned and writable;
+            // no entry runs meanwhile.
+            unsafe { slot.replace(0) }
+        })
+        .collect();
+    release_words(jit, &words);
+    Ok(())
+}
+
+/// Drops `words`, evaluated results that their slots no longer hold, in
+/// `jit`'s domain.
+fn release_words(jit: &Jit, words: &[u64]) {
+    cheby_runtime::alloc::with_domain(jit.domain(), || {
+        for &word in words {
+            if word != 0 {
+                // SAFETY: an owned result of an evaluation in `jit`,
+                // charged to its domain, now the current one; the caller
+                // gave it up, and nothing else reads it.
+                unsafe { cheby_runtime::rc::drop(word) };
+            }
+        }
+    });
+}
+
+/// The slots of `order` in `jit`.
+fn slots_of(jit: &Jit, order: &[ConstInfo]) -> Result<Vec<*mut u64>, Ice> {
+    order
+        .iter()
+        .map(|info| {
+            jit.const_slot(info.def)
+                .ok_or_else(|| Ice::new(format!("the constant `{}` has no slot", info.path)))
+        })
+        .collect()
+}
+
+/// The REPL's path (GAP(repl-constant-images)): replaces each evaluated
+/// result of `order` in its slot of `jit`, the session JIT, by its
+/// installed copy (D-979), then frees the results (R-1). The images are
+/// in-process ones: a static object a result holds, such as an earlier
+/// entry's installed constant or a literal of the session's code, is
+/// shared by address, never copied (D-539, the wave-6 review's R-2).
+/// Call it after [`evaluate`] reported nothing.
+///
+/// # Errors
+///
+/// An [`Ice`] if a constant has no slot or value, its value holds
+/// something no image describes, or installing fails.
+pub fn replace_with_images(jit: &Jit, order: &[ConstInfo]) -> Result<(), Ice> {
+    let slots = slots_of(jit, order)?;
+    let mut roots: Vec<(&str, u64)> = Vec::with_capacity(order.len());
+    for (info, slot) in order.iter().zip(&slots) {
+        // SAFETY: a constant's slot in `jit`, 8-aligned and readable; no
+        // entry runs meanwhile.
+        let word = unsafe { slot.read() };
+        if word == 0 {
+            return Err(Ice::new(format!(
+                "the constant `{}` has no value",
+                info.path
+            )));
+        }
+        roots.push((&info.path, word));
+    }
+    // SAFETY: each word is an evaluated result in `jit`'s heap, live while
+    // its slot owns it; the static objects it reaches are the process's
+    // or the session JIT's, which outlive every slot of the session.
+    let images =
+        unsafe { image::serialize_in_process(&roots) }.map_err(|e| Ice::new(e.to_string()))?;
+    let words: Vec<u64> = roots.iter().map(|&(_, word)| word).collect();
+    install_with(jit, &images, order, true)?;
+    // The slots now hold the installed copies; the results are the
+    // caller's no longer.
+    release_words(jit, &words);
+    Ok(())
+}
+
+/// The image of each evaluated constant of `order` (D-979), in its order:
+/// an object two of them share is stored once (D-539). Call it after
+/// [`evaluate`] reported nothing, before `jit` is dropped.
+///
+/// # Errors
+///
+/// An [`Ice`] if a constant has no slot or no value, or its value holds
+/// something no image describes (E0068 keeps closures and handles out).
+pub fn images(jit: &Jit, order: &[ConstInfo]) -> Result<Vec<ConstImage>, Ice> {
+    let mut roots: Vec<(&str, u64)> = Vec::with_capacity(order.len());
+    for info in order {
+        let slot = jit
+            .const_slot(info.def)
+            .ok_or_else(|| Ice::new(format!("the constant `{}` has no slot", info.path)))?;
+        // SAFETY: a constant's slot in `jit`, 8-aligned and readable; no
+        // entry runs meanwhile.
+        let word = unsafe { slot.read() };
+        if word == 0 {
+            return Err(Ice::new(format!(
+                "the constant `{}` has no value",
+                info.path
+            )));
+        }
+        roots.push((&info.path, word));
+    }
+    // SAFETY: each word is an evaluated constant's value in `jit`'s heap,
+    // owned by its slot (or frozen), live during the call; no entry runs
+    // meanwhile.
+    unsafe { image::serialize(&roots) }.map_err(|e| Ice::new(e.to_string()))
+}
+
+/// Installs `images` into `jit`'s slots of the constants of `order`, by
+/// path, before any entry of `jit` runs (D-979, D-535): with
+/// `cheby_runtime::consteval::image::install`, the routine every host
+/// calls, on an entry with `jit`'s trampolines (a key's hash may call a
+/// type's `@std_hooks` closure), user constructors resolved to the
+/// layouts `jit`'s module records registered (D-1169).
+///
+/// # Errors
+///
+/// An [`Ice`] if an image cannot be installed (it is checked whole before
+/// any slot is written) or the entry fails.
+pub fn install(jit: &Jit, images: &[ConstImage], order: &[ConstInfo]) -> Result<(), Ice> {
+    install_with(jit, images, order, false)
+}
+
+/// [`install`], of in-process images (GAP(repl-constant-images)) when
+/// `in_process`.
+fn install_with(
+    jit: &Jit,
+    images: &[ConstImage],
+    order: &[ConstInfo],
+    in_process: bool,
+) -> Result<(), Ice> {
+    if images.is_empty() {
+        return Ok(());
+    }
+    let addresses: Vec<usize> = jit.module_records().iter().map(|r| r.address).collect();
+    // SAFETY: `jit`'s registered records, live while `jit` is.
+    let types = unsafe { cheby_runtime::image::type_layouts_at(&addresses) }
+        .map_err(|e| Ice::new(format!("installing constants: {e}")))?;
+    let mut slots: BTreeMap<Box<str>, usize> = BTreeMap::new();
+    for info in order {
+        if let Some(slot) = jit.const_slot(info.def) {
+            slots.insert(info.path.clone(), slot.expose_provenance());
+        }
+    }
+    // The entry's task must be `'static`: it gets the images' address and
+    // count, not a copy of their bytes, and reads them while this call
+    // waits for the entry (the wave-6 review's R-1).
+    let (address, len) = (images.as_ptr().expose_provenance(), images.len());
+    let result: Arc<Mutex<Option<Result<(), image::ConstImageError>>>> = Arc::default();
+    let out = Arc::clone(&result);
+    let task = move || {
+        let mut slot_of = |path: &str| {
+            slots
+                .get(path)
+                .map(|&address| std::ptr::with_exposed_provenance_mut::<u64>(address))
+        };
+        // SAFETY: `images` is borrowed for this whole call, and `run_task`
+        // returns only once the task has ended (an entry that ended the
+        // program never comes back to it); `address` and `len` are its
+        // pointer and length.
+        let images = unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::with_exposed_provenance::<ConstImage>(address),
+                len,
+            )
+        };
+        // SAFETY: each slot is a constant slot of the JIT, writable data
+        // that no entry reads yet (a REPL's detached fibers load it
+        // atomically); the layouts are the JIT's registered ones; an
+        // in-process image's addresses are static objects of the process
+        // or of this session's JIT, which outlive its slots.
+        let installed = unsafe {
+            if in_process {
+                image::install_in_process(images, &mut slot_of, &types)
+            } else {
+                image::install(images, &mut slot_of, &types)
+            }
+        };
+        *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(installed);
+        0
+    };
+    let config = EntryConfig {
+        callbacks: jit.callbacks(),
+        domain: jit.domain(),
+        unwind_edges: jit.unwind_edges(),
+        ..EntryConfig::new(EntryMode::Run)
+    };
+    // SAFETY: the trampolines are `jit`'s, valid while `jit` lives, which
+    // outlives the call.
+    match unsafe { cheby_runtime::entry::run_task(&config, task) } {
+        Ok(EntryOutcome::Returned(_)) => {
+            match result.lock().unwrap_or_else(PoisonError::into_inner).take() {
+                Some(Ok(())) => Ok(()),
+                Some(Err(e)) => Err(Ice::new(format!("installing constants: {e}"))),
+                None => Err(Ice::new("installing constants returned no result")),
+            }
+        }
+        Ok(EntryOutcome::Panicked(report)) => Err(Ice::new(format!(
+            "installing constants panicked: {}",
+            report.message
+        ))),
+        Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
+        Ok(EntryOutcome::Deadlocked(_)) => Err(Ice::new("installing constants deadlocked")),
+        Err(e) => Err(Ice::new(format!("installing constants: {e}"))),
+    }
 }
 
 /// The debug text (§3.13) of each evaluated constant's value, in the order
@@ -222,7 +478,8 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
         let printed = words
             .iter()
             .map(|&word| {
-                // SAFETY: an evaluated constant's frozen value, or 0.
+                // SAFETY: an evaluated constant's value, owned by its slot
+                // (or frozen) while the host waits for this entry, or 0.
                 (word != 0).then(|| unsafe { cheby_runtime::generic::debug_string(word) })
             })
             .collect();
@@ -237,8 +494,9 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
         unwind_edges: jit.unwind_edges(),
         ..EntryConfig::new(EntryMode::Test)
     };
-    // SAFETY: the trampolines are `jit`'s, and the words its frozen
-    // constants, valid while `jit` lives, which outlives the call.
+    // SAFETY: the trampolines are `jit`'s, and the words its constants'
+    // values, which their slots keep alive while `jit` lives, which
+    // outlives the call.
     match unsafe { cheby_runtime::entry::run_task(&config, task) } {
         Ok(EntryOutcome::Returned(_)) => Ok(std::mem::take(
             &mut *texts.lock().unwrap_or_else(PoisonError::into_inner),
@@ -297,47 +555,6 @@ fn js_range(
              `@target(native)`",
         )
     }))
-}
-
-/// Rebuilds every `Map` and `Set` in the results with the per-process seed
-/// (D-196, D-539), on an entry with the JIT's trampolines, since hashing a
-/// key may call a type's `@std_hooks` closure.
-fn rebuild(jit: &Jit, slots: &[*mut u64]) -> Result<(), Ice> {
-    // SAFETY: each slot is a constant's slot in `jit`, readable; it holds
-    // 0 or this evaluation's value. No entry runs meanwhile.
-    let words: Vec<u64> = slots.iter().map(|&slot| unsafe { slot.read() }).collect();
-    let seed = cheby_runtime::generic::process_seed();
-    let config = EntryConfig {
-        callbacks: jit.callbacks(),
-        domain: jit.domain(),
-        unwind_edges: jit.unwind_edges(),
-        ..EntryConfig::new(EntryMode::ConstEval(ConstEvalLimits {
-            seed,
-            ..ConstEvalLimits::default()
-        }))
-    };
-    let task = move || {
-        // SAFETY: the evaluated values, live and charged to the JIT's
-        // domain, which is the entry's; nothing else uses them meanwhile.
-        unsafe { cheby_runtime::consteval::rebuild_collections(&words, seed) };
-        0
-    };
-    // SAFETY: the trampolines are `jit`'s, valid while `jit` lives, which
-    // outlives the call.
-    match unsafe { cheby_runtime::entry::run_task(&config, task) } {
-        Ok(EntryOutcome::Returned(_)) => Ok(()),
-        // Hashing ran the same code when the constants were evaluated, so
-        // it cannot panic now.
-        Ok(EntryOutcome::Panicked(report)) => Err(Ice::new(format!(
-            "rebuilding the maps and sets of constants panicked: {}",
-            report.message
-        ))),
-        Ok(EntryOutcome::Exited(status)) => Err(exited(jit, status)),
-        Ok(EntryOutcome::Deadlocked(_)) => {
-            Err(Ice::new("a constant evaluation cannot deadlock (E0077)"))
-        }
-        Err(e) => Err(Ice::new(format!("rebuilding constants: {e}"))),
-    }
 }
 
 /// An isolated entry of constant evaluation ended the program with
@@ -436,7 +653,7 @@ fn limits(info: &ConstInfo, config: &ConstEvalConfig) -> ConstEvalLimits {
 
 /// Makes every evaluated result static in place (D-539): out of the
 /// build's accounting domain, never counted or freed.
-fn freeze(jit: &Jit, slots: &[*mut u64]) {
+fn freeze_slots(jit: &Jit, slots: &[*mut u64]) {
     cheby_runtime::alloc::with_domain(jit.domain(), || {
         for &slot in slots {
             // SAFETY: each slot is a constant's slot in `jit`, 8-aligned and

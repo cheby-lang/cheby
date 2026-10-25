@@ -1,0 +1,8 @@
+error[E0036]: `src/ffi.h` is not a C source
+ --> tests/ui/13-tooling/manifest/native_not_c/cheby.toml:5:12
+  |
+5 | sources = ["src/ffi.h"]
+  |            ^^^^^^^^^^^
+  |
+  = help: list only the `.c` files to compile; the compiler finds headers through `#include`
+

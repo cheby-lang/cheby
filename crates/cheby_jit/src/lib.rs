@@ -47,11 +47,15 @@
 //!   its fibers have stopped.
 //! - Runtime symbols resolve through `cheby_runtime::symbols()`; other
 //!   native symbols of `@external(native, …)` through the symbols defined
-//!   with [`Jit::define_symbol`] and then the process's dynamic symbol
-//!   table, checked before finalizing so a missing symbol is an error,
-//!   never a panic (D-532). Foreign symbols are imported by address, with
-//!   no signature, and called indirectly with each call site's C
-//!   signature, so batches may bind one symbol with different signatures.
+//!   with [`Jit::define_symbol`], then the package libraries added with
+//!   [`Jit::add_library`] in order, then the process's dynamic symbol
+//!   table (D-455, D-941, [`resolve_native`]), checked before finalizing
+//!   so a missing symbol is an error, never a panic (D-532). Foreign
+//!   symbols are imported by address, with no signature, and called
+//!   indirectly with each call site's C signature, so batches may bind one
+//!   symbol with different signatures. A name is resolved once per `Jit`
+//!   (Cranelift keeps what it found), so a library added later serves only
+//!   names no earlier batch resolved.
 //! - The code model is the one the cache and executables use (D-913,
 //!   D-921, ADR-0064): the target's fixed ISA
 //!   ([`cheby_codegen_clif::isa::host_isa`]), never the host's detected
@@ -85,8 +89,11 @@ use cheby_runtime::{
 };
 
 mod memory;
+mod native;
 #[cfg(test)]
 mod start_root_tests;
+
+pub use native::{NativeLibrary, generation_symbol, resolve as resolve_native, split_generation};
 // The tests compile and run machine code. Windows support is M6 (D-545),
 // so they are not built there. Two attributes, not `all(test, …)`, so
 // Clippy still sees a test module (`allow-unwrap-in-tests`).
@@ -190,6 +197,23 @@ pub struct CodeMemory {
 /// `Send` for Cranelift's lookup function.
 type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
 
+/// The package libraries of a [`Jit`] by generation, each in the order
+/// they were added (D-941), shared with Cranelift's lookup function:
+/// generation 0 is [`Jit::add_library`]'s, each later one a REPL
+/// `:reload`'s ([`Jit::add_library_generation`]).
+type Libraries = Arc<Mutex<Vec<Vec<Arc<NativeLibrary>>>>>;
+
+/// Where the name `name` a batch imports resolves among the runtime's
+/// symbols, the package libraries of its generation
+/// ([`split_generation`]) and the process; `None` when nothing defines it
+/// or its generation is unknown.
+fn resolve_generation(name: &str, libraries: &Libraries) -> Option<*const u8> {
+    let (symbol, generation) = split_generation(name);
+    let generations = libraries.lock().unwrap_or_else(PoisonError::into_inner);
+    let libraries = generations.get(usize::try_from(generation).ok()?)?;
+    resolve_native(symbol, libraries)
+}
+
 /// The code and data memory of a [`Jit`] after the `Jit` is dropped
 /// (D-708): [`Jit`]'s `Drop` moves its module here, and the last
 /// [`CodeToken`] (or the `Jit` itself, if it handed none out) frees it.
@@ -253,6 +277,9 @@ pub struct Jit {
     /// How much of the code arena is reserved and committed.
     memory: Arc<memory::Usage>,
     symbols: SymbolTable,
+    /// The package libraries, searched after [`Jit::symbols`] and before
+    /// the process (D-941).
+    libraries: Libraries,
     /// The accounting domain every entry of this JIT charges (plan
     /// §4.3.4): one build, one domain.
     domain: Arc<Domain>,
@@ -355,14 +382,32 @@ impl Jit {
         let mut builder = JITBuilder::with_isa(isa, cheby_codegen_clif::isa::libcall_names());
         builder.symbols(cheby_runtime::symbols());
         let symbols: SymbolTable = Arc::default();
+        let libraries: Libraries = Arc::new(Mutex::new(vec![Vec::new()]));
         let table = Arc::clone(&symbols);
+        let libs = Arc::clone(&libraries);
         // Tried before the process's symbols (Cranelift asks the last
         // lookup function first); the runtime's registry comes before both.
+        // Within it, the defined and stubbed symbols, then the package
+        // libraries in order (D-941). A name of a later library generation
+        // is resolved here whole: runtime, that generation's libraries,
+        // process ([`generation_symbol`]).
         builder.symbol_lookup_fn(Box::new(move |name| {
-            let table = table.lock().unwrap_or_else(PoisonError::into_inner);
-            table
-                .get(name)
-                .map(|&address| std::ptr::with_exposed_provenance::<u8>(address))
+            let defined = {
+                let table = table.lock().unwrap_or_else(PoisonError::into_inner);
+                table
+                    .get(name)
+                    .map(|&address| std::ptr::with_exposed_provenance::<u8>(address))
+            };
+            defined.or_else(|| {
+                if split_generation(name).1 > 0 {
+                    return resolve_generation(name, &libs);
+                }
+                let generations = libs.lock().unwrap_or_else(PoisonError::into_inner);
+                generations
+                    .first()?
+                    .iter()
+                    .find_map(|library| library.lookup(name))
+            })
         }));
         let arena = memory::ReservedArena::new(memory::ARENA_SIZE)
             .map_err(|e| JitError::Host(format!("cannot reserve memory for code: {e}")))?;
@@ -382,6 +427,7 @@ impl Jit {
             clif: Vec::new(),
             memory: usage,
             symbols,
+            libraries,
             domain: Domain::new(),
             callbacks: Callbacks::default(),
             repointed: Vec::new(),
@@ -442,6 +488,57 @@ impl Jit {
     pub unsafe fn define_symbol(&mut self, name: &str, address: *const u8) {
         let mut table = self.symbols.lock().unwrap_or_else(PoisonError::into_inner);
         table.insert(name.into(), address.expose_provenance());
+    }
+
+    /// Adds a package's shared library (D-941): later batches resolve a
+    /// native symbol in the runtime's symbols, then in the libraries in
+    /// the order they were added (build order), then in the process
+    /// (D-455). A command adds its libraries before its first
+    /// [`Jit::compile`]; a name an earlier batch resolved keeps its
+    /// address.
+    ///
+    /// # Errors
+    ///
+    /// None today: the library is open already. The `Result` leaves room
+    /// for N8b's filling of the forwarder's table.
+    pub fn add_library(&mut self, library: Arc<NativeLibrary>) -> Result<(), JitError> {
+        let mut generations = self
+            .libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(libraries) = generations.first_mut()
+            && !libraries.iter().any(|known| Arc::ptr_eq(known, &library))
+        {
+            libraries.push(library);
+        }
+        Ok(())
+    }
+
+    /// Adds a generation of package libraries, in build order, and returns
+    /// its number: a REPL `:reload` that changed the package's native code
+    /// (D-712, D-941). Code compiled from then on names its native symbols
+    /// with [`generation_symbol`] and that number, so it calls the new
+    /// libraries, while code compiled before keeps the plain names and the
+    /// libraries they resolved to; no library is ever unloaded.
+    pub fn add_library_generation(&mut self, libraries: Vec<Arc<NativeLibrary>>) -> u32 {
+        let mut generations = self
+            .libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        generations.push(libraries);
+        u32::try_from(generations.len().saturating_sub(1)).unwrap_or(u32::MAX)
+    }
+
+    /// The package libraries of generation 0, in order (D-941): those
+    /// [`Jit::add_library`] added.
+    #[must_use]
+    pub fn libraries(&self) -> Vec<Arc<NativeLibrary>> {
+        self.libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .first()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Compiles a batch of units, in order: declares and defines their
@@ -971,14 +1068,15 @@ impl Jit {
             }
         }
         let mut table = self.symbols.lock().unwrap_or_else(PoisonError::into_inner);
+        // The runtime, the package libraries of the name's generation, the
+        // process (D-455, D-941).
         let missing: Vec<String> = self
             .decls
             .foreign_symbols()
             .into_iter()
             .filter(|symbol| {
-                !runtime.iter().any(|(name, _)| name == symbol)
-                    && !table.contains_key(*symbol)
-                    && !process_defines(symbol)
+                !table.contains_key(*symbol)
+                    && resolve_generation(symbol, &self.libraries).is_none()
             })
             .map(str::to_owned)
             .collect();
@@ -998,25 +1096,6 @@ impl Jit {
         }
         Ok(())
     }
-}
-
-/// Whether the process defines `symbol`, the JIT's fallback lookup.
-#[cfg(unix)]
-fn process_defines(symbol: &str) -> bool {
-    let Ok(name) = std::ffi::CString::new(symbol) else {
-        return false;
-    };
-    // SAFETY: `name` is a valid NUL-terminated string that outlives the
-    // call, and `RTLD_DEFAULT` is a valid handle; `dlsym` only reads.
-    let address = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-    !address.is_null()
-}
-
-/// Whether the process defines `symbol`. Only the runtime's symbols are
-/// known off Unix.
-#[cfg(not(unix))]
-fn process_defines(_symbol: &str) -> bool {
-    false
 }
 
 impl Drop for Jit {

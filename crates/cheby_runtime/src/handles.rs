@@ -1,9 +1,9 @@
 //! The handle kinds of `std::channel`, `std::fiber` and `std::selector`
 //! (D-647, D-703): `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector`
-//! values are the runtime kinds 40 to 44 ([`abi::layout`]); `std::net`'s
-//! `Listener` and `Connection` are 46 and 47 (D-982), handles with a
-//! payload as 40 to 43 are, whose finalizers close their sockets
-//! (`net.rs`). 45 stays reserved for `std::file`'s `File`.
+//! values are the runtime kinds 40 to 44 ([`abi::layout`]); `std::file`'s
+//! `File` is 45 and `std::net`'s `Listener` and `Connection` are 46 and 47
+//! (D-982), handles with a payload as 40 to 43 are, whose finalizers close
+//! their files (`file.rs`) and sockets (`net.rs`).
 //!
 //! They are handles: `==` and hashing stop on them with the catchable
 //! panic of a function value, and their debug text is `<Sender>`,
@@ -11,7 +11,7 @@
 //! value of an external type (D-233, D-590), through the kinds' `handle`
 //! flag ([`CustomKind::handle`]).
 //!
-//! (D-750) The objects of kinds 40 to 43, 46 and 47 are 24 bytes:
+//! (D-750) The objects of kinds 40 to 43 and 45 to 47 are 24 bytes:
 //! the header, a pointer to the boxed Rust payload ([`HandlePayload`]), and
 //! a pointer to the payload's vtable. The payload is shared by every copy
 //! of the value (copies share the object), so it is `Send + Sync`. When the
@@ -57,7 +57,8 @@ use crate::object::{self, scan_and_layout, word_to_ptr};
 use crate::panic::fatal;
 
 /// The Rust state behind a `Sender`, `Receiver`, `Fiber` or `Scope` handle
-/// (kinds 40 to 43), or a `Listener` or `Connection` (46, 47), owned by
+/// (kinds 40 to 43), or a `File`, `Listener` or `Connection` (45 to 47),
+/// owned by
 /// the handle object and shared by every copy
 /// of the value.
 pub(crate) trait HandlePayload: Send + Sync + 'static {
@@ -70,7 +71,7 @@ pub(crate) trait HandlePayload: Send + Sync + 'static {
     fn finalize(self: Box<Self>, release: &mut dyn FnMut(Word));
 }
 
-/// The handle kinds with a payload: 40 to 43, 46 and 47.
+/// The handle kinds with a payload: 40 to 43 and 45 to 47.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HandleKind {
     /// A channel's sending handle, `std::channel.Sender` (40).
@@ -81,6 +82,8 @@ pub(crate) enum HandleKind {
     Fiber,
     /// A scope handle, `std::fiber.Scope` (43).
     Scope,
+    /// A file or a standard stream, `std::file.File` (45, D-982, D-1071).
+    File,
     /// A TCP listener, `std::net.Listener` (46, D-982).
     Listener,
     /// A TCP connection, `std::net.Connection` (47, D-982).
@@ -95,6 +98,7 @@ impl HandleKind {
             Self::Receiver => ids::RECEIVER,
             Self::Fiber => ids::FIBER,
             Self::Scope => ids::SCOPE,
+            Self::File => ids::FILE,
             Self::Listener => ids::LISTENER,
             Self::Connection => ids::CONNECTION,
         }
@@ -368,6 +372,7 @@ static SENDER_KIND: CustomKind = handle_kind("Sender");
 static RECEIVER_KIND: CustomKind = handle_kind("Receiver");
 static FIBER_KIND: CustomKind = handle_kind("Fiber");
 static SCOPE_KIND: CustomKind = handle_kind("Scope");
+static FILE_KIND: CustomKind = handle_kind("File");
 static LISTENER_KIND: CustomKind = handle_kind("Listener");
 static CONNECTION_KIND: CustomKind = handle_kind("Connection");
 
@@ -384,7 +389,7 @@ static SELECTOR_KIND: CustomKind = CustomKind {
     shape: layout::KindShape::Opaque,
 };
 
-/// Registers the seven kinds once per process. The layout table's builtin
+/// Registers the eight kinds once per process. The layout table's builtin
 /// initialization calls it, so they are known before any object exists.
 pub(crate) fn register() {
     static ONCE: Once = Once::new();
@@ -395,6 +400,7 @@ pub(crate) fn register() {
             (ids::FIBER, &FIBER_KIND),
             (ids::SCOPE, &SCOPE_KIND),
             (ids::SELECTOR, &SELECTOR_KIND),
+            (ids::FILE, &FILE_KIND),
             (ids::LISTENER, &LISTENER_KIND),
             (ids::CONNECTION, &CONNECTION_KIND),
         ] {
@@ -724,10 +730,19 @@ pub(crate) mod tests {
                 int_word(0),
             ]);
             words.push(empty);
+            // Tier 3's handles (D-982), counted after `Selector`
+            // (GAP(leaked-kinds-tier3)).
+            for kind in [
+                HandleKind::File,
+                HandleKind::Listener,
+                HandleKind::Connection,
+            ] {
+                words.push(counted(kind, &finalized, Vec::new()));
+            }
             let expected = if cfg!(debug_assertions) {
-                [1, 2, 1, 1, 1]
+                [1, 2, 1, 1, 1, 1, 1, 1]
             } else {
-                [0; 5]
+                [0; 8]
             };
             assert_eq!(domain.live_kinds(), expected);
             let line = alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects());
@@ -735,7 +750,8 @@ pub(crate) mod tests {
                 assert_eq!(
                     line.as_deref(),
                     Some(
-                        "note: leaked 1 <Sender>, 2 <Receiver>, 1 <Fiber>, 1 <Scope>, 1 <Selector>"
+                        "note: leaked 1 <Sender>, 2 <Receiver>, 1 <Fiber>, 1 <Scope>, \
+                         1 <Selector>, 1 <File>, 1 <Listener>, 1 <Connection>"
                     )
                 );
             } else {
@@ -744,7 +760,7 @@ pub(crate) mod tests {
             release(words);
             let other = string("other");
             if cfg!(debug_assertions) {
-                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0]);
+                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0, 0, 0, 0]);
                 assert_eq!(
                     alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects()).as_deref(),
                     Some("note: leaked 1 <Receiver>, and 1 object of other kinds")
@@ -752,7 +768,7 @@ pub(crate) mod tests {
             }
             release([receiver, other]);
         });
-        assert_eq!(domain.live_kinds(), [0; 5]);
+        assert_eq!(domain.live_kinds(), [0; 8]);
         assert_eq!(domain.live_objects(), 0);
         assert_eq!(alloc::leaked_kinds_line(domain.live_kinds(), 0), None);
     }

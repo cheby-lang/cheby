@@ -49,6 +49,11 @@ pub struct UnitCode {
     /// The unit's external types, as the module record lists them (D-919):
     /// `MirModule::externals`.
     pub(crate) externals: Vec<cheby_mir::layout::ExternalDesc>,
+    /// The constants the unit initializes, in function (`DefIndex`)
+    /// order: each one's path `module::name` and the slot the unit
+    /// defines, which the module record lists (D-979,
+    /// GAP(const-image-slots)).
+    pub(crate) consts: Vec<(String, cranelift_module::DataId)>,
 }
 
 /// Compiles `unit` alone into `module`, which holds nothing else (D-917,
@@ -88,12 +93,22 @@ pub fn compile_unit<M: Module>(
     crate::declare(module, &mut decls, units, &cx, opts)?;
     let (clif, stats, defined) = crate::define_with_stats(module, units, &mut decls, &cx, opts)?;
     let types = crate::modrec::record_types(unit, &decls)?;
+    let mut consts = Vec::new();
+    for function in &unit.functions {
+        if let FnKey::ConstInit(def) = function.key {
+            let slot = decls.const_slot(def).ok_or_else(|| {
+                CodegenError::ice(format!("the constant {def:?} has no slot in its own unit"))
+            })?;
+            consts.push((unit.name(def)?.path(), slot));
+        }
+    }
     Ok(UnitCode {
         defined,
         stats,
         clif,
         types,
         externals: unit.externals.clone(),
+        consts,
     })
 }
 

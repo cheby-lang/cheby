@@ -4,5 +4,5 @@ error[E0053]: the native symbol `app_build_missing_symbol` is not defined
 14 | @external(native, "app_build_missing_symbol")
    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
    |
-   = note: the symbol must be defined by the Cheby runtime or the running process
+   = note: the symbol must be defined by the Cheby runtime, the package's native code or libraries, or the running process
 

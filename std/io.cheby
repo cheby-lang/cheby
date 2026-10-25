@@ -34,20 +34,29 @@ type Kind {
   HostNotFound,
   Closed,
   InvalidInput,
+  AlreadyExists,
+  IsADirectory,
+  NotADirectory,
+  DirectoryNotEmpty,
   Other,
 }
 
 /// The `Error` for the kernels' pair: `1` not found, `2` permission
-/// denied, `3` invalid UTF-8, `8` connection refused, `9` connection
-/// reset, `10` address in use, `11` host not found, `12` closed, `13`
-/// invalid input, anything else another kind with the operating system's
-/// message. A kind with a predicate drops the message, so its text is the
-/// same on every platform (D-345, D-981).
+/// denied, `3` invalid UTF-8, `4` already exists, `5` is a directory, `6`
+/// not a directory, `7` directory not empty, `8` connection refused, `9`
+/// connection reset, `10` address in use, `11` host not found, `12`
+/// closed, `13` invalid input, anything else another kind with the
+/// operating system's message. A kind with a predicate drops the message,
+/// so its text is the same on every platform (D-345, D-981).
 fn from_os(code: Int, message: String) -> Error {
   case code {
     1 => Error { kind: NotFound, message: "" }
     2 => Error { kind: PermissionDenied, message: "" }
     3 => Error { kind: InvalidData, message: "" }
+    4 => Error { kind: AlreadyExists, message: "" }
+    5 => Error { kind: IsADirectory, message: "" }
+    6 => Error { kind: NotADirectory, message: "" }
+    7 => Error { kind: DirectoryNotEmpty, message: "" }
     8 => Error { kind: ConnectionRefused, message: "" }
     9 => Error { kind: ConnectionReset, message: "" }
     10 => Error { kind: AddressInUse, message: "" }
@@ -73,6 +82,10 @@ fn hash(error: Error) -> (Int, String) {
     NotFound => (1, "")
     PermissionDenied => (2, "")
     InvalidData => (3, "")
+    AlreadyExists => (4, "")
+    IsADirectory => (5, "")
+    NotADirectory => (6, "")
+    DirectoryNotEmpty => (7, "")
     ConnectionRefused => (8, "")
     ConnectionReset => (9, "")
     AddressInUse => (10, "")
@@ -133,7 +146,13 @@ pub fn write_stderr(text: String) -> Result<Nil, Error> {
 /// Reads the next line from standard input, without its line ending, or
 /// `None` at the end of input (D-305).
 pub fn read_line() -> Result<Option<String>, Error> {
-  lift(sys_read_line())
+  // No call may follow the kernel on success: a call's entry check would
+  // deliver a pending cancellation and drop the line just taken from
+  // standard input's reader (D-1065).
+  case sys_read_line() {
+    Ok(line) => Ok(line)
+    Err(failure) => lift(Err(failure))
+  }
 }
 
 // Files
@@ -216,6 +235,73 @@ pub fn is_invalid_data(error: Error) -> Bool {
   }
 }
 
+/// Tells whether `error` means that something already exists at a path
+/// where a directory, or a file opened with `file::create_new`, was to be
+/// created (D-981, D-1066).
+pub fn is_already_exists(error: Error) -> Bool {
+  case error.kind {
+    AlreadyExists => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a path names a directory where a file
+/// was expected (D-981).
+pub fn is_a_directory(error: Error) -> Bool {
+  case error.kind {
+    IsADirectory => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a path names something other than a
+/// directory where a directory was expected, including a path that goes
+/// through a file (D-981).
+pub fn is_not_a_directory(error: Error) -> Bool {
+  case error.kind {
+    NotADirectory => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a directory could not be removed
+/// because it has entries (D-981).
+pub fn is_directory_not_empty(error: Error) -> Bool {
+  case error.kind {
+    DirectoryNotEmpty => True
+    _ => False
+  }
+}
+
+test "the file kinds have their predicates and fixed texts" {
+  let kinds = [
+    (4, "already exists"),
+    (5, "is a directory"),
+    (6, "not a directory"),
+    (7, "directory not empty"),
+  ]
+  fn check(rest: List<(Int, String)>) {
+    case rest {
+      [] => Nil
+      [(code, text), ..tail] => {
+        let error = from_os(code, "the system's own words")
+        assert show(error) == text
+        assert "{error:?}" == text
+        assert error == from_os(code, "other words")
+        assert error != from_os(0, "the system's own words")
+        assert is_already_exists(error) == (code == 4)
+        assert is_a_directory(error) == (code == 5)
+        assert is_not_a_directory(error) == (code == 6)
+        assert is_directory_not_empty(error) == (code == 7)
+        assert !is_not_found(error)
+        assert !is_invalid_input(error)
+        check(tail)
+      }
+    }
+  }
+  check(kinds)
+}
+
 /// Tells whether `error` means that nothing listens at the address a
 /// connection was made to (D-981).
 pub fn is_connection_refused(error: Error) -> Bool {
@@ -261,8 +347,9 @@ pub fn is_closed(error: Error) -> Bool {
   }
 }
 
-/// Tells whether `error` means that an argument could not be used, such
-/// as a port outside 0 to 65535 (D-981).
+/// Tells whether `error` means that an argument could not be used: a path
+/// that contains U+0000, a port outside 0 to 65535, or a file handle used
+/// in a mode it was not opened for (D-981).
 pub fn is_invalid_input(error: Error) -> Bool {
   case error.kind {
     InvalidInput => True
@@ -310,6 +397,10 @@ pub fn show(error: Error) -> String {
     NotFound => "not found"
     PermissionDenied => "permission denied"
     InvalidData => "invalid UTF-8"
+    AlreadyExists => "already exists"
+    IsADirectory => "is a directory"
+    NotADirectory => "not a directory"
+    DirectoryNotEmpty => "directory not empty"
     ConnectionRefused => "connection refused"
     ConnectionReset => "connection reset"
     AddressInUse => "address in use"

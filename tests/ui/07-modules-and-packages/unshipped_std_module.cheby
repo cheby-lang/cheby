@@ -1,13 +1,13 @@
 // @mode: check-fail
-// @decisions: D-477, D-480, D-554, D-729
+// @decisions: D-477, D-480, D-554, D-729, D-989
 //! An import of a standard-library module that the plan defines but
-//! `std/` does not ship yet is the only E0038 at M1's exit, and paths
-//! through such an import report nothing more.
+//! `std/` does not ship yet, `std::process` since `std::http` ships, is
+//! the only E0038, and paths through such an import report nothing more.
 
-import std::http
 import std::io
+import std::process
 
 fn main() {
-  let _ = http::get("https://example.com")
-  io::println("fetched")
+  let _ = process::exit(0)
+  io::println("exited")
 }

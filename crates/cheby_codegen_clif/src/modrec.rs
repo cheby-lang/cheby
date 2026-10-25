@@ -25,9 +25,11 @@
 //! |                     | order                                                         |
 //! | after the externals | one free-shape word (8 bytes) per constructor, in the order   |
 //! |                     | of the `CtorEntry`s                                           |
-//! | after the shapes    | the string table: each string once, `u32` length then UTF-8:  |
+//! | after the shapes    | one `ConstEntry` (16 bytes) per constant the unit initializes |
+//! |                     | (a unit alone only), in function (`DefIndex`) order           |
+//! | after the constants | the string table: each string once, `u32` length then UTF-8:  |
 //! |                     | the call sites' paths first, then the types' strings, then    |
-//! |                     | the external types' names                                     |
+//! |                     | the external types' names, then the constants' paths          |
 //!
 //! Its table pointers are relocations to the record itself with the
 //! table's offset as addend; each function's code pointer is a relocation
@@ -45,9 +47,12 @@
 //! hooks (D-482), the external types (std's handle types aside, which are
 //! runtime kinds, D-647, D-982) and the free-shape words (D-907, computed
 //! with `cheby_runtime::layout::free_shape_word`, which registration
-//! checks them against, D-1167) are filled. The
-//! constants are K5a's: they stay empty, and registration refuses what it
-//! cannot register yet. A record of a unit alone is a pure function of its
+//! checks them against, D-1167) are filled. A unit alone's record lists
+//! its constants, each path beside a data relocation to its slot, which
+//! an executable's start reads to install the program's constant images
+//! (D-979, GAP(const-image-slots)); a JIT batch's records list none, since
+//! a JIT host finds slots through `Jit::const_slot`, and a unit without
+//! constants keeps the record it had. A record of a unit alone is a pure function of its
 //! unit (D-915): it holds no layout id, which registration assigns
 //! (D-920).
 
@@ -61,8 +66,8 @@ use cheby_iface::DefId;
 use cheby_mir::layout::ExternalDesc;
 use cheby_mir::{LayoutDesc, LayoutRef, MirModule, Repr, UnitKind};
 use cheby_runtime::image::{
-    CallSiteEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry, FunctionEntry,
-    HookEntry, ModuleRecord, NO_STRING, TypeEntry,
+    CallSiteEntry, ConstEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry,
+    FunctionEntry, HookEntry, ModuleRecord, NO_STRING, TypeEntry,
 };
 use cheby_runtime::layout::{FieldKind, LayoutInfo, free_shape_word};
 
@@ -122,6 +127,10 @@ const EXTERNAL_NAME: u32 = 0;
 const EXTERNAL_KEY: u32 = 8;
 const EXTERNAL_DROP: u32 = 16;
 const SHAPE_WORD: u32 = 8;
+const CONSTANTS: u32 = 96;
+const CONST_ENTRY: u32 = 16;
+const CONST_PATH: u32 = 0;
+const CONST_SLOT: u32 = 8;
 
 // The layout written here is `image.rs`'s, checked against its structs.
 #[expect(
@@ -169,6 +178,10 @@ const _: () = {
     assert!(EXTERNAL_KEY as usize == offset_of!(ExternalEntry, type_key));
     assert!(EXTERNAL_DROP as usize == offset_of!(ExternalEntry, drop));
     assert!(SHAPE_WORD as usize == size_of::<u64>());
+    assert!(CONSTANTS == TABLES[6]);
+    assert!(CONST_ENTRY as usize == size_of::<ConstEntry>());
+    assert!(CONST_PATH as usize == offset_of!(ConstEntry, path));
+    assert!(CONST_SLOT as usize == offset_of!(ConstEntry, slot));
 };
 
 /// One user type of the unit, as its record lists it (D-919, D-522).
@@ -433,7 +446,9 @@ pub fn define_batch_records<M: Module>(
             .filter(|external| (new.external)(external.def))
             .cloned()
             .collect();
-        let data = define_record(module, None, &functions, &types, &externals)?;
+        // A JIT host finds a constant's slot by its def (`Jit::const_slot`),
+        // so a batch's records list no constant (GAP(const-image-slots)).
+        let data = define_record(module, None, &functions, &types, &externals, &[])?;
         out.push(BatchRecord { unit: index, data });
     }
     Ok(out)
@@ -477,7 +492,9 @@ fn batch_function_units(
 /// (D-917) in `module` and defines it as the module record of `code`, a
 /// unit compiled alone ([`crate::compile_unit`]): its functions in
 /// definition order, its user types ([`record_types`]), its external
-/// types and the free-shape words of its user layouts (D-919).
+/// types, the free-shape words of its user layouts (D-919) and the
+/// constants it initializes with their slots (D-979,
+/// GAP(const-image-slots)).
 ///
 /// # Errors
 ///
@@ -495,6 +512,7 @@ pub(crate) fn define_unit<M: Module>(
         &code.defined,
         &code.types,
         &code.externals,
+        &code.consts,
     )
 }
 
@@ -502,8 +520,9 @@ pub(crate) fn define_unit<M: Module>(
 /// `Linkage::Hidden` (D-917) or an anonymous one for `None` (a JIT
 /// batch's record, which nothing names), and defines it as the module
 /// record of a unit whose functions are `defined`, in definition order,
-/// whose user types are `types` ([`record_types`]) and whose external
-/// types are `externals`.
+/// whose user types are `types` ([`record_types`]), whose external
+/// types are `externals` and whose constants are `consts` (path and
+/// slot).
 ///
 /// # Errors
 ///
@@ -514,6 +533,7 @@ fn define_record<M: Module>(
     defined: &[DefinedCode],
     types: &[RecordType],
     externals: &[ExternalDesc],
+    consts: &[(String, DataId)],
 ) -> Result<DataId, RecordError> {
     let module_error = |e: cranelift_module::ModuleError| CodegenError::module(&e);
     let id = match name {
@@ -521,7 +541,7 @@ fn define_record<M: Module>(
         None => module.declare_anonymous_data(false, false),
     }
     .map_err(module_error)?;
-    let layout = Layout::new(defined, types, externals)?;
+    let layout = Layout::new(defined, types, externals, consts)?;
     let mut bytes = Bytes(vec![
         0;
         usize::try_from(layout.size).map_err(|_| too_large())?
@@ -569,6 +589,7 @@ fn define_record<M: Module>(
     }
     write_types(module, &mut desc, this, &mut bytes, &layout, types)?;
     write_externals(&mut desc, this, &mut bytes, &layout, externals)?;
+    write_consts(module, &mut desc, this, &mut bytes, &layout, consts)?;
     let strings_at = usize::try_from(layout.strings_at).map_err(|_| too_large())?;
     bytes
         .0
@@ -708,6 +729,36 @@ fn write_externals(
     Ok(())
 }
 
+/// Writes the `constants` table of the record `this` at the offset
+/// `layout` gives: each constant's path string and a data relocation to
+/// its slot (GAP(const-image-slots)).
+fn write_consts<M: Module>(
+    module: &mut M,
+    desc: &mut DataDescription,
+    this: GlobalValue,
+    bytes: &mut Bytes,
+    layout: &Layout,
+    consts: &[(String, DataId)],
+) -> Result<(), RecordError> {
+    let count = u64::try_from(consts.len()).map_err(|_| too_large())?;
+    bytes.u64(CONSTANTS, count)?;
+    if count > 0 {
+        desc.write_data_addr(
+            add(CONSTANTS, TABLE_PTR)?,
+            this,
+            i64::from(layout.consts_at),
+        );
+    }
+    let mut at = layout.consts_at;
+    for ((_, slot), &path) in consts.iter().zip(&layout.const_paths) {
+        bytes.u32(add(at, CONST_PATH)?, path)?;
+        let slot = module.declare_data_in_data(*slot, desc);
+        desc.write_data_addr(add(at, CONST_SLOT)?, slot, 0);
+        at = add(at, CONST_ENTRY)?;
+    }
+    Ok(())
+}
+
 /// The free-shape word of each constructor of `types`, types in order and
 /// each type's constructors in tag order: what registration derives for
 /// the layout it makes from the record's facts (D-907, D-1163), computed
@@ -788,13 +839,17 @@ struct Layout {
     ctors_at: u32,
     fields_at: u32,
     hooks_at: u32,
-    /// The offsets of the external entries and of the free-shape words.
+    /// The offsets of the external entries, of the free-shape words and
+    /// of the constant entries.
     externals_at: u32,
     shapes_at: u32,
+    consts_at: u32,
     /// Each type's strings, in the order of the types.
     type_strings: Vec<TypeStrings>,
     /// Each external type's name.
     external_names: Vec<u32>,
+    /// Each constant's path.
+    const_paths: Vec<u32>,
     /// The free-shape words ([`free_shapes`]).
     shapes: Vec<u64>,
     /// The string table's bytes.
@@ -810,6 +865,7 @@ impl Layout {
         defined: &[DefinedCode],
         types: &[RecordType],
         externals: &[ExternalDesc],
+        consts: &[(String, DataId)],
     ) -> Result<Self, RecordError> {
         let mut table = Strings::default();
         let mut sites = Vec::with_capacity(defined.len());
@@ -871,11 +927,18 @@ impl Layout {
             .iter()
             .map(|external| table.intern(&external.name))
             .collect::<Result<Vec<_>, _>>()?;
+        // The constants' paths after them, so a unit without constants
+        // keeps the string table it had before records listed them.
+        let const_paths = consts
+            .iter()
+            .map(|(path, _)| table.intern(path))
+            .collect::<Result<Vec<_>, _>>()?;
         let shapes = free_shapes(types)?;
         let functions = u32::try_from(defined.len()).map_err(|_| too_large())?;
         let type_count = u32::try_from(types.len()).map_err(|_| too_large())?;
         let external_count = u32::try_from(externals.len()).map_err(|_| too_large())?;
         let shape_count = u32::try_from(shapes.len()).map_err(|_| too_large())?;
+        let const_count = u32::try_from(consts.len()).map_err(|_| too_large())?;
         let sites_at = add(HEADER, mul(functions, FUNCTION_ENTRY)?)?;
         let types_at = add(sites_at, mul(site_count, SITE_ENTRY)?)?;
         let ctors_at = add(types_at, mul(type_count, TYPE_ENTRY)?)?;
@@ -883,7 +946,8 @@ impl Layout {
         let hooks_at = add(fields_at, mul(field_count, FIELD_ENTRY)?)?;
         let externals_at = add(hooks_at, mul(hook_count, HOOK_ENTRY)?)?;
         let shapes_at = add(externals_at, mul(external_count, EXTERNAL_ENTRY)?)?;
-        let strings_at = add(shapes_at, mul(shape_count, SHAPE_WORD)?)?;
+        let consts_at = add(shapes_at, mul(shape_count, SHAPE_WORD)?)?;
+        let strings_at = add(consts_at, mul(const_count, CONST_ENTRY)?)?;
         let strings = table.bytes;
         let size = add(
             strings_at,
@@ -898,8 +962,10 @@ impl Layout {
             hooks_at,
             externals_at,
             shapes_at,
+            consts_at,
             type_strings,
             external_names,
+            const_paths,
             shapes,
             strings,
             strings_at,

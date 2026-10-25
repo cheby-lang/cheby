@@ -315,11 +315,25 @@ priv fn describe(error: Oops) -> String {
         })
         .expect("the entries unit holds `show`'s value shim");
     assert!(facts.used_as_value(show));
+    // GAP(entries-unit-facts): only the entries unit makes `show` a
+    // value, through `main`'s error dictionary, which holds `fn app::show`
+    // itself; without its facts `show` would borrow and the counting would
+    // stop on that dictionary's call ("a borrowed use in a moving
+    // terminator"). So the entries unit's facts stay in the scope.
+    let scope: Vec<_> = units
+        .iter()
+        .filter(|u| u.unit != crate::UnitKind::Entries)
+        .collect();
+    assert!(!collect_facts(&scope).used_as_value(show));
     let m = lower_package_inferred("app", &[("", source)], false)
         .unwrap()
         .masks;
     assert_eq!(of(&m, "app::show"), BorrowMask::OWNED, "{m:?}");
     assert_eq!(of(&m, "app::describe"), mask(&[0]), "{m:?}");
+    // Counted and validated with the ownership simulation, as a build.
+    let built = lower_source(&[("", source)]);
+    let shim = built.any_function("shim app::show");
+    assert!(!shim.contains("borrow"), "{shim}");
 }
 
 #[test]

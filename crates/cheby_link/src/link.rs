@@ -8,8 +8,11 @@
 //!   `MACOSX_DEPLOYMENT_TARGET` removed from its environment, so nothing
 //!   but `PATH` reaches the link from the environment (D-264).
 //! - Inputs, in this order: the module objects in build order, the program
-//!   object, the runtime archive, then the archive's system libraries
-//!   ([`crate::native_libs`]).
+//!   object, the package's C objects in `sources` order, the runtime
+//!   archive, the package's `libraries` as `-l<name>` in manifest order,
+//!   then the archive's system libraries ([`crate::native_libs`]): the
+//!   package's native code comes where D-1112's line leaves room for it
+//!   (D-940, GAP(native-link-order)).
 //! - Flags: on Linux `-pie -Wl,--gc-sections -Wl,--eh-frame-hdr
 //!   -Wl,-z,relro,-z,now -Wl,--build-id=sha1`; on macOS `-arch arm64
 //!   -mmacosx-version-min=<the archive's minimum> -Wl,-dead_strip -Wl,-S`
@@ -76,6 +79,14 @@ pub struct LinkJob<'a> {
     /// then the program object under
     /// [`crate::program::PROGRAM_OBJECT_NAME`].
     pub objects: &'a [(String, Vec<u8>)],
+    /// The package's C objects, in `sources` order, linked after the
+    /// program object (D-940, GAP(native-link-order)): `(source, object
+    /// bytes)`, the source only naming nothing but the object's place in
+    /// the list.
+    pub c_objects: &'a [(String, Vec<u8>)],
+    /// The package's `libraries`, as `-l<name>` before the archive's
+    /// system libraries (D-940, GAP(native-link-order)).
+    pub libraries: &'a [String],
     /// The runtime archive, checked with
     /// [`crate::archive::check_runtime_id`] by the caller.
     pub archive: &'a Path,
@@ -118,6 +129,12 @@ fn object_file(module: &str) -> String {
     format!("{module}.o")
 }
 
+/// The file name of the package's C object at `index` of `sources` in the
+/// temporary directory (GAP(native-link-order)).
+pub(crate) fn native_object_file(index: usize) -> String {
+    format!("native-{index}.o")
+}
+
 /// Links `job` into `job.output` (module documentation).
 ///
 /// # Errors
@@ -148,6 +165,15 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
         std::fs::write(&path, bytes).map_err(|e| io("write", &path, e))?;
         names.push(file);
     }
+    // The package's C objects follow the program object, each under its
+    // place in `sources`: no module path holds `-`, so no name collides
+    // (GAP(native-link-order)).
+    for (index, (_, bytes)) in job.c_objects.iter().enumerate() {
+        let file = native_object_file(index);
+        let path = objects.path.join(&file);
+        std::fs::write(&path, bytes).map_err(|e| io("write", &path, e))?;
+        names.push(file);
+    }
     sweep_dead(out_dir, STAGING_PREFIX);
     let staging = PrivateDir::create(out_dir, STAGING_PREFIX)?;
     let staged = staging.path.join(name);
@@ -161,6 +187,7 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
         .arg(&staged)
         .args(&names)
         .arg(job.archive)
+        .args(job.libraries.iter().map(|name| format!("-l{name}")))
         .args(native_libs::link_args());
     let output = cmd.output().map_err(|e| LinkError::NoCc(e.to_string()))?;
     if !output.status.success() {
@@ -177,14 +204,19 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
 
 /// A fresh directory only its owner can read, removed with everything in
 /// it when dropped.
-struct PrivateDir {
+pub(crate) struct PrivateDir {
     path: PathBuf,
 }
 
 impl PrivateDir {
+    /// The directory.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Creates `<parent>/<prefix>-<pid>-<n>` for the first `n` whose
     /// directory does not exist yet.
-    fn create(parent: &Path, prefix: &str) -> Result<Self, LinkError> {
+    pub(crate) fn create(parent: &Path, prefix: &str) -> Result<Self, LinkError> {
         let pid = std::process::id();
         for n in 0_u32..10_000 {
             let mut name = OsString::from(prefix);

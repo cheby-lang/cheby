@@ -1197,6 +1197,7 @@ mod control;
 mod entry_unwind;
 mod large_frame;
 mod literals;
+mod native;
 mod objects;
 mod records;
 mod repl;

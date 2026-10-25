@@ -226,14 +226,16 @@ pub mod layout {
     pub const SCOPE: LayoutId = 43;
     /// A selector node (D-695, D-703).
     pub const SELECTOR: LayoutId = 44;
-    /// A TCP listener (`std::net`, D-982). 45 stays reserved for
-    /// `std::file`'s `File`.
+    /// A file handle (`std::file`, D-982), the standard streams' handles
+    /// included (D-1071).
+    pub const FILE: LayoutId = 45;
+    /// A TCP listener (`std::net`, D-982).
     pub const LISTENER: LayoutId = 46;
     /// A TCP connection (`std::net`, D-982).
     pub const CONNECTION: LayoutId = 47;
     /// The first id of the runtime-defined kinds registered with
     /// `layout::register_builtin` (list and map nodes, the handle kinds 40
-    /// to 44, 46 and 47, the others to 63 reserved).
+    /// to 47, the others to 63 reserved).
     pub const CUSTOM_FIRST: LayoutId = LIST_FIRST;
     /// The last id reserved for builtin collection nodes (F3, F4).
     pub const BUILTIN_RESERVED_END: LayoutId = 63;
@@ -468,8 +470,10 @@ pub use crate::runtime_id::{RUNTIME_ID, RUNTIME_ID_HEX};
 
 /// The version of the program image `cb$image` and of the module records
 /// `cb$mod$<path>` (D-919), whose layout `crate::image` documents field
-/// by field. It goes up with every change of that layout.
-pub const IMAGE_VERSION: u32 = 1;
+/// by field. It goes up with every change of that layout: 2 since the
+/// module records' `constants` tables name each constant beside its slot
+/// (K5a, GAP(const-image-slots)).
+pub const IMAGE_VERSION: u32 = 2;
 
 /// Names of the C-ABI symbols generated code imports.
 /// Runtime internals are `cheby_rt_*`; kernels are
@@ -974,8 +978,11 @@ mod tests {
             ],
             [40, 41, 42, 43, 44]
         );
-        // D-982: `File` will be 45.
-        assert_eq!((layout::LISTENER, layout::CONNECTION), (46, 47));
+        // D-982: `File`, `Listener` and `Connection`.
+        assert_eq!(
+            (layout::FILE, layout::LISTENER, layout::CONNECTION),
+            (45, 46, 47)
+        );
         // Intrinsics get generated bodies and are never registered (D-693).
         for intrinsic in sym::INTRINSICS {
             assert!(intrinsic.starts_with("cheby_rt_"));

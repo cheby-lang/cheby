@@ -1,0 +1,27 @@
+// @mode: run-fail
+// @command: run
+// @exit: 1
+// @milestone: M3
+// @decisions: D-943, D-941, D-532
+//! The package's C code defines `app_present`, and nothing defines the
+//! other two symbols. `main` reaches `missing`, so its symbol is E0053
+//! before anything runs; nothing reaches `unused`, whose symbol is bound
+//! to the runtime's stub. `13-tooling/build/native_missing_symbols` builds
+//! the same package and pins the same diagnostic (§12.5).
+
+import std::io
+
+@external(native, "app_present")
+fn present() -> Int
+
+@external(native, "app_missing_reached")
+fn missing() -> Int
+
+@external(native, "app_missing_unreached")
+pub fn unused() -> Int
+
+fn main() {
+  let a = present()
+  let b = missing()
+  io::println("{a} {b}")
+}

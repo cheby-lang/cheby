@@ -14,21 +14,28 @@
 //!
 //! Before anything links, in this order:
 //!
-//! - a program that reaches a constant is a "not available yet" tool error
-//!   (D-924, until constants reach executables);
+//! - the package's `[native]` C sources are compiled (cached) and its
+//!   shared library loaded by the front end, as for `cheby run` (D-940 to
+//!   D-942); the same C objects and the `libraries` go into the link
+//!   after the program object (GAP(native-link-order));
 //! - E0053 for every native symbol that a reached `@external` names and
 //!   D-943's build resolver cannot find: the runtime's exported names,
-//!   then each system library of the archive opened by its recorded file
-//!   name ([`cheby_link::native_libs`]); a symbol that it cannot find and
+//!   then the package's shared library, then each system library of the
+//!   archive opened by its recorded file name
+//!   ([`cheby_link::native_libs`]); a symbol that it cannot find and
 //!   that only unreached functions of whole modules name gets a hidden
 //!   stub in the program object, which calls `cheby_rt_unresolved`
 //!   (D-943, [`ProgramSpec::stubs`]);
+//! - the constants `main` reaches are evaluated as under `cheby run`, in a
+//!   module of their own on `plain` code (D-978), and their errors stop the
+//!   build; their images go into the program object's constants table
+//!   ([`ProgramSpec::constants`]), which the executable's start installs
+//!   before `main` (D-979, D-924);
 //! - the runtime archive is found and its runtime ID checked (D-929,
 //!   D-930).
 //!
 //! On Windows `cheby build --target native` is a "not available yet (M6)"
-//! tool error (D-935). Those two are what remains of D-924's refusals:
-//! constants until K5a, Windows until M6.
+//! tool error (D-935), what remains of D-924's refusals.
 //!
 //! User layouts and `@std_hooks` reach executables through the module
 //! records (D-919): each record lists its unit's types, constructors,
@@ -164,6 +171,8 @@ pub fn build_cached_with(
     before_link(&output);
     cheby_link::link::link(&cheby_link::link::LinkJob {
         objects: &built.objects,
+        c_objects: &built.c_objects,
+        libraries: &built.libraries,
         archive: &archive,
         output: &built.executable,
     })
@@ -187,6 +196,11 @@ pub(crate) struct Built {
     /// `(module path, object)`: each code unit's object in build order,
     /// then the program object under [`PROGRAM_OBJECT_NAME`].
     pub objects: Vec<(String, Vec<u8>)>,
+    /// The package's C objects in `sources` order, the same cache entries
+    /// `cheby run` loads (D-940, D-942): linked after the program object.
+    pub c_objects: Vec<(String, Vec<u8>)>,
+    /// The package's `libraries`, linked as `-l<name>` (D-940).
+    pub libraries: Vec<String>,
     /// The executable's absolute path.
     pub executable: PathBuf,
 }
@@ -235,31 +249,34 @@ pub(crate) fn build_objects(
     };
     let mir = backend::mir_options_from_env()?;
     let lowered = backend::lower(&front, &out.sources, &backend::Roots::Main(main), mir)?;
-    if let Some(&constant) = lowered.reach.constant_order().first() {
-        let name = lowered
-            .units
-            .iter()
-            .find_map(|unit| unit.name(constant).ok())
-            .map_or_else(|| "a constant".to_owned(), |n| format!("`{}`", n.path()));
-        return Err(Error::new(format!(
-            "`cheby build` is not available yet for programs that use constants, such as {name} \
-             (planned for a later step of M3)"
-        )));
-    }
     let compiled = compile_records(&front, &lowered.units, main.def, mir)?;
     // D-943: E0053 for the symbols reached functions name and the build
     // resolver cannot find; a stub in the program object for each one
     // only unreached functions of whole modules name.
     let reached = backend::reached_symbols(&lowered);
-    let (missing, stubs): (Vec<String>, Vec<String>) =
-        unresolved_symbols(&compiled.records, &compiled.entries)
-            .into_iter()
-            .partition(|symbol| reached.contains(symbol));
+    let (missing, stubs): (Vec<String>, Vec<String>) = unresolved_symbols(
+        &compiled.records,
+        &compiled.entries,
+        front.native.library.as_deref(),
+    )
+    .into_iter()
+    .partition(|symbol| reached.contains(symbol));
     if !missing.is_empty() {
         let diagnostics = backend::unresolved(&front, &missing)?;
         crate::report_back_end(&mut out, diagnostics);
         return Ok(Objects::CompileFailed(out));
     }
+    // D-978, D-979: the constants `main` reaches, evaluated in a module of
+    // their own on `plain` code as under `cheby run`, go into the program
+    // object as images, which the executable's start installs (D-924).
+    let images = match backend::constant_images(&front, &out.sources, &lowered, mir)? {
+        Ok(images) => images,
+        Err(diagnostics) => {
+            crate::report_back_end(&mut out, diagnostics);
+            return Ok(Objects::CompileFailed(out));
+        }
+    };
+    let constants = cheby_runtime::consteval::image::encode_table(&images);
     let stacks = Stacks {
         main_stack: front.main_stack,
         fiber_stack: front.fiber_stack,
@@ -270,11 +287,14 @@ pub(crate) fn build_objects(
         &mangle::entry_main(&path.to_string()),
         stacks,
         &stubs,
+        &constants,
     )?;
     Ok(Objects::Ready {
         output: out,
         built: Built {
             objects,
+            c_objects: front.native.objects.clone(),
+            libraries: front.native.libraries.clone(),
             executable,
         },
     })
@@ -336,13 +356,14 @@ struct Stacks {
 
 /// The objects of the link: each record replayed under its module path,
 /// in build order, then the program object (D-915) with D-943's `stubs`
-/// (sorted). Debug toolchains first run D-918's check over the local
-/// copies.
+/// (sorted) and the constants table `constants` (D-979). Debug toolchains
+/// first run D-918's check over the local copies.
 fn write_objects(
     compiled: &Compiled<'_>,
     entry: &str,
     stacks: Stacks,
     stubs: &[String],
+    constants: &[u8],
 ) -> Result<Vec<(String, Vec<u8>)>, Error> {
     if cfg!(debug_assertions) {
         let mut copies: Vec<(&str, &CodeRecord)> = compiled
@@ -369,6 +390,7 @@ fn write_objects(
         fiber_stack: stacks.fiber_stack,
         unwind_edges: stacks.unwind_edges,
         stubs,
+        constants,
     };
     let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
     let program =
@@ -437,9 +459,15 @@ fn entries_record(
 /// The native symbols the records import that D-943's build resolver
 /// cannot find, sorted: every imported name outside the generated ones
 /// (`cb$…`) is a runtime or foreign symbol, named only by an import word
-/// (D-917). The runtime's exported names come first, then the archive's
-/// system libraries.
-fn unresolved_symbols(records: &[CodeRecord], entries: &CodeRecord) -> Vec<String> {
+/// (D-917). The runtime's exported names come first, then the package's
+/// shared library (its C code and its `libraries`, through its `dlopen`
+/// handle, D-941), then the archive's system libraries (D-943, D-1113);
+/// never the `cheby` process.
+fn unresolved_symbols(
+    records: &[CodeRecord],
+    entries: &CodeRecord,
+    package: Option<&cheby_jit::NativeLibrary>,
+) -> Vec<String> {
     let runtime = cheby_runtime::symbols();
     let mut foreign: BTreeSet<&str> = BTreeSet::new();
     for record in records.iter().chain(std::iter::once(entries)) {
@@ -447,6 +475,7 @@ fn unresolved_symbols(records: &[CodeRecord], entries: &CodeRecord) -> Vec<Strin
             if symbol.linkage == SymbolLinkage::Import
                 && !symbol.name.starts_with(mangle::PREFIX)
                 && !runtime.iter().any(|(name, _)| *name == symbol.name)
+                && package.is_none_or(|library| library.lookup(&symbol.name).is_none())
             {
                 foreign.insert(&symbol.name);
             }

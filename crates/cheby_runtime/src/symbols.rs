@@ -44,8 +44,8 @@ use crate::reuse::{
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
 use crate::{
-    bytes, consteval, desc, env, fiber_ops, hamt, io, list, net, num, random, runtime_info, text,
-    time,
+    bytes, consteval, desc, env, fiber_ops, file, hamt, io, list, net, num, random, runtime_info,
+    text, time,
 };
 
 /// The address of a static object.
@@ -156,6 +156,8 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     runtime_info::kernels(&mut out);
     time::kernels(&mut out);
     net::kernels(&mut out);
+    file::kernels(&mut out);
+    crate::http::kernels(&mut out);
     out
 }
 
@@ -177,6 +179,8 @@ pub fn complete_modules() -> Vec<&'static str> {
         runtime_info::COMPLETE,
         time::COMPLETE,
         net::COMPLETE,
+        file::COMPLETE,
+        crate::http::COMPLETE,
     ]
     .concat()
 }
@@ -615,6 +619,40 @@ mod tests {
             .collect();
         assert_eq!(registered, declared);
         assert_eq!(registered.len(), 10);
+    }
+
+    /// Every kernel of `std::file` has the C signature of its `@external`
+    /// declaration in `std/file.cheby`, after the context pointer for a
+    /// `@std_context` kernel, and carries `@std_context` exactly when its
+    /// native function takes that pointer (D-985, D-692): the fifteen that
+    /// suspend do, and `sys_std_stream`, which neither waits nor fails
+    /// (D-1071), does not.
+    #[test]
+    fn file_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("file.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            assert!(
+                declared
+                    .insert(symbol.clone(), (signature, context))
+                    .is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, ((Vec<&'static str>, &'static str), bool)> =
+            file::signatures()
+                .into_iter()
+                .map(|(name, params, result, context)| {
+                    (name.to_owned(), ((params.to_vec(), result), context))
+                })
+                .collect();
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 16);
+        assert_eq!(
+            registered.values().filter(|(_, context)| *context).count(),
+            15
+        );
     }
 
     #[test]

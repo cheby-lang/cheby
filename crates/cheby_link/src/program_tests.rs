@@ -122,6 +122,7 @@ fn spec(records: &[String]) -> ProgramSpec<'_> {
         fiber_stack: 1 << 20,
         unwind_edges: true,
         stubs: &[],
+        constants: &[],
     }
 }
 
@@ -274,6 +275,41 @@ fn link_program_image_words() {
 }
 
 /// Whether a relocation in text is PC-relative (D-913).
+/// D-979: the constants table follows the table of module records in
+/// `cb$image`, its count at 88 and a relocation to it at 96; the rest of
+/// the image is unchanged.
+#[test]
+fn link_program_constants_follow_the_module_table() {
+    for &format in Format::ALL {
+        let records = records();
+        let table = b"CHBT\x00tail";
+        let spec = ProgramSpec {
+            constants: table,
+            ..spec(&records)
+        };
+        let bytes = program_object(format.isa(), &spec, &entries(&[0, 2])).unwrap();
+        let (relocs, image) = relocs_of(format, &bytes, "cb$image");
+        assert_eq!(word(&image, 88), 9, "{format:?}");
+        let file = ::object::File::parse(&*bytes).unwrap();
+        let symbol = file
+            .symbols()
+            .find(|s| s.name().is_ok_and(|n| format.strip(n) == "cb$image"))
+            .unwrap();
+        let section = file
+            .section_by_index(symbol.section_index().unwrap())
+            .unwrap();
+        let start = usize::try_from(symbol.address() - section.address()).unwrap();
+        let data = section.data().unwrap();
+        assert_eq!(&data[start + 120..start + 129], table, "{format:?}");
+        let offsets: Vec<u64> = relocs.keys().copied().collect();
+        assert_eq!(
+            offsets,
+            [16, 24, 32, 48, 96, 104, 112],
+            "{format:?}: {relocs:?}"
+        );
+    }
+}
+
 fn pc_relative(flags: RelocationFlags) -> bool {
     match flags {
         RelocationFlags::Elf { r_type } => matches!(
@@ -422,6 +458,8 @@ fn link_program_imports_runtime_id() {
     let stale = stub_archive(&dir, false);
     let err = crate::link::link(&crate::link::LinkJob {
         objects: &objects,
+        c_objects: &[],
+        libraries: &[],
         archive: &stale,
         output: &output,
     })
@@ -435,6 +473,8 @@ fn link_program_imports_runtime_id() {
     let good = stub_archive(&dir, true);
     crate::link::link(&crate::link::LinkJob {
         objects: &objects,
+        c_objects: &[],
+        libraries: &[],
         archive: &good,
         output: &output,
     })
@@ -700,7 +740,10 @@ fn program_stubs_none_keeps_the_object() {
                 Format::Elf => PINNED_ELF_AARCH64,
                 Format::MachO => PINNED_MACHO_AARCH64,
             };
-            let content = fnv(&layout_free(format, &bytes));
+            // The pins hold version 1 of the image; K5a raised it to 2 for
+            // the records' constants tables (GAP(const-image-slots)), the
+            // only word of the object that changed.
+            let content = fnv(&layout_free(format, &with_version_one(format, &bytes)));
             assert_eq!((bytes.len(), content), pinned, "{format:?}");
         }
         let symbols = symbols(format, &bytes);
@@ -710,6 +753,28 @@ fn program_stubs_none_keeps_the_object() {
             "{format:?}"
         );
     }
+}
+
+/// `bytes` with `cb$image`'s version word set to 1, the version the pins
+/// below were taken with.
+fn with_version_one(format: Format, bytes: &[u8]) -> Vec<u8> {
+    let file = ::object::File::parse(bytes).unwrap();
+    let image = file
+        .symbols()
+        .find(|s| s.name().is_ok_and(|n| format.strip(n) == "cb$image"))
+        .unwrap();
+    let section = file
+        .section_by_index(image.section_index().unwrap())
+        .unwrap();
+    let (start, _) = section.file_range().unwrap();
+    let at = usize::try_from(start + image.address() - section.address()).unwrap();
+    let mut out = bytes.to_vec();
+    assert_eq!(
+        u32::from_le_bytes(out[at..at + 4].try_into().unwrap()),
+        abi::IMAGE_VERSION
+    );
+    out[at..at + 4].copy_from_slice(&1_u32.to_le_bytes());
+    out
 }
 
 /// [`program`]'s object at `bd16c14`, as `(length, FNV-1a of`
@@ -785,6 +850,8 @@ fn program_stubs_link_and_reach_unresolved() {
     let output = dir.join("prog");
     crate::link::link(&crate::link::LinkJob {
         objects: &objects,
+        c_objects: &[],
+        libraries: &[],
         archive: &dir.join("libstub.a"),
         output: &output,
     })

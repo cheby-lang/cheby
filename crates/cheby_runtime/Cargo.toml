@@ -19,6 +19,7 @@ crate-type = ["rlib"]
 crossbeam-deque.workspace = true
 crossbeam-utils.workspace = true
 getrandom.workspace = true
+httparse.workspace = true
 libc.workspace = true
 memchr.workspace = true
 mio = { workspace = true, features = ["net"] }

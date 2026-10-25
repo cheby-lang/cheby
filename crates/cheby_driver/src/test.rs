@@ -542,6 +542,11 @@ impl TestProgram {
         err: &mut dyn Write,
         hooks: &mut Hooks,
     ) -> Result<TestReport, Error> {
+        // D-1067 (S3, GAP(test-temp-root-handoff)): the run's temporary
+        // root, given to the runtime before any test runs and removed with
+        // what the tests left when it drops, after the runtime, on every
+        // path; without it, scratch directories use the host's directory.
+        let _temp_root = cheby_runtime::file::TestRoot::create().ok();
         // `env::program_name()` is the package name, as under `cheby run`
         // (D-369, D-578).
         let runtime = test_runtime(&self.package, self.stacks, self.threads)?;
@@ -1697,13 +1702,22 @@ mod runner_tests {
 
     use super::{Hooks, PreparedTests, TestOptions, TestOutcome, TestProgram, prepare_test};
 
-    /// `pause(ms)`, which waits on a timer, and a kernel bound so that its
-    /// new `String` leaks (as `tests/ui/13-tooling/test/leak.cheby` does).
+    /// `pause(ms)`, which waits on a timer. A test that must leak sends a
+    /// channel's own receiver into it (`MAIL` and `LEAK`, as
+    /// `tests/ui/13-tooling/test/leak.cheby` does): binding a kernel to drop
+    /// its result is E0055 since D-944.
     const HELPERS: &str = "import std::duration\nimport std::selector\n\n\
-         @external(native, \"cheby_env_program_name\")\nfn program_name_dropped() -> Nil\n\n\
          fn pause(ms: Int) -> Nil {\n  selector::new()\n  \
          |> selector::after(_, duration::milliseconds(ms), fn() { Nil })\n  \
          |> selector::select\n}\n\n";
+
+    /// A type whose value holds a channel's receiver: sent into its own
+    /// channel, it keeps the channel alive forever, a leak the spec
+    /// documents (§9.6, D-029). Needs `import std::channel`.
+    const MAIL: &str = "type Mail {\n  Mail(channel::Receiver<Mail>)\n}\n\n";
+
+    /// The statements of a test that leaks a receiver ([`MAIL`]).
+    const LEAK: &str = "  let (tx, rx) = channel::new(1)\n  let _ = channel::send(tx, Mail(rx))\n";
 
     /// A package `app` in a fresh temporary directory whose root module
     /// holds [`HELPERS`], then `body`, compiled with every test selected,
@@ -1889,11 +1903,14 @@ mod runner_tests {
         ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
     )]
     fn runner_checks_each_test_on_its_own_domain() {
-        let body = "fn churn(n: Int, total: Int) -> Int {\n  case n {\n    0 => total\n    \
-             _ => churn(n - 1, total + string::length(\"item {n}\"))\n  }\n}\n\n\
-             test \"churns a million strings\" {\n  assert churn(1000000, 0) > 0\n}\n\n\
-             @target(native)\ntest \"leaks a string\" {\n  program_name_dropped()\n  pause(50)\n}\n";
-        let (dir, program) = program("domains", "import std::string\n", body, 2);
+        let body = format!(
+            "{MAIL}fn churn(n: Int, total: Int) -> Int {{\n  case n {{\n    0 => total\n    \
+             _ => churn(n - 1, total + string::length(\"item {{n}}\"))\n  }}\n}}\n\n\
+             test \"churns a million strings\" {{\n  assert churn(1000000, 0) > 0\n}}\n\n\
+             test \"leaks a receiver\" {{\n{LEAK}  pause(50)\n}}\n"
+        );
+        let imports = "import std::channel\nimport std::string\n";
+        let (dir, program) = program("domains", imports, &body, 2);
         let mut hooks = Hooks {
             domains: Some(Vec::new()),
             ..Hooks::default()
@@ -1901,8 +1918,11 @@ mod runner_tests {
         let (text, outcomes) = run(program, &mut hooks);
         let leak_check = cheby_runtime::LEAK_CHECK_ENABLED;
         let leaked = if leak_check {
+            // The receiver and the `Mail` that holds it (D-784's line).
             TestOutcome::Failed(
-                "error: leak check failed: 1 object is still live at exit\n".to_owned(),
+                "error: leak check failed: 2 objects are still live at exit\n\
+                 note: leaked 1 <Receiver>, and 1 object of other kinds\n"
+                    .to_owned(),
             )
         } else {
             TestOutcome::Passed
@@ -1911,7 +1931,7 @@ mod runner_tests {
             outcomes,
             [
                 ("churns a million strings".to_owned(), TestOutcome::Passed),
-                ("leaks a string".to_owned(), leaked),
+                ("leaks a receiver".to_owned(), leaked),
             ],
             "{text}"
         );
@@ -1929,15 +1949,17 @@ mod runner_tests {
         ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
     )]
     fn runner_skips_only_the_check_of_the_test_refused_memory() {
-        let body = "@target(native)\nfn ask(done: channel::Sender<Nil>) -> Int {\n  let _ = done\n  \
-             string::length(string::repeat(\"x\", 1152921504606846976))\n}\n\n\
-             @target(native)\ntest \"a is refused memory\" {\n  let (done_tx, done_rx) = channel::new::<Nil>(1)\n  \
-             fiber::spawn_detached(fn() { ask(done_tx) })\n  \
-             assert channel::receive(done_rx) == Err(Nil)\n}\n\n\
-             @target(native)\ntest \"b leaks a string\" {\n  program_name_dropped()\n  pause(50)\n}\n\n\
-             test \"c is clean\" {\n  assert True\n}\n";
+        let body = format!(
+            "{MAIL}@target(native)\nfn ask(done: channel::Sender<Nil>) -> Int {{\n  let _ = done\n  \
+             string::length(string::repeat(\"x\", 1152921504606846976))\n}}\n\n\
+             @target(native)\ntest \"a is refused memory\" {{\n  let (done_tx, done_rx) = channel::new::<Nil>(1)\n  \
+             fiber::spawn_detached(fn() {{ ask(done_tx) }})\n  \
+             assert channel::receive(done_rx) == Err(Nil)\n}}\n\n\
+             test \"b leaks a receiver\" {{\n{LEAK}  pause(50)\n}}\n\n\
+             test \"c is clean\" {{\n  assert True\n}}\n"
+        );
         let imports = "import std::channel\nimport std::fiber\nimport std::string\n";
-        let (dir, program) = program("refused", imports, body, 3);
+        let (dir, program) = program("refused", imports, &body, 3);
         let mut hooks = Hooks {
             domains: Some(Vec::new()),
             ..Hooks::default()
@@ -1952,7 +1974,7 @@ mod runner_tests {
             passed,
             [
                 ("a is refused memory", true),
-                ("b leaks a string", !leak_check),
+                ("b leaks a receiver", !leak_check),
                 ("c is clean", true),
             ],
             "{text}"

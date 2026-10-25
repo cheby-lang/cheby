@@ -14,6 +14,10 @@
 //!   where it is used (D-469).
 //! - [`repl::SessionScope`] resolves a REPL entry, a module of its own,
 //!   with the names of its session (§13.5, D-547).
+//! - E0055 reserves the `cheby_rt_` and `cb$` prefixes here; for the other
+//!   names the runtime exports, the driver calls
+//!   [`runtime_export_reserved`] with the runtime's names after resolution
+//!   (D-944), so this crate never depends on the runtime.
 //! - The only part of the support gate (D-451) left in the front end is
 //!   E0038 for an import of a standard-library module that the spec plans
 //!   but the toolchain does not ship yet (tiers 2 and 3). Paths through such an import
@@ -43,6 +47,7 @@ pub use imports::{
     ImportItemRequest, ImportRequest, ImportTarget, Lookup, ModuleLookup, closest_name,
     collect_imports, cycle_diagnostic, resolve_import_targets,
 };
+pub use items::runtime_export_reserved;
 pub use scope::{ModuleScope, ScopeEntry, ScopeSource};
 
 cheby_iface::newtype_index! {

@@ -221,6 +221,11 @@ pub struct Session {
     /// How many times `:reload` changed something: the generation of its
     /// modules (D-547).
     reloads: u32,
+    /// The generation of the package's native code that code compiled now
+    /// calls: 0 at the start, then the JIT's number for the library each
+    /// `:reload` that changed a C source loaded (D-712, D-941,
+    /// [`cheby_jit::generation_symbol`]).
+    native_generation: u32,
 }
 
 /// A native symbol that an `@external(native, …)` of a session item
@@ -355,7 +360,11 @@ impl Session {
         // runtime, which keeps its own (D-690), and for isolated entries
         // (constant evaluation, and every entry on the thread backend).
         cheby_runtime::entry::set_program(Vec::new(), front.package_name.clone());
-        let jit = Jit::configured(codegen, JitOptions::from_env())?;
+        let mut jit = Jit::configured(codegen, JitOptions::from_env())?;
+        // The package's native code, loaded by the front end (D-941).
+        for library in front.native_libraries() {
+            jit.add_library(library)?;
+        }
         let runtime = session_runtime(&front, options.threads)?;
         if let Some(runtime) = &runtime {
             runtime.attach(jit.code_token());
@@ -381,6 +390,7 @@ impl Session {
             natives: Vec::new(),
             replaced: BTreeMap::new(),
             reloads: 0,
+            native_generation: 0,
             runtime,
             group: DetachedGroup::new(),
             stuck: Vec::new(),
@@ -1075,7 +1085,8 @@ impl Session {
         )?))
     }
 
-    /// E0054 for each native symbol `entry` binds that a live binding binds
+    /// E0055 for each native symbol `entry` binds that the runtime exports
+    /// (D-944), and E0054 for each other one that a live binding binds
     /// with another C signature (D-475): a binding of the package or the
     /// standard library, or of a session item that is still the session's
     /// definition of its name and that the entry does not replace.
@@ -1083,9 +1094,19 @@ impl Session {
     fn native_conflicts(&self, entry: &CheckedEntry) -> Vec<Diagnostic> {
         let replaced: Vec<DefId> = entry.redefinitions().map(|r| r.old).collect();
         let mut out = Vec::new();
+        let runtime = cheby_runtime::symbols();
+        let exported = |symbol: &str| runtime.iter().any(|(name, _)| *name == symbol);
         for (_, symbol, binding) in
             entry_natives(&entry.resolved, &entry.iface, &self.front.globals)
         {
+            // D-944: E0055 for a name the runtime exports, which only std
+            // may bind; it is then no binding for E0054.
+            if let Some(reserved) =
+                cheby_resolve::runtime_export_reserved(&symbol, binding.span, &exported)
+            {
+                out.push(reserved);
+                continue;
+            }
             let live = self.front.natives.get(&symbol).or_else(|| {
                 self.natives
                     .iter()
@@ -1124,22 +1145,23 @@ impl Session {
     fn unresolved(&self, entry: &CheckedEntry, symbols: &[String]) -> Vec<Diagnostic> {
         symbols
             .iter()
-            .map(|symbol| {
+            .map(|name| {
+                // The symbol itself, not the name of its library
+                // generation (`name_native_generation`).
+                let symbol = cheby_jit::split_generation(name).0;
                 let own = entry
                     .resolved
                     .items
                     .iter()
-                    .find_map(|item| item.attrs.native_symbol().filter(|(s, _)| s == symbol));
+                    .find_map(|item| item.attrs.native_symbol().filter(|(s, _)| *s == symbol));
                 let span = own
                     .map(|(_, span)| span)
-                    .or_else(|| self.front.natives.get(symbol.as_str()).map(|b| b.span));
+                    .or_else(|| self.front.natives.get(symbol).map(|b| b.span));
                 let diag = Diagnostic::new(
                     codes::UNRESOLVED_NATIVE_SYMBOL,
                     format!("the native symbol `{symbol}` is not defined"),
                 )
-                .with_note(
-                    "the symbol must be defined by the Cheby runtime or the running process",
-                );
+                .with_note(crate::native::E0053_NOTE);
                 match span {
                     Some(span) => diag.with_primary(span, "nothing defines this symbol"),
                     None => diag,
@@ -1398,6 +1420,18 @@ impl Session {
                 });
             }
         }
+        // D-712, D-941: a changed C source loads the package's native code
+        // again beside the old, and the modules that bind native symbols
+        // get new versions that call it; old code keeps the old library
+        // (GAP(native-library-files)).
+        match self.reload_native() {
+            Ok(true) => self.add_native_modules(&mut reloaded)?,
+            Ok(false) => {}
+            Err(e) => {
+                out.stderr(&self.tool_error(e.message()));
+                return Ok(());
+            }
+        }
         self.add_importers(&mut reloaded)?;
         if reloaded.is_empty() {
             // What discovery found is reported even when no text changed,
@@ -1418,6 +1452,62 @@ impl Session {
             Some(done) => self.finish_reload(&done, out),
             None => Ok(()),
         }
+    }
+
+    /// Prepares the package's native code again (D-941): `true` when its
+    /// C code changed, after the new library joined the JIT as a new
+    /// generation that code compiled from now on calls (D-712); `false`
+    /// when nothing changed or the package has no native code.
+    ///
+    /// # Errors
+    ///
+    /// The tool error of a failed compile or link (D-942).
+    fn reload_native(&mut self) -> Result<bool, Error> {
+        let Some((root, package, table)) = self.front.native.source.clone() else {
+            return Ok(false);
+        };
+        let known = self.front.native.inputs;
+        let Some(native) = crate::native::prepare_unless(&root, &package, &table, None, known)?
+        else {
+            return Ok(false);
+        };
+        self.native_generation = self.jit.add_library_generation(native.libraries());
+        self.front.native = native;
+        Ok(true)
+    }
+
+    /// Adds to `reloaded` every module of the package that binds a native
+    /// symbol, with the text it has, so its new version calls the package's
+    /// new native code (D-712, D-941).
+    fn add_native_modules(&self, reloaded: &mut Vec<Reloaded>) -> Result<(), Error> {
+        for &id in &self.front.order {
+            let Ok(info) = self.front.modules.try_get(id) else {
+                continue;
+            };
+            let at = usize::try_from(id.as_u32()).unwrap_or(usize::MAX);
+            let binds = self
+                .front
+                .module_natives
+                .get(at)
+                .is_some_and(|natives| !natives.is_empty());
+            if info.package != PackageId::LOCAL || self.replaced.contains_key(&id) || !binds {
+                continue;
+            }
+            let path = self.original_path(id)?;
+            if reloaded.iter().any(|r| r.path == path) {
+                continue;
+            }
+            let Some(file) = info.file.and_then(|f| self.sources.file(f)) else {
+                continue;
+            };
+            reloaded.push(Reloaded {
+                path,
+                display: file.path().to_owned(),
+                bytes: file.text().as_bytes().to_vec(),
+                old: Some(id),
+            });
+        }
+        Ok(())
     }
 
     /// Adds to `reloaded` the modules of the package that import a
@@ -1712,12 +1802,18 @@ impl Session {
             if self.replaced.contains_key(&id) || olds.contains(&id) {
                 continue;
             }
-            let bindings = self
+            let mut bindings = self
                 .front
                 .module_natives
                 .get(usize::try_from(id.as_u32()).unwrap_or(usize::MAX))
                 .cloned()
                 .unwrap_or_default();
+            // D-944: a reloaded version may bind a name the runtime
+            // exports; the session's other modules never do, or it would
+            // not have started.
+            if !self.is_std(id) {
+                bindings = frontend::reserve_exports(bindings, diagnostics);
+            }
             frontend::bind_natives(bindings, &mut natives, diagnostics);
         }
         natives
@@ -1806,6 +1902,33 @@ struct Again {
     name: Name,
     source: Span,
     inside: Option<ModuleId>,
+}
+
+/// Names every native symbol `unit`'s foreign calls make after the
+/// package's native code of `generation` (D-712, D-941,
+/// [`cheby_jit::generation_symbol`]): the JIT resolves a name once, so
+/// code compiled after a `:reload` that changed a C source reaches the new
+/// library only under names of its own (GAP(native-library-files)). Front
+/// end and diagnostics keep the symbol itself; generation 0 changes
+/// nothing.
+fn name_native_generation(unit: &mut MirModule, generation: u32) {
+    if generation == 0 {
+        return;
+    }
+    for function in &mut unit.functions {
+        for block in &mut function.blocks {
+            for stmt in &mut block.stmts {
+                if let cheby_mir::Stmt::Assign {
+                    value: cheby_mir::Rvalue::CallForeign { symbol, .. },
+                    ..
+                }
+                | cheby_mir::Stmt::Eval(cheby_mir::Rvalue::CallForeign { symbol, .. }) = stmt
+                {
+                    *symbol = cheby_jit::generation_symbol(symbol, generation).into();
+                }
+            }
+        }
+    }
 }
 
 /// The path of the new version of a module that `:reload` makes:
@@ -2030,6 +2153,9 @@ impl Session {
                 sources: &self.sources,
             };
             let mut unit = lower_items(thir, &wanted, &cx)?;
+            if !self.is_std(module) {
+                name_native_generation(&mut unit, self.native_generation);
+            }
             count_and_check_with(&mut unit, &self.mir)?;
             units.push(unit);
             items.extend(new);
@@ -2312,6 +2438,7 @@ impl Session {
             infos.push(ConstInfo {
                 def,
                 name: name.into(),
+                path: format!("{module_path}::{name}").into(),
                 name_span: span,
                 seed,
                 on_js: item.targets.contains(Target::Js),
@@ -2325,7 +2452,18 @@ impl Session {
             memory_limit: self.front.const_eval_memory_limit,
             targets: self.front.package_targets,
         };
-        Ok(cheby_consteval::evaluate(&mut self.jit, &infos, &config)?)
+        // K5a, GAP(repl-constant-images): the entry's constants evaluate in
+        // the session JIT (its package code is `plain`, D-971; std keeps
+        // its masks, D-1180), then reach their slots from images, as in
+        // every other host (D-979): a new generation gets a new image.
+        // The images stay in the process, so an earlier entry's installed
+        // constant is shared by address, never copied (D-539, the wave-6
+        // review's R-2), and the evaluated results are freed (R-1).
+        let diagnostics = cheby_consteval::evaluate(&mut self.jit, &infos, &config)?;
+        if diagnostics.is_empty() {
+            cheby_consteval::replace_with_images(&self.jit, &infos)?;
+        }
+        Ok(diagnostics)
     }
 }
 
@@ -2675,8 +2813,10 @@ mod tests {
     /// Starts a session outside any package with `options`.
     fn start(options: SessionOptions) -> Box<Session> {
         let dir = std::env::temp_dir();
-        let Start::Ready(session, warnings) = Session::start(&dir, options).unwrap() else {
-            panic!("the session did not start");
+        let session = Session::start(&dir, options).unwrap();
+        let (session, warnings) = match session {
+            Start::Ready(session, warnings) => (session, warnings),
+            Start::Failed(why) => panic!("the session did not start:\n{why}"),
         };
         assert_eq!(warnings, "");
         session
@@ -2735,6 +2875,80 @@ mod tests {
         assert_eq!(printed[7], "20 : Int\n");
         assert!(printed[8].starts_with("error[E0042]"), "{}", printed[8]);
         assert!(printed[8].contains("<repl:9>:1:1"), "{}", printed[8]);
+    }
+
+    /// GAP(repl-constant-images), the wave-6 review's R-2: a constant that
+    /// holds an earlier entry's constant shares its installed value, as
+    /// D-539 asks, instead of installing a copy of it, so entries that
+    /// name a large constant cost a word each. Every installed value is
+    /// static, and nothing of the evaluations stays in the session's
+    /// domain (R-1).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn repl_constants_share_earlier_installed_constants() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut session = start(options());
+                let live = session.jit.domain().live_objects();
+                for entry in [
+                    "import std::list",
+                    "const big: List<Int> = list::range(0, 1000)",
+                    "const c1: (List<Int>, Int) = (big, 1)",
+                    "const c2: (List<Int>, List<Int>) = (big, big)",
+                    "const c3: (List<Int>, Int) = c1",
+                ] {
+                    let mut out = Buffer::default();
+                    session.eval(entry, &mut out).unwrap();
+                    assert_eq!(out.text, "", "{entry}");
+                }
+                assert_eq!(session.jit.domain().live_objects(), live);
+                let slot = |name: &str| -> u64 {
+                    let def = session
+                        .evaluated
+                        .iter()
+                        .copied()
+                        .find(|def| {
+                            session
+                                .front
+                                .set
+                                .get(def.module)
+                                .and_then(|iface| iface.item(def.index))
+                                .is_some_and(|item| {
+                                    session.front.globals.names.get(item.name) == name
+                                })
+                        })
+                        .unwrap_or_else(|| panic!("no constant `{name}`"));
+                    // SAFETY: an installed constant's slot.
+                    unsafe { *session.jit.const_slot(def).unwrap() }
+                };
+                let big = slot("big");
+                let c1 = slot("c1");
+                // SAFETY: installed values, static for the session.
+                unsafe {
+                    for word in [big, c1, slot("c2"), slot("c3")] {
+                        assert!(cheby_runtime::consteval::image::is_static(word));
+                    }
+                    assert_eq!(cheby_runtime::values::read_tuple(c1)[0], big);
+                    assert_eq!(cheby_runtime::values::read_tuple(slot("c2")), [big, big]);
+                }
+                // A constant that is an earlier one is that value.
+                assert_eq!(slot("c3"), c1);
+                for (entry, printed) in [
+                    ("let (l, m) = c3", ""),
+                    ("(list::length(l), m)", "(1000, 1) : (Int, Int)\n"),
+                ] {
+                    let mut out = Buffer::default();
+                    session.eval(entry, &mut out).unwrap();
+                    assert_eq!(out.text, printed, "{entry}");
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     /// No package unit a session lowers borrows (D-715, D-808, D-971):
