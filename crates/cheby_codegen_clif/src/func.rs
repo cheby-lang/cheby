@@ -397,7 +397,7 @@ fn unwind_only_blocks(func: &Function) -> Result<Vec<bool>, CodegenError> {
 
 /// Writes into the module record `desc` the drop function of each external
 /// type of `externals` that has one (D-949, D-1168,
-/// GAP(external-drop-in-records)): the `drop` word of its entry, at
+/// D-1228): the `drop` word of its entry, at
 /// `entries + n * entry_size + drop_offset`, becomes a data relocation to
 /// the C function, declared with `Linkage::Import` as foreign symbols are
 /// under `ForeignImport::Address` (a function the module already declares
@@ -574,7 +574,7 @@ impl Translator<'_, '_> {
             for (i, stmt) in block.stmts.iter().enumerate() {
                 self.pad = pad_of(i, self).transpose()?;
                 if self.pad.is_some() && ffi_checked_later(&block.stmts, i) {
-                    // D-946, GAP(ffi-flag-after-the-helper): the helper that
+                    // D-946, D-1231: the helper that
                     // takes this foreign call's result tests the flag after it
                     // (`ffi_checked_later`).
                     self.pad = None;

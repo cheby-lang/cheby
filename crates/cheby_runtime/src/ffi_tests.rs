@@ -76,7 +76,7 @@ fn me() -> *mut ExecCtx {
 
 // The table and the header ---------------------------------------------------
 
-/// GAP(ffi-table-order): `NAMES` is `cheby.h`'s declaration order, every
+/// D-1226: `NAMES` is `cheby.h`'s declaration order, every
 /// function the header declares is listed once, and each is a runtime
 /// export (D-944, D-1204), so E0055 and the C-object check reserve it.
 #[test]
@@ -253,7 +253,7 @@ fn ffi_debug_type_check_child() {
     panic!("the entry went on: {outcome:?}");
 }
 
-/// D-945, GAP(ffi-debug-type-check): a value of another type is a fatal
+/// D-945, D-1227: a value of another type is a fatal
 /// runtime error in a runtime built with debug assertions.
 #[test]
 #[cfg_attr(windows, ignore = "starts a child process that runs fibers (D-545)")]

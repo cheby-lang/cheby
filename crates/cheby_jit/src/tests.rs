@@ -1083,7 +1083,7 @@ fn batches_may_call_a_foreign_symbol_with_new_signatures() {
 /// into a code record whose import words are local copies, declared
 /// anonymously when it is loaded, so each record has its own words and
 /// no word is declared by name; the symbols the words hold are declared
-/// by name once (GAP(record-batch-load), which refines D-1105).
+/// by name once (D-1219, which refines D-1105).
 #[cfg(unix)]
 #[test]
 fn failed_batches_leave_no_import_word_undefined() {

@@ -14,7 +14,7 @@
 //! same name, `/` to `index.html`, and anything else is `404`, a path that
 //! would leave the directory included (D-1027).
 //!
-//! GAP(fixture-server-rules): it answers `GET` and `HEAD` only, and any
+//! D-1248: it answers `GET` and `HEAD` only, and any
 //! other method with `405` and `allow: GET, HEAD`; a request line that is
 //! not `<method> <target> HTTP/1.<n>`, or a head that does not end within
 //! 64 KiB, gets `400`. The query and fragment of the target are ignored,

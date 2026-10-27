@@ -173,7 +173,7 @@ Ownership follows one convention (D-187):
 
 The functions of `cheby.h` follow these rules (D-945, D-946):
 
-- Passing a value of another type than a function expects is undefined behavior, as a wrong `@external` signature is. Runtimes built with debug assertions check it and stop with a fatal runtime error.
+- Passing a value of another type than a function expects is undefined behavior, as a wrong `@external` signature is. Runtimes built with debug assertions check it and stop with a fatal runtime error. _Note:_ the reference implementation's debug runtime prints `fatal runtime error: <function> was given <what it got>, not <what it takes>` (D-1227).
 - A NULL argument means no value. Functions that read return NULL or zero for it, and `cheby_ffi_drop` does nothing.
 - A function of `cheby.h` that cannot allocate returns NULL. When the foreign function then returns, Cheby releases its result if it is not NULL and panics with `out of memory` ([§11.8.2](11-errors-and-panics.md#1182-out-of-memory)). Inside a drop function, the failure is a fatal runtime error instead ([§9.5](09-memory-model.md#95-handles-and-drop-functions)) (D-642, D-946).
 - A function of `cheby.h` finds the running fiber itself, so foreign functions receive no context argument (D-946).

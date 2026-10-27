@@ -294,7 +294,7 @@ impl UiTest {
     /// example's `env` format, empty lines skipped; empty without the file.
     /// The harness applies it to the child after its own settings (`NO_COLOR`,
     /// `CHEBY_RT_POISON`, the cache), so it may override them but
-    /// `CHEBY_CACHE` ([`ENV_RESERVED`]); GAP(ui-env-precedence).
+    /// `CHEBY_CACHE` ([`ENV_RESERVED`]); D-1237.
     ///
     /// # Errors
     ///
@@ -363,7 +363,7 @@ const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", 
 pub const INPUT_EXTENSIONS: [&str; 3] = ["stdin", "args", "env"];
 
 /// The variable a test's `.env` may not set: the harness's own cache
-/// (D-959; GAP(ui-env-precedence)).
+/// (D-959; D-1237).
 pub const ENV_RESERVED: &[&str] = &["CHEBY_CACHE"];
 
 /// The root module of a package test, which holds the header.

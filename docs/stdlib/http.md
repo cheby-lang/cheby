@@ -70,11 +70,21 @@ A `url` is absolute, with the scheme `http` or `https` in any case, a host name,
 
 The client sends the path and the query as `fetch` does, after the WHATWG URL parser (D-1070):
 
-- It percent-encodes the path with WHATWG's path percent-encode set and the query with the query percent-encode set that the parser applies to `http` and `https` URLs, so a space, `"`, `<` and `>` are encoded in both, and so is every character outside ASCII, as UTF-8.
+- It percent-encodes the path with WHATWG's path percent-encode set and the query with the query percent-encode set that the parser applies to `http` and `https` URLs, so a space, `"`, `<` and `>` are encoded in both, `^`, `` ` ``, `{` and `}` in the path, `'` in the query, and every character outside ASCII in both, as UTF-8 (D-1247).
 - An existing `%XX` is sent as it is, so a URL that is already encoded is not encoded twice.
 - `.` and `..` segments are removed from the path, also when they are written as `%2e` or `%2E`, so `/a/./b/../c` is sent as `/a/c`.
 
 This does not separate the parts of a query: `"{base}/search?q={term}"` with `term = "a&b=c"` still sends two parameters. A caller builds the query with [`url::encode_query`](url.md#encode_query) and a segment with [`url::encode_segment`](url.md#encode_segment) (D-1069).
+
+The client reads the rest of a URL as that parser reads an `http` or `https` URL too (D-1247):
+
+- Tabs and line breaks are removed anywhere in the URL, and C0 controls and spaces around it.
+- Any number of `/` or `\` may follow the scheme, and `\` separates path segments as `/` does.
+- A host name is percent-decoded and lower-cased. One that holds a control, a space or a character that WHATWG forbids in a domain, `#%/:<>?@[\]^|`, is an invalid URL.
+- An IPv4 address in shorthand, such as `127.1`, is not normalized, and an IPv6 address is lower-cased but not compressed, so `host` names the address as written.
+- An empty port means none, and the scheme's own port is left out of `host`.
+
+> **Open (OQ-http-3):** IPv4 shorthand and IPv6 compression. `fetch` sends `127.1` as `127.0.0.1` and an IPv6 address in its compressed form, and the native client sends both as written, so `host` differs between the targets (D-232, D-1247). _Proposed:_ until the native client parses addresses, it sends them as written. M4 settles this with the JS side (OQ-P14).
 
 > **Open (OQ-http-1):** international domain names. `fetch` accepts a host name outside ASCII, and the native client rejects it as an invalid URL, so the two targets differ (D-232). _Proposed:_ until the native client converts such names, the JS kernel rejects them too, with `is_invalid_url`, so both targets give the same result. M4 settles this with the JS side (OQ-P14).
 
@@ -163,7 +173,7 @@ fn search(base: String, term: String) -> Result<http::Response, http::Error> {
 pub fn send(method: Method, url: String, headers: List<(String, String)>, body: String) -> Result<Response, Error>
 ```
 
-Sends a request with `method`, `headers` and `body` to `url`, and returns the final response, after following redirects. The client sets `host`, `content-length` and `connection` itself and ignores those names in `headers`. It also sends `user-agent: cheby` and `accept: */*` unless `headers` names them. `body` is sent as UTF-8. An empty `body` sends no `content-length` for `GET`, `HEAD`, `DELETE` and `OPTIONS`. The function is not named `request`, because the module needs a parameter of that name (D-051, D-1009).
+Sends a request with `method`, `headers` and `body` to `url`, and returns the final response, after following redirects. The client sets `host`, `content-length` and `connection` itself and ignores those names in `headers`. It also sends `user-agent: cheby` and `accept: */*` unless `headers` names them. `body` is sent as UTF-8. An empty `body` sends no `content-length` for `GET`, `HEAD`, `DELETE` and `OPTIONS`. The head is the request line, then `host`, then the caller's headers in order, with names in lower case and values without the spaces and tabs around them, then `accept` and `user-agent` when `headers` does not name them, then `content-length` when it is sent, and last `connection: close` (D-1247). The function is not named `request`, because the module needs a parameter of that name (D-051, D-1009).
 
 - **Fails:** the cases of [`get`](#get), and `Err` for which [`is_invalid_header`](#is_invalid_header) holds when a header name is not an HTTP token, a value contains a line break or U+0000, or the method of `Other` is not a token. Invalid headers are found before any connection is made.
 - **Cost:** O(n) in the size of the request and the response, plus the network. Informative.
@@ -194,7 +204,7 @@ test "send carries a method, headers and a body" {
 
 A server must survive a bad request. Each connection is a fiber in a scope that the server opens, and each request's handler runs inside a scope of its own on that fiber. A handler that panics therefore fails only its own scope: its request gets `500`, its panic report is printed to standard error as a detached fiber's is (D-669), and nothing else is cancelled. This is the one place in std where a panic does not cancel its siblings (D-040, §10.3). A cancellation from outside the server, such as a `fiber::timeout` around it, still cancels every connection and handler (D-1012, ADR-0067).
 
-> **Open (OQ-http-2):** whether a handler's panic report should also name the request's method and path. _Proposed:_ the report is the plain report of a detached fiber, with the panic's message and location only, as written below (D-669, D-1012).
+A handler's panic report is the plain report of a detached fiber, with the panic's message and location only. It names neither the request's method nor its path (D-669, D-1012).
 
 ### `serve`
 
@@ -202,7 +212,7 @@ A server must survive a bad request. Each connection is a fiber in a scope that 
 pub fn serve(port: Int, handler: fn(Request) -> Response) -> Result<Nil, Error>
 ```
 
-Listens on `port` on every interface, and answers each request with `handler`, as [`serve_on`](#serve_on) does. It listens on `::` and accepts IPv4 connections on the same socket, or on `0.0.0.0` where the host has no IPv6 (D-1015). It returns only when listening fails, or accepting fails in a way that does not pass. 030 calls it with the port from `PORT`.
+Listens on `port` on every interface, and answers each request with `handler`, as [`serve_on`](#serve_on) does. It listens on `::` and accepts IPv4 connections on the same socket, or on `0.0.0.0` when listening on `::` fails because the host has no IPv6: the address family is not supported, or `::` cannot be assigned. Any other failure of listening is returned (D-1015, D-1239). It returns only when listening fails, or accepting fails in a way that does not pass. 030 calls it with the port from `PORT`.
 
 - **Fails:** `Err` with an IO failure ([`io_error`](#io_error)) for which `io::is_invalid_input` holds when `port` is outside 0 to 65535, `io::is_address_in_use` when the port is taken, and `io::is_permission_denied` when the program may not use it, and for every other failure of the operating system in listening or accepting.
 - **Cost:** per request, O(n) in the size of the request and the response, plus `handler`. Informative.
@@ -238,12 +248,12 @@ Answers each request that arrives on `listener` with `handler`. A program that n
 
 Every connection is a fiber in a scope that `serve_on` opens. It reads requests one after another, keeping the connection open between them unless the client asks to close it. Each request's `handler` call runs in a scope of its own on that fiber (D-1012). The limits below are informative (D-1013):
 
-1. **Before the handler.** A request whose head is not valid HTTP/1.1 gets `400`, a head over 64 KiB gets `431`, a body over 10 MiB gets `413`, a transfer coding other than `chunked` gets `501`, and a path, query or body that does not decode to valid UTF-8 gets `400`. The connection is then closed, and `handler` is not called. A request with `expect: 100-continue` gets `100 Continue` before its body is read.
+1. **Before the handler.** A request whose head is valid neither as HTTP/1.1 nor as HTTP/1.0 gets `400`, a head over 64 KiB gets `431`, a body over 10 MiB gets `413`, a transfer coding other than `chunked` gets `501`, and a path, query or body that does not decode to valid UTF-8 gets `400`. The response's body is `bad request`, `request header fields too large`, `content too large` or `not implemented`, the connection is then closed, and `handler` is not called (D-1243). A body is framed by its `transfer-encoding` when it has one, and by its `content-length` otherwise. An empty list of codings, or `content-length` values that are not all one number, get `400`, and a request with both is read by its coding and its connection closed after the response. A chunked body counts toward the 10 MiB limit as it was sent, its chunk-size lines, extensions and line ends included, and a trailer section over 64 KiB gets `431`. A malformed chunk, or a chunk line over 64 KiB, gets `400` (D-1246). A request with `expect: 100-continue` gets `100 Continue` before its body is read, and only when a body follows. A request head that is valid HTTP/1.0 is served as HTTP/1.1, and its connection is closed after the response: it gets no `100 Continue`, and a `transfer-encoding` in it gets `400` (D-1242).
 2. **The handler.** `handler` is called with the `Request` on the connection's fiber. A `HEAD` request reaches it as `Head`, and its response is sent without the body.
 3. **A panic.** If `handler` panics, the request gets `500` with the body `internal server error`, the panic report is printed to standard error, and the connection stays open for the next request. No other request is affected.
-4. **The response.** The status line, then the response's headers in order, then `content-length` and `date`, which the server sets itself and which replace any `content-length`, `transfer-encoding`, `connection` or `date` in `headers`. A status outside 100 to 999, or a header that [`send`](#send) would reject, is replaced by `500` with the body `internal server error`, so a handler can never split a response.
-5. **Idle connections.** A connection with no new request for 60 seconds is closed, and so is one whose request head is not complete 30 seconds after it began.
-6. **Errors of accepting.** A failure to accept that passes, such as too many open files or a connection aborted before it was accepted, is retried after a pause of 100 milliseconds. Any other failure ends `serve_on`: it cancels every connection and every handler in flight with `fiber::cancel` (D-1060), waits until they have unwound, and returns `Err`. It does not wait for idle connections to reach their limit.
+4. **The response.** The status line `HTTP/1.1 <status> <reason>`, with RFC 9110's reason phrase, or RFC 6585's for `429` and `431`, and an empty one for any other status. Then the response's headers in order, then `content-length` and `date`, which the server sets itself and which replace any `content-length`, `transfer-encoding`, `connection` or `date` in `headers`, and `connection: close` when the server closes the connection after the response: after a refusal, an HTTP/1.0 request, a request whose `connection` header asks to close, or a request with both a length and a transfer coding. Any other response has no `connection` header. `date` is RFC 9110's IMF-fixdate, such as `Sun, 06 Nov 1994 08:49:37 GMT`. A `1xx`, `204` or `304` response has neither `content-length` nor a body, and a response to `HEAD` has the `content-length` its body would have, and no body. A status outside 100 to 999, or a header that [`send`](#send) would reject, is replaced by `500` with the body `internal server error`, so a handler can never split a response (D-1241, D-1243, D-1245).
+5. **Idle connections.** A connection with no new request for 60 seconds is closed, and so is one whose request head is not complete 30 seconds after it began, or whose body is not complete 60 seconds after its head was read. Each is closed without a response (D-1240).
+6. **Errors of accepting.** A failure to accept that passes, such as too many open files or a connection aborted before it was accepted, is retried after a pause of 100 milliseconds. A failure passes when `std::io` has no predicate for it, or when `io::is_connection_reset` holds (D-1244). Any other failure ends `serve_on`: it cancels every connection and every handler in flight with `fiber::cancel` (D-1060), waits until they have unwound, and returns `Err`. It does not wait for idle connections to reach their limit.
 7. **A closed listener.** When accepting fails with `io::is_closed`, because the program closed `listener` with [`net::close_listener`](net.md#close_listener), `serve_on` ends in the same way, but returns `Ok(Nil)`: closing the listener is how a program, or one of its own handlers, stops a server on purpose. A handler that closes its own server's listener is cancelled with the rest, so its response may not be sent. Requests in flight are cancelled, not drained (D-1063, D-1064).
 8. **Cancellation.** When the fiber that called `serve_on` is cancelled, every connection and every handler in flight is cancelled with it ([§10.7](../spec/10-concurrency.md#107-cancellation)).
 

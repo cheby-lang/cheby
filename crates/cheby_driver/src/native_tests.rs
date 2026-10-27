@@ -253,7 +253,7 @@ fn clash_text(symbol: &str) -> String {
     )
 }
 
-/// GAP(c-object-reserved-prefixes), D-944, D-1201: a C object that defines
+/// D-1232, D-944, D-1201: a C object that defines
 /// a name with the prefix `cheby_rt_` or `cb$` is the same tool error as
 /// one that defines a runtime export, whether or not the runtime exports
 /// that name today (`cb$` through an assembler label, as C identifiers

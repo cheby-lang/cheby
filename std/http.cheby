@@ -1214,7 +1214,7 @@ test "serve rejects a port out of range" {
 
 /// A listener on `port` of every interface: `::`, whose socket accepts
 /// IPv4 too, or `0.0.0.0` when listening on `::` fails because the host
-/// has no IPv6, and only then (D-1015). GAP(http-serve-binding).
+/// has no IPv6, and only then (D-1015). D-1239.
 priv fn listen_everywhere(port: Int) -> Result<net::Listener, io::Error> {
   case net::listen("::", port) {
     Ok(listener) => Ok(listener)
@@ -1228,7 +1228,7 @@ priv fn listen_everywhere(port: Int) -> Result<net::Listener, io::Error> {
 /// Whether a failure to listen on `::` means that the host has no IPv6:
 /// the operating system does not support the address family, or cannot
 /// assign `::`, as it words those failures, which have no predicate of
-/// their own. GAP(http-serve-binding).
+/// their own. D-1239.
 priv fn lacks_ipv6(failure: io::Error) -> Bool {
   let (code, message) = io::hash(failure)
   let words = ascii_lower(message)
@@ -1373,7 +1373,7 @@ test "https to a server that does not speak TLS is a TLS failure" {
 /// may take once its head is read, the largest body, the pause before
 /// accepting again after a failure that passes, and how a connection is
 /// accepted, which a test replaces to fail on purpose.
-/// GAP(http-serve-limits).
+/// D-1240.
 type Limits {
   idle: duration::Duration,
   head_time: duration::Duration,
@@ -1388,7 +1388,7 @@ type Limits {
 /// body may hold up to 10 MiB; a failure to accept that passes is retried
 /// after 100 milliseconds. D-1013 gives a body no time, so one that is not
 /// complete 60 seconds, the idle limit, after its head is closed too: a
-/// client never holds a connection without bound (GAP(http-serve-limits)).
+/// client never holds a connection without bound (D-1240).
 fn default_limits() -> Limits {
   Limits {
     idle: duration::seconds(60),
@@ -1400,7 +1400,7 @@ fn default_limits() -> Limits {
   }
 }
 
-/// `serve_on` with `limits` (GAP(http-serve-limits)): the scope of the
+/// `serve_on` with `limits` (D-1240): the scope of the
 /// connections, and the loop that accepts them on the calling fiber.
 fn serve_with(
   listener: net::Listener,
@@ -1458,7 +1458,7 @@ priv fn accept_loop(
 /// reset before it was accepted, or a failure of the operating system that
 /// has no predicate, such as too many open files (D-1013). A closed
 /// listener and every failure with a predicate of `std::io` do not pass.
-/// GAP(http-serve-accept-passing).
+/// D-1244.
 priv fn is_passing(reason: io::Error) -> Bool {
   let (code, _) = io::hash(reason)
   code == 0 || io::is_connection_reset(reason)
@@ -1510,7 +1510,7 @@ priv fn serve_requests(
 }
 
 /// The response to a request refused before its handler (D-1013).
-/// GAP(http-serve-texts).
+/// D-1243.
 priv fn refusal(status: Int) -> Response {
   case status {
     413 => text(413, "content too large")
@@ -1596,7 +1596,7 @@ priv fn read_request_head(
 /// or in a transfer coding other than `chunked` is refused (D-311, D-1004,
 /// D-1013, D-1069). An HTTP/1.0 request is served as an HTTP/1.1 one and
 /// its connection closed after the response; it gets no `100 Continue`,
-/// and a `transfer-encoding` in it is `400`. GAP(http-serve-http10).
+/// and a `transfer-encoding` in it is `400`. D-1242.
 priv fn request_from_head(connection: net::Connection, limits: Limits, head: RequestHead) -> Next {
   case string::split(head.line, " ") {
     [token, target, version] => {
@@ -1657,9 +1657,9 @@ priv type Framing { NoBody, Length(Int), Chunked }
 /// refuses it: `413` for a `content-length` over the limit, `501` for a
 /// transfer coding other than `chunked`, `400` for a `content-length` that
 /// is not one number and for a `transfer-encoding` in an HTTP/1.0 request
-/// (D-1013, GAP(http-serve-http10)). A request with both a
+/// (D-1013, D-1242). A request with both a
 /// `transfer-encoding` and a `content-length` is read by its coding (RFC
-/// 9112 §6.1). GAP(http-serve-framing).
+/// 9112 §6.1). D-1246.
 priv fn body_framing(
   old: Bool,
   fields: List<(String, String)>,
@@ -1699,7 +1699,7 @@ priv fn asks_to_close(fields: List<(String, String)>) -> Bool {
 /// `body_of` within the body limit: a body that is not complete
 /// `limits.body_time` after its head was read ends the connection without
 /// an answer, as a head over the head limit does (D-1013,
-/// GAP(http-serve-limits)).
+/// D-1240).
 priv fn body_within(
   connection: net::Connection,
   buffer: bytes::Bytes,
@@ -1767,7 +1767,7 @@ priv fn read_at_least(
 /// included, passes the body limit, and `400` for a chunk that is not well
 /// formed or a line longer than 64 KiB. Bytes already read are dropped as
 /// it goes, so what it holds stays near the limits (D-1013,
-/// GAP(http-serve-framing)).
+/// D-1246).
 priv fn read_request_chunks(
   connection: net::Connection,
   buffer: bytes::Bytes,
@@ -1846,7 +1846,7 @@ priv fn request_chunk_data(
 /// `at` of `buffer` after `seen` bytes of them, up to the empty line, and
 /// returns the body with the bytes after it. The trailer section is a
 /// field section, so it may hold 64 KiB as a head does, and `431` refuses
-/// a longer one (D-1013, GAP(http-serve-framing)).
+/// a longer one (D-1013, D-1246).
 priv fn request_trailers(
   connection: net::Connection,
   buffer: bytes::Bytes,
@@ -1894,8 +1894,8 @@ priv fn method_of(token: String) -> Method {
 /// `content-length` and `date`, `connection: close` when the server closes
 /// the connection after it, and the body, which a response to `HEAD`
 /// leaves out. A `1xx`, `204` or `304` response has neither a
-/// `content-length` nor a body (RFC 9110 §8.6, §15). GAP(http-serve-texts),
-/// GAP(http-serve-response-head).
+/// `content-length` nor a body (RFC 9110 §8.6, §15). D-1243,
+/// D-1245.
 priv fn response_bytes(method: Method, given: Response, closing: Bool) -> bytes::Bytes {
   let response = case is_sendable(given) {
     True => given
@@ -1943,7 +1943,7 @@ priv fn is_sendable(response: Response) -> Bool {
 }
 
 /// The reason phrase of `status` in RFC 9110 §15, and RFC 6585's for `429`
-/// and `431`; empty for a status without one. GAP(http-serve-response-head).
+/// and `431`; empty for a status without one. D-1245.
 priv fn reason_phrase(status: Int) -> String {
   case status {
     100 => "Continue"
@@ -1997,7 +1997,7 @@ priv fn reason_phrase(status: Int) -> String {
 }
 
 /// RFC 9110's IMF-fixdate of `stamp`, such as `Sun, 06 Nov 1994 08:49:37
-/// GMT` (RFC 9110 §5.6.7). GAP(http-serve-date).
+/// GMT` (RFC 9110 §5.6.7). D-1241.
 priv fn http_date(stamp: time::Timestamp) -> String {
   let seconds = duration::to_seconds(time::to_unix(stamp))
   let days = int::floor_div(seconds, 86_400)

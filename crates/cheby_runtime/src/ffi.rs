@@ -8,7 +8,7 @@
 //! Each `cheby_ffi_*` function is a `#[no_mangle] extern "C"` export of
 //! the runtime, in [`NAMES`]' order, which is `cheby.h`'s declaration
 //! order and the order of the forwarder's `cheby_ffi_table`
-//! (GAP(ffi-table-order)): under the JIT a package's C code calls them
+//! (D-1226): under the JIT a package's C code calls them
 //! through the forwarder of its shared library, whose table
 //! `cheby_jit::NativeLibrary::open` fills from [`table`] (D-941); an
 //! executable's C objects call these definitions in the runtime archive
@@ -30,7 +30,7 @@
 //! - A value of another type than a function takes is undefined behavior
 //!   (§12.5.1). A runtime built with debug assertions checks each one and
 //!   stops with `fatal runtime error: <function> was given <what it got>,
-//!   not <what it takes>` (GAP(ffi-debug-type-check)).
+//!   not <what it takes>` (D-1227).
 //! - An allocation that fails sets the fiber's unwind flag with D-642's
 //!   `out of memory` panic and returns NULL (D-946): the allocating
 //!   functions run under [`ffi_guarded`], whose guard hands the panic to
@@ -95,7 +95,7 @@ pub const PREFIX: &str = "cheby_ffi_";
 pub const TABLE_SYMBOL: &str = "cheby_ffi_table";
 
 /// `cheby.h`'s functions in its declaration order, which is also the
-/// order of the forwarder's `cheby_ffi_table` (GAP(ffi-table-order)): the
+/// order of the forwarder's `cheby_ffi_table` (D-1226): the
 /// table holds one entry per name, then the null word that ends it
 /// (D-1196). The header only grows (D-945), so a new function goes last.
 pub const NAMES: [&str; 25] = [
@@ -318,7 +318,7 @@ fn value(word: Word) -> *mut c_void {
 
 // Debug type checks ---------------------------------------------------------
 
-/// The types a `cheby_ffi_` function reads (GAP(ffi-debug-type-check)).
+/// The types a `cheby_ffi_` function reads (D-1227).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Want {
     String,
@@ -394,7 +394,7 @@ fn describe(id: Option<abi::LayoutId>) -> String {
 
 /// D-945: checks, in a runtime built with debug assertions, that `word`,
 /// a non-NULL argument of `function`, is a `want`; stops with a fatal
-/// runtime error otherwise (GAP(ffi-debug-type-check)). Without debug
+/// runtime error otherwise (D-1227). Without debug
 /// assertions a wrong value is undefined behavior, as §12.5.1 says.
 ///
 /// # Safety
@@ -1015,7 +1015,7 @@ const EXTERNAL_SIZE: u64 = 16;
 /// returned null``, at `location`, the `@external` function's declaration
 /// (both static `String`s, D-947).
 ///
-/// GAP(ffi-null-backtrace-start): only the wrappers of packages'
+/// D-1230: only the wrappers of packages'
 /// `@external(native, …)` functions call it, so it is a naked stub as
 /// `cheby_rt_panic` is (D-1040): it passes its caller's frame pointer and
 /// return address to [`ffi_value_from`] and jumps to it, and the NULL
@@ -1045,7 +1045,7 @@ pub unsafe extern "C" fn cheby_rt_ffi_value(
     )
 }
 
-/// GAP(ffi-null-backtrace-start): as the AAPCS64 stub, on System V
+/// D-1230: as the AAPCS64 stub, on System V
 /// x86-64: the arguments are in `rdi`, `rsi`, `rdx` and `rcx`; `rbp` goes
 /// to `r8` and the return address, the word at `[rsp]`, to `r9`.
 ///

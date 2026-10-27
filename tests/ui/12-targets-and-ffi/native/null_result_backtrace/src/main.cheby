@@ -5,7 +5,7 @@
 //! function lists the frames that called it: the `@external` function at
 //! its declaration, then each caller at its call (§12.5.1, §11.6). The
 //! check runs in runtime code, but its walk starts at the generated
-//! wrapper's frame, not at the no-frames line. GAP(ffi-null-backtrace-start).
+//! wrapper's frame, not at the no-frames line. D-1230.
 
 import std::io
 

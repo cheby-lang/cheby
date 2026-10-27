@@ -95,7 +95,7 @@ fn ffi_wrapper_wraps_an_external_result() {
     );
 }
 
-/// D-947, D-946, GAP(null-results-outside-std): a counted result is checked
+/// D-947, D-946, D-1229: a counted result is checked
 /// by `cheby_rt_ffi_value` with D-947's message and the declaration's
 /// location, right after the call, and returned as it is.
 #[test]
@@ -124,7 +124,7 @@ fn ffi_wrapper_checks_a_counted_result_for_null() {
     assert!(contents.contains("return _2"), "{contents}");
 }
 
-/// GAP(null-results-outside-std): std's wrappers call no helper, so std's
+/// D-1229: std's wrappers call no helper, so std's
 /// code is as before.
 #[test]
 fn ffi_wrapper_leaves_std_wrappers_alone() {

@@ -312,7 +312,7 @@ fn code_record_body_edit_misses_only_its_module() {
     );
 }
 
-/// GAP(code-record-entries): a record that does not decode (here of another
+/// D-1221: a record that does not decode (here of another
 /// `RECORD_VERSION`) is a miss, compiled again and written again, and the
 /// next run finds it.
 #[test]
@@ -418,7 +418,7 @@ fn code_record_stale_lowering_hint_is_rewritten() {
     );
 }
 
-/// D-965 and GAP(reuse-report-bypasses-code-reads): `--reuse-report` reads
+/// D-965 and D-1223: `--reuse-report` reads
 /// no code record (its lines are made while lowering), logging every lookup
 /// as a miss, and still writes; the report is the same warm as cold.
 #[test]

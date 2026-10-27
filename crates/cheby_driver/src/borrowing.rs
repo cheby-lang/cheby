@@ -33,7 +33,7 @@
 //! compared with the fresh result in a debug toolchain, and a difference is
 //! an internal error naming the module (D-1131's pattern); a unit loaded
 //! from its code record lowers nothing to compare
-//! (GAP(code-record-entries)). Std modules get no records (the
+//! (D-1221). Std modules get no records (the
 //! build ID fixes std until K6), nor does the entries unit (D-964), nor a
 //! module without a front record (one with errors is never lowered,
 //! D-964). The records are artifacts (D-264, D-972): nothing in a key or a
@@ -168,10 +168,10 @@ impl RecordSink {
 
 impl RecordSink {
     /// The code or tests record under `key` (K4c, D-1193,
-    /// GAP(code-record-entries)), unlogged: the caller logs one line per
+    /// D-1221), unlogged: the caller logs one line per
     /// unit ([`RecordSink::log_lookup`]). `read` is false when the command
     /// bypasses code-record reads (`--reuse-report`,
-    /// GAP(reuse-report-bypasses-code-reads)); `CHEBY_DUMP_DIR` bypasses
+    /// D-1223); `CHEBY_DUMP_DIR` bypasses
     /// every read (D-965). A record that hits is decoded with
     /// `CodeRecord::decode`'s checks and nothing more, since no fresh
     /// compile exists to compare (D-1131); one of another `RECORD_VERSION`,
@@ -186,7 +186,7 @@ impl RecordSink {
     }
 
     /// Logs a lookup as `artifact subject hit|miss`
-    /// (GAP(code-record-log-lines), D-973): K4c's `code.<kind>` and
+    /// (D-1224, D-973): K4c's `code.<kind>` and
     /// `tests.<kind>` lines, and the `facts` and `masks` hits of units the
     /// command loads from the cache without lowering them.
     pub(crate) fn log_lookup(&self, artifact: &str, subject: &str, hit: bool) {
@@ -383,7 +383,7 @@ impl Inferred {
     /// each package unit's own facts, which name its callees for its code
     /// key (K4c), and no masks. So a `plain` unit gets a facts record too,
     /// where D-1192 gave it none, since a `plain` command computes its keys
-    /// before lowering from the stored facts (GAP(code-record-entries)).
+    /// before lowering from the stored facts (D-1221).
     ///
     /// # Errors
     ///
@@ -783,7 +783,7 @@ pub(crate) struct KeyUnit<'a> {
     /// Its code identity: fresh for a lowered unit, planned otherwise.
     pub identity: Key,
     /// For a code unit, its module's own masks by item; for a tests unit,
-    /// those of its module's code unit (GAP(tests-key-own-masks)).
+    /// those of its module's code unit (D-1222).
     pub own: &'a [(String, BorrowMask)],
     /// Its facts: fresh for a lowered unit, stored otherwise.
     pub facts: &'a UnitFacts,
@@ -798,7 +798,7 @@ pub(crate) struct KeyUnit<'a> {
 /// the unit's facts name as a callee (D-1191's facts list exactly a unit's
 /// callees in other modules). A tests unit's own module enters through its
 /// code unit's own masks rather than through its callees' slots, since its
-/// facts do not list callees of its own module (GAP(tests-key-own-masks)).
+/// facts do not list callees of its own module (D-1222).
 /// [`log_keys`] logs them once they are final.
 ///
 /// # Errors

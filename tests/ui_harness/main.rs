@@ -305,7 +305,7 @@ fn build_and_run(
 /// reference-count mistake stops the program where it happens (D-544).
 /// `CHEBY_CACHE` names the harness's own cache (D-959). The test's `.env`
 /// comes last, so it may override the others but the cache, which
-/// `UiTest::env` refuses (D-1043, GAP(ui-env-precedence)); without one, the
+/// `UiTest::env` refuses (D-1043, D-1237); without one, the
 /// child inherits no `CHEBY_BACKTRACE` (`process::run`).
 fn child_env(cmd: &mut Command, test: &UiTest, env: &[(String, String)], cache: &HarnessCache) {
     cmd.env("NO_COLOR", "1").env(POISON_ENV, "1");

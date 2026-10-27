@@ -48,7 +48,7 @@ impl NativeLibrary {
 
     /// Fills the forwarder's `cheby_ffi_table` with this process's
     /// `cheby_ffi_` functions, in `cheby.h`'s declaration order
-    /// (`cheby_runtime::ffi::table`, D-941, GAP(ffi-table-order)), so the
+    /// (`cheby_runtime::ffi::table`, D-941, D-1226), so the
     /// package's C code reaches the runtime that loaded it. A library
     /// without the table (not a package's) is left alone.
     #[expect(

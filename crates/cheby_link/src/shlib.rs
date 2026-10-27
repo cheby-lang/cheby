@@ -12,7 +12,7 @@
 //! - The forwarder ([`FORWARDER_SOURCE`]) defines `cheby_ffi_table`, the
 //!   table of the running `cheby`'s `cheby_ffi_` functions, one entry per
 //!   function in `cheby.h`'s declaration order and a null word last
-//!   (D-1196, GAP(ffi-table-order)), and each of `cheby.h`'s functions as a
+//!   (D-1196, D-1226), and each of `cheby.h`'s functions as a
 //!   call through its entry, so the package's C code reaches the runtime
 //!   of the process that loaded it (D-941). It is compiled beside the
 //!   embedded `cheby.h`, which it includes. An executable links no
@@ -35,7 +35,7 @@ use crate::link::{CC, OBJECTS_PREFIX, PrivateDir, REMOVED_VARS, native_object_fi
 
 /// The forwarder's C source (D-941): `cheby_ffi_table`, one entry per
 /// function of `cheby.h` in the header's declaration order
-/// (`cheby_runtime::ffi::NAMES`, GAP(ffi-table-order)) and the null word
+/// (`cheby_runtime::ffi::NAMES`, D-1226) and the null word
 /// that ends it (D-1196), and a definition of each function that calls
 /// through its entry. It includes the embedded `cheby.h`, written beside
 /// it, so the compiler checks every definition against the header. The

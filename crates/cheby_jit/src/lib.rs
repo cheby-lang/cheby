@@ -525,7 +525,7 @@ impl Jit {
     /// (`cheby_codegen_clif::jit_unit`), and every record, fresh or from
     /// the store, is loaded in the order given ([`Jit::load_records`]), the
     /// entries unit's included, which is never stored (D-964,
-    /// GAP(entries-unit-beside-records)). Returns, for each unit, the
+    /// D-1218). Returns, for each unit, the
     /// record compiled fresh for a code or tests unit given as MIR, which a
     /// host may store (D-1193), and `None` otherwise. Every slot a REPL
     /// redefinition takes over is repointed ([`Jit::publish_all_repoints`]).
@@ -589,7 +589,7 @@ impl Jit {
         // K4c: every item of a unit a JIT loads is global hidden, so a
         // record never depends on the program that stored it (its `main`,
         // its reached constants, its selected tests), and any later batch
-        // can name it (GAP(record-items-hidden)).
+        // can name it (D-1220).
         let ucx = cheby_codegen_clif::UnitCx {
             named_outside: &|_| true,
         };
@@ -904,7 +904,7 @@ impl Jit {
     /// compiled forgets the old declarations of its functions, constructor
     /// layouts and constant slot, which the next batch declares anew, as
     /// `Decls::set_session_name` does; every later batch's units get the
-    /// names (`jit_unit::Seed`, GAP(repl-on-records)).
+    /// names (`jit_unit::Seed`, D-1225).
     pub fn set_session_names(&mut self, names: impl IntoIterator<Item = (DefId, SessionName)>) {
         for (def, name) in names {
             // A new generation of an external type is registered anew,

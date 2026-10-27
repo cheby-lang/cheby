@@ -1210,7 +1210,7 @@ fn image_register_records_owner_ranges_go_when_unregistered() {
 
 /// D-1041: each range points at its function's name in the registered
 /// record, `NO_STRING` giving no name, with the inner-body flag (D-679,
-/// GAP(backtrace-record-layout)); a name out of range or flags beyond the
+/// D-1234); a name out of range or flags beyond the
 /// two known bits are refused before anything is registered.
 #[test]
 fn image_register_records_names_ranges() {

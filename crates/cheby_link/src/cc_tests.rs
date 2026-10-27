@@ -86,7 +86,7 @@ fn native_cc_header_is_the_guard_and_the_typedef() {
     );
 }
 
-/// D-945, GAP(ffi-table-order): `cheby.h` declares each `cheby_ffi_`
+/// D-945, D-1226: `cheby.h` declares each `cheby_ffi_`
 /// function once, in `cheby_runtime::ffi::NAMES`' order, and nothing else
 /// with the prefix; the forwarder defines each one as a call through its
 /// entry of `cheby_ffi_table`, whose last word is the null of D-1196.

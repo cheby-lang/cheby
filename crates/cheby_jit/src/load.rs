@@ -1,5 +1,5 @@
 //! Loading code records into a [`Jit`] (K4c: D-914, D-922, D-1169;
-//! `cache.md` §7.3; GAP(record-batch-load)).
+//! `cache.md` §7.3; D-1219).
 //!
 //! Every JIT host compiles each unit it needs alone into a code record
 //! (`cheby_codegen_clif::jit_unit`) or takes one from the store, and loads
@@ -181,7 +181,7 @@ impl Jit {
     /// and the runtime and foreign symbols nothing defines. Returns the
     /// constant slots `cb$const$…` the batch reads that no loaded record
     /// defines, which the JIT defines itself, 0 (E6), as one JIT's units
-    /// did before records (GAP(record-batch-load)).
+    /// did before records (D-1219).
     fn check_items(&self, items: &[Item<'_>]) -> Result<Vec<String>, JitError> {
         let mut batch: FxHashSet<&str> = FxHashSet::default();
         for item in items {

@@ -1,4 +1,4 @@
-//! The REPL on code records (K4c, GAP(repl-on-records)): every entry's
+//! The REPL on code records (K4c, D-1225): every entry's
 //! units are compiled alone into records and loaded into the session's
 //! JIT, and a redefinition takes over its slot as before (D-043, D-712).
 

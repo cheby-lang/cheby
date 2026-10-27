@@ -307,7 +307,7 @@ pub(crate) fn build_scoped(
     let libraries = front.native_libraries();
     // K4c: package units come from the code cache where their records hit,
     // and are not lowered. A dump is always of fresh code (D-965), the
-    // reuse report is made while lowering (GAP(reuse-report-bypasses-code-reads)),
+    // reuse report is made while lowering (D-1223),
     // and the code-generation benchmark compiles everything.
     let resolves = |symbol: &str| cheby_jit::resolve_native(symbol, &libraries).is_some();
     let resolves: &(dyn Fn(&str) -> bool + Sync) = &resolves;
@@ -1121,7 +1121,7 @@ pub(crate) struct Reading<'a> {
     /// Whether code and tests records are read (D-914): a unit whose record
     /// hits is not lowered, inferred or compiled, and loads from its
     /// record. `--reuse-report` reads none, since its lines are made while
-    /// lowering (GAP(reuse-report-bypasses-code-reads)), and
+    /// lowering (D-1223), and
     /// `CHEBY_DUMP_DIR` reads nothing at all (D-965).
     pub code: bool,
     /// Whether the build's JIT loads the units' code records, so each
@@ -1512,7 +1512,7 @@ fn keys_of(
 }
 
 /// The lookup lines of a lowering through the cache (D-973;
-/// GAP(code-record-log-lines)): `code.<kind> <module> hit|miss` or
+/// D-1224): `code.<kind> <module> hit|miss` or
 /// `tests.<kind> <module>#tests hit|miss` for each package unit with a
 /// key, and, for each unit loaded without being lowered, the `facts` hit
 /// and, in a build with borrowing, the `masks` hit its key read (a lowered

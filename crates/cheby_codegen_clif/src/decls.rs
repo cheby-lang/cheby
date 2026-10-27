@@ -228,7 +228,7 @@ pub struct Decls {
     /// [`crate::declare`], where every symbol is local.
     alone: Option<FxHashSet<DefId>>,
     /// In a unit compiled alone for a JIT that holds earlier batches
-    /// ([`crate::jit_unit::record_for_jit`], K4c, GAP(repl-on-records)):
+    /// ([`crate::jit_unit::record_for_jit`], K4c, D-1225):
     /// the symbols those batches defined that this unit uses instead of
     /// defining its own.
     seed: Option<Seed>,
@@ -415,7 +415,7 @@ impl Decls {
     }
 
     /// An empty table for one unit compiled alone for a JIT that already
-    /// holds earlier batches (K4c, GAP(repl-on-records)): as
+    /// holds earlier batches (K4c, D-1225): as
     /// [`Decls::new_alone`], with `seed`'s session names and test ordinals
     /// registered, and its slots, constant slots and layouts imported where
     /// the unit would otherwise define them again.
@@ -1344,7 +1344,7 @@ impl Decls {
         }
         // A unit alone for a JIT whose earlier batch defined the slot this
         // redefinition takes over imports it, and the JIT repoints it once
-        // the batch is loaded (K4c, GAP(repl-on-records)).
+        // the batch is loaded (K4c, D-1225).
         if takes_over
             && let Some(symbol) = self.seed.as_ref().and_then(|s| s.slots.get(&key)).cloned()
         {
@@ -1492,7 +1492,7 @@ impl Decls {
             }
             // A slot an earlier batch of the JIT defined keeps the symbol it
             // was defined with, which a later generation that took it over
-            // does not carry (K4c, GAP(repl-on-records)). Only such a
+            // does not carry (K4c, D-1225). Only such a
             // callee's slot comes from the seed: any other callee's slot is
             // its own, named by its current generation, even when another
             // unit of this batch defines it and the seed still names an
@@ -1648,7 +1648,7 @@ impl Decls {
             }
             // The slot an earlier batch of the JIT defined for this constant
             // or session value, or for the one it takes over (D-547), is
-            // imported (K4c, GAP(repl-on-records)).
+            // imported (K4c, D-1225).
             let seeded = self.seed.as_ref().and_then(|s| {
                 s.consts.get(&def).or_else(|| {
                     let old = self.session.get(def).and_then(|n| n.reuse)?;

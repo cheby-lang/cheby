@@ -333,7 +333,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1104    | Windows targets use x86-64-v2 and Armv8.0, the flags of Linux, until M6 settles them                |
 | D-1118    | The cache root's owner and permission checks run on Unix only; M6 adds the Windows check            |
 | D-1128    | Tests and `xtask` never use the developer's cache, only fresh owner-only temporary ones             |
-| D-1132    | No module is checked twice; `run`, `test` and `build` check from source until K4a, K4c (ADR-0073)   |
+| D-1132    | No module is checked twice; `run`, `test`, `build` check from source until K4d, N9 (D-1250)         |
 | D-1140    | The `@aot` trial and UI build tests compare the build's output followed by the executable's         |
 | D-1141    | UI build tests are never blessed; their goldens are written by hand                                 |
 | D-1142    | A UI build test whose build fails compares the build's status and output, and runs nothing          |
@@ -349,6 +349,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1190    | The REPL evaluates constants in its session JIT, with std's masks, until K6                         |
 | D-1202    | `[native]` with sources or libraries is a tool error on Windows until M6                            |
 | D-1213    | E0038's probes import `std::process` until S7 moves them to a unit test                             |
+| D-1217    | Every JIT host compiles each unit alone into a code record; std's records are stored only from K6   |
+| D-1223    | `--reuse-report` reads no code record until K4d replays the reuse lines cached with a record        |
+| D-1250    | K4d ends the warm check from source for `run` and `test`, N9 for `build`                            |
 
 ## Open questions
 

@@ -194,7 +194,7 @@ fn wake_won(won: &mut Vec<FiberRef>) {
 /// there, and one filled after it is a fiber spawned afterwards
 /// (`ScopeState::fill` finds `owner` unmarked), which runs normally
 /// (`cancel_models.rs` model 6). Entered with no runtime lock held.
-/// GAP(fiber-cancel-kernel).
+/// D-1238.
 pub(crate) fn cancel_spawned(owner: &Arc<ScopeState>) -> bool {
     let mut won = Vec::new();
     let mut scopes = Vec::new();
@@ -228,7 +228,7 @@ pub(super) fn targeted_within(fiber: &ExecCtx, depth: u32) -> bool {
 /// them, such as the scope's body, gets `Nil`. Without a runtime a scope
 /// has no members, so the walk reaches nobody and the kernel returns
 /// (D-692). The result is `Nil`, which is `CType::Void`: the kernel
-/// returns nothing, as `sys_spawn_detached` does. GAP(fiber-cancel-kernel).
+/// returns nothing, as `sys_spawn_detached` does. D-1238.
 ///
 /// # Safety
 ///

@@ -36,7 +36,7 @@ use crate::rc;
 /// deadline), releases `p0..p(count-1)` and returns 1; else returns 0 and
 /// leaves them untouched. Never raises itself.
 ///
-/// D-1040 (GAP(backtrace-slow-unwind-stubs)): generated code reaches the
+/// D-1040 (D-1236): generated code reaches the
 /// slow path through this helper too, so it is a naked stub as well. Its
 /// arguments fill `x0`-`x6` (AAPCS64), so it pushes a frame record of its
 /// own (`x29`, `x30`), passes the record's address in `x7` and calls
@@ -162,7 +162,7 @@ unsafe extern "C" fn stack_slow_unwind_from(
 /// of `frame_size` bytes, through [`crate::panic::cheby_rt_stack_slow_frame`]'s
 /// work (D-743, D-775).
 ///
-/// D-1040 (GAP(backtrace-slow-unwind-stubs)): a naked stub, as
+/// D-1040 (D-1236): a naked stub, as
 /// [`cheby_rt_stack_slow_unwind`]'s. Its arguments fill `x0`-`x7`
 /// (AAPCS64), so it makes 32 bytes of room, stores its frame record
 /// (`x29`, `x30`) at `sp + 16`, passes the record's address as the ninth

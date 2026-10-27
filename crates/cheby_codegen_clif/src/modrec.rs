@@ -37,7 +37,7 @@
 //! to the function, and its `name` the offset of its display name
 //! ([`DisplayName`], D-1041) or `NO_STRING`, with `FN_LARGE_BODY` among the
 //! flags of a large function's inner body (D-679,
-//! GAP(backtrace-record-layout)); a constructor's `layout_word` and `ctor_static` and a
+//! D-1234); a constructor's `layout_word` and `ctor_static` and a
 //! hook's three function values are data relocations to the unit's own
 //! `cb$layout$…` word, `cb$ctor$…` static and `cb$fnval$…` values. An
 //! empty table is count 0 and pointer 0, a constructor with fields has
@@ -372,7 +372,7 @@ pub struct DisplayName {
 
 /// The display name of the function `key` of `unit` (D-1041), or `None`
 /// for code without one: value shims, `dyn` forwarders, trampolines and
-/// entry thunks (a `@blocking` shim has no key). GAP(backtrace-record-layout):
+/// entry thunks (a `@blocking` shim has no key). D-1234:
 ///
 /// - a top-level function or a constant's initializer: its module path and
 ///   name joined by `::`, as source code names it (`demo::check`,
@@ -444,7 +444,7 @@ fn source_path(name: &DefName) -> String {
 /// reloaded module under a path whose last segment carries a generation
 /// mark, `fib<r1>`, and a REPL entry checked again is lowered as the
 /// module `<repl:N:G>`; a backtrace names them `fib` and `<repl:N>`, as
-/// before the reload. GAP(backtrace-record-layout).
+/// before the reload. D-1234.
 fn source_module(module: &str) -> String {
     if let Some(inner) = module
         .strip_prefix(REPL_MODULE_PREFIX)

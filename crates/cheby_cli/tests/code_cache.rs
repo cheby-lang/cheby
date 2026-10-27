@@ -397,7 +397,7 @@ fn code_cache_naive_records_are_their_own() {
     );
 }
 
-/// D-852, D-268, GAP(reuse-report-bypasses-code-reads): `cheby run
+/// D-852, D-268, D-1223: `cheby run
 /// --reuse-report` and `cheby test --reuse-report` print the same warm as
 /// cold, since the report is made while lowering and code records are not
 /// read for it.

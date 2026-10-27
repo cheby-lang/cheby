@@ -757,7 +757,7 @@ impl RecordFacts {
             // Since K4c every JIT loads units compiled alone, whose records
             // list the constants they initialize as the object's do (D-1189;
             // a JIT host still finds slots through `Jit::const_slot`,
-            // GAP(record-batch-load)); the object's count is checked against
+            // D-1219); the object's count is checked against
             // its unit in `check_records`.
             constants: decoded.counts[6],
         }

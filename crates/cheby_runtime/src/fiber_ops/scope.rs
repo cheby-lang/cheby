@@ -454,7 +454,7 @@ impl ScopeState {
     /// of this lock, so a fiber anywhere below a member that learns of the
     /// cancellation's effects finds a marked scope on its chain
     /// (`cancel::check_chain`, D-769), whatever the walk's progress.
-    /// GAP(fiber-cancel-kernel).
+    /// D-1238.
     pub(crate) fn cancel_spawned_step(
         self: &Arc<Self>,
         won: &mut Vec<FiberRef>,
@@ -654,7 +654,7 @@ impl ScopeState {
 /// scope is the target, is known by its target alone (D-1060). Called
 /// under `scope`'s lock: the fiber lock is taken inside it (a scope lock,
 /// then a fiber lock). A thread that runs no fiber (a unit test that calls
-/// `record_panic` itself) has nothing to read. GAP(fiber-cancel-kernel).
+/// `record_panic` itself) has nothing to read. D-1238.
 fn panicker_is_cancelled_here(scope: &ScopeState) -> bool {
     // SAFETY: `current_fiber` is null or the control block of the fiber
     // running on this thread, which lives while it runs; only a shared

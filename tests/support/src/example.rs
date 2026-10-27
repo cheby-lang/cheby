@@ -231,7 +231,7 @@ impl Example {
     /// and only when a placeholder needs it, so an example without one
     /// starts no server.
     ///
-    /// GAP(fixture-placeholder-syntax): a placeholder is a `{`, one or more
+    /// D-1249: a placeholder is a `{`, one or more
     /// characters that are neither white space nor a brace, and a `}`, in
     /// an `args` line or an `env` value; only `{http_fixture}` is known. A
     /// brace that starts no such run is kept as it is, and `env` keys are
@@ -280,7 +280,7 @@ impl Example {
 
 /// `text`, a line of the example's `file`, with each `{http_fixture}`
 /// replaced by `resolve(file)`; any other placeholder is an error
-/// (GAP(fixture-placeholder-syntax), D-1027).
+/// (D-1249, D-1027).
 fn expand(
     text: &str,
     file: &str,

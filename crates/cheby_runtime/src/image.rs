@@ -97,7 +97,7 @@
 //! without a name: value shims, `dyn` forwarders, trampolines, entry
 //! thunks, `@blocking` shims) at 16, `pad` (`u32`) at 20, `sites` (table of
 //! [`CallSiteEntry`], any order) at 24. Version 3 of the layout gave the
-//! entry its name (GAP(backtrace-record-layout)); version 2's entry was 32
+//! entry its name (D-1234); version 2's entry was 32
 //! bytes, without `name` and `pad`.
 //!
 //! [`CallSiteEntry`] (16 bytes, D-867's record): `ret_offset` (`u32`, the
@@ -177,7 +177,7 @@ pub const FN_CHEBY_ABI: u32 = 1;
 /// [`FunctionEntry::flags`]: the function is the inner body `cb$big$…` of a
 /// function with a large frame (D-679), named as that function; a
 /// backtrace does not show the outer frame when its inner body is the next
-/// frame inward (D-1039). GAP(backtrace-record-layout).
+/// frame inward (D-1039). D-1234.
 pub const FN_LARGE_BODY: u32 = 2;
 
 /// The field kinds a [`FieldEntry::kind`] names, by index.

@@ -174,7 +174,7 @@ pub(crate) fn prepare_unless(
 
 /// The prefixes of the names the toolchain keeps for itself, whatever the
 /// runtime exports today: the runtime's own `cheby_rt_` and generated
-/// code's `cb$` (D-455, D-917). GAP(c-object-reserved-prefixes): a C
+/// code's `cb$` (D-455, D-917). D-1232: a C
 /// object that defines such a name is the same tool error as one that
 /// defines a runtime export (D-1201, D-944), as the user chose.
 const RESERVED_PREFIXES: [&str; 2] = ["cheby_rt_", "cb$"];
@@ -540,7 +540,7 @@ fn write_atomically(dir: &Path, path: &Path, bytes: &[u8]) -> Result<(), Error> 
     })
 }
 
-/// D-949, D-1168, GAP(external-drop-in-records): gives each external type
+/// D-949, D-1168, D-1228: gives each external type
 /// that `unit`, a code unit of `module`, lists its native drop function
 /// (`ExternalDesc::drop`), from the module's resolved items
 /// (`Checked::drops`): the module record's external entry then points to
@@ -577,7 +577,7 @@ pub(crate) fn attach_drops(
 /// function of a reached external type is a reached symbol, which E0053
 /// covers. Values of an external type come only from such calls, so a
 /// type no reached call makes has no value whose drop function could run
-/// (GAP(reached-external-types): what D-943 calls a reached external type).
+/// (D-1233: what D-943 calls a reached external type).
 pub(crate) fn reached_drops(
     reached: &[cheby_mir::MirModule],
     units: &[cheby_mir::MirModule],

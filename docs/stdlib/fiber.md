@@ -288,6 +288,7 @@ pub fn cancel(owner: Scope)
 Cancels every fiber spawned into `owner` so far, and every scope nested in them, with `owner` as the target (D-667, D-1060, ADR-0069). It never cancels `owner`'s body and does not mark the scope as cancelled:
 
 - Fibers spawned into `owner` afterwards run normally. The scope waits for the cancelled fibers to unwind, as it waits for every fiber, and returns `Ok` with the body's value once every fiber has ended.
+- A spawn into `owner` that runs at the same time as `cancel` is ordered by the scope: its fiber is either reached by `cancel` or spawned afterwards (D-1238).
 - A panic of a fiber after `cancel` has reached it is not recorded, as for a timeout (D-671), so it does not make the scope fail.
 - Any fiber that holds the `Scope` may call `cancel`. When the caller is one of the fibers it cancels, `cancel` does not return, and the caller unwinds at once, as a cancelled blocking operation does (D-102).
 - On a scope that has ended, failed or been cancelled, `cancel` does nothing.

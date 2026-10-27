@@ -34,7 +34,7 @@
 //! stack), `<called from outside Cheby code>` at a trampoline or any other
 //! code, `(more frames not walked)` at the cap.
 //!
-//! GAP(backtrace-format-details): the log leaves open how the caps and
+//! D-1235: the log leaves open how the caps and
 //! folding meet, so a run of equal lines counts its printed lines toward
 //! [`MAX_LINES`] and its `(repeated …)` line does not; frames past the cap
 //! are counted in `(<n> more frames)`, folded ones included; a walk that

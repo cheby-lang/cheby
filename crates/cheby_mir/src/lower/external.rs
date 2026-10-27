@@ -39,7 +39,7 @@
 //! - A result of any other counted type is checked by
 //!   `cheby_rt_ffi_value`: a NULL result panics with ``foreign function
 //!   `<symbol>` returned null`` at the declaration (D-947,
-//!   GAP(null-results-outside-std)).
+//!   D-1229).
 //!
 //! A failed `cheby_ffi_` allocation sets the unwind flag (D-946). After a
 //! call whose result one of the two helpers takes, code generation tests
@@ -272,7 +272,7 @@ fn wrap_external(b: &mut FunctionBuilder, handle: Local, type_key: u64) -> Resul
 /// failed `cheby_ffi_` allocation of the call, and the cleanup releases
 /// `raw` (D-946); a NULL `raw` panics with D-947's message at the
 /// `@external` function's declaration, `location`
-/// (GAP(null-results-outside-std): std's kernels are Rust and never
+/// (D-1229: std's kernels are Rust and never
 /// return NULL, so only packages' wrappers check).
 fn check_value(
     b: &mut FunctionBuilder,

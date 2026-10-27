@@ -1,7 +1,7 @@
 //! Units compiled alone for a JIT host (K4c, D-914, D-923): every JIT host
 //! compiles each unit it needs alone into a code record and loads the
 //! records into its `JITModule` (`cheby_jit`), so fresh and cached code take
-//! one load path (GAP(fresh-code-through-records)).
+//! one load path (D-1217).
 //!
 //! [`record_for_jit`] compiles one unit, a code, tests or entries unit, into
 //! its [`CodeRecord`] and a [`UnitIndex`]: where the loader finds the
@@ -17,7 +17,7 @@
 //! ordinals (D-1179). The unit imports what the seed names instead of
 //! defining it again, and a redefinition that takes over a slot imports
 //! that slot and lists the repoint in its index (D-043, D-712;
-//! GAP(repl-on-records)). Without a seed, the record is the one the cache
+//! D-1225). Without a seed, the record is the one the cache
 //! stores: [`crate::record::record_unit`]'s for a code or tests unit.
 
 use cranelift_codegen::isa::OwnedTargetIsa;
@@ -96,7 +96,7 @@ pub struct JitUnit {
 /// record for a JIT host (module docs), with `seed` for a JIT that holds
 /// earlier batches. A code or tests unit's record holds its module record
 /// (`cb$mod$…`, D-1107); an entries unit's holds none, and it is never
-/// stored (D-964, GAP(entries-unit-beside-records)). Without a seed, a code
+/// stored (D-964, D-1218). Without a seed, a code
 /// or tests unit's record is [`crate::record::record_unit`]'s.
 ///
 /// # Errors

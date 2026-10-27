@@ -194,7 +194,7 @@ fn a_missing_blocking_symbol_is_reported_before_finalizing() {
         panic!("{err}");
     };
     assert_eq!(symbols, &["cheby_test_missing_blocking"]);
-    // Nothing of the failed batch is declared (K4c, GAP(record-batch-load)).
+    // Nothing of the failed batch is declared (K4c, D-1219).
     assert_eq!(jit.declared(), 0);
 }
 

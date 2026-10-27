@@ -6,7 +6,7 @@
 //! through code records ([`cheby_jit::Jit::compile_units`]): each unit it
 //! needs is compiled alone into a record and loaded, or its record comes
 //! from the store and is loaded the same way, so fresh and cached code take
-//! one load path (GAP(fresh-code-through-records)). The lookups come
+//! one load path (D-1217). The lookups come
 //! before lowering (`backend.rs`'s `lower_through_cache`): a unit whose
 //! record hits is not lowered, and reaches [`compile`] as its record in
 //! [`Lowered::order`].
@@ -14,10 +14,10 @@
 //! - A package module's code unit's record lies under its code key
 //!   (`KeyKind::Code`) and its tests unit's under its tests key
 //!   (`KeyKind::Tests`), for the kinds `run`, `test` and `plain` (D-1193),
-//!   as `CodeRecord::encode`'s bytes (GAP(code-record-entries)).
+//!   as `CodeRecord::encode`'s bytes (D-1221).
 //! - Each lookup is logged under `CHEBY_CACHE_LOG` as `code.<kind> <module>
 //!   hit|miss` or `tests.<kind> <module>#tests hit|miss`, beside K4b's
-//!   `key` lines (D-973, GAP(code-record-log-lines)).
+//!   `key` lines (D-973, D-1224).
 //! - A miss is compiled eagerly and whole, its functions in parallel
 //!   (D-923), and its record written behind the command (D-1138), at most
 //!   once per process (D-1139). Std's units have no key until K6 (D-1192,
@@ -27,7 +27,7 @@
 //! - `CHEBY_DUMP_DIR` bypasses reads (D-965) and still writes; so does
 //!   `--reuse-report` until K4d replays the reuse lines cached with a
 //!   record, since the report is made while lowering
-//!   (GAP(reuse-report-bypasses-code-reads)).
+//!   (D-1223).
 //!
 //! A record from the store has no index of its functions by key, so the
 //! command names its constants' slots by symbol ([`name_consts`]).
