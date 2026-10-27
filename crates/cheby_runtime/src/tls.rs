@@ -158,6 +158,11 @@ thread_local! {
     static CACHE: RefCell<BlockCache> = const { RefCell::new(BlockCache::new()) };
     /// Poisoned blocks kept out of the allocator.
     static QUARANTINE: RefCell<Quarantine> = const { RefCell::new(Quarantine::new()) };
+    /// The drop-function mark (D-946, D-949): `Some` while a user external
+    /// type's drop function runs on this thread, holding the references
+    /// its `cheby_ffi_drop` calls gave up, which the finalizer releases
+    /// onto the running free worklist once the drop function returns.
+    static DROP_MARK: RefCell<Option<Vec<Word>>> = const { RefCell::new(None) };
     /// Tests force hash collisions in maps and sets by masking key hashes.
     #[cfg(test)]
     static HASH_MASK: Cell<u64> = const { Cell::new(u64::MAX) };
@@ -338,6 +343,15 @@ pub(crate) fn with_cache_of<R>(
 #[inline(never)]
 pub(crate) fn with_quarantine<R>(f: impl FnOnce(&RefCell<Quarantine>) -> R) -> Option<R> {
     QUARANTINE.try_with(f).ok()
+}
+
+/// Calls `f` with this thread's drop-function mark (D-946, D-949): `Some`
+/// while a user drop function runs here; `None` during thread teardown.
+/// `f` never suspends, and nothing under it frees an object or calls
+/// foreign code, so the cell is never borrowed twice.
+#[inline(never)]
+pub(crate) fn with_drop_mark<R>(f: impl FnOnce(&RefCell<Option<Vec<Word>>>) -> R) -> Option<R> {
+    DROP_MARK.try_with(f).ok()
 }
 
 /// The mask applied to key hashes on this thread (tests only).

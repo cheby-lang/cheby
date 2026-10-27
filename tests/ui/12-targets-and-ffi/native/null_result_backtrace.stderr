@@ -1,0 +1,6 @@
+panicked at tests/ui/12-targets-and-ffi/native/null_result_backtrace/src/main.cheby:13:4:
+foreign function `app_name` returned null
+backtrace:
+  in app::name at tests/ui/12-targets-and-ffi/native/null_result_backtrace/src/main.cheby:13:4
+  in app::greeting at tests/ui/12-targets-and-ffi/native/null_result_backtrace/src/main.cheby:16:14
+  in app::main at tests/ui/12-targets-and-ffi/native/null_result_backtrace/src/main.cheby:22:15

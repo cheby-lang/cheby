@@ -471,7 +471,7 @@ fn jit_records_entry_thunks_are_in_no_range() {
         assert_eq!(locate::range_at(thunk + 4), None);
         assert_eq!(locate::range_at(thunk), None);
     }
-    let make_p = jit.decls.func(FnKey::Item(def(1, 0))).unwrap().id;
+    let make_p = jit.func_id(FnKey::Item(def(1, 0))).unwrap();
     let start = jit
         .module
         .get_finalized_function(make_p)

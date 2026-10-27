@@ -172,11 +172,20 @@ pub(crate) fn prepare_unless(
     }))
 }
 
+/// The prefixes of the names the toolchain keeps for itself, whatever the
+/// runtime exports today: the runtime's own `cheby_rt_` and generated
+/// code's `cb$` (D-455, D-917). GAP(c-object-reserved-prefixes): a C
+/// object that defines such a name is the same tool error as one that
+/// defines a runtime export (D-1201, D-944), as the user chose.
+const RESERVED_PREFIXES: [&str; 2] = ["cheby_rt_", "cb$"];
+
 /// D-944: a C object that defines a name the runtime exports is a tool
 /// error before anything links or loads. The names are the JIT's table
-/// (`cheby_runtime::symbols()`) and the two that only the runtime archive
-/// exports to executables: their entry, `cheby_rt_main`, and the
-/// runtime-ID symbol (D-925, D-930; the wave-6 review's R-3).
+/// (`cheby_runtime::symbols()`, `cheby.h`'s `cheby_ffi_` functions among
+/// them, D-1204), the two that only the runtime archive exports to
+/// executables, their entry `cheby_rt_main` and the runtime-ID symbol
+/// (D-925, D-930; the wave-6 review's R-3), and every name with a
+/// [`RESERVED_PREFIXES`] prefix.
 fn check_exports(source: &str, object: &[u8]) -> Result<(), Error> {
     let defined = cheby_link::shlib::defined_symbols(object).map_err(|e| {
         Error::from(cheby_iface::Ice::new(format!(
@@ -189,7 +198,11 @@ fn check_exports(source: &str, object: &[u8]) -> Result<(), Error> {
         cheby_runtime::abi::sym::RUNTIME_ID_SYMBOL,
     ];
     if let Some(symbol) = defined.iter().find(|name| {
-        runtime.iter().any(|(export, _)| export == name) || archive_only.contains(&name.as_str())
+        runtime.iter().any(|(export, _)| export == name)
+            || archive_only.contains(&name.as_str())
+            || RESERVED_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
     }) {
         return Err(Error::new(format!(
             "`{source}` defines `{symbol}`, a name the Cheby runtime exports; give the C \
@@ -525,6 +538,76 @@ fn write_atomically(dir: &Path, path: &Path, bytes: &[u8]) -> Result<(), Error> 
         let _ = std::fs::remove_file(&tmp);
         io("write", path, e)
     })
+}
+
+/// D-949, D-1168, GAP(external-drop-in-records): gives each external type
+/// that `unit`, a code unit of `module`, lists its native drop function
+/// (`ExternalDesc::drop`), from the module's resolved items
+/// (`Checked::drops`): the module record's external entry then points to
+/// it (`cheby_codegen_clif`'s `modrec.rs`), and registration stores it
+/// with the type's layout. A REPL session names it as its library
+/// generation `generation` does (D-1197; 0 elsewhere). A module that was
+/// not checked (a REPL entry) declares no external type.
+pub(crate) fn attach_drops(
+    front: &crate::frontend::Frontend,
+    module: cheby_iface::ModuleId,
+    unit: &mut cheby_mir::MirModule,
+    generation: u32,
+) {
+    let Some(checked) = front.checked(module) else {
+        return;
+    };
+    for external in &mut unit.externals {
+        if external.def.module != module {
+            continue;
+        }
+        if let Some((_, symbol)) = checked
+            .drops
+            .iter()
+            .find(|(index, _)| *index == external.def.index)
+        {
+            external.drop = Some(cheby_jit::generation_symbol(symbol, generation).into());
+        }
+    }
+}
+
+/// D-943, D-949: the drop functions of the external types whose values
+/// `reached` code makes, the type keys its `cheby_rt_ffi_external` calls
+/// name (`cheby_mir`'s `lower/external.rs`), as `units` list them: a drop
+/// function of a reached external type is a reached symbol, which E0053
+/// covers. Values of an external type come only from such calls, so a
+/// type no reached call makes has no value whose drop function could run
+/// (GAP(reached-external-types): what D-943 calls a reached external type).
+pub(crate) fn reached_drops(
+    reached: &[cheby_mir::MirModule],
+    units: &[cheby_mir::MirModule],
+) -> Vec<String> {
+    use cheby_mir::{Const, Operand, Rvalue, Stmt};
+    let mut keys = std::collections::BTreeSet::new();
+    for function in reached.iter().flat_map(|unit| &unit.functions) {
+        for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
+            let (Stmt::Assign {
+                value: Rvalue::CallForeign { symbol, args, .. },
+                ..
+            }
+            | Stmt::Eval(Rvalue::CallForeign { symbol, args, .. })) = stmt
+            else {
+                continue;
+            };
+            if cheby_jit::split_generation(symbol).0 != cheby_runtime::abi::sym::FFI_EXTERNAL {
+                continue;
+            }
+            if let Some(Operand::Const(Const::Sized { bits, .. })) = args.get(2) {
+                keys.insert(*bits);
+            }
+        }
+    }
+    units
+        .iter()
+        .flat_map(|unit| &unit.externals)
+        .filter(|external| keys.contains(&external.type_key))
+        .filter_map(|external| external.drop.as_deref().map(str::to_owned))
+        .collect()
 }
 
 /// Marks `path` as used now (D-961's trim reads the modification time).

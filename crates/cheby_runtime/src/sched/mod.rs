@@ -1034,6 +1034,7 @@ impl Runtime {
             Some(threads) => threads.clamp(1, MAX_THREADS),
             None => threads_from_env()?,
         };
+        crate::backtrace::setting_from_env()?;
         if !switch::SUPPORTED {
             return Err(RuntimeError::Unsupported);
         }

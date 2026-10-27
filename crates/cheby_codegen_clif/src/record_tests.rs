@@ -719,21 +719,30 @@ fn record_modrec_layout_matches_image() {
     assert_eq!(strings_at + strings, bytes.len());
     let mut sites_seen = Vec::new();
     for (i, (code, function)) in compiled.defined.iter().zip(&r.functions).enumerate() {
-        let entry = 112 + 32 * i;
+        // D-1041: 40-byte entries, the name's offset at +16 (N7b).
+        let entry = 112 + 40 * i;
         let symbol = &r.symbols[function.symbol as usize].name;
         assert_eq!(reloc_at(entry), Some((symbol.as_str(), 0)));
         assert_eq!(u32_at(bytes, entry + 8) as usize, function.bytes.len());
         assert_eq!(u32_at(bytes, entry + 8), code.len);
         let flags = u32_at(bytes, entry + 12);
         assert_eq!(flags, if code.cheby_abi { FN_CHEBY_ABI } else { 0 });
-        let sites = u64_at(bytes, entry + 16) as usize;
+        let fn_name = u32_at(bytes, entry + 16);
+        match &code.name {
+            Some(display) => {
+                assert_eq!(string_at(bytes, strings_at, fn_name), display.text);
+            }
+            None => assert_eq!(fn_name, NO_STRING),
+        }
+        assert_eq!(u32_at(bytes, entry + 20), 0);
+        let sites = u64_at(bytes, entry + 24) as usize;
         assert_eq!(sites, code.sites.len());
         if sites == 0 {
-            assert_eq!(u64_at(bytes, entry + 24), 0);
-            assert_eq!(reloc_at(entry + 24), None);
+            assert_eq!(u64_at(bytes, entry + 32), 0);
+            assert_eq!(reloc_at(entry + 32), None);
             continue;
         }
-        let (target, at) = reloc_at(entry + 24).unwrap();
+        let (target, at) = reloc_at(entry + 32).unwrap();
         assert_eq!(target, name);
         for (k, site) in code.sites.iter().enumerate() {
             let at = at as usize + 16 * k;

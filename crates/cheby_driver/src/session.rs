@@ -2155,6 +2155,7 @@ impl Session {
             let mut unit = lower_items(thir, &wanted, &cx)?;
             if !self.is_std(module) {
                 name_native_generation(&mut unit, self.native_generation);
+                crate::native::attach_drops(&self.front, module, &mut unit, self.native_generation);
             }
             count_and_check_with(&mut unit, &self.mir)?;
             units.push(unit);

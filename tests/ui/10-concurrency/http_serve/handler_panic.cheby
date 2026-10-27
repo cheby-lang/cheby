@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @decisions: D-1012, D-669
+// @milestone: M3
+//! A handler that panics in `http::serve_on` gives its request `500`, and
+//! its panic report is printed to standard error as a detached fiber's is,
+//! with the panic's message and location only (D-669, D-1012). Nothing
+//! else fails: the server goes on until `main` closes its listener, and
+//! `serve_on` then returns `Ok(Nil)` (D-1064).
+
+import std::fiber
+import std::http
+import std::io
+import std::net
+
+fn main() {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  let outcome = {
+    use owner <- fiber::scope()
+    let server = fiber::spawn(owner, fn() {
+      http::serve_on(listener, fn(_) { panic as "the handler failed" })
+    })
+    let assert Ok(response) = http::get("http://127.0.0.1:{port}/crash")
+    io::println("{response.status}")
+    let assert Ok(Nil) = net::close_listener(listener)
+    fiber::join(server)
+  }
+  let assert Ok(Ok(Nil)) = outcome
+}

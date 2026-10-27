@@ -373,6 +373,11 @@ impl StoreShare {
     pub(crate) fn put_hint(&self, key: &Key, payload: &[u8]) -> Result<(), StoreError> {
         put_entry(&self.shared, FileKind::Hint, key.hash(), payload)
     }
+
+    /// [`Store::get_hint`]: K4c reads lowering's read-set hints (D-1195).
+    pub(crate) fn get_hint(&self, key: &Key) -> Option<Vec<u8>> {
+        self.shared.get(FileKind::Hint, key.hash())
+    }
 }
 
 /// Hands an entry to the writer: [`Store::put`].

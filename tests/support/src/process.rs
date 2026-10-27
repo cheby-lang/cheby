@@ -3,8 +3,12 @@
 //! The harnesses' timeouts are multiplied by `CHEBY_HARNESS_SCALE`
 //! ([`scaled_timeout`], D-722), for slow machines, emulators and
 //! sanitizer builds.
+//!
+//! A child inherits none of [`CLEARED_ENV`] unless its command sets the
+//! variable itself (D-1043): a developer's `CHEBY_BACKTRACE=1` never
+//! changes a golden.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -96,14 +100,33 @@ impl RunOutput {
     }
 }
 
+/// The variables a developer may set that no harness child inherits unless
+/// the test sets them itself (D-1043; D-747's `CHEBY_THREADS` is handled by
+/// `threads::apply`).
+pub const CLEARED_ENV: &[&str] = &["CHEBY_BACKTRACE"];
+
+/// Removes each of [`CLEARED_ENV`] from `cmd`'s environment unless `cmd`
+/// sets it (or removes it) itself: what [`run`] does to every child, and
+/// what a harness that spawns its children another way calls (D-1043).
+pub fn clear_inherited(cmd: &mut Command) {
+    for key in CLEARED_ENV {
+        if !cmd.get_envs().any(|(name, _)| name == OsStr::new(key)) {
+            cmd.env_remove(key);
+        }
+    }
+}
+
 /// Runs `cmd`, feeding it `stdin` (or nothing), and kills it after
 /// `timeout`. Output is decoded lossily as UTF-8 with `\r\n` normalized to
-/// `\n`, so goldens are the same on every platform.
+/// `\n`, so goldens are the same on every platform. Each of
+/// [`CLEARED_ENV`] is removed from the child's environment unless `cmd`
+/// sets it ([`clear_inherited`], D-1043).
 ///
 /// # Errors
 ///
 /// Returns a message if the process cannot be started or waited for.
 pub fn run(mut cmd: Command, stdin: Option<&[u8]>, timeout: Duration) -> Result<RunOutput, String> {
+    clear_inherited(&mut cmd);
     cmd.stdin(if stdin.is_some() {
         Stdio::piped()
     } else {
@@ -198,6 +221,46 @@ mod tests {
                 "{bad}: {err}"
             );
         }
+    }
+
+    /// D-1043: a child inherits no `CHEBY_BACKTRACE` unless its command
+    /// sets it, or removes it, itself.
+    #[test]
+    fn ui_env_backtrace_cleared_unless_set() {
+        let removed = |cmd: &Command| -> Vec<(OsString, Option<OsString>)> {
+            cmd.get_envs()
+                .map(|(k, v)| (k.to_owned(), v.map(OsStr::to_owned)))
+                .collect()
+        };
+        let mut plain = Command::new("cheby");
+        clear_inherited(&mut plain);
+        assert_eq!(removed(&plain), [("CHEBY_BACKTRACE".into(), None)]);
+        let mut set = Command::new("cheby");
+        set.env("CHEBY_BACKTRACE", "1");
+        clear_inherited(&mut set);
+        assert_eq!(
+            removed(&set),
+            [("CHEBY_BACKTRACE".into(), Some("1".into()))]
+        );
+        let mut gone = Command::new("cheby");
+        gone.env_remove("CHEBY_BACKTRACE");
+        clear_inherited(&mut gone);
+        assert_eq!(removed(&gone), [("CHEBY_BACKTRACE".into(), None)]);
+    }
+
+    /// A child that `run` starts sees no inherited `CHEBY_BACKTRACE`, and
+    /// one its command sets.
+    #[cfg(unix)]
+    #[test]
+    fn ui_env_run_clears_backtrace() {
+        let timeout = Duration::from_secs(60);
+        let mut plain = Command::new("/bin/sh");
+        plain.args(["-c", "printf '%s' \"${CHEBY_BACKTRACE-unset}\""]);
+        assert_eq!(run(plain, None, timeout).unwrap().stdout, "unset");
+        let mut set = Command::new("/bin/sh");
+        set.args(["-c", "printf '%s' \"${CHEBY_BACKTRACE-unset}\""])
+            .env("CHEBY_BACKTRACE", "1");
+        assert_eq!(run(set, None, timeout).unwrap().stdout, "1");
     }
 
     #[test]

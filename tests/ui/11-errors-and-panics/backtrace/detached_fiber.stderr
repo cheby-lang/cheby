@@ -1,0 +1,5 @@
+panicked at tests/ui/11-errors-and-panics/backtrace/detached_fiber.cheby:16:3:
+the detached fiber failed
+backtrace:
+  in ui_test::fail at tests/ui/11-errors-and-panics/backtrace/detached_fiber.cheby:16:3
+  <called from outside Cheby code>

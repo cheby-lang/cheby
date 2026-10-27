@@ -194,7 +194,8 @@ fn a_missing_blocking_symbol_is_reported_before_finalizing() {
         panic!("{err}");
     };
     assert_eq!(symbols, &["cheby_test_missing_blocking"]);
-    assert_eq!(jit.decls.import_words(), Vec::<(&str, bool)>::new());
+    // Nothing of the failed batch is declared (K4c, GAP(record-batch-load)).
+    assert_eq!(jit.declared(), 0);
 }
 
 /// A runtime with one worker: a fiber that blocked its worker would stop

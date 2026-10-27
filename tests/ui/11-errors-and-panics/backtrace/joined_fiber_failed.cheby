@@ -1,0 +1,44 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! With `CHEBY_BACKTRACE=1`, `joined fiber failed` has a backtrace of its
+//! own, from the frame that `fiber::join` published before it waited: its
+//! first line is the user's call of `fiber::join`, while the report keeps
+//! `<unknown location>` (§10.3, §11.6).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn fail_after(start: channel::Receiver<Nil>, text: String) -> Int {
+  let _ = channel::receive(start)
+  panic as text
+}
+
+fn join_it(doomed: fiber::Fiber<Int>) -> Int {
+  let value = fiber::join(doomed)
+  value + 1
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<fiber::Fiber<Int>>(1)
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let first = {
+    use owner <- fiber::scope()
+    let doomed = fiber::spawn(owner, fn() { fail_after(go_rx, "doomed") })
+    let assert Ok(Nil) = channel::send(tx, doomed)
+    let assert Ok(Nil) = channel::send(go_tx, Nil)
+    Nil
+  }
+  case first {
+    Ok(_) => io::println("the first scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the first scope failed: {text}")
+    }
+  }
+  let assert Ok(doomed) = channel::receive(rx)
+  io::println("joining from outside the scope")
+  let value = join_it(doomed)
+  io::println("never printed: {value}")
+}

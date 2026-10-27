@@ -30,7 +30,9 @@
 //! `scope` would catch a panic and mislead.
 //!
 //! - [`cancel`]: cancellation (D-667, D-706): the subtree walk, the check a
-//!   fiber makes before it parks, and the publication of its wait node.
+//!   fiber makes before it parks, and the publication of its wait node;
+//!   and the kernel `sys_cancel` of `fiber::cancel` (D-1060), which walks
+//!   a scope's members but not its body.
 //! - [`select`]: the kernels of `std::selector` (D-673, D-695): building
 //!   selectors, and the select wait over several channels and a timer.
 //!
@@ -289,7 +291,7 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 13] {
+fn all() -> [Entry; 14] {
     [
         (
             "cheby_selector_sys_new",
@@ -366,6 +368,12 @@ fn all() -> [Entry; 13] {
         (
             "cheby_fiber_sys_spawn_detached",
             detached::cheby_fiber_sys_spawn_detached as *const u8,
+            &["Word"],
+            "()",
+        ),
+        (
+            "cheby_fiber_sys_cancel",
+            cancel::cheby_fiber_sys_cancel as *const u8,
             &["Word"],
             "()",
         ),
@@ -460,6 +468,8 @@ impl Drop for Owned {
     }
 }
 
+#[cfg(test)]
+mod cancel_models;
 #[cfg(test)]
 mod cancel_races;
 #[cfg(test)]

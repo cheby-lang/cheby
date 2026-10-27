@@ -396,6 +396,10 @@ fn straight(stmts: Vec<Stmt>, result: u32) -> Vec<Block> {
     vec![block(stmts, ret(result))]
 }
 
+// K4c's loader, with this file's builders.
+#[path = "load_tests.rs"]
+mod load_tests;
+
 #[test]
 fn panic_kinds_match_the_runtime() {
     let mir: Vec<u32> = PanicKind::ALL.iter().map(|k| k.code()).collect();
@@ -703,7 +707,7 @@ fn missing_native_symbols_are_all_reported() {
     let mut fixed = calls_natives(&[]);
     let target = fixed.call(def(1, 0), Vec::new());
     jit.compile(&fixed.units()).unwrap();
-    assert_eq!(jit.decls.foreign_symbols(), Vec::<&str>::new());
+    assert!(!jit.declares("cheby_test_missing_a") && !jit.declares("cheby_test_missing_b"));
     assert_eq!(
         run_const(&jit, target),
         EntryOutcome::Returned(static_nil())
@@ -1074,50 +1078,41 @@ fn batches_may_call_a_foreign_symbol_with_new_signatures() {
     assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
 }
 
-/// Whether every import word `jit` declared is defined, with the words.
-fn words_defined(jit: &Jit) -> (bool, Vec<String>) {
-    let words = jit.decls.import_words();
-    let all = words.iter().all(|&(_, defined)| defined);
-    (all, words.iter().map(|&(s, _)| s.to_owned()).collect())
-}
-
-/// A batch that fails restores the JIT's declarations, so it leaves no
-/// import word declared and undefined (D-913): the next batch that uses
-/// the same symbol declares its word again and defines it, and a session's
-/// later batches share the words of its earlier ones
-/// (D-1105).
+/// A batch that fails declares nothing, so it leaves no import word
+/// declared and undefined (D-913). Since K4c every unit is compiled alone
+/// into a code record whose import words are local copies, declared
+/// anonymously when it is loaded, so each record has its own words and
+/// no word is declared by name; the symbols the words hold are declared
+/// by name once (GAP(record-batch-load), which refines D-1105).
 #[cfg(unix)]
 #[test]
 fn failed_batches_leave_no_import_word_undefined() {
     use cheby_mir::CType;
     let mut jit = Jit::new().unwrap();
-    // The first batch fails: nothing of it stays, the runtime's words
-    // included.
+    // The first batch fails: nothing of it is declared, the runtime's
+    // symbols included.
     let failed = labs_batch(0, labs_wrapper(0, &[CType::I64], &[-3], true));
     let err = jit.compile(&failed).unwrap_err();
     assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
-    assert_eq!(jit.decls.import_words(), Vec::<(&str, bool)>::new());
+    assert_eq!(jit.declared(), 0);
     jit.compile(&labs_batch(1, labs_wrapper(1, &[CType::I64], &[-5], false)))
         .unwrap();
-    let (all, words) = words_defined(&jit);
-    assert!(all, "{words:?}");
-    assert!(words.iter().any(|w| w == "labs"), "{words:?}");
-    assert!(words.iter().any(|w| w == sym::ALLOC), "{words:?}");
-    assert!(
-        !words.iter().any(|w| w == "cheby_no_such_symbol_anywhere"),
-        "{words:?}"
-    );
+    assert!(jit.declares("labs") && jit.declares(sym::ALLOC));
+    assert!(!jit.declares("cb$imp$labs") && !jit.declares(&format!("cb$imp${}", sym::ALLOC)));
+    assert!(!jit.declares("cheby_no_such_symbol_anywhere"));
     assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
-    // A failure after a batch compiled keeps that batch's words, defined.
+    // A failure after a batch compiled declares nothing more.
+    let declared = jit.declared();
     let err = jit
         .compile(&labs_batch(2, labs_wrapper(2, &[CType::I64], &[-7], true)))
         .unwrap_err();
     assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
-    assert_eq!(words_defined(&jit), (true, words.clone()));
-    // A later batch uses the session's word for `labs`.
+    assert_eq!(jit.declared(), declared);
+    assert!(!jit.declares("cheby_no_such_symbol_anywhere"));
+    // A later batch has words of its own for `labs`.
     jit.compile(&labs_batch(3, labs_wrapper(3, &[CType::I64], &[-9], false)))
         .unwrap();
-    assert_eq!(words_defined(&jit), (true, words));
+    assert!(!jit.declares("cb$imp$labs"));
     assert_eq!(run_const(&jit, def(1, 103)), EntryOutcome::Returned(9));
     assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
 }

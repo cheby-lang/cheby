@@ -27,7 +27,9 @@ use crate::image::{self, ProgramImage};
 /// `main` runs, such as a bad `CHEBY_THREADS` (D-658), is printed as
 /// `error: …` and gives 1.
 ///
-/// The runtime reads `CHEBY_THREADS` and `CHEBY_RT_STATS` (D-927);
+/// The runtime reads `CHEBY_THREADS`, `CHEBY_BACKTRACE` (D-1038, through
+/// `Runtime::new`, so a bad value stops the program before `main` as a bad
+/// `CHEBY_THREADS` does) and `CHEBY_RT_STATS` (D-927);
 /// `env::args()` is `argv[1..]` and `env::program_name()` is `argv[0]`,
 /// with invalid UTF-8 replaced (D-347, D-369, D-311). The stacks and
 /// `unwind_edges` come from the image (D-660, D-742), and so do the

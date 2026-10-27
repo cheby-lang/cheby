@@ -115,6 +115,10 @@ pub struct DetachedGroup {
     /// their domain (`deadlock::PoolPending`): a stuck mark releases them
     /// once. A leaf lock.
     jobs: Mutex<TrackedJobs>,
+    /// Set while [`Runtime::teardown`] tears the group's fibers down: the
+    /// values they release meanwhile call no user drop function (D-949,
+    /// D-710; `ffi::finalize_external`).
+    tearing_down: AtomicBool,
 }
 
 /// The tracked pool jobs of a group ([`DetachedGroup::track_job`]): weak
@@ -218,7 +222,20 @@ impl DetachedGroup {
             domains: Mutex::new(Vec::new()),
             stuck: AtomicBool::new(false),
             jobs: Mutex::new(TrackedJobs::default()),
+            tearing_down: AtomicBool::new(false),
         })
+    }
+
+    /// Whether a teardown is tearing the group's fibers down (D-710): a
+    /// user drop function is then not called (D-949).
+    pub(crate) fn tearing_down(&self) -> bool {
+        self.tearing_down.load(Ordering::SeqCst)
+    }
+
+    /// Sets the teardown mark by hand, for the tests of drop functions.
+    #[cfg(test)]
+    pub(crate) fn set_tearing_down(&self, on: bool) {
+        self.tearing_down.store(on, Ordering::SeqCst);
     }
 
     /// Records `domain` as the domain of a root that starts in the group,
@@ -830,6 +847,9 @@ impl Runtime {
     /// counted once by the marked fibers). From the host only, with no runtime
     /// lock held. Runs no user code (ADR-0029).
     pub fn teardown(&self, group: &DetachedGroup) -> TeardownReport {
+        // D-949: teardown calls no user drop function (D-710); set before
+        // the first cancellation, cleared once the teardown ends.
+        group.tearing_down.store(true, Ordering::SeqCst);
         let (bases, left_before) = group.close();
         for base in &bases {
             cancel::cancel(base);
@@ -883,6 +903,7 @@ impl Runtime {
             group.emptied.wait_for(&mut inner, TEARDOWN_POLL);
         }
         report.waited = inner.left.saturating_sub(left_before);
+        group.tearing_down.store(false, Ordering::SeqCst);
         report
     }
 

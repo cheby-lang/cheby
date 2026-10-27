@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-947, D-940
+//! The package's C function `app_name` returns NULL for a `String`. The
+//! call panics with ``foreign function `app_name` returned null``, located
+//! at the `@external` function's declaration, before the result is used
+//! (§12.5.1, §11.6). `13-tooling/build/native_null_result` builds the same
+//! package and pins the same panic from the executable.
+
+import std::io
+
+@external(native, "app_name")
+fn name() -> String
+
+fn main() {
+  io::println("before")
+  let text = name()
+  io::println("after: {text}")
+}

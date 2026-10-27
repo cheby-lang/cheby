@@ -20,6 +20,7 @@ MIR to Cranelift IR. One lowering serves the JIT, the AOT object writer of M3 an
 | ------------- | ---------------------------------------------------------------------------------------------- |
 | `decls.rs`    | `Decls`, `FuncDecl`, `SlotDecl`, `SlotKey`: declarations that persist across batches           |
 | `unit.rs`     | `compile_unit`, `UnitCx`, `UnitCode`: one unit compiled alone (D-917)                          |
+| `jit_unit.rs` | One unit compiled alone into a record for a JIT, with its index and seed (D-914)               |
 | `func.rs`     | `translate`: one MIR function to CLIF                                                          |
 | `sig.rs`      | Machine types and Cranelift signatures                                                         |
 | `values.rs`   | Objects and uniform words: boxing, allocation, field access, tagging                           |

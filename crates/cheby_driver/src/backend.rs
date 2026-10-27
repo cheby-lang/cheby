@@ -89,6 +89,7 @@ use cheby_types::thir;
 use rayon::prelude::*;
 
 use crate::Error;
+use crate::cache::code_keys::UnitPart;
 use crate::frontend::{Frontend, hidden_reads};
 use crate::load_set::{Start, Summaries};
 
@@ -303,7 +304,23 @@ pub(crate) fn build_scoped(
     };
     let mir_options = mir;
     let mir = kind_options(roots, mir, scope);
-    let lowered = lower_scoped(front, sources, roots, mir, scope)?;
+    let libraries = front.native_libraries();
+    // K4c: package units come from the code cache where their records hit,
+    // and are not lowered. A dump is always of fresh code (D-965), the
+    // reuse report is made while lowering (GAP(reuse-report-bypasses-code-reads)),
+    // and the code-generation benchmark compiles everything.
+    let resolves = |symbol: &str| cheby_jit::resolve_native(symbol, &libraries).is_some();
+    let resolves: &(dyn Fn(&str) -> bool + Sync) = &resolves;
+    let program = scope == Scope::Whole && !check;
+    let reading = Reading {
+        code: dump.is_none()
+            && !capture_clif
+            && !reuse_report
+            && !matches!(roots, Roots::AllFunctions),
+        jit: true,
+        resolves: program.then_some(resolves),
+    };
+    let lowered = lower_reading(front, sources, roots, mir, scope, reading)?;
     if let Some(dir) = &code_dump {
         write_mir_dumps(dir, &lowered.units)?;
     }
@@ -333,8 +350,8 @@ pub(crate) fn build_scoped(
         capture_clif: capture_clif || dump.is_some(),
         ..codegen
     };
-    let libraries = front.native_libraries();
-    let mut jit = match compile_with_libraries(&lowered.units, codegen, options, &libraries) {
+    // K4c: every unit through its code record, fresh or from the store.
+    let mut jit = match crate::code_cache::compile(front, &lowered, codegen, options, &libraries) {
         Ok(jit) => jit,
         Err(JitError::UnresolvedSymbols(symbols)) => {
             let mut diagnostics = unresolved(front, &symbols)?;
@@ -358,6 +375,7 @@ pub(crate) fn build_scoped(
         // images and installs nothing (D-979).
         Roots::Constants | Roots::Evaluate(_) => {
             let infos = const_infos(front, sources, &lowered.reach)?;
+            crate::code_cache::name_consts(front, &mut jit, &infos)?;
             let mode = if check {
                 ConstMode::Check
             } else {
@@ -380,6 +398,7 @@ pub(crate) fn build_scoped(
         // images before any entry runs (D-978, D-979).
         Roots::Main(_) | Roots::Tests(_) => {
             let infos = const_infos(front, sources, &lowered.reach)?;
+            crate::code_cache::name_consts(front, &mut jit, &infos)?;
             let evaluated =
                 evaluation_module(front, sources, &infos, codegen, mir_options, dump, scope)?;
             match evaluated {
@@ -515,7 +534,14 @@ fn evaluation_module(
     let defs: Vec<DefId> = infos.iter().map(|info| info.def).collect();
     let roots = Roots::Evaluate(&defs);
     let mir = kind_options(&roots, mir, scope);
-    let lowered = lower_scoped(front, sources, &roots, mir, scope)?;
+    // K4c: the constants' modules' `plain` records from the store where
+    // they hit; a dump is always of fresh code (D-965).
+    let reading = Reading {
+        code: dump.is_none() && !codegen.capture_clif,
+        jit: true,
+        resolves: None,
+    };
+    let lowered = lower_reading(front, sources, &roots, mir, scope, reading)?;
     let dir = dump.map(|dir| dir.join(CONSTEVAL_DIR));
     if let Some(dir) = &dir {
         write_mir_dumps(dir, &lowered.units)?;
@@ -532,11 +558,12 @@ fn evaluation_module(
         ..codegen
     };
     let libraries = front.native_libraries();
-    let mut jit =
-        compile_with_libraries(&lowered.units, codegen, options, &libraries).map_err(jit_ice)?;
+    let mut jit = crate::code_cache::compile(front, &lowered, codegen, options, &libraries)
+        .map_err(jit_ice)?;
     if let Some(dir) = &dir {
         write_dump(&dir.join("clif.txt"), &jit.take_clif().join("\n"))?;
     }
+    crate::code_cache::name_consts(front, &mut jit, infos)?;
     if let Err(diagnostics) = evaluate_in(front, sources, &mut jit, infos, ConstMode::Run)? {
         return Ok(Err(diagnostics));
     }
@@ -683,8 +710,8 @@ pub(crate) fn unresolved(front: &Frontend, symbols: &[String]) -> Result<Vec<Dia
 /// before whole modules declared: a reached function's wrapper calls its
 /// symbol, while an intrinsic, whose body the compiler generates (D-693),
 /// and a function whose only external is for another target call none.
-/// Reached external types have no drop functions yet (N8b), so they add
-/// none.
+/// The drop functions of reached external types are reached too (D-949,
+/// `crate::native::reached_drops`).
 pub(crate) fn reached_symbols(lowered: &Lowered) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for unit in reached_units(&lowered.units, lowered) {
@@ -705,6 +732,10 @@ pub(crate) fn reached_symbols(lowered: &Lowered) -> BTreeSet<String> {
             }
         }
     }
+    out.extend(crate::native::reached_drops(
+        &reached_units(&lowered.units, lowered),
+        &lowered.units,
+    ));
     out
 }
 
@@ -769,6 +800,13 @@ pub(crate) struct Lowered {
     pub reads: BTreeMap<ModuleId, UnitReads>,
     /// The selected tests, whose entries run (D-970).
     pub selected: BTreeSet<DefId>,
+    /// The code key of each package unit (D-1193), under which K4c stores
+    /// its code record.
+    pub keys: crate::borrowing::UnitKeys,
+    /// Every unit of the build in build order, the entries unit last: one
+    /// of [`Lowered::units`], or a package unit's record from the store,
+    /// which was not lowered (K4c).
+    pub order: Vec<Placed>,
 }
 
 /// The hidden reads of one module's units in lowering and borrow
@@ -835,16 +873,26 @@ pub(crate) fn lower(
 /// outside std reads other modules through a recording view, and
 /// [`Lowered::reads`] holds what it read beyond its imports and its front
 /// end's reads (D-955).
-#[expect(
-    clippy::too_many_lines,
-    reason = "each root kind's starts, then lowering, inference and counting in their order"
-)]
 pub(crate) fn lower_scoped(
     front: &Frontend,
     sources: &SourceMap,
     roots: &Roots<'_>,
     mir: MirOptions,
     scope: Scope,
+) -> Result<Lowered, Ice> {
+    lower_reading(front, sources, roots, mir, scope, Reading::default())
+}
+
+/// [`lower_scoped`], taking package units from the build cache as
+/// `reading` allows (K4c, [`lower_through_cache`]): a unit whose code
+/// record hits is not lowered, and [`Lowered::order`] holds its record.
+pub(crate) fn lower_reading(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+    scope: Scope,
+    reading: Reading<'_>,
 ) -> Result<Lowered, Ice> {
     let local = local_modules(front);
     let mut starts: Vec<Start<'_>> = Vec::new();
@@ -930,40 +978,433 @@ pub(crate) fn lower_scoped(
     let logs = read_logs(front, &jobs);
     // D-510 lowers the reachable items of a module, D-966 all of them.
     let wanted = |def: DefId| scope == Scope::Whole || reach.contains(def);
-    // Only the package's own modules record their sites for the reuse
-    // report (D-717); std and dependencies never do.
-    let lowered: Vec<Result<ModuleUnits, Ice>> = jobs
-        .par_iter()
-        .map(|&(module, selected)| {
-            let record_sites = mir.record_sites && local.contains(&module);
-            lower_module(
-                front,
-                sources,
-                &wanted,
-                module,
-                code_modules.contains(&module),
-                selected,
-                record_sites,
-                logs.get(&module),
-            )
-        })
+    let cx = Lowering {
+        front,
+        sources,
+        wanted: &wanted,
+        local: &local,
+        jobs: &jobs,
+        code_modules: &code_modules,
+        logs: &logs,
+        record_sites: mir.record_sites,
+    };
+    let entries_unit = if entries.is_empty() {
+        None
+    } else {
+        Some(lower_entry_unit(front, sources, &entries)?)
+    };
+    let done = lower_through_cache(&cx, entries_unit, roots, mir, reading)?;
+    Ok(Lowered {
+        units: done.units,
+        order: done.order,
+        reach,
+        reads: done.reads,
+        selected,
+        keys: done.keys,
+    })
+}
+
+/// One lowering's modules and how to lower them ([`lower_scoped`]).
+struct Lowering<'a> {
+    front: &'a Frontend,
+    sources: &'a SourceMap,
+    /// The items lowered (D-510's reachable ones, or all, D-966).
+    wanted: &'a (dyn Fn(DefId) -> bool + Sync),
+    /// The local package's modules.
+    local: &'a [ModuleId],
+    /// The modules lowered, in build order, each with its selected tests.
+    jobs: &'a [(ModuleId, Option<&'a Vec<&'a thir::TestDef>>)],
+    /// The modules that get a code unit.
+    code_modules: &'a BTreeSet<ModuleId>,
+    logs: &'a BTreeMap<ModuleId, UnitLogs>,
+    /// `--reuse-report`'s sites (D-717), recorded only by the package's own
+    /// modules.
+    record_sites: bool,
+}
+
+/// A unit's place in a build: its module's job (build order) and part.
+type At = (usize, UnitPart);
+
+impl Lowering<'_> {
+    /// Every unit the build needs: a code part for each module that gets a
+    /// code unit, a tests part for each with selected tests, in build
+    /// order.
+    fn parts(&self) -> Vec<At> {
+        let mut out = Vec::new();
+        for (job, &(module, selected)) in self.jobs.iter().enumerate() {
+            if self.code_modules.contains(&module) {
+                out.push((job, UnitPart::Code));
+            }
+            if selected.is_some() {
+                out.push((job, UnitPart::Tests));
+            }
+        }
+        out
+    }
+
+    /// The module of the unit `at`.
+    fn module(&self, at: At) -> Result<ModuleId, Ice> {
+        self.jobs
+            .get(at.0)
+            .map(|&(module, _)| module)
+            .ok_or_else(|| Ice::new("a unit of a module the build does not lower"))
+    }
+
+    /// Lowers the units `parts`, each checked as lowered, in parallel on
+    /// rayon's global pool (G1, D-263), taken in build order so the units
+    /// and the error reported do not depend on the thread count (D-264).
+    /// Lowering a module reads only its THIR and the interfaces (D-246).
+    fn lower(&self, parts: &BTreeSet<At>) -> Result<Vec<(At, MirModule)>, Ice> {
+        let jobs: BTreeSet<usize> = parts.iter().map(|&(job, _)| job).collect();
+        let jobs: Vec<usize> = jobs.into_iter().collect();
+        let lowered: Vec<Result<Vec<(At, MirModule)>, Ice>> = jobs
+            .par_iter()
+            .map(|&job| {
+                let &(module, selected) = self
+                    .jobs
+                    .get(job)
+                    .ok_or_else(|| Ice::new("a unit of a module the build does not lower"))?;
+                let code = parts.contains(&(job, UnitPart::Code));
+                let tests = if parts.contains(&(job, UnitPart::Tests)) {
+                    selected
+                } else {
+                    None
+                };
+                // Only the package's own modules record their sites for the
+                // reuse report (D-717); std and dependencies never do.
+                let record_sites = self.record_sites && self.local.contains(&module);
+                let [code, tests] = lower_module(
+                    self.front,
+                    self.sources,
+                    self.wanted,
+                    module,
+                    code,
+                    tests,
+                    record_sites,
+                    self.logs.get(&module),
+                )?;
+                let mut out = Vec::new();
+                if let Some(unit) = code {
+                    out.push(((job, UnitPart::Code), unit?));
+                }
+                if let Some(unit) = tests {
+                    out.push(((job, UnitPart::Tests), unit?));
+                }
+                Ok(out)
+            })
+            .collect();
+        let mut out = Vec::new();
+        for result in lowered {
+            out.extend(result?);
+        }
+        Ok(out)
+    }
+
+    /// The masks [`unit_masks`] gives a code unit, recording its module's
+    /// reads (D-955).
+    fn masks_for(
+        &self,
+        unit: &MirModule,
+        facts: &borrow::BuildFacts,
+    ) -> Result<borrow::Masks, Ice> {
+        let log = match unit.unit {
+            UnitKind::Code(module) => self.logs.get(&module).map(|l| &l.code),
+            _ => None,
+        };
+        unit_masks(self.front, unit, facts, log)
+    }
+}
+
+/// What a lowering may take from the build cache (K4c).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Reading<'a> {
+    /// Whether code and tests records are read (D-914): a unit whose record
+    /// hits is not lowered, inferred or compiled, and loads from its
+    /// record. `--reuse-report` reads none, since its lines are made while
+    /// lowering (GAP(reuse-report-bypasses-code-reads)), and
+    /// `CHEBY_DUMP_DIR` reads nothing at all (D-965).
+    pub code: bool,
+    /// Whether the build's JIT loads the units' code records, so each
+    /// package unit's lookup is logged (`code.<kind>`, `tests.<kind>`), as
+    /// a miss when `code` reads none: every JIT host's build, not `cheby
+    /// build`'s, which compiles its units itself (`aot.rs`).
+    pub jit: bool,
+    /// For a program's build, whether a native symbol resolves (D-943): a
+    /// record that imports one that does not is lowered after all, so
+    /// E0053 is decided on its MIR, for the symbols reached functions name.
+    pub resolves: Option<&'a (dyn Fn(&str) -> bool + Sync)>,
+}
+
+/// What [`lower_through_cache`] gives [`lower_scoped`].
+struct CachedLowering {
+    units: Vec<MirModule>,
+    order: Vec<Placed>,
+    reads: BTreeMap<ModuleId, UnitReads>,
+    keys: crate::borrowing::UnitKeys,
+}
+
+/// A unit of a build, in build order ([`Lowered::order`]).
+#[derive(Debug)]
+pub(crate) enum Placed {
+    /// The unit lowered, at this index of [`Lowered::units`].
+    Fresh(usize),
+    /// A package unit whose code record came from the store (D-914): it was
+    /// not lowered.
+    Cached {
+        /// The unit's kind.
+        unit: UnitKind,
+        /// Its module path.
+        path: Box<str>,
+        /// Its record, decoded with `CodeRecord::decode`'s checks.
+        record: cheby_codegen_clif::record::CodeRecord,
+    },
+}
+
+/// Whether every runtime and foreign symbol `record` imports satisfies
+/// `resolves`.
+fn record_resolves(
+    record: &cheby_codegen_clif::record::CodeRecord,
+    resolves: &(dyn Fn(&str) -> bool + Sync),
+) -> bool {
+    record.symbols.iter().all(|symbol| {
+        symbol.linkage != cheby_codegen_clif::record::SymbolLinkage::Import
+            || symbol.name.starts_with(cheby_codegen_clif::mangle::PREFIX)
+            || resolves(&symbol.name)
+    })
+}
+
+/// K4c's keys before lowering (D-914, D-1192's "read to skip work",
+/// D-1193, D-1195; plan §2.2): the units of `cx` and the entries unit
+/// `entries`, each package unit taken from the cache where it can be.
+///
+/// 1. Each package unit's identity comes from its lowering hint, and its
+///    facts record is read ([`crate::borrowing::plan`]).
+/// 2. Every unit whose facts did not hit is lowered, std's and the entries
+///    unit included; the build's facts are those units' facts and the
+///    stored ones (D-1191).
+/// 3. In a build with borrowing, each code unit not lowered reads its masks
+///    record under the digest of the facts about its module; one that
+///    misses is lowered. The lowered code units are inferred, and every
+///    lowered unit gets those masks and the stored ones (D-779).
+/// 4. Every package unit gets its code key ([`crate::borrowing::unit_keys`])
+///    and its record is looked up: a unit not lowered whose record hits is
+///    loaded from it, so its lowering, inference and code generation are
+///    skipped; a lowered one whose record hits is compiled no more; one not
+///    lowered whose record misses is lowered now, inferred again (a debug
+///    toolchain compares its records), and looked up once more if its fresh
+///    identity differs from its hint's (D-1195: its hint is then written
+///    again).
+/// 5. The units left are counted. The records of the lowered units are
+///    written behind the command (D-1138), and the log gets one `facts`,
+///    `masks`, `code.<kind>` or `tests.<kind>` line per lookup and one
+///    `key` line per unit (D-973).
+///
+/// Without a cache, or with nothing read, every unit is lowered as before.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the five steps of the module docs, in their order, over one build's units"
+)]
+fn lower_through_cache(
+    cx: &Lowering<'_>,
+    entries: Option<MirModule>,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+    reading: Reading<'_>,
+) -> Result<CachedLowering, Ice> {
+    use crate::borrowing::{self as records, Planned, StoredMasks};
+    let front = cx.front;
+    let kind = records::build_kind(roots, mir);
+    let borrows = mir.borrows();
+    let parts = cx.parts();
+    let mut keyed = Vec::with_capacity(parts.len());
+    for &at in &parts {
+        keyed.push((at.1, cx.module(at)?));
+    }
+    let plan = records::plan(front, &keyed, reading.code);
+    let planned = |at: At| -> Option<&Planned> { plan.get(&(at.1, cx.module(at).ok()?)) };
+    // 1-2: every unit whose facts the cache does not hold is lowered.
+    let mut skipped: BTreeSet<At> = parts
+        .iter()
+        .copied()
+        .filter(|&at| planned(at).is_some_and(|p| p.facts.is_some()))
         .collect();
-    let mut units = Vec::new();
-    for result in lowered {
-        for unit in result?.into_iter().flatten() {
-            units.push(unit?);
+    let first: BTreeSet<At> = parts
+        .iter()
+        .copied()
+        .filter(|at| !skipped.contains(at))
+        .collect();
+    let mut tags: Vec<Option<At>> = Vec::new();
+    let mut units: Vec<MirModule> = Vec::new();
+    for (at, unit) in cx.lower(&first)? {
+        tags.push(Some(at));
+        units.push(unit);
+    }
+    if let Some(unit) = entries {
+        tags.push(None);
+        units.push(unit);
+    }
+    // 3: the build's facts and masks; every unit is lowered before any is
+    // counted, since the masks come from the whole build (D-779).
+    let mut stored: BTreeMap<At, StoredMasks> = BTreeMap::new();
+    let mut inferred = if borrows {
+        let stored_facts: Vec<&cheby_mir::borrow::UnitFacts> = skipped
+            .iter()
+            .filter_map(|&at| planned(at)?.facts.as_ref())
+            .collect();
+        let facts = records::build_facts(front, &units, &stored_facts)?;
+        let mut second = BTreeSet::new();
+        records::with_build_defs(front, |defs| -> Result<(), Ice> {
+            for &at in skipped.iter().filter(|at| at.1 == UnitPart::Code) {
+                let Some(p) = planned(at) else { continue };
+                match records::stored_masks(front, p, cx.module(at)?, kind, &facts, defs)? {
+                    Some(masks) => {
+                        stored.insert(at, masks);
+                    }
+                    None => {
+                        second.insert(at);
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        for (at, unit) in cx.lower(&second)? {
+            skipped.remove(&at);
+            tags.push(Some(at));
+            units.push(unit);
+        }
+        let by_def: borrow::Masks = stored
+            .values()
+            .flat_map(|s| s.by_def.iter().map(|(&def, &mask)| (def, mask)))
+            .collect();
+        records::infer_with(front, &mut units, facts, &by_def, &|unit, facts| {
+            cx.masks_for(unit, facts)
+        })?
+    } else {
+        records::Inferred::plain(front, &units)?
+    };
+    // 4: the keys, the records of the lowered units, and the lookups.
+    let lowered: BTreeSet<At> = tags.iter().flatten().copied().collect();
+    let mut reads = unit_reads(front, cx.jobs, &lowered, cx.logs)?;
+    let refs: Vec<&MirModule> = units.iter().collect();
+    let mut fresh = records::write_fresh(
+        front,
+        &refs,
+        &reads,
+        &inferred,
+        kind,
+        borrows,
+        &plan,
+        reading.code,
+    )?;
+    let mut keys = keys_of(
+        cx, &parts, &plan, &skipped, &stored, &fresh, &inferred, kind, mir,
+    )?;
+    let mut cached: BTreeMap<At, cheby_codegen_clif::record::CodeRecord> = BTreeMap::new();
+    let mut third = BTreeSet::new();
+    let sink = records::sink(front);
+    let usable = |record: &cheby_codegen_clif::record::CodeRecord| {
+        reading
+            .resolves
+            .is_none_or(|ok| record_resolves(record, ok))
+    };
+    if let Some(sink) = sink {
+        for &at in &parts {
+            let Some(key) = keys.keys.get(&(at.1, cx.module(at)?)) else {
+                continue;
+            };
+            match sink.code_find(key, reading.code).filter(|r| usable(r)) {
+                Some(record) => {
+                    cached.insert(at, record);
+                }
+                None if skipped.contains(&at) => {
+                    third.insert(at);
+                }
+                None => {}
+            }
         }
     }
-    if !entries.is_empty() {
-        units.push(lower_entry_unit(front, sources, &entries)?);
+    if !third.is_empty() {
+        let mut more: Vec<MirModule> = Vec::new();
+        let mut more_tags: Vec<At> = Vec::new();
+        for (at, unit) in cx.lower(&third)? {
+            skipped.remove(&at);
+            more_tags.push(at);
+            more.push(unit);
+        }
+        // Inferred again from the build's facts, which a debug toolchain's
+        // record comparison checks against the stored masks (D-1192).
+        let masks = if borrows {
+            records::masks_of(&more, inferred.facts(), &|unit, facts| {
+                cx.masks_for(unit, facts)
+            })?
+        } else {
+            borrow::Masks::new()
+        };
+        let mut all = inferred.masks.clone();
+        all.extend(masks.iter().map(|(&def, &mask)| (def, mask)));
+        if borrows {
+            let applied: Vec<Result<(), Ice>> = more
+                .par_iter_mut()
+                .map(|unit| borrow::apply(unit, &all))
+                .collect();
+            applied.into_iter().collect::<Result<(), Ice>>()?;
+        }
+        inferred.extend(records::Inferred::plain(front, &more)?, &masks);
+        let done: BTreeSet<At> = more_tags.iter().copied().collect();
+        // Merged per part: the other unit of a module may have been
+        // lowered before.
+        for (module, late) in unit_reads(front, cx.jobs, &done, cx.logs)? {
+            let entry = reads.entry(module).or_default();
+            if late.code.is_some() {
+                entry.code = late.code;
+            }
+            if late.tests.is_some() {
+                entry.tests = late.tests;
+            }
+        }
+        let refs: Vec<&MirModule> = more.iter().collect();
+        fresh.extend(records::write_fresh(
+            front,
+            &refs,
+            &reads,
+            &inferred,
+            kind,
+            borrows,
+            &plan,
+            reading.code,
+        )?);
+        // A key that moved (the hint named other reads) is looked up once
+        // more under the fresh identity.
+        let again = keys_of(
+            cx, &parts, &plan, &skipped, &stored, &fresh, &inferred, kind, mir,
+        )?;
+        for &at in &more_tags {
+            let at_key = (at.1, cx.module(at)?);
+            let (Some(old), Some(new)) = (keys.keys.get(&at_key), again.keys.get(&at_key)) else {
+                continue;
+            };
+            if old != new
+                && let Some(record) = sink
+                    .and_then(|s| s.code_find(new, reading.code))
+                    .filter(|r| usable(r))
+            {
+                cached.insert(at, record);
+            }
+        }
+        keys = again;
+        for (at, unit) in more_tags.into_iter().zip(more) {
+            tags.push(Some(at));
+            units.push(unit);
+        }
     }
-    // Every unit is lowered before any is counted: the borrow masks come
-    // from the whole build (D-779).
-    let inferred = if mir.borrows() {
-        Some(infer_borrowing(front, &mut units, &logs)?)
-    } else {
-        None
-    };
+    // 5: the units left, counted, in build order; then the log.
+    let mut placed: Vec<(Option<At>, MirModule)> = tags
+        .into_iter()
+        .zip(units)
+        .filter(|(at, _)| at.is_none_or(|at| !cached.contains_key(&at)))
+        .collect();
+    placed.sort_by_key(|(at, _)| at.unwrap_or((usize::MAX, UnitPart::Tests)));
+    let (tags, mut units): (Vec<Option<At>>, Vec<MirModule>) = placed.into_iter().unzip();
     let counted: Vec<Result<(), Ice>> = units
         .par_iter_mut()
         .map(|unit| count_lowered_with(unit, &mir))
@@ -971,15 +1412,145 @@ pub(crate) fn lower_scoped(
     for result in counted {
         result?;
     }
-    let reads = unit_reads(front, &jobs, &code_modules, &logs)?;
-    // K4b: the facts and masks records and the code keys (D-969).
-    crate::borrowing::write_records(front, &units, &reads, inferred.as_ref(), roots, mir)?;
-    Ok(Lowered {
+    let mut order = Vec::with_capacity(parts.len().saturating_add(1));
+    let fresh_at: BTreeMap<At, usize> = tags
+        .iter()
+        .enumerate()
+        .filter_map(|(i, at)| at.map(|at| (at, i)))
+        .collect();
+    for &at in &parts {
+        if let Some(record) = cached.remove(&at) {
+            let module = cx.module(at)?;
+            order.push(Placed::Cached {
+                unit: match at.1 {
+                    UnitPart::Code => UnitKind::Code(module),
+                    UnitPart::Tests => UnitKind::Tests(module),
+                },
+                path: front.modules.try_get(module)?.path.to_string().into(),
+                record,
+            });
+        } else if let Some(&i) = fresh_at.get(&at) {
+            order.push(Placed::Fresh(i));
+        } else {
+            return Err(Ice::new(
+                "a unit of the build was neither lowered nor cached",
+            ));
+        }
+    }
+    if let Some(i) = tags.iter().position(Option::is_none) {
+        order.push(Placed::Fresh(i));
+    }
+    if let Some(sink) = sink {
+        if reading.jit {
+            log_lookups(cx, sink, &parts, &keys, &order, &skipped, kind, borrows)?;
+        }
+        records::log_keys(front, kind, &keys)?;
+    }
+    Ok(CachedLowering {
         units,
-        reach,
+        order,
         reads,
-        selected,
+        keys,
     })
+}
+
+/// Every package unit's code key ([`crate::borrowing::unit_keys`]): a
+/// lowered unit's from its fresh identity, facts and masks, one not
+/// lowered from its planned identity, stored facts and stored masks.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what lower_through_cache holds about each unit"
+)]
+fn keys_of(
+    cx: &Lowering<'_>,
+    parts: &[At],
+    plan: &crate::borrowing::Plan,
+    skipped: &BTreeSet<At>,
+    stored: &BTreeMap<At, crate::borrowing::StoredMasks>,
+    fresh: &BTreeMap<(UnitPart, ModuleId), crate::borrowing::FreshUnit>,
+    inferred: &crate::borrowing::Inferred,
+    kind: crate::cache::BuildKind,
+    mir: MirOptions,
+) -> Result<crate::borrowing::UnitKeys, Ice> {
+    let none: Vec<(String, borrow::BorrowMask)> = Vec::new();
+    // A code unit's own masks, by module: fresh, or stored.
+    let code_own = |job: usize, module: ModuleId| -> &[(String, borrow::BorrowMask)] {
+        fresh.get(&(UnitPart::Code, module)).map_or_else(
+            || {
+                stored
+                    .get(&(job, UnitPart::Code))
+                    .map_or(none.as_slice(), |s| s.record.masks.as_slice())
+            },
+            |f| f.own.as_slice(),
+        )
+    };
+    let mut units = Vec::with_capacity(parts.len());
+    for &at in parts {
+        let module = cx.module(at)?;
+        let (identity, facts) = if let Some(f) = fresh.get(&(at.1, module)) {
+            let Some(facts) = inferred.part(at.1, module) else {
+                continue;
+            };
+            (f.identity, facts)
+        } else if skipped.contains(&at)
+            && let Some(p) = plan.get(&(at.1, module))
+            && let (Some(identity), Some(facts)) = (p.identity, p.facts.as_ref())
+        {
+            (identity, facts)
+        } else {
+            continue;
+        };
+        units.push(crate::borrowing::KeyUnit {
+            part: at.1,
+            module,
+            identity,
+            own: code_own(at.0, module),
+            facts,
+        });
+    }
+    crate::borrowing::unit_keys(cx.front, kind, mir, &units, &inferred.masks)
+}
+
+/// The lookup lines of a lowering through the cache (D-973;
+/// GAP(code-record-log-lines)): `code.<kind> <module> hit|miss` or
+/// `tests.<kind> <module>#tests hit|miss` for each package unit with a
+/// key, and, for each unit loaded without being lowered, the `facts` hit
+/// and, in a build with borrowing, the `masks` hit its key read (a lowered
+/// unit's lines come with its records).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what lower_through_cache holds about each unit"
+)]
+fn log_lookups(
+    cx: &Lowering<'_>,
+    sink: &crate::borrowing::RecordSink,
+    parts: &[At],
+    keys: &crate::borrowing::UnitKeys,
+    order: &[Placed],
+    skipped: &BTreeSet<At>,
+    kind: crate::cache::BuildKind,
+    borrows: bool,
+) -> Result<(), Ice> {
+    for (&at, placed) in parts.iter().zip(order) {
+        let module = cx.module(at)?;
+        if !keys.keys.contains_key(&(at.1, module)) {
+            continue;
+        }
+        let path = cx.front.modules.try_get(module)?.path.to_string();
+        let hit = matches!(placed, Placed::Cached { .. });
+        let subject = match at.1 {
+            UnitPart::Code => path.clone(),
+            UnitPart::Tests => format!("{path}#tests"),
+        };
+        sink.log_lookup(&format!("{}.{}", at.1.tag(), kind.tag()), &subject, hit);
+        if skipped.contains(&at) {
+            sink.log_lookup("facts", &subject, true);
+            if borrows && at.1 == UnitPart::Code {
+                sink.log_lookup("masks", &subject, true);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What the roots reach in `scope`, and the modules that get a code unit:
@@ -1045,17 +1616,23 @@ fn read_logs(
         .collect()
 }
 
-/// The hidden reads of each lowered unit of the modules in `logs`
-/// (D-955): what its views handed out beyond the module's imports and
-/// its front end's hidden reads.
+/// The hidden reads of each unit of `lowered` (by job and part) of the
+/// modules in `logs` (D-955): what its views handed out beyond the
+/// module's imports and its front end's hidden reads. A unit the build
+/// loaded from the cache was not lowered and reads nothing (K4c).
 fn unit_reads(
     front: &Frontend,
     jobs: &[(ModuleId, Option<&Vec<&thir::TestDef>>)],
-    code_modules: &BTreeSet<ModuleId>,
+    lowered: &BTreeSet<At>,
     logs: &BTreeMap<ModuleId, UnitLogs>,
 ) -> Result<BTreeMap<ModuleId, UnitReads>, Ice> {
     let mut reads = BTreeMap::new();
-    for &(module, selected) in jobs {
+    for (job, &(module, _)) in jobs.iter().enumerate() {
+        let code = lowered.contains(&(job, UnitPart::Code));
+        let tests = lowered.contains(&(job, UnitPart::Tests));
+        if !code && !tests {
+            continue;
+        }
         let Some(log) = logs.get(&module) else {
             continue;
         };
@@ -1076,8 +1653,8 @@ fn unit_reads(
         reads.insert(
             module,
             UnitReads {
-                code: code_modules.contains(&module).then(|| hidden(&log.code)),
-                tests: selected.map(|_| hidden(&log.tests)),
+                code: code.then(|| hidden(&log.code)),
+                tests: tests.then(|| hidden(&log.tests)),
             },
         );
     }
@@ -1200,6 +1777,12 @@ fn lower_module(
             &cx,
             record_sites,
         ))
+        .map(|mut unit| {
+            // D-949: the external types' drop functions, which the module
+            // record's external entries point to (D-1168).
+            crate::native::attach_drops(front, module, &mut unit, 0);
+            unit
+        })
     });
     let tests = selected.map(|selected| {
         // Only the tests given: the selected ones under D-510, whose
@@ -1470,9 +2053,9 @@ fn compile_with(
 
 /// A JIT with `codegen` and `options` that also resolves native symbols in
 /// the package libraries `libraries` (D-941, build order), with `units`
-/// compiled: every JIT a command builds to run a package's code,
-/// constants' included, gets the package's native code this way
-/// ([`Frontend::native_libraries`]).
+/// compiled, for the tests: every command's JIT goes through
+/// [`crate::code_cache::compile`], which loads the same records.
+#[cfg(test)]
 fn compile_with_libraries(
     units: &[MirModule],
     codegen: CodegenOptions,

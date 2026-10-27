@@ -1,0 +1,19 @@
+// @mode: run-fail
+// @command: build
+// @milestone: M3
+// @decisions: D-947, D-1141
+//! `12-targets-and-ffi/native/null_result` built with `cheby build`: the
+//! executable's wrapper checks the C function's NULL `String` as `cheby
+//! run`'s does, and the panic names the `@external` function's
+//! declaration (§12.5.1).
+
+import std::io
+
+@external(native, "app_name")
+fn name() -> String
+
+fn main() {
+  io::println("before")
+  let text = name()
+  io::println("after: {text}")
+}

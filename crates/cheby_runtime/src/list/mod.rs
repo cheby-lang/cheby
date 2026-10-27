@@ -83,16 +83,20 @@ pub(crate) unsafe fn iter(list: Word) -> Iter {
 /// # Safety
 ///
 /// `list` is a live list value.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "for other runtime modules from W3-B on; tests use it now"
-    )
-)]
 pub(crate) unsafe fn length(list: Word) -> usize {
     // SAFETY: forwarded from the caller.
     ops::len(unsafe { node::Root::from_word(list) })
+}
+
+/// Element `index` of a borrowed list, borrowed, or `None` outside it
+/// (`cheby_ffi_list_get`, D-945).
+///
+/// # Safety
+///
+/// `list` is a live list value; the element is valid while it is.
+pub(crate) unsafe fn get(list: Word, index: usize) -> Option<Word> {
+    // SAFETY: forwarded from the caller.
+    ops::get(unsafe { node::Root::from_word(list) }, index)
 }
 
 /// A list of the given owned elements, in order; the result is owned.

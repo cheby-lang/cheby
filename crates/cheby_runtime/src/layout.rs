@@ -287,7 +287,48 @@ pub struct LayoutInfo {
     /// The type's `@std_hooks` (equal, hash, debug) closures (D-482),
     /// set once with [`set_hooks`] (W3-B).
     hooks: OnceLock<[Word; 3]>,
+    /// The native drop function of an external type's layout (D-949),
+    /// given to [`register_external_with_drop`]; `None` for every other
+    /// layout and for an external type without one.
+    external_drop: Option<DropRef>,
 }
+
+/// An external type's native drop function, `void f(void *handle)`
+/// (§12.5.3, D-949): called once with the foreign handle of a value whose
+/// last reference went away, never with NULL.
+pub type ExternalDrop = unsafe extern "C" fn(*mut std::ffi::c_void);
+
+/// The drop function at `address`, a module record's
+/// `ExternalEntry::drop` (D-949, D-1168): `None` for null, the entry of an
+/// external type without one.
+///
+/// # Safety
+///
+/// A non-null `address` is a native function `void f(void *handle)` with
+/// the C calling convention, which lives as long as the process.
+#[must_use]
+pub(crate) unsafe fn external_drop_from(address: *const u8) -> Option<ExternalDrop> {
+    if address.is_null() {
+        return None;
+    }
+    // SAFETY: forwarded from the caller: the address of a function with
+    // `ExternalDrop`'s ABI and signature, and function pointers are the
+    // size of data pointers on every target.
+    Some(unsafe { std::mem::transmute::<*const u8, ExternalDrop>(address) })
+}
+
+/// A layout's [`ExternalDrop`], compared by address
+/// ([`std::ptr::fn_addr_eq`]) for `LayoutInfo`'s equality.
+#[derive(Clone, Copy, Debug)]
+struct DropRef(ExternalDrop);
+
+impl PartialEq for DropRef {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
+impl Eq for DropRef {}
 
 /// The stable key of a type for hashing (D-538): SipHash-1-3 with a zero
 /// key of the module path's UTF-8 bytes (empty for builtin types), one
@@ -360,6 +401,7 @@ impl LayoutInfo {
             raw_fields,
             fields: infos,
             hooks: OnceLock::new(),
+            external_drop: None,
         }
     }
 
@@ -392,6 +434,7 @@ impl LayoutInfo {
             raw_fields: 0,
             fields: Box::new([]),
             hooks: OnceLock::new(),
+            external_drop: None,
         }
     }
 
@@ -409,6 +452,7 @@ impl LayoutInfo {
             raw_fields,
             fields: Box::new([]),
             hooks: OnceLock::new(),
+            external_drop: None,
         }
     }
 
@@ -416,6 +460,13 @@ impl LayoutInfo {
     #[must_use]
     pub fn hooks(&self) -> Option<[Word; 3]> {
         self.hooks.get().copied()
+    }
+
+    /// The native drop function of an external type's layout (D-949), if
+    /// it has one.
+    #[must_use]
+    pub fn external_drop(&self) -> Option<ExternalDrop> {
+        self.external_drop.map(|drop| drop.0)
     }
 
     /// The scan count the header of an object of this layout carries.
@@ -913,10 +964,10 @@ unsafe fn external_children(_: Word, _: &mut dyn FnMut(Word)) {}
 /// ([`LayoutInfo::is_external`]); its own `equal`, `hash` and `debug` are
 /// never called.
 ///
-/// Calling the type's drop function when the last reference goes away
-/// (D-101, §9.5) is not implemented yet: M1 builds no external values,
-/// because a native host library comes with M3 (OQ-P9). The kind's
-/// `finalize` slot is where it goes then (D-703).
+/// Its finalizer calls the type's native drop function, if its layout has
+/// one ([`register_external_with_drop`]), once, inline on the releasing
+/// fiber, never with a NULL handle and never during a teardown
+/// (`ffi::finalize_external`, D-949, D-703, D-710).
 pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
     name: "external handle",
     size: external_size,
@@ -925,7 +976,7 @@ pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
     hash: None,
     debug: None,
     handle: true,
-    finalize: None,
+    finalize: Some(crate::ffi::finalize_external),
     shape: KindShape::Opaque,
 };
 
@@ -943,12 +994,29 @@ impl LayoutInfo {
 /// Registers the layout of the values of the external type `type_name`
 /// (§12.5.3), whose key is `type_key` ([`type_key`] of its module path and
 /// name), at the next user id, and returns the id. The layout is a
-/// [`LayoutKind::Custom`] of [`EXTERNAL_HANDLE`].
+/// [`LayoutKind::Custom`] of [`EXTERNAL_HANDLE`], without a drop function.
 ///
 /// # Errors
 ///
 /// [`LayoutError::TableFull`] once all 2^24 ids are taken.
 pub fn register_external(type_name: &str, type_key: u64) -> Result<LayoutId, LayoutError> {
+    register_external_with_drop(type_name, type_key, None)
+}
+
+/// [`register_external`] with the type's native drop function, which the
+/// layout keeps (D-949): [`EXTERNAL_HANDLE`]'s finalizer calls it. The
+/// layout is also found by its key from then on ([`external_by_key`]),
+/// the latest registration of a key winning, so a REPL reload's new
+/// version of a type (D-712) wraps its new values in its new layout.
+///
+/// # Errors
+///
+/// [`LayoutError::TableFull`] once all 2^24 ids are taken.
+pub fn register_external_with_drop(
+    type_name: &str,
+    type_key: u64,
+    drop: Option<ExternalDrop>,
+) -> Result<LayoutId, LayoutError> {
     let info = LayoutInfo {
         name: type_name.into(),
         type_name: type_name.into(),
@@ -961,6 +1029,7 @@ pub fn register_external(type_name: &str, type_key: u64) -> Result<LayoutId, Lay
         raw_fields: 1,
         fields: Box::new([]),
         hooks: OnceLock::new(),
+        external_drop: drop.map(DropRef),
     };
     let mut next = lock_next();
     let id = *next;
@@ -969,7 +1038,30 @@ pub fn register_external(type_name: &str, type_key: u64) -> Result<LayoutId, Lay
     }
     store_user(id, info)?;
     *next = id.saturating_add(1);
+    EXTERNAL_KEYS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(type_key, id);
     Ok(id)
+}
+
+/// The layout of each external type's values by type key
+/// ([`register_external_with_drop`]): how a foreign call's wrapper finds
+/// the layout of the D-590 object it wraps a returned handle in
+/// (`ffi::cheby_rt_ffi_external`, D-947), since code names the type by
+/// its key and ids are assigned at start (D-454). A leaf lock.
+static EXTERNAL_KEYS: Mutex<std::collections::BTreeMap<u64, LayoutId>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// The layout id of the external type whose key is `type_key`, as last
+/// registered ([`register_external_with_drop`]), if any.
+#[must_use]
+pub fn external_by_key(type_key: u64) -> Option<LayoutId> {
+    EXTERNAL_KEYS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&type_key)
+        .copied()
 }
 
 /// Sets the `@std_hooks` closures (equal, hash, debug) of a constructor

@@ -300,6 +300,150 @@ test "joining a failed fiber from outside its scope panics" {
 
 // Cancellation
 
+/// Cancels every fiber spawned into `owner` so far, and every scope nested
+/// in them, with `owner` as the target, but never `owner`'s body; does not
+/// return when the caller is one of them, and does nothing on a scope that
+/// has ended, failed or been cancelled (D-102, D-667, D-1060).
+@std_context
+@external(native, "cheby_fiber_sys_cancel")
+@external(js, "./fiber.mjs", "sys_cancel")
+fn sys_cancel(owner: Scope) -> Nil
+
+/// Cancels every fiber spawned into `owner` so far, and every scope nested
+/// in them, with `owner` as the target (D-667, D-1060, ADR-0069). It never
+/// cancels `owner`'s body and does not mark the scope as cancelled:
+/// fibers spawned into it afterwards run normally, and the scope returns
+/// `Ok` with the body's value once every fiber has ended. A panic of a
+/// fiber after `cancel` has reached it is not recorded (D-671). Any fiber
+/// that holds the `Scope` may call it; when the caller is one of the
+/// fibers it cancels, `cancel` does not return and the caller unwinds at
+/// once (D-102). On a scope that has ended, failed or been cancelled it
+/// does nothing. A joiner of a cancelled fiber follows `join`'s rule
+/// (D-668).
+pub fn cancel(owner: Scope) {
+  sys_cancel(owner)
+}
+
+test "cancel stops the fibers of a scope but not its body" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { channel::receive(never) })
+    cancel(owner)
+    "body"
+  }
+  assert outcome == Ok("body")
+  // The cancelled fiber released `never`, the only `Receiver`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "fibers spawned after cancel run normally" {
+  let outcome = {
+    use owner <- scope()
+    cancel(owner)
+    let later = spawn(owner, fn() { 6 * 7 })
+    join(later)
+  }
+  assert outcome == Ok(42)
+}
+
+test "a fiber that cancels its own scope unwinds at once" {
+  let (tx, rx) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() {
+      cancel(owner)
+      channel::send(tx, 1)
+    })
+    Nil
+  }
+  assert outcome == Ok(Nil)
+  // The fiber never reached its send, and unwinding released `tx`.
+  assert channel::receive(rx) == Err(Nil)
+}
+
+test "joining a fiber that cancel reached fails the scope" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    let waiting = spawn(owner, fn() { channel::receive(never) })
+    cancel(owner)
+    join(waiting)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "joined fiber failed"
+  assert channel::send(keep, 1) == Err(1)
+}
+
+/// Calls each function of `contenders` on a fiber of its own, in a scope
+/// of its own, and returns `Ok(Some(value))` with the value of the first
+/// one to return, once the others, which it cancels, have unwound
+/// (D-1061). An empty list gives `Ok(None)` and spawns nothing. A
+/// contender that panics before the race is decided makes it `Err` with
+/// that panic; a panic after that is not recorded (D-1060). It is written
+/// over `scope`, `spawn`, a channel and `cancel`, with no kernel.
+pub fn race<T>(contenders: List<fn() -> T>) -> Result<Option<T>, Panic> {
+  let outcome = {
+    use owner <- scope()
+    let (tx, rx) = channel::new::<Result<T, Panic>>(0)
+    fn start(rest) {
+      case rest {
+        [] => Nil
+        [contender, ..others] => {
+          // Each contender runs in a nested scope and sends how it ended,
+          // so the first message decides the race: a panic that comes
+          // later stays in its own scope and is never recorded (D-1061).
+          spawn(owner, fn() { channel::send(tx, scope(fn(_) { contender() })) })
+          start(others)
+        }
+      }
+    }
+    start(contenders)
+    // `start` is not used again, so it is released here together with the
+    // `tx` it captured (D-205). Only the contenders hold a `Sender` now, so
+    // `rx` closes at once when there are none.
+    let first = channel::receive(rx)
+    // `rx` is released after its last use, so contenders blocked in `send`
+    // get their value back and end. `cancel` stops the ones still working.
+    cancel(owner)
+    first
+  }
+  case outcome {
+    Ok(Ok(Ok(value))) => Ok(Some(value))
+    Ok(Ok(Err(failure))) => Err(failure)
+    Ok(Err(Nil)) => Ok(None)
+    Err(failure) => Err(failure)
+  }
+}
+
+test "race returns the first value and cancels the rest" {
+  let (keep, never) = channel::new::<Int>(1)
+  let slow = fn() {
+    let _ = channel::receive(never)
+    2
+  }
+  let outcome = race([fn() { 1 }, slow])
+  assert outcome == Ok(Some(1))
+  // The slow contender was cancelled and released `never`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "race of no contenders is None" {
+  assert race::<Int>([]) == Ok(None)
+}
+
+test "a panic before the race is decided fails it" {
+  let (keep, never) = channel::new::<Int>(1)
+  let slow = fn() {
+    let _ = channel::receive(never)
+    2
+  }
+  let outcome = race([slow, fn() { panic as "lost" }])
+  let assert Err(failure) = outcome
+  assert message(failure) == "lost"
+  assert channel::send(keep, 1) == Err(1)
+}
+
 /// Calls `f` on the calling fiber, in a new scope, and cancels it if it
 /// has not finished within `limit` (§10.8, D-103, D-181, D-665, D-671).
 /// `Ok` holds `f`'s value when it returned first, `Err(Panicked(p))` holds

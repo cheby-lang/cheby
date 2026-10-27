@@ -106,7 +106,7 @@ fn program() -> (Prog, DefId) {
 
 /// The address of `f`'s code in `jit`.
 fn start_of(jit: &Jit, f: DefId) -> usize {
-    let id = jit.decls.func(FnKey::Item(f)).unwrap().id;
+    let id = jit.func_id(FnKey::Item(f)).unwrap();
     jit.module.get_finalized_function(id).expose_provenance()
 }
 
@@ -158,18 +158,23 @@ fn code_map_offsets_are_return_addresses_of_calls() {
     assert!(range.cheby_abi);
     let locations: Vec<&str> = range.sites.iter().map(|s| &*s.location).collect();
     assert_eq!(locations, [LOC_A, LOC_B]);
-    // The same function translated again with the JIT's declarations
-    // compiles to the same code; its call sites are Cranelift's own.
-    let cx = CodegenCx {
-        layouts: &BuiltinLayouts,
+    // The same function translated again, with the batch declared in a
+    // module of its own, compiles to the same code; its call sites are
+    // Cranelift's own.
+    let cx = cheby_codegen_clif::CodegenCx {
+        layouts: &cheby_codegen_clif::BuiltinLayouts,
     };
+    let mut module = cheby_codegen_clif::record::RecordingModule::new(
+        cheby_codegen_clif::isa::host_isa().unwrap(),
+    );
+    let mut decls = cheby_codegen_clif::Decls::new(module.isa()).unwrap();
+    cheby_codegen_clif::declare(&mut module, &mut decls, &units, &cx, &jit.codegen).unwrap();
     let caller = units[0]
         .functions
         .iter()
         .find(|f| f.key == FnKey::Item(def(1, CALLER)))
         .unwrap();
-    let func =
-        cheby_codegen_clif::translate(&units[0], caller, &jit.decls, &cx, &jit.codegen).unwrap();
+    let func = cheby_codegen_clif::translate(&units[0], caller, &decls, &cx, &jit.codegen).unwrap();
     let mut ctx = cranelift_codegen::Context::for_function(func);
     ctx.compile(jit.module.isa(), &mut ControlPlane::default())
         .unwrap();

@@ -1,5 +1,5 @@
-//! An HTTP/1.1 client, and the records that it shares with the server
-//! (D-1003 to D-1010, D-1016, D-1017, D-1052, D-1070, D-1074).
+//! An HTTP/1.1 client and server, and the records that they share
+//! (D-1003 to D-1017, D-1052, D-1064, D-1070, D-1074).
 //!
 //! `Method`, `Request` and `Response` are plain data, exposed, so other
 //! packages read their fields, build them and match their variants
@@ -20,9 +20,16 @@
 //! `std::net`, so `fiber::timeout` cancels a request. Each request opens
 //! one connection and closes it.
 //!
-//! The server's request-head kernel, `sys_parse_request_head`, is bound
-//! here, package-visible, before the server that calls it, as `std::net`
-//! bound `sys_connect_tls` (D-985, D-1182).
+//! The server is Cheby over `std::net` and `std::fiber` too (D-1012 to
+//! D-1015, ADR-0067). `serve_on` accepts on the calling fiber and runs each
+//! connection on a fiber of its own in a scope that it opens; a connection
+//! reads one request after another, until the private kernel
+//! `sys_parse_request_head` finds a complete head (D-1210), and calls the
+//! handler in a scope of its own, so that a panic gives that request `500`
+//! and fails nothing else. Accepting ends with a closed listener or a
+//! failure that does not pass, and `serve_on` then cancels its connections
+//! with `fiber::cancel` (D-1060, D-1064). The server's limits live in a
+//! private record that std's tests fill with short timeouts.
 //!
 //! The builders, `header`, `request_header` and `method_name` are Cheby over
 //! `std::json`, `std::list` and `std::string`, so constants can run them;
@@ -31,11 +38,14 @@
 //! module's name, and `std::url` as `urls`, because `get` and `send` take a
 //! parameter `url` (D-062, D-111, D-1053).
 //!
-//! The tests talk to fake servers written over `std::net` on the loopback
-//! address, with ports the operating system chooses, in detached fibers
-//! that `cheby test` tears down when the test ends (D-723, D-990).
+//! The tests talk to `serve_on`, or to fake servers written over
+//! `std::net`, on the loopback address, with ports the operating system
+//! chooses, in detached fibers that `cheby test` tears down when the test
+//! ends (D-723, D-990).
 
 import std::bytes
+import std::channel
+import std::duration
 import std::fiber
 import std::int
 import std::io
@@ -45,6 +55,7 @@ import std::net
 import std::option
 import std::result
 import std::string
+import std::time
 import std::url as urls
 
 // Records
@@ -266,18 +277,20 @@ priv fn is_redirect(status: Int) -> Bool {
   status == 301 || status == 302 || status == 303 || status == 307 || status == 308
 }
 
-/// The request that a redirect with `status` to `target` sends next
-/// (D-1008): 303, and 301 or 302 after a method other than `GET` or `HEAD`,
-/// continue as `GET` without the body and the headers that describe it, as
-/// `fetch` does; `authorization` and `cookie` are dropped when the
-/// redirect leaves the origin. D-1212: `HEAD` stays
-/// `HEAD` after a 303, as in `fetch`. D-1212 also has a 301 or 302 rewrite
-/// only `POST`; this function still follows D-1008's text there until the
-/// next package that edits this file changes it.
+/// The request that a redirect with `status` to `target` sends next, as
+/// `fetch` does (D-1008, D-1212): a 303 after a method other than `GET` or
+/// `HEAD`, and a 301 or 302 after `POST`, continue as `GET` without the
+/// body and the headers that describe it; after a 301 or 302 every other
+/// method keeps its method and body, and a 303 after `HEAD` stays `HEAD`.
+/// `authorization` and `cookie` are dropped when the redirect leaves the
+/// origin.
 priv fn redirected(outgoing: Outgoing, status: Int, target: Target) -> Outgoing {
-  let to_get = (status == 301 || status == 302 || status == 303)
-    && outgoing.method != Get
-    && outgoing.method != Head
+  let to_get = case status {
+    303 => outgoing.method != Get && outgoing.method != Head
+    301 => outgoing.method == Post
+    302 => outgoing.method == Post
+    _ => False
+  }
   let same_origin = origin(outgoing.target) == origin(target)
   let headers = list::filter(outgoing.headers, fn((name, _)) {
     let body_header = list::contains(
@@ -324,6 +337,70 @@ test "redirects are followed, a 303 continues as GET, and credentials stay at th
     "",
   ]
   assert response.body == string::join(sent, "\r\n")
+}
+
+test "a PUT keeps its method and body after a 301" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    fake_server(listener, 2, fn(request) {
+      case string::split_once(request, " HTTP/1.1") {
+        Some(("PUT /old", _)) => reply(301, [("location", "/new")], "")
+        _ => reply(200, [], request)
+      }
+    })
+  })
+  let given = [("content-type", "text/plain")]
+  let assert Ok(response) = send(Put, "http://127.0.0.1:{port}/old", given, "data")
+  // D-1212: only `POST` continues as `GET` after a 301 or 302.
+  assert string::starts_with(response.body, "PUT /new HTTP/1.1\r\n")
+  assert string::contains(response.body, "\r\ncontent-type: text/plain\r\n")
+  assert string::ends_with(response.body, "\r\ncontent-length: 4\r\nconnection: close\r\n\r\ndata")
+}
+
+test "a POST continues as GET after a 302" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    fake_server(listener, 2, fn(request) {
+      case string::split_once(request, " HTTP/1.1") {
+        Some(("POST /old", _)) => reply(302, [("location", "/new")], "")
+        _ => reply(200, [], request)
+      }
+    })
+  })
+  let given = [("content-type", "text/plain"), ("x-keep", "1")]
+  let assert Ok(response) = send(Post, "http://127.0.0.1:{port}/old", given, "data")
+  let sent = [
+    "GET /new HTTP/1.1",
+    "host: 127.0.0.1:{port}",
+    "x-keep: 1",
+    "accept: */*",
+    "user-agent: cheby",
+    "connection: close",
+    "",
+    "",
+  ]
+  // D-1212: the body and the headers that describe it are dropped.
+  assert response.body == string::join(sent, "\r\n")
+}
+
+test "a HEAD request stays HEAD after a 303" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    fake_server(listener, 2, fn(request) {
+      case string::split_once(request, "\r\n") {
+        Some(("HEAD /old HTTP/1.1", _)) => reply(303, [("location", "/new")], "")
+        Some((line, _)) => reply(200, [("x-request-line", line)], "")
+        None => reply(400, [], "")
+      }
+    })
+  })
+  let assert Ok(response) = send(Head, "http://127.0.0.1:{port}/old", [], "")
+  // D-1212: a 303 rewrites every method but `GET` and `HEAD`.
+  assert response.status == 200
+  assert header(response, "x-request-line") == Some("HEAD /new HTTP/1.1")
 }
 
 test "ten redirects are followed, and an eleventh is too many" {
@@ -1115,6 +1192,1232 @@ priv fn has_scheme(input: String) -> Bool {
   }
 }
 
+// Server
+
+/// Listens on `port` on every interface and answers each request with
+/// `handler`, as `serve_on` does. It listens on `::`, accepting IPv4
+/// connections on the same socket, or on `0.0.0.0` where the host has no
+/// IPv6 (D-1015). It returns only when listening fails, or accepting fails
+/// in a way that does not pass.
+pub fn serve(port: Int, handler: fn(Request) -> Response) -> Result<Nil, Error> {
+  case listen_everywhere(port) {
+    Ok(listener) => serve_on(listener, handler)
+    Err(failure) => Err(from_io(failure))
+  }
+}
+
+test "serve rejects a port out of range" {
+  let assert Err(reason) = serve(70_000, fn(_) { text(200, "") })
+  let assert Some(cause) = io_error(reason)
+  assert io::is_invalid_input(cause)
+}
+
+/// A listener on `port` of every interface: `::`, whose socket accepts
+/// IPv4 too, or `0.0.0.0` when listening on `::` fails because the host
+/// has no IPv6, and only then (D-1015). GAP(http-serve-binding).
+priv fn listen_everywhere(port: Int) -> Result<net::Listener, io::Error> {
+  case net::listen("::", port) {
+    Ok(listener) => Ok(listener)
+    Err(failure) => case lacks_ipv6(failure) {
+      True => net::listen("0.0.0.0", port)
+      False => Err(failure)
+    }
+  }
+}
+
+/// Whether a failure to listen on `::` means that the host has no IPv6:
+/// the operating system does not support the address family, or cannot
+/// assign `::`, as it words those failures, which have no predicate of
+/// their own. GAP(http-serve-binding).
+priv fn lacks_ipv6(failure: io::Error) -> Bool {
+  let (code, message) = io::hash(failure)
+  let words = ascii_lower(message)
+  code == 0
+    && (string::contains(words, "address family not supported")
+      || string::contains(words, "assign requested address"))
+}
+
+/// Answers each request that arrives on `listener` with `handler` (D-1012
+/// to D-1014). Every connection is a fiber in a scope that `serve_on`
+/// opens, which reads requests one after another, keeping the connection
+/// open between them unless the client asks to close it, and calls
+/// `handler` for each in a scope of its own, so that a panic gives that
+/// request `500` and reaches nothing else. It ends when accepting fails in
+/// a way that does not pass, with `Err`, or with `io::is_closed`, because
+/// the program closed `listener`, with `Ok(Nil)`; it then cancels every
+/// connection and handler in flight with `fiber::cancel` and waits until
+/// they have unwound (D-1060, D-1063, D-1064).
+pub fn serve_on(listener: net::Listener, handler: fn(Request) -> Response) -> Result<Nil, Error> {
+  serve_with(listener, handler, default_limits())
+}
+
+test "segments and query are decoded" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    serve_on(listener, fn(request) {
+      let pairs = list::map(request.query, fn((key, value)) { key + "=" + value })
+      text(200, string::join(request.segments, "|") + " " + string::join(pairs, "&"))
+    })
+  })
+  let assert Ok(response) = get("http://127.0.0.1:{port}/a%2Fb//c/?x=1&y=two+words&flag")
+  assert response.body == "a/b|c x=1&y=two words&flag="
+}
+
+test "a handler that panics gives that request a 500 and nothing else" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    serve_on(listener, fn(request) {
+      case request.path {
+        "/crash" => panic as "handler bug"
+        _ => text(200, "fine")
+      }
+    })
+  })
+  let base = "http://127.0.0.1:{port}"
+  let assert Ok(crashed) = get(base + "/crash")
+  assert crashed.status == 500
+  let assert Ok(healthy) = get(base + "/")
+  assert healthy.status == 200
+}
+
+test "closing the listener stops serve_on" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  let assert Ok(outcome) = fiber::scope(fn(owner) {
+    let server = fiber::spawn(owner, fn() { serve_on(listener, fn(_) { text(200, "up") }) })
+    let assert Ok(first) = get("http://127.0.0.1:{port}/")
+    assert first.body == "up"
+    let assert Ok(Nil) = net::close_listener(listener)
+    fiber::join(server)
+  })
+  assert outcome == Ok(Nil)
+}
+
+test "a server answers a client over loopback" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    serve_on(listener, fn(request) {
+      case request.method, request.segments {
+        Get, ["greet", name] => text(200, "hello {name}")
+        _, _ => text(404, "no such page")
+      }
+    })
+  })
+  let base = "http://127.0.0.1:{port}"
+  let assert Ok(found) = get(base + "/greet/ada")
+  assert found.status == 200
+  assert found.body == "hello ada"
+  assert header(found, "content-type") == Some("text/plain; charset=utf-8")
+  let assert Ok(missing) = get(base + "/nowhere")
+  assert missing.status == 404
+  assert missing.body == "no such page"
+}
+
+test "redirects are followed, and a loop of them ends" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    serve_on(listener, fn(request) {
+      case request.path {
+        "/old" => text(301, "") |> with_header(_, "location", "/new")
+        "/new" => text(200, "moved here")
+        _ => text(302, "") |> with_header(_, "location", "/loop")
+      }
+    })
+  })
+  let assert Ok(moved) = get("http://127.0.0.1:{port}/old")
+  assert moved.status == 200
+  assert moved.body == "moved here"
+  let assert Err(reason) = get("http://127.0.0.1:{port}/loop")
+  assert is_too_many_redirects(reason)
+}
+
+test "the client encodes a URL as fetch does" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() { serve_on(listener, fn(request) { text(200, request.path) }) })
+  let assert Ok(response) = get("http://127.0.0.1:{port}/a b/./x/%2e%2E/y/c%2Fd")
+  assert response.body == "/a%20b/y/c%2Fd"
+}
+
+test "send carries a method, headers and a body" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    serve_on(listener, fn(request) {
+      let token = option::unwrap_or(request_header(request, "X-Token"), "none")
+      text(200, method_name(request.method) + " " + token + " " + request.body)
+    })
+  })
+  let url = "http://127.0.0.1:{port}/orders"
+  let assert Ok(response) = send(Post, url, [("x-token", "abc")], "one tea")
+  assert response.body == "POST abc one tea"
+}
+
+test "https to a server that does not speak TLS is a TLS failure" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() { serve_on(listener, fn(_) { text(200, "plain") }) })
+  let assert Err(reason) = get("https://127.0.0.1:{port}/")
+  assert is_tls(reason)
+  assert "{reason}" == "TLS failure"
+}
+
+/// The server's limits (D-1013). The numbers are informative, so they live
+/// here, where `serve_on` fills them with D-1013's values and std's tests
+/// make the timeouts short: the time a connection may wait for a request,
+/// the time a request head may take once it has begun, the time a body
+/// may take once its head is read, the largest body, the pause before
+/// accepting again after a failure that passes, and how a connection is
+/// accepted, which a test replaces to fail on purpose.
+/// GAP(http-serve-limits).
+type Limits {
+  idle: duration::Duration,
+  head_time: duration::Duration,
+  body_time: duration::Duration,
+  body_size: Int,
+  retry: duration::Duration,
+  accept: fn(net::Listener) -> Result<net::Connection, io::Error>,
+}
+
+/// D-1013's limits: a connection idle for 60 seconds is closed, and so is
+/// one whose request head is not complete 30 seconds after it began; a
+/// body may hold up to 10 MiB; a failure to accept that passes is retried
+/// after 100 milliseconds. D-1013 gives a body no time, so one that is not
+/// complete 60 seconds, the idle limit, after its head is closed too: a
+/// client never holds a connection without bound (GAP(http-serve-limits)).
+fn default_limits() -> Limits {
+  Limits {
+    idle: duration::seconds(60),
+    head_time: duration::seconds(30),
+    body_time: duration::seconds(60),
+    body_size: 10 * 1024 * 1024,
+    retry: duration::milliseconds(100),
+    accept: fn(server) { net::accept(server) },
+  }
+}
+
+/// `serve_on` with `limits` (GAP(http-serve-limits)): the scope of the
+/// connections, and the loop that accepts them on the calling fiber.
+fn serve_with(
+  listener: net::Listener,
+  handler: fn(Request) -> Response,
+  limits: Limits,
+) -> Result<Nil, Error> {
+  let outcome = {
+    use owner <- fiber::scope()
+    accept_loop(owner, listener, handler, limits)
+  }
+  case outcome {
+    Ok(stopped) => stopped
+    // Each handler runs in a scope of its own, so only a bug in
+    // `std::http` itself can fail this scope.
+    Err(failure) => panic as fiber::message(failure)
+  }
+}
+
+/// Accepts connections on `listener` and spawns a fiber for each into
+/// `owner`, until accepting fails in a way that does not pass (D-1012,
+/// D-1013, D-1064).
+priv fn accept_loop(
+  owner: fiber::Scope,
+  listener: net::Listener,
+  handler: fn(Request) -> Response,
+  limits: Limits,
+) -> Result<Nil, Error> {
+  let accept_next = limits.accept
+  case accept_next(listener) {
+    Ok(connection) => {
+      fiber::spawn(owner, fn() { serve_connection(connection, handler, limits) })
+      accept_loop(owner, listener, handler, limits)
+    }
+    Err(reason) => case is_passing(reason), io::is_closed(reason) {
+      True, _ => {
+        time::sleep(limits.retry)
+        accept_loop(owner, listener, handler, limits)
+      }
+      // The program closed the listener to stop the server (D-1064).
+      False, True => {
+        fiber::cancel(owner)
+        Ok(Nil)
+      }
+      False, False => {
+        // Ends every connection now, so that the scope's close does not
+        // wait for idle ones (D-1012, D-1060).
+        fiber::cancel(owner)
+        Err(from_io(reason))
+      }
+    }
+  }
+}
+
+/// Whether a failure to accept passes: a connection that was aborted or
+/// reset before it was accepted, or a failure of the operating system that
+/// has no predicate, such as too many open files (D-1013). A closed
+/// listener and every failure with a predicate of `std::io` do not pass.
+/// GAP(http-serve-accept-passing).
+priv fn is_passing(reason: io::Error) -> Bool {
+  let (code, _) = io::hash(reason)
+  code == 0 || io::is_connection_reset(reason)
+}
+
+/// Answers the requests of `connection` one after another, then closes it.
+priv fn serve_connection(
+  connection: net::Connection,
+  handler: fn(Request) -> Response,
+  limits: Limits,
+) -> Nil {
+  serve_requests(connection, handler, limits, bytes::new())
+  let _ = net::close(connection)
+  Nil
+}
+
+/// What reading the next request of a connection gave: nothing to answer,
+/// because the client closed the connection or a limit of D-1013 passed; a
+/// status to answer before closing (D-1013); or a request for the handler.
+priv type Next { Ended, Refused(Int), Received(Incoming) }
+
+/// A request read from a connection, whether the connection closes after
+/// its response, and the bytes read after it.
+priv type Incoming { request: Request, closes: Bool, rest: bytes::Bytes }
+
+/// Reads the next request of `connection` after the bytes `buffer` and
+/// answers it, then the ones after it, until the connection closes.
+priv fn serve_requests(
+  connection: net::Connection,
+  handler: fn(Request) -> Response,
+  limits: Limits,
+  buffer: bytes::Bytes,
+) -> Nil {
+  case next_request(connection, limits, buffer) {
+    Ended => Nil
+    Refused(status) => {
+      let _ = net::write_bytes(connection, response_bytes(Get, refusal(status), True))
+      Nil
+    }
+    Received(incoming) => {
+      let given = call_handler(incoming.request, handler)
+      let data = response_bytes(incoming.request.method, given, incoming.closes)
+      case net::write_bytes(connection, data), incoming.closes {
+        Ok(Nil), False => serve_requests(connection, handler, limits, incoming.rest)
+        _, _ => Nil
+      }
+    }
+  }
+}
+
+/// The response to a request refused before its handler (D-1013).
+/// GAP(http-serve-texts).
+priv fn refusal(status: Int) -> Response {
+  case status {
+    413 => text(413, "content too large")
+    431 => text(431, "request header fields too large")
+    501 => text(501, "not implemented")
+    _ => text(400, "bad request")
+  }
+}
+
+/// Calls `handler` in a scope of its own, so that its panic reaches only
+/// this request: the request gets `500`, and the panic report is printed to
+/// standard error as a detached fiber's is (D-669, D-1012).
+priv fn call_handler(request: Request, handler: fn(Request) -> Response) -> Response {
+  let outcome = {
+    use _scope <- fiber::scope()
+    handler(request)
+  }
+  case outcome {
+    Ok(response) => response
+    Err(failure) => {
+      io::eprintln(fiber::show(failure))
+      text(500, "internal server error")
+    }
+  }
+}
+
+/// Reads the next request of `connection` after `buffer`: when nothing of
+/// it has arrived, it waits for its first bytes for at most the idle limit,
+/// and once its head has begun, it must be complete within the head limit
+/// (D-1013).
+priv fn next_request(connection: net::Connection, limits: Limits, buffer: bytes::Bytes) -> Next {
+  case bytes::is_empty(buffer) {
+    True => case fiber::timeout(limits.idle, fn() { net::read_bytes(connection, 65_536) }) {
+      Ok(Ok(Some(first))) => read_head_within(connection, limits, first)
+      _ => Ended
+    }
+    False => read_head_within(connection, limits, buffer)
+  }
+}
+
+/// Reads the head that `buffer` begins within the head limit, then the
+/// request it starts (D-1013).
+priv fn read_head_within(
+  connection: net::Connection,
+  limits: Limits,
+  buffer: bytes::Bytes,
+) -> Next {
+  case fiber::timeout(limits.head_time, fn() { read_request_head(connection, buffer) }) {
+    Ok(Ok(head)) => request_from_head(connection, limits, head)
+    Ok(Err(Some(status))) => Refused(status)
+    _ => Ended
+  }
+}
+
+/// A request head: its request line, its headers in wire order with
+/// lower-case names, and the bytes read after it.
+priv type RequestHead { line: String, headers: List<(String, String)>, rest: bytes::Bytes }
+
+/// Reads from `connection`, after `buffer`, until the kernel parses a
+/// complete request head (D-1210): `Err(Some(status))` for a head that is
+/// not valid (`400`) or is over 64 KiB (`431`), and `Err(None)` when the
+/// client closes the connection first.
+priv fn read_request_head(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+) -> Result<RequestHead, Option<Int>> {
+  case sys_parse_request_head(buffer) {
+    Ok(Some((line, fields, length))) => {
+      let rest = bytes::slice(buffer, length, bytes::length(buffer))
+      Ok(RequestHead { line, headers: fields, rest })
+    }
+    Ok(None) => case net::read_bytes(connection, 65_536) {
+      Ok(Some(more)) => read_request_head(connection, bytes::append(buffer, more))
+      _ => Err(None)
+    }
+    Err((431, _)) => Err(Some(431))
+    Err(_) => Err(Some(400))
+  }
+}
+
+/// The request that `head` starts, with its body read: a path, query or
+/// body that does not decode to valid UTF-8 is `400`, and a body too large
+/// or in a transfer coding other than `chunked` is refused (D-311, D-1004,
+/// D-1013, D-1069). An HTTP/1.0 request is served as an HTTP/1.1 one and
+/// its connection closed after the response; it gets no `100 Continue`,
+/// and a `transfer-encoding` in it is `400`. GAP(http-serve-http10).
+priv fn request_from_head(connection: net::Connection, limits: Limits, head: RequestHead) -> Next {
+  case string::split(head.line, " ") {
+    [token, target, version] => {
+      let old = version == "HTTP/1.0"
+      let (raw_path, raw_query) = case string::split_once(target, "?") {
+        Some(pair) => pair
+        None => (target, "")
+      }
+      let decoded =
+        raw_path
+        |> string::split(_, "/")
+        |> list::filter(_, fn(part) { part != "" })
+        |> list::try_map(_, fn(part) { urls::decode_segment(part) })
+      let both_lengths = values_of(head.headers, "transfer-encoding") != []
+        && values_of(head.headers, "content-length") != []
+      let expectation = ascii_lower(option::unwrap_or(first_header(head.headers, "expect"), ""))
+      let expects = !old && expectation == "100-continue"
+      case decoded, urls::decode_query(raw_query), body_framing(old, head.headers, limits) {
+        Ok(names), Ok(pairs), Ok(framing) => case body_within(
+          connection,
+          head.rest,
+          framing,
+          expects,
+          limits,
+        ) {
+          Ok((data, rest)) => case string::from_bytes(data) {
+            Ok(content) => {
+              let request = Request {
+                method: method_of(token),
+                path: raw_path,
+                segments: names,
+                query: pairs,
+                headers: head.headers,
+                body: content,
+              }
+              // A request with both a length and a transfer coding is read
+              // by its coding, and its connection closed (RFC 9112 §6.1).
+              let closes = old || both_lengths || asks_to_close(head.headers)
+              Received(Incoming { request, closes, rest })
+            }
+            Err(Nil) => Refused(400)
+          }
+          Err(Some(status)) => Refused(status)
+          Err(None) => Ended
+        }
+        _, _, Err(status) => Refused(status)
+        _, _, _ => Refused(400)
+      }
+    }
+    _ => Refused(400)
+  }
+}
+
+/// How a request's body is framed (RFC 9112 §6).
+priv type Framing { NoBody, Length(Int), Chunked }
+
+/// The framing of the body of a request with `fields`, or the status that
+/// refuses it: `413` for a `content-length` over the limit, `501` for a
+/// transfer coding other than `chunked`, `400` for a `content-length` that
+/// is not one number and for a `transfer-encoding` in an HTTP/1.0 request
+/// (D-1013, GAP(http-serve-http10)). A request with both a
+/// `transfer-encoding` and a `content-length` is read by its coding (RFC
+/// 9112 §6.1). GAP(http-serve-framing).
+priv fn body_framing(
+  old: Bool,
+  fields: List<(String, String)>,
+  limits: Limits,
+) -> Result<Framing, Int> {
+  let codings =
+    values_of(fields, "transfer-encoding")
+    |> list::flat_map(_, fn(value) { string::split(value, ",") })
+    |> list::map(_, fn(coding) { ascii_lower(trim_blanks(coding)) })
+    |> list::filter(_, fn(coding) { coding != "" })
+  case values_of(fields, "transfer-encoding"), old {
+    [], _ => case content_length(fields) {
+      Ok(None) => Ok(NoBody)
+      Ok(Some(0)) => Ok(NoBody)
+      Ok(Some(size)) => case size > limits.body_size {
+        True => Err(413)
+        False => Ok(Length(size))
+      }
+      Err(Nil) => Err(400)
+    }
+    _, True => Err(400)
+    _, False => case codings {
+      ["chunked"] => Ok(Chunked)
+      [] => Err(400)
+      _ => Err(501)
+    }
+  }
+}
+
+/// Whether a request's `connection` header names `close`.
+priv fn asks_to_close(fields: List<(String, String)>) -> Bool {
+  values_of(fields, "connection")
+  |> list::flat_map(_, fn(value) { string::split(value, ",") })
+  |> list::any(_, fn(choice) { ascii_lower(trim_blanks(choice)) == "close" })
+}
+
+/// `body_of` within the body limit: a body that is not complete
+/// `limits.body_time` after its head was read ends the connection without
+/// an answer, as a head over the head limit does (D-1013,
+/// GAP(http-serve-limits)).
+priv fn body_within(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+  framing: Framing,
+  expects: Bool,
+  limits: Limits,
+) -> Result<(bytes::Bytes, bytes::Bytes), Option<Int>> {
+  case framing {
+    NoBody => Ok((bytes::new(), buffer))
+    _ => case fiber::timeout(limits.body_time, fn() {
+      body_of(connection, buffer, framing, expects, limits)
+    }) {
+      Ok(read) => read
+      Err(_) => Err(None)
+    }
+  }
+}
+
+/// Reads the body framed by `framing` from `connection` after `buffer`,
+/// first answering `100 Continue` when the client `expects` it (D-1013),
+/// and returns it with the bytes read after it: `Err(Some(status))` when
+/// the body is refused, and `Err(None)` when the client goes away first.
+priv fn body_of(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+  framing: Framing,
+  expects: Bool,
+  limits: Limits,
+) -> Result<(bytes::Bytes, bytes::Bytes), Option<Int>> {
+  let continued = case framing != NoBody && expects {
+    True => net::write_bytes(connection, bytes::from_string("HTTP/1.1 100 Continue\r\n\r\n"))
+    False => Ok(Nil)
+  }
+  case continued, framing {
+    Err(_), _ => Err(None)
+    Ok(Nil), NoBody => Ok((bytes::new(), buffer))
+    Ok(Nil), Length(size) => case read_at_least(connection, buffer, size) {
+      Ok(data) => Ok((bytes::slice(data, 0, size), bytes::slice(data, size, bytes::length(data))))
+      Err(Nil) => Err(None)
+    }
+    Ok(Nil), Chunked => read_request_chunks(connection, buffer, 0, bytes::new(), 0, limits)
+  }
+}
+
+/// Reads from `connection` until `buffer` holds at least `size` bytes, and
+/// returns all of them; `Err(Nil)` when the client closes first.
+priv fn read_at_least(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+  size: Int,
+) -> Result<bytes::Bytes, Nil> {
+  case bytes::length(buffer) >= size {
+    True => Ok(buffer)
+    False => case net::read_bytes(connection, 65_536) {
+      Ok(Some(more)) => read_at_least(connection, bytes::append(buffer, more), size)
+      _ => Err(Nil)
+    }
+  }
+}
+
+/// Reads a chunked request body whose next chunk-size line starts at `at`
+/// of `buffer`, after the chunks gathered in `body` and the `sent` bytes
+/// they took on the wire (RFC 9112 §7.1), with the bytes after it: `413`
+/// once the body as sent, its chunk-size lines, extensions and line ends
+/// included, passes the body limit, and `400` for a chunk that is not well
+/// formed or a line longer than 64 KiB. Bytes already read are dropped as
+/// it goes, so what it holds stays near the limits (D-1013,
+/// GAP(http-serve-framing)).
+priv fn read_request_chunks(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+  at: Int,
+  body: bytes::Bytes,
+  sent: Int,
+  limits: Limits,
+) -> Result<(bytes::Bytes, bytes::Bytes), Option<Int>> {
+  case bytes::index_of(buffer, line_end(), at) {
+    None => case bytes::length(buffer) - at > 65_536 {
+      True => Err(Some(400))
+      False => case net::read_bytes(connection, 65_536) {
+        Ok(Some(more)) => {
+          let kept = bytes::append(unread(buffer, at), more)
+          read_request_chunks(connection, kept, 0, body, sent, limits)
+        }
+        _ => Err(None)
+      }
+    }
+    Some(end) => {
+      let framed = sent + end + 2 - at
+      case chunk_size(string::from_bytes_lossy(bytes::slice(buffer, at, end))) {
+        None => Err(Some(400))
+        Some(0) => request_trailers(connection, buffer, end + 2, 0, body)
+        Some(size) => case framed + size + 2 > limits.body_size {
+          True => Err(Some(413))
+          False => {
+            let total = framed + size + 2
+            request_chunk_data(connection, buffer, end + 2, size, body, total, limits)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The bytes of `buffer` from `at` on: `buffer` itself when `at` is 0.
+priv fn unread(buffer: bytes::Bytes, at: Int) -> bytes::Bytes {
+  case at {
+    0 => buffer
+    _ => bytes::slice(buffer, at, bytes::length(buffer))
+  }
+}
+
+/// Reads the `size` bytes of a request's chunk that start at `start` of
+/// `buffer`, and the line ending after them; `sent` counts them already.
+priv fn request_chunk_data(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+  start: Int,
+  size: Int,
+  body: bytes::Bytes,
+  sent: Int,
+  limits: Limits,
+) -> Result<(bytes::Bytes, bytes::Bytes), Option<Int>> {
+  let stop = start + size
+  case bytes::length(buffer) >= stop + 2 {
+    True => case bytes::slice(buffer, stop, stop + 2) == line_end() {
+      True => {
+        let longer = bytes::append(body, bytes::slice(buffer, start, stop))
+        read_request_chunks(connection, buffer, stop + 2, longer, sent, limits)
+      }
+      False => Err(Some(400))
+    }
+    False => case net::read_bytes(connection, 65_536) {
+      Ok(Some(more)) => {
+        let kept = bytes::append(unread(buffer, start), more)
+        request_chunk_data(connection, kept, 0, size, body, sent, limits)
+      }
+      _ => Err(None)
+    }
+  }
+}
+
+/// Skips the trailer lines after a request's last chunk, which start at
+/// `at` of `buffer` after `seen` bytes of them, up to the empty line, and
+/// returns the body with the bytes after it. The trailer section is a
+/// field section, so it may hold 64 KiB as a head does, and `431` refuses
+/// a longer one (D-1013, GAP(http-serve-framing)).
+priv fn request_trailers(
+  connection: net::Connection,
+  buffer: bytes::Bytes,
+  at: Int,
+  seen: Int,
+  body: bytes::Bytes,
+) -> Result<(bytes::Bytes, bytes::Bytes), Option<Int>> {
+  case bytes::index_of(buffer, line_end(), at) {
+    Some(end) => case end == at, seen + end + 2 - at > 65_536 {
+      True, _ => Ok((body, bytes::slice(buffer, end + 2, bytes::length(buffer))))
+      False, True => Err(Some(431))
+      False, False => request_trailers(connection, buffer, end + 2, seen + end + 2 - at, body)
+    }
+    None => case seen + bytes::length(buffer) - at > 65_536 {
+      True => Err(Some(431))
+      False => case net::read_bytes(connection, 65_536) {
+        Ok(Some(more)) =>
+          request_trailers(connection, bytes::append(unread(buffer, at), more), 0, seen, body)
+        _ => Err(None)
+      }
+    }
+  }
+}
+
+/// The method a request line's token names: a token that names a variant
+/// is always that variant, and any other is `Other` as received (D-1005).
+priv fn method_of(token: String) -> Method {
+  case token {
+    "GET" => Get
+    "HEAD" => Head
+    "POST" => Post
+    "PUT" => Put
+    "PATCH" => Patch
+    "DELETE" => Delete
+    "OPTIONS" => Options
+    _ => Other(token)
+  }
+}
+
+/// The bytes of `given` as the server sends them for a request with
+/// `method` (D-1013): a response with a status outside 100 to 999, or a
+/// header that `send` would reject, is replaced by `500`. Then the status
+/// line, the response's headers in order without any `content-length`,
+/// `transfer-encoding`, `connection` or `date`, the server's
+/// `content-length` and `date`, `connection: close` when the server closes
+/// the connection after it, and the body, which a response to `HEAD`
+/// leaves out. A `1xx`, `204` or `304` response has neither a
+/// `content-length` nor a body (RFC 9110 §8.6, §15). GAP(http-serve-texts),
+/// GAP(http-serve-response-head).
+priv fn response_bytes(method: Method, given: Response, closing: Bool) -> bytes::Bytes {
+  let response = case is_sendable(given) {
+    True => given
+    False => text(500, "internal server error")
+  }
+  let status = response.status
+  let content = bytes::from_string(response.body)
+  let bodiless = status < 200 || status == 204 || status == 304
+  let size = bytes::length(content)
+  let length = case bodiless {
+    True => []
+    False => [("content-length", "{size}")]
+  }
+  let ending = case closing {
+    True => [("connection", "close")]
+    False => []
+  }
+  let replaced = ["content-length", "transfer-encoding", "connection", "date"]
+  let kept = list::filter(response.headers, fn((name, _)) {
+    !list::contains(replaced, ascii_lower(name))
+  })
+  let lines =
+    [kept, length, [("date", http_date(time::now()))], ending]
+    |> list::flatten
+    |> list::map(_, fn((name, value)) { name + ": " + value + "\r\n" })
+  let status_line = "HTTP/1.1 {status} " + reason_phrase(status) + "\r\n"
+  let head_text = status_line + string::join(lines, "") + "\r\n"
+  case bodiless || method == Head {
+    True => bytes::from_string(head_text)
+    False => bytes::append(bytes::from_string(head_text), content)
+  }
+}
+
+/// Whether the server can send `response` as it is: a status from 100 to
+/// 999, and headers that `send` would accept (D-1009, D-1013).
+priv fn is_sendable(response: Response) -> Bool {
+  response.status >= 100
+    && response.status <= 999
+    && list::all(response.headers, fn((name, value)) {
+      is_token(name)
+        && !string::contains(value, "\r")
+        && !string::contains(value, "\n")
+        && !string::contains(value, "\u{0}")
+    })
+}
+
+/// The reason phrase of `status` in RFC 9110 §15, and RFC 6585's for `429`
+/// and `431`; empty for a status without one. GAP(http-serve-response-head).
+priv fn reason_phrase(status: Int) -> String {
+  case status {
+    100 => "Continue"
+    101 => "Switching Protocols"
+    200 => "OK"
+    201 => "Created"
+    202 => "Accepted"
+    203 => "Non-Authoritative Information"
+    204 => "No Content"
+    205 => "Reset Content"
+    206 => "Partial Content"
+    300 => "Multiple Choices"
+    301 => "Moved Permanently"
+    302 => "Found"
+    303 => "See Other"
+    304 => "Not Modified"
+    305 => "Use Proxy"
+    307 => "Temporary Redirect"
+    308 => "Permanent Redirect"
+    400 => "Bad Request"
+    401 => "Unauthorized"
+    402 => "Payment Required"
+    403 => "Forbidden"
+    404 => "Not Found"
+    405 => "Method Not Allowed"
+    406 => "Not Acceptable"
+    407 => "Proxy Authentication Required"
+    408 => "Request Timeout"
+    409 => "Conflict"
+    410 => "Gone"
+    411 => "Length Required"
+    412 => "Precondition Failed"
+    413 => "Content Too Large"
+    414 => "URI Too Long"
+    415 => "Unsupported Media Type"
+    416 => "Range Not Satisfiable"
+    417 => "Expectation Failed"
+    421 => "Misdirected Request"
+    422 => "Unprocessable Content"
+    426 => "Upgrade Required"
+    429 => "Too Many Requests"
+    431 => "Request Header Fields Too Large"
+    500 => "Internal Server Error"
+    501 => "Not Implemented"
+    502 => "Bad Gateway"
+    503 => "Service Unavailable"
+    504 => "Gateway Timeout"
+    505 => "HTTP Version Not Supported"
+    _ => ""
+  }
+}
+
+/// RFC 9110's IMF-fixdate of `stamp`, such as `Sun, 06 Nov 1994 08:49:37
+/// GMT` (RFC 9110 §5.6.7). GAP(http-serve-date).
+priv fn http_date(stamp: time::Timestamp) -> String {
+  let seconds = duration::to_seconds(time::to_unix(stamp))
+  let days = int::floor_div(seconds, 86_400)
+  let of_day = seconds - days * 86_400
+  let (year, month, day) = time::civil_from_days(days)
+  // 1970-01-01 was a Thursday.
+  let weekdays = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
+  let weekday = option::unwrap_or(list::get(weekdays, int::modulo(days, 7)), "")
+  let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+  let month_name = option::unwrap_or(list::get(months, month - 1), "")
+  let clock =
+    [of_day / 3_600, of_day / 60 - of_day / 3_600 * 60, of_day - of_day / 60 * 60]
+    |> list::map(_, two_digits)
+    |> string::join(_, ":")
+  let year_text = string::pad_start("{year}", 4, "0")
+  weekday + ", " + two_digits(day) + " " + month_name + " " + year_text + " " + clock + " GMT"
+}
+
+/// `n`, from 0 to 99, as two digits.
+priv fn two_digits(n: Int) -> String {
+  string::pad_start("{n}", 2, "0")
+}
+
+test "http_date writes the IMF-fixdate of RFC 9110" {
+  let stamp = time::from_unix(duration::seconds(784_111_777))
+  assert http_date(stamp) == "Sun, 06 Nov 1994 08:49:37 GMT"
+  assert http_date(time::from_unix(duration::zero)) == "Thu, 01 Jan 1970 00:00:00 GMT"
+}
+
+test "a head that is not valid gets 400" {
+  let port = serve_for_tests(fn(_) { text(200, "called") })
+  let answer_text = exchange_raw(port, bytes::from_string("GARBAGE\r\n\r\n"))
+  assert string::starts_with(answer_text, "HTTP/1.1 400 Bad Request\r\n")
+  assert string::contains(answer_text, "\r\nconnection: close\r\n")
+  assert string::ends_with(answer_text, "\r\n\r\nbad request")
+}
+
+test "a head over 64 KiB gets 431" {
+  let port = serve_for_tests(fn(_) { text(200, "called") })
+  // 64 KiB and one byte with no complete head, which the server reads
+  // whole before it answers.
+  let start = "GET / HTTP/1.1\r\nx-large: "
+  let filler = string::repeat("a", 65_537 - string::length(start))
+  let answer_text = exchange_raw(port, bytes::from_string(start + filler))
+  assert string::starts_with(answer_text, "HTTP/1.1 431 Request Header Fields Too Large\r\n")
+  assert string::ends_with(answer_text, "\r\n\r\nrequest header fields too large")
+}
+
+test "a body over 10 MiB gets 413" {
+  let port = serve_for_tests(fn(_) { text(200, "called") })
+  let head_text = "POST / HTTP/1.1\r\ncontent-length: 10485761\r\n\r\n"
+  let answer_text = exchange_raw(port, bytes::from_string(head_text))
+  assert string::starts_with(answer_text, "HTTP/1.1 413 Content Too Large\r\n")
+  assert string::ends_with(answer_text, "\r\n\r\ncontent too large")
+}
+
+test "a transfer coding other than chunked gets 501" {
+  let port = serve_for_tests(fn(_) { text(200, "called") })
+  let head_text = "POST / HTTP/1.1\r\ntransfer-encoding: gzip, chunked\r\n\r\n"
+  let answer_text = exchange_raw(port, bytes::from_string(head_text))
+  assert string::starts_with(answer_text, "HTTP/1.1 501 Not Implemented\r\n")
+  assert string::ends_with(answer_text, "\r\n\r\nnot implemented")
+}
+
+test "a path or a query that is not UTF-8 once decoded gets 400" {
+  let port = serve_for_tests(fn(_) { text(200, "called") })
+  let path_answer = exchange_raw(port, bytes::from_string("GET /a%FF HTTP/1.1\r\n\r\n"))
+  assert string::starts_with(path_answer, "HTTP/1.1 400 Bad Request\r\n")
+  let query_answer = exchange_raw(port, bytes::from_string("GET /?q=%C3 HTTP/1.1\r\n\r\n"))
+  assert string::starts_with(query_answer, "HTTP/1.1 400 Bad Request\r\n")
+  assert string::ends_with(query_answer, "\r\n\r\nbad request")
+}
+
+test "a body that is not UTF-8 gets 400" {
+  let port = serve_for_tests(fn(request) { text(200, request.body) })
+  let head_text = bytes::from_string("POST / HTTP/1.1\r\ncontent-length: 2\r\n\r\n")
+  let answer_text = exchange_raw(port, bytes::append(head_text, bytes::from_list([0xFF, 0xFE])))
+  assert string::starts_with(answer_text, "HTTP/1.1 400 Bad Request\r\n")
+  assert string::ends_with(answer_text, "\r\n\r\nbad request")
+}
+
+test "a chunked body is read" {
+  let port = serve_for_tests(fn(request) { text(200, request.body) })
+  let chunks = "5;name=value\r\nhello\r\n7\r\n, world\r\n0\r\nx-trailer: 1\r\n\r\n"
+  let head_text = "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
+  let answer_text = exchange_raw(port, bytes::from_string(head_text + chunks))
+  assert string::starts_with(answer_text, "HTTP/1.1 200 OK\r\n")
+  assert string::contains(answer_text, "\r\ncontent-length: 12\r\n")
+  assert string::ends_with(answer_text, "\r\nconnection: close\r\n\r\nhello, world")
+}
+
+test "a request that expects 100-continue gets 100 Continue before its body" {
+  let port = serve_for_tests(fn(request) { text(200, request.body) })
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    let assert Ok(connection) = net::connect("127.0.0.1", port)
+    let lines = [
+      "POST / HTTP/1.1",
+      "expect: 100-continue",
+      "content-length: 5",
+      "connection: close",
+      "",
+      "",
+    ]
+    let assert Ok(Nil) =
+      net::write_bytes(connection, bytes::from_string(string::join(lines, "\r\n")))
+    let interim = read_until_blank_line(connection, bytes::new())
+    let assert Ok(Nil) = net::write_bytes(connection, bytes::from_string("hello"))
+    let final = string::from_bytes_lossy(read_all(connection, bytes::new()))
+    (interim, final)
+  })
+  let assert Ok((interim, final)) = outcome
+  assert interim == "HTTP/1.1 100 Continue\r\n\r\n"
+  assert string::starts_with(final, "HTTP/1.1 200 OK\r\n")
+  assert string::ends_with(final, "\r\n\r\nhello")
+}
+
+/// What `connection` sends after `buffer` up to and with the first empty
+/// line, as text.
+priv fn read_until_blank_line(connection: net::Connection, buffer: bytes::Bytes) -> String {
+  let received_text = string::from_bytes_lossy(buffer)
+  case string::contains(received_text, "\r\n\r\n") {
+    True => received_text
+    False => case net::read_bytes(connection, 1) {
+      Ok(Some(more)) => read_until_blank_line(connection, bytes::append(buffer, more))
+      _ => received_text
+    }
+  }
+}
+
+test "a connection stays open between requests until the client asks to close it" {
+  let port = serve_for_tests(fn(request) { text(200, request.path) })
+  let first = "GET /first HTTP/1.1\r\nhost: here\r\n\r\n"
+  let second = "GET /second HTTP/1.1\r\nhost: here\r\nconnection: close\r\n\r\n"
+  // Both requests are sent at once, and the server answers them in order
+  // on one connection, then closes it.
+  let answer_text = exchange_raw(port, bytes::from_string(first + second))
+  let assert Some((first_answer, second_answer)) = string::split_once(answer_text, "\r\n\r\n/first")
+  assert string::starts_with(first_answer, "HTTP/1.1 200 OK\r\n")
+  assert !string::contains(first_answer, "connection")
+  assert string::starts_with(second_answer, "HTTP/1.1 200 OK\r\n")
+  assert string::ends_with(second_answer, "\r\nconnection: close\r\n\r\n/second")
+}
+
+test "a HEAD request reaches the handler as Head and gets no body" {
+  let port = serve_for_tests(fn(request) { text(200, method_name(request.method)) })
+  let answer_text =
+    exchange_raw(port, bytes::from_string("HEAD /x HTTP/1.1\r\nconnection: close\r\n\r\n"))
+  assert string::starts_with(answer_text, "HTTP/1.1 200 OK\r\n")
+  // The length is the body's that a `GET` would get, and no body follows.
+  assert string::contains(answer_text, "\r\ncontent-length: 4\r\n")
+  assert string::ends_with(answer_text, "\r\nconnection: close\r\n\r\n")
+  let assert Ok(fetched) = send(Head, "http://127.0.0.1:{port}/x", [], "")
+  assert fetched.body == ""
+  assert header(fetched, "content-length") == Some("4")
+}
+
+test "the server sets content-length, date and connection itself" {
+  let port = serve_for_tests(fn(_) {
+    text(200, "hi")
+    |> with_header(_, "content-length", "99")
+    |> with_header(_, "Transfer-Encoding", "chunked")
+    |> with_header(_, "connection", "keep-alive")
+    |> with_header(_, "date", "yesterday")
+    |> with_header(_, "x-kept", "1")
+  })
+  let assert Ok(response) = get("http://127.0.0.1:{port}/")
+  assert response.body == "hi"
+  assert values_of(response.headers, "content-length") == ["2"]
+  assert values_of(response.headers, "transfer-encoding") == []
+  // The client asked to close the connection, so the server says it closes.
+  assert values_of(response.headers, "connection") == ["close"]
+  assert header(response, "x-kept") == Some("1")
+  let assert [date] = values_of(response.headers, "date")
+  assert string::length(date) == 29
+  assert string::ends_with(date, " GMT")
+}
+
+test "a status outside 100 to 999 or a header that send would reject becomes 500" {
+  let port = serve_for_tests(fn(request) {
+    case request.path {
+      "/low" => Response { status: 99, headers: [], body: "low" }
+      "/high" => Response { status: 1000, headers: [], body: "high" }
+      "/split" => text(200, "split") |> with_header(_, "x-note", "a\r\nb")
+      "/name" => text(200, "name") |> with_header(_, "bad name", "x")
+      _ => text(200, "fine")
+    }
+  })
+  let base = "http://127.0.0.1:{port}"
+  let outcomes = list::map(["/low", "/high", "/split", "/name"], fn(path) {
+    case get(base + path) {
+      Ok(response) => (response.status, response.body)
+      Err(_) => (0, "")
+    }
+  })
+  assert list::all(outcomes, fn(outcome) { outcome == (500, "internal server error") })
+  let assert Ok(fine) = get(base + "/")
+  assert fine.status == 200
+}
+
+test "a handler panic while another request is in flight leaves that request alone" {
+  let (waiting_tx, waiting_rx) = channel::new::<Nil>(1)
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let port = serve_for_tests(fn(request) {
+    case request.path {
+      "/slow" => {
+        let _ = channel::send(waiting_tx, Nil)
+        let _ = channel::receive(go_rx)
+        text(200, "slow and fine")
+      }
+      _ => panic as "handler bug"
+    }
+  })
+  let base = "http://127.0.0.1:{port}"
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    use owner <- fiber::scope()
+    let slow = fiber::spawn(owner, fn() { get(base + "/slow") })
+    let assert Ok(Nil) = channel::receive(waiting_rx)
+    let crashed = get(base + "/crash")
+    let assert Ok(Nil) = channel::send(go_tx, Nil)
+    (crashed, fiber::join(slow))
+  })
+  let assert Ok(Ok((Ok(crashed), Ok(healthy)))) = outcome
+  assert crashed.status == 500
+  assert crashed.body == "internal server error"
+  assert healthy.status == 200
+  assert healthy.body == "slow and fine"
+}
+
+test "a handler that closes its own server's listener ends serve_on with Ok(Nil)" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    use owner <- fiber::scope()
+    let server = fiber::spawn(owner, fn() {
+      serve_on(listener, fn(_) {
+        let _ = net::close_listener(listener)
+        text(200, "stopping")
+      })
+    })
+    // The handler is cancelled with the rest, so its answer may not come
+    // (D-1064).
+    let _ = get("http://127.0.0.1:{port}/stop")
+    fiber::join(server)
+  })
+  assert outcome == Ok(Ok(Ok(Nil)))
+}
+
+test "an idle connection is closed after the idle limit" {
+  let base = default_limits()
+  let port = serve_for_tests_with(fn(_) { text(200, "called") }, Limits {
+    ..base,
+    idle: duration::milliseconds(30),
+  })
+  // Nothing is sent: the server closes the connection after 30 ms.
+  assert exchange_raw(port, bytes::new()) == ""
+}
+
+test "a head not complete within the head limit is closed" {
+  let base = default_limits()
+  let port = serve_for_tests_with(fn(_) { text(200, "called") }, Limits {
+    ..base,
+    head_time: duration::milliseconds(30),
+  })
+  // The head never ends; the idle limit stays at 60 s, so only the head
+  // limit closes the connection within the ten seconds `exchange_raw`
+  // waits.
+  assert exchange_raw(port, bytes::from_string("GET / HTTP/1.1\r\nhost: here\r\n")) == ""
+}
+
+test "a body not complete within the body limit is closed" {
+  let base = default_limits()
+  let port = serve_for_tests_with(fn(_) { text(200, "called") }, Limits {
+    ..base,
+    body_time: duration::milliseconds(30),
+  })
+  // The head is complete and the rest of the body never comes; the idle
+  // and head limits stay at 60 s and 30 s, so only the body limit closes
+  // the connection within the ten seconds `exchange_raw` waits, for a body
+  // with a length and a chunked one alike.
+  let length = "POST / HTTP/1.1\r\ncontent-length: 5\r\n\r\nab"
+  assert exchange_raw(port, bytes::from_string(length)) == ""
+  let chunked = "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n5\r\nab"
+  assert exchange_raw(port, bytes::from_string(chunked)) == ""
+}
+
+test "a trailer section over 64 KiB gets 431" {
+  let port = serve_for_tests(fn(_) { text(200, "called") })
+  let head_text = "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n0\r\n"
+  // 8,193 trailer lines of 8 bytes: the last one passes 64 KiB, so the
+  // server has read every byte when it answers.
+  let trailers = string::repeat("x-t: 1\r\n", 8_193)
+  let answer_text = exchange_raw(port, bytes::from_string(head_text + trailers))
+  assert string::starts_with(answer_text, "HTTP/1.1 431 Request Header Fields Too Large\r\n")
+  assert string::ends_with(answer_text, "\r\n\r\nrequest header fields too large")
+}
+
+test "a chunked body's framing counts toward the body limit" {
+  let base = default_limits()
+  let port = serve_for_tests_with(fn(request) { text(200, request.body) }, Limits {
+    ..base,
+    body_size: 64,
+  })
+  // One byte of data under a chunk-size line of 104 bytes: the body as
+  // sent passes 64 bytes. The data is not sent, so that no byte is left
+  // unread when the server answers.
+  let extension = string::repeat("e", 100)
+  let head_text = "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n1;" + extension + "\r\n"
+  let answer_text = exchange_raw(port, bytes::from_string(head_text))
+  assert string::starts_with(answer_text, "HTTP/1.1 413 Content Too Large\r\n")
+  // A body whose data and framing fit is read.
+  let fits = "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
+  let small = exchange_raw(port, bytes::from_string(fits + "2\r\nok\r\n0\r\n\r\n"))
+  assert string::ends_with(small, "\r\n\r\nok")
+}
+
+test "an accept failure that does not pass ends serve_on at once with Err" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  // The first accept takes a connection, and the second fails with a
+  // failure that has a predicate, which does not pass.
+  let (tokens, gate) = channel::new::<Nil>(1)
+  let assert Ok(Nil) = channel::send(tokens, Nil)
+  let base = default_limits()
+  let failing = Limits {
+    ..base,
+    accept: fn(server) {
+      case channel::receive(gate) {
+        Ok(Nil) => net::accept(server)
+        Err(Nil) => Err(io::from_os(2, ""))
+      }
+    },
+  }
+  let outcome = fiber::timeout(duration::seconds(10), fn() {
+    use owner <- fiber::scope()
+    let server = fiber::spawn(owner, fn() {
+      serve_with(listener, fn(_) { text(200, "called") }, failing)
+    })
+    let assert Ok(client) = net::connect("127.0.0.1", port)
+    // The server does not wait for the idle connection's 60 s.
+    let ended = fiber::join(server)
+    let after = net::read_bytes(client, 16)
+    (ended, after)
+  })
+  let assert Ok(Ok((Err(reason), after))) = outcome
+  let assert Some(cause) = io_error(reason)
+  assert io::is_permission_denied(cause)
+  // The connection was cancelled and released, so it is closed.
+  assert case after {
+    Ok(Some(_)) => False
+    _ => True
+  }
+}
+
+test "an HTTP/1.0 request is served as HTTP/1.1 and its connection closed" {
+  let port = serve_for_tests(fn(request) { text(200, request.path + " " + request.body) })
+  let keep = "GET /old HTTP/1.0\r\nconnection: keep-alive\r\n\r\n"
+  let answer_text = exchange_raw(port, bytes::from_string(keep))
+  assert string::starts_with(answer_text, "HTTP/1.1 200 OK\r\n")
+  assert string::ends_with(answer_text, "\r\nconnection: close\r\n\r\n/old ")
+  // No `100 Continue` for HTTP/1.0, and its body is read by its length.
+  let expecting = "POST /e HTTP/1.0\r\nexpect: 100-continue\r\ncontent-length: 2\r\n\r\nhi"
+  let expected = exchange_raw(port, bytes::from_string(expecting))
+  assert string::starts_with(expected, "HTTP/1.1 200 OK\r\n")
+  assert string::ends_with(expected, "\r\n\r\n/e hi")
+  // The head alone, so that no byte is left unread when the server closes.
+  let chunked = "POST /c HTTP/1.0\r\ntransfer-encoding: chunked\r\n\r\n"
+  let refused = exchange_raw(port, bytes::from_string(chunked))
+  assert string::starts_with(refused, "HTTP/1.1 400 Bad Request\r\n")
+}
+
+/// Serves `handler` on a loopback listener with a port the operating system
+/// chose, in a detached fiber that `cheby test` tears down when the test
+/// ends (D-723, D-990), and returns the port.
+priv fn serve_for_tests(handler: fn(Request) -> Response) -> Int {
+  serve_for_tests_with(handler, default_limits())
+}
+
+/// `serve_for_tests` with `limits`.
+priv fn serve_for_tests_with(handler: fn(Request) -> Response, limits: Limits) -> Int {
+  case net::listen("127.0.0.1", 0) {
+    Ok(listener) => {
+      let port = net::local_port(listener)
+      fiber::spawn_detached(fn() { serve_with(listener, handler, limits) })
+      port
+    }
+    Err(_) => 0
+  }
+}
+
+/// What a client that writes `data` to the server on `port` and reads
+/// until the server closes the connection receives, as text; a fixed text
+/// when that takes more than ten seconds.
+priv fn exchange_raw(port: Int, data: bytes::Bytes) -> String {
+  case fiber::timeout(duration::seconds(10), fn() { talk(port, data) }) {
+    Ok(received_text) => received_text
+    Err(_) => "no close within ten seconds"
+  }
+}
+
+/// The body of `exchange_raw`.
+priv fn talk(port: Int, data: bytes::Bytes) -> String {
+  case net::connect("127.0.0.1", port) {
+    Ok(connection) => {
+      let _ = net::write_bytes(connection, data)
+      let all = read_all(connection, bytes::new())
+      let _ = net::close(connection)
+      string::from_bytes_lossy(all)
+    }
+    Err(_) => "no connection"
+  }
+}
+
+/// Everything `connection` sends after `buffer` until it closes.
+priv fn read_all(connection: net::Connection, buffer: bytes::Bytes) -> bytes::Bytes {
+  case net::read_bytes(connection, 65_536) {
+    Ok(Some(more)) => read_all(connection, bytes::append(buffer, more))
+    _ => buffer
+  }
+}
+
 // Building responses
 
 /// Returns a response with `status`, the header `content-type:
@@ -1423,8 +2726,8 @@ priv fn sys_parse_response_head(
 
 /// Parses a request head from the bytes read so far, as
 /// `sys_parse_response_head` parses a response's, with the request line in
-/// place of the status: `<method> <target> HTTP/1.<minor>`. For the
-/// server, which calls it; bound before it, as `std::net` bound
+/// place of the status: `<method> <target> HTTP/1.<minor>`. The server
+/// calls it; it stays package-visible, as `std::net` binds
 /// `sys_connect_tls` (D-985, D-1182, D-1210).
 @external(native, "cheby_http_sys_parse_request_head")
 @external(js, "./http.mjs", "sys_parse_request_head")

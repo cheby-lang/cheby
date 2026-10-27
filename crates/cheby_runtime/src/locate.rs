@@ -40,8 +40,13 @@
 //! previous one ends it too, and so does the cap of [`MAX_FRAMES`] records.
 //! The walk is a pure function over a [`FrameReader`], so its tests feed it
 //! synthetic stacks and run under Miri.
+//!
+//! A panic's backtrace (D-1039) walks the same records but lists every
+//! frame (`crate::backtrace::render`), through [`CodeMap::frame_at`] and
+//! each range's display name (D-1041), read in place from its module
+//! record ([`FunctionName`]) under the map's read lock ([`with_map`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::mem::{align_of, size_of};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -74,6 +79,86 @@ pub struct CodeRangeDesc {
     /// The function's call sites that have a location: calls in code
     /// outside package `std`; empty for std, shims and thunks. Any order.
     pub sites: Vec<CallSiteDesc>,
+    /// D-1041: the function's display name, read in place from its
+    /// registered module record, which lives as long as the range (D-867);
+    /// `None` for unnamed code (value shims, `dyn` forwarders, trampolines,
+    /// entry thunks, `@blocking` shims).
+    pub name: Option<FunctionName>,
+    /// Whether the function is the inner body `cb$big$…` of a function with
+    /// a large frame (D-679), whose outer frame a backtrace does not show
+    /// when the inner body is the next frame inward (D-1039).
+    pub large_body: bool,
+}
+
+/// A display name inside a registered module record: no copy (D-1041).
+///
+/// A name the map holds points into its range's module record, which
+/// lives as long as the range is registered (D-867); every name a caller
+/// outside this crate gets ([`range_at`], [`owner_ranges`]) points into a
+/// copy the process keeps instead, interned once per text, so it stays
+/// valid after the range is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionName {
+    /// The name's first byte.
+    ptr: *const u8,
+    /// Its length in bytes.
+    len: usize,
+}
+
+// SAFETY: a `FunctionName` only reads immutable UTF-8 bytes that stay valid
+// while anyone can reach it ([`FunctionName::in_record`]'s contract and the
+// interned copies), so it may move between and be shared by threads.
+unsafe impl Send for FunctionName {}
+// SAFETY: as for `Send`: the bytes are never written.
+unsafe impl Sync for FunctionName {}
+
+impl FunctionName {
+    /// The name whose UTF-8 bytes are `text`, inside a module record.
+    ///
+    /// # Safety
+    ///
+    /// `text` lies in a module record that stays valid and unchanged for as
+    /// long as the range it names is registered, and the name is used only
+    /// inside this crate while the map holds that range (a copy made for
+    /// callers outside goes through [`FunctionName::interned`]).
+    pub(crate) const unsafe fn in_record(text: &str) -> Self {
+        Self {
+            ptr: text.as_ptr(),
+            len: text.len(),
+        }
+    }
+
+    /// The name of the process's own copy of `text`, made once per text and
+    /// kept for the process's life: what a caller outside this crate gets.
+    fn interned(text: &str) -> Self {
+        static INTERNED: std::sync::Mutex<BTreeSet<&'static str>> =
+            std::sync::Mutex::new(BTreeSet::new());
+        let mut interned = INTERNED.lock().unwrap_or_else(PoisonError::into_inner);
+        let kept: &'static str = if let Some(&kept) = interned.get(text) {
+            kept
+        } else {
+            let kept: &'static str = Box::leak(text.to_owned().into_boxed_str());
+            interned.insert(kept);
+            kept
+        };
+        Self {
+            ptr: kept.as_ptr(),
+            len: kept.len(),
+        }
+    }
+
+    /// The name. Valid while its range is registered (the record's code
+    /// owner, D-867); a name from [`range_at`] or [`owner_ranges`] is valid
+    /// for the process's life.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        // SAFETY: every `FunctionName` comes from `in_record` (UTF-8 bytes of
+        // a registered record, read only while its range is registered, as
+        // its contract says) or from `interned` (a copy kept for the
+        // process's life), so `ptr` points to `len` initialized bytes of
+        // valid UTF-8 that nothing writes.
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.len)) }
+    }
 }
 
 /// A call's location in a deadlock report: `path:line:column` (D-858).
@@ -98,10 +183,10 @@ pub(crate) const MAX_FRAMES: usize = 4096;
 
 /// The alignment of every frame pointer: frame records are pushed on a
 /// 16-byte aligned stack on both supported ISAs.
-const FRAME_ALIGN: usize = 16;
+pub(crate) const FRAME_ALIGN: usize = 16;
 
 /// A frame record: the caller's frame pointer, then the return address.
-const RECORD: usize = size_of::<[usize; 2]>();
+pub(crate) const RECORD: usize = size_of::<[usize; 2]>();
 
 /// The path index of a call site whose location could not be read: the
 /// walk stops there with `None`, since the innermost call outside std was
@@ -133,6 +218,22 @@ enum SiteAt {
     Known(Location),
 }
 
+/// What the map says about one frame of a backtrace's walk (D-1039): the
+/// function that holds a return address, and the call that address
+/// returns from.
+#[derive(Debug, Clone)]
+pub(crate) struct MapFrame {
+    /// The function's display name (D-1041), `None` for unnamed code.
+    pub(crate) name: Option<FunctionName>,
+    /// Whether the function has the Cheby ABI: a walk goes on past it.
+    pub(crate) cheby_abi: bool,
+    /// Whether it is a large function's inner body (D-679).
+    pub(crate) large_body: bool,
+    /// The call's location when the address is a recorded call site with
+    /// one; `None` for std code, shims and unrecorded calls.
+    pub(crate) site: Option<Location>,
+}
+
 /// A registered function.
 #[derive(Debug)]
 struct CodeRange {
@@ -143,6 +244,10 @@ struct CodeRange {
     cheby_abi: bool,
     /// Sorted by `ret_offset`, without duplicates.
     sites: Box<[CallSite]>,
+    /// The display name, in the range's module record (D-1041).
+    name: Option<FunctionName>,
+    /// A large function's inner body (D-679).
+    large_body: bool,
 }
 
 /// The map from code addresses to functions and call sites (module
@@ -194,6 +299,8 @@ impl CodeMap {
                 owner,
                 cheby_abi: desc.cheby_abi,
                 sites: sites.into_boxed_slice(),
+                name: desc.name,
+                large_body: desc.large_body,
             });
         }
         batch.sort_by_key(|range| range.start);
@@ -282,6 +389,25 @@ impl CodeMap {
         }
     }
 
+    /// The function that holds the return address `ra` (the call ends
+    /// right before it) and the call's location, for a backtrace's walk
+    /// (D-1039); `None` outside every registered range, as for an entry
+    /// thunk or a trampoline (D-1111). The name points into the range's
+    /// module record: valid while the map's lock is held.
+    pub(crate) fn frame_at(&self, ra: usize) -> Option<MapFrame> {
+        let range = self.find(ra.checked_sub(1)?)?;
+        let site = match self.site_at(range, ra) {
+            SiteAt::Known(location) => Some(location),
+            SiteAt::Unknown | SiteAt::NoSite => None,
+        };
+        Some(MapFrame {
+            name: range.name,
+            cheby_abi: range.cheby_abi,
+            large_body: range.large_body,
+            site,
+        })
+    }
+
     /// `range` as a [`CodeRangeDesc`], its sites' locations written as
     /// `path:line:column` (empty for a site without a path).
     fn describe(&self, range: &CodeRange) -> CodeRangeDesc {
@@ -305,6 +431,10 @@ impl CodeMap {
             len: u32::try_from(range.end.saturating_sub(range.start)).unwrap_or(u32::MAX),
             cheby_abi: range.cheby_abi,
             sites,
+            // A copy the process keeps: the caller may hold the description
+            // after the range is gone.
+            name: range.name.map(|name| FunctionName::interned(name.as_str())),
+            large_body: range.large_body,
         }
     }
 
@@ -434,6 +564,14 @@ pub fn range_at(address: usize) -> Option<(u64, CodeRangeDesc)> {
     let map = CODE_MAP.read().unwrap_or_else(PoisonError::into_inner);
     map.find(address)
         .map(|range| (range.owner, map.describe(range)))
+}
+
+/// Runs `read` on the process's map under its read lock, a leaf lock
+/// (D-867): a panic's backtrace resolves its frames this way (D-1042).
+/// `read` takes no other lock.
+pub(crate) fn with_map<R>(read: impl FnOnce(&CodeMap) -> R) -> R {
+    let map = CODE_MAP.read().unwrap_or_else(PoisonError::into_inner);
+    read(&map)
 }
 
 /// The innermost recorded call site above `frame` (a published frame

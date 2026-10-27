@@ -275,6 +275,12 @@ pub const MIRI_GROUPS: &[MiriGroup] = &[
         filter: "locate_tests::",
         skips: &[],
     },
+    // D-1039, D-1042: the backtrace's walks on synthetic stacks (N7b).
+    MiriGroup {
+        name: "backtrace",
+        filter: "backtrace_tests::",
+        skips: &[],
+    },
     MiriGroup {
         name: "rc",
         filter: "rc::",
@@ -1493,6 +1499,7 @@ mod tests {
             "layout::",
             "alloc::",
             "locate_tests::",
+            "backtrace_tests::",
             "sched::timer::tests::miri_timer_",
         ];
         let mut sorted = filters.clone();

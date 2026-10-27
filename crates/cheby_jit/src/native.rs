@@ -11,9 +11,8 @@
 //!
 //! A library is never unloaded: code compiled against it may run until
 //! the process exits (a REPL session's detached fibers, D-712), and the
-//! forwarder's table it holds is the running `cheby`'s
-//! (D-1196: the table has no entry until N8b, so
-//! nothing is filled yet).
+//! forwarder's table it holds is the running `cheby`'s: [`NativeLibrary::open`]
+//! fills it with the runtime's `cheby_ffi_` functions (D-941, D-945).
 
 use std::path::{Path, PathBuf};
 
@@ -39,10 +38,38 @@ impl NativeLibrary {
     /// always, since native code there is M6's (D-935).
     pub fn open(path: &Path) -> Result<Self, String> {
         let handle = loader::open(path)?;
-        Ok(Self {
+        let library = Self {
             handle,
             path: path.to_path_buf(),
-        })
+        };
+        library.fill_table();
+        Ok(library)
+    }
+
+    /// Fills the forwarder's `cheby_ffi_table` with this process's
+    /// `cheby_ffi_` functions, in `cheby.h`'s declaration order
+    /// (`cheby_runtime::ffi::table`, D-941, GAP(ffi-table-order)), so the
+    /// package's C code reaches the runtime that loaded it. A library
+    /// without the table (not a package's) is left alone.
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "the symbol is the C array `void *cheby_ffi_table[]`, which the C compiler aligns \
+                  as a pointer"
+    )]
+    fn fill_table(&self) {
+        let Some(table) = self.lookup(cheby_runtime::ffi::TABLE_SYMBOL) else {
+            return;
+        };
+        let table = table.cast_mut().cast::<*const u8>();
+        for (index, address) in cheby_runtime::ffi::table().into_iter().enumerate() {
+            // SAFETY: the forwarder defines `cheby_ffi_table` as a writable
+            // array of one pointer per function of `cheby.h` and a null word
+            // (`cheby_link::shlib::FORWARDER_SOURCE`), and a library's key
+            // covers the forwarder's source (D-1197), so this library's
+            // table has `table()`'s length plus one. Nothing runs the
+            // library's C code before `open` returns.
+            unsafe { table.add(index).write(address) };
+        }
     }
 
     /// The file the library was opened from.

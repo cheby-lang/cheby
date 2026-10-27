@@ -143,6 +143,7 @@ fn runtime_symbols() -> [(&'static str, *const u8); 49] {
 pub fn symbols() -> Vec<(&'static str, *const u8)> {
     let mut out = runtime_symbols().to_vec();
     out.extend(desc::symbols());
+    out.extend(crate::ffi::result_helpers());
     io::kernels(&mut out);
     num::kernels(&mut out);
     list::kernels(&mut out);
@@ -158,6 +159,9 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     net::kernels(&mut out);
     file::kernels(&mut out);
     crate::http::kernels(&mut out);
+    // `cheby.h`'s functions, which C code calls (D-945): runtime exports,
+    // so E0055 and the C-object check reserve them (D-944, D-1204).
+    crate::ffi::kernels(&mut out);
     out
 }
 
@@ -345,7 +349,12 @@ mod tests {
         let all_declared: BTreeSet<&str> =
             declared.values().flatten().map(String::as_str).collect();
         for name in &registered {
-            if !name.starts_with("cheby_rt_") && !all_declared.contains(name) {
+            // `cheby.h`'s functions are called by C code, never declared
+            // in std (D-945).
+            if !name.starts_with("cheby_rt_")
+                && !name.starts_with(crate::ffi::PREFIX)
+                && !all_declared.contains(name)
+            {
                 errors.push(format!("`{name}` is registered but not declared in std"));
             }
         }
@@ -592,9 +601,10 @@ mod tests {
             registered_context, declared_context,
             "the kernels that take the context pointer and the `@std_context` declarations differ"
         );
-        // channel and fiber 8, selector 5, random 1, runtime 3.
-        assert_eq!(registered.len(), 8 + 5 + 1 + 3);
-        assert_eq!(registered_context.len(), 8 + 5 + 2);
+        // channel and fiber 9 (`fiber::cancel`'s `sys_cancel`, D-1060),
+        // selector 5, random 1, runtime 3.
+        assert_eq!(registered.len(), 9 + 5 + 1 + 3);
+        assert_eq!(registered_context.len(), 9 + 5 + 2);
     }
 
     /// Every kernel of `std::net` has the C signature of its `@external`

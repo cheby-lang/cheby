@@ -47,7 +47,12 @@
 #   outcome of each (G6), and the determinism check: every example and the
 #   benchmark projects built with `--jobs 1` and the default from two paths,
 #   their interfaces, MIR, CLIF and constants compared byte for byte (D-264,
-#   D-551), on Linux and macOS.
+#   D-551), and the blobs and records of the two fresh caches the builds
+#   write compared byte for byte (D-972). Every runnable example (no
+#   `skip-run` in its `test.toml`) is also built into an executable from
+#   the two paths under one basename, and the two executables are compared
+#   byte for byte; each one must build (D-934, D-1164). The runtime archive
+#   is built before any executable (D-929). On Linux x86-64 and macOS.
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.

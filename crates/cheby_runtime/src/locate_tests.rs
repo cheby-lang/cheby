@@ -44,6 +44,8 @@ fn range(start: usize, len: u32, cheby_abi: bool, sites: Vec<CallSiteDesc>) -> C
         len,
         cheby_abi,
         sites,
+        name: None,
+        large_body: false,
     }
 }
 

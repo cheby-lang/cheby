@@ -31,7 +31,7 @@ A `run-pass` or `run-fail` test may have input files next to it, named like its 
 | `name.args`  | the program's arguments, one per line (an empty line is an empty argument), passed after `--`           |
 | `name.env`   | `KEY=VALUE` lines applied to the child's environment, in the format of an example's `env` file (D-1043) |
 
-Input is data, so it sits beside the test like a golden, and `cargo xtask bless` never writes it. A test of another mode with an input file is an error. For a package test the files sit beside the directory, as `name.stdin`, `name.args` and `name.env`. Every test without a `.env` file that sets it runs with `CHEBY_BACKTRACE` removed from its environment, so a developer's own setting never changes a golden (D-1043).
+Input is data, so it sits beside the test like a golden, and `cargo xtask bless` never writes it. A test of another mode with an input file is an error. For a package test the files sit beside the directory, as `name.stdin`, `name.args` and `name.env`. Every test without a `.env` file that sets it runs with `CHEBY_BACKTRACE` removed from its environment, so a developer's own setting never changes a golden (D-1043). The harness applies `name.env` after its own settings (`NO_COLOR`, `CHEBY_RT_POISON`, the cache), to `cheby` and to a build test's executable alike; it may not set `CHEBY_CACHE`, and a line that is not `KEY=VALUE` is an error of the test.
 
 ## Single-file tests
 

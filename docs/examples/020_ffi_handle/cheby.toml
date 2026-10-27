@@ -1,2 +1,5 @@
 name = "ffi_handle"
 version = "0.1.0"
+
+[native]
+sources = ["src/store_ffi.c"]

@@ -30,6 +30,7 @@ The standard library's sources in `std/` are embedded in the binary by `std_lib.
 | `frontend.rs`        | The build graph and the front-end phases                                                                                                                               |
 | `backend.rs`         | MIR lowering, code generation, constant evaluation and running                                                                                                         |
 | `borrowing.rs`       | Borrowing inference over a build's units and its records: facts and masks records, code keys (D-968, D-969)                                                            |
+| `code_cache.rs`      | K4c's code records: a JIT batch of every unit through its record, fresh or from the store, and the fresh records stored (D-914, D-1193)                                |
 | `cache/`             | The build cache (D-955 to D-965, D-973): the store, keys, location, trimming, `CHEBY_CACHE_LOG`; `front.rs`, front records; `replay.rs`, stored diagnostics; `index.rs`, package indexes |
 | `test.rs`            | `prepare_test`, `TestProgram` and `test_std`: `cheby test` (§13.6, D-541) and std's self-test                                                                          |
 | `session.rs`         | REPL sessions: checking each entry as the module `<repl:N>`, redefinition, `:module` and `:reload` (§13.5, D-606, D-625)                                               |

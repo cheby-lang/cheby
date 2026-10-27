@@ -28,6 +28,7 @@
 //!     pub fn tail_owned(&self, def: DefId) -> BorrowMask;
 //!     pub fn union(parts: &[&UnitFacts], defs: &Defs<'_>) -> Result<BuildFacts, Ice>;
 //!     pub fn about_module(&self, module: ModuleId, defs: &Defs<'_>) -> Result<Vec<u8>, Ice>;
+//!     pub fn with_parts(self, parts: &[&UnitFacts], defs: &Defs<'_>) -> Result<BuildFacts, Ice>;
 //! }
 //! pub fn collect_facts(units: &[&MirModule]) -> BuildFacts;
 //! pub struct UnitFacts { /* private */ }           // Clone Debug Default PartialEq Eq
@@ -35,10 +36,12 @@
 //!     pub fn encode(&self) -> Vec<u8>;
 //!     pub fn decode(bytes: &[u8]) -> Result<UnitFacts, Ice>;
 //!     pub fn callees_elsewhere(&self) -> Vec<String>;
+//!     pub fn callee_names(&self) -> Vec<(&str, &str)>;
 //!     pub fn values(&self) -> Vec<String>;
 //!     pub fn tail_owned(&self) -> Vec<(String, BorrowMask)>;
 //! }
 //! pub fn unit_facts(unit: &MirModule, defs: &Defs<'_>) -> Result<UnitFacts, Ice>;
+//! pub fn find_defs(names: &[(&str, &str)], defs: &Defs<'_>) -> Result<Vec<Option<DefId>>, Ice>;
 //! pub trait Eligibility {
 //!     fn is_private_item(&self, def: DefId) -> bool;
 //!     fn is_external_wrapper(&self, def: DefId) -> bool;
@@ -503,6 +506,17 @@ impl UnitFacts {
         self.values.iter().map(path_of).collect()
     }
 
+    /// The functions of other modules the unit calls, as (module path,
+    /// item) pairs, sorted: [`UnitFacts::callees_elsewhere`] unjoined, so a
+    /// caller can find each def ([`find_defs`]) and name its slot.
+    #[must_use]
+    pub fn callee_names(&self) -> Vec<(&str, &str)> {
+        self.foreign
+            .iter()
+            .map(|name| (&*name.module, &*name.item))
+            .collect()
+    }
+
     /// The positions the unit's tail calls into other modules fill with a
     /// non-constant, by `module::item` path.
     #[must_use]
@@ -640,6 +654,35 @@ impl<'d, 'a> Resolver<'d, 'a> {
     }
 }
 
+/// The def each (module path, item) of `names` names, as stored facts and
+/// masks records name functions ([`UnitFacts::callee_names`]; the builtin
+/// module as the empty path), or `None` where `defs` sees no such item or
+/// two (K4c: a record whose names no longer resolve is not used).
+///
+/// # Errors
+///
+/// An [`Ice`] if an interface's names cannot be read.
+pub fn find_defs(names: &[(&str, &str)], defs: &Defs<'_>) -> Result<Vec<Option<DefId>>, Ice> {
+    let mut resolver = Resolver::new(defs);
+    let mut out = Vec::with_capacity(names.len());
+    for &(module, item) in names {
+        let name = FactName {
+            module: module.into(),
+            item: item.into(),
+        };
+        let known = resolver
+            .modules
+            .get(module)
+            .is_some_and(|&id| defs.interface(id).is_some());
+        out.push(if known {
+            resolver.find(&name).ok()
+        } else {
+            None
+        });
+    }
+    Ok(out)
+}
+
 /// The canonical bytes of the masks' inputs about one module's functions
 /// ([`BuildFacts::about_module`]).
 const ABOUT_MODULE_VERSION: u8 = 1;
@@ -669,6 +712,20 @@ impl BuildFacts {
             facts.merge(own);
         }
         Ok(facts)
+    }
+
+    /// These facts with `parts` added (D-1191): the facts of a build some
+    /// of whose units were lowered ([`collect_facts`] over them) and the
+    /// others' stored facts, each name found through `defs`. A build that
+    /// loads a unit's code from the cache lowers nothing of it, so its facts
+    /// come from its facts record (K4c, D-1192).
+    ///
+    /// # Errors
+    ///
+    /// As [`BuildFacts::union`].
+    pub fn with_parts(mut self, parts: &[&UnitFacts], defs: &Defs<'_>) -> Result<Self, Ice> {
+        self.merge(Self::union(parts, defs)?);
+        Ok(self)
     }
 
     /// The facts the masks of `module`'s functions depend on, as canonical

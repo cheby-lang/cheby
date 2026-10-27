@@ -1138,6 +1138,11 @@ pub fn out_of_memory(bytes: u64) -> ! {
     // The system may have nothing left at all, not even for the report of
     // the panic or the memory-limit error: give it the reserve first.
     release_reserve();
+    // D-946: inside a user drop function no wrapper tests the flag after
+    // the call, so a failed allocation there is fatal (D-171).
+    if crate::ffi::in_drop_function() {
+        fatal(format_args!("{}", crate::ffi::OUT_OF_MEMORY_IN_DROP));
+    }
     crate::entry::check_budget(bytes);
     if crate::entry::current_ctx().is_none() {
         fatal(format_args!("{OUT_OF_MEMORY}"));

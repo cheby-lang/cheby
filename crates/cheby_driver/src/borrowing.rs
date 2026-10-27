@@ -21,12 +21,19 @@
 //!   key ([`code_keys::code_key`]), logged as a `key` line under
 //!   `CHEBY_CACHE_LOG` (D-973); K4c stores code records under them.
 //!
-//! D-1192: until K4c caches code, nothing
-//! reads a record to skip work. Every command still lowers and infers
-//! fresh, and writes the records behind the command (D-1138), at most once
-//! per process (D-1139). A record that hits is compared with the fresh
-//! result in a debug toolchain, and a difference is an internal error
-//! naming the module (D-1131's pattern). Std modules get no records (the
+//! Since K4c the records are read to skip work (D-1192): before it lowers
+//! anything, a command computes each package unit's identity from its
+//! hint and reads its facts record ([`plan`]); the units whose facts hit
+//! are lowered only if their masks record ([`stored_masks`]) or their code
+//! record misses, and every unit's code key is computed the same way
+//! whether it was lowered or not ([`unit_keys`]; `backend.rs`'s
+//! `lower_through_cache`). The records of the units a command lowers are
+//! written behind the command (D-1138), at most once per process (D-1139)
+//! ([`write_fresh`]). A record that hits for a unit lowered fresh is
+//! compared with the fresh result in a debug toolchain, and a difference is
+//! an internal error naming the module (D-1131's pattern); a unit loaded
+//! from its code record lowers nothing to compare
+//! (GAP(code-record-entries)). Std modules get no records (the
 //! build ID fixes std until K6), nor does the entries unit (D-964), nor a
 //! module without a front record (one with errors is never lowered,
 //! D-964). The records are artifacts (D-264, D-972): nothing in a key or a
@@ -46,6 +53,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use cheby_codegen_clif::record::CodeRecord;
 use cheby_codegen_clif::{CodegenOptions, mangle};
 use cheby_iface::{DepView, Ice, ModuleId, PackageId};
 use cheby_mir::borrow::{self, BorrowMask, BuildFacts, UnitFacts};
@@ -118,7 +126,22 @@ impl RecordSink {
         payload: &[u8],
         same: &dyn Fn(&[u8]) -> bool,
     ) -> Result<(), Ice> {
-        let stored = if self.reads {
+        self.record_known(artifact, subject, key, payload, same, false)
+    }
+
+    /// [`RecordSink::record`], without reading again when `known_miss`
+    /// says an earlier lookup of `key` in this command missed (K4c's
+    /// [`plan`]): the miss is logged and the payload written.
+    fn record_known(
+        &self,
+        artifact: &str,
+        subject: &str,
+        key: &Key,
+        payload: &[u8],
+        same: &dyn Fn(&[u8]) -> bool,
+        known_miss: bool,
+    ) -> Result<(), Ice> {
+        let stored = if self.reads && !known_miss {
             self.store.get_record(key)
         } else {
             None
@@ -141,6 +164,60 @@ impl RecordSink {
         }
         Ok(())
     }
+}
+
+impl RecordSink {
+    /// The code or tests record under `key` (K4c, D-1193,
+    /// GAP(code-record-entries)), unlogged: the caller logs one line per
+    /// unit ([`RecordSink::log_lookup`]). `read` is false when the command
+    /// bypasses code-record reads (`--reuse-report`,
+    /// GAP(reuse-report-bypasses-code-reads)); `CHEBY_DUMP_DIR` bypasses
+    /// every read (D-965). A record that hits is decoded with
+    /// `CodeRecord::decode`'s checks and nothing more, since no fresh
+    /// compile exists to compare (D-1131); one of another `RECORD_VERSION`,
+    /// or that does not decode, is a miss, and the command writes it again.
+    pub(crate) fn code_find(&self, key: &Key, read: bool) -> Option<CodeRecord> {
+        if !(read && self.reads) {
+            return None;
+        }
+        self.store
+            .get_record(key)
+            .and_then(|bytes| CodeRecord::decode(&bytes).ok())
+    }
+
+    /// Logs a lookup as `artifact subject hit|miss`
+    /// (GAP(code-record-log-lines), D-973): K4c's `code.<kind>` and
+    /// `tests.<kind>` lines, and the `facts` and `masks` hits of units the
+    /// command loads from the cache without lowering them.
+    pub(crate) fn log_lookup(&self, artifact: &str, subject: &str, hit: bool) {
+        self.log.record(artifact, subject, hit);
+    }
+
+    /// Stores `record` under `key`, behind the command (D-1138), at most
+    /// once per process (D-1139); a write that fails is skipped (D-1129).
+    pub(crate) fn code_store(&self, key: &Key, record: &CodeRecord) {
+        let _ = self.store.put_record(key, &record.encode());
+    }
+
+    /// Reads the lowering read-set hint `key` (D-955, D-1195): the module
+    /// paths it names, `None` without a hint or with one that does not
+    /// decode.
+    pub(crate) fn hint(&self, key: &Key) -> Option<Vec<String>> {
+        if !self.reads {
+            return None;
+        }
+        self.store
+            .get_hint(key)
+            .and_then(|bytes| crate::cache::front::decode_hint(&bytes))
+    }
+}
+
+/// The code keys of a lowering's package units (D-1193), by part and
+/// module.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct UnitKeys {
+    /// Each package unit's key.
+    pub keys: BTreeMap<(UnitPart, ModuleId), Key>,
 }
 
 /// The sink of `front`'s command, if it has a cache.
@@ -177,20 +254,65 @@ pub(crate) fn infer(
     unit_masks: &UnitMasks<'_>,
 ) -> Result<Inferred, Ice> {
     let facts = scope_facts(units);
-    let masks = masks_of(units, &facts, unit_masks)?;
+    infer_with(front, units, facts, &borrow::Masks::new(), unit_masks)
+}
+
+/// The facts of a build some of whose package units were not lowered
+/// because their code comes from the cache (K4c, D-1192's "read to skip
+/// work"): those of the lowered `units` ([`scope_facts`]) and the stored
+/// facts `stored` of the others, by name (D-1191). The union is the facts
+/// the whole build's lowering would give, since a facts record is keyed by
+/// what its unit's lowering reads.
+///
+/// # Errors
+///
+/// An [`Ice`] if a stored name names no def the build can see.
+pub(crate) fn build_facts(
+    front: &Frontend,
+    units: &[MirModule],
+    stored: &[&UnitFacts],
+) -> Result<BuildFacts, Ice> {
+    let facts = scope_facts(units);
+    if stored.is_empty() {
+        return Ok(facts);
+    }
+    let all = all_modules(front);
+    let view = DepView::new(&front.set, &all);
+    facts.with_parts(stored, &build_defs(front, &view))
+}
+
+/// [`infer`] with the build's facts `facts` ([`build_facts`]) and the
+/// stored masks `stored` of the package modules whose code units were not
+/// lowered (K4c): each lowered code unit's masks are inferred from the
+/// facts, and every lowered unit gets those and the stored ones.
+///
+/// # Errors
+///
+/// As [`infer`].
+pub(crate) fn infer_with(
+    front: &Frontend,
+    units: &mut [MirModule],
+    facts: BuildFacts,
+    stored: &borrow::Masks,
+    unit_masks: &UnitMasks<'_>,
+) -> Result<Inferred, Ice> {
+    let mut masks = masks_of(units, &facts, unit_masks)?;
     #[cfg(test)]
-    hook::check(front, units, &facts, &masks, unit_masks)?;
+    if stored.is_empty() {
+        hook::check(front, units, &facts, &masks, unit_masks)?;
+    }
     let inferred = Inferred::new(front, units, facts)?;
+    masks.extend(stored.iter().map(|(&def, &mask)| (def, mask)));
     let applied: Vec<Result<(), Ice>> = units
         .par_iter_mut()
         .map(|unit| borrow::apply(unit, &masks))
         .collect();
     applied.into_iter().collect::<Result<(), Ice>>()?;
-    Ok(inferred)
+    Ok(Inferred { masks, ..inferred })
 }
 
 /// Every code unit's masks under `facts`, merged.
-fn masks_of(
+pub(crate) fn masks_of(
     units: &[MirModule],
     facts: &BuildFacts,
     unit_masks: &UnitMasks<'_>,
@@ -212,6 +334,9 @@ fn masks_of(
 pub(crate) struct Inferred {
     facts: BuildFacts,
     parts: BTreeMap<(UnitPart, ModuleId), UnitFacts>,
+    /// The masks written into the units: inferred for the lowered code
+    /// units, stored for the others (K4c).
+    pub masks: borrow::Masks,
 }
 
 /// One package unit's own facts, by part and module.
@@ -247,7 +372,43 @@ impl Inferred {
                 parts.insert(at, f);
             }
         }
-        Ok(Self { facts, parts })
+        Ok(Self {
+            facts,
+            parts,
+            masks: borrow::Masks::new(),
+        })
+    }
+
+    /// The record inputs of a lowering without borrowing (`plain`, D-971):
+    /// each package unit's own facts, which name its callees for its code
+    /// key (K4c), and no masks. So a `plain` unit gets a facts record too,
+    /// where D-1192 gave it none, since a `plain` command computes its keys
+    /// before lowering from the stored facts (GAP(code-record-entries)).
+    ///
+    /// # Errors
+    ///
+    /// As [`Inferred::new`].
+    pub(crate) fn plain(front: &Frontend, units: &[MirModule]) -> Result<Self, Ice> {
+        Self::new(front, units, BuildFacts::default())
+    }
+
+    /// Adds the record inputs of `more`, units lowered after the others
+    /// because their stored code missed (K4c): their own facts, and their
+    /// masks `masks`.
+    pub(crate) fn extend(&mut self, more: Self, masks: &borrow::Masks) {
+        self.parts.extend(more.parts);
+        self.masks
+            .extend(masks.iter().map(|(&def, &mask)| (def, mask)));
+    }
+
+    /// The build's facts.
+    pub(crate) const fn facts(&self) -> &BuildFacts {
+        &self.facts
+    }
+
+    /// The own facts of the lowered package unit `part` of `module`.
+    pub(crate) fn part(&self, part: UnitPart, module: ModuleId) -> Option<&UnitFacts> {
+        self.parts.get(&(part, module))
     }
 }
 
@@ -288,7 +449,7 @@ fn recorded_unit(
 /// The build kind of a lowering of `roots` with `mir` (D-958): `plain`
 /// without borrowing (D-971, D-978), `test` for tests, `run` otherwise
 /// (`cheby run` and `cheby build`).
-fn build_kind(roots: &Roots<'_>, mir: MirOptions) -> BuildKind {
+pub(crate) fn build_kind(roots: &Roots<'_>, mir: MirOptions) -> BuildKind {
     if !mir.borrow {
         BuildKind::Plain
     } else if matches!(roots, Roots::Tests(_)) {
@@ -313,91 +474,268 @@ fn settings(kind: BuildKind, mir: MirOptions) -> Settings {
     }
 }
 
-/// Writes the borrowing records of a lowering and logs its code keys
-/// (module docs): for each package unit of `units` (counted, with the
-/// build's masks) whose module has a front record, its lowering hint and
-/// code identity from `reads`, its facts record and, for a code unit, its
-/// masks record when the build inferred masks (`inferred`), and its code
-/// key. Nothing without a cache.
+/// What a command knows of a package unit before it lowers it (K4c,
+/// D-1192's "read to skip work", D-955's two steps): its code identity
+/// from its lowering hint and, when the command reads code records, its
+/// stored facts.
+#[derive(Clone, Debug)]
+pub(crate) struct Planned {
+    /// The module's path.
+    pub path: String,
+    /// The module paths the unit's lowering hint names (D-955, D-1195),
+    /// empty without a hint.
+    pub hint: Vec<String>,
+    /// `C2` or `T2` over the hint's reads; `None` when a read it names has
+    /// no front record.
+    pub identity: Option<Key>,
+    /// The unit's facts record under `identity`, when the command read it
+    /// and it hit.
+    pub facts: Option<UnitFacts>,
+}
+
+/// Each package unit's [`Planned`], by part and module.
+pub(crate) type Plan = BTreeMap<(UnitPart, ModuleId), Planned>;
+
+/// What `front`'s command knows of each package unit of `parts` before it
+/// lowers any (K4c): its identity from its hint and, with `read`, its
+/// stored facts. A unit whose facts hit need not be lowered for the build's
+/// facts (D-1191); whether it is lowered at all is decided by its masks
+/// and code records. Nothing without a cache, nor for std or a module
+/// without a front record (D-964).
+pub(crate) fn plan(front: &Frontend, parts: &[(UnitPart, ModuleId)], read: bool) -> Plan {
+    let Some(sink) = sink(front) else {
+        return Plan::new();
+    };
+    let build = sink.store.build_id();
+    let planned: Vec<Option<((UnitPart, ModuleId), Planned)>> = parts
+        .par_iter()
+        .map(|&(part, module)| {
+            let info = front.modules.get(module)?;
+            if info.package != PackageId::LOCAL {
+                return None;
+            }
+            let path = info.path.to_string();
+            let keys = sink.modules.get(&path).copied()?;
+            let hint = sink
+                .hint(&code_keys::lreads_key(keys.f2, part, build))
+                .unwrap_or_default();
+            let named: Option<Vec<(String, Hash128)>> = hint
+                .iter()
+                .map(|p| sink.modules.get(p).map(|k| (p.clone(), k.interface)))
+                .collect();
+            let identity = named.map(|mut named| {
+                named.sort();
+                code_keys::code_identity(keys.f2, part, build, &named)
+            });
+            let facts = identity
+                .filter(|_| read && sink.reads)
+                .and_then(|id| sink.store.get_record(&code_keys::facts_key(id, build)))
+                .and_then(|bytes| unsealed(&bytes).and_then(|b| UnitFacts::decode(b).ok()));
+            Some((
+                (part, module),
+                Planned {
+                    path,
+                    hint,
+                    identity,
+                    facts,
+                },
+            ))
+        })
+        .collect();
+    planned.into_iter().flatten().collect()
+}
+
+/// A code unit's stored masks ([`stored_masks`]): the record, and each
+/// mask by def.
+#[derive(Clone, Debug)]
+pub(crate) struct StoredMasks {
+    /// The masks by item, as stored.
+    pub record: MasksRecord,
+    /// The same masks by def.
+    pub by_def: borrow::Masks,
+}
+
+/// The masks record of the code unit of `module`, which the command did not
+/// lower (K4c, D-1192's "read to skip work"): under its planned identity,
+/// the build kind and the digest of `facts` about the module (D-1191), each
+/// item found by def through `defs` ([`with_build_defs`]). `None` on a miss,
+/// without an identity, or when an item no longer names one def: the unit
+/// is then lowered.
+///
+/// # Errors
+///
+/// An [`Ice`] if the facts name a def `defs` cannot see.
+pub(crate) fn stored_masks(
+    front: &Frontend,
+    planned: &Planned,
+    module: ModuleId,
+    kind: BuildKind,
+    facts: &BuildFacts,
+    defs: &Defs<'_>,
+) -> Result<Option<StoredMasks>, Ice> {
+    let (Some(sink), Some(identity)) = (sink(front), planned.identity) else {
+        return Ok(None);
+    };
+    if !sink.reads {
+        return Ok(None);
+    }
+    let digest = Hash128::of(&facts.about_module(module, defs)?);
+    let key = code_keys::masks_key(identity, kind, digest, sink.store.build_id());
+    let Some(record) = sink
+        .store
+        .get_record(&key)
+        .and_then(|bytes| MasksRecord::decode(&bytes))
+    else {
+        return Ok(None);
+    };
+    let names: Vec<(&str, &str)> = record
+        .masks
+        .iter()
+        .map(|(item, _)| (planned.path.as_str(), item.as_str()))
+        .collect();
+    let found = borrow::find_defs(&names, defs)?;
+    let mut by_def = borrow::Masks::new();
+    for ((_, mask), def) in record.masks.iter().zip(found) {
+        let Some(def) = def else {
+            return Ok(None);
+        };
+        by_def.insert(def, *mask);
+    }
+    Ok(Some(StoredMasks { record, by_def }))
+}
+
+/// Calls `f` with the interfaces of the whole build, which name every def
+/// a unit, a facts record or a masks record can hold.
+pub(crate) fn with_build_defs<R>(front: &Frontend, f: impl FnOnce(&Defs<'_>) -> R) -> R {
+    let all = all_modules(front);
+    let view = DepView::new(&front.set, &all);
+    f(&build_defs(front, &view))
+}
+
+/// What [`write_fresh`] gives each package unit the command lowered.
+#[derive(Clone, Debug)]
+pub(crate) struct FreshUnit {
+    /// Its code identity from its hidden reads (D-955).
+    pub identity: Key,
+    /// A code unit's own masks by item (empty for a tests unit).
+    pub own: Vec<(String, BorrowMask)>,
+}
+
+/// The borrowing records of the package units a command lowered (K4b's
+/// records, D-1192, D-955; module docs): for each of `units` (counted, with
+/// the build's masks) whose module has a front record, its lowering hint,
+/// written when its hidden reads are not empty and rewritten empty when
+/// its planned hint named reads that are gone (D-1195), its code identity
+/// from `reads`, its facts record and, for a code unit of a build that
+/// `borrows`, its masks record, each looked up (a debug toolchain compares
+/// a hit with the fresh one), and written on a miss. A lookup that
+/// [`plan`] already made with the same key and that missed is not made
+/// again. Returns each unit's identity and own masks. Nothing without a
+/// cache.
 ///
 /// # Errors
 ///
 /// An [`Ice`] if a unit names a def it has no name for, or, in a debug
 /// toolchain, if a record that hits differs from the fresh one.
-pub(crate) fn write_records(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one lowering's units, reads, inference and plan, as `lower_scoped` holds them"
+)]
+pub(crate) fn write_fresh(
     front: &Frontend,
-    units: &[MirModule],
+    units: &[&MirModule],
     reads: &BTreeMap<ModuleId, UnitReads>,
-    inferred: Option<&Inferred>,
-    roots: &Roots<'_>,
-    mir: MirOptions,
-) -> Result<(), Ice> {
+    inferred: &Inferred,
+    kind: BuildKind,
+    borrows: bool,
+    plan: &Plan,
+    read: bool,
+) -> Result<BTreeMap<(UnitPart, ModuleId), FreshUnit>, Ice> {
     let Some(sink) = sink(front) else {
-        return Ok(());
+        return Ok(BTreeMap::new());
     };
-    let kind = build_kind(roots, mir);
-    let all = all_modules(front);
-    let view = DepView::new(&front.set, &all);
-    let writing = Writing {
-        front,
-        sink,
-        reads,
-        inferred,
-        kind,
-        settings: settings(kind, mir),
-        positions: mir.positions,
-        defs: build_defs(front, &view),
-    };
-    // Each unit's records are independent (the store takes puts from any
-    // thread, the log is sorted when the command ends), so they are
-    // written in parallel; the first error in unit order is reported.
-    let written: Vec<Result<(), Ice>> = units.par_iter().map(|unit| writing.unit(unit)).collect();
-    written.into_iter().collect()
+    with_build_defs(front, |defs| {
+        let writing = Writing {
+            front,
+            sink,
+            reads,
+            inferred,
+            kind,
+            borrows,
+            plan,
+            read,
+            defs,
+        };
+        // Each unit's records are independent (the store takes puts from
+        // any thread, the log is sorted when the command ends), so they are
+        // written in parallel; the first error in unit order is reported.
+        let written: Vec<Result<Option<FreshEntry>, Ice>> =
+            units.par_iter().map(|unit| writing.unit(unit)).collect();
+        let mut out = BTreeMap::new();
+        for result in written {
+            if let Some((at, fresh)) = result? {
+                out.insert(at, fresh);
+            }
+        }
+        Ok(out)
+    })
 }
 
-/// What [`write_records`] writes with, for each unit.
+/// One lowered package unit's [`FreshUnit`], by part and module.
+type FreshEntry = ((UnitPart, ModuleId), FreshUnit);
+
+/// What [`write_fresh`] writes with, for each unit.
 struct Writing<'a> {
     front: &'a Frontend,
     sink: &'a RecordSink,
     reads: &'a BTreeMap<ModuleId, UnitReads>,
-    inferred: Option<&'a Inferred>,
+    inferred: &'a Inferred,
     kind: BuildKind,
-    settings: Settings,
-    positions: bool,
-    defs: Defs<'a>,
+    borrows: bool,
+    plan: &'a Plan,
+    /// Whether [`plan`] looked up facts records.
+    read: bool,
+    defs: &'a Defs<'a>,
 }
 
 impl Writing<'_> {
-    /// The records and the code key of `unit`, if it gets them.
-    fn unit(&self, unit: &MirModule) -> Result<(), Ice> {
+    /// The records, identity and own masks of `unit`, if it gets them.
+    fn unit(&self, unit: &MirModule) -> Result<Option<FreshEntry>, Ice> {
         let (front, sink) = (self.front, self.sink);
         let build = sink.store.build_id();
         let Some((part, module)) = recorded_unit(front, sink, unit) else {
-            return Ok(());
+            return Ok(None);
         };
         let path = front.modules.try_get(module)?.path.to_string();
         let Some(keys) = sink.modules.get(&path).copied() else {
-            return Ok(());
+            return Ok(None);
         };
         let hidden = self.reads.get(&module).and_then(|r| match part {
             UnitPart::Code => r.code.as_ref(),
             UnitPart::Tests => r.tests.as_ref(),
         });
         let Some(hidden) = hidden else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(named) = named_reads(front, sink, hidden)? else {
-            return Ok(());
+            return Ok(None);
         };
-        if !named.is_empty() {
-            let paths: Vec<String> = named.iter().map(|(p, _)| p.clone()).collect();
-            // A failed write is skipped (D-1129).
+        let planned = self.plan.get(&(part, module));
+        let paths: Vec<String> = named.iter().map(|(p, _)| p.clone()).collect();
+        // D-1195: a hint is written when the reads are not empty, and a
+        // stale non-empty one is rewritten (empty) when they became empty.
+        // A failed write is skipped (D-1129).
+        if !paths.is_empty() || planned.is_some_and(|p| !p.hint.is_empty()) {
             let _ = sink.store.put_hint(
                 &code_keys::lreads_key(keys.f2, part, build),
                 &encode_hint(&paths),
             );
         }
         let identity = code_keys::code_identity(keys.f2, part, build, &named);
+        // The facts lookup `plan` made under this identity, if it missed.
+        let known_miss = self.read
+            && sink.reads
+            && planned.is_some_and(|p| p.identity == Some(identity) && p.facts.is_none());
         let subject = match part {
             UnitPart::Code => path.clone(),
             UnitPart::Tests => format!("{path}#tests"),
@@ -406,10 +744,8 @@ impl Writing<'_> {
             UnitPart::Code => own_masks(unit)?,
             UnitPart::Tests => Vec::new(),
         };
-        if let Some(inferred) = self.inferred
-            && let Some(facts) = inferred.parts.get(&(part, module))
-        {
-            sink.record(
+        if let Some(facts) = self.inferred.parts.get(&(part, module)) {
+            sink.record_known(
                 "facts",
                 &subject,
                 &code_keys::facts_key(identity, build),
@@ -419,9 +755,10 @@ impl Writing<'_> {
                         .and_then(|b| UnitFacts::decode(b).ok())
                         .is_some_and(|stored| &stored == facts)
                 },
+                known_miss,
             )?;
-            if part == UnitPart::Code {
-                let digest = Hash128::of(&inferred.facts.about_module(module, &self.defs)?);
+            if part == UnitPart::Code && self.borrows {
+                let digest = Hash128::of(&self.inferred.facts.about_module(module, self.defs)?);
                 let record = MasksRecord { masks: own.clone() };
                 sink.record(
                     "masks",
@@ -432,20 +769,109 @@ impl Writing<'_> {
                 )?;
             }
         }
-        let callees = callee_slots(front, unit, part, module)?;
+        Ok(Some(((part, module), FreshUnit { identity, own })))
+    }
+}
+
+/// One package unit's inputs to its code key ([`unit_keys`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KeyUnit<'a> {
+    /// The unit's part and module.
+    pub part: UnitPart,
+    /// Its module.
+    pub module: ModuleId,
+    /// Its code identity: fresh for a lowered unit, planned otherwise.
+    pub identity: Key,
+    /// For a code unit, its module's own masks by item; for a tests unit,
+    /// those of its module's code unit (GAP(tests-key-own-masks)).
+    pub own: &'a [(String, BorrowMask)],
+    /// Its facts: fresh for a lowered unit, stored otherwise.
+    pub facts: &'a UnitFacts,
+}
+
+/// The code key of each of `units` (D-1193), computed the same way whether
+/// the unit was lowered or not, so a key computed before lowering finds the
+/// record a cold command stored (K4c): the build ID, the settings of the
+/// build kind `kind` and `mir` (D-958), the positions switch (D-1173), the
+/// identity, the own masks, and the slot symbol, with the mask `masks`
+/// gives (D-1109), of each function of the package in another module that
+/// the unit's facts name as a callee (D-1191's facts list exactly a unit's
+/// callees in other modules). A tests unit's own module enters through its
+/// code unit's own masks rather than through its callees' slots, since its
+/// facts do not list callees of its own module (GAP(tests-key-own-masks)).
+/// [`log_keys`] logs them once they are final.
+///
+/// # Errors
+///
+/// An [`Ice`] if a name cannot be read.
+pub(crate) fn unit_keys(
+    front: &Frontend,
+    kind: BuildKind,
+    mir: MirOptions,
+    units: &[KeyUnit<'_>],
+    masks: &borrow::Masks,
+) -> Result<UnitKeys, Ice> {
+    let Some(sink) = sink(front) else {
+        return Ok(UnitKeys::default());
+    };
+    let build = sink.store.build_id();
+    let settings = settings(kind, mir);
+    let names: Vec<Vec<(&str, &str)>> = units.iter().map(|u| u.facts.callee_names()).collect();
+    let flat: Vec<(&str, &str)> = names.iter().flatten().copied().collect();
+    let found = with_build_defs(front, |defs| borrow::find_defs(&flat, defs))?;
+    let mut found = found.into_iter();
+    let mut keys = BTreeMap::new();
+    for (unit, names) in units.iter().zip(&names) {
+        let mut callees = BTreeSet::new();
+        for &(module, item) in names {
+            let Some(def) = found.next().flatten() else {
+                continue;
+            };
+            let local = front
+                .modules
+                .get(def.module)
+                .is_some_and(|info| info.package == PackageId::LOCAL);
+            if local && def.module != unit.module {
+                let name = cheby_mir::DefName {
+                    def,
+                    module: module.into(),
+                    item: item.into(),
+                };
+                let mask = masks.get(&def).copied().unwrap_or_default();
+                callees.insert(mangle::slot(&name, mask));
+            }
+        }
+        let callees: Vec<String> = callees.into_iter().collect();
         let key = code_keys::code_key(&CodeKeyInputs {
             build,
-            part,
-            settings: &self.settings,
-            positions: self.positions,
-            identity,
-            own: &own,
+            part: unit.part,
+            settings: &settings,
+            positions: mir.positions,
+            identity: unit.identity,
+            own: unit.own,
             callees: &callees,
         });
-        sink.log
-            .key(&format!("{}.{}", part.tag(), self.kind.tag()), &path, &key);
-        Ok(())
+        keys.insert((unit.part, unit.module), key);
     }
+    Ok(UnitKeys { keys })
+}
+
+/// Logs each of `keys` as a `key code.<kind>|tests.<kind> <module> <hex>`
+/// line (D-973, D-1193).
+///
+/// # Errors
+///
+/// An [`Ice`] if a key's module is unknown.
+pub(crate) fn log_keys(front: &Frontend, kind: BuildKind, keys: &UnitKeys) -> Result<(), Ice> {
+    let Some(sink) = sink(front) else {
+        return Ok(());
+    };
+    for (&(part, module), key) in &keys.keys {
+        let path = front.modules.try_get(module)?.path.to_string();
+        sink.log
+            .key(&format!("{}.{}", part.tag(), kind.tag()), &path, key);
+    }
+    Ok(())
 }
 
 /// The hidden reads `hidden` with their module paths and interface
@@ -480,33 +906,6 @@ fn own_masks(unit: &MirModule) -> Result<Vec<(String, BorrowMask)>, Ice> {
     }
     out.sort();
     Ok(out)
-}
-
-/// The slot symbols (D-1109: with the mask) of the callees whose masks
-/// `unit`'s code depends on, sorted: a code unit's callees of the package
-/// in other modules (D-787, D-812), a tests unit's callees of the package
-/// in any module.
-fn callee_slots(
-    front: &Frontend,
-    unit: &MirModule,
-    part: UnitPart,
-    module: ModuleId,
-) -> Result<Vec<String>, Ice> {
-    let mut out = BTreeSet::new();
-    for decl in &unit.callees {
-        let local = front
-            .modules
-            .get(decl.def.module)
-            .is_some_and(|info| info.package == PackageId::LOCAL);
-        let counts = match part {
-            UnitPart::Code => decl.def.module != module,
-            UnitPart::Tests => true,
-        };
-        if local && counts {
-            out.insert(mangle::slot(unit.name(decl.def)?, decl.sig.borrow));
-        }
-    }
-    Ok(out.into_iter().collect())
 }
 
 /// A test hook (D-686: keyed by thread in a static, never a

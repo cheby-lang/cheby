@@ -111,6 +111,7 @@ mod decls;
 mod error;
 mod func;
 pub mod isa;
+pub mod jit_unit;
 mod layout;
 #[cfg(test)]
 mod locs_tests;
@@ -124,6 +125,8 @@ mod unit;
 mod unwind;
 mod values;
 
+#[cfg(test)]
+mod modrec_names_tests;
 #[cfg(test)]
 mod positions_tests;
 #[cfg(test)]
@@ -316,6 +319,9 @@ pub struct DefinedCode {
     /// by offset, a row only where the line or column changes; empty with
     /// positions off and for code without MIR positions (shims).
     pub positions: Vec<SourceRow>,
+    /// D-1041: its display name in the module record, `None` for code
+    /// without one (N7b's `modrec::name_functions`).
+    pub name: Option<modrec::DisplayName>,
 }
 
 /// One row of a function's line table (D-938): the code from `offset` on,
@@ -371,6 +377,10 @@ pub fn define<M: Module>(
 /// # Errors
 ///
 /// A [`CodegenError`] if translation or compilation fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "N7b's one call that names the functions (D-1041) brings it to 101 lines"
+)]
 pub fn define_with_stats<M: Module>(
     module: &mut M,
     mirs: &[MirModule],
@@ -471,6 +481,7 @@ pub fn define_with_stats<M: Module>(
     for &(_, function, id, ref code) in &compiled {
         defined.push(defined_code(&*module, decls, function, id, code)?);
     }
+    modrec::name_functions(decls, mirs, &mut defined)?;
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
     // nothing.
@@ -644,6 +655,7 @@ fn defined_code<M: Module>(
         cheby_abi: code.cheby_abi,
         sites,
         positions,
+        name: None,
     })
 }
 

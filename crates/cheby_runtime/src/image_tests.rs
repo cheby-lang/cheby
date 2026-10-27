@@ -98,6 +98,8 @@ fn function(code: &'static [u8], sites: Vec<CallSiteEntry>) -> FunctionEntry {
         code: code.as_ptr(),
         len: u32::try_from(code.len()).unwrap(),
         flags: FN_CHEBY_ABI,
+        name: NO_STRING,
+        pad: 0,
         sites: table(sites),
     }
 }
@@ -316,9 +318,10 @@ fn image_rejects_malformed_records() {
         malformed(Some(0), "a call site's path")
     );
 
-    // Unknown function flags, and a function without code.
+    // Unknown function flags (bit 1 is `FN_LARGE_BODY` since version 3),
+    // and a function without code.
     let mut flagged = function(code(0x40), Vec::new());
-    flagged.flags = 2;
+    flagged.flags = 4;
     let flags = record(path_strings, vec![flagged], |_| {});
     assert_eq!(
         install(&image(&[flags])),
@@ -898,8 +901,9 @@ fn register(records: &[&'static ModuleRecord]) -> Result<u64, ImageError> {
 
 /// A record's external types are registered after its user layouts, in
 /// table order (D-1168), each a handle layout with
-/// its name and key, so a value prints as `<Db>` (D-233); an external type
-/// with a drop function is refused before anything is registered (D-703).
+/// its name and key, so a value prints as `<Db>` (D-233), and found by its
+/// key; an external type's drop function is registered with its layout
+/// (D-949).
 #[test]
 fn image_register_records_external_types_with_names_and_keys() {
     let externals = [
@@ -931,27 +935,41 @@ fn image_register_records_external_types_with_names_and_keys() {
         assert_eq!(&*found.name, name);
         assert_eq!(found.tag, 0);
     }
-    // A drop function: refused, nothing of either record registered.
-    let (good, good_words) = types_record(&shape_and_pair(), Vec::new(), &|_, _, _, _| {});
-    let (names, offsets) = strings(&["Db"]);
-    let bad = record(names, Vec::new(), |parts| {
+    for (name, key) in externals {
+        let id = layout::external_by_key(key).unwrap();
+        assert_eq!(&*layout::get(id).unwrap().type_name, name);
+        assert!(layout::get(id).unwrap().external_drop().is_none());
+    }
+    // D-949 (the old refusal of D-1168, rewritten): a drop function is
+    // registered with its type's layout, which the external handle kind's
+    // finalizer calls.
+    let key = layout::type_key("app::store", "DroppedDb");
+    let (names, offsets) = strings(&["DroppedDb"]);
+    let with_drop = record(names, Vec::new(), |parts| {
         parts.externals = table(vec![ExternalEntry {
             type_name: offsets[0],
             pad: 0,
-            type_key: externals[0].1,
-            drop: fn_value(),
+            type_key: key,
+            drop: drop_db_address(),
         }]);
     });
-    assert_eq!(
-        register(&[good, bad]),
-        Err(ImageError::Malformed {
-            module: Some(1),
-            what: "an external type's drop function, which this runtime does not register yet",
-        })
-    );
-    for &(layout_word, _) in good_words.iter().flatten() {
-        assert_eq!(read(layout_word), SENTINEL);
-    }
+    register(&[with_drop]).unwrap();
+    let info = layout::get(layout::external_by_key(key).unwrap()).unwrap();
+    assert_eq!(&*info.type_name, "DroppedDb");
+    let drop: layout::ExternalDrop = drop_db;
+    assert!(std::ptr::fn_addr_eq(info.external_drop().unwrap(), drop));
+}
+
+/// The drop function of the test's `DroppedDb` (D-949).
+unsafe extern "C" fn drop_db(_: *mut std::ffi::c_void) {}
+
+/// [`drop_db`]'s address, as a module record's external entry holds it.
+#[expect(
+    clippy::as_conversions,
+    reason = "taking the address of a function needs an `as` cast"
+)]
+fn drop_db_address() -> *const u8 {
+    drop_db as *const u8
 }
 
 /// A free-shape word that is not the one registration derives (D-907) is
@@ -1188,4 +1206,71 @@ fn image_register_records_owner_ranges_go_when_unregistered() {
     assert_eq!(locate_return(ra), None);
     assert_eq!(locate::owner_ranges(owner), Vec::new());
     assert_eq!(locate::range_at(ra), None);
+}
+
+/// D-1041: each range points at its function's name in the registered
+/// record, `NO_STRING` giving no name, with the inner-body flag (D-679,
+/// GAP(backtrace-record-layout)); a name out of range or flags beyond the
+/// two known bits are refused before anything is registered.
+#[test]
+fn image_register_records_names_ranges() {
+    use crate::image::FN_LARGE_BODY;
+    let (texts, offsets) = strings(&["src/main.cheby", "demo::check", "demo \"adds\"::{fn#0}"]);
+    let (check, closure, shim) = (code(0x20), code(0x20), code(0x20));
+    let named = |code, name, flags| FunctionEntry {
+        flags,
+        name,
+        ..function(code, Vec::new())
+    };
+    let r = record(
+        texts,
+        vec![
+            named(check, offsets[1], FN_CHEBY_ABI),
+            named(closure, offsets[2], FN_CHEBY_ABI | FN_LARGE_BODY),
+            named(shim, NO_STRING, FN_CHEBY_ABI),
+        ],
+        |_| {},
+    );
+    let owner = register(&[r]).unwrap();
+    let registered: Vec<(Option<String>, bool)> = locate::owner_ranges(owner)
+        .into_iter()
+        .map(|range| (range.name.map(|n| n.as_str().to_owned()), range.large_body))
+        .collect();
+    let mut want = vec![
+        (check.as_ptr().addr(), Some("demo::check".to_owned()), false),
+        (
+            closure.as_ptr().addr(),
+            Some("demo \"adds\"::{fn#0}".to_owned()),
+            true,
+        ),
+        (shim.as_ptr().addr(), None, false),
+    ];
+    want.sort_by_key(|&(start, ..)| start);
+    let want: Vec<(Option<String>, bool)> = want.into_iter().map(|(_, n, l)| (n, l)).collect();
+    assert_eq!(registered, want);
+    let (_, range) = locate::range_at(check.as_ptr().addr()).unwrap();
+    assert_eq!(
+        range.name.map(|n| n.as_str().to_owned()).as_deref(),
+        Some("demo::check")
+    );
+    locate::unregister_code(owner);
+
+    let (texts, _) = strings(&["demo::f"]);
+    let out_of_range = record(texts, vec![named(code(0x20), 999, FN_CHEBY_ABI)], |_| {});
+    assert_eq!(
+        register(&[out_of_range]),
+        Err(ImageError::Malformed {
+            module: Some(0),
+            what: "a function's name"
+        })
+    );
+    let (texts, offsets) = strings(&["demo::f"]);
+    let flags = record(texts, vec![named(code(0x20), offsets[0], 4)], |_| {});
+    assert_eq!(
+        register(&[flags]),
+        Err(ImageError::Malformed {
+            module: Some(0),
+            what: "unknown function flags"
+        })
+    );
 }

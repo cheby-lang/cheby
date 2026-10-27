@@ -822,10 +822,12 @@ fn static_objects_and_function_values() {
     }
 }
 
-/// A static is defined once per JIT: a later batch whose unit names the
-/// same symbol, `cb$desc$geo$Point`, uses the first batch's object; the
-/// second batch repeats `g`'s shim, which is not defined again either, and
-/// its function value still calls `g` (D-523).
+/// A static of the same symbol in two batches, `cb$desc$geo$Point`: since
+/// K4c every unit is compiled alone into a code record, and a record's
+/// statics and shims are local copies, declared anonymously when it is
+/// loaded (D-914, D-918), so the second batch has its own copy with the
+/// first's contents, and its copy of `g`'s shim still calls `g` through
+/// `g`'s slot (D-523's rule holds within one record).
 #[test]
 fn a_static_is_defined_once_across_batches() {
     let batch = |index: u32| {
@@ -867,8 +869,13 @@ fn a_static_is_defined_once_across_batches() {
     jit.compile(&second).unwrap();
     let a = returned(run_const(&jit, one));
     let b = returned(run_const(&jit, two));
-    assert_eq!(a, b);
-    assert_eq!(layout_of(a), abi::layout::DESC_NOMINAL);
+    assert_ne!(a, b, "each record has its own copy (D-918)");
+    for copy in [a, b] {
+        assert_eq!(layout_of(copy), abi::layout::DESC_NOMINAL);
+        assert_eq!(rc_of(copy), abi::RC_STATIC);
+        assert_eq!(text_of(read_word(copy, 8)), "Point");
+        assert_eq!(text_of(read_word(copy, 16)), "geo");
+    }
     assert_eq!(
         returned(run_const(&jit, via_fnval.unwrap())),
         abi::tag_int(42).unwrap()

@@ -1,0 +1,24 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-947, D-1040, D-1039
+//! With `CHEBY_BACKTRACE=1`, the panic of a NULL result from a package's C
+//! function lists the frames that called it: the `@external` function at
+//! its declaration, then each caller at its call (§12.5.1, §11.6). The
+//! check runs in runtime code, but its walk starts at the generated
+//! wrapper's frame, not at the no-frames line. GAP(ffi-null-backtrace-start).
+
+import std::io
+
+@external(native, "app_name")
+fn name() -> String
+
+fn greeting() -> String {
+  let text = name()
+  "hello " + text
+}
+
+fn main() {
+  io::println("before")
+  let shown = greeting()
+  io::println(shown)
+}

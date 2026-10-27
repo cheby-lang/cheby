@@ -142,7 +142,7 @@ unsafe fn spawn(
     let slot = match scope.join() {
         Membership::Ended => {
             drop(handle);
-            raise_panic(
+            crate::unwind::raise::raise_panic_from_wait(
                 Some(ctx),
                 PanicKind::Explicit,
                 Some("spawn into a scope that has ended"),

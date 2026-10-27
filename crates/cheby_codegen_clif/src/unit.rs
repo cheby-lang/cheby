@@ -2,8 +2,11 @@
 //! that holds nothing else, so its code record stands alone and any
 //! program that needs the module reuses it (D-914, ADR-0047).
 //!
-//! The JIT's batches ([`crate::declare`], [`crate::define`]) never take
-//! this path; they keep their one-module mode.
+//! Every host takes this path since K4c: `cheby build` (`aot.rs`) and every
+//! JIT, which loads the units' code records (D-914,
+//! [`crate::jit_unit`]). The one-module mode of [`crate::declare`] and
+//! [`crate::define`] remains for the dumps' tests and tools that compile a
+//! batch into one module.
 
 use cranelift_module::Module;
 use rustc_hash::FxHashSet;
@@ -74,6 +77,21 @@ pub fn compile_unit<M: Module>(
     ucx: &UnitCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<UnitCode, CodegenError> {
+    compile_unit_with(module, unit, ucx, None, opts).map(|(code, _)| code)
+}
+
+/// [`compile_unit`], with what a JIT that holds earlier batches tells the
+/// unit (`seed`, K4c), returning also what its loader needs
+/// ([`crate::decls::IndexParts`]). With a seed, the module record lists
+/// neither the types whose layouts the seed names nor the external types
+/// it says are registered: an earlier batch registered them (D-1169).
+pub(crate) fn compile_unit_with<M: Module>(
+    module: &mut M,
+    unit: &MirModule,
+    ucx: &UnitCx<'_>,
+    seed: Option<&crate::jit_unit::Seed>,
+    opts: &CodegenOptions,
+) -> Result<(UnitCode, crate::decls::IndexParts), CodegenError> {
     // The unit's own items that another unit may name: those whose
     // function is global hidden (D-1110). Asked once
     // per item, in function order; the set is only looked up.
@@ -85,14 +103,28 @@ pub fn compile_unit<M: Module>(
             named.insert(def);
         }
     }
-    let mut decls = crate::Decls::new_alone(module.isa(), named)?;
+    let mut decls = match seed {
+        Some(seed) => crate::Decls::new_seeded(module.isa(), named, seed)?,
+        None => crate::Decls::new_alone(module.isa(), named)?,
+    };
     let cx = crate::CodegenCx {
         layouts: &NoLayoutIds,
     };
     let units = std::slice::from_ref(unit);
     crate::declare(module, &mut decls, units, &cx, opts)?;
     let (clif, stats, defined) = crate::define_with_stats(module, units, &mut decls, &cx, opts)?;
-    let types = crate::modrec::record_types(unit, &decls)?;
+    let mut types = crate::modrec::record_types(unit, &decls)?;
+    let mut externals = unit.externals.clone();
+    if let Some(seed) = seed {
+        let seeded = &decls.seeded_layouts;
+        types.retain(|ty| {
+            !unit
+                .layouts
+                .iter()
+                .any(|desc| desc.type_def == ty.def && seeded.contains(&desc.layout))
+        });
+        externals.retain(|external| !seed.externals.contains(&external.def));
+    }
     let mut consts = Vec::new();
     for function in &unit.functions {
         if let FnKey::ConstInit(def) = function.key {
@@ -102,14 +134,18 @@ pub fn compile_unit<M: Module>(
             consts.push((unit.name(def)?.path(), slot));
         }
     }
-    Ok(UnitCode {
-        defined,
-        stats,
-        clif,
-        types,
-        externals: unit.externals.clone(),
-        consts,
-    })
+    let parts = decls.index_parts();
+    Ok((
+        UnitCode {
+            defined,
+            stats,
+            clif,
+            types,
+            externals,
+            consts,
+        },
+        parts,
+    ))
 }
 
 /// The layout ids of a unit alone: none. Its layout words and `cb$ctor$`

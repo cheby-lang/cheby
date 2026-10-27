@@ -325,6 +325,11 @@ pub struct ExternalDesc {
     pub name: Box<str>,
     /// D-559's key of the module path and the type's bare name.
     pub type_key: u64,
+    /// The type's native drop function, `void f(void *handle)`
+    /// (`@external(native, "f")` on the type, D-949): what the module
+    /// record's external entry points to (D-1168), filled by the driver
+    /// after lowering from the resolved module; `None` without one.
+    pub drop: Option<Box<str>>,
 }
 
 /// Std's handle types (D-647, D-982): external types of their modules
@@ -368,6 +373,7 @@ pub fn module_externals(module: ModuleId, defs: &Defs<'_>) -> Result<Vec<Externa
             def,
             type_key: type_key(&path.module, &path.item),
             name: path.item,
+            drop: None,
         });
     }
     Ok(out)

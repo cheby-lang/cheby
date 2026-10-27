@@ -242,56 +242,6 @@ pub const PLANNED_STD_MODULES: &[&str] = &["context", "process"];
 /// since (D-728). An entry's comment names what its test needs and the
 /// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // The public `fiber::cancel` and `fiber::race` come with S5 (D-1060,
-    // D-1061).
-    (
-        "fiber",
-        "cancel stops the fibers of a scope but not its body",
-        "M3",
-    ),
-    ("fiber", "fibers spawned after cancel run normally", "M3"),
-    (
-        "fiber",
-        "a fiber that cancels its own scope unwinds at once",
-        "M3",
-    ),
-    (
-        "fiber",
-        "joining a fiber that cancel reached fails the scope",
-        "M3",
-    ),
-    (
-        "fiber",
-        "race returns the first value and cancels the rest",
-        "M3",
-    ),
-    ("fiber", "race of no contenders is None", "M3"),
-    ("fiber", "a panic before the race is decided fails it", "M3"),
-    // `http.md`'s tests that start a server with `http::serve` or
-    // `http::serve_on`, which come with S5 (D-728, D-1012); the client's
-    // own tests are in `std/http.cheby` against fake servers over
-    // `std::net` (D-990).
-    ("http", "a server answers a client over loopback", "M3"),
-    (
-        "http",
-        "redirects are followed, and a loop of them ends",
-        "M3",
-    ),
-    ("http", "the client encodes a URL as fetch does", "M3"),
-    ("http", "send carries a method, headers and a body", "M3"),
-    ("http", "serve rejects a port out of range", "M3"),
-    ("http", "segments and query are decoded", "M3"),
-    (
-        "http",
-        "a handler that panics gives that request a 500 and nothing else",
-        "M3",
-    ),
-    ("http", "closing the listener stops serve_on", "M3"),
-    (
-        "http",
-        "https to a server that does not speak TLS is a TLS failure",
-        "M3",
-    ),
     // `io::Source`, `io::Sink`, `copy` and `other`, S7 (D-1072). The `copy`
     // test also needs S3's `file::with_temp_dir`, so it lives in
     // `std/file.cheby`.

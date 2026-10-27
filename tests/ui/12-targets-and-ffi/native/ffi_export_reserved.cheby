@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @milestone: M3
+// @decisions: D-1204, D-944, D-945
+//! The functions of `cheby.h` are names the runtime exports, so binding one
+//! outside std is E0055, as for a std kernel (§12.5, §12.5.1): C code calls
+//! them, Cheby code does not.
+
+@!target(native)
+
+@external(native, "cheby_ffi_dup")
+pub fn dup(text: String) -> String

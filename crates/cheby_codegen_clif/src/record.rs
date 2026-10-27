@@ -76,7 +76,8 @@ use crate::{CodegenError, SourceRow};
 
 /// The version of [`CodeRecord`]'s encoding. A record of another version
 /// is refused, never read. Version 2 holds the source positions of D-938.
-pub const RECORD_VERSION: u32 = 2;
+/// Version 3 (D-1041) holds the module records' function names.
+pub const RECORD_VERSION: u32 = 3;
 
 /// The first bytes of an encoded record.
 const MAGIC: [u8; 4] = *b"cbcr";
@@ -563,6 +564,20 @@ impl RecordingModule {
         }
     }
 
+    /// The symbol index of the function `func`, if it was declared.
+    pub(crate) fn func_symbol(&self, func: FuncId) -> Option<u32> {
+        self.funcs
+            .get(usize::try_from(func.as_u32()).ok()?)
+            .copied()
+    }
+
+    /// The symbol index of the data object `data`, if it was declared.
+    pub(crate) fn data_symbol(&self, data: DataId) -> Option<u32> {
+        self.datas
+            .get(usize::try_from(data.as_u32()).ok()?)
+            .copied()
+    }
+
     fn symbol_name(&self, symbol: u32) -> String {
         usize::try_from(symbol)
             .ok()
@@ -787,18 +802,34 @@ pub fn record_unit(
     ucx: &crate::UnitCx<'_>,
     opts: &crate::CodegenOptions,
 ) -> Result<CodeRecord, RecordError> {
+    if unit.unit == cheby_mir::UnitKind::Entries {
+        return Err(RecordError::Unsupported(
+            "the entries unit, which is never cached (D-964)".into(),
+        ));
+    }
+    crate::jit_unit::record_with(isa, unit, ucx, None, opts).map(|compiled| compiled.record)
+}
+
+/// `unit` compiled alone into a fresh recording module: its module record
+/// for a code or tests unit (none for an entries unit, D-1107), its
+/// source positions (D-938), and what [`crate::jit_unit::record_for_jit`]
+/// gives besides the record.
+pub(crate) fn record_into(
+    mut module: RecordingModule,
+    unit: &cheby_mir::MirModule,
+    ucx: &crate::UnitCx<'_>,
+    seed: Option<&crate::jit_unit::Seed>,
+    opts: &crate::CodegenOptions,
+) -> Result<(CodeRecord, RecordedUnit), RecordError> {
     let name = match unit.unit {
-        cheby_mir::UnitKind::Code(_) => crate::mangle::module_record(&unit.path),
-        cheby_mir::UnitKind::Tests(_) => crate::mangle::tests_module_record(&unit.path),
-        cheby_mir::UnitKind::Entries => {
-            return Err(RecordError::Unsupported(
-                "the entries unit, which is never cached (D-964)".into(),
-            ));
-        }
+        cheby_mir::UnitKind::Code(_) => Some(crate::mangle::module_record(&unit.path)),
+        cheby_mir::UnitKind::Tests(_) => Some(crate::mangle::tests_module_record(&unit.path)),
+        cheby_mir::UnitKind::Entries => None,
     };
-    let mut module = RecordingModule::new(isa);
-    let code = crate::compile_unit(&mut module, unit, ucx, opts)?;
-    crate::modrec::define_unit(&mut module, &name, &code)?;
+    let (code, parts) = crate::unit::compile_unit_with(&mut module, unit, ucx, seed, opts)?;
+    if let Some(name) = &name {
+        crate::modrec::define_unit(&mut module, name, &code)?;
+    }
     // D-938: the rows of each function, and the unit's file once, when it
     // has any. A unit whose file has no diagnostic path (D-421; a file
     // outside the package would show an absolute one) keeps no rows, so no
@@ -815,7 +846,26 @@ pub fn record_unit(
             module.set_source(Some(source));
         }
     }
-    module.finish()
+    let mut index = crate::jit_unit::index_of(&module, &parts)?;
+    if name.is_some() {
+        index.externals = code.externals.iter().map(|external| external.def).collect();
+    }
+    let record = module.finish()?;
+    Ok((
+        record,
+        RecordedUnit {
+            index,
+            clif: code.clif,
+            stats: code.stats,
+        },
+    ))
+}
+
+/// What [`record_into`] gives besides the record.
+pub(crate) struct RecordedUnit {
+    pub(crate) index: crate::jit_unit::UnitIndex,
+    pub(crate) clif: Vec<String>,
+    pub(crate) stats: crate::DefineStats,
 }
 
 /// The code of a relocation kind in the encoding, `None` for a kind a

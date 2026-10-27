@@ -395,6 +395,107 @@ fn unwind_only_blocks(func: &Function) -> Result<Vec<bool>, CodegenError> {
         .collect())
 }
 
+/// Writes into the module record `desc` the drop function of each external
+/// type of `externals` that has one (D-949, D-1168,
+/// GAP(external-drop-in-records)): the `drop` word of its entry, at
+/// `entries + n * entry_size + drop_offset`, becomes a data relocation to
+/// the C function, declared with `Linkage::Import` as foreign symbols are
+/// under `ForeignImport::Address` (a function the module already declares
+/// keeps its declaration). The JIT resolves it as it resolves the package
+/// library's symbols (D-941); a link resolves it in the package's C
+/// objects. A type without one keeps its 0 (`modrec.rs`).
+///
+/// # Errors
+///
+/// The module's error if the declaration conflicts with an earlier one;
+/// an internal error if an offset overflows.
+pub(crate) fn write_external_drops<M: cranelift_module::Module>(
+    module: &mut M,
+    desc: &mut cranelift_module::DataDescription,
+    entries: u32,
+    entry_size: u32,
+    drop_offset: u32,
+    externals: &[cheby_mir::layout::ExternalDesc],
+) -> Result<(), CodegenError> {
+    use cranelift_module::{FuncOrDataId, Linkage};
+    let overflow = || CodegenError::ice("an external entry's offset overflows");
+    for (n, external) in externals.iter().enumerate() {
+        let Some(symbol) = external.drop.as_deref() else {
+            continue;
+        };
+        let n = u32::try_from(n).map_err(|_| overflow())?;
+        let offset = n
+            .checked_mul(entry_size)
+            .and_then(|at| at.checked_add(entries))
+            .and_then(|at| at.checked_add(drop_offset))
+            .ok_or_else(overflow)?;
+        match module.get_name(symbol) {
+            Some(FuncOrDataId::Func(id)) => {
+                let func = module.declare_func_in_data(id, desc);
+                desc.write_function_addr(offset, func);
+            }
+            Some(FuncOrDataId::Data(id)) => {
+                let data = module.declare_data_in_data(id, desc);
+                desc.write_data_addr(offset, data, 0);
+            }
+            None => {
+                let id = module
+                    .declare_data(symbol, Linkage::Import, false, false)
+                    .map_err(|e| CodegenError::module(&e))?;
+                let data = module.declare_data_in_data(id, desc);
+                desc.write_data_addr(offset, data, 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether statement `i` of `stmts` is a non-blocking foreign call whose
+/// result a later statement of the block, after nothing but `dup`s and
+/// `drop`s, hands to `cheby_rt_ffi_value` or `cheby_rt_ffi_external` (as
+/// the wrapper of a package's `@external(native, …)` does, `cheby_mir`'s
+/// `lower/external.rs`). Such a call gets no flag test of its own: the
+/// helper tests the flag, so after a failed `cheby_ffi_` allocation it
+/// releases the foreign result before the wrapper unwinds (D-946), which
+/// the call's own edge could not, since a pad never uses the result of the
+/// instruction that unwinds to it. The `drop`s in between release
+/// arguments, which an unwinding releases too. A REPL generation's name
+/// of a helper (`<helper>$cheby$gen<n>`, D-1197) counts as the helper.
+fn ffi_checked_later(stmts: &[Stmt], i: usize) -> bool {
+    let Some(Stmt::Assign {
+        dst,
+        value: Rvalue::CallForeign {
+            blocking: false, ..
+        },
+    }) = stmts.get(i)
+    else {
+        return false;
+    };
+    let helper = |symbol: &str| {
+        [abi::sym::FFI_VALUE, abi::sym::FFI_EXTERNAL]
+            .iter()
+            .any(|name| {
+                symbol
+                    .strip_prefix(name)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("$cheby$gen"))
+            })
+    };
+    for stmt in stmts.iter().skip(i.saturating_add(1)) {
+        match stmt {
+            Stmt::Dup(_) | Stmt::Drop(_) => {}
+            Stmt::Assign {
+                value: Rvalue::CallForeign { symbol, args, .. },
+                ..
+            }
+            | Stmt::Eval(Rvalue::CallForeign { symbol, args, .. }) => {
+                return helper(symbol) && args.get(1) == Some(&Operand::Local(*dst));
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// `bits` truncated to the width of `ty`, as Cranelift wants an `iconst`
 /// immediate of a narrow type.
 pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
@@ -472,6 +573,12 @@ impl Translator<'_, '_> {
             };
             for (i, stmt) in block.stmts.iter().enumerate() {
                 self.pad = pad_of(i, self).transpose()?;
+                if self.pad.is_some() && ffi_checked_later(&block.stmts, i) {
+                    // D-946, GAP(ffi-flag-after-the-helper): the helper that
+                    // takes this foreign call's result tests the flag after it
+                    // (`ffi_checked_later`).
+                    self.pad = None;
+                }
                 // D-938: every instruction a statement emits at its
                 // position.
                 self.set_pos(block.pos_at(i));

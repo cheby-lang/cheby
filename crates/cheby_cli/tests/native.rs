@@ -285,3 +285,182 @@ fn native_cc_missing_cc_is_a_tool_error() {
     );
     assert_eq!(run.status, Some(1));
 }
+
+/// C code that builds and reads Cheby values through `cheby.h` (D-945,
+/// D-187): strings (invalid UTF-8 replaced, D-311), lists, options,
+/// results, and one write through the runtime's stream (D-951).
+const VALUES_C: &str = r#"#include <cheby.h>
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+cheby_value *app_greet(cheby_value *name) {
+    size_t len = 0;
+    const char *bytes = cheby_ffi_string_bytes(name, &len);
+    char *text = malloc(len + 7);
+    if (text == NULL) {
+        return NULL;
+    }
+    memcpy(text, "hello, ", 7);
+    memcpy(text + 7, bytes, len);
+    cheby_value *out = cheby_ffi_string_new(text, len + 7);
+    free(text);
+    return out;
+}
+
+cheby_value *app_numbers(int64_t n) {
+    cheby_value *items[16];
+    size_t count = n < 0 ? 0 : n > 16 ? 16 : (size_t)n;
+    for (size_t i = 0; i < count; i++) {
+        items[i] = cheby_ffi_int_new((int64_t)i + 1);
+    }
+    return cheby_ffi_list_new(items, count);
+}
+
+cheby_value *app_first(cheby_value *items) {
+    if (cheby_ffi_list_length(items) == 0) {
+        return cheby_ffi_none();
+    }
+    return cheby_ffi_some(cheby_ffi_dup(cheby_ffi_list_get(items, 0)));
+}
+
+cheby_value *app_parse(cheby_value *text) {
+    size_t len = 0;
+    const char *bytes = cheby_ffi_string_bytes(text, &len);
+    int64_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (bytes[i] < '0' || bytes[i] > '9') {
+            static const char message[] = "not a number";
+            return cheby_ffi_err(cheby_ffi_string_new(message, sizeof message - 1));
+        }
+        n = n * 10 + (bytes[i] - '0');
+    }
+    return cheby_ffi_ok(cheby_ffi_int_new(n));
+}
+
+cheby_value *app_invalid(void) {
+    return cheby_ffi_string_new("a\xff" "b", 3);
+}
+
+void app_say(cheby_value *line) {
+    size_t len = 0;
+    const char *bytes = cheby_ffi_string_bytes(line, &len);
+    cheby_ffi_write_stdout(bytes, len);
+}
+"#;
+
+/// The module that binds [`VALUES_C`]: `main` prints what C builds, and C's
+/// output comes between two `io::println` lines, also in a test.
+const VALUES_MAIN: &str = r#"//! Cheby values built and read by C code.
+
+import std::io
+
+@external(native, "app_greet")
+fn greet(name: String) -> String
+
+@external(native, "app_numbers")
+fn numbers(n: Int) -> List<Int>
+
+@external(native, "app_first")
+fn first(items: List<String>) -> Option<String>
+
+@external(native, "app_parse")
+fn parse(text: String) -> Result<Int, String>
+
+@external(native, "app_invalid")
+fn invalid() -> String
+
+@external(native, "app_say")
+fn say(line: String)
+
+fn main() {
+  let hello = greet("C")
+  io::println(hello)
+  let listed = numbers(3)
+  io::println("{listed:?}")
+  let some = first(["a", "b"])
+  let none = first([])
+  io::println("{some:?} {none:?}")
+  let good = parse("42")
+  let bad = parse("4x")
+  io::println("{good:?} {bad:?}")
+  let replaced = invalid()
+  io::println(replaced)
+  io::println("one")
+  say("two\n")
+  io::println("three")
+}
+
+test "C output is captured in order" {
+  io::println("one")
+  say("two\n")
+  io::println("three")
+  assert False
+}
+"#;
+
+/// What [`VALUES_MAIN`]'s `main` prints.
+const VALUES_OUT: &str = "hello, C\n[1, 2, 3]\nSome(\"a\") None\nOk(42) Err(\"not a number\")\n\
+                          a\u{fffd}b\none\ntwo\nthree\n";
+
+/// The values package in `dir/app`.
+fn values_package(dir: &Path) -> PathBuf {
+    package(
+        dir,
+        "app",
+        &[
+            (
+                "cheby.toml",
+                "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n\n\
+                 [native]\nsources = [\"src/values.c\"]\n",
+            ),
+            ("src/values.c", VALUES_C),
+            ("src/main.cheby", VALUES_MAIN),
+        ],
+    )
+}
+
+/// D-945, D-187, D-311: C code builds and reads strings, lists, options
+/// and results through `cheby.h`'s functions, the same under `cheby run`
+/// (through the forwarder's table, D-941) and in an executable (the
+/// runtime archive's definitions), and nothing leaks (the debug leak
+/// check, D-710).
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn native_ffi_values_round_trip() {
+    let tmp = FreshDir::create("cheby-native-ffi-values").unwrap();
+    let root = values_package(tmp.path());
+    let run = cheby(&root, &["run"], &[], None);
+    assert_eq!(run.stderr, "");
+    assert_eq!(run.stdout, VALUES_OUT);
+    assert_eq!(run.status, Some(0));
+    let exe = tmp.path().join("exe").join("app");
+    let build = cheby(&root, &["build", "-o", exe.to_str().unwrap()], &[], None);
+    assert_eq!(build.status, Some(0), "{}", build.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stderr, "");
+    assert_eq!(ran.stdout, VALUES_OUT);
+    assert_eq!(ran.status, Some(0));
+}
+
+/// D-951, D-684: `cheby_ffi_write_stdout` writes once through the
+/// runtime's stream, in order with `io::println` under `cheby run`, in an
+/// executable, and inside `cheby test`'s capture of the test that wrote it.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn native_ffi_output_order() {
+    let tmp = FreshDir::create("cheby-native-ffi-order").unwrap();
+    let root = values_package(tmp.path());
+    let run = cheby(&root, &["run"], &[], None);
+    assert!(run.stdout.ends_with("one\ntwo\nthree\n"), "{}", run.stdout);
+    let exe = tmp.path().join("exe").join("app");
+    let build = cheby(&root, &["build", "-o", exe.to_str().unwrap()], &[], None);
+    assert_eq!(build.status, Some(0), "{}", build.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert!(ran.stdout.ends_with("one\ntwo\nthree\n"), "{}", ran.stdout);
+    let test = cheby(&root, &["test"], &[], None);
+    assert_eq!(test.status, Some(1), "{}{}", test.stdout, test.stderr);
+    let all = format!("{}{}", test.stdout, test.stderr);
+    assert!(all.contains("one\ntwo\nthree\n"), "{all}");
+}

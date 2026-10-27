@@ -42,8 +42,10 @@
 //! A run test may also have input beside it (D-543, [`RunInput`]):
 //! `<name>.stdin` is fed to `cheby run` as standard input, byte for byte
 //! (without it standard input is null), and `<name>.args` holds the
-//! program's arguments, one per line, passed after `--`. Other modes may
-//! not have them.
+//! program's arguments, one per line, passed after `--`. `<name>.env`
+//! holds variables for the child's environment, `KEY=VALUE` lines in the
+//! format of an example's `env` file ([`UiTest::env`], D-1043). Other modes
+//! may not have them.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -288,6 +290,34 @@ impl UiTest {
         Ok(RunInput { stdin, args })
     }
 
+    /// `<name>.env` beside the test (D-1043): `KEY=VALUE` lines in an
+    /// example's `env` format, empty lines skipped; empty without the file.
+    /// The harness applies it to the child after its own settings (`NO_COLOR`,
+    /// `CHEBY_RT_POISON`, the cache), so it may override them but
+    /// `CHEBY_CACHE` ([`ENV_RESERVED`]); GAP(ui-env-precedence).
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the file if it cannot be read, a line is not
+    /// `KEY=VALUE` with a non-empty key, or a line sets a reserved variable.
+    pub fn env(&self) -> Result<Vec<(String, String)>, String> {
+        let path = self.golden("env");
+        let Some(text) = crate::golden::read(&path)? else {
+            return Ok(Vec::new());
+        };
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| match line.split_once('=') {
+                Some((key, _)) if ENV_RESERVED.contains(&key) => Err(format!(
+                    "{}: `{key}` is the harness's own and cannot be set by a test",
+                    path.display()
+                )),
+                Some((key, value)) if !key.is_empty() => Ok((key.to_owned(), value.to_owned())),
+                _ => Err(format!("{}: `{line}` is not KEY=VALUE", path.display())),
+            })
+            .collect()
+    }
+
     /// Whether the test runs JIT-compiled code (D-545), so that it is
     /// ignored where programs do not run ([`crate::platform`]). A run test
     /// does. A check test does unless its `.stderr` golden holds an error
@@ -328,8 +358,13 @@ impl UiTest {
 /// code; counting it here only ignores a few more tests on Windows.
 const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
 
-/// The extensions of the input files of a run test (D-543).
-pub const INPUT_EXTENSIONS: [&str; 2] = ["stdin", "args"];
+/// The extensions of the input files of a run test (D-543), and its
+/// environment file (D-1043).
+pub const INPUT_EXTENSIONS: [&str; 3] = ["stdin", "args", "env"];
+
+/// The variable a test's `.env` may not set: the harness's own cache
+/// (D-959; GAP(ui-env-precedence)).
+pub const ENV_RESERVED: &[&str] = &["CHEBY_CACHE"];
 
 /// The root module of a package test, which holds the header.
 pub const ROOT_MODULE: &str = "src/main.cheby";
@@ -594,6 +629,64 @@ mod tests {
         let root = scratch(
             "input-on-check",
             &[("c/t.cheby", "// @mode: check-pass\n"), ("c/t.stdin", "x")],
+        );
+        assert!(all(&root).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// D-1043: a test's `.env`, `KEY=VALUE` lines, read for a file test
+    /// and a package test alike; none without the file; a bad line, a
+    /// reserved key and a `.env` beside a check test are errors.
+    #[test]
+    fn ui_env_reads_key_value_lines() {
+        let root = scratch(
+            "env",
+            &[
+                ("c/on.cheby", "// @mode: run-fail\n"),
+                ("c/on.env", "CHEBY_BACKTRACE=1\n\nA=b=c\nEMPTY=\n"),
+                ("c/off.cheby", "// @mode: run-fail\n"),
+                ("c/pkg/cheby.toml", ""),
+                ("c/pkg/src/main.cheby", "// @mode: run-pass\n"),
+                ("c/pkg.env", "CHEBY_BACKTRACE=yes\r\n"),
+                ("c/bad.cheby", "// @mode: run-pass\n"),
+                ("c/bad.env", "CHEBY_BACKTRACE\n"),
+                ("c/cache.cheby", "// @mode: run-pass\n"),
+                ("c/cache.env", "CHEBY_CACHE=/tmp/x\n"),
+                ("c/nokey.cheby", "// @mode: run-pass\n"),
+                ("c/nokey.env", "=1\n"),
+            ],
+        );
+        let tests = all(&root).unwrap();
+        let env = |name: &str| tests.iter().find(|t| t.name == name).unwrap().env();
+        let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+        assert_eq!(
+            env("c/on").unwrap(),
+            [
+                pair("CHEBY_BACKTRACE", "1"),
+                pair("A", "b=c"),
+                pair("EMPTY", "")
+            ]
+        );
+        assert_eq!(env("c/off").unwrap(), []);
+        assert_eq!(env("c/pkg").unwrap(), [pair("CHEBY_BACKTRACE", "yes")]);
+        let bad = env("c/bad").unwrap_err();
+        assert!(
+            bad.ends_with("bad.env: `CHEBY_BACKTRACE` is not KEY=VALUE"),
+            "{bad}"
+        );
+        let cache = env("c/cache").unwrap_err();
+        assert!(
+            cache.contains("`CHEBY_CACHE` is the harness's own"),
+            "{cache}"
+        );
+        assert!(env("c/nokey").is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+        let root = scratch(
+            "env-on-check",
+            &[
+                ("c/t.cheby", "// @mode: check-pass\n"),
+                ("c/t.env", "A=1\n"),
+            ],
         );
         assert!(all(&root).is_err());
         std::fs::remove_dir_all(&root).unwrap();

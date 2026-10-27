@@ -146,9 +146,8 @@ fn a_same_signature_redefinition_repoints_the_slot() {
     .unwrap();
     assert_eq!(jit.slot(f2, &cheby_sig(&[])), Some(before));
     assert_eq!(run_const(&jit, run), EntryOutcome::Returned(false_word()));
-    let symbols = jit.decls.symbols();
-    assert!(symbols.contains(&"cb$fn$<repl>$f$r1"), "{symbols:?}");
-    assert!(!symbols.contains(&"cb$slot$<repl>$f$r1"), "{symbols:?}");
+    assert!(jit.defines("cb$fn$<repl>$f$r1"));
+    assert!(!jit.declares("cb$slot$<repl>$f$r1"));
     jit.revert_repoints().unwrap();
     assert_eq!(run_const(&jit, run), EntryOutcome::Returned(true_word()));
     // The explicit API does the same.
@@ -219,8 +218,14 @@ fn another_signature_gets_a_new_slot() {
     let old = jit.slot(f, &cheby_sig(&[])).unwrap();
     let new = jit.slot(f2, &one).unwrap();
     assert_ne!(old, new);
-    assert_eq!(jit.decls.slot_of(f2).unwrap().symbol, "cb$slot$<repl>$f$r1");
-    assert_eq!(jit.decls.slot_of(f).unwrap().symbol, "cb$slot$<repl>$f");
+    assert_eq!(
+        jit.slot_name(jit.slot_of(f2).unwrap()).as_deref(),
+        Some("cb$slot$<repl>$f$r1")
+    );
+    assert_eq!(
+        jit.slot_name(jit.slot_of(f).unwrap()).as_deref(),
+        Some("cb$slot$<repl>$f")
+    );
     // `g` keeps calling the old `f`.
     assert_eq!(run_const(&jit, run), EntryOutcome::Returned(true_word()));
     // A slot never points at code of another signature.
@@ -314,8 +319,9 @@ fn an_item_is_declared_again_for_its_redefinition() {
     .unwrap();
     assert_eq!(run_const(&jit, run), EntryOutcome::Returned(false_word()));
     assert_eq!(
-        jit.decls.func(FnKey::Item(f)).unwrap().symbol,
-        "cb$fn$<repl>$f$r1"
+        jit.func_name(jit.func_id(FnKey::Item(f)).unwrap())
+            .as_deref(),
+        Some("cb$fn$<repl>$f$r1")
     );
     // Without a new generation, a second declaration is still a bug.
     let again = jit.compile(&[entry_unit(
@@ -468,8 +474,13 @@ fn every_symbol_of_a_redefined_item_carries_its_generation() {
     });
     unit.names.push(name(def(5, 6), "<repl:5>", "dict"));
     unit.names.sort_by_key(|n| n.def);
-    jit.compile(&[unit]).unwrap();
-    let symbols = jit.decls.symbols();
+    // The unit's code record names every symbol, its local copies too
+    // (K4c: a record's locals are declared anonymously in the JIT).
+    let records = jit
+        .compile_units(&[BatchUnit::Mir(&unit)], &BatchCx::default())
+        .unwrap();
+    let record = records.first().cloned().flatten().unwrap();
+    let symbols: Vec<&str> = record.symbols.iter().map(|s| s.name.as_str()).collect();
     for expected in [
         "cb$fn$<repl>$f$r2",
         "cb$slot$<repl>$f$r2",
@@ -549,8 +560,7 @@ fn session_values_live_in_constant_slots() {
     jit.bind_values(&[(x3, true_word())]).unwrap();
     assert_ne!(jit.const_slot(x3), jit.const_slot(x));
     assert_eq!(run_const(&jit, run), EntryOutcome::Returned(false_word()));
-    let symbols = jit.decls.symbols();
-    assert!(symbols.contains(&"cb$const$<repl>$x"), "{symbols:?}");
-    assert!(symbols.contains(&"cb$const$<repl>$x$r2"), "{symbols:?}");
-    assert!(!symbols.contains(&"cb$const$<repl>$x$r1"), "{symbols:?}");
+    assert!(jit.defines("cb$const$<repl>$x"));
+    assert!(jit.defines("cb$const$<repl>$x$r2"));
+    assert!(!jit.declares("cb$const$<repl>$x$r1"));
 }

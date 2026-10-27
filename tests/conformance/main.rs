@@ -107,6 +107,15 @@
 //! D-888), is never blessed, and is ignored under `CHEBY_BLESS=1` (D-853)
 //! and on Windows until M6 (D-935).
 //!
+//! The HTTP fixture (D-1027, `cheby_test_support::http_fixture`): every
+//! trial that passes the example's `args` or `env`, a run trial at every
+//! variant and the `@aot` trial's build and runs, takes them from
+//! `Example::run_args`, which replaces `{http_fixture}` with the URL of the
+//! one server this process runs for the example's `site/`, started on first
+//! use on a port the operating system chooses, so a harness run's trials
+//! share it. Any other `{…}` word there fails the trial. An example
+//! without the placeholder starts no server.
+//!
 //! The cache (D-959, `cheby_test_support::cache`): the harness creates one
 //! fresh owner-only directory in the system's temporary directory when it
 //! starts and gives it to every child, `cheby` or an executable, as
@@ -347,15 +356,25 @@ fn check_executable(ex: &Example, variants: &[Variant], base: &Run) -> Result<()
     let executable = out_dir.path().join(&ex.name);
     let output = executable.to_string_lossy().into_owned();
     let stdin = goldens.stdin.as_deref().map(str::as_bytes);
+    // D-1027: `{http_fixture}` expanded, for the build's environment too.
+    let run_args = ex.run_args(&goldens)?;
     aot::check(
         &expected,
         variants,
         // The base trial's child environment, with the example's `env`.
-        || cheby(&ex.dir, &["build", "-o", &output], &goldens.env, None, base),
+        || {
+            cheby(
+                &ex.dir,
+                &["build", "-o", &output],
+                &run_args.env,
+                None,
+                base,
+            )
+        },
         |variant| {
             let mut cmd = Command::new(&executable);
-            cmd.args(&goldens.args).current_dir(&ex.dir);
-            child_env(&mut cmd, &goldens.env, variant, base);
+            cmd.args(&run_args.args).current_dir(&ex.dir);
+            child_env(&mut cmd, &run_args.env, variant, base);
             process::run(cmd, stdin, base.timeout)
         },
     )
@@ -513,17 +532,20 @@ fn run_example(
     goldens: &example::Goldens,
     run: &Run,
 ) -> Result<process::RunOutput, String> {
+    // D-1027: `{http_fixture}` expanded; every trial of this process shares
+    // the one server of the example's `site/`.
+    let run_args = ex.run_args(goldens)?;
     // Program arguments follow `--`, so they are never taken for a module
     // path or a flag of `cheby run`.
     let mut args = vec!["run"];
-    if !goldens.args.is_empty() {
+    if !run_args.args.is_empty() {
         args.push("--");
-        args.extend(goldens.args.iter().map(String::as_str));
+        args.extend(run_args.args.iter().map(String::as_str));
     }
     cheby(
         &ex.dir,
         &args,
-        &goldens.env,
+        &run_args.env,
         goldens.stdin.as_deref().map(str::as_bytes),
         run,
     )

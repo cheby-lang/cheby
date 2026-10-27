@@ -1,0 +1,39 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! With `CHEBY_BACKTRACE=1`, a panic that a scope catches prints nothing:
+//! its backtrace is dropped with it, and the scope's `Panic` carries only
+//! the message (§10.3, §11.6).
+
+import std::fiber
+import std::io
+
+fn fail(n: Int) -> Int {
+  panic as "failed with {n}"
+}
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { fail(1) })
+    Nil
+  }
+  case outcome {
+    Ok(_) => io::println("the scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the scope failed: {text}")
+    }
+  }
+  let caught = {
+    use _ <- fiber::scope()
+    fail(2)
+  }
+  case caught {
+    Ok(_) => io::println("the second scope returned Ok")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the second scope failed: {text}")
+    }
+  }
+}

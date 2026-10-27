@@ -34,6 +34,9 @@
 
 pub mod abi;
 pub mod alloc;
+mod backtrace;
+#[cfg(test)]
+mod backtrace_tests;
 mod bytes;
 pub mod callback;
 pub mod capture;
@@ -43,6 +46,7 @@ pub mod ctx;
 pub mod desc;
 pub mod entry;
 mod env;
+pub mod ffi;
 pub mod fiber;
 pub(crate) mod fiber_ops;
 pub mod file;

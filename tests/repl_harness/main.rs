@@ -46,6 +46,10 @@
 //! directory>` the harness uses that directory instead, creating it
 //! owner-only if needed, and never deletes it (D-1144).
 //!
+//! No `cheby repl` inherits `CHEBY_BACKTRACE` (D-1043,
+//! `cheby_test_support::process::clear_inherited`), so a developer's setting
+//! never changes a transcript.
+//!
 //! On Windows every transcript is ignored until M6 (D-545,
 //! `cheby_test_support::platform`).
 
@@ -302,6 +306,8 @@ fn run_repl(
         .stdout(writer)
         .stderr(writer_err);
     cache.apply(&mut cmd);
+    // D-1043: no transcript inherits the developer's `CHEBY_BACKTRACE`.
+    process::clear_inherited(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start {cmd:?}: {e}"))?;

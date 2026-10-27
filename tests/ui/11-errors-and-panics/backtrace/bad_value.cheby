@@ -1,0 +1,13 @@
+// @mode: run-fail
+// @exit: 1
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! `CHEBY_BACKTRACE` takes only `0` and `1`: any other value, here `yes`,
+//! stops the program before `main` runs, with an error and status 1, as a
+//! bad `CHEBY_THREADS` does (§11.6).
+
+import std::io
+
+fn main() {
+  io::println("never printed")
+}

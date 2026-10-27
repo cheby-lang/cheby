@@ -120,6 +120,26 @@ impl ResolvedModule {
     pub const fn def_id(&self, index: DefIndex) -> DefId {
         DefId::new(self.module, index)
     }
+
+    /// The native drop function of each external type this module
+    /// declares with an `@external(native, "f")` (§12.5.3, D-949), in
+    /// `DefIndex` order: what the module's record lists in its external
+    /// entries' `drop` (D-1168), so the runtime calls `f(handle)` once
+    /// when the last reference to a value of the type goes away. Only an
+    /// external type may carry `@external` among the types (E0045 rejects
+    /// it on any other type), so every type item with one is listed.
+    #[must_use]
+    pub fn external_drops(&self) -> Vec<(DefIndex, Box<str>)> {
+        self.items
+            .iter_enumerated()
+            .filter(|(_, item)| item.kind == DefKind::Type)
+            .filter_map(|(index, item)| {
+                item.attrs
+                    .native_symbol()
+                    .map(|(symbol, _)| (index, Box::from(symbol)))
+            })
+            .collect()
+    }
 }
 
 /// An item of the module being resolved.

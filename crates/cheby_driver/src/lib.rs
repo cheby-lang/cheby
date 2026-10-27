@@ -67,6 +67,7 @@ mod aot;
 mod backend;
 mod borrowing;
 pub mod cache;
+mod code_cache;
 mod frontend;
 mod load_set;
 mod native;
@@ -1193,6 +1194,10 @@ mod aot_tests;
 mod borrowing_tests;
 #[cfg(test)]
 mod cache_tests;
+#[cfg(test)]
+mod code_record_repl_tests;
+#[cfg(test)]
+mod code_record_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]

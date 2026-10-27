@@ -472,8 +472,9 @@ pub use crate::runtime_id::{RUNTIME_ID, RUNTIME_ID_HEX};
 /// `cb$mod$<path>` (D-919), whose layout `crate::image` documents field
 /// by field. It goes up with every change of that layout: 2 since the
 /// module records' `constants` tables name each constant beside its slot
-/// (K5a, D-1189).
-pub const IMAGE_VERSION: u32 = 2;
+/// (K5a, D-1189), 3 since the function entries name their functions (N7b,
+/// D-1041).
+pub const IMAGE_VERSION: u32 = 3;
 
 /// Names of the C-ABI symbols generated code imports.
 /// Runtime internals are `cheby_rt_*`; kernels are
@@ -725,12 +726,29 @@ pub mod sym {
             .copied()
     }
 
+    /// `uint64_t cheby_rt_ffi_external(ExecCtx *ctx, uint64_t handle,
+    /// uint64_t type_key)`: a new value of the external type whose key is
+    /// `type_key`, holding the handle a foreign function returned, NULL
+    /// included (D-947, D-590); after a failed `cheby_ffi_` allocation, the
+    /// handle released and 0 with the flag set (D-946). Called by the
+    /// wrapper of a package's `@external(native, …)` (`cheby_mir`'s
+    /// `lower/external.rs`).
+    pub const FFI_EXTERNAL: &str = "cheby_rt_ffi_external";
+    /// `void cheby_rt_ffi_value(ExecCtx *ctx, uint64_t raw, uint64_t
+    /// message, uint64_t location)`: after a failed `cheby_ffi_`
+    /// allocation, returns with the flag set, so the caller releases `raw`
+    /// and unwinds (D-946); otherwise a NULL `raw` panics with `message`
+    /// at `location` (D-947). Called by the wrapper of a package's
+    /// `@external(native, …)` whose result is a counted value.
+    pub const FFI_VALUE: &str = "cheby_rt_ffi_value";
+
     /// Every runtime symbol that is not a kernel (the `cheby_rt_*` helpers
-    /// and static objects, the builtin nominal descriptors last), in the
+    /// and static objects, the builtin nominal descriptors, then the
+    /// foreign-result helpers of packages' wrappers), in the
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 72] = [
+    pub const ALL: [&str; 74] = [
         ALLOC,
         DUP,
         DROP,
@@ -803,6 +821,8 @@ pub mod sym {
         DESC_SYMBOLS[20],
         DESC_SYMBOLS[21],
         DESC_SYMBOLS[22],
+        FFI_EXTERNAL,
+        FFI_VALUE,
     ];
 
     /// The data symbol of the static object of a builtin nullary
@@ -967,7 +987,11 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(49..), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(49..72), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(
+            sym::ALL.get(72..),
+            Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
+        );
         assert_eq!(
             [
                 layout::SENDER,

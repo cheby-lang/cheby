@@ -10,7 +10,7 @@
 //!   ([`super::guard`]).
 //! - Generated code's own raises (`cheby_rt_panic`, a stack overflow found
 //!   by the slow paths) have no Rust frame to unwind:
-//!   [`raise_from_runtime`] records the panic, sets the flag and returns
+//!   [`raise_from_runtime_at`] records the panic, sets the flag and returns
 //!   (D-700).
 //! - A cancellation (D-102, D-688) is raised the same two ways: by a
 //!   kernel that would park, or a scope's close passing it through
@@ -27,6 +27,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::abi::PanicKind;
+use crate::backtrace::{self, Start};
 use crate::ctx::ExecCtx;
 use crate::io;
 use crate::panic::{PanicReport, UNKNOWN_LOCATION, fatal};
@@ -55,9 +56,38 @@ pub(crate) fn raise_panic(ctx: Option<*mut ExecCtx>, kind: PanicKind, message: O
     raise(ctx, PanicReport::new(kind, message, UNKNOWN_LOCATION))
 }
 
+/// The raise of a waiting kernel's panic (D-1040's second start): `joined
+/// fiber failed` (`fiber_ops/join.rs`) and `spawn into a scope that has
+/// ended` (`fiber_ops/spawn.rs`), which read the control block's
+/// wait-frame word (D-868) for the backtrace's walk. Otherwise as
+/// [`raise_panic`], whose arguments it takes.
+pub(crate) fn raise_panic_from_wait(
+    ctx: Option<*mut ExecCtx>,
+    kind: PanicKind,
+    message: Option<&str>,
+) -> ! {
+    raise_at(
+        ctx,
+        PanicReport::new(kind, message, UNKNOWN_LOCATION),
+        Some(backtrace::wait_start_of),
+    )
+}
+
 /// [`raise_panic`] with a report of its own, for helpers that know the
-/// location of the operation that panics.
+/// location of the operation that panics. Its backtrace, when the variable
+/// is on, is the no-frames line: no frame record of generated code is
+/// known (D-1040).
 pub(crate) fn raise(ctx: Option<*mut ExecCtx>, report: PanicReport) -> ! {
+    raise_at(ctx, report, None)
+}
+
+/// [`raise`] with the backtrace's start (D-1040): `start` reads it from
+/// the running fiber, `None` is no start.
+fn raise_at(
+    ctx: Option<*mut ExecCtx>,
+    report: PanicReport,
+    start: Option<fn(&ExecCtx) -> Start>,
+) -> ! {
     let ctx = running(ctx).unwrap_or_else(|| {
         fatal(format_args!(
             "a `{:?}` panic happened outside of any entry",
@@ -67,11 +97,22 @@ pub(crate) fn raise(ctx: Option<*mut ExecCtx>, report: PanicReport) -> ! {
     // SAFETY: `running` returns the running fiber's control block, alive
     // while it runs; only shared references to it are made.
     let fiber = unsafe { &*ctx };
+    let start = start.map_or(Start::Unknown, |start| start(fiber));
+    let report = with_backtrace(fiber, report, start);
     if !fiber.unwind_edges() {
         edgeless(Some(&report));
     }
     record::start_panic(fiber, report);
     std::panic::resume_unwind(Box::new(ChebyUnwind))
+}
+
+/// `report` with the backtrace of `fiber` from `start` (D-1042), captured
+/// while every frame is on the stack, before the panic is recorded and
+/// before an edgeless fiber prints it; unchanged with the variable off or
+/// in constant evaluation.
+fn with_backtrace(fiber: &ExecCtx, report: PanicReport, start: Start) -> PanicReport {
+    let backtrace = backtrace::capture(fiber, start, &report.location);
+    report.with_backtrace(backtrace)
 }
 
 /// Delivers a cancellation from runtime code (D-102, D-688, D-706): records
@@ -97,7 +138,7 @@ pub(crate) fn raise_cancel(ctx: Option<*mut ExecCtx>) -> ! {
 }
 
 /// Delivers a cancellation found by the stack slow path (D-688, step 3)
-/// from its outermost Rust frame, as [`raise_from_runtime`] does a panic:
+/// from its outermost Rust frame, as [`raise_from_runtime_at`] does a panic:
 /// records it, sets the flag and returns, so no Rust unwinding runs at the
 /// entry check (D-700), and generated code runs its entry pad. In a fiber
 /// compiled without unwind edges it ends the process with
@@ -114,14 +155,18 @@ pub(crate) fn cancel_from_runtime(fiber: &ExecCtx) {
 /// (`cheby_rt_panic`, the stack slow paths) to the return flag, from the
 /// outermost Rust frame, so no Rust unwinding runs (D-700): records the
 /// report, sets the flag and returns, and generated code runs its cleanup
-/// pad (D-733).
+/// pad (D-733). `start` is the backtrace's start: the frame record of the
+/// generated code that called the raising entry, which its naked stub
+/// passes (D-1040), or [`Start::Unknown`].
 ///
 /// # Safety
 ///
 /// `ctx` is null (outside any entry, which ends the process) or the
 /// running fiber's control block, and the caller is the outermost Rust
-/// frame below generated code: nothing above it needs dropping.
-pub(crate) unsafe fn raise_from_runtime(ctx: *mut ExecCtx, report: PanicReport) {
+/// frame below generated code: nothing above it needs dropping. `start` is
+/// [`Start::Unknown`] or names a frame of the running fiber's generated
+/// code that called the entry.
+pub(crate) unsafe fn raise_from_runtime_at(ctx: *mut ExecCtx, report: PanicReport, start: Start) {
     // SAFETY: forwarded from the caller.
     let Some(fiber) = (unsafe { ctx.as_ref() }) else {
         fatal(format_args!(
@@ -129,6 +174,7 @@ pub(crate) unsafe fn raise_from_runtime(ctx: *mut ExecCtx, report: PanicReport) 
             report.kind
         ))
     };
+    let report = with_backtrace(fiber, report, start);
     if !fiber.unwind_edges() {
         edgeless(Some(&report));
     }

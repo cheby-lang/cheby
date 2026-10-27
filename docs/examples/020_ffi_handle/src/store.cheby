@@ -40,9 +40,13 @@
 //! `ffi_handle_store_close` prints its message, then frees the struct
 //! and releases the name it kept.
 //!
-//! The C side is not part of this package: nothing in the manifest or
-//! under `src/` says how C code is built, so a native build links
-//! these symbols from a library provided some other way.
+//! The C side is `store_ffi.c` next to this file, which the `[native]`
+//! table of the package's `cheby.toml` lists in `sources`. Every command
+//! that runs or builds the package compiles it with `cc` and links it
+//! with the program, and it includes `cheby.h`, which the toolchain
+//! provides. `ffi_handle_store_close` writes its message with
+//! `cheby_ffi_write_stdout`, so the message comes out in order with
+//! `io::println`.
 
 // `==` on a `Store`, or on any value that contains one, panics, and
 // the compiler warns when it can see such a comparison (D-189, D-233):

@@ -232,6 +232,59 @@ fn native_cc_runtime_export_is_a_tool_error() {
     }
 }
 
+/// The tool error of a C source `src/clash.c` that holds `definition`.
+fn clash_error(definition: &str) -> String {
+    let root = Dir::new("reserved");
+    root.write(
+        "src/clash.c",
+        &format!("#include <stdint.h>\n{definition}\nint64_t app_value(void) {{ return 21; }}\n"),
+    );
+    prepare(root.path(), "app", &table(&["src/clash.c"], &[]), None)
+        .unwrap_err()
+        .message()
+        .to_owned()
+}
+
+/// D-1201's text for `src/clash.c` defining `symbol`.
+fn clash_text(symbol: &str) -> String {
+    format!(
+        "`src/clash.c` defines `{symbol}`, a name the Cheby runtime exports; give the C \
+         function another name"
+    )
+}
+
+/// GAP(c-object-reserved-prefixes), D-944, D-1201: a C object that defines
+/// a name with the prefix `cheby_rt_` or `cb$` is the same tool error as
+/// one that defines a runtime export, whether or not the runtime exports
+/// that name today (`cb$` through an assembler label, as C identifiers
+/// hold no `$`).
+#[test]
+#[cfg_attr(windows, ignore = "C compiles on Windows are M6 (D-935)")]
+fn native_cc_reserved_prefix_is_a_tool_error() {
+    assert_eq!(
+        clash_error("void cheby_rt_mine(void) {}"),
+        clash_text("cheby_rt_mine")
+    );
+    assert_eq!(
+        clash_error(&format!(
+            "const char cb_data[1] __asm__(\"{}cb$mine\") = {{0}};",
+            label_prefix()
+        )),
+        clash_text("cb$mine")
+    );
+}
+
+/// D-944, D-1204: `cheby.h`'s functions are runtime exports, so a C object
+/// that defines one is the tool error too.
+#[test]
+#[cfg_attr(windows, ignore = "C compiles on Windows are M6 (D-935)")]
+fn native_cc_reserved_ffi_name_is_a_tool_error() {
+    assert_eq!(
+        clash_error("void *cheby_ffi_dup(void *v) { return v; }"),
+        clash_text("cheby_ffi_dup")
+    );
+}
+
 /// The prefix the platform's C compiler puts before a global symbol's
 /// name: Mach-O's `_`.
 fn label_prefix() -> &'static str {

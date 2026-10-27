@@ -300,8 +300,9 @@ fn lowered_and_compiled(root: &Path) -> (Vec<MirModule>, Vec<(String, CodeRecord
 /// A unit that defines no user layout or external type writes the module
 /// record it wrote before the records carried types (d13dbbf): 001's
 /// `hello_world` code record, encoded, is pinned on macOS arm64 by its
-/// size and digest (4352 bytes at version 2 with positions, D-938; 4320
-/// at version 1, D-1115), and on every target its module record lists no
+/// size and digest (4397 bytes at version 3 with the functions' names,
+/// D-1041; 4352 at version 2 with positions, D-938; 4320 at version 1,
+/// D-1115), and on every target its module record lists no
 /// type, external type, hook or free shape. `std::io`'s record grows by its types' tables; both sizes are
 /// printed for the report (`--nocapture`).
 #[test]
@@ -319,10 +320,10 @@ fn aot_001_hello_world_record_unchanged() {
         sizes.insert(path.as_str(), (encoded.len(), digest(&encoded)));
     }
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        // The version-2 record with positions (D-938): d13dbbf's and
-        // bd16c14's 4320 bytes at version 1 (D-1115), plus the unit's
-        // source path and each function's rows.
-        assert_eq!(sizes["hello_world"], (4352, 0xf57a_7e8b_b4d8_b194));
+        // The version-3 record (D-1041, N7b): version 2's 4352 bytes with
+        // positions (D-938; 4320 at version 1, D-1115), plus 8 bytes per
+        // function entry and the functions' names in its string table.
+        assert_eq!(sizes["hello_world"], (4397, 0x3bb0_2bed_2390_d3de));
     }
     let (_, hello) = &records[1];
     let (bytes, _) = record_object(hello, "cb$mod$hello_world");
@@ -548,7 +549,7 @@ fn decode_record(bytes: &[u8], record: &str) -> DecodedRecord {
     let shapes = (0..counts[4]).map(|s| word(shape_table + 8 * s)).collect();
     let function_table = if counts[5] == 0 { 0 } else { inner(88) };
     let sites = (0..counts[5])
-        .map(|f| word(function_table + 32 * f + 16))
+        .map(|f| word(function_table + 40 * f + 24))
         .collect();
     DecodedRecord {
         counts,
@@ -617,15 +618,17 @@ fn check_records(
         let defined = symbols(&object);
         let decoded = decode_record(&object, &mangle::module_record(path));
         // A unit alone lists every constant it initializes, beside its
-        // slot (D-979, D-1189); no external type names a
-        // drop function yet (D-1168).
+        // slot (D-979, D-1189); an external type's entry names its drop
+        // function exactly when the type has one (D-949, D-1168).
         let consts = unit
             .functions
             .iter()
             .filter(|f| matches!(f.key, cheby_mir::FnKey::ConstInit(_)))
             .count();
         assert_eq!(decoded.counts[6], u64::try_from(consts).unwrap(), "{path}");
-        assert!(decoded.externals.iter().all(|e| !e.2), "{path}");
+        let drops: Vec<bool> = unit.externals.iter().map(|e| e.drop.is_some()).collect();
+        let named: Vec<bool> = decoded.externals.iter().map(|e| e.2).collect();
+        assert_eq!(named, drops, "{path}");
         // One free-shape word per constructor, the one registration
         // derives (D-907, D-1167).
         let mut shapes = Vec::new();
@@ -751,10 +754,12 @@ impl RecordFacts {
             externals: decoded.externals.clone(),
             shapes: decoded.shapes.clone(),
             sites,
-            // A JIT batch's records list no constant, since a JIT host finds
-            // slots by def (D-1189); the object's count is
-            // checked against its unit in `check_records`.
-            constants: 0,
+            // Since K4c every JIT loads units compiled alone, whose records
+            // list the constants they initialize as the object's do (D-1189;
+            // a JIT host still finds slots through `Jit::const_slot`,
+            // GAP(record-batch-load)); the object's count is checked against
+            // its unit in `check_records`.
+            constants: decoded.counts[6],
         }
     }
 
@@ -827,7 +832,7 @@ impl RecordFacts {
             .map(|s| word(pointer(address + 72) + 8 * s))
             .collect();
         let mut sites: Vec<u64> = (0..count(80))
-            .map(|f| word(pointer(address + 88) + 32 * f + 16))
+            .map(|f| word(pointer(address + 88) + 40 * f + 24))
             .filter(|&n| n > 0)
             .collect();
         sites.sort_unstable();
@@ -897,7 +902,15 @@ fn facts_package(dir: &Path) -> PathBuf {
 /// types, constructors, fields, external types, hooks, free shapes and
 /// call-site counts (D-919). The entries unit has no record (D-1111).
 fn check_jit_records(units: &[MirModule], decoded: &[(String, DecodedRecord)]) {
-    let mut jit = cheby_jit::Jit::new().unwrap();
+    // As a command's JIT of whole modules: a native symbol nothing defines,
+    // such as a drop function nothing reaches, binds to
+    // `cheby_rt_unresolved` (D-943, D-949).
+    let options = cheby_jit::JitOptions {
+        stub_unresolved: true,
+        ..cheby_jit::JitOptions::from_env()
+    };
+    let mut jit =
+        cheby_jit::Jit::configured(cheby_codegen_clif::CodegenOptions::default(), options).unwrap();
     jit.compile(units).unwrap();
     let records = jit.module_records();
     assert!(
@@ -936,12 +949,13 @@ fn aot_records_match_the_jit() {
         .iter()
         .flat_map(|(_, record)| &record.externals)
         .collect();
+    // `Db` names its drop function, `facts_db_close` (D-949).
     assert_eq!(
         externals,
         [&(
             "Db".to_owned(),
             cheby_runtime::layout::type_key("facts::shapes", "Db"),
-            false
+            true
         )]
     );
     let paths: Vec<&str> = decoded.iter().map(|(path, _)| path.as_str()).collect();

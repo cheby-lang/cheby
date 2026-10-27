@@ -3,14 +3,16 @@
 //! metadata, golden files, the platforms that skip run trials (D-545),
 //! running commands with a timeout scaled by `CHEBY_HARNESS_SCALE`, the
 //! thread variants of the conformance trials (D-722, docs/plan/testing.md),
-//! each harness's fresh `CHEBY_CACHE` (D-959) and the `@aot` trial of the
-//! conformance harness (D-1025).
+//! each harness's fresh `CHEBY_CACHE` (D-959), the `@aot` trial of the
+//! conformance harness (D-1025) and the HTTP fixture of the examples
+//! (D-1027).
 
 pub mod aot;
 pub mod cache;
 pub mod decisions;
 pub mod example;
 pub mod golden;
+pub mod http_fixture;
 pub mod milestone;
 pub mod platform;
 pub mod process;

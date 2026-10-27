@@ -12,7 +12,7 @@
 //! | Offset              | Contents                                                      |
 //! | ------------------- | ------------------------------------------------------------- |
 //! | 0                   | the seven tables of `ModuleRecord`, 16 bytes each             |
-//! | 112                 | one `FunctionEntry` (32 bytes) per function, definition order |
+//! | 112                 | one `FunctionEntry` (40 bytes) per function, definition order |
 //! | after them          | each function's `CallSiteEntry`s (16 bytes), in its order     |
 //! | after the sites     | one `TypeEntry` (32 bytes) per user type, in [`RecordType`]   |
 //! |                     | order                                                         |
@@ -29,16 +29,21 @@
 //! |                     | (a unit alone only), in function (`DefIndex`) order           |
 //! | after the constants | the string table: each string once, `u32` length then UTF-8:  |
 //! |                     | the call sites' paths first, then the types' strings, then    |
-//! |                     | the external types' names, then the constants' paths          |
+//! |                     | the external types' names, then the constants' paths, then    |
+//! |                     | the functions' display names (D-1041)                         |
 //!
 //! Its table pointers are relocations to the record itself with the
 //! table's offset as addend; each function's code pointer is a relocation
-//! to the function; a constructor's `layout_word` and `ctor_static` and a
+//! to the function, and its `name` the offset of its display name
+//! ([`DisplayName`], D-1041) or `NO_STRING`, with `FN_LARGE_BODY` among the
+//! flags of a large function's inner body (D-679,
+//! GAP(backtrace-record-layout)); a constructor's `layout_word` and `ctor_static` and a
 //! hook's three function values are data relocations to the unit's own
 //! `cb$layout$…` word, `cb$ctor$…` static and `cb$fnval$…` values. An
 //! empty table is count 0 and pointer 0, a constructor with fields has
-//! `ctor_static` 0, and an external type's `drop` is 0 (user drop
-//! functions come later, D-101, D-703, D-1168). A
+//! `ctor_static` 0, and an external type's `drop` is a data relocation to
+//! its native drop function, or 0 without one (D-949, D-1168,
+//! `func::write_external_drops`). A
 //! unit without user layouts or external types writes no type, external
 //! or shape, so its record is the call-site table and the string table
 //! alone.
@@ -64,10 +69,10 @@ use cranelift_module::{DataDescription, DataId, Linkage, Module};
 
 use cheby_iface::DefId;
 use cheby_mir::layout::ExternalDesc;
-use cheby_mir::{LayoutDesc, LayoutRef, MirModule, Repr, UnitKind};
+use cheby_mir::{DefName, FnKey, LayoutDesc, LayoutRef, MirModule, Repr, UnitKind};
 use cheby_runtime::image::{
-    CallSiteEntry, ConstEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry,
-    FunctionEntry, HookEntry, ModuleRecord, NO_STRING, TypeEntry,
+    CallSiteEntry, ConstEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FN_LARGE_BODY,
+    FieldEntry, FunctionEntry, HookEntry, ModuleRecord, NO_STRING, TypeEntry,
 };
 use cheby_runtime::layout::{FieldKind, LayoutInfo, free_shape_word};
 
@@ -93,12 +98,13 @@ const TABLE_PTR: u32 = 8;
 /// The alignment of the record and of every entry in it.
 const ALIGN: u64 = 8;
 
-const FUNCTION_ENTRY: u32 = 32;
+const FUNCTION_ENTRY: u32 = 40;
 const SITE_ENTRY: u32 = 16;
 const FN_CODE: u32 = 0;
 const FN_LEN: u32 = 8;
 const FN_FLAGS: u32 = 12;
-const FN_SITES: u32 = 16;
+const FN_NAME: u32 = 16;
+const FN_SITES: u32 = 24;
 const SITE_RET: u32 = 0;
 const SITE_PATH: u32 = 4;
 const SITE_LINE: u32 = 8;
@@ -145,6 +151,7 @@ const _: () = {
     assert!(FN_CODE as usize == offset_of!(FunctionEntry, code));
     assert!(FN_LEN as usize == offset_of!(FunctionEntry, len));
     assert!(FN_FLAGS as usize == offset_of!(FunctionEntry, flags));
+    assert!(FN_NAME as usize == offset_of!(FunctionEntry, name));
     assert!(FN_SITES as usize == offset_of!(FunctionEntry, sites));
     assert!(SITE_ENTRY as usize == size_of::<CallSiteEntry>());
     assert!(SITE_RET as usize == offset_of!(CallSiteEntry, ret_offset));
@@ -347,6 +354,165 @@ fn field_kind_index(repr: Repr) -> u32 {
         .position(|&k| k == kind)
         .and_then(|index| u32::try_from(index).ok())
         .unwrap_or(u32::MAX)
+}
+
+/// A function's display name in its module record (D-1041), which a
+/// backtrace shows (D-1039): [`crate::DefinedCode::name`], set by
+/// [`name_functions`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisplayName {
+    /// The name as a backtrace shows it: `demo::check`,
+    /// `demo::double_all::{fn#0}`, `demo "adds"`, `<repl:2>`, `<builtin>`.
+    pub text: String,
+    /// Whether the function is the inner body `cb$big$…` of a function with
+    /// a large frame (D-679), named as that function: its entry gets
+    /// `FN_LARGE_BODY`.
+    pub large_body: bool,
+}
+
+/// The display name of the function `key` of `unit` (D-1041), or `None`
+/// for code without one: value shims, `dyn` forwarders, trampolines and
+/// entry thunks (a `@blocking` shim has no key). GAP(backtrace-record-layout):
+///
+/// - a top-level function or a constant's initializer: its module path and
+///   name joined by `::`, as source code names it (`demo::check`,
+///   `std::list::fold`); a std function a user unit instantiates keeps its
+///   std path, and a definition made in the REPL is its item path in its
+///   entry's module (`<repl:2>::f`), as MIR names it;
+/// - a test: as `cheby test` prints it, `demo "adds"`; a REPL entry's body,
+///   the `test` item of its entry's module, is `<repl:N>`;
+/// - a closure: its owner's name and `::{fn#<n>}`, `n` from 0 as in D-456's
+///   symbol (`demo::double_all::{fn#0}`, `demo "adds"::{fn#0}`);
+/// - a continuation (D-780): its owner's name;
+/// - a built-in tuple function (D-560, D-583): `<builtin>`.
+///
+/// Every module path is the one source code names ([`source_module`]), so
+/// a function keeps its name after a REPL `:reload` or a re-check.
+///
+/// # Errors
+///
+/// An internal error if `unit` has no name for a def the key names.
+pub(crate) fn display_name(unit: &MirModule, key: FnKey) -> Result<Option<String>, CodegenError> {
+    let owner = |def| -> Result<String, CodegenError> {
+        let name = unit.name(def)?;
+        Ok(if matches!(unit.unit, UnitKind::Tests(_)) {
+            test_name(name)
+        } else {
+            source_path(name)
+        })
+    };
+    Ok(match key {
+        FnKey::Item(def) | FnKey::ConstInit(def) => Some(source_path(unit.name(def)?)),
+        FnKey::Test(def) => Some(test_name(unit.name(def)?)),
+        FnKey::Closure { owner: def, index } => Some(format!("{}::{{fn#{index}}}", owner(def)?)),
+        FnKey::Continuation { owner: def, .. } => Some(owner(def)?),
+        FnKey::TupleDictFn { .. } => Some(BUILTIN_NAME.to_owned()),
+        FnKey::ValueShim(_) | FnKey::DynForward { .. } | FnKey::Entry(_) | FnKey::Trampoline(_) => {
+            None
+        }
+    })
+}
+
+/// The name of built-in code without a source (D-583).
+const BUILTIN_NAME: &str = "<builtin>";
+
+/// The module path of every REPL entry starts with this (`<repl:N>`).
+const REPL_MODULE_PREFIX: &str = "<repl:";
+
+/// A test's display name, `module "name"`, as `cheby test` prints it; a
+/// REPL entry's body, its entry's module path `<repl:N>`.
+fn test_name(name: &DefName) -> String {
+    let module = source_module(&name.module);
+    if module.starts_with(REPL_MODULE_PREFIX) {
+        module
+    } else {
+        format!("{module} \"{}\"", name.item)
+    }
+}
+
+/// `name`'s item path, `module::item`, with the module path that source
+/// code names ([`source_module`]); the item alone for a builtin def.
+fn source_path(name: &DefName) -> String {
+    if name.module.is_empty() {
+        name.item.to_string()
+    } else {
+        format!("{}::{}", source_module(&name.module), name.item)
+    }
+}
+
+/// `module` as source code names it (D-1041): a REPL `:reload` loads each
+/// reloaded module under a path whose last segment carries a generation
+/// mark, `fib<r1>`, and a REPL entry checked again is lowered as the
+/// module `<repl:N:G>`; a backtrace names them `fib` and `<repl:N>`, as
+/// before the reload. GAP(backtrace-record-layout).
+fn source_module(module: &str) -> String {
+    if let Some(inner) = module
+        .strip_prefix(REPL_MODULE_PREFIX)
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let number = inner.split(':').next().unwrap_or(inner);
+        return format!("{REPL_MODULE_PREFIX}{number}>");
+    }
+    module
+        .split("::")
+        .map(without_reload_mark)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// A module path's `segment` without the generation mark `<r<n>>` that a
+/// REPL `:reload` gives it; no identifier contains `<`.
+fn without_reload_mark(segment: &str) -> &str {
+    segment
+        .strip_suffix('>')
+        .and_then(|rest| rest.rsplit_once("<r"))
+        .filter(|(_, digits)| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(segment, |(name, _)| name)
+}
+
+/// Gives each function of `defined`, which [`crate::define_with_stats`]
+/// defined from `mirs` with `decls`, its display name ([`display_name`],
+/// D-1041): a function by its MIR key, a large frame's inner body
+/// `cb$big$…` (which follows its outer function) by its outer function's
+/// name, marked as an inner body, and a `@blocking` shim none.
+///
+/// # Errors
+///
+/// An internal error if a function of `mirs` was not declared or its unit
+/// has no name for it.
+pub(crate) fn name_functions(
+    decls: &Decls,
+    mirs: &[MirModule],
+    defined: &mut [DefinedCode],
+) -> Result<(), CodegenError> {
+    let mut keys: rustc_hash::FxHashMap<cranelift_module::FuncId, (&MirModule, FnKey)> =
+        rustc_hash::FxHashMap::default();
+    for unit in mirs {
+        for function in &unit.functions {
+            let id = decls.func(function.key)?.id;
+            keys.entry(id).or_insert((unit, function.key));
+        }
+    }
+    let large_prefix = crate::mangle::large_frame_body("");
+    let mut previous: Option<DisplayName> = None;
+    for code in defined.iter_mut() {
+        let name = match keys.get(&code.id) {
+            Some(&(unit, key)) => display_name(unit, key)?.map(|text| DisplayName {
+                text,
+                large_body: false,
+            }),
+            None if decls.func_name(code.id).starts_with(&large_prefix) => {
+                previous.clone().map(|outer| DisplayName {
+                    large_body: true,
+                    ..outer
+                })
+            }
+            None => None,
+        };
+        previous.clone_from(&name);
+        code.name = name;
+    }
+    Ok(())
 }
 
 /// One module record of a JIT batch ([`define_batch_records`]).
@@ -563,12 +729,22 @@ fn define_record<M: Module>(
     }
     let mut entry = HEADER;
     let mut site_at = layout.sites_at;
-    for (code, sites) in defined.iter().zip(&layout.sites) {
+    for ((code, sites), name) in defined
+        .iter()
+        .zip(&layout.sites)
+        .zip(&layout.function_names)
+    {
         let func = module.declare_func_in_data(code.id, &mut desc);
         desc.write_function_addr(add(entry, FN_CODE)?, func);
         bytes.u32(add(entry, FN_LEN)?, code.len)?;
-        let flags = if code.cheby_abi { FN_CHEBY_ABI } else { 0 };
-        bytes.u32(add(entry, FN_FLAGS)?, flags)?;
+        let abi = if code.cheby_abi { FN_CHEBY_ABI } else { 0 };
+        let large = if code.name.as_ref().is_some_and(|name| name.large_body) {
+            FN_LARGE_BODY
+        } else {
+            0
+        };
+        bytes.u32(add(entry, FN_FLAGS)?, abi | large)?;
+        bytes.u32(add(entry, FN_NAME)?, *name)?;
         let site_count = u64::try_from(sites.len()).map_err(|_| too_large())?;
         bytes.u64(add(entry, FN_SITES)?, site_count)?;
         if site_count > 0 {
@@ -589,6 +765,15 @@ fn define_record<M: Module>(
     }
     write_types(module, &mut desc, this, &mut bytes, &layout, types)?;
     write_externals(&mut desc, this, &mut bytes, &layout, externals)?;
+    // N8b (D-949): the drop functions of the external entries.
+    crate::func::write_external_drops(
+        module,
+        &mut desc,
+        layout.externals_at,
+        EXTERNAL_ENTRY,
+        EXTERNAL_DROP,
+        externals,
+    )?;
     write_consts(module, &mut desc, this, &mut bytes, &layout, consts)?;
     let strings_at = usize::try_from(layout.strings_at).map_err(|_| too_large())?;
     bytes
@@ -806,6 +991,23 @@ struct CtorStrings {
     fields: Vec<u32>,
 }
 
+/// Each function's display name in `table`, or `NO_STRING` (D-1041),
+/// interned after every other string, so every other string keeps the
+/// offset it had before records named their functions.
+fn function_names<'a>(
+    table: &mut Strings<'a>,
+    defined: &'a [DefinedCode],
+) -> Result<Vec<u32>, RecordError> {
+    defined
+        .iter()
+        .map(|code| {
+            code.name
+                .as_ref()
+                .map_or(Ok(NO_STRING), |name| table.intern(&name.text))
+        })
+        .collect()
+}
+
 /// A record's string table under construction: each string once, in the
 /// order first interned.
 #[derive(Default)]
@@ -850,6 +1052,8 @@ struct Layout {
     external_names: Vec<u32>,
     /// Each constant's path.
     const_paths: Vec<u32>,
+    /// Each function's display name, or `NO_STRING` (D-1041).
+    function_names: Vec<u32>,
     /// The free-shape words ([`free_shapes`]).
     shapes: Vec<u64>,
     /// The string table's bytes.
@@ -933,6 +1137,7 @@ impl Layout {
             .iter()
             .map(|(path, _)| table.intern(path))
             .collect::<Result<Vec<_>, _>>()?;
+        let function_names = function_names(&mut table, defined)?;
         let shapes = free_shapes(types)?;
         let functions = u32::try_from(defined.len()).map_err(|_| too_large())?;
         let type_count = u32::try_from(types.len()).map_err(|_| too_large())?;
@@ -966,6 +1171,7 @@ impl Layout {
             type_strings,
             external_names,
             const_paths,
+            function_names,
             shapes,
             strings,
             strings_at,

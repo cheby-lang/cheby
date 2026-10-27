@@ -20,7 +20,11 @@
 //!
 //! A run test's `<name>.stdin` is its standard input, which is null
 //! without one, and `<name>.args` its arguments, one per line, passed
-//! after `--` (D-543). With `// @command: test`, a run test runs
+//! after `--` (D-543). Its `<name>.env`, `KEY=VALUE` lines, is applied to
+//! the environment of every child it starts, `cheby` and a build test's
+//! executable, after the harness's own settings (D-1043); every other
+//! child runs without `CHEBY_BACKTRACE`, whatever the developer set
+//! (`cheby_test_support::process`). With `// @command: test`, a run test runs
 //! `cheby test` instead of `cheby run`, and its goldens hold that
 //! command's output, and `// @flags: …` adds words after the subcommand
 //! (D-543).
@@ -189,10 +193,11 @@ fn check_package(
 ) -> Result<(), String> {
     let mode = test.header.mode;
     let input = test.input()?;
+    let env = test.env()?;
     let (what, out) = if mode.runs() && test.header.command == RunCommand::Build {
         (
             "`cheby build` and the executable".to_owned(),
-            build_and_run(test, package, &input, cache, timeout)?,
+            build_and_run(test, package, &input, &env, cache, timeout)?,
         )
     } else {
         let command = if mode.runs() {
@@ -206,7 +211,7 @@ fn check_package(
         cmd.args(["--color=never", command])
             .args(&test.header.flags)
             .current_dir(package);
-        child_env(&mut cmd, test, cache);
+        child_env(&mut cmd, test, &env, cache);
         if !input.args.is_empty() {
             cmd.arg("--").args(&input.args);
         }
@@ -268,6 +273,7 @@ fn build_and_run(
     test: &UiTest,
     package: &Path,
     input: &RunInput,
+    env: &[(String, String)],
     cache: &HarnessCache,
     timeout: Duration,
 ) -> Result<process::RunOutput, String> {
@@ -281,13 +287,13 @@ fn build_and_run(
             cmd.args(["--color=never", "build", "-o", &output])
                 .args(&test.header.flags)
                 .current_dir(package);
-            child_env(&mut cmd, test, cache);
+            child_env(&mut cmd, test, env, cache);
             process::run(cmd, None, timeout)
         },
         || {
             let mut cmd = Command::new(&executable);
             cmd.args(&input.args).current_dir(package);
-            child_env(&mut cmd, test, cache);
+            child_env(&mut cmd, test, env, cache);
             process::run(cmd, input.stdin.as_deref(), timeout)
         },
     )
@@ -297,10 +303,14 @@ fn build_and_run(
 /// `NO_COLOR` keeps goldens plain even if the developer's environment
 /// forces color (`CLICOLOR_FORCE`). Freed objects are poisoned, so a
 /// reference-count mistake stops the program where it happens (D-544).
-/// `CHEBY_CACHE` names the harness's own cache (D-959).
-fn child_env(cmd: &mut Command, test: &UiTest, cache: &HarnessCache) {
+/// `CHEBY_CACHE` names the harness's own cache (D-959). The test's `.env`
+/// comes last, so it may override the others but the cache, which
+/// `UiTest::env` refuses (D-1043, GAP(ui-env-precedence)); without one, the
+/// child inherits no `CHEBY_BACKTRACE` (`process::run`).
+fn child_env(cmd: &mut Command, test: &UiTest, env: &[(String, String)], cache: &HarnessCache) {
     cmd.env("NO_COLOR", "1").env(POISON_ENV, "1");
     cache.apply(cmd);
+    cmd.envs(env.iter().map(|(key, value)| (key, value)));
     // The reuse report describes Perceus counting, so a test of it runs
     // with `CHEBY_RC` removed even when the harness runs under
     // `CHEBY_RC=naive` (D-718, D-853).

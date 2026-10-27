@@ -35,9 +35,9 @@ use std::sync::OnceLock;
 
 use crate::link::{CC, OBJECTS_PREFIX, PrivateDir, REMOVED_VARS, sweep_dead};
 
-/// `cheby.h` (D-945): an include guard and `typedef struct cheby_value
-/// cheby_value;` until N8b adds the `cheby_ffi_` functions
-/// (D-1196).
+/// `cheby.h` (D-945): its include guard `CHEBY_H`, `typedef struct
+/// cheby_value cheby_value;` (D-1196) and the runtime's `cheby_ffi_`
+/// functions, in `cheby_runtime::ffi::NAMES`' order.
 pub const HEADER: &str = include_str!("../include/cheby.h");
 
 /// The header's file name in the include directory, and how a dependency

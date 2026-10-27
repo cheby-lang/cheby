@@ -15,6 +15,7 @@ use cheby_mir::{
 };
 use cheby_runtime::abi;
 
+use crate::jit_unit::Seed;
 use crate::layout::builtin_layout_id;
 use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
@@ -76,6 +77,25 @@ pub(crate) enum ImportTarget<'s> {
 pub(crate) enum ImportRef {
     Func(FuncId),
     Data(DataId),
+}
+
+/// What [`Decls::index_parts`] gives a JIT's loader about one unit
+/// compiled alone (K4c), by the ids of its recording module.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct IndexParts {
+    /// Every function declared or imported, by key.
+    pub(crate) funcs: Vec<(FnKey, FuncId)>,
+    /// The slot each top-level function of the unit was put in, with its
+    /// key.
+    pub(crate) slots: Vec<(DefId, SlotKey, DataId)>,
+    /// Every constant slot declared or imported.
+    pub(crate) consts: Vec<(DefId, DataId)>,
+    /// Every user constructor layout declared or imported: its word and,
+    /// for a nullary one, its static.
+    pub(crate) layouts: Vec<(LayoutRef, DataId, Option<DataId>)>,
+    /// The slots the unit's REPL redefinitions take over, with their new
+    /// code (D-043).
+    pub(crate) repoints: Vec<(DataId, FuncId, DefId)>,
 }
 
 /// A declared indirection slot (D-043).
@@ -201,12 +221,21 @@ pub struct Decls {
     /// The shims declared and not defined yet, in declaration order:
     /// [`crate::define`] defines them with its batch.
     pub(crate) pending_shims: Vec<(FuncId, Box<str>, ForeignSig)>,
-    /// `Some` in the unit-alone mode of [`crate::compile_unit`] (D-917),
-    /// which the JIT never uses: the unit's own items that another unit
-    /// may name ([`crate::UnitCx::named_outside`]), whose functions and
-    /// slots are global hidden. `None` in the JIT's mode, where every
-    /// symbol is local.
+    /// `Some` in the unit-alone mode of [`crate::compile_unit`] (D-917):
+    /// the unit's own items that another unit may name
+    /// ([`crate::UnitCx::named_outside`]), whose functions and slots are
+    /// global hidden. `None` in the one-module mode of
+    /// [`crate::declare`], where every symbol is local.
     alone: Option<FxHashSet<DefId>>,
+    /// In a unit compiled alone for a JIT that holds earlier batches
+    /// ([`crate::jit_unit::record_for_jit`], K4c, GAP(repl-on-records)):
+    /// the symbols those batches defined that this unit uses instead of
+    /// defining its own.
+    seed: Option<Seed>,
+    /// The constructor layouts this unit imports because an earlier
+    /// batch of its JIT declared them ([`Seed::layouts`]): its module
+    /// record does not list their types again.
+    pub(crate) seeded_layouts: FxHashSet<LayoutRef>,
 }
 
 impl std::fmt::Debug for Decls {
@@ -380,7 +409,64 @@ impl Decls {
             blocking_variants: FxHashMap::default(),
             pending_shims: Vec::new(),
             alone: None,
+            seed: None,
+            seeded_layouts: FxHashSet::default(),
         })
+    }
+
+    /// An empty table for one unit compiled alone for a JIT that already
+    /// holds earlier batches (K4c, GAP(repl-on-records)): as
+    /// [`Decls::new_alone`], with `seed`'s session names and test ordinals
+    /// registered, and its slots, constant slots and layouts imported where
+    /// the unit would otherwise define them again.
+    ///
+    /// # Errors
+    ///
+    /// As [`Decls::new`].
+    pub(crate) fn new_seeded(
+        isa: &dyn TargetIsa,
+        named_outside: FxHashSet<DefId>,
+        seed: &Seed,
+    ) -> Result<Self, CodegenError> {
+        let mut decls = Self::new_alone(isa, named_outside)?;
+        for (&def, name) in &seed.session {
+            decls.session.insert(def, name.clone());
+        }
+        for (&def, &ordinal) in &seed.test_ordinals {
+            decls.test_ordinals.insert(def, ordinal);
+        }
+        decls.seed = Some(seed.clone());
+        Ok(decls)
+    }
+
+    /// What a JIT's loader needs from this table after the unit compiled
+    /// alone (K4c): every function, slot, constant slot and layout it
+    /// declared or imported, and the slots its REPL redefinitions take over.
+    pub(crate) fn index_parts(&mut self) -> IndexParts {
+        let mut funcs: Vec<(FnKey, FuncId)> = self.funcs.iter().map(|(k, d)| (*k, d.id)).collect();
+        funcs.sort_by_key(|&(_, id)| id.as_u32());
+        let mut slots: Vec<(DefId, SlotKey, DataId)> = self
+            .def_slots
+            .iter()
+            .filter_map(|(&def, key)| Some((def, key.clone(), self.slots.get(key)?.id)))
+            .collect();
+        slots.sort_by_key(|(_, _, id)| id.as_u32());
+        let mut consts: Vec<(DefId, DataId)> =
+            self.consts.iter().map(|(&d, &id)| (d, id)).collect();
+        consts.sort_by_key(|&(_, id)| id.as_u32());
+        let mut layouts: Vec<(LayoutRef, DataId, Option<DataId>)> = self
+            .layouts
+            .iter()
+            .map(|(&layout, decl)| (layout, decl.word, decl.ctor))
+            .collect();
+        layouts.sort_by_key(|(_, word, _)| word.as_u32());
+        IndexParts {
+            funcs,
+            slots,
+            consts,
+            layouts,
+            repoints: self.take_repoints(),
+        }
     }
 
     /// An empty table for one unit compiled alone ([`crate::compile_unit`],
@@ -1125,6 +1211,13 @@ impl Decls {
                     };
                 };
                 let name = self.def_name(unit, def)?;
+                // D-1179: a seeded ordinal is the test's place among all of
+                // its module's tests on native, which the driver gives.
+                if self.seed.is_some()
+                    && let Some(&ordinal) = self.test_ordinals.get(&def)
+                {
+                    return Ok(mangle::test(&name.module, ordinal));
+                }
                 let next = self.next_test.entry(module).or_insert(0);
                 let ordinal = *next;
                 *next = next.saturating_add(1);
@@ -1249,6 +1342,26 @@ impl Decls {
             self.def_slots.insert(def, key);
             return Ok(());
         }
+        // A unit alone for a JIT whose earlier batch defined the slot this
+        // redefinition takes over imports it, and the JIT repoints it once
+        // the batch is loaded (K4c, GAP(repl-on-records)).
+        if takes_over
+            && let Some(symbol) = self.seed.as_ref().and_then(|s| s.slots.get(&key)).cloned()
+        {
+            let slot = self.data(module, &symbol, Linkage::Import, true)?;
+            self.slot_sigs.insert(slot, abi_sig.clone());
+            self.pending_repoints.push((slot, id, def));
+            self.slots.insert(
+                key.clone(),
+                SlotDecl {
+                    id: slot,
+                    symbol,
+                    func: id,
+                },
+            );
+            self.def_slots.insert(def, key);
+            return Ok(());
+        }
         let slot_symbol = mangle::slot(&self.def_name(unit, def)?, abi_sig.borrow);
         let slot = self.data(module, &slot_symbol, linkage, true)?;
         self.pending_slots.push((slot, id));
@@ -1281,6 +1394,24 @@ impl Decls {
             )));
         };
         if self.layouts.contains_key(&desc.layout) || builtin_layout_id(&desc.layout).is_some() {
+            return Ok(());
+        }
+        // An earlier batch of the JIT declared and registered this layout
+        // (a REPL entry that lowers more items of a module): the unit
+        // imports its objects and registers it no second time (K4c).
+        if let Some((word, ctor)) = self
+            .seed
+            .as_ref()
+            .and_then(|s| s.layouts.get(&desc.layout))
+            .cloned()
+        {
+            let word = self.data(module, &word, Linkage::Import, true)?;
+            let ctor = match ctor {
+                Some(ctor) => Some(self.data(module, &ctor, Linkage::Import, true)?),
+                None => None,
+            };
+            self.layouts.insert(desc.layout, LayoutDecl { word, ctor });
+            self.seeded_layouts.insert(desc.layout);
             return Ok(());
         }
         let name = self.def_name(unit, def)?;
@@ -1359,7 +1490,27 @@ impl Decls {
             if self.slots.contains_key(&key) || self.imported_slots.contains_key(&key) {
                 continue;
             }
-            let symbol = mangle::slot(&self.def_name(unit, callee.def)?, callee.sig.borrow);
+            // A slot an earlier batch of the JIT defined keeps the symbol it
+            // was defined with, which a later generation that took it over
+            // does not carry (K4c, GAP(repl-on-records)). Only such a
+            // callee's slot comes from the seed: any other callee's slot is
+            // its own, named by its current generation, even when another
+            // unit of this batch defines it and the seed still names an
+            // older generation's slot of the same path and signature.
+            let takes_over = self
+                .session
+                .get(callee.def)
+                .is_some_and(|n| n.reuse.is_some());
+            let seeded = self
+                .seed
+                .as_ref()
+                .filter(|_| takes_over)
+                .and_then(|s| s.slots.get(&key))
+                .cloned();
+            let symbol = match seeded {
+                Some(symbol) => symbol,
+                None => mangle::slot(&self.def_name(unit, callee.def)?, callee.sig.borrow),
+            };
             let id = self.data(module, &symbol, Linkage::Import, true)?;
             self.slot_sigs.insert(id, callee.sig.clone());
             self.imported_slots.insert(key, id);
@@ -1429,21 +1580,26 @@ impl Decls {
                 continue;
             }
             let name = self.def_name(unit, def)?;
-            let word = self.data(
-                module,
-                &mangle::item(Kind::Layout, &name),
-                Linkage::Import,
-                true,
-            )?;
-            let ctor = if desc.fields.is_empty() {
-                Some(self.data(
-                    module,
-                    &mangle::item(Kind::Ctor, &name),
-                    Linkage::Import,
-                    true,
-                )?)
-            } else {
-                None
+            let seeded = self
+                .seed
+                .as_ref()
+                .and_then(|s| s.layouts.get(&desc.layout))
+                .cloned();
+            let (word_symbol, ctor_symbol) = match seeded {
+                Some((word, ctor)) => (word, ctor),
+                None => (
+                    mangle::item(Kind::Layout, &name),
+                    desc.fields
+                        .is_empty()
+                        .then(|| mangle::item(Kind::Ctor, &name)),
+                ),
+            };
+            let word = self.data(module, &word_symbol, Linkage::Import, true)?;
+            let ctor = match ctor_symbol {
+                Some(symbol) if desc.fields.is_empty() => {
+                    Some(self.data(module, &symbol, Linkage::Import, true)?)
+                }
+                _ => None,
             };
             self.layouts.insert(desc.layout, LayoutDecl { word, ctor });
         }
@@ -1487,6 +1643,20 @@ impl Decls {
             if let Some(old) = self.session.get(def).and_then(|n| n.reuse)
                 && let Some(&id) = self.consts.get(&old)
             {
+                self.consts.insert(def, id);
+                continue;
+            }
+            // The slot an earlier batch of the JIT defined for this constant
+            // or session value, or for the one it takes over (D-547), is
+            // imported (K4c, GAP(repl-on-records)).
+            let seeded = self.seed.as_ref().and_then(|s| {
+                s.consts.get(&def).or_else(|| {
+                    let old = self.session.get(def).and_then(|n| n.reuse)?;
+                    s.consts.get(&old)
+                })
+            });
+            if let Some(symbol) = seeded.cloned() {
+                let id = self.data(module, &symbol, Linkage::Import, true)?;
                 self.consts.insert(def, id);
                 continue;
             }

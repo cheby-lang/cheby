@@ -10,10 +10,13 @@
 //!   names only `libraries` gets the forwarder alone, linked with them, so
 //!   the system's loader finds them the same way.
 //! - The forwarder ([`FORWARDER_SOURCE`]) defines `cheby_ffi_table`, the
-//!   table of the running `cheby`'s `cheby_ffi_` functions that `cheby.h`'s
-//!   functions jump through. Until N8b the header declares no function and
-//!   the table has no entry, only the null word that ends it
-//!   (D-1196).
+//!   table of the running `cheby`'s `cheby_ffi_` functions, one entry per
+//!   function in `cheby.h`'s declaration order and a null word last
+//!   (D-1196, GAP(ffi-table-order)), and each of `cheby.h`'s functions as a
+//!   call through its entry, so the package's C code reaches the runtime
+//!   of the process that loaded it (D-941). It is compiled beside the
+//!   embedded `cheby.h`, which it includes. An executable links no
+//!   forwarder: its C objects call the runtime archive's definitions.
 //! - `cc` runs in a fresh private directory (`cheby-objects-<pid>-<n>`, as
 //!   the link's, D-1112) with relative names, under the output name
 //!   `lib<package>.so` or `lib<package>.dylib`, so no path of the machine
@@ -30,14 +33,127 @@ use std::process::Command;
 
 use crate::link::{CC, OBJECTS_PREFIX, PrivateDir, REMOVED_VARS, native_object_file, sweep_dead};
 
-/// The forwarder's C source (D-941): the table of the running `cheby`'s
-/// `cheby_ffi_` functions, which holds only its ending null word until
-/// N8b (D-1196).
+/// The forwarder's C source (D-941): `cheby_ffi_table`, one entry per
+/// function of `cheby.h` in the header's declaration order
+/// (`cheby_runtime::ffi::NAMES`, GAP(ffi-table-order)) and the null word
+/// that ends it (D-1196), and a definition of each function that calls
+/// through its entry. It includes the embedded `cheby.h`, written beside
+/// it, so the compiler checks every definition against the header. The
+/// running `cheby` fills the table when it loads the library
+/// (`cheby_jit::NativeLibrary::open`).
 pub const FORWARDER_SOURCE: &str = "\
-/* The forwarder of a package's shared library (D-941): the functions of
-   cheby.h jump through this table, which the running cheby fills. */
-void *cheby_ffi_table[1] = { 0 };
+/* The forwarder of a package's shared library (D-941): each function of
+   cheby.h jumps through this table, which the running cheby fills with its
+   runtime's functions in cheby.h's declaration order when it loads the
+   library; the null word ends it (D-1196). */
+#include \"cheby.h\"
+
+void *cheby_ffi_table[26] = { 0 };
+
+cheby_value *cheby_ffi_dup(cheby_value *v) {
+    return ((cheby_value * (*)(cheby_value *))cheby_ffi_table[0])(v);
+}
+
+void cheby_ffi_drop(cheby_value *v) {
+    ((void (*)(cheby_value *))cheby_ffi_table[1])(v);
+}
+
+cheby_value *cheby_ffi_string_new(const char *bytes, size_t len) {
+    return ((cheby_value * (*)(const char *, size_t))cheby_ffi_table[2])(bytes, len);
+}
+
+const char *cheby_ffi_string_bytes(cheby_value *s, size_t *len) {
+    return ((const char * (*)(cheby_value *, size_t *))cheby_ffi_table[3])(s, len);
+}
+
+cheby_value *cheby_ffi_bytes_new(const uint8_t *data, size_t len) {
+    return ((cheby_value * (*)(const uint8_t *, size_t))cheby_ffi_table[4])(data, len);
+}
+
+const uint8_t *cheby_ffi_bytes_data(cheby_value *b, size_t *len) {
+    return ((const uint8_t * (*)(cheby_value *, size_t *))cheby_ffi_table[5])(b, len);
+}
+
+cheby_value *cheby_ffi_int_new(int64_t value) {
+    return ((cheby_value * (*)(int64_t))cheby_ffi_table[6])(value);
+}
+
+int64_t cheby_ffi_int_get(cheby_value *v) {
+    return ((int64_t (*)(cheby_value *))cheby_ffi_table[7])(v);
+}
+
+cheby_value *cheby_ffi_float_new(double value) {
+    return ((cheby_value * (*)(double))cheby_ffi_table[8])(value);
+}
+
+double cheby_ffi_float_get(cheby_value *v) {
+    return ((double (*)(cheby_value *))cheby_ffi_table[9])(v);
+}
+
+cheby_value *cheby_ffi_bool_new(bool value) {
+    return ((cheby_value * (*)(bool))cheby_ffi_table[10])(value);
+}
+
+bool cheby_ffi_bool_get(cheby_value *v) {
+    return ((bool (*)(cheby_value *))cheby_ffi_table[11])(v);
+}
+
+cheby_value *cheby_ffi_nil(void) {
+    return ((cheby_value * (*)(void))cheby_ffi_table[12])();
+}
+
+cheby_value *cheby_ffi_some(cheby_value *payload) {
+    return ((cheby_value * (*)(cheby_value *))cheby_ffi_table[13])(payload);
+}
+
+cheby_value *cheby_ffi_none(void) {
+    return ((cheby_value * (*)(void))cheby_ffi_table[14])();
+}
+
+cheby_value *cheby_ffi_option_get(cheby_value *option) {
+    return ((cheby_value * (*)(cheby_value *))cheby_ffi_table[15])(option);
+}
+
+cheby_value *cheby_ffi_ok(cheby_value *payload) {
+    return ((cheby_value * (*)(cheby_value *))cheby_ffi_table[16])(payload);
+}
+
+cheby_value *cheby_ffi_err(cheby_value *payload) {
+    return ((cheby_value * (*)(cheby_value *))cheby_ffi_table[17])(payload);
+}
+
+bool cheby_ffi_result_is_ok(cheby_value *result) {
+    return ((bool (*)(cheby_value *))cheby_ffi_table[18])(result);
+}
+
+cheby_value *cheby_ffi_result_get(cheby_value *result) {
+    return ((cheby_value * (*)(cheby_value *))cheby_ffi_table[19])(result);
+}
+
+cheby_value *cheby_ffi_list_new(cheby_value **items, size_t n) {
+    return ((cheby_value * (*)(cheby_value **, size_t))cheby_ffi_table[20])(items, n);
+}
+
+size_t cheby_ffi_list_length(cheby_value *list) {
+    return ((size_t (*)(cheby_value *))cheby_ffi_table[21])(list);
+}
+
+cheby_value *cheby_ffi_list_get(cheby_value *list, size_t index) {
+    return ((cheby_value * (*)(cheby_value *, size_t))cheby_ffi_table[22])(list, index);
+}
+
+int cheby_ffi_write_stdout(const char *bytes, size_t len) {
+    return ((int (*)(const char *, size_t))cheby_ffi_table[23])(bytes, len);
+}
+
+int cheby_ffi_write_stderr(const char *bytes, size_t len) {
+    return ((int (*)(const char *, size_t))cheby_ffi_table[24])(bytes, len);
+}
 ";
+
+/// The number of entries of the forwarder's table: one per function of
+/// `cheby.h`, then the null word that ends it (D-1196).
+pub const FFI_TABLE_LEN: usize = cheby_runtime::ffi::NAMES.len() + 1;
 
 /// The symbol of the forwarder's table (D-941).
 pub const FFI_TABLE: &str = "cheby_ffi_table";
@@ -149,6 +265,7 @@ pub fn link_shared(job: &SharedJob<'_>) -> Result<Vec<u8>, ShlibError> {
         std::fs::write(&path, bytes)
             .map_err(|e| ShlibError::Io(format!("cannot write `{}`: {e}", path.display())))
     };
+    write(crate::cc::HEADER_NAME, crate::cc::HEADER.as_bytes())?;
     write("forwarder.c", FORWARDER_SOURCE.as_bytes())?;
     run(
         dir.path(),

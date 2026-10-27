@@ -48,7 +48,7 @@
 //! | 32     | `externals`   | [`ExternalEntry`], 24 bytes each    | the module's external types                                                 |
 //! | 48     | `hooks`       | [`HookEntry`], 32 bytes each        | the `@std_hooks` of the module's types (D-482, D-585)                       |
 //! | 64     | `free_shapes` | `u64` words                         | the free-shape word of each user layout, in the order of `types` (D-907)    |
-//! | 80     | `functions`   | [`FunctionEntry`], 32 bytes each    | the call-site table (D-856, D-867)                                          |
+//! | 80     | `functions`   | [`FunctionEntry`], 40 bytes each    | the call-site table (D-856, D-867), with each function's name (D-1041)      |
 //! | 96     | `constants`   | [`ConstEntry`], 16 bytes each       | the module's constants with their slots `cb$const$…`, `DefIndex` order      |
 //!
 //! [`ConstEntry`] (16 bytes, D-1189): `path` (`u32`
@@ -89,10 +89,16 @@
 //! values `cb$fnval$…` of the `equal`, `hash` and `debug` hooks at 8, 16
 //! and 24.
 //!
-//! [`FunctionEntry`] (32 bytes): `code` (pointer to the function's first
+//! [`FunctionEntry`] (40 bytes): `code` (pointer to the function's first
 //! byte) at 0, `len` (`u32`, its length in bytes) at 8, `flags` (`u32`:
-//! [`FN_CHEBY_ABI`] when it has the Cheby ABI, no other bit) at 12,
-//! `sites` (table of [`CallSiteEntry`], any order) at 16.
+//! [`FN_CHEBY_ABI`] when it has the Cheby ABI, [`FN_LARGE_BODY`] when it is
+//! a large function's inner body, no other bit) at 12, `name` (`u32`
+//! string, the function's display name, D-1041, or [`NO_STRING`] for code
+//! without a name: value shims, `dyn` forwarders, trampolines, entry
+//! thunks, `@blocking` shims) at 16, `pad` (`u32`) at 20, `sites` (table of
+//! [`CallSiteEntry`], any order) at 24. Version 3 of the layout gave the
+//! entry its name (GAP(backtrace-record-layout)); version 2's entry was 32
+//! bytes, without `name` and `pad`.
 //!
 //! [`CallSiteEntry`] (16 bytes, D-867's record): `ret_offset` (`u32`, the
 //! return address's offset from the function's start) at 0, `path`
@@ -110,16 +116,18 @@
 //! runtime's own, a layout word for every constructor, a constructor
 //! static exactly for each constructor without fields, one free-shape word
 //! per user layout equal to the one registration derives, every external
-//! type named and without a drop function, every hook naming a listed type
-//! once with three non-null values) before it registers anything. It then
+//! type named, every hook naming a listed type
+//! once with three non-null values, every function name in range) before
+//! it registers anything. It then
 //! registers, record by record in the order given, each type's
 //! constructors with consecutive ids in tag order (D-522, D-1163), writing
 //! into each layout word the header that allocation copies and into each
 //! constructor static its static header (D-454, D-920), then the record's
-//! external types in table order (`layout::register_external`,
-//! D-1168); then the hooks of every record on every
+//! external types in table order, each with its drop function
+//! (`layout::register_external_with_drop`, D-1168, D-949); then the hooks of every record on every
 //! constructor of each hooked type (D-482, D-585), and the call-site
-//! ranges under the caller's code owner (D-867).
+//! ranges under the caller's code owner (D-867), each pointing at its
+//! function's name in the record, nothing copied (D-1041).
 //!
 //! [`register_records`] also checks every record's constants (a path
 //! string and an aligned, non-null slot each) and registers nothing for
@@ -165,6 +173,12 @@ pub const NO_STRING: u32 = u32::MAX;
 /// function (an entry thunk, a trampoline, a `@blocking` shim) ends a
 /// deadlock walk (D-856).
 pub const FN_CHEBY_ABI: u32 = 1;
+
+/// [`FunctionEntry::flags`]: the function is the inner body `cb$big$…` of a
+/// function with a large frame (D-679), named as that function; a
+/// backtrace does not show the outer frame when its inner body is the next
+/// frame inward (D-1039). GAP(backtrace-record-layout).
+pub const FN_LARGE_BODY: u32 = 2;
 
 /// The field kinds a [`FieldEntry::kind`] names, by index.
 pub const FIELD_KINDS: [FieldKind; 13] = [
@@ -549,8 +563,14 @@ pub struct FunctionEntry {
     pub code: *const u8,
     /// The function's length in bytes.
     pub len: u32,
-    /// [`FN_CHEBY_ABI`] or 0.
+    /// [`FN_CHEBY_ABI`], [`FN_LARGE_BODY`], both or 0.
     pub flags: u32,
+    /// D-1041: the function's display name, an offset in the record's string
+    /// table, or [`NO_STRING`] for code without a name (value shims, `dyn`
+    /// forwarders, trampolines, entry thunks, `@blocking` shims).
+    pub name: u32,
+    /// 0.
+    pub pad: u32,
     /// The function's call sites that have a location.
     pub sites: Table<CallSiteEntry>,
 }
@@ -641,11 +661,13 @@ const _: () = {
     assert!(offset_of!(HookEntry, hash) == 16);
     assert!(offset_of!(HookEntry, debug) == 24);
 
-    assert!(size_of::<FunctionEntry>() == 32);
+    assert!(size_of::<FunctionEntry>() == 40);
     assert!(offset_of!(FunctionEntry, code) == 0);
     assert!(offset_of!(FunctionEntry, len) == 8);
     assert!(offset_of!(FunctionEntry, flags) == 12);
-    assert!(offset_of!(FunctionEntry, sites) == 16);
+    assert!(offset_of!(FunctionEntry, name) == 16);
+    assert!(offset_of!(FunctionEntry, pad) == 20);
+    assert!(offset_of!(FunctionEntry, sites) == 24);
 
     assert!(size_of::<ConstEntry>() == 16);
     assert!(offset_of!(ConstEntry, path) == 0);
@@ -954,9 +976,7 @@ pub unsafe fn type_layouts_at(addresses: &[usize]) -> Result<TypeLayouts, ImageE
 /// [`ImageError::Malformed`] before anything is registered, for a table,
 /// string, reference or word that is not what the module documentation
 /// says, a free-shape word that is not the one registration derives
-/// (D-1167), or an external type with a drop function,
-/// which no host passes until user drop functions are registered (D-703),
-/// or a constant without a path or a slot. The one failure after
+/// (D-1167), or a constant without a path or a slot. The one failure after
 /// registration has begun is a full layout table (2^24 ids), also
 /// [`ImageError::Malformed`].
 ///
@@ -996,8 +1016,12 @@ pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<
         for ty in record.types {
             ids.push(register_type(index, ty)?);
         }
-        for (type_name, type_key) in record.externals {
-            layout::register_external(&type_name, type_key).map_err(|_| {
+        for (type_name, type_key, drop) in record.externals {
+            // SAFETY: a record's drop word is null or its type's native drop
+            // function, `void f(void *handle)` (D-949), which the caller
+            // keeps valid as long as anything registered may be used.
+            let drop = unsafe { layout::external_drop_from(drop) };
+            layout::register_external_with_drop(&type_name, type_key, drop).map_err(|_| {
                 ImageError::malformed(index, "more user layouts than the layout table holds")
             })?;
         }
@@ -1022,7 +1046,7 @@ pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<
 /// key) and its hooks.
 struct CheckedRecord {
     types: Vec<CheckedType>,
-    externals: Vec<(String, u64)>,
+    externals: Vec<(String, u64, *const u8)>,
     hooks: Vec<TypeHooks>,
 }
 
@@ -1065,11 +1089,12 @@ fn check_free_shapes(
     }
 }
 
-/// Checks the external types of `record` and returns each one's name and
-/// key, in table order. A drop function is refused until user drop
-/// functions are registered (D-101, D-703): no code generation writes one
-/// yet (D-1168).
-fn external_types(index: usize, record: &ModuleRecord) -> Result<Vec<(String, u64)>, ImageError> {
+/// Checks the external types of `record` and returns each one's name, key
+/// and drop function (null for none), in table order (D-1168, D-949).
+fn external_types(
+    index: usize,
+    record: &ModuleRecord,
+) -> Result<Vec<(String, u64, *const u8)>, ImageError> {
     let malformed = |what| ImageError::malformed(index, what);
     let strings = record
         .strings
@@ -1083,12 +1108,7 @@ fn external_types(index: usize, record: &ModuleRecord) -> Result<Vec<(String, u6
     for external in externals {
         let name =
             string(strings, external.type_name).ok_or(malformed("an external type's name"))?;
-        if !external.drop.is_null() {
-            return Err(malformed(
-                "an external type's drop function, which this runtime does not register yet",
-            ));
-        }
-        out.push((name.to_owned(), external.type_key));
+        out.push((name.to_owned(), external.type_key, external.drop));
     }
     Ok(out)
 }
@@ -1287,9 +1307,21 @@ fn code_ranges(
         if function.code.is_null() {
             return Err(ImageError::malformed(index, "a function without code"));
         }
-        if function.flags & !FN_CHEBY_ABI != 0 {
+        if function.flags & !(FN_CHEBY_ABI | FN_LARGE_BODY) != 0 {
             return Err(ImageError::malformed(index, "unknown function flags"));
         }
+        let name = if function.name == NO_STRING {
+            None
+        } else {
+            let text = string(strings, function.name)
+                .ok_or(ImageError::malformed(index, "a function's name"))?;
+            // SAFETY: `text` lies in the record's string table, which
+            // `register_records`' caller keeps valid and unchanged for as
+            // long as anything registered may be used: the range this name
+            // goes with included, until its owner is unregistered (D-867).
+            // The map reads it only while it holds the range.
+            Some(unsafe { locate::FunctionName::in_record(text) })
+        };
         let sites = function
             .sites
             .items()
@@ -1315,6 +1347,8 @@ fn code_ranges(
             len: function.len,
             cheby_abi: function.flags & FN_CHEBY_ABI != 0,
             sites: descs,
+            name,
+            large_body: function.flags & FN_LARGE_BODY != 0,
         });
     }
     Ok(())

@@ -1,0 +1,23 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! With `CHEBY_BACKTRACE=1`, a failing test's block holds its panic's
+//! report and then its backtrace, which ends at the test, named as
+//! `cheby test` prints it (§11.6, §13.6).
+
+fn check(n: Int) -> Int {
+  case {
+    n > 2 => panic as "too big: {n}"
+    _ => n
+  }
+}
+
+test "small numbers pass" {
+  assert check(1) == 1
+}
+
+test "large numbers fail" {
+  assert check(3) == 3
+}

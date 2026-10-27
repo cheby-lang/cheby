@@ -128,7 +128,8 @@ pub(crate) struct NativeBinding {
     pub span: Span,
 }
 
-/// The native symbols bound by `resolved`'s functions, in item order.
+/// The native symbols bound by `resolved`'s functions and external types' drop functions
+/// (D-949), in item order.
 pub(crate) fn native_bindings(
     resolved: &ResolvedModule,
     iface: &ModuleInterface,
@@ -139,10 +140,18 @@ pub(crate) fn native_bindings(
         let Some((symbol, span)) = item.attrs.native_symbol() else {
             continue;
         };
-        let Some(ItemSig::Fn(sig)) = iface.item(index).map(|i| &i.sig) else {
-            continue;
+        let sig = match iface.item(index).map(|i| &i.sig) {
+            Some(ItemSig::Fn(sig)) => {
+                foreign_sig_with_context(sig, globals, item.attrs.std_context)
+            }
+            // D-949: an external type's drop function is
+            // `void f(void *handle)`, checked by E0054 like any binding.
+            Some(ItemSig::Type(_)) => ForeignSig {
+                params: vec![cheby_mir::repr::CType::Ptr],
+                ret: cheby_mir::repr::CType::Void,
+            },
+            _ => continue,
         };
-        let sig = foreign_sig_with_context(sig, globals, item.attrs.std_context);
         out.push((symbol.into(), NativeBinding { sig, span }));
     }
     out
@@ -218,6 +227,11 @@ pub(crate) struct Checked {
     /// (D-1124, D-964).
     pub front_reads: Vec<ModuleId>,
     pub thir: thir::Module,
+    /// The native drop function of each external type the module declares
+    /// (D-949), from its resolved items
+    /// (`cheby_resolve::ResolvedModule::external_drops`): what lowering's
+    /// `ExternalDesc::drop` gets (`crate::native::attach_drops`).
+    pub drops: Vec<(cheby_iface::DefIndex, Box<str>)>,
     /// The module's interface (also in [`Frontend::set`] for the package's
     /// modules).
     pub interface: Arc<ModuleInterface>,
@@ -596,6 +610,7 @@ pub(crate) fn check_extra_module(
         // (D-964), so their views record nothing.
         front_reads: Vec::new(),
         thir,
+        drops: resolved.external_drops(),
         interface: Arc::new(iface),
         warnings: diags,
     }))
@@ -697,6 +712,7 @@ pub(crate) fn check_reloaded(
                 // (D-964), so its views record nothing.
                 front_reads: Vec::new(),
                 thir,
+                drops: resolved.external_drops(),
                 interface: iface,
                 warnings: Vec::new(),
             });
@@ -1459,6 +1475,7 @@ impl BuildInputs<'_> {
                 deps,
                 front_reads,
                 thir,
+                drops: resolved.external_drops(),
                 interface: iface,
                 warnings: Vec::new(),
             }),

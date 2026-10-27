@@ -2373,7 +2373,7 @@ block1 cold:
 ; userextname1 = cb$imp$cheby_rt_stack_slow_unwind
 ; userextname2 = cb$slot$std$io$println
 ; userextname3 = cb$str$fn$hello_world$main$1
-function u0:32(i64) -> i64 tail {
+function u0:24(i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname1
     gv2 = symbol colocated userextname2
@@ -2410,7 +2410,7 @@ block1 cold:
 ; cb$entry$main$hello_world
 ; userextname0 = cb$slot$hello_world$main
 ; userextname1 = cb$imp$cheby_rt_drop
-function u0:33(i64) -> i64 system_v {
+function u0:24(i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname1
     sig0 = (i64) -> i64 tail
@@ -2464,7 +2464,7 @@ block1 cold:
 
 ; cb$tramp$0
 ; userextname0 = cb$imp$cheby_rt_dup
-function u0:34(i64, i64) -> i64 system_v {
+function u0:25(i64, i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) system_v
     sig1 = (i64, i64) -> i64 tail
@@ -2519,7 +2519,7 @@ block1 cold:
 
 ; cb$tramp$1
 ; userextname0 = cb$imp$cheby_rt_dup
-function u0:35(i64, i64, i64) -> i64 system_v {
+function u0:26(i64, i64, i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64) -> i64 tail
@@ -2574,7 +2574,7 @@ block1 cold:
 
 ; cb$tramp$2
 ; userextname0 = cb$imp$cheby_rt_dup
-function u0:36(i64, i64, i64, i64) -> i64 system_v {
+function u0:27(i64, i64, i64, i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64, i64) -> i64 tail
@@ -2629,7 +2629,7 @@ block1 cold:
 
 ; cb$tramp$3
 ; userextname0 = cb$imp$cheby_rt_dup
-function u0:37(i64, i64, i64, i64, i64) -> i64 system_v {
+function u0:28(i64, i64, i64, i64, i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64, i64, i64) -> i64 tail
@@ -2684,7 +2684,7 @@ block1 cold:
 
 ; cb$tramp$4
 ; userextname0 = cb$imp$cheby_rt_dup
-function u0:38(i64, i64, i64, i64, i64, i64) -> i64 system_v {
+function u0:29(i64, i64, i64, i64, i64, i64) -> i64 system_v {
     gv0 = symbol colocated userextname0
     sig0 = (i64) system_v
     sig1 = (i64, i64, i64, i64, i64, i64) -> i64 tail

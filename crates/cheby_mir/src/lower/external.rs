@@ -21,17 +21,54 @@
 //! (`foreign_sig_with_context`, D-745). A std external
 //! whose symbol is a std intrinsic gets the intrinsic's generated body
 //! instead of a foreign call (D-693, `intrinsic.rs`).
+//!
+//! The wrapper of a package's `@external(native, …)` outside std calls C
+//! code (D-940), which needs three more things (§12.5.1; std's wrappers do
+//! not change, since its kernels are Rust, never return NULL and take and
+//! return its handle types as runtime kinds):
+//!
+//! - An argument of an external type declared outside std crosses as its
+//!   handle, the word at offset 8 of its D-590 object (§12.5.1: an
+//!   external type crosses as a pointer), read with an `unbox` to `U64`
+//!   (the object has a boxed `U64`'s shape) and passed as `u64`. The
+//!   argument stays held until the
+//!   call is over (a `use` of it last).
+//! - A result of such an external type is the raw handle, `u64`, which
+//!   `cheby_rt_ffi_external` wraps in a new value of the type's layout,
+//!   NULL included (D-947, D-590).
+//! - A result of any other counted type is checked by
+//!   `cheby_rt_ffi_value`: a NULL result panics with ``foreign function
+//!   `<symbol>` returned null`` at the declaration (D-947,
+//!   GAP(null-results-outside-std)).
+//!
+//! A failed `cheby_ffi_` allocation sets the unwind flag (D-946). After a
+//! call whose result one of the two helpers takes, code generation tests
+//! the flag after the helper instead of after the call (`cheby_codegen_clif`'s
+//! `func.rs`), so the helper sees it: the external helper releases the
+//! handle, and the cleanup of the value helper's edge releases the owned
+//! result, before the wrapper unwinds. A scalar or `Nil` result needs no
+//! release: the flag's test after the call unwinds at once.
 
-use cheby_iface::{FnSig, Ice, PackageId};
+use cheby_iface::{FnSig, Ice, ItemSig, PackageId, Ty, TyKind, TypeDefKind};
 use cheby_types::thir;
 
 use crate::builder::FunctionBuilder;
 use crate::ir::{
-    Abi, Const, FnKey, Function, Operand, PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
+    Abi, Const, FnKey, Function, Local, Operand, PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
 };
+use crate::layout::type_key;
 use crate::lower::LowerCx;
 use crate::lower::intrinsic::{Intrinsic, lower_intrinsic};
-use crate::repr::{CType, Repr, foreign_sig_with_context, repr_of};
+use crate::repr::{CType, ForeignSig, Repr, foreign_sig_with_context, repr_of};
+
+/// The runtime's helper that wraps a package's foreign result of an
+/// external type (`cheby_runtime::abi::sym::FFI_EXTERNAL`; this crate does
+/// not depend on the runtime, and a test compares the names).
+const FFI_EXTERNAL: &str = "cheby_rt_ffi_external";
+
+/// The runtime's helper that checks a package's foreign result of a
+/// counted type (`cheby_runtime::abi::sym::FFI_VALUE`).
+const FFI_VALUE: &str = "cheby_rt_ffi_value";
 
 /// The function of `f`, whose `@external(native, …)` is `ext`: the
 /// Cheby-ABI wrapper of its kernel, or a std intrinsic's generated body.
@@ -62,19 +99,24 @@ pub(super) fn lower_wrapper(
         }
         return lower_intrinsic(intrinsic, f, sig, cx);
     }
+    // C code of a package outside std (D-940): external values cross as
+    // their handles and its results are checked (module documentation).
+    let package = !in_std(f, cx)?;
     let ret_repr = repr_of(sig.ret, globals);
     let mut b = FunctionBuilder::new(FnKey::Item(f.def), Abi::Cheby, Repr::Value, f.span)?;
-    b.set_entry_loc(&cx.location(f.span)?)?;
-    let fsig = foreign_sig_with_context(sig, globals, ext.context);
+    let location = cx.location(f.span)?;
+    b.set_entry_loc(&location)?;
+    let mut fsig = foreign_sig_with_context(sig, globals, ext.context);
     let mut args = Vec::with_capacity(sig.params.len().saturating_add(1));
     if ext.context {
         // The running fiber's context, the kernel's first argument
         // (D-692, D-745).
         args.push(Operand::Const(Const::Ctx));
     }
+    let mut params = Vec::with_capacity(sig.params.len());
     for p in &sig.params {
         let local = b.add_param(repr_of(p.ty, globals), Some(p.name), Some(p.ty))?;
-        args.push(Operand::Local(local));
+        params.push((local, package && external_type(p.ty, cx)?.is_some()));
     }
     if !allowed_in_constants(f, cx)? {
         let symbol = b.string(&ext.symbol)?;
@@ -82,6 +124,17 @@ pub(super) fn lower_wrapper(
             RuntimeFn::EffectCheck,
             vec![Operand::Const(Const::Str(symbol))],
         )?;
+    }
+    let first_param = usize::from(ext.context);
+    let kept = pass_params(&mut b, &params, &mut args, &mut fsig, first_param)?;
+    let external_ret = if package {
+        external_type(sig.ret, cx)?
+    } else {
+        None
+    };
+    if external_ret.is_some() {
+        // The raw handle, wrapped below (D-947).
+        fsig.ret = CType::U64;
     }
     let call = Rvalue::CallForeign {
         symbol: ext.symbol.clone(),
@@ -91,7 +144,14 @@ pub(super) fn lower_wrapper(
         // generation reads the flag.
         blocking: ext.blocking,
     };
-    let result = if fsig.ret == CType::Void {
+    let result = if let Some(type_key) = external_ret {
+        let handle = b.assign(Repr::U64, call)?;
+        Operand::Local(wrap_external(&mut b, handle, type_key)?)
+    } else if package && fsig.ret == CType::Ptr {
+        let raw = b.assign(Repr::Value, call)?;
+        check_value(&mut b, raw, &ext.symbol, &location)?;
+        Operand::Local(raw)
+    } else if fsig.ret == CType::Void {
         b.push(Stmt::Eval(call))?;
         Operand::Const(Const::Nil)
     } else {
@@ -110,8 +170,132 @@ pub(super) fn lower_wrapper(
             Operand::Local(boxed)
         }
     };
+    // An external argument whose handle C was given stays held until the
+    // call and its checks are over: without this use its last use would be
+    // the read of its handle, and counting would release it (and run its
+    // drop function) before C sees the handle. Last, so no allocation
+    // follows its release.
+    for local in kept {
+        b.assign(Repr::Value, Rvalue::Use(Operand::Local(local)))?;
+    }
     b.terminate(Terminator::Return(result))?;
     b.finish()
+}
+
+/// Pushes the foreign call's arguments for `params` (each a parameter and
+/// whether it is a package's external value) onto `args`, the C parameter
+/// at `first_param` plus its index in `fsig`: a plain parameter as it is,
+/// an external value as its handle, a `u64` (§12.5.1, D-590). Returns the
+/// external parameters, which the wrapper keeps held past the call.
+fn pass_params(
+    b: &mut FunctionBuilder,
+    params: &[(Local, bool)],
+    args: &mut Vec<Operand>,
+    fsig: &mut ForeignSig,
+    first_param: usize,
+) -> Result<Vec<Local>, Ice> {
+    let mut kept = Vec::new();
+    for (n, &(local, external)) in params.iter().enumerate() {
+        if !external {
+            args.push(Operand::Local(local));
+            continue;
+        }
+        // The handle is the word at offset 8 of the 16-byte object, which
+        // has a boxed `U64`'s shape (a header, then one raw word), so
+        // `unbox` reads it (an object is never a tagged word).
+        let handle = b.assign(
+            Repr::U64,
+            Rvalue::Unbox {
+                value: Operand::Local(local),
+                to: Repr::U64,
+            },
+        )?;
+        args.push(Operand::Local(handle));
+        if let Some(ctype) = fsig.params.get_mut(first_param.saturating_add(n)) {
+            *ctype = CType::U64;
+        }
+        kept.push(local);
+    }
+    Ok(kept)
+}
+
+/// The key of `ty` (D-559) when it is an external type declared outside
+/// std (§12.5.3): its values are D-590 objects of a layout the runtime
+/// registered from the declaring module's record (D-1168). Std's handle
+/// types are runtime kinds (D-647, D-703, D-982), never wrapped here.
+fn external_type(ty: Ty, cx: &LowerCx<'_>) -> Result<Option<u64>, Ice> {
+    let TyKind::Named { def, .. } = cx.defs.globals.types.kind(ty) else {
+        return Ok(None);
+    };
+    let def = *def;
+    let item = cx.defs.item(def)?;
+    if !matches!(&item.sig, ItemSig::Type(t) if matches!(t.kind, TypeDefKind::External)) {
+        return Ok(None);
+    }
+    if cx.defs.modules.try_get(def.module)?.package == PackageId::STD {
+        return Ok(None);
+    }
+    let name = cx.defs.name(def)?;
+    Ok(Some(type_key(&name.module, &name.item)))
+}
+
+/// Wraps `handle`, the raw result of a package's foreign function whose
+/// result is an external type, in a new value of that type, NULL included
+/// (D-947, D-590): `cheby_rt_ffi_external(ctx, handle, type_key)`, which
+/// releases the handle and unwinds instead when a `cheby_ffi_` allocation
+/// of the call failed (D-946).
+fn wrap_external(b: &mut FunctionBuilder, handle: Local, type_key: u64) -> Result<Local, Ice> {
+    b.assign(
+        Repr::Value,
+        Rvalue::CallForeign {
+            symbol: FFI_EXTERNAL.into(),
+            sig: ForeignSig {
+                params: vec![CType::Ptr, CType::U64, CType::U64],
+                ret: CType::Ptr,
+            },
+            args: vec![
+                Operand::Const(Const::Ctx),
+                Operand::Local(handle),
+                Operand::Const(Const::Sized {
+                    repr: Repr::U64,
+                    bits: type_key,
+                }),
+            ],
+            blocking: false,
+        },
+    )
+}
+
+/// Checks `raw`, the owned result of the package's foreign function
+/// `symbol` whose result is a counted value:
+/// `cheby_rt_ffi_value(ctx, raw, message, location)` unwinds after a
+/// failed `cheby_ffi_` allocation of the call, and the cleanup releases
+/// `raw` (D-946); a NULL `raw` panics with D-947's message at the
+/// `@external` function's declaration, `location`
+/// (GAP(null-results-outside-std): std's kernels are Rust and never
+/// return NULL, so only packages' wrappers check).
+fn check_value(
+    b: &mut FunctionBuilder,
+    raw: Local,
+    symbol: &str,
+    location: &str,
+) -> Result<(), Ice> {
+    let message = b.string(&format!("foreign function `{symbol}` returned null"))?;
+    let location = b.string(location)?;
+    b.push(Stmt::Eval(Rvalue::CallForeign {
+        symbol: FFI_VALUE.into(),
+        sig: ForeignSig {
+            params: vec![CType::Ptr, CType::Ptr, CType::Ptr, CType::Ptr],
+            ret: CType::Void,
+        },
+        args: vec![
+            Operand::Const(Const::Ctx),
+            Operand::Local(raw),
+            Operand::Const(Const::Str(message)),
+            Operand::Const(Const::Str(location)),
+        ],
+        blocking: false,
+    }))
 }
 
 /// The native body of a function whose only implementation is an
@@ -175,3 +359,7 @@ fn allowed_in_constants(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<bool, Ice> 
 fn in_std(f: &thir::FnDef, cx: &LowerCx<'_>) -> Result<bool, Ice> {
     Ok(cx.defs.modules.try_get(f.def.module)?.package == PackageId::STD)
 }
+
+#[cfg(test)]
+#[path = "external_tests.rs"]
+mod tests;

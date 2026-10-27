@@ -9,7 +9,7 @@ use crate::abi::{PanicKind, Word};
 use crate::ctx::ExecCtx;
 use crate::handles::{self, HandleKind};
 use crate::unwind::guard::guarded;
-use crate::unwind::raise::{raise_cancel, raise_panic};
+use crate::unwind::raise::{raise_cancel, raise_panic_from_wait};
 
 /// `fiber::sys_join`, private, which `fiber::join` calls: waits until the
 /// fiber of the borrowed handle `fiber` has ended and returns its value,
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn cheby_fiber_sys_join(ctx: *mut ExecCtx, fiber: Word) ->
                 raise_cancel(Some(ctx))
             }
             Ok(Joined::Failed) => {
-                raise_panic(Some(ctx), PanicKind::Explicit, Some("joined fiber failed"))
+                raise_panic_from_wait(Some(ctx), PanicKind::Explicit, Some("joined fiber failed"))
             }
             Err(cancel::Cancelled) => raise_cancel(Some(ctx)),
         }

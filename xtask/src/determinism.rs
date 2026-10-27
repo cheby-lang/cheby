@@ -23,14 +23,16 @@
 //!    bypasses reads and still writes (D-965). The two caches' `v1/blob/`
 //!    and `v1/rec/` trees must be identical byte for byte; `v1/hint/` is
 //!    left out. D-972's warm rebuild is K8's (M3 wave 10).
-//! 4. Executables (D-934): every runnable example (not `skip-run`) is also
-//!    built with `cheby build -o <dir>/<example>` from each of the two
-//!    copies, with a fresh cache of its own and the same basename. The two
-//!    executables must be identical byte for byte; where `cheby build`
-//!    refuses the program (a "not available yet" tool error, D-924, or a
-//!    compile error), the two refusals' status and standard error must be.
-//!    Any other failure, and a refusal of an example in [`MUST_BUILD`],
-//!    fails the check.
+//! 4. Executables (D-934): every runnable example (one whose `test.toml`
+//!    has no `skip-run`, [`must_build`]) is also built with
+//!    `cheby build -o <dir>/<example>` from each of the two copies, with a
+//!    fresh cache of its own and the same basename. Every one of them must
+//!    build, and its two executables must be identical byte for byte
+//!    (D-1164, D-934): a refusal of a runnable example, even one "not
+//!    available yet" (D-924) or a compile error, fails the check like any
+//!    other failure of `cheby build`. There is no list: an example joins
+//!    the moment its `skip-run` goes. Examples with `skip-run` are only
+//!    checked, never built into executables.
 //!    The runtime archive is built with `cheby` ([`crate::build_cheby`],
 //!    D-929).
 
@@ -65,7 +67,7 @@ pub fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String
     let examples = example::all(root)?;
     let runnable: Vec<String> = examples
         .iter()
-        .filter(|ex| !ex.config.skip_run)
+        .filter(|ex| must_build(ex))
         .map(|ex| ex.name.clone())
         .collect();
     let mut all: Vec<(String, PathBuf)> =
@@ -262,9 +264,10 @@ fn report_executables(base: &Path, name: &str) -> Result<bool, String> {
     })
 }
 
-/// D-934: the two executables of `name`, byte for byte, or, when the
-/// build refused the program, the two refusals. `Ok` says what was
-/// compared, naming the executable; `Err` gives the first difference.
+/// D-934: the two executables of `name`, a runnable example, byte for
+/// byte. `Ok` says what was compared, naming the executable; `Err` gives
+/// the first difference, or the failure of a build that did not succeed
+/// twice, which no runnable example may have (D-1164).
 fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>, String> {
     let [(a, _, _), (b, _, _)] = BUILDS;
     let read_log = |label: &str| {
@@ -282,7 +285,7 @@ fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>
         executable_path(base, b, name),
     );
     if !log_a.starts_with("exit: Some(0)\n") {
-        return Ok(refusal(name, &log_a));
+        return Ok(Err(failed_build(&log_a)));
     }
     let read = |path: &Path| std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()));
     let (bytes_a, bytes_b) = (read(&exe_a)?, read(&exe_b)?);
@@ -308,73 +311,30 @@ fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>
     )))
 }
 
-/// The runnable examples `cheby build` must build (D-1164): every one
-/// since constants reach executables as images (K5a; D-924, D-979), the
-/// 29 that are not `skip-run`. A refusal of one of them is a failure; an
-/// example outside the list (none is runnable) may still be refused with
-/// D-1114's set (a "not available yet" tool error or a compile error,
-/// status 1).
-const MUST_BUILD: [&str; 29] = [
-    "001_hello_world",
-    "002_greet",
-    "003_fizzbuzz",
-    "004_tictactoe",
-    "005_prime_sieve",
-    "006_game_of_life",
-    "007_mandelbrot",
-    "008_json",
-    "009_counter_actor",
-    "010_guess_number",
-    "011_json_codec",
-    "012_shapes",
-    "013_dining_philosophers",
-    "014_word_count",
-    "015_expression_evaluator",
-    "016_plugins",
-    "017_generic_containers",
-    "018_worker_pool",
-    "019_supervisor",
-    "021_base64",
-    "022_bank_accounts",
-    "023_vending_machine",
-    "024_two_sum",
-    "025_linked_list",
-    "026_route_planner",
-    "027_lru_cache",
-    "028_money_and_rationals",
-    "029_csv_report",
-    "032_aoc_2024_day_1",
-];
+/// Whether `cheby build` must build `example` into an executable: every
+/// runnable example, the ones whose `test.toml` has no `skip-run` (D-1164,
+/// D-934). The rule reads `skip-run`, so an example joins the moment it
+/// runs; the others are only checked.
+fn must_build(example: &example::Example) -> bool {
+    !example.config.skip_run
+}
 
-/// Whether a `cheby build` that failed alike twice, as `log` records it,
-/// is a refusal module documentation item 4 allows: a "not available yet"
-/// tool error (D-924) or a compile error, with exit status 1, of an
-/// example not in [`MUST_BUILD`]. Any other failure (a missing or stale
-/// runtime archive, D-929 and D-930, no C compiler, a failed link, an
-/// internal error, a signal) fails the check, since nothing may skip on it.
-fn refusal(name: &str, log: &str) -> Result<String, String> {
+/// The failure of a `cheby build` of a runnable example that failed alike
+/// twice, as `log` records it. Every such failure fails the check (D-1164,
+/// D-934): a "not available yet" tool error (D-924) or a compile error as
+/// much as a missing or stale runtime archive (D-929, D-930), no C
+/// compiler, a failed link, an internal error or a signal.
+fn failed_build(log: &str) -> String {
+    let status = log.lines().next().unwrap_or("exit: (none)");
     let stderr = log.split_once("--- stderr\n").map_or("", |(_, e)| e);
     let first = stderr
         .lines()
         .find(|l| l.starts_with("error"))
         .unwrap_or("(no error line)");
-    let allowed = log.starts_with("exit: Some(1)\n")
-        && !stderr.contains("internal compiler error")
-        && (first.starts_with("error: `cheby build` is not available yet")
-            || first.starts_with("error: `cheby build --target native` is not available yet")
-            || first.starts_with("error[E"));
-    if !allowed {
-        return Err(format!(
-            "`cheby build` failed twice alike, and not with a \"not available yet\" tool error \
-             or a compile error: {first}"
-        ));
-    }
-    if MUST_BUILD.contains(&name) {
-        return Err(format!(
-            "`cheby build` must build this example, but refused it twice alike: {first}"
-        ));
-    }
-    Ok(format!("`cheby build` refused it twice alike: {first}"))
+    format!(
+        "`cheby build` must build every runnable example (D-1164, D-934), but failed twice \
+         alike ({status}): {first}"
+    )
 }
 
 /// The cache of the build of `name` under `top`: a different absolute
@@ -511,32 +471,75 @@ fn compare_dumps(a: &Path, b: &Path) -> Result<Option<String>, String> {
 mod tests {
     use super::*;
 
+    use cheby_test_support::example::{Example, TestConfig};
+    use cheby_test_support::milestone::Milestone;
+
     fn log(exit: &str, stderr: &str) -> String {
         format!("exit: {exit}\n--- stdout\n--- stderr\n{stderr}")
     }
 
-    /// Module documentation item 4: only a "not available yet" tool error
-    /// or a compile error counts as a refusal, and never for an example
-    /// that must build: since K5a every runnable example (D-1164, D-979).
+    fn example(name: &str, skip_run: bool) -> Example {
+        Example {
+            name: name.to_owned(),
+            dir: PathBuf::from(name),
+            config: TestConfig {
+                milestone: Milestone::M1,
+                skip_run,
+                reason: skip_run.then(|| "checked only".to_owned()),
+                timing: false,
+            },
+        }
+    }
+
+    /// A scratch `base` of `check-determinism` for one test, removed first.
+    fn scratch(test: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("xtask-determinism-{test}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        dir
+    }
+
+    /// Writes the two builds of `name` under `base` as `build_executable`
+    /// records them: each label's log and, if given, its executable.
+    fn builds(base: &Path, name: &str, logs: [&str; 2], exes: Option<[&[u8]; 2]>) {
+        let [(a, _, _), (b, _, _)] = BUILDS;
+        for (i, label) in [a, b].into_iter().enumerate() {
+            let exe = executable_path(base, label, name);
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(executable_log(base, label, name), logs[i]).unwrap();
+            if let Some(bytes) = exes {
+                std::fs::write(&exe, bytes[i]).unwrap();
+            }
+        }
+    }
+
+    /// Module documentation item 4, the logged rule (D-1164, D-934): every
+    /// runnable example (no `skip-run`) must build, so no refusal is
+    /// accepted for one, neither a "not available yet" tool error (D-924)
+    /// nor a compile error, which D-1114 accepted before the rule covered
+    /// every runnable example; any other failure fails as before, and two
+    /// identical executables pass. An example with `skip-run` is not built.
+    /// The test keeps the name it had under D-1114's accepted refusals, the
+    /// rule it pinned before D-1164 reached every runnable example.
     #[test]
     fn refusals_allowed_only_for_not_yet_and_compile_errors() {
+        assert!(must_build(&example("001_hello_world", false)));
+        assert!(must_build(&example("020_ffi_handle", false)));
+        assert!(!must_build(&example("031_web_scraper", true)));
+
+        let base = scratch("refusals");
         let not_yet = log(
             "Some(1)",
             "error: `cheby build --target native` is not available yet on Windows (planned for \
              M6)\n",
         );
-        assert!(refusal("020_ffi_handle", &not_yet).is_ok());
-        assert!(refusal("001_hello_world", &not_yet).is_err());
-        assert!(refusal("029_csv_report", &not_yet).is_err());
         let compile = log(
             "Some(1)",
             "error[E0053]: no symbol\n --> src/main.cheby:1:1\n",
         );
-        assert!(refusal("020_ffi_handle", &compile).is_ok());
-        assert!(refusal("002_greet", &compile).is_err());
-        assert!(refusal("005_prime_sieve", &compile).is_err());
-        assert!(refusal("025_linked_list", &not_yet).is_err());
-        assert_eq!(MUST_BUILD.len(), 29);
+        let mut refused = vec![not_yet, compile];
         for stderr in [
             "error: the runtime archive `/nonexistent/libcheby_rt_exe.a` does not exist\n",
             "error: the runtime archive `x` was built from another runtime\n",
@@ -544,12 +547,39 @@ mod tests {
             "error: the link failed\n",
             "",
         ] {
+            refused.push(log("Some(1)", stderr));
+        }
+        refused.push(log("None", "error[E0053]: x\n"));
+        refused.push(log("Some(101)", "error[E0053]: x\n"));
+        for (i, failed) in refused.iter().enumerate() {
+            let name = format!("{i:03}_example");
+            builds(&base, &name, [failed, failed], None);
+            let diff = compare_executables(&base, &name).unwrap().unwrap_err();
             assert!(
-                refusal("029_csv_report", &log("Some(1)", stderr)).is_err(),
-                "{stderr}"
+                diff.contains("must build every runnable example (D-1164, D-934)"),
+                "{diff}"
             );
         }
-        assert!(refusal("029_csv_report", &log("None", "error[E0053]: x\n")).is_err());
-        assert!(refusal("029_csv_report", &log("Some(101)", "error[E0053]: x\n")).is_err());
+
+        let ok = log("Some(0)", "");
+        builds(&base, "100_same", [&ok, &ok], Some([b"exe", b"exe"]));
+        let same = compare_executables(&base, "100_same").unwrap().unwrap();
+        assert!(same.contains("identical"), "{same}");
+        builds(&base, "101_other", [&ok, &ok], Some([b"exe", b"exf"]));
+        let other = compare_executables(&base, "101_other")
+            .unwrap()
+            .unwrap_err();
+        assert!(other.contains("differ at byte 2"), "{other}");
+        builds(
+            &base,
+            "102_one_failed",
+            [&ok, &refused[0]],
+            Some([b"exe", b"exe"]),
+        );
+        let one = compare_executables(&base, "102_one_failed")
+            .unwrap()
+            .unwrap_err();
+        assert!(one.contains("differs between the two builds"), "{one}");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

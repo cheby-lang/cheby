@@ -184,10 +184,11 @@ fn record_positions_same_unit_twice_same_bytes() {
 }
 
 /// A record of version 1, which had no positions, is refused like any
-/// other version, and the version is 2 (D-938).
+/// other version, and the version is 3 (D-938; 3 since the module records
+/// name their functions, D-1041).
 #[test]
 fn record_positions_old_version_refused() {
-    assert_eq!(RECORD_VERSION, 2);
+    assert_eq!(RECORD_VERSION, 3);
     let mut bytes = record(&with_positions(code_model_unit())).encode();
     bytes[4..8].copy_from_slice(&1_u32.to_le_bytes());
     assert_eq!(CodeRecord::decode(&bytes), Err(RecordError::Version(1)));

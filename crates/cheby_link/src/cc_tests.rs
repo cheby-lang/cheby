@@ -71,12 +71,56 @@ fn job<'a>(root: &'a TestDir, headers: &'a TestDir, source: &'a str) -> CompileJ
     }
 }
 
+/// D-1196's guard and typedef stay (the header only grows, D-945), around
+/// D-945's functions.
 #[test]
 fn native_cc_header_is_the_guard_and_the_typedef() {
-    assert_eq!(
-        HEADER,
-        "#ifndef CHEBY_H\n#define CHEBY_H\n\ntypedef struct cheby_value cheby_value;\n\n#endif\n"
+    assert!(
+        HEADER.starts_with("#ifndef CHEBY_H\n#define CHEBY_H\n"),
+        "{HEADER}"
     );
+    assert!(HEADER.ends_with("\n#endif\n"), "{HEADER}");
+    assert!(
+        HEADER.contains("\ntypedef struct cheby_value cheby_value;\n"),
+        "{HEADER}"
+    );
+}
+
+/// D-945, GAP(ffi-table-order): `cheby.h` declares each `cheby_ffi_`
+/// function once, in `cheby_runtime::ffi::NAMES`' order, and nothing else
+/// with the prefix; the forwarder defines each one as a call through its
+/// entry of `cheby_ffi_table`, whose last word is the null of D-1196.
+#[test]
+fn native_forwarder_follows_the_headers_order() {
+    let names = cheby_runtime::ffi::NAMES;
+    let mut previous = 0;
+    for name in names {
+        let declaration = format!("{name}(");
+        let at = HEADER
+            .find(&declaration)
+            .unwrap_or_else(|| panic!("{name}"));
+        assert!(at > previous, "{name} out of order");
+        assert_eq!(HEADER.matches(&declaration).count(), 1, "{name}");
+        previous = at;
+    }
+    assert_eq!(HEADER.matches("cheby_ffi_").count(), names.len());
+    let source = crate::shlib::FORWARDER_SOURCE;
+    assert!(source.contains("#include \"cheby.h\"\n"));
+    assert!(source.contains(&format!(
+        "void *cheby_ffi_table[{}] = {{ 0 }};",
+        crate::shlib::FFI_TABLE_LEN
+    )));
+    assert_eq!(crate::shlib::FFI_TABLE_LEN, names.len() + 1);
+    for (index, name) in names.iter().enumerate() {
+        let definition = source
+            .split("\n\n")
+            .find(|part| part.contains(&format!("{name}(")))
+            .unwrap_or_else(|| panic!("the forwarder does not define {name}"));
+        assert!(
+            definition.contains(&format!("cheby_ffi_table[{index}]")),
+            "{definition}"
+        );
+    }
 }
 
 #[test]
@@ -257,6 +301,52 @@ fn native_shlib_links_the_objects_and_the_forwarder() {
     })
     .unwrap();
     assert_eq!(bytes, again);
+}
+
+/// D-941, D-945: the forwarder defines every function of `cheby.h`, and
+/// each calls the runtime's function its entry of `cheby_ffi_table` holds
+/// once the table is filled, as `cheby_jit::NativeLibrary::open` fills it.
+#[test]
+#[cfg(unix)]
+fn native_forwarder_calls_through_the_table() {
+    use std::ffi::CString;
+    let bytes = link_shared(&SharedJob {
+        package: "app",
+        objects: &[],
+        libraries: &[],
+    })
+    .unwrap();
+    let out = TestDir::new("forwarder");
+    let mut names = cheby_runtime::ffi::NAMES.to_vec();
+    names.push(FFI_TABLE);
+    assert!(defines(&out, &bytes, &names).iter().all(|&found| found));
+    let path = out.path().join(crate::shlib::file_name("app"));
+    let file = CString::new(path.to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path; `defines` opened it already.
+    let handle = unsafe { libc::dlopen(file.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    assert!(!handle.is_null());
+    let symbol = |name: &str| {
+        let name = CString::new(name).unwrap();
+        // SAFETY: a live handle and a valid NUL-terminated name.
+        unsafe { libc::dlsym(handle, name.as_ptr()) }
+    };
+    let table = symbol(FFI_TABLE).cast::<*const u8>();
+    for (index, address) in cheby_runtime::ffi::table().into_iter().enumerate() {
+        // SAFETY: the forwarder's table has one writable word per
+        // function, and nothing calls through it meanwhile.
+        unsafe { table.add(index).write(address) };
+    }
+    // SAFETY: the forwarder's definitions, with `cheby.h`'s signatures.
+    // An `Int` is a tagged word, so no value is allocated and no fiber is
+    // needed.
+    unsafe {
+        let int_new: unsafe extern "C" fn(i64) -> *mut std::ffi::c_void =
+            std::mem::transmute(symbol("cheby_ffi_int_new"));
+        let int_get: unsafe extern "C" fn(*mut std::ffi::c_void) -> i64 =
+            std::mem::transmute(symbol("cheby_ffi_int_get"));
+        assert_eq!(int_get(int_new(21)), 21);
+        assert_eq!(int_get(std::ptr::null_mut()), 0, "NULL means nothing");
+    }
 }
 
 /// D-941: a package that names only `libraries` gets the forwarder alone,

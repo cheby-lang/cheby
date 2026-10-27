@@ -1,0 +1,27 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! Without `CHEBY_BACKTRACE`, the program of `nested_calls` prints the
+//! report's two lines and nothing more: the harness removes the variable
+//! from every test that does not set it (§11.6).
+
+import std::io
+import std::list
+
+fn check(n: Int) -> Int {
+  case {
+    n > 2 => panic as "too big: {n}"
+    _ => n * 2
+  }
+}
+
+fn double_all(xs: List<Int>) -> List<Int> {
+  let doubled = list::map(xs, fn(n) { 1 + check(n) })
+  doubled
+}
+
+fn main() {
+  let doubled = double_all([1, 2, 3])
+  let count = list::length(doubled)
+  io::println("{count}")
+}

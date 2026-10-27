@@ -1054,6 +1054,10 @@ mod tests {
     const RELEASES: &str = "calls the guarded slow path, which sets the flag and returns, tests the \
                             flag, then releases words only through `rc::drop`, which never raises \
                             (D-171, D-775)";
+    const STUB: &str = "a naked stub that passes its caller's frame record to its body (D-1040), \
+                        or a plain function calling that body";
+    const SLOW_BODY: &str = "runs the slow path in its guard (`stack_slow_at`), which sets the flag \
+                             and returns (D-700)";
 
     /// The `extern "C"` functions of the crate that never unwind, with the
     /// reason, by file (relative to `src/`) and name (`$name` inside a
@@ -1066,6 +1070,19 @@ mod tests {
         ("reuse.rs", "cheby_rt_free_unique", DROP),
         ("reuse.rs", "cheby_rt_reuse_hit", COUNTS),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
+        ("panic.rs", "panic_from", RAISES_ITSELF),
+        ("panic.rs", "cheby_rt_stack_slow", STUB),
+        ("panic.rs", "stack_slow_from", SLOW_BODY),
+        ("panic.rs", "cheby_rt_stack_slow_frame", STUB),
+        ("panic.rs", "stack_slow_frame_from", SLOW_BODY),
+        ("ffi.rs", "cheby_rt_ffi_value", STUB),
+        ("ffi.rs", "ffi_value_from", RAISES_ITSELF),
+        ("unwind/entry_slow.rs", "stack_slow_unwind_from", RELEASES),
+        (
+            "unwind/entry_slow.rs",
+            "stack_slow_frame_unwind_from",
+            RELEASES,
+        ),
         (
             "unwind/entry_slow.rs",
             "cheby_rt_stack_slow_unwind",
