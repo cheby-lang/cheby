@@ -366,6 +366,106 @@ fn backtrace_walk_caps_the_records() {
     );
 }
 
+/// D-1235: a run of equal lines that the line cap cuts adds the frames it
+/// does not print to `(<n> more frames)` and prints no `(repeated …)`
+/// line, whether the cap falls after its first line or its second; a run
+/// whose three lines fill the cap folds as usual. A run that folds below
+/// the cap leaves its `(repeated …)` line out of the count (D-1039: lines
+/// are counted after folding).
+#[test]
+fn backtrace_walk_line_cap_cuts_a_run() {
+    let head = "backtrace:\n  in demo::check at a.cheby:1:2\n";
+    let a_line = "  in demo::a at src/main.cheby:50:3\n";
+    let pair = format!("{a_line}  in demo::b at src/main.cheby:60:3\n");
+    let rec = "  in demo::rec at src/main.cheby:40:3\n";
+    let walk = |pairs: usize, lone_a: bool| {
+        let mut chain = vec![F::Check];
+        for _ in 0..pairs {
+            chain.extend([F::A, F::B]);
+        }
+        if lone_a {
+            chain.push(F::A);
+        }
+        chain.extend([F::Rec; 10]);
+        chain.push(F::Main);
+        let walked = text(&chain, OUTSIDE_CODE, "a.cheby:1:2", true);
+        assert_eq!(
+            walked.lines().filter(|l| l.starts_with("  in ")).count(),
+            MAX_LINES,
+            "{walked}"
+        );
+        walked
+    };
+    // The cap falls after the run's first line: its other 9 frames and
+    // `main` are the 10 more frames.
+    assert_eq!(
+        walk(49, false),
+        format!("{head}{}{rec}  (10 more frames)\n", pair.repeat(49))
+    );
+    // After its second line: 8 of the run and `main`.
+    assert_eq!(
+        walk(48, true),
+        format!(
+            "{head}{}{a_line}{}  (9 more frames)\n",
+            pair.repeat(48),
+            rec.repeat(2)
+        )
+    );
+    // The run's three lines are lines 98 to 100: the run folds, and only
+    // `main` is past the cap.
+    assert_eq!(
+        walk(48, false),
+        format!(
+            "{head}{}{}  (repeated 7 more times)\n  (1 more frames)\n",
+            pair.repeat(48),
+            rec.repeat(FOLD)
+        )
+    );
+    // A run that folds below the cap: its `(repeated …)` line does not
+    // count, so 1 + 3 + 96 lines fill the cap exactly.
+    let mut chain = vec![F::Check];
+    chain.extend([F::Rec; 10]);
+    for _ in 0..48 {
+        chain.extend([F::A, F::B]);
+    }
+    chain.push(F::Main);
+    assert_eq!(
+        text(&chain, OUTSIDE_CODE, "a.cheby:1:2", true),
+        format!(
+            "{head}{}  (repeated 7 more times)\n{}  (1 more frames)\n",
+            rec.repeat(FOLD),
+            pair.repeat(48)
+        )
+    );
+}
+
+/// D-1235: a walk that reaches both caps prints `(<n> more frames)`, then
+/// `(more frames not walked)`. The count holds every frame the walk read
+/// past the line cap, a run of equal lines that would have folded
+/// included: 4096 records give 4097 frames with the start's, and 100 of
+/// them print.
+#[test]
+fn backtrace_walk_reaches_both_caps() {
+    let mut chain = vec![F::Check];
+    for _ in 0..60 {
+        chain.extend([F::A, F::B]);
+    }
+    chain.extend(std::iter::repeat_n(F::Rec, MAX_FRAMES));
+    chain.push(F::Main);
+    let walked = text(&chain, OUTSIDE_CODE, "a.cheby:1:2", true);
+    let a_line = "  in demo::a at src/main.cheby:50:3\n";
+    let pair = format!("{a_line}  in demo::b at src/main.cheby:60:3\n");
+    let hidden = MAX_FRAMES + 1 - MAX_LINES;
+    assert_eq!(hidden, 3997);
+    assert_eq!(
+        walked,
+        format!(
+            "backtrace:\n  in demo::check at a.cheby:1:2\n{}{a_line}  ({hidden} more frames)\n{NOT_WALKED}\n",
+            pair.repeat(49)
+        )
+    );
+}
+
 /// D-1040's second start: the published record of the std function that
 /// called the kernel, which is not shown; the first line is its caller at
 /// the call that reached it.
