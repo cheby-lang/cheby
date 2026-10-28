@@ -310,7 +310,7 @@ The standard library's `test` blocks sit next to the code they test, in its sour
 
 The style itself is defined by the formatter, not by this specification. Examples in this specification use it: two-space indentation, one statement per line (D-1155), trailing commas in multi-line lists (D-1152), and multi-line pipelines with `|>` at the start of each line (D-1159).
 
-_Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns for now (D-1150). It sorts the imports within each block of imports, a run of imports on consecutive lines with no blank line or comment between them, by module path in byte order (D-1148). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147).
+_Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns (D-1252). It sorts the imports within each block of imports, a run of imports on consecutive lines with no blank line or comment between them, by module path in byte order (D-1148). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147).
 
 ## 13.8 Diagnostics and warnings
 
