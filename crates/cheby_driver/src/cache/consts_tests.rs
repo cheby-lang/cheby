@@ -594,7 +594,7 @@ fn main() {
 
 /// D-1188's tag 3: `pair` shares `base`'s list, so its image references
 /// `base`'s, and its entry lists `base`'s image with the hash of its
-/// bytes (GAP(const-image-references)). When `base`'s entry is gone,
+/// bytes (D-1261). When `base`'s entry is gone,
 /// `pair` hits but is evaluated again with `base`, so the two images
 /// installed together come from one evaluation; the run's asserts pass.
 #[test]
@@ -742,7 +742,7 @@ fn keys_after(
 /// D-1250 with D-1134: the keys before the check, from the package
 /// index's vouched front records alone (their reference summaries and
 /// source hashes), equal the keys after it, from the reach and
-/// `const_infos` (GAP(const-keys-before-check)).
+/// `const_infos` (D-1259).
 #[test]
 #[cfg_attr(
     windows,

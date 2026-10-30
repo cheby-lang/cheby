@@ -14,7 +14,7 @@
 //!   any value (D-948).
 //! - Parameters may hold external types at any depth, as opaque values.
 //! - A type parameter is not checked, whatever a call instantiates it with.
-//! - GAP(e0079-scope): the walk enters type arguments, tuple elements and
+//! - D-1270: the walk enters type arguments, tuple elements and
 //!   the fields of types declared outside the standard library (an alias
 //!   is already what it stands for); it does not enter function types or
 //!   `dyn` values, which foreign code cannot build at all, or the fields of

@@ -65,7 +65,7 @@ All gaps marked in the first draft were settled by D-126 to D-197, and later gap
 
 ### Examples
 
-Examples are written in Cheby with the formatting `cheby fmt` is expected to produce: two-space indentation, no semicolons, trailing commas in multi-line lists.
+Examples are written in Cheby with the formatting `cheby fmt` is expected to produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns (D-1252), type bodies and pipelines always broken with one variant, field or stage per line, and an arm's body on the arm's line with one space before `=>` (D-1274 to D-1276).
 
 ```cheby
 import std::io

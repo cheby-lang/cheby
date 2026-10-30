@@ -32,7 +32,7 @@
 //! The reservation is released by `free_memory` and on drop.
 //!
 //! **A record's functions in one span** (K4d; D-914, D-922;
-//! GAP(record-placement)). Calls between generated functions are direct
+//! D-1258). Calls between generated functions are direct
 //! (every generated symbol is colocated, D-913): a `bl` on aarch64 reaches
 //! ±128 MiB, a `call rel32` on x86-64 the whole arena. Before the loader
 //! defines a record's functions it asks for a code run of their total size

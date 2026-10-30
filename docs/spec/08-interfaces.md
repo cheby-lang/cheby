@@ -58,9 +58,11 @@ _Example:_ a `pub` type whose `show` is only package-visible does not satisfy `S
 
 ```cheby
 // geometry/angle.cheby
-pub type Angle { radians: Float }
+pub type Angle {
+  radians: Float,
+}
 
-fn show(a: Angle) -> String {   // package-visible, less visible than Angle
+fn show(a: Angle) -> String { // package-visible, less visible than Angle
   "{a.radians} rad"
 }
 ```
@@ -73,7 +75,10 @@ Function names in a module are unique and never overloaded, so a module can sati
 
 ```cheby
 // geometry/point.cheby
-pub type Point { x: Float, y: Float }
+pub type Point {
+  x: Float,
+  y: Float,
+}
 
 pub fn show(p: Point) -> String {
   "({p.x}, {p.y})"
@@ -204,9 +209,20 @@ For a type known at the conversion, the compiler supplies the descriptor statica
 ```cheby
 interface Any
 
-fn wrap<T: Any>(xs: List<T>) -> dyn Any { xs }      // OK: `T`'s descriptor comes from its bound
-fn label<T: Show>(xs: List<T>) -> dyn Show { xs }   // OK: the `Show` bound carries it
-fn wrap_bad<T>(xs: List<T>) -> dyn Any { xs }       // error: `T` has no bound, add one such as `T: Any`
+// OK: `T`'s descriptor comes from its bound
+fn wrap<T: Any>(xs: List<T>) -> dyn Any {
+  xs
+}
+
+// OK: the `Show` bound carries it
+fn label<T: Show>(xs: List<T>) -> dyn Show {
+  xs
+}
+
+// error: `T` has no bound, add one such as `T: Any`
+fn wrap_bad<T>(xs: List<T>) -> dyn Any {
+  xs
+}
 ```
 
 The check that a converted value's type satisfies `I`, and the choice of its function package and descriptor, are constraints resolved at the end of the enclosing top-level body, after numeric literals are defaulted, like operators and interface calls ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234, D-237). After `let x = 1` and `let d: dyn Show = x`, a later use of `x` as a `U8` gives `d` the descriptor of `U8` and `U8`'s `show`. If the converted value's type is still not fully known at the end, as in `let a: dyn Any = []` or `let b: dyn Any = None` with nothing fixing the element type, it is a compile error that asks for a type annotation. Only numeric literals are defaulted.

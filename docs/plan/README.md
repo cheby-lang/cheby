@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design), [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1), [M2 checkpoint 2 plan](../decisions/LOG.md#2026-10-12-m2-checkpoint-2-plan), [M2 checkpoint 2](../decisions/LOG.md#2026-10-14-m2-checkpoint-2), [M2 checkpoint 3 plan](../decisions/LOG.md#2026-10-14-m2-checkpoint-3-plan), [M2 checkpoint 3](../decisions/LOG.md#2026-10-14-m2-checkpoint-3), [M2 checkpoint 4a](../decisions/LOG.md#2026-10-16-m2-checkpoint-4a), [M2 checkpoint 4b](../decisions/LOG.md#2026-10-16-m2-checkpoint-4b), [M2 H1 checkpoint](../decisions/LOG.md#2026-10-17-m2-h1-checkpoint) [M2 H1 checkpoint report](../decisions/LOG.md#2026-10-18-m2-h1-checkpoint-report), [Global allocator](../decisions/LOG.md#2026-10-18-global-allocator), [M3 design](../decisions/LOG.md#2026-10-21-m3-design), [Scoped context values](../decisions/LOG.md#2026-10-23-scoped-context-values), [Standard-library additions, part 1](../decisions/LOG.md#2026-10-23-standard-library-additions-part-1), [M3 CP1 review](../decisions/LOG.md#2026-10-24-m3-cp1-review) and [M3 CP2 review](../decisions/LOG.md#2026-10-29-m3-cp2-review):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design), [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1), [M2 checkpoint 2 plan](../decisions/LOG.md#2026-10-12-m2-checkpoint-2-plan), [M2 checkpoint 2](../decisions/LOG.md#2026-10-14-m2-checkpoint-2), [M2 checkpoint 3 plan](../decisions/LOG.md#2026-10-14-m2-checkpoint-3-plan), [M2 checkpoint 3](../decisions/LOG.md#2026-10-14-m2-checkpoint-3), [M2 checkpoint 4a](../decisions/LOG.md#2026-10-16-m2-checkpoint-4a), [M2 checkpoint 4b](../decisions/LOG.md#2026-10-16-m2-checkpoint-4b), [M2 H1 checkpoint](../decisions/LOG.md#2026-10-17-m2-h1-checkpoint) [M2 H1 checkpoint report](../decisions/LOG.md#2026-10-18-m2-h1-checkpoint-report), [Global allocator](../decisions/LOG.md#2026-10-18-global-allocator), [M3 design](../decisions/LOG.md#2026-10-21-m3-design), [Scoped context values](../decisions/LOG.md#2026-10-23-scoped-context-values), [Standard-library additions, part 1](../decisions/LOG.md#2026-10-23-standard-library-additions-part-1), [M3 CP1 review](../decisions/LOG.md#2026-10-24-m3-cp1-review), [M3 CP2 review](../decisions/LOG.md#2026-10-29-m3-cp2-review) and [M3 wave 9](../decisions/LOG.md#2026-10-30-m3-wave-9):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -333,7 +333,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1104    | Windows targets use x86-64-v2 and Armv8.0, the flags of Linux, until M6 settles them                |
 | D-1118    | The cache root's owner and permission checks run on Unix only; M6 adds the Windows check            |
 | D-1128    | Tests and `xtask` never use the developer's cache, only fresh owner-only temporary ones             |
-| D-1132    | No module is checked twice; `run`, `test`, `build` check from source until K4d, N9 (D-1250)         |
+| D-1132    | No module is checked twice; warm `run`, `test` check only misses (D-1256); `build` all until N9     |
 | D-1140    | The `@aot` trial and UI build tests compare the build's output followed by the executable's         |
 | D-1141    | UI build tests are never blessed; their goldens are written by hand                                 |
 | D-1142    | A UI build test whose build fails compares the build's status and output, and runs nothing          |
@@ -344,19 +344,21 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1162    | Executables hold the toolchain's source paths until M6's distributed toolchain remaps them          |
 | D-1173    | The hidden `CHEBY_POSITIONS=off` turns source positions off until M3's exit or later (D-1251)       |
 | D-1174    | Linux executables hold the runtime archive's debug paths, the toolchain checkout's too, until M6    |
-| D-1180    | `cheby check` compiles std without borrow masks until std's code comes from the cache (K6)          |
-| D-1187    | Every command but the REPL evaluates constants on `plain` code, std without masks, until K6         |
-| D-1190    | The REPL evaluates constants in its session JIT, with std's masks, until K6                         |
+| D-1180    | `cheby check` compiled std without borrow masks until K6 cached std's one code (D-1264)             |
+| D-1187    | Every command but the REPL evaluates constants on `plain` code, std's one code from K6 (D-1264)     |
+| D-1190    | The REPL evaluates constants in its session JIT, with std's one code from K6 (D-1264)               |
 | D-1202    | `[native]` with sources or libraries is a tool error on Windows until M6                            |
 | D-1213    | E0038's probes import `std::process` until S7 moves them to a unit test                             |
-| D-1217    | Every JIT host compiles each unit alone into a code record; std's records are stored only from K6   |
-| D-1223    | `--reuse-report` reads no code record until K4d replays the reuse lines cached with a record        |
-| D-1250    | K4d ends the warm check from source for `run` and `test`, N9 for `build`                            |
+| D-1217    | Every JIT host compiles each unit alone into a code record; std's records are stored from K6        |
+| D-1223    | `--reuse-report` read no code record until K4d replayed the reuse lines beside it (D-1257)          |
+| D-1250    | K4d ends the warm check from source for `run` and `test` (D-1256), N9 for `build`                   |
 | D-1251    | Every record keeps source positions; hidden `CHEBY_POSITIONS` stays until M3's exit or later        |
 | D-1252    | `cheby fmt`'s width is 100 columns; T1b reformats the examples and std at 100 in wave 9             |
 | D-1253    | N9 lands linker GC of record entries in wave 10, names as offsets, no layout version change         |
 | D-1254    | Wave 9's gate reads x86-64 through `bench.yml` with the time outside `main` split                   |
 | D-1255    | A wave's commit pauses when rc or `rc/list_pipeline` reaches 1.05 on the Apple M3 or x86-64         |
+| D-1271    | `bench-run --split` splits the time outside `main` by subtraction, on x86-64 and the Apple M3       |
+| D-1272    | A wave's x86-64 reading runs on a candidate commit on a side branch; `aot` moves only after it      |
 
 ## Open questions
 

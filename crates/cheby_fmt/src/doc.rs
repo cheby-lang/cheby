@@ -94,7 +94,7 @@ pub enum Doc {
     /// by themselves in the rest of the line, whatever follows them; else
     /// printed as they are. A `case` arm's patterns, guard and `=>`, so
     /// that a body that stays on the arm's line never breaks them
-    /// (GAP(case-arm-layout)).
+    /// (D-1276).
     FlatIfFits(Rc<Doc>),
 }
 

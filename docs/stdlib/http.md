@@ -128,9 +128,11 @@ test "redirects are followed, and a loop of them ends" {
   fiber::spawn_detached(fn() {
     http::serve_on(listener, fn(request) {
       case request.path {
-        "/old" => http::text(301, "") |> http::with_header(_, "location", "/new")
+        "/old" => http::text(301, "")
+          |> http::with_header(_, "location", "/new")
         "/new" => http::text(200, "moved here")
-        _ => http::text(302, "") |> http::with_header(_, "location", "/loop")
+        _ => http::text(302, "")
+          |> http::with_header(_, "location", "/loop")
       }
     })
   })
@@ -364,8 +366,7 @@ Returns `response` with the header `name` set to `value`. Every header of that n
 
 ```cheby
 test "with_header replaces every header of that name" {
-  let response =
-    http::text(200, "hi")
+  let response = http::text(200, "hi")
     |> http::with_header(_, "X-Trace", "1")
     |> http::with_header(_, "x-trace", "2")
   assert response.headers == [("content-type", "text/plain; charset=utf-8"), ("x-trace", "2")]
@@ -384,8 +385,7 @@ Returns `response` with the header `name: value` added at the end, with `name` i
 
 ```cheby
 test "add_header keeps the headers of the same name" {
-  let response =
-    http::text(200, "hi")
+  let response = http::text(200, "hi")
     |> http::add_header(_, "Set-Cookie", "a=1")
     |> http::add_header(_, "set-cookie", "b=2")
   assert list::filter(response.headers, fn((name, _)) { name == "set-cookie" }) == [
@@ -410,7 +410,8 @@ Returns the value of the first header of `response` named `name`, compared witho
 
 ```cheby
 test "header matches names in any case" {
-  let response = http::text(405, "") |> http::with_header(_, "allow", "POST")
+  let response = http::text(405, "")
+    |> http::with_header(_, "allow", "POST")
   assert http::header(response, "allow") == Some("POST")
   assert http::header(response, "Allow") == Some("POST")
   assert http::header(response, "location") == None

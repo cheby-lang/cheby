@@ -511,7 +511,7 @@ mod tests {
         }
     }
 
-    /// D-1027, GAP(031-site): 031 runs against the fixture. Its `args` is
+    /// D-1027, D-1273: 031 runs against the fixture. Its `args` is
     /// the one placeholder, its `site/` holds the five pages, and it is no
     /// longer check-only.
     #[test]

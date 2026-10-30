@@ -5,7 +5,11 @@ Decoders, which turn a JSON value into typed data (D-320). A decoder is built fr
 ```cheby
 pub type Decoder<T>
 
-pub exposed type Error { expected: String, found: String, path: List<String> }
+pub exposed type Error {
+  expected: String,
+  found: String,
+  path: List<String>,
+}
 ```
 
 `Decoder<T>` is opaque. It decodes a `T`.
@@ -222,7 +226,8 @@ test "fields of nested objects add to the path" {
     use name <- decode::field("author", decode::field("name", decode::string(), decode::success))
     decode::success(name)
   }
-  assert json::parse(r#"{"author": {"name": "Toni Morrison"}}"#, author_name()) == Ok("Toni Morrison")
+  assert json::parse(r#"{"author": {"name": "Toni Morrison"}}"#, author_name()) ==
+    Ok("Toni Morrison")
   let problem = decode::Error { expected: "String", found: "Int", path: ["author", "name"] }
   assert json::parse(r#"{"author": {"name": 42}}"#, author_name()) == Err(json::Decode([problem]))
 }

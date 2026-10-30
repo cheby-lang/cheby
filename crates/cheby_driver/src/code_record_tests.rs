@@ -256,8 +256,8 @@ fn three(name: &str) -> Pkg {
 
 /// D-914, D-1192's "read to skip work": a cold run misses every package
 /// unit's code record and writes it; a warm run finds every one, so it
-/// lowers none of the package's units (std's and the entries unit are
-/// lowered, uncached until K6, D-964) and loads them from their records in
+/// lowers none of the package's units (std's load from std's own records,
+/// D-1264, and the entries unit is lowered, D-964) and loads them from their records in
 /// build order, writing no record.
 #[test]
 #[cfg_attr(
@@ -345,7 +345,7 @@ fn code_record_other_version_is_a_miss_and_written_again() {
         std::fs::write(&path, changed).unwrap();
         spoiled += 1;
     }
-    // The package's records, and std's once std is cached (K6).
+    // The package's records, and std's (D-1264).
     assert!(spoiled >= MODULES.len(), "{spoiled}");
     let again = p.run();
     assert_eq!(

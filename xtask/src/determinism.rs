@@ -527,6 +527,7 @@ mod tests {
     fn refusals_allowed_only_for_not_yet_and_compile_errors() {
         assert!(must_build(&example("001_hello_world", false)));
         assert!(must_build(&example("020_ffi_handle", false)));
+        // A synthetic check-only example: the real 031 runs since D-1273.
         assert!(!must_build(&example("031_web_scraper", true)));
 
         let base = scratch("refusals");

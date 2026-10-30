@@ -253,7 +253,9 @@ Writes `data` to the file at `path` unchanged, creating the file if it does not 
 
 ```cheby
 test "write_file_bytes needs the directory to exist" {
-  let assert Err(reason) = io::write_file_bytes("no/such/directory/out.bin", bytes::from_list([0x00]))
+  let assert Err(reason) = io::write_file_bytes("no/such/directory/out.bin", bytes::from_list([
+    0x00,
+  ]))
   assert io::is_not_found(reason)
 }
 ```

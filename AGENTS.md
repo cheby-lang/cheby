@@ -65,7 +65,7 @@ Never change language behavior in the spec, the examples or the compiler without
 
 ## Writing Cheby code
 
-Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists. Agents often get these rules wrong:
+Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, and an arm's body on the arm's line with one space before `=>`. Agents often get these rules wrong:
 
 - No `for`, `while`, `loop`, `if` or `else` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Guards use `when`.
 - No mutation and no shadowing (D-017, D-051). Every `let` introduces a new name.
@@ -127,6 +127,8 @@ cargo xtask coverage              # decisions cited in the spec that no test nam
 cargo xtask cross-check           # compiler parser against tree-sitter
 cargo xtask test-std              # std's own test blocks, one module at a time
 cargo xtask check-examples        # cheby check in every example
+# cheby fmt's form in std and the examples
+cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')
 cargo xtask check-determinism     # same outputs across thread counts and paths
 ```
 

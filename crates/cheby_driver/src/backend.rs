@@ -1203,7 +1203,7 @@ fn is_std(front: &Frontend, module: ModuleId) -> bool {
 /// under `BuildKind::StdSelfTest` (D-980, D-479), where std is the
 /// package and its masks are inferred over the build's units as a test
 /// build's are (D-779), so they never reach std's one code
-/// (GAP(std-self-test-kind)).
+/// (D-1265).
 fn is_self_test(front: &Frontend, roots: &Roots<'_>) -> bool {
     matches!(roots, Roots::Tests(tests) if tests.iter().any(|t| is_std(front, t.module)))
 }

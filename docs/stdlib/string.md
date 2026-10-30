@@ -311,7 +311,8 @@ test "join puts the separator between parts" {
   assert string::join(["a", "b", "c"], ", ") == "a, b, c"
   assert string::join(["only"], ", ") == "only"
   assert string::join([], ", ") == ""
-  assert ["x", "y"] |> string::join(_, "") == "xy"
+  assert ["x", "y"]
+    |> string::join(_, "") == "xy"
 }
 ```
 

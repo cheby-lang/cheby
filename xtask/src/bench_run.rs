@@ -39,7 +39,7 @@
 //! binary is built with `--release` first, or `--rust-bin` names a
 //! prebuilt one and cargo is not run for it.
 //!
-//! With `--split` (D-1254, GAP(split-buckets)), each benchmark's timed runs and stats run are
+//! With `--split` (D-1254, D-1271), each benchmark's timed runs and stats run are
 //! followed by the split of the time outside `main`, read only from what
 //! `cheby` already prints. Each binary first runs one untimed `cheby
 //! check` and `cheby run` (the warm-up), and builds the benchmark once with

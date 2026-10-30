@@ -115,7 +115,10 @@ _Example_, not a `test` because it needs a worker that runs until its channel cl
 ```cheby
 const request_id: context::Key<Option<String>> = context::key_without_default()
 
-fn submit(jobs: channel::Sender<(String, Option<String>)>, job: String) -> Result<Nil, (String, Option<String>)> {
+fn submit(
+  jobs: channel::Sender<(String, Option<String>)>,
+  job: String,
+) -> Result<Nil, (String, Option<String>)> {
   channel::send(jobs, (job, context::get(request_id)))
 }
 

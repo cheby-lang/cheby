@@ -587,7 +587,10 @@ Calls `f` on each element and returns the values of the `Some` results, in order
 ```cheby
 test "filter_map keeps the Some results" {
   assert list::filter_map([0, 2, 5], list::get(["a", "b", "c"], _)) == ["a", "c"]
-  assert list::filter_map(["1", "x", "3"], fn(text) { result::to_option(int::parse(text)) }) == [1, 3]
+  assert list::filter_map(["1", "x", "3"], fn(text) { result::to_option(int::parse(text)) }) == [
+    1,
+    3,
+  ]
 }
 ```
 

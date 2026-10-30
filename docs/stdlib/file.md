@@ -145,7 +145,10 @@ A file already closes at its last use (D-205). What the `with_*` functions add i
 `body` returns `Result<T, io::Error>`, so `use source <- file::with_open(path)` works in a function whose error type is `io::Error`. A function with its own error type keeps the IO inside the `with_*` call and maps the error outside it, after the call returns (D-1075):
 
 ```cheby
-type LoadError { ReadFailed(io::Error), Empty }
+type LoadError {
+  ReadFailed(io::Error),
+  Empty,
+}
 
 fn load(path: String) -> Result<String, LoadError> {
   let read = file::with_open(path, fn(source) { file::read_line(source) })

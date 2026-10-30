@@ -520,7 +520,7 @@ fn raised_out_of_memory(me: &crate::ctx::ExecCtx, word: u64) -> u64 {
     u64::from(word == 0 && flagged && raised)
 }
 
-/// D-950, D-817, GAP(blocking-package-shims): after a refused pool
+/// D-950, D-817, D-1268: after a refused pool
 /// thread, a fiber that runs another fiber's queued job inline acts for
 /// that fiber as a pool thread would: the `String` the other fiber's C
 /// code builds is charged to the other fiber's domain, and both domains
@@ -544,7 +544,7 @@ fn ffi_pool_job_inline_for_another_fiber_charges_its_domain() {
     assert!(stderr.contains("inline ok\n"), "{stderr}");
 }
 
-/// D-950, D-946, D-817, GAP(blocking-package-shims): a failed allocation
+/// D-950, D-946, D-817, D-1268: a failed allocation
 /// of another fiber's job run inline is recorded in that job and raised
 /// on its own fiber when it resumes, never on the fiber that ran it.
 #[test]

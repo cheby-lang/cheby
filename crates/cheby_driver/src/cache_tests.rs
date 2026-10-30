@@ -1675,7 +1675,7 @@ fn cache_hit_reader_lowering_edit_misses_the_reader() {
     assert_eq!(edited, code_run_lines(&all, &["app", "app::b", "app::c"]));
 }
 
-/// D-1250 (K4d, GAP(warm-check-before-keys)): the entry of every
+/// D-1250 (K4d, D-1256): the entry of every
 /// example's `main` and of every test it holds, `Result` mains with their
 /// `Show` dictionaries included, round-trips through the warm facts'
 /// encoding by names (`warm_keys::Naming`), so a warm hit's entries unit

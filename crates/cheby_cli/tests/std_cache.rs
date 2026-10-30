@@ -210,7 +210,7 @@ fn std_cache_second_command_parses_no_std() {
 /// D-980: after std's first use by one package, other commands of other
 /// packages that import other std modules parse no std module and miss
 /// no std front record, a `cheby check` first included
-/// (GAP(std-first-use-by-check): a check that reads no std record is std's
+/// (D-1266: a check that reads no std record is std's
 /// first use too).
 #[test]
 #[cfg_attr(

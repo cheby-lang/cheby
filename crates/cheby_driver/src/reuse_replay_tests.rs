@@ -1,5 +1,5 @@
 //! The reuse lines cached beside code records (K4d, D-965,
-//! GAP(reuse-lines-with-record)): their bytes round-trip, malformed ones
+//! D-1257): their bytes round-trip, malformed ones
 //! miss, a stale code key finds none, and a warm `--reuse-report` replays
 //! what a cold one printed, a unit without lines replaying none.
 //!

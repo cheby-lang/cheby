@@ -56,11 +56,15 @@ Unused items are warned about according to their visibility: an unused `priv` it
 
 ```cheby
 // src/web/session.cheby, package my_app
-pub type SessionId { SessionId(String) }
+pub type SessionId {
+  SessionId(String),
+}
 
-type Store { Store(List<SessionId>) }          // package-visible
+type Store { // package-visible
+  Store(List<SessionId>),
+}
 
-priv fn hash_token(token: String) -> String {  // this module only
+priv fn hash_token(token: String) -> String { // this module only
   …
 }
 
@@ -79,8 +83,12 @@ An item's signature must not mention a type that is less visible than the item i
 An alias is transparent (D-081), so only the types it stands for count, and the alias's own visibility does not matter. A `pub` function may use a `priv` alias of `Int`, because every caller can write `Int` instead (D-488).
 
 ```cheby
-priv type Secret { Secret(String) }
-type Token { Token(String) }
+priv type Secret {
+  Secret(String),
+}
+type Token {
+  Token(String),
+}
 
 fn reveal() -> Secret { … }    // error: package-visible `reveal` mentions `priv` type `Secret`
 pub fn issue() -> Token { … }  // error: `pub` `issue` mentions package-visible type `Token`
@@ -113,13 +121,17 @@ Any module of the current package, of a dependency or of `std` may be imported. 
 A path without braces always names a module, never an item. The root module is imported by the first segment alone: the package's own name inside the package, as in `import my_app`, and the dependency key in other packages ([§7.1](#71-packages)).
 
 ```cheby
-import std::list
-import std::io
-import my_app::web::router
 import json::decode as json_decode
+import my_app::web::router
+import std::io
+import std::list
 
 fn main() {
-  io::println(list::length([1, 2]) |> int::show)   // error: `int` is not imported
+  // error: `int` is not imported
+  io::println(
+    list::length([1, 2])
+    |> int::show,
+  )
 }
 ```
 

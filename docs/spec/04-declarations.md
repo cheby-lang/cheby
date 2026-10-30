@@ -183,11 +183,16 @@ Each variant introduces a **constructor** with the variant's name in the value n
 A type body that starts with a field (`name: Type`) declares a type with exactly one named-field variant whose constructor has the same name as the type (D-082):
 
 ```cheby
-pub type Point { x: Float, y: Float }
+pub type Point {
+  x: Float,
+  y: Float,
+}
 
 // is equivalent to
 
-pub type Point { Point { x: Float, y: Float } }
+pub type Point {
+  Point { x: Float, y: Float },
+}
 ```
 
 The type `Point` lives in the type namespace and the constructor `Point` in the value namespace, so the names do not clash (D-111).
@@ -225,7 +230,9 @@ pub type Table<V> = map::Map<String, V>
 To make a distinct type, declare a single-variant type instead:
 
 ```cheby
-pub type UserId { UserId(Int) }
+pub type UserId {
+  UserId(Int),
+}
 ```
 
 `exposed` is not allowed on aliases.

@@ -20,10 +20,12 @@
 //!   `key` lines (D-973, D-1224).
 //! - A miss is compiled eagerly and whole, its functions in parallel
 //!   (D-923), and its record written behind the command (D-1138), at most
-//!   once per process (D-1139). Std's units have no key until K6 (D-1192,
-//!   D-1193), so they are compiled every time and never stored; nor is the
-//!   entries unit (D-964), nor anything of a module with errors, which is
-//!   never lowered.
+//!   once per process (D-1139). Std's units are not stored here: a JIT host
+//!   with a cache that reads loads them from std's own code records, keyed
+//!   by the build ID and settings with no mask, callee or identity, which
+//!   std's first use writes (D-1264, D-1266; `std_cache.rs`). Nor is the
+//!   entries unit stored (D-964), nor anything of a module with errors,
+//!   which is never lowered.
 //! - `CHEBY_DUMP_DIR` bypasses reads (D-965) and still writes.
 //!   `--reuse-report` reads a record only with the reuse lines cached
 //!   beside it, which it replays (K4d, D-965, refining D-1223;

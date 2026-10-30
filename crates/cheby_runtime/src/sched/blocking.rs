@@ -914,7 +914,7 @@ pub unsafe extern "C" fn cheby_rt_blocking_call(
             out
         };
         let word = wait_for_job(Pool::global(), me, call, &Hooks::default());
-        // GAP(blocking-package-shims): a call that must unwind after its
+        // D-1268: a call that must unwind after its
         // job returns hands its result word back with the flag set, and
         // the wrapper's helper (`cheby_rt_ffi_value`, `cheby_rt_ffi_external`)
         // releases it on the fiber before the wrapper unwinds: an owned

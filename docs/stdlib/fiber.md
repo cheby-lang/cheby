@@ -62,9 +62,7 @@ test "a scope waits for every fiber spawned into it" {
   let (tx, rx) = channel::new::<Int>(3)
   let outcome = {
     use owner <- fiber::scope()
-    fiber::spawn(owner, fn() {
-      fiber::spawn(owner, fn() { channel::send(tx, 2) })
-    })
+    fiber::spawn(owner, fn() { fiber::spawn(owner, fn() { channel::send(tx, 2) }) })
     Nil
   }
   assert outcome == Ok(Nil)

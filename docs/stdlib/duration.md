@@ -216,7 +216,8 @@ Returns the sum of two spans. It makes `Duration` satisfy `Add`, so `a + b` call
 
 ```cheby
 test "add sums spans" {
-  assert duration::add(duration::milliseconds(700), duration::milliseconds(800)) == duration::milliseconds(1_500)
+  assert duration::add(duration::milliseconds(700), duration::milliseconds(800)) ==
+    duration::milliseconds(1_500)
   assert duration::seconds(1) + duration::milliseconds(-250) == duration::milliseconds(750)
 }
 ```
@@ -233,7 +234,8 @@ Returns `a` minus `b`, which is negative when `b` is the longer span. It makes `
 
 ```cheby
 test "sub may go below zero" {
-  assert duration::sub(duration::seconds(2), duration::milliseconds(500)) == duration::milliseconds(1_500)
+  assert duration::sub(duration::seconds(2), duration::milliseconds(500)) ==
+    duration::milliseconds(1_500)
   assert duration::seconds(1) - duration::seconds(3) == duration::seconds(-2)
 }
 ```
@@ -366,7 +368,8 @@ Returns the shorter of `a` and `b`, and `a` when they are equal.
 
 ```cheby
 test "min picks the shorter" {
-  assert duration::min(duration::seconds(3), duration::milliseconds(10)) == duration::milliseconds(10)
+  assert duration::min(duration::seconds(3), duration::milliseconds(10)) ==
+    duration::milliseconds(10)
 }
 ```
 

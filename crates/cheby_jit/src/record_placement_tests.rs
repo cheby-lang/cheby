@@ -1,5 +1,5 @@
 //! A record's functions in one span, and direct calls that reach (K4d;
-//! D-914, D-922; GAP(record-placement); `memory.rs`'s module docs): a
+//! D-914, D-922; D-1258; `memory.rs`'s module docs): a
 //! batch whose code is larger than aarch64's `bl` reaches loads and runs,
 //! with a direct call inside the first record and inside the last that
 //! each crosses tens of MiB of code, and each record's functions lie in one

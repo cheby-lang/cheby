@@ -3,7 +3,10 @@
 The running program as a process. Tier 3 has two functions: [`exit`](#exit), which ends the program with a chosen status, and [`until_interrupted`](#until_interrupted), which turns Ctrl-C or a request to stop into a cancellation of the code it runs (D-1073). Command-line arguments and environment variables stay in [`std::env`](env.md) (D-183, D-988). Tier 3 does not start other processes: nothing needs it yet, browsers cannot provide it, and adding it later breaks nothing (D-1024). In the form `cheby doc` prints:
 
 ```cheby
-pub exposed type Interrupt { Interrupted, Panicked(fiber::Panic) }
+pub exposed type Interrupt {
+  Interrupted,
+  Panicked(fiber::Panic),
+}
 ```
 
 - **`Interrupt`.** The error of [`until_interrupted`](#until_interrupted), with the shape of `fiber::Timeout`. It is `exposed`, so other packages match `process::Interrupted` and `process::Panicked(p)` in patterns and compare with `==` (D-181, D-1073).

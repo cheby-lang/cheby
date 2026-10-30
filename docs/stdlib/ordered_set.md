@@ -59,7 +59,10 @@ Returns a set of the given items, as if each were inserted in turn, so a repeate
 
 ```cheby
 test "from_list drops duplicates and keeps first positions" {
-  assert ordered_set::to_list(ordered_set::from_list(["pear", "apple", "pear"])) == ["pear", "apple"]
+  assert ordered_set::to_list(ordered_set::from_list(["pear", "apple", "pear"])) == [
+    "pear",
+    "apple",
+  ]
 }
 ```
 

@@ -33,7 +33,7 @@ _Example:_ `rx` is dropped at the start of the `0` branch, which closes the chan
 ```cheby
 fn take(rx: Receiver<Int>, remaining: Int, found: List<Int>) -> List<Int> {
   case remaining {
-    0 => found   // rx is released here
+    0 => found // rx is released here
     _ => {
       let assert Ok(n) = channel::receive(rx)
       take(rx, remaining - 1, [..found, n])

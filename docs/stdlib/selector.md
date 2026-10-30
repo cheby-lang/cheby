@@ -48,8 +48,7 @@ Returns `selector` with an arm that receives from `receiver` and passes the resu
 test "select takes a value from a ready arm" {
   let (tx, rx) = channel::new::<Int>(1)
   let assert Ok(Nil) = channel::send(tx, 7)
-  let got =
-    selector::new()
+  let got = selector::new()
     |> selector::receive(_, rx, fn(r) { r })
     |> selector::select
   assert got == Ok(7)
@@ -57,8 +56,7 @@ test "select takes a value from a ready arm" {
 
 test "a closed channel's arm is ready with Err(Nil)" {
   let (_, rx) = channel::new::<Int>(0)
-  let got =
-    selector::new()
+  let got = selector::new()
     |> selector::receive(_, rx, fn(r) { r })
     |> selector::select
   assert got == Err(Nil)
@@ -80,8 +78,7 @@ _Note:_ a timer arm of zero or less is ready at once and competes uniformly with
 ```cheby
 test "a timer arm is ready once its time has passed" {
   let (keep, never) = channel::new::<Int>(0)
-  let got =
-    selector::new()
+  let got = selector::new()
     |> selector::receive(_, never, fn(_) { "message" })
     |> selector::after(_, duration::milliseconds(10), fn() { "timer" })
     |> selector::select
@@ -91,8 +88,7 @@ test "a timer arm is ready once its time has passed" {
 }
 
 test "a timer of zero is ready at once" {
-  let got =
-    selector::new()
+  let got = selector::new()
     |> selector::after(_, duration::milliseconds(0), fn() { 1 })
     |> selector::select
   assert got == 1
@@ -132,8 +128,7 @@ test "a waiting selector takes a handoff on a capacity-0 channel" {
 test "select chooses among ready arms without favoring one" {
   let (_, left) = channel::new::<Nil>(0)
   let (_, right) = channel::new::<Nil>(0)
-  let choose =
-    selector::new()
+  let choose = selector::new()
     |> selector::receive(_, left, fn(_) { True })
     |> selector::receive(_, right, fn(_) { False })
   fn count(remaining, lefts) {
@@ -150,7 +145,9 @@ test "select chooses among ready arms without favoring one" {
 }
 
 test "a selector without arms waits until it is cancelled" {
-  let waited = fiber::timeout(duration::milliseconds(10), fn() { selector::select(selector::new::<Nil>()) })
+  let waited = fiber::timeout(duration::milliseconds(10), fn() {
+    selector::select(selector::new::<Nil>())
+  })
   assert waited == Err(fiber::TimedOut)
 }
 ```
@@ -177,16 +174,19 @@ It is written in Cheby over a private kernel, `sys_select_now`, implemented afte
 ```cheby
 test "select_now takes from a ready arm" {
   let (tx, rx) = channel::new::<Int>(1)
-  let waiting = selector::new() |> selector::receive(_, rx, fn(r) { r })
+  let waiting = selector::new()
+    |> selector::receive(_, rx, fn(r) { r })
   assert selector::select_now(waiting) == None
   let assert Ok(Nil) = channel::send(tx, 7)
   assert selector::select_now(waiting) == Some(Ok(7))
 }
 
 test "a timer arm is ready in select_now only when it is zero" {
-  let later = selector::new() |> selector::after(_, duration::seconds(10), fn() { "later" })
+  let later = selector::new()
+    |> selector::after(_, duration::seconds(10), fn() { "later" })
   assert selector::select_now(later) == None
-  let now = selector::new() |> selector::after(_, duration::zero, fn() { "now" })
+  let now = selector::new()
+    |> selector::after(_, duration::zero, fn() { "now" })
   assert selector::select_now(now) == Some("now")
   assert selector::select_now(selector::new::<Nil>()) == None
 }

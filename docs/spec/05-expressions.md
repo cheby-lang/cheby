@@ -35,8 +35,8 @@ An expression statement that is not the last statement of its block is evaluated
 
 ```cheby
 fn save_all(items: List<Item>) -> Nil {
-  write_log("saving")              // warning: discarded `Result`
-  let _ = write_log("saving")      // no warning
+  write_log("saving") // warning: discarded `Result`
+  let _ = write_log("saving") // no warning
   Nil
 }
 ```
@@ -90,8 +90,8 @@ import std::string
 
 fn process(input: String) -> Int {
   let trimmed = string::trim(input)
-  let trimmed = string::lowercase(trimmed)   // error: `trimmed` is already bound
-  let list = [1, 2, 3]                        // error: `list` is an imported module
+  let trimmed = string::lowercase(trimmed) // error: `trimmed` is already bound
+  let list = [1, 2, 3] // error: `list` is an imported module
   0
 }
 ```
@@ -624,14 +624,14 @@ Only a `_` that is a whole argument of the call on the right side counts as its 
 _Note:_ `x` needs a binding of its own only where something is evaluated before the hole. When the hole is the first argument of a function or constructor called directly, `x` is used in place (D-498).
 
 ```cheby
-let names =
-  users
+let names = users
   |> list::filter(_, is_active)
   |> list::map(_, fn(user) { user.name })
   |> list::sort
   |> string::join(_, ", ")
 
-let count = names |> list::length
+let count = names
+  |> list::length
 ```
 
 ## 5.17 Paths

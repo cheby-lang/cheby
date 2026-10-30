@@ -152,7 +152,8 @@ Reads a point written in RFC 3339 form: `YYYY-MM-DDTHH:MM:SS`, an optional fract
 test "parse reads RFC 3339 with any offset" {
   let assert Ok(stamp) = time::parse("2026-10-21T14:30:00+02:00")
   assert time::show(stamp) == "2026-10-21T12:30:00Z"
-  assert time::parse("2026-10-21t12:30:00.25z") == Ok(time::from_unix(duration::milliseconds(1_792_585_800_250)))
+  assert time::parse("2026-10-21t12:30:00.25z") ==
+    Ok(time::from_unix(duration::milliseconds(1_792_585_800_250)))
   assert time::parse("2026-10-21") == Err(Nil)
   assert time::parse("2026-10-21 12:30:00Z") == Err(Nil)
   assert time::parse("2026-02-30T00:00:00Z") == Err(Nil)

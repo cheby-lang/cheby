@@ -6,9 +6,10 @@
 //! hash. A warm command reads std's front records and interfaces instead
 //! of parsing and checking std, and std's code records instead of
 //! compiling it; D-450's rule (check only the std modules the imports
-//! reach) applies only on a miss.
+//! reach) applies only to a front end that reads no std front record
+//! (D-1262).
 //!
-//! - **One inference unit** (D-968, GAP(std-masks-whole)): std's masks are
+//! - **One inference unit** (D-968, D-1264): std's masks are
 //!   inferred over every std module's code unit, whatever the program
 //!   imports, in a front end of std's own ([`whole_std`], once per
 //!   process). So std has one code per build ID and settings, and every
@@ -26,11 +27,11 @@
 //!   (D-978's `plain` code is the package's modules without borrowing and
 //!   std's one code). `cargo xtask test-std` builds under
 //!   `BuildKind::StdSelfTest` and reads none of them
-//!   (GAP(std-self-test-kind)).
+//!   (D-1265).
 //! - **The first use** (D-980): a lookup that misses lowers all of std for
 //!   its facts and compiles every std module's code unit into its record,
 //!   stored behind the command (D-1138), not only the load set's
-//!   (GAP(std-first-use-code)): a later command whose load set holds
+//!   (D-1267): a later command whose load set holds
 //!   another std module then needs no std body, so it parses no std
 //!   module. It costs about 0.1 s once per machine, toolchain and settings
 //!   (`cargo xtask bench-compile`'s "std first use").
@@ -38,7 +39,7 @@
 //! `CHEBY_CACHE_LOG` lists std's lookups and parses under their own names,
 //! `parse.std <module>`, `front.std <module> hit|miss` and
 //! `code.std <module> hit|miss`, beside D-1135's package-only lines
-//! (GAP(std-cache-log-lines)).
+//! (D-1263).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -67,7 +68,7 @@ pub(crate) const FRONT_HITS: bool = true;
 /// D-980: std module `module`'s (`std::<path>`) front record key:
 /// `KeyKind::Front` over the build ID, the tag `std-f1` and the path; the
 /// build ID fixes std's sources (D-957), so no source hash
-/// (GAP(std-front-records)).
+/// (D-1262).
 pub(crate) fn std_front_key(build: BuildId, module: &str) -> Key {
     Key::builder(KeyKind::Front, build)
         .str("std-f1")
@@ -215,7 +216,7 @@ pub(crate) fn std_code_key(build: BuildId, module: &str, settings: &Settings) ->
 /// `std`) and the positions switch (D-1173), each field length-prefixed.
 /// Std's masks are inferred over every std module (D-968), so they are a
 /// function of the build ID and the settings, and no mask, callee or
-/// identity enters the key (GAP(std-masks-whole)).
+/// identity enters the key (D-1264).
 pub(crate) fn std_code_key_at(
     build: BuildId,
     module: &str,
@@ -261,7 +262,7 @@ pub(crate) struct WholeStd {
     fronts: Vec<StdFront>,
 }
 
-/// What a std module's front record holds (GAP(std-front-records)), made
+/// What a std module's front record holds (D-1262), made
 /// from std's own front end: everything but the blobs' names, since the
 /// interface artifact holds the store's build ID.
 struct StdFront {
@@ -491,7 +492,7 @@ fn std_front_of(front: &Frontend, module: ModuleId) -> Result<StdFront, Ice> {
 }
 
 /// Std module `path`'s summaries `entries` (the walk's form) as a command
-/// walks them over decoded interfaces (GAP(std-front-records)): a decoded
+/// walks them over decoded interfaces (D-1262): a decoded
 /// interface holds no `priv` item (D-953), so a mention of one of the
 /// module's own `priv` items (`visible` lacks its name; `priv` is module
 /// private, so no other module mentions it) is replaced by that item's
@@ -664,11 +665,11 @@ pub(crate) fn std_records(
 }
 
 /// Std's first use (D-980), whichever command makes it
-/// (GAP(std-first-use-by-check)): every std module checked, lowered whole
+/// (D-1266): every std module checked, lowered whole
 /// and inferred as one unit ([`whole_std`]), counted with `mir`, compiled
 /// alone into its code record and stored under [`std_code_key_at`], and
 /// its front record stored under [`std_front_key`] with its interface
-/// artifact (GAP(std-front-records)), all behind the command (D-1138);
+/// artifact (D-1262), all behind the command (D-1138);
 /// `parse.std <module>` is logged for each std module. A write that fails
 /// is skipped: a later command misses (D-1129).
 ///

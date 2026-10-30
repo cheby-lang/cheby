@@ -327,7 +327,7 @@ fn ffi_guarded<R: Unwound>(body: impl FnOnce() -> R) -> R {
 /// a package's `@blocking` call, the call first enters its job under the
 /// per-job lock, and a job that a give-up or a halt abandoned gets
 /// `abandoned` without anything done: NULL, nothing or -1 (D-950,
-/// GAP(ffi-job-lock), `ffi_pool.rs`).
+/// D-1269, `ffi_pool.rs`).
 fn ffi_job_guarded<R: Unwound>(abandoned: R, body: impl FnOnce() -> R) -> R {
     let Some(job) = ffi_pool::current_job() else {
         return ffi_guarded(body);

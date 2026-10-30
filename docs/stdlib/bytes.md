@@ -252,7 +252,9 @@ Returns `data` with `byte` added at the end. It updates `data` in place when not
 
 ```cheby
 test "push adds one byte" {
-  let data = bytes::new() |> bytes::push(_, 0x41) |> bytes::push(_, 0x42)
+  let data = bytes::new()
+    |> bytes::push(_, 0x41)
+    |> bytes::push(_, 0x42)
   assert data == bytes::from_string("AB")
 }
 ```
@@ -444,7 +446,16 @@ test "64-bit pushes name their byte order" {
   let little = bytes::push_u64_le(bytes::new(), 0x0102_0304_0506_0708)
   assert bytes::to_list(big) == [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
   assert bytes::to_list(little) == [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
-  assert bytes::push_i64_le(bytes::new(), -1) == bytes::from_list([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+  assert bytes::push_i64_le(bytes::new(), -1) == bytes::from_list([
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+    0xFF,
+  ])
 }
 ```
 

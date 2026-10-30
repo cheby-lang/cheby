@@ -1,5 +1,5 @@
 //! The reuse report from records (K4d; D-965, D-1223,
-//! GAP(reuse-lines-with-record)).
+//! D-1257).
 //!
 //! `--reuse-report`'s lines are made while lowering (D-717, D-852), and a
 //! unit whose code record hits is not lowered (D-1221). So the lines of

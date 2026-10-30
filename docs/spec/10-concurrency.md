@@ -194,7 +194,7 @@ _Example:_ a producer that ends closes the channel for its consumer.
 ```cheby
 fn produce(tx: Sender<Int>, n: Int) {
   case n {
-    0 => Nil   // tx is dropped here, which closes the channel
+    0 => Nil // tx is dropped here, which closes the channel
     _ => {
       let assert Ok(_) = channel::send(tx, n)
       produce(tx, n - 1)
@@ -221,17 +221,16 @@ Neither is a suspension point ([§10.2](#102-scheduling)). A fiber that only pol
 There is no `select` statement. Waiting on several channels is done with a **selector** from the standard library (D-041). A selector is built from several receive arms, each mapping the result of a receive to a common result type, and then waited on:
 
 ```cheby
-let events =
-  selector::new()
+let events = selector::new()
   |> selector::receive(_, jobs, fn(r) { Job(r) })
   |> selector::receive(_, control, fn(r) { Control(r) })
   |> selector::after(_, duration::seconds(5), fn() { Idle })
 
 case selector::select(events) {
   Job(Ok(job)) => run(job)
-  Job(Err(Nil)) => Nil          // jobs is closed
+  Job(Err(Nil)) => Nil // jobs is closed
   Control(Ok(cmd)) => handle(cmd)
-  Control(Err(Nil)) => Nil      // control is closed
+  Control(Err(Nil)) => Nil // control is closed
   Idle => Nil
 }
 ```

@@ -239,7 +239,10 @@ A type alias `type UserId = Int` gives another name to an existing type (D-081).
 Top-level functions and type declarations may have type parameters, written with angle brackets (D-049):
 
 ```cheby
-type Pair<A, B> { first: A, second: B }
+type Pair<A, B> {
+  first: A,
+  second: B,
+}
 
 fn swap<A, B>(pair: Pair<A, B>) -> Pair<B, A> {
   Pair { first: pair.second, second: pair.first }
@@ -265,8 +268,8 @@ Local bindings are **monomorphic** (D-123). A closure bound with `let`, and a lo
 ```cheby
 fn main() {
   let wrap = fn(x) { [x] }
-  let a = wrap(1)       // fixes wrap: fn(Int) -> List<Int>
-  let b = wrap("hi")    // compile error: expected Int, found String
+  let a = wrap(1) // fixes wrap: fn(Int) -> List<Int>
+  let b = wrap("hi") // compile error: expected Int, found String
 }
 ```
 
@@ -292,29 +295,29 @@ fn sum(numbers: List<Int>) -> Int {
   fn step(acc, rest) {
     case rest {
       [] => acc
-      [first, ..tail] => step(acc + first, tail)   // `+` is resolved at the end: Int
+      [first, ..tail] => step(acc + first, tail) // `+` is resolved at the end: Int
     }
   }
   step(0, numbers)
 }
 
 fn total(items: List<Item>) -> Int {
-  list::fold(items, 0, fn(acc, item) { acc + item.price })   // `item` is an Item
+  list::fold(items, 0, fn(acc, item) { acc + item.price }) // `item` is an Item
 }
 
 fn sums(ps: List<Point>, qs: List<Point>) -> List<Float> {
-  list::map(list::zip(ps, qs), fn((a, b)) { a.x + b.x })   // the closure is checked after `zip(ps, qs)`
+  list::map(list::zip(ps, qs), fn((a, b)) { a.x + b.x }) // the closure is checked after `zip(ps, qs)`
 }
 ```
 
 ```cheby
 fn main() {
-  let get_x = fn(p) { p.x }   // compile error: type of `p` unknown, annotate `fn(p: Point)`
+  let get_x = fn(p) { p.x } // compile error: type of `p` unknown, annotate `fn(p: Point)`
   let x = get_x(origin)
 }
 
 fn unused() {
-  let f = fn(a, b) { a + b }   // compile error: type of `a` unknown at the end of the body
+  let f = fn(a, b) { a + b } // compile error: type of `a` unknown at the end of the body
 }
 ```
 
@@ -360,7 +363,7 @@ let g: fn(String) -> Int = fn(s) { unreachable(s) }   // OK
 
 ```cheby
 fn as_shape(circle: Circle) -> dyn Shape {
-  circle   // OK: the body's expected type is `dyn Shape`
+  circle // OK: the body's expected type is `dyn Shape`
 }
 ```
 

@@ -177,7 +177,7 @@ impl Jit {
         }
         for ((item, ids), &run) in items.iter().zip(&ids).zip(&runs) {
             // A record's functions one after the other in one span
-            // (`memory.rs`, GAP(record-placement)).
+            // (`memory.rs`, D-1258).
             self.memory.start_code_run(run);
             self.define_record(item.record, ids)?;
             self.memory.start_code_run(0);
@@ -610,7 +610,7 @@ pub(crate) const CALL_REACH: usize = if cfg!(target_arch = "aarch64") {
 ///
 /// An internal error naming the record's module when its code alone is
 /// larger than a direct call reaches ([`CALL_REACH`]): no placement could
-/// make its calls reach (GAP(record-placement)).
+/// make its calls reach (D-1258).
 pub(crate) fn code_run(item: &Item<'_>) -> Result<usize, JitError> {
     let mut total: usize = 0;
     for function in &item.record.functions {

@@ -197,7 +197,9 @@ test "upsert updates or inserts through one function" {
       None => 1
     }
   }
-  let counts = list::fold(["b", "a", "b"], map::new(), fn(found, word) { map::upsert(found, word, bump) })
+  let counts = list::fold(["b", "a", "b"], map::new(), fn(found, word) {
+    map::upsert(found, word, bump)
+  })
   assert counts == map::from_list([("a", 1), ("b", 2)])
 }
 ```

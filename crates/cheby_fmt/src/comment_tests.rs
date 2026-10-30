@@ -87,7 +87,7 @@ fn fmt_comment_around_pipeline_stages() {
         src,
     );
     // As a value, the head stays on the line of `=` and the `|>` lines go
-    // one level deeper (GAP(pipes-always-broken)).
+    // one level deeper (D-1275).
     body(
         "  let t = xs |> // why\n    list::sum\n",
         (12, "  let t = xs\n    |> // why\n      list::sum\n"),
@@ -168,7 +168,7 @@ fn fmt_comment_in_patterns() {
     let src = "  case v {\n    (Some(x) // left\n      | None) => 1\n  }\n";
     body(src, (20, src), src);
     // Narrower, the arm's body stays on the arm's line
-    // (GAP(case-arm-layout)).
+    // (D-1276).
     body(
         src,
         (

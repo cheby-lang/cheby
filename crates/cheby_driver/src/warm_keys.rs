@@ -9,9 +9,10 @@
 //! The key functions K4c computes with before lowering (D-1221, D-1222),
 //! `borrowing.rs`'s [`plan`], [`stored_masks`], [`with_build_defs`] and
 //! [`unit_keys`], are generic over a [`KeyView`]: a [`Frontend`] after the
-//! check, a [`WarmView`] before it, so there is one computation of a key.
+//! check, or a [`WarmView`] before it, so a key has one computation. No
+//! command computes a key before its check yet (D-1256).
 //! Which modules miss is decided as [`keys_before_check`] says
-//! (GAP(warm-check-before-keys)).
+//! (D-1256).
 //!
 //! [`plan`]: crate::borrowing::plan
 //! [`stored_masks`]: crate::borrowing::stored_masks
@@ -219,10 +220,10 @@ pub(crate) fn misses_before_check(
 }
 
 /// D-1250 (refines D-1132): which package modules a warm build checks,
-/// from `view` alone; with K5b's `consts::misses_before_check`, which
+/// from `view` alone; with K5b's `consts::misses_before_check_from`, which
 /// constants miss.
 ///
-/// GAP(warm-check-before-keys): a code key names its callees' slots and
+/// D-1256: a code key names its callees' slots and
 /// its masks by def (D-1193, D-1191), which only interfaces give, and
 /// before the check no interface exists, std's included (a decoded package
 /// interface refers to std's). So the keys themselves are computed after
@@ -240,8 +241,10 @@ pub(crate) fn misses_before_check(
 /// misses (D-1134). `--reuse-report`, which reads a record only with its
 /// reuse lines (`reuse_replay.rs`), checks every module as before
 /// ([`misses_before_check`] gives no misses). A hit the back end must lower
-/// after all (an edit changed a mask its callers' keys name, D-812) starts
-/// the command again with every module checked ([`Frontend::wanted_body`]).
+/// after all (an edit that only a reader's lowering reads, D-955; a body
+/// edit that changes a package-visible function's mask, D-812; a change of
+/// D-958's settings or of `CHEBY_POSITIONS`, D-1173) starts the command
+/// again with every module checked ([`Frontend::wanted_body`], D-1256).
 ///
 /// # Errors
 ///

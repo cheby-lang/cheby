@@ -275,7 +275,10 @@ import std::sorted_map
 
 /// A key ordered by `id` alone. Two badges with the same `id` and
 /// different labels compare `Equal` without being `==`.
-type Badge { id: Int, label: String }
+type Badge {
+  id: Int,
+  label: String,
+}
 
 fn compare(a: Badge, b: Badge) -> Order {
   int::compare(a.id, b.id)

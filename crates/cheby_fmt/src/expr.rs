@@ -14,7 +14,7 @@
 //!   breaks) when that first line fits. A chain of two or more operators
 //!   of one precedence breaks at every operator together, after it, its
 //!   continuation lines one level deeper; `&&` and `||` form one chain and
-//!   break before the operator. A value after `=`, `<-` or `=>`, and the
+//!   break before the operator. A value after `=` or `<-`, and the
 //!   right operand of a lone binary operator, goes: a block, `case`,
 //!   closure or binary expression on the operator's line, breaking inside;
 //!   a string, literal, path or field access on the operator's line, else
@@ -22,39 +22,38 @@
 //!   on the operator's line, hugging there (a list or record literal
 //!   opening on that line, a call whose last argument hugs) when that
 //!   first line fits, flat on the next line, hugging on the next line, else
-//!   broken on the operator's line. After `=>`, flat on the next line
-//!   comes before hugging on the arm's line, unless the body is a call
-//!   that ends in a closure. A call's last argument hugs when
+//!   broken on the operator's line. An arm's body after `=>` follows
+//!   D-1276 instead. A call's last argument hugs when
 //!   it is itself a call whose last argument hugs (`Some(fold(xs, 0,
 //!   fn(acc, x) {`). A function's return type stays on the line of `)`, so
 //!   a header breaks its parameters first.
-//! - D-1159: a pipeline is flat when it fits; otherwise one
-//!   stage per line, each line starting with `|>`, at the indentation of
-//!   the pipeline's first line when the pipeline starts its line (a
-//!   statement, a list element, the value of `let`, `use`, `const` or an
-//!   arm on a line of its own), else one level deeper. As a value after
-//!   `=`, `<-` or `=>` it goes to the next line, one level deeper, when it
-//!   does not fit after the operator. A pipeline whose last stage must
-//!   break (it holds a closure of several statements) stays on one line up
-//!   to that stage when that line fits.
+//! - D-1275, superseding D-1159: a line break goes before every `|>`, even
+//!   in a pipeline of one stage that fits, so each stage starts a line
+//!   with `|>`. As a value after `=`, `<-` or `=>`, or after `assert`, the
+//!   head stays on that line and the `|>` lines go one level deeper, as
+//!   they do for a pipeline that is an operand of a binary operator. A
+//!   pipeline that is a statement, a block's value, a list or tuple
+//!   element or a call argument keeps its `|>` lines at the head's
+//!   indentation. A last stage still hugs its closure, block, `case`, list
+//!   or record by its own layout.
 //! - D-1155: the block of an item, a test or a local function is broken
 //!   over lines unless empty (`{}`); any other block with exactly one
-//!   statement and no comment is `{ statement }` when it fits; blocks with
-//!   more statements or a comment, and every `case`, have one statement or
-//!   arm per line.
+//!   statement and no comment, but an arm's body (D-1276), is
+//!   `{ statement }` when it fits; blocks with more statements or a
+//!   comment, and every `case`, have one statement or arm per line.
 //!   Blank lines at the start and the end of a block are dropped; single
 //!   blank lines between statements and arms are kept (D-1030).
 //! - D-1156: `case` subjects and an arm's patterns and guard
 //!   stay on the line of `case` and of the arm, breaking only inside their
-//!   own brackets; an arm is `patterns [when guard] => body`, the body
-//!   after `=>` laid out as a value after `=` is.
-//! - The user's mid-wave decisions of M3's ninth wave, to be logged:
-//!   GAP(pipes-always-broken) breaks every pipeline before every `|>`, even
-//!   one stage that fits, the head staying on the line of `=`, `<-` or
-//!   `=>` with the `|>` lines one level deeper (it replaces D-1159's flat
-//!   and hugging forms); GAP(case-arm-layout) keeps an arm's body on the
-//!   arm's line (flat, hugging, else broken there) and breaks an arm's
-//!   block body always; an arm has one space before `=>`, never padding.
+//!   own brackets; every `case` is broken, one arm per line.
+//! - D-1276: an arm's body always starts on the arm's line, after `=>`:
+//!   flat when it fits, else hugging there when that first line fits, else
+//!   broken there; a body that cannot break stays there past the width.
+//!   An arm's patterns, guard and `=>` break only when they do not fit by
+//!   themselves, never because of the body after them. An arm whose body
+//!   is a block is always broken, one statement per line, even with one
+//!   statement. Every arm has exactly one space before `=>`, and arms are
+//!   never aligned. A subjectless `case`'s arms follow the same rules.
 //!
 //! A comment or a blank line between two parts of a node keeps its place
 //! and breaks the line there ([`crate::gap`], D-1160, D-1161); a token that holds a line break
@@ -68,7 +67,7 @@ use crate::doc::Doc;
 use crate::gap::{Gap, Parts};
 use crate::layout::{Delims, Formatter, INDENT, ListStyle, entries, hugs, is_comment};
 
-/// A pipeline's layout: one stage per line (GAP(pipes-always-broken)).
+/// A pipeline's layout: one stage per line (D-1275).
 struct PipeForms {
     normal: Doc,
 }
@@ -121,7 +120,7 @@ const fn level(op: SyntaxKind) -> u8 {
 }
 
 /// Whether a pipeline whose parent is of this kind starts its line, so
-/// its stages line up with its first line. GAP(pipes-always-broken): the
+/// its stages line up with its first line. D-1275: the
 /// value of `let`, `use`, `const` or an arm stays on the line of `=`,
 /// `<-` or `=>`, so its `|>` lines go one level deeper (D-1157).
 const fn starts_line(parent: SyntaxKind) -> bool {
@@ -192,7 +191,7 @@ fn bin_parts(node: SyntaxNode<'_>) -> Option<BinParts<'_>> {
 /// `<-`, `=>`, or the one operator of a binary expression), with the
 /// space or line break before it (D-1157).
 ///
-/// GAP(case-arm-layout): after `=>` (`arm`), the body always starts on
+/// D-1276: after `=>` (`arm`), the body always starts on
 /// the arm's line: flat there, else hugging there when that first line
 /// fits, else broken there; a body that cannot break stays there past the
 /// width. D-1157's "flat on the next line" and "hugging on the next line"
@@ -349,7 +348,7 @@ impl<'t> Formatter<'t> {
                 SyntaxElement::Token(token) => parts.push(self.token(token)),
                 SyntaxElement::Node(n) => parts.push(self.node(n)),
             }
-            // GAP(case-arm-layout): an arm's patterns, guard and `=>` break
+            // D-1276: an arm's patterns, guard and `=>` break
             // only when they do not fit by themselves, never because of
             // the body that stays on their line.
             if child_kind == SyntaxKind::FAT_ARROW
@@ -368,9 +367,11 @@ impl<'t> Formatter<'t> {
     }
 
     /// The value after `=`, `<-` or `=>`, with the space before it: on
-    /// the operator's line, breaking inside where it must; a pipeline or
-    /// an atom that does not fit there on the next line, one level deeper
-    /// (D-1157, D-1159).
+    /// the operator's line, breaking inside where it must; a value that
+    /// does not fit there may move to the next line, one level deeper, as
+    /// `tail_doc` says, but never after `=>` (D-1157, D-1276). A
+    /// pipeline's head stays on the operator's line, its `|>` lines one
+    /// level deeper (D-1275).
     pub(crate) fn assign_tail(&mut self, value: SyntaxNode<'t>) -> Doc {
         let kind = value.kind();
         if kind == SyntaxKind::BIN_EXPR
@@ -380,7 +381,7 @@ impl<'t> Formatter<'t> {
                 let anchor = self.src.node_line_indent(value);
                 return Doc::concat(vec![Doc::text(" "), self.verbatim(value, anchor)]);
             };
-            // GAP(pipes-always-broken): the head stays on the operator's
+            // D-1275: the head stays on the operator's
             // line, its `|>` lines one level deeper.
             return Doc::concat(vec![Doc::text(" "), forms.normal]);
         }
@@ -506,7 +507,7 @@ impl<'t> Formatter<'t> {
         ])))
     }
 
-    /// A pipeline's layouts (D-1159). A comment or a blank
+    /// A pipeline's layout (D-1275). A comment or a blank
     /// line before a `|>` takes the place of the line break before it; one
     /// after a `|>` breaks the line there, and the stage goes one level
     /// deeper (D-1160). Either way the pipeline is
@@ -545,7 +546,7 @@ impl<'t> Formatter<'t> {
         let mut broken_stages = Vec::new();
         for (before, stage, after) in stages {
             let stage = self.node(stage);
-            // GAP(pipes-always-broken): the line breaks before every `|>`,
+            // D-1275: the line breaks before every `|>`,
             // even of one stage that fits; a last stage still hugs its
             // closure, block, `case`, list or record by its own layout.
             broken_stages.push(before.doc(false).unwrap_or_else(Doc::hardline));
@@ -598,11 +599,11 @@ impl<'t> Formatter<'t> {
     }
 
     /// A block: `{}` when empty; with `body` (an item's, a test's or a
-    /// local function's), or with more than one statement or a comment,
-    /// one statement per line; else `{ statement }` when it fits
-    /// (D-1155).
+    /// local function's), as an arm's body (D-1276), or with more than one
+    /// statement or a comment, one statement per line; else
+    /// `{ statement }` when it fits (D-1155).
     pub(crate) fn block(&mut self, node: SyntaxNode<'t>, body: bool) -> Option<Doc> {
-        // GAP(case-arm-layout): an arm's block body is always broken, one
+        // D-1276: an arm's block body is always broken, one
         // statement per line, even one statement that fits.
         if !body && !is_arm_body(node) {
             let entries = entries(node, Some((SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)));

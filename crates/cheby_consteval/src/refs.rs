@@ -1,6 +1,6 @@
 //! The earlier images an image references (D-1188's tag 3), read from its
 //! bytes without building anything: what K5b's cache checks before it
-//! installs a cached image beside others (GAP(const-image-references)).
+//! installs a cached image beside others (D-1261).
 //!
 //! The reader follows the format `cheby_runtime::consteval::image`
 //! documents (D-1188) and checks only what it needs to find every

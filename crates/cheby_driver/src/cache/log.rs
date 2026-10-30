@@ -96,7 +96,7 @@ impl CacheLog {
     }
 
     /// Records that the command parsed std module `module`, as a line
-    /// `parse.std <module>` (GAP(std-cache-log-lines), refining D-1135:
+    /// `parse.std <module>` (D-1263, refining D-1135:
     /// `parse` stays package-only, and std's parses get their own name).
     /// A std module is listed once per command, though std's first use
     /// parses it in a front end of its own beside the command's.

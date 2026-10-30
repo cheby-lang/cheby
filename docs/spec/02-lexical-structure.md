@@ -182,8 +182,7 @@ In addition:
 _Example:_ continuation in pipelines and conditions.
 
 ```cheby
-let total =
-  orders
+let total = orders
   |> list::filter(_, is_paid)
   |> list::map(_, price)
   |> list::fold(_, 0, add)

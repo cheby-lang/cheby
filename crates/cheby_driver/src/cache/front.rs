@@ -26,7 +26,8 @@
 //! holds an absolute path, a
 //! `ModuleId`, a `FileId` or an interning number (D-264): modules are
 //! named by their paths, and spans by byte ranges in the module's own file.
-//! Std modules get no record: the build ID fixes std until K6 (D-955).
+//! Std modules' front records lie under keys of their own, with no source
+//! hash, since the build ID fixes std (D-957, D-1262; `std_cache.rs`).
 
 use cheby_mir::{CType, ForeignSig};
 use cheby_package::{Target, Targets};
@@ -478,7 +479,7 @@ const fn ctype(tag: u8) -> Option<CType> {
 }
 
 /// What a warm `cheby run` or `cheby test` reads of a package module it
-/// does not check (K4d, D-1250, GAP(warm-check-before-keys)), stored beside
+/// does not check (K4d, D-1250, D-1256), stored beside
 /// its front record under [`warm_facts_key`] by a command of either that
 /// checked it: its summaries in the walk's form (`load_set::summarize`,
 /// D-1178: in the order reach's walk meets them, which the front record's

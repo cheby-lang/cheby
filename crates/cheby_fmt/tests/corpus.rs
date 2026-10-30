@@ -294,7 +294,7 @@ fn is_padded_place(token: SyntaxToken<'_>) -> bool {
             .is_some_and(|p| p.kind() != SyntaxKind::NEWLINE)
 }
 
-/// GAP(case-arm-layout): an arm has one space before `=>`, never padding.
+/// D-1276: an arm has one space before `=>`, never padding.
 /// Every corpus source with spaces added before each arm's `=>` (the
 /// padding of the withdrawn alignment) formats exactly as the source does,
 /// and in the output every arm's `=>` after its patterns has one space

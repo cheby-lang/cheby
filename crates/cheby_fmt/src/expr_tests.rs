@@ -84,7 +84,7 @@ fn fmt_expr_call_hugs_a_last_call_that_hugs() {
         &wrap(src),
     );
     // Narrower, the call breaks on the arm's line: an arm's body never
-    // moves to the next line (GAP(case-arm-layout)).
+    // moves to the next line (D-1276).
     body(
         &wrap(src),
         (
@@ -112,7 +112,7 @@ fn fmt_expr_value_after_equals_hugs_before_moving() {
 
 #[test]
 fn fmt_expr_arm_body_breaks_on_the_arm_line() {
-    // GAP(case-arm-layout): after `=>`, a body that does not fit flat on
+    // D-1276: after `=>`, a body that does not fit flat on
     // the arm's line breaks there; it never moves to the next line.
     let wrap = |arm: &str| format!("  case x {{\n{arm}  }}\n");
     body(
@@ -148,7 +148,7 @@ fn fmt_expr_arm_body_breaks_on_the_arm_line() {
 
 #[test]
 fn fmt_expr_arm_block_body_always_breaks() {
-    // GAP(case-arm-layout): an arm's block body is broken even with one
+    // D-1276: an arm's block body is broken even with one
     // statement that fits.
     let wrap = |arms: &str| format!("  case x {{\n{arms}  }}\n");
     let out = wrap(
@@ -171,7 +171,7 @@ fn fmt_expr_arm_block_body_always_breaks() {
 
 #[test]
 fn fmt_expr_arms_have_one_space_before_the_arrow() {
-    // GAP(case-arm-layout): every arm has one space between its patterns
+    // D-1276: every arm has one space between its patterns
     // and guard and `=>`, whatever its neighbours; source padded to line
     // up the arrows formats to one space (and stays there: idempotence).
     let wrap = |arms: &str| format!("  case op {{\n{arms}  }}\n");
@@ -239,7 +239,7 @@ fn fmt_expr_one_operator_lays_out_its_right_operand_as_a_value() {
 
 #[test]
 fn fmt_expr_pipeline_one_stage_per_line() {
-    // GAP(pipes-always-broken): one stage per line even when it fits; as
+    // D-1275: one stage per line even when it fits; as
     // a statement, the `|>` lines stay at the head's indentation.
     let out = "  orders\n  |> list::filter(_, is_paid)\n  |> list::map(_, price)\n";
     body(
@@ -258,7 +258,7 @@ fn fmt_expr_pipeline_one_stage_per_line() {
 #[test]
 fn fmt_expr_pipeline_value_stays_on_the_operator_line() {
     // After `=`, `<-` and `=>`, the head stays on the operator's line and
-    // the `|>` lines go one level deeper (GAP(pipes-always-broken)).
+    // the `|>` lines go one level deeper (D-1275).
     let out = "  let total = orders\n    |> list::filter(_, is_paid)\n    |> list::map(_, price)\n";
     body(
         "  let total = orders |> list::filter(_, is_paid) |> list::map(_, price)\n",
@@ -279,7 +279,7 @@ fn fmt_expr_pipeline_value_stays_on_the_operator_line() {
 fn fmt_expr_pipeline_nested_in_other_constructs() {
     // A pipe in a call argument, in a one-statement closure and as an
     // operand breaks; the construct around it breaks as a multi-line
-    // element requires (GAP(pipes-always-broken)).
+    // element requires (D-1275).
     body(
         "  f(xs |> list::sum)\n",
         (40, "  f(\n    xs\n    |> list::sum,\n  )\n"),

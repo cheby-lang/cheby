@@ -25,7 +25,10 @@ pub exposed type Value {
 `Value` does not satisfy `Show`, because a module satisfies `Show` for one type only and `json::show` is `Error`'s (D-045, D-362). A program prints a value with [`to_string`](#to_string) or `{value:?}`.
 
 ```cheby
-pub exposed type Position { line: Int, column: Int }
+pub exposed type Position {
+  line: Int,
+  column: Int,
+}
 
 pub exposed type Error {
   Syntax(Position),
@@ -62,7 +65,10 @@ Returns an `Array` holding `encode` applied to each element of `items`, in order
 
 ```cheby
 test "array encodes each element with the given function" {
-  assert json::array(["a", "b"], json::String) == json::Array([json::String("a"), json::String("b")])
+  assert json::array(["a", "b"], json::String) == json::Array([
+    json::String("a"),
+    json::String("b"),
+  ])
   assert json::to_string(json::array([1, 2], json::Int)) == "[1,2]"
 }
 ```
@@ -97,7 +103,10 @@ Returns an `Array` holding the `to_json` of each element of `items`, in order (D
 ```cheby
 import std::json
 
-type Point { x: Int, y: Int }
+type Point {
+  x: Int,
+  y: Int,
+}
 
 fn to_json(point: Point) -> json::Value {
   json::Object([("x", json::Int(point.x)), ("y", json::Int(point.y))])
@@ -175,17 +184,20 @@ test "to_pretty_string indents by two spaces" {
     ("extra", json::Object([])),
     ("none", json::Array([])),
   ])
-  let expected = string::join([
-    r"{",
-    r#"  "title": "Dune","#,
-    r#"  "tags": ["#,
-    r#"    "classic","#,
-    "    1",
-    "  ],",
-    r#"  "extra": {},"#,
-    r#"  "none": []"#,
-    r"}",
-  ], "\n")
+  let expected = string::join(
+    [
+      r"{",
+      r#"  "title": "Dune","#,
+      r#"  "tags": ["#,
+      r#"    "classic","#,
+      "    1",
+      "  ],",
+      r#"  "extra": {},"#,
+      r#"  "none": []"#,
+      r"}",
+    ],
+    "\n",
+  )
   assert json::to_pretty_string(document) == expected
   assert json::to_pretty_string(json::Int(1)) == "1"
 }
@@ -214,8 +226,14 @@ test "parse decodes a document in one step" {
   assert json::parse(r#"{"x": 1, "y": 2}"#, point()) == Ok((1, 2))
   let x_problem = decode::Error { expected: "Int", found: "String", path: ["x"] }
   let y_problem = decode::Error { expected: "Int", found: "Null", path: ["y"] }
-  assert json::parse(r#"{"x": "1", "y": null}"#, point()) == Err(json::Decode([x_problem, y_problem]))
-  assert json::parse(r#"{"x": 1"#, point()) == Err(json::Syntax(json::Position { line: 1, column: 8 }))
+  assert json::parse(r#"{"x": "1", "y": null}"#, point()) == Err(json::Decode([
+    x_problem,
+    y_problem,
+  ]))
+  assert json::parse(r#"{"x": 1"#, point()) == Err(json::Syntax(json::Position {
+    line: 1,
+    column: 8,
+  }))
 }
 ```
 
@@ -261,7 +279,10 @@ test "parse_value keeps object members in order, repeated keys too" {
 
 test "parse_value reads escapes and rejects unpaired surrogates" {
   assert json::parse_value(r#""tab\t\u00e9 \ud83d\ude00""#) == Ok(json::String("tab\té \u{1F600}"))
-  assert json::parse_value(r#""\ud800""#) == Err(json::Syntax(json::Position { line: 1, column: 8 }))
+  assert json::parse_value(r#""\ud800""#) == Err(json::Syntax(json::Position {
+    line: 1,
+    column: 8,
+  }))
 }
 
 test "a syntax error gives the line and the column in code points" {
@@ -270,7 +291,10 @@ test "a syntax error gives the line and the column in code points" {
   let colon_missing = json::Syntax(json::Position { line: 2, column: 6 })
   assert json::parse_value(lf) == Err(colon_missing)
   assert json::parse_value(crlf) == Err(colon_missing)
-  assert json::parse_value(r#"["é", x]"#) == Err(json::Syntax(json::Position { line: 1, column: 7 }))
+  assert json::parse_value(r#"["é", x]"#) == Err(json::Syntax(json::Position {
+    line: 1,
+    column: 7,
+  }))
   assert json::parse_value("[1, 2,]") == Err(json::Syntax(json::Position { line: 1, column: 7 }))
   assert json::parse_value("1 2") == Err(json::Syntax(json::Position { line: 1, column: 3 }))
   assert json::parse_value("") == Err(json::Syntax(json::Position { line: 1, column: 1 }))
@@ -360,9 +384,14 @@ test "a json error shows as a message" {
   let syntax = json::Syntax(json::Position { line: 2, column: 6 })
   assert json::show(syntax) == "invalid JSON at line 2, column 6"
   let year = decode::Error { expected: "Int", found: "String", path: ["year"] }
-  let edition = decode::Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  let edition = decode::Error {
+    expected: "Format",
+    found: "String",
+    path: ["books", "1", "format"],
+  }
   let wrong = json::Decode([year, edition])
-  assert "{wrong}" == "unexpected JSON: expected Int, found String at year; expected Format, found String at books.1.format"
+  assert "{wrong}" ==
+    "unexpected JSON: expected Int, found String at year; expected Format, found String at books.1.format"
 }
 ```
 

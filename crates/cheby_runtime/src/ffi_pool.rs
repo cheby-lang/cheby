@@ -17,7 +17,7 @@
 //!   allocations return NULL without allocating, as a fiber's do under its
 //!   flag (D-946). The fiber raises the `out of memory` panic when it
 //!   resumes (`sched::blocking`'s `cheby_rt_blocking_call`).
-//! - GAP(ffi-job-lock): each `cheby_ffi_` call on a pool thread that
+//! - D-1269: each `cheby_ffi_` call on a pool thread that
 //!   changes the runtime's state (an allocation, `cheby_ffi_dup`,
 //!   `cheby_ffi_drop`, an output function) first enters its job under the
 //!   job's short lock ([`FfiJob::enter`]): the lock covers the test of the
@@ -38,7 +38,7 @@
 //! A call that runs inline on its own fiber (no runtime, a refused pool
 //! thread, a stop that gave up, D-692, D-815, D-817) needs no job: its
 //! fiber is current there, and `cheby.h` acts for it directly.
-//! GAP(blocking-package-shims): after a refused pool thread, a fiber runs
+//! D-1268: after a refused pool thread, a fiber runs
 //! every queued job inline (D-817), other fibers' among them. For another
 //! fiber's job, [`run_as_job`] makes the running fiber stop being current
 //! for the length of the shim and installs the job, so the thread acts for
@@ -169,7 +169,7 @@ impl FfiJob {
 /// it is: `cheby.h` finds that fiber itself. Where another fiber is
 /// current (it runs the queued jobs after a refused thread, D-817), that
 /// fiber stops being current until `call` returns, so the thread acts for
-/// the job's fiber as a pool thread does (GAP(blocking-package-shims)).
+/// the job's fiber as a pool thread does (D-1268).
 pub(crate) fn run_as_job<R>(job: &Arc<FfiJob>, call: impl FnOnce() -> R) -> R {
     /// Restores the host slot's job and domain, then the fiber that was
     /// current.

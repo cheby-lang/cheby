@@ -607,7 +607,7 @@ impl<'t> Formatter<'t> {
             style.comma = Comma::Kept(comma);
         }
         let doc = self.list(open, inner, close, style)?;
-        // GAP(type-bodies-always-broken): a type definition's own body,
+        // D-1274: a type definition's own body,
         // its variants or its record fields, is always broken, one element
         // per line with the trailing comma of a broken list (D-1152),
         // however short. A record-shaped variant's fields, a variant's

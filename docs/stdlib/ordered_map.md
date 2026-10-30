@@ -242,7 +242,9 @@ test "upsert keeps the position of an existing key" {
     }
   }
   let words = ["to", "be", "or", "not", "to", "be"]
-  let counts = list::fold(words, ordered_map::new(), fn(acc, word) { ordered_map::upsert(acc, word, bump) })
+  let counts = list::fold(words, ordered_map::new(), fn(acc, word) {
+    ordered_map::upsert(acc, word, bump)
+  })
   assert ordered_map::to_list(counts) == [("to", 2), ("be", 2), ("or", 1), ("not", 1)]
 }
 ```

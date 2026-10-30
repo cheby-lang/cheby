@@ -9,10 +9,16 @@
 //! hash ([`const_key`]). The set's std modules are left out: the build ID
 //! fixes std's sources (D-957), and which std modules a constant reaches
 //! follows from the package modules it reaches, so the key still fixes
-//! every byte of the seed (GAP(const-keys-before-check)). The hashes are
-//! the cache's SipHash-1-3 128 of the same bytes (D-963), which the
-//! package index holds, so a warm command computes every key before its
-//! check ([`keys_before_check`], D-1250).
+//! every byte of the seed (D-1259). The hashes are the cache's SipHash-1-3
+//! 128 of the same bytes (D-963), which the package index holds, so a key
+//! is computed the same way before the check, over the vouched front
+//! records' reference summaries, as after it, over the command's reach;
+//! a constant whose walk meets a module the index does not vouch for has
+//! no key before the check and misses (D-1259). A warm command looks
+//! before its check only at the constants its roots reach
+//! ([`misses_before_check_from`], D-1250, D-1259); [`keys_before_check`],
+//! which computes every key, is called by no command yet; N9 uses it or
+//! removes it.
 //!
 //! The entry holds the constant's image (D-1188) or its failure's
 //! diagnostics, stored structured and replayed as a module's are (D-965);
@@ -25,13 +31,13 @@
 //! evaluation (D-1188's tag 3), so a cached image is valid only beside the
 //! very images it was written with. Its entry therefore lists each image
 //! it references with the hash of that image's bytes
-//! (GAP(const-image-references)), and a hit is used only when every image
+//! (D-1261), and a hit is used only when every image
 //! it references hits with those bytes. Otherwise it is evaluated again
 //! with the constants it reads and the hits whose images reference it, so
 //! the images installed together always come from one evaluation or from
 //! entries that agree byte for byte ([`ConstPlan`]).
 //!
-//! Entry bytes (GAP(const-entry-bytes)), sealed with their SipHash-1-3 128
+//! Entry bytes (D-1260), sealed with their SipHash-1-3 128
 //! as front records are: `CBCE`, a version byte, then a tag: 0 for an
 //! image (the list of referenced images, each as its path and the 16-byte
 //! hash of its bytes, then the image's bytes), 1 for a failure (the blob
@@ -65,7 +71,7 @@ const ARTIFACT: &str = "const";
 /// The `[const-eval]` limits a constant's key holds (D-977), and the
 /// package's checked targets: E0078's range check runs only when they
 /// hold `js` (D-540), so they are part of the verdict
-/// (GAP(const-entry-bytes)).
+/// (D-1260).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConstLimits {
     /// The time limit of one top-level evaluation (D-536).
@@ -1036,7 +1042,7 @@ pub(crate) enum ConstRoots<'a> {
 /// The reached constants come from walking the vouched modules' reference
 /// summaries (D-967) as the build's reach does: a constant no root
 /// reaches is never looked up, so its missing entry checks nothing
-/// (GAP(const-keys-before-check)). When the walk meets a module the view
+/// (D-1259). When the walk meets a module the view
 /// does not vouch for, every package constant counts. A `main`'s entry
 /// dictionary is not in its summary (`load_set.rs`), so a constant
 /// reached only through it counts only if something else reaches it (K4d's

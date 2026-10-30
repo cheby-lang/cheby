@@ -32,7 +32,7 @@
 //! lets the pool thread act for the parked fiber (`cheby_runtime`'s
 //! `ffi_pool.rs`), and a call that must unwind after its job (a
 //! cancellation, a failed allocation) comes back with its result word and
-//! the flag set. GAP(blocking-package-shims): when the wrapper hands that
+//! the flag set. D-1268: when the wrapper hands that
 //! word to `cheby_rt_ffi_value` or `cheby_rt_ffi_external`, the call has no
 //! flag test of its own and the helper releases the result on the fiber
 //! before the wrapper unwinds (`func.rs`'s `ffi_checked_later`, D-171);

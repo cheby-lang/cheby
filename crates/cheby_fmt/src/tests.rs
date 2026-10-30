@@ -182,7 +182,7 @@ fn fmt_items_fn_header_breaks_when_too_wide() {
 
 #[test]
 fn fmt_items_type_bodies() {
-    // GAP(type-bodies-always-broken): a type's own body is broken however
+    // D-1274: a type's own body is broken however
     // short; a record-shaped variant's fields and a payload that fits stay
     // flat.
     assert_eq!(

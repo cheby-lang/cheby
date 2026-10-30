@@ -459,7 +459,11 @@ test "compare is a total order" {
   assert float::compare(-0.0, 0.0) == Equal
   assert float::compare(float::nan, float::infinity) == Greater
   assert float::compare(float::nan, float::nan) == Equal
-  assert list::sort([float::nan, 1.0, float::neg_infinity]) == [float::neg_infinity, 1.0, float::nan]
+  assert list::sort([float::nan, 1.0, float::neg_infinity]) == [
+    float::neg_infinity,
+    1.0,
+    float::nan,
+  ]
 }
 ```
 
