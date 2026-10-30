@@ -27,7 +27,8 @@ fn between(low: Int, high: Int) -> Int {
   assert low <= high as "between needs low <= high, got {low} and {high}"
   // The foreign function takes a `U32`, so the size of the range must
   // be narrowed first. Narrowing can fail, so it returns a `Result`.
-  let assert Ok(size) = u32::from_int(high - low + 1) as "the range from {low} to {high} is too large"
+  let assert Ok(size) =
+    u32::from_int(high - low + 1) as "the range from {low} to {high} is too large"
   // Widening from `U32` to `Int` always succeeds, so it returns an
   // `Int` directly.
   low + int::from_u32(below(size))

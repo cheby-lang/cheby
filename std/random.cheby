@@ -371,7 +371,9 @@ fn shuffle_down<T>(generator: Generator, xs: List<T>, i: Int) -> (List<T>, Gener
 fn swapped<T>(xs: List<T>, i: Int, j: Int) -> List<T> {
   let assert Some(at_i) = list::get(xs, i)
   let assert Some(at_j) = list::get(xs, j)
-  xs |> list::set(_, i, at_j) |> list::set(_, j, at_i)
+  xs
+  |> list::set(_, i, at_j)
+  |> list::set(_, j, at_i)
 }
 
 test "shuffle reorders a list from a seed" {

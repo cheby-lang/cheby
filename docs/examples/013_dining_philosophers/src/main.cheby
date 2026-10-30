@@ -23,6 +23,7 @@
 //! once. Each of them eats a fixed number of meals and then leaves, and
 //! once the table is empty `main` prints how many meals each one ate.
 
+import dining_philosophers::fork
 import std::channel
 import std::duration
 import std::fiber
@@ -34,7 +35,6 @@ import std::random
 import std::result
 import std::selector
 import std::set
-import dining_philosophers::fork
 
 /// Who comes to dinner, in their order around the table.
 const guests: List<String> = ["Aristotle", "Kant", "Spinoza", "Marx", "Russell"]
@@ -70,7 +70,8 @@ fn main() -> Result<Nil, fiber::Panic> {
   // A `Map` has no order of its own (D-093), so the names come from
   // `guests`, in their order around the table.
   list::each(guests, fn(name) {
-    let meals = map::get(eaten, name) |> option::unwrap_or(_, 0)
+    let meals = map::get(eaten, name)
+      |> option::unwrap_or(_, 0)
     io::println("{name} ate {meals} meals.")
   })
   let total = list::sum(map::values(eaten), 0)
@@ -81,7 +82,11 @@ fn main() -> Result<Nil, fiber::Panic> {
 
 /// Runs the dinner of `names`, `meals` meals each, while checking its
 /// log, and returns how many meals each philosopher started, by name.
-fn observe(names: List<String>, meals: Int, max_pause: Int) -> Result<map::Map<String, Int>, fiber::Panic> {
+fn observe(
+  names: List<String>,
+  meals: Int,
+  max_pause: Int,
+) -> Result<map::Map<String, Int>, fiber::Panic> {
   use scope <- fiber::scope()
   // Capacity 0: a philosopher's `report` returns only once the event
   // has been received. `StopsEating` is received before the forks go
@@ -136,8 +141,12 @@ fn seating(names: List<String>) -> List<Philosopher> {
   let right_forks = [..other_forks, first_fork]
   fn step(unseated, lefts, rights, seated) {
     case unseated, lefts, rights {
-      [name, ..more_names], [left, ..more_lefts], [right, ..more_rights] =>
-        step(more_names, more_lefts, more_rights, [..seated, sit(name, left, right)])
+      [name, ..more_names], [left, ..more_lefts], [right, ..more_rights] => step(
+        more_names,
+        more_lefts,
+        more_rights,
+        [..seated, sit(name, left, right)],
+      )
       _, _, _ => seated
     }
   }
@@ -214,12 +223,16 @@ fn check_log(
     Ok(StartsEating(eater, _)) => {
       assert !set::contains(held, eater.first.number) as "fork {eater.first.number} is held twice"
       assert !set::contains(held, eater.second.number) as "fork {eater.second.number} is held twice"
-      let taken = held |> set::insert(_, eater.first.number) |> set::insert(_, eater.second.number)
+      let taken = held
+        |> set::insert(_, eater.first.number)
+        |> set::insert(_, eater.second.number)
       let counted = map::upsert(eaten, eater.name, fn(before) { option::unwrap_or(before, 0) + 1 })
       check_log(log, taken, counted)
     }
     Ok(StopsEating(eater, _)) => {
-      let freed = held |> set::remove(_, eater.first.number) |> set::remove(_, eater.second.number)
+      let freed = held
+        |> set::remove(_, eater.first.number)
+        |> set::remove(_, eater.second.number)
       check_log(log, freed, eaten)
     }
     Err(Nil) => eaten
@@ -237,7 +250,9 @@ test "everyone eats every meal, and no fork is ever held twice" {
   // Without pauses the philosophers fight over the forks as hard as
   // they can. A deadlock would make the test time out instead of hang.
   let outcome = fiber::timeout(duration::seconds(10), fn() { observe(guests, 20, 0) })
-  let everyone = guests |> list::map(_, fn(name) { (name, 20) }) |> map::from_list
+  let everyone = guests
+    |> list::map(_, fn(name) { (name, 20) })
+    |> map::from_list
   assert outcome == Ok(Ok(everyone))
 }
 

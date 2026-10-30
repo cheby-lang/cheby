@@ -13,6 +13,14 @@
 //! - the edit-to-run latency: one function body is changed, then
 //!   `cheby run` is timed until `main` has run (a full rebuild in M1).
 //!
+//! - std's first use (D-980, K6): the median over [`FIRST_USE_ROUNDS`]
+//!   rounds of `cheby run` of `bench/gen`'s `small` project of 10k lines
+//!   (seed 1) on an empty cache, minus the same `cheby run` on a cache that
+//!   `cheby run` of the project generated with seed 2 filled first, so
+//!   std's records are in it and the seed-1 package's are not
+//!   ([`std_first_use`]). Each measurement has a fresh cache of its own
+//!   (`cache.rs`).
+//!
 //! Checking and checking with code generation run twice: with `--jobs 1`,
 //! which gives the lines per second per core, and with the default
 //! number of threads (the available parallelism), which gives the scaling
@@ -282,7 +290,9 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             edit_to_run,
         });
     }
-    let table = render(&rows);
+    eprintln!("bench-compile: std's first use, {FIRST_USE_ROUNDS} rounds");
+    let first_use = std_first_use(&cheby, &base, env)?;
+    let table = format!("{}{}", render(&rows), render_first_use(first_use));
     print!("{table}");
     if let Some(summary) = &args.summary {
         crate::append(
@@ -303,9 +313,140 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             runs: RUNS,
             load_before,
         };
-        write_json(root, out, &meta, &rows)?;
+        write_json(root, out, &meta, &rows, first_use)?;
     }
     Ok(())
+}
+
+/// The rounds of "std first use" ([`std_first_use`]).
+const FIRST_USE_ROUNDS: usize = 5;
+
+/// D-980's first-use cost ("about 0.15 s once per machine"; K6): per
+/// round, `cheby run` of `small-10000` (seed 1) on an empty cache, and the
+/// same run on a fresh cache that `cheby run` of `small-10000` generated
+/// with seed 2 filled first: std's records are in it, the seed-1 package's
+/// are not, so the difference is what std's first use costs. The median
+/// over the rounds of the differences, in nanoseconds (negative when the
+/// noise exceeds the cost). Each run logs `CHEBY_CACHE_LOG`, and a round
+/// fails when the seed-2 run did not look up every std code record the
+/// seed-1 run on the empty cache looked up ([`check_first_use`]).
+fn std_first_use(cheby: &Path, base: &Path, env: &[(String, String)]) -> Result<i128, String> {
+    let mut dirs = Vec::new();
+    for seed in [1, 2] {
+        let dir = base.join(format!("first-use-small-10000-seed-{seed}"));
+        cheby_bench_gen::generate(&Config {
+            lines: 10_000,
+            shape: Shape::Small,
+            seed,
+        })
+        .write(&dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+        dirs.push(dir);
+    }
+    let [seed1, seed2] = dirs.as_slice() else {
+        return Err("std first use: two projects".to_owned());
+    };
+    let mut diffs = Vec::with_capacity(FIRST_USE_ROUNDS);
+    for round in 0..FIRST_USE_ROUNDS {
+        let log = |name: &str| base.join(format!("first-use-{round}-{name}.log"));
+        let empty = crate::cache::fresh("first-use-empty")?;
+        let cold = time_logged(cheby, seed1, empty.path(), &log("cold"), env)?;
+        let filled = crate::cache::fresh("first-use-filled")?;
+        time_logged(cheby, seed2, filled.path(), &log("fill"), env)?;
+        let warm = time_logged(cheby, seed1, filled.path(), &log("warm"), env)?;
+        let read = |name: &str| {
+            std::fs::read_to_string(log(name)).map_err(|e| format!("std first use: {e}"))
+        };
+        check_first_use(&read("cold")?, &read("fill")?)?;
+        let nanos = |d: Duration| i128::try_from(d.as_nanos()).unwrap_or(i128::MAX);
+        diffs.push(nanos(cold).saturating_sub(nanos(warm)));
+    }
+    median(&mut diffs).ok_or_else(|| "std first use: no round".to_owned())
+}
+
+/// The middle of `values` once sorted (the upper middle of an even
+/// count), or `None` when there is none.
+fn median(values: &mut [i128]) -> Option<i128> {
+    values.sort_unstable();
+    values.get(values.len() / 2).copied()
+}
+
+/// The `code.std` modules of a `CHEBY_CACHE_LOG` text.
+fn std_code_modules(log: &str) -> std::collections::BTreeSet<&str> {
+    log.lines()
+        .filter_map(|line| line.strip_prefix("code.std "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .collect()
+}
+
+/// Fails when the seed-1 run on the empty cache (`cold`) logged no
+/// `code.std` line (no std lookup to measure), or when the seed-2 run that
+/// filled the other cache (`fill`) lacks a `code.std` line of a module the
+/// seed-1 run has: then the filled cache need not hold that module's
+/// record, and the difference would not be std's first use.
+fn check_first_use(cold: &str, fill: &str) -> Result<(), String> {
+    let wanted = std_code_modules(cold);
+    if wanted.is_empty() {
+        return Err(
+            "std first use: the run on the empty cache logged no `code.std` line".to_owned(),
+        );
+    }
+    let filled = std_code_modules(fill);
+    let missing: Vec<&str> = wanted.difference(&filled).copied().collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "std first use: the seed-2 run logged no `code.std` line of {}",
+            missing.join(", ")
+        ))
+    }
+}
+
+/// Times `cheby run` in `dir` on the cache `cache`, its lookups logged to
+/// `log` (`CHEBY_CACHE_LOG`), with `env` set; it must succeed.
+fn time_logged(
+    cheby: &Path,
+    dir: &Path,
+    cache: &Path,
+    log: &Path,
+    env: &[(String, String)],
+) -> Result<Duration, String> {
+    let mut cmd = Command::new(cheby);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    cmd.env("CHEBY_CACHE", cache).env("CHEBY_CACHE_LOG", log);
+    let start = Instant::now();
+    let out = cmd
+        .args(["--color=never", "run"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", cheby.display()))?;
+    let elapsed = start.elapsed();
+    if !out.status.success() {
+        return Err(format!(
+            "`cheby run` failed in {} ({})\n{}",
+            dir.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(elapsed)
+}
+
+/// The "std first use" table: one column (D-980, K6).
+fn render_first_use(nanos: i128) -> String {
+    // Milliseconds fit an `i32` for any run this measures; a larger
+    // difference shows as the bound.
+    let millis = i32::try_from(nanos / 1_000_000).unwrap_or(i32::MAX);
+    let seconds = f64::from(millis) / 1000.0;
+    format!(
+        "\n| Std first use |\n| ------------- |\n| {seconds:.3} s |\n\nStd first use: the median over \
+         {FIRST_USE_ROUNDS} rounds of `cheby run` of `small-10000` (seed 1) on an empty cache, minus \
+         the same run on a cache that `cheby run` of `small-10000` generated with seed 2 filled \
+         first: std's records are in it, the seed-1 package's are not (D-980).\n"
+    )
 }
 
 /// Writes the rows with the metadata to `out`. `xtask_commit` names the
@@ -315,11 +456,13 @@ fn write_json(
     out: &Path,
     meta: &crate::bench_run::Meta,
     rows: &[Row],
+    first_use: i128,
 ) -> Result<(), String> {
     let value = json!({
         "meta": meta.to_json(),
         "xtask_commit": crate::bench_run::head_commit(root),
         "rows": rows.iter().map(Row::to_json).collect::<Vec<_>>(),
+        "std_first_use_ns": i64::try_from(first_use).unwrap_or(i64::MAX),
     });
     let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     std::fs::write(out, format!("{text}\n")).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -701,5 +844,30 @@ mod tests {
     fn kib_has_one_decimal() {
         assert_eq!(kib(0), "0.0");
         assert_eq!(kib(1536), "1.5");
+    }
+
+    /// K6 (D-980): the seed-2 run must look up every std code record the
+    /// seed-1 run on the empty cache looked up, and the empty-cache run must
+    /// look one up at all.
+    #[test]
+    fn first_use_check_needs_every_std_line_of_the_cold_run() {
+        let cold = "code.run bench miss\ncode.std std::io miss\ncode.std std::list miss\n";
+        let fill = "code.std std::io miss\ncode.std std::list miss\ncode.std std::map miss\n";
+        assert_eq!(check_first_use(cold, fill), Ok(()));
+        let short = "code.std std::io miss\n";
+        assert_eq!(
+            check_first_use(cold, short),
+            Err("std first use: the seed-2 run logged no `code.std` line of std::list".to_owned())
+        );
+        assert!(check_first_use("code.run bench miss\n", fill).is_err());
+    }
+
+    /// The column is the middle difference, negative ones included.
+    #[test]
+    fn first_use_median_is_the_middle_difference() {
+        assert_eq!(median(&mut [30, -5, 10, 20, 0]), Some(10));
+        assert_eq!(median(&mut [2, 1]), Some(2));
+        assert_eq!(median(&mut []), None);
+        assert!(render_first_use(150_000_000).contains("| 0.150 s |"));
     }
 }

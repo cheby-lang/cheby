@@ -16,13 +16,16 @@
 //! so they take constant stack space. Nesting is not: every level of
 //! arrays or objects inside each other uses a few more stack frames.
 
+import json::value
 import std::float
 import std::result
 import std::string
-import json::value
 
 /// Why parsing failed, and where, counted in code points from 0.
-type ParseError { position: Int, reason: Reason }
+type ParseError {
+  position: Int,
+  reason: Reason,
+}
 
 /// What went wrong.
 type Reason {
@@ -43,7 +46,10 @@ type Reason {
 
 /// The code points still to read, and how many have been read before
 /// them. It is `priv` because only this module needs it.
-priv type Input { rest: List<String>, position: Int }
+priv type Input {
+  rest: List<String>,
+  position: Int,
+}
 
 /// What a parsing step returns: the parsed thing and the input after it.
 priv type Parsed<T> = Result<(T, Input), ParseError>
@@ -109,7 +115,10 @@ priv fn keyword(input: Input, word: String, parsed: value::Value) -> Parsed<valu
   fn step(current: Input, expected: List<String>) {
     case current.rest, expected {
       _, [] => Ok((parsed, current))
-      [found, ..rest], [wanted, ..others] when found == wanted => step(advance(current, 1, rest), others)
+      [found, ..rest], [wanted, ..others] when found == wanted => step(
+        advance(current, 1, rest),
+        others,
+      )
       _, _ => unexpected(current)
     }
   }
@@ -154,13 +163,19 @@ priv fn parse_object(input: Input) -> Parsed<value::Value> {
 /// Parses the `"key": value` member at `input` and the ones after it,
 /// adding them to `members`. Like `array_items`, it recurses by a tail
 /// call.
-priv fn object_members(input: Input, members: List<(String, value::Value)>) -> Parsed<value::Value> {
+priv fn object_members(
+  input: Input,
+  members: List<(String, value::Value)>,
+) -> Parsed<value::Value> {
   use (key, after_key) <- result::try(parse_quoted(input))
   use after_colon <- result::try(expect(skip_whitespace(after_key), ":"))
   use (item, after_item) <- result::try(parse_value(skip_whitespace(after_colon)))
   let after = skip_whitespace(after_item)
   case after.rest {
-    [",", ..rest] => object_members(skip_whitespace(advance(after, 1, rest)), [..members, (key, item)])
+    [",", ..rest] => object_members(skip_whitespace(advance(after, 1, rest)), [
+      ..members,
+      (key, item),
+    ])
     ["}", ..rest] => Ok((value::Object([..members, (key, item)]), advance(after, 1, rest)))
     _ => unexpected(after)
   }
@@ -346,7 +361,8 @@ test "numbers can be negative and have fractions and exponents" {
 test "strings decode their escapes" {
   assert parse(r#""hello""#) == Ok(value::String("hello"))
   assert parse(r#""""#) == Ok(value::String(""))
-  assert parse(r#""a\"b\\c\/d\ne\tf\rg\bh\fi""#) == Ok(value::String("a\"b\\c/d\ne\tf\rg\u{8}h\u{c}i"))
+  assert parse(r#""a\"b\\c\/d\ne\tf\rg\bh\fi""#) ==
+    Ok(value::String("a\"b\\c/d\ne\tf\rg\u{8}h\u{c}i"))
   assert parse(r#""héllo 🎉""#) == Ok(value::String("héllo 🎉"))
 }
 
@@ -428,10 +444,14 @@ test "positions count code points, not bytes" {
 }
 
 test "errors show as messages for the user" {
-  assert show(ParseError { position: 3, reason: UnexpectedEnd }) == "unexpected end of input at position 3"
-  assert show(ParseError { position: 7, reason: UnexpectedChar("x") }) == "unexpected \"x\" at position 7"
-  assert show(ParseError { position: 5, reason: InvalidEscape("x") }) == "invalid escape \\x at position 5"
-  assert show(ParseError { position: 1, reason: UnicodeEscape }) == "\\u escapes are not supported at position 1"
+  assert show(ParseError { position: 3, reason: UnexpectedEnd }) ==
+    "unexpected end of input at position 3"
+  assert show(ParseError { position: 7, reason: UnexpectedChar("x") }) ==
+    "unexpected \"x\" at position 7"
+  assert show(ParseError { position: 5, reason: InvalidEscape("x") }) ==
+    "invalid escape \\x at position 5"
+  assert show(ParseError { position: 1, reason: UnicodeEscape }) ==
+    "\\u escapes are not supported at position 1"
 }
 
 test "parsing pretty-printed JSON gives back the same value" {

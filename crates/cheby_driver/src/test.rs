@@ -395,6 +395,26 @@ fn prepare_test_inner(
     options: &TestOptions,
     cache: Option<&crate::Cache>,
 ) -> Result<PreparedTests, Error> {
+    // D-1250: a warm `cheby test` checks only what its build needs; a build
+    // that then wants a hit's body starts again with every module checked.
+    match prepare_test_once(root, options, cache, Some(options.reuse_report)) {
+        Err(crate::Restart::Again(mark)) => {
+            crate::rollback_log(cache, mark);
+            prepare_test_once(root, options, cache, None).map_err(crate::Restart::into_error)
+        }
+        other => other.map_err(crate::Restart::into_error),
+    }
+}
+
+/// One attempt of [`prepare_test_inner`], `warm` as
+/// `crate::front_end_family`'s.
+fn prepare_test_once(
+    root: &Path,
+    options: &TestOptions,
+    cache: Option<&crate::Cache>,
+    warm: Option<bool>,
+) -> Result<PreparedTests, crate::Restart> {
+    let mark = crate::log_mark(cache);
     let mut out = CheckOutput {
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
@@ -406,6 +426,7 @@ fn prepare_test_inner(
         None,
         &mut out,
         cache,
+        warm.map(|reuse| (reuse, None)),
     )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -421,9 +442,9 @@ fn prepare_test_inner(
                 .iter()
                 .any(|(module_path, _)| within(module_path, &path));
             if !exists {
-                return Err(Error::new(format!(
-                    "there is no module `{path}` in this package"
-                )));
+                return Err(
+                    Error::new(format!("there is no module `{path}` in this package")).into(),
+                );
             }
             Some(path)
         }
@@ -433,11 +454,12 @@ fn prepare_test_inner(
     let mut tests = Vec::new();
     let mut filtered_out: usize = 0;
     for (path, module) in local_modules(&front) {
-        let Some(checked) = front.checked(module) else {
+        // A warm hit's tests come from its warm facts (D-1250).
+        let Some(module_tests) = front.tests_of(module) else {
             continue;
         };
         let shown = path.to_string();
-        for test in checked.thir.tests.iter().filter(|t| on_native(&front, t)) {
+        for test in module_tests.iter().filter(|t| on_native(&front, t)) {
             let in_scope = scope.as_ref().is_none_or(|scope| within(&path, scope));
             if in_scope && matches_filter(&shown, &test.name, options.filter.as_deref()) {
                 roots.push(TestRoot { module, test });
@@ -455,13 +477,18 @@ fn prepare_test_inner(
     let jit = if roots.is_empty() {
         None
     } else {
-        let built = backend::build_reporting(
+        let built = match backend::build_reporting(
             &front,
             &out.sources,
             Roots::Tests(roots),
             false,
             options.reuse_report,
-        )?;
+        ) {
+            Err(_) if warm.is_some() && front.wanted_body() => {
+                return Err(crate::Restart::Again(mark));
+            }
+            built => built?,
+        };
         match built {
             Ok(built) => {
                 reuse_report = built.reuse_report.unwrap_or_default();

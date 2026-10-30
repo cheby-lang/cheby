@@ -5,7 +5,10 @@
 
 /// A point. `x` grows to the right and `y` grows downwards, as on a
 /// screen.
-type Point { x: Float, y: Float }
+type Point {
+  x: Float,
+  y: Float,
+}
 
 /// Returns the point at `x`, `y`.
 fn new(x: Float, y: Float) -> Point {

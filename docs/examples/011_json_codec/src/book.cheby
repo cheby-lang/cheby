@@ -6,10 +6,10 @@
 //! type. The same rule means a module can satisfy an interface such as
 //! `json::ToJson` for only one type (ADR-0020).
 
-import std::json
-import std::json::decode
 import json_codec::author
 import json_codec::format
+import std::json
+import std::json::decode
 
 /// A book in the library.
 ///
@@ -69,13 +69,15 @@ test "a book encodes as compact JSON and decodes back" {
     format: format::Paperback,
     tags: ["science fiction", "classic"],
   }
-  let expected = r#"{"title":"Dune","author":{"name":"Frank Herbert","born":1920},"year":1965,"format":"paperback","tags":["science fiction","classic"]}"#
+  let expected =
+    r#"{"title":"Dune","author":{"name":"Frank Herbert","born":1920},"year":1965,"format":"paperback","tags":["science fiction","classic"]}"#
   assert json::to_string(to_json(dune)) == expected
   assert json::parse(json::to_string(to_json(dune)), decoder()) == Ok(dune)
 }
 
 test "missing tags decode as an empty list" {
-  let text = r#"{"title":"Beloved","author":{"name":"Toni Morrison"},"year":1987,"format":"hardcover"}"#
+  let text =
+    r#"{"title":"Beloved","author":{"name":"Toni Morrison"},"year":1987,"format":"hardcover"}"#
   let beloved = Book {
     title: "Beloved",
     author: author::Author { name: "Toni Morrison", born: None },
@@ -87,7 +89,8 @@ test "missing tags decode as an empty list" {
 }
 
 test "a value of the wrong kind is a decode error at its path" {
-  let year_text = r#"{"title":"Dune","author":{"name":"Frank Herbert"},"year":"1965","format":"ebook"}"#
+  let year_text =
+    r#"{"title":"Dune","author":{"name":"Frank Herbert"},"year":"1965","format":"ebook"}"#
   let year_problem = decode::Error { expected: "Int", found: "String", path: ["year"] }
   assert json::parse(year_text, decoder()) == Err(json::Decode([year_problem]))
   // A key of a nested object adds to the path.
@@ -97,7 +100,8 @@ test "a value of the wrong kind is a decode error at its path" {
 }
 
 test "an unknown format is a decode error at the format" {
-  let text = r#"{"title":"Dune","author":{"name":"Frank Herbert"},"year":1965,"format":"audiobook"}"#
+  let text =
+    r#"{"title":"Dune","author":{"name":"Frank Herbert"},"year":1965,"format":"audiobook"}"#
   let problem = decode::Error { expected: "Format", found: "String", path: ["format"] }
   assert json::parse(text, decoder()) == Err(json::Decode([problem]))
 }

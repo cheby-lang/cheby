@@ -95,6 +95,39 @@ impl CacheLog {
             .push(format!("parse {module}"));
     }
 
+    /// Records that the command parsed std module `module`, as a line
+    /// `parse.std <module>` (GAP(std-cache-log-lines), refining D-1135:
+    /// `parse` stays package-only, and std's parses get their own name).
+    /// A std module is listed once per command, though std's first use
+    /// parses it in a front end of its own beside the command's.
+    pub fn parsed_std(&self, module: &str) {
+        if self.path.is_none() {
+            return;
+        }
+        let line = format!("parse.std {module}");
+        let mut lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+
+    /// How many lines the log holds now, for [`CacheLog::rollback`].
+    pub(crate) fn mark(&self) -> usize {
+        self.lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
+    /// Drops the lines recorded after `mark` (a command that starts again,
+    /// D-1133, D-1135: only the run that finished is logged).
+    pub(crate) fn rollback(&self, mark: usize) {
+        self.lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .truncate(mark);
+    }
+
     /// The recorded lines, sorted.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {

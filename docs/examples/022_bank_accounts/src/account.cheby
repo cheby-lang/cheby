@@ -24,10 +24,10 @@
 //! of a `Handle` may close the account, and an account whose last
 //! `Handle` is dropped closes by itself.
 
+import bank_accounts::money
 import std::channel
 import std::fiber
 import std::result
-import bank_accounts::money
 
 /// A handle for sending requests to an account. All copies talk to the
 /// same actor.
@@ -131,8 +131,7 @@ fn show(error: Error) -> String {
     // `balance` is also the name of a function in this module, so the
     // field is bound to a new name instead of being punned: a binding
     // must not shadow a top-level item.
-    InsufficientFunds { balance: available, requested } =>
-      "the balance of {available} is less than {requested}"
+    InsufficientFunds { balance: available, requested } => "the balance of {available} is less than {requested}"
     Closed => "the account is closed"
   }
 }
@@ -148,7 +147,10 @@ priv fn tell(handle: Handle, request: Request) -> Result<Nil, Error> {
 
 /// Sends the request that `make_request` builds around a new reply
 /// channel, and waits for the answer.
-priv fn ask<T>(handle: Handle, make_request: fn(channel::Sender<T>) -> Request) -> Result<T, Error> {
+priv fn ask<T>(
+  handle: Handle,
+  make_request: fn(channel::Sender<T>) -> Request,
+) -> Result<T, Error> {
   // Capacity 1 lets the actor leave its answer and move on, without
   // waiting for this fiber to take it.
   let (reply_tx, reply_rx) = channel::new::<T>(1)
@@ -225,7 +227,11 @@ priv fn credit(state: Account, amount: money::Money) -> Account {
 priv fn debit(state: Account, amount: money::Money) -> Result<Account, Error> {
   case {
     amount > state.balance => Err(InsufficientFunds { balance: state.balance, requested: amount })
-    _ => Ok(Account { ..state, balance: state.balance - amount, withdrawals: state.withdrawals + 1 })
+    _ => Ok(Account {
+      ..state,
+      balance: state.balance - amount,
+      withdrawals: state.withdrawals + 1,
+    })
   }
 }
 
@@ -239,8 +245,15 @@ test "credit adds to the balance and counts the deposit" {
 
 test "debit refuses to go below zero" {
   let before = Account { balance: money::from_cents(10_00), deposits: 0, withdrawals: 0 }
-  assert debit(before, money::from_cents(10_00)) == Ok(Account { balance: money::zero, deposits: 0, withdrawals: 1 })
-  let refusal = InsufficientFunds { balance: money::from_cents(10_00), requested: money::from_cents(10_01) }
+  assert debit(before, money::from_cents(10_00)) == Ok(Account {
+    balance: money::zero,
+    deposits: 0,
+    withdrawals: 1,
+  })
+  let refusal = InsufficientFunds {
+    balance: money::from_cents(10_00),
+    requested: money::from_cents(10_01),
+  }
   assert debit(before, money::from_cents(10_01)) == Err(refusal)
 }
 
@@ -261,7 +274,10 @@ test "a refused withdrawal changes nothing" {
     let wallet = start(scope, "Ada", money::from_cents(3_00))
     (withdraw(wallet, money::from_cents(3_01)), balance(wallet))
   }
-  let refusal = InsufficientFunds { balance: money::from_cents(3_00), requested: money::from_cents(3_01) }
+  let refusal = InsufficientFunds {
+    balance: money::from_cents(3_00),
+    requested: money::from_cents(3_01),
+  }
   assert answers == (Err(refusal), Ok(money::from_cents(3_00)))
 }
 
@@ -291,7 +307,10 @@ test "the actor returns its account once every Handle is gone" {
 }
 
 test "errors show as messages for the customer" {
-  let refusal = InsufficientFunds { balance: money::from_cents(3_00), requested: money::from_cents(12_50) }
+  let refusal = InsufficientFunds {
+    balance: money::from_cents(3_00),
+    requested: money::from_cents(12_50),
+  }
   assert show(refusal) == "the balance of 3.00 is less than 12.50"
   assert show(Closed) == "the account is closed"
 }

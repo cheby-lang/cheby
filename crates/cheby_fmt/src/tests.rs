@@ -1,10 +1,10 @@
 //! Unit tests of the formatter on small sources.
 
-use super::{PROVISIONAL_WIDTH, format_source};
+use super::{WIDTH, format_source};
 
 #[track_caller]
 fn fmt(text: &str) -> String {
-    fmt_at(text, PROVISIONAL_WIDTH)
+    fmt_at(text, WIDTH)
 }
 
 #[track_caller]
@@ -182,10 +182,26 @@ fn fmt_items_fn_header_breaks_when_too_wide() {
 
 #[test]
 fn fmt_items_type_bodies() {
+    // GAP(type-bodies-always-broken): a type's own body is broken however
+    // short; a record-shaped variant's fields and a payload that fits stay
+    // flat.
     assert_eq!(
         fmt("pub   type Color {\n  Red,\n  Green(Int,),\n  Blue { x: Int,  y: Int }\n}\n"),
-        "pub type Color { Red, Green(Int), Blue { x: Int, y: Int } }\n"
+        "pub type Color {\n  Red,\n  Green(Int),\n  Blue { x: Int, y: Int },\n}\n"
     );
+    assert_eq!(
+        fmt("type Player { X, O }\n"),
+        "type Player {\n  X,\n  O,\n}\n"
+    );
+    assert_eq!(
+        fmt("pub type Duration { seconds: Int, nanoseconds: Int }\n"),
+        "pub type Duration {\n  seconds: Int,\n  nanoseconds: Int,\n}\n"
+    );
+    assert_eq!(
+        fmt("type Tree<K, V> { Leaf, Bin(Int, K, V, Tree<K, V>, Tree<K, V>) }\n"),
+        "type Tree<K, V> {\n  Leaf,\n  Bin(Int, K, V, Tree<K, V>, Tree<K, V>),\n}\n"
+    );
+    assert_eq!(fmt("type Unit { Unit }\n"), "type Unit {\n  Unit,\n}\n");
     let src = "type Shape {\n  Circle { radius: Float },\n  Rectangle { width_of_the_shape: Float, height_of_the_shape: Float },\n}\n";
     assert_eq!(
         fmt_at(src, 60),

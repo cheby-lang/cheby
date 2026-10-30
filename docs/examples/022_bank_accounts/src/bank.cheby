@@ -23,10 +23,10 @@
 //! `let assert`, which panics instead of asking every caller to handle
 //! a case that should never happen.
 
-import std::fiber
-import std::result
 import bank_accounts::account
 import bank_accounts::money
+import std::fiber
+import std::result
 
 /// Why a transfer did not happen. In both cases no money has moved by
 /// the time `transfer` returns.
@@ -62,7 +62,8 @@ fn transfer(
       // gone and the program has a bug, so it panics with the reason
       // rather than returning an error that nobody could act on.
       let payer_name = account::name(payer)
-      let assert Ok(Nil) = account::deposit(payer, amount) as "could not refund {amount} to {payer_name}"
+      let assert Ok(Nil) =
+        account::deposit(payer, amount) as "could not refund {amount} to {payer_name}"
       Err(Returned(reason))
     }
   }
@@ -112,7 +113,10 @@ test "a transfer larger than the balance moves nothing" {
     let attempt = transfer(grace, ada, money::from_cents(2_00))
     (attempt, total([ada, grace]))
   }
-  let refusal = account::InsufficientFunds { balance: money::from_cents(1_00), requested: money::from_cents(2_00) }
+  let refusal = account::InsufficientFunds {
+    balance: money::from_cents(1_00),
+    requested: money::from_cents(2_00),
+  }
   assert outcome == (Err(NotTaken(refusal)), Ok(money::from_cents(11_00)))
 }
 

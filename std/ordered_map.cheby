@@ -214,11 +214,7 @@ pub fn remove<K, V>(m: OrderedMap<K, V>, key: K) -> OrderedMap<K, V> {
   case map::get(m.index, key) {
     Some((place, _)) => {
       let OrderedMap { index, order, next } = m
-      OrderedMap {
-        index: map::remove(index, key),
-        order: sorted_map::remove(order, place),
-        next,
-      }
+      OrderedMap { index: map::remove(index, key), order: sorted_map::remove(order, place), next }
     }
     None => m
   }

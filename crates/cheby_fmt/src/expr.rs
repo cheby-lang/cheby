@@ -48,6 +48,13 @@
 //!   stay on the line of `case` and of the arm, breaking only inside their
 //!   own brackets; an arm is `patterns [when guard] => body`, the body
 //!   after `=>` laid out as a value after `=` is.
+//! - The user's mid-wave decisions of M3's ninth wave, to be logged:
+//!   GAP(pipes-always-broken) breaks every pipeline before every `|>`, even
+//!   one stage that fits, the head staying on the line of `=`, `<-` or
+//!   `=>` with the `|>` lines one level deeper (it replaces D-1159's flat
+//!   and hugging forms); GAP(case-arm-layout) keeps an arm's body on the
+//!   arm's line (flat, hugging, else broken there) and breaks an arm's
+//!   block body always; an arm has one space before `=>`, never padding.
 //!
 //! A comment or a blank line between two parts of a node keeps its place
 //! and breaks the line there ([`crate::gap`], D-1160, D-1161); a token that holds a line break
@@ -61,12 +68,9 @@ use crate::doc::Doc;
 use crate::gap::{Gap, Parts};
 use crate::layout::{Delims, Formatter, INDENT, ListStyle, entries, hugs, is_comment};
 
-/// A pipeline's layouts: the usual one (flat when it fits, else one stage
-/// per line), and, when the last stage must break, the one that keeps
-/// every stage but the last on one line.
+/// A pipeline's layout: one stage per line (GAP(pipes-always-broken)).
 struct PipeForms {
     normal: Doc,
-    hug: Option<Doc>,
 }
 
 /// Whether the printer writes no space between two parts of a sequence
@@ -117,19 +121,13 @@ const fn level(op: SyntaxKind) -> u8 {
 }
 
 /// Whether a pipeline whose parent is of this kind starts its line, so
-/// its stages line up with its first line.
+/// its stages line up with its first line. GAP(pipes-always-broken): the
+/// value of `let`, `use`, `const` or an arm stays on the line of `=`,
+/// `<-` or `=>`, so its `|>` lines go one level deeper (D-1157).
 const fn starts_line(parent: SyntaxKind) -> bool {
     matches!(
         parent,
-        SyntaxKind::BLOCK
-            | SyntaxKind::ARG_LIST
-            | SyntaxKind::LIST_EXPR
-            | SyntaxKind::TUPLE_EXPR
-            | SyntaxKind::LET_STMT
-            | SyntaxKind::USE_STMT
-            | SyntaxKind::CASE_ARM
-            | SyntaxKind::COND_ARM
-            | SyntaxKind::CONST_DECL
+        SyntaxKind::BLOCK | SyntaxKind::ARG_LIST | SyntaxKind::LIST_EXPR | SyntaxKind::TUPLE_EXPR
     )
 }
 
@@ -190,22 +188,15 @@ fn bin_parts(node: SyntaxNode<'_>) -> Option<BinParts<'_>> {
     }
 }
 
-/// Whether `node` is a call whose last argument is a closure, or a call
-/// that ends in such a call, which hugs the call's parentheses.
-fn ends_in_closure(node: SyntaxNode<'_>) -> bool {
-    node.kind() == SyntaxKind::CALL_EXPR
-        && node
-            .children()
-            .find(|c| c.kind() == SyntaxKind::ARG_LIST)
-            .and_then(|args| args.children().last())
-            .is_some_and(|last| last.kind() == SyntaxKind::CLOSURE || ends_in_closure(last))
-}
-
 /// `doc`, the laid-out `value` after an assignment-like operator (`=`,
 /// `<-`, `=>`, or the one operator of a binary expression), with the
-/// space or line break before it (D-1157). After
-/// `=>` (`arm`), a value that fits flat on the next line goes there
-/// before it breaks on the arm's line.
+/// space or line break before it (D-1157).
+///
+/// GAP(case-arm-layout): after `=>` (`arm`), the body always starts on
+/// the arm's line: flat there, else hugging there when that first line
+/// fits, else broken there; a body that cannot break stays there past the
+/// width. D-1157's "flat on the next line" and "hugging on the next line"
+/// steps, and D-1156's next-line body, no longer apply to an arm.
 fn tail_doc(value: SyntaxNode<'_>, doc: Doc, arm: bool) -> Doc {
     let kind = value.kind();
     let same_line = Doc::concat(vec![Doc::text(" "), doc.clone()]);
@@ -215,39 +206,58 @@ fn tail_doc(value: SyntaxNode<'_>, doc: Doc, arm: bool) -> Doc {
         SyntaxKind::BLOCK | SyntaxKind::CASE_EXPR | SyntaxKind::CLOSURE | SyntaxKind::BIN_EXPR => {
             same_line
         }
-        // These cannot break: on the next line when they do not fit.
+        // These cannot break: on the next line when they do not fit, but
+        // after `=>`.
         SyntaxKind::STRING_LIT
         | SyntaxKind::LITERAL
         | SyntaxKind::PATH_EXPR
         | SyntaxKind::FIELD_EXPR
         | SyntaxKind::HOLE
-        | SyntaxKind::PATH_TYPE => Doc::choice(same_line, next_line(doc)),
+        | SyntaxKind::PATH_TYPE => {
+            if arm {
+                same_line
+            } else {
+                Doc::choice(same_line, next_line(doc))
+            }
+        }
         // The rest (calls, lists, records, tuples), in this order: flat on
         // the operator's line; hugging on the operator's line (a list or a
         // record opening there, a call whose last argument hugs its
         // parentheses), when that first line fits; flat on the next line;
         // hugging on the next line; else broken on the operator's line.
-        // After `=>`, flat on the next line comes before hugging, except
-        // for a call that ends in a closure.
+        // After `=>`, only the operator's line.
         _ => {
             let flat = (!doc.has_hard_break()).then(|| Doc::flat(doc.clone()));
             let hug = hugs(SyntaxElement::Node(value)).then(|| doc.expand_last());
             let a_flat = flat.clone().map(|f| Doc::concat(vec![Doc::text(" "), f]));
-            let b_flat = flat.map(next_line);
             let a_hug = hug.clone().map(|h| Doc::concat(vec![Doc::text(" "), h]));
-            let b_hug = hug.map(next_line);
-            let order = if arm && !ends_in_closure(value) {
-                [a_flat, b_flat, a_hug, b_hug]
+            let (b_flat, b_hug) = if arm {
+                (None, None)
             } else {
-                [a_flat, a_hug, b_flat, b_hug]
+                (flat.map(next_line), hug.map(next_line))
             };
-            order
+            [a_flat, a_hug, b_flat, b_hug]
                 .into_iter()
                 .rev()
                 .flatten()
                 .fold(same_line, |fallback, layout| Doc::choice(layout, fallback))
         }
     }
+}
+
+/// Whether `node` is the body of a `case` arm: the last node of the arm,
+/// after `=>`.
+fn is_arm_body(node: SyntaxNode<'_>) -> bool {
+    node.parent().is_some_and(|arm| {
+        matches!(arm.kind(), SyntaxKind::CASE_ARM | SyntaxKind::COND_ARM)
+            && arm
+                .children()
+                .last()
+                .is_some_and(|last| last.text_range() == node.text_range())
+            && arm
+                .children_with_tokens()
+                .any(|c| c.kind() == SyntaxKind::FAT_ARROW)
+    })
 }
 
 impl<'t> Formatter<'t> {
@@ -339,6 +349,14 @@ impl<'t> Formatter<'t> {
                 SyntaxElement::Token(token) => parts.push(self.token(token)),
                 SyntaxElement::Node(n) => parts.push(self.node(n)),
             }
+            // GAP(case-arm-layout): an arm's patterns, guard and `=>` break
+            // only when they do not fit by themselves, never because of
+            // the body that stays on their line.
+            if child_kind == SyntaxKind::FAT_ARROW
+                && matches!(kind, SyntaxKind::CASE_ARM | SyntaxKind::COND_ARM)
+            {
+                parts.flat_if_fits();
+            }
             prev = Some(child_kind);
         }
         // A node never ends with a comment (the tree builder puts it in
@@ -362,16 +380,9 @@ impl<'t> Formatter<'t> {
                 let anchor = self.src.node_line_indent(value);
                 return Doc::concat(vec![Doc::text(" "), self.verbatim(value, anchor)]);
             };
-            let same_line = if forms.normal.has_hard_break() {
-                forms.hug
-            } else {
-                Some(Doc::flat(forms.normal.clone()))
-            };
-            let next_line = Doc::nest(INDENT, Doc::concat(vec![Doc::hardline(), forms.normal]));
-            return match same_line {
-                Some(doc) => Doc::choice(Doc::concat(vec![Doc::text(" "), doc]), next_line),
-                None => next_line,
-            };
+            // GAP(pipes-always-broken): the head stays on the operator's
+            // line, its `|>` lines one level deeper.
+            return Doc::concat(vec![Doc::text(" "), forms.normal]);
         }
         let doc = self.node(value);
         let arm = value
@@ -415,11 +426,7 @@ impl<'t> Formatter<'t> {
     fn binary(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
         let op = bin_parts(node)?.op.kind();
         if op == SyntaxKind::PIPE_GT {
-            let forms = self.pipe_forms(node)?;
-            return Some(match forms.hug {
-                Some(hug) => Doc::choice(hug, forms.normal),
-                None => forms.normal,
-            });
+            return Some(self.pipe_forms(node)?.normal);
         }
         let chain_level = level(op);
         let mut operands = Vec::new();
@@ -534,54 +541,27 @@ impl<'t> Formatter<'t> {
         } else {
             INDENT
         };
-        let last_hugs = stages
-            .last()
-            .is_some_and(|(_, n, _)| hugs(SyntaxElement::Node(*n)));
-        let quiet = stages.iter().all(|(b, _, a)| b.is_empty() && a.is_empty());
         let head = self.node(head);
-        let mut docs = Vec::new();
         let mut broken_stages = Vec::new();
         for (before, stage, after) in stages {
             let stage = self.node(stage);
-            broken_stages.push(before.doc(false).unwrap_or_else(Doc::line));
+            // GAP(pipes-always-broken): the line breaks before every `|>`,
+            // even of one stage that fits; a last stage still hugs its
+            // closure, block, `case`, list or record by its own layout.
+            broken_stages.push(before.doc(false).unwrap_or_else(Doc::hardline));
             broken_stages.push(Doc::text("|>"));
             if let Some(gap) = after.doc(false) {
-                broken_stages.push(Doc::nest(INDENT, Doc::concat(vec![gap, stage.clone()])));
+                broken_stages.push(Doc::nest(INDENT, Doc::concat(vec![gap, stage])));
             } else {
                 broken_stages.push(Doc::text(" "));
-                broken_stages.push(stage.clone());
+                broken_stages.push(stage);
             }
-            docs.push(stage);
         }
-        let stages = docs;
         let normal = Doc::group(Doc::concat(vec![
-            head.clone(),
+            head,
             Doc::nest(indent, Doc::concat(broken_stages)),
         ]));
-        let hug = match stages.split_last() {
-            Some((last, firsts))
-                if last_hugs
-                    && quiet
-                    && normal.has_hard_break()
-                    && !head.has_hard_break()
-                    && !firsts.iter().any(Doc::has_hard_break) =>
-            {
-                let mut flat = vec![head];
-                for stage in firsts {
-                    flat.push(Doc::text(" |> "));
-                    flat.push(stage.clone());
-                }
-                // The last stage in its hugging layout: the pipeline
-                // stays on one line only when that stage hugs.
-                Some(Doc::concat(vec![
-                    Doc::flat(Doc::concat(flat)),
-                    Doc::text(" |> "),
-                    last.expand_last(),
-                ]))
-            }
-            _ => None,
-        };
-        Some(PipeForms { normal, hug })
+        Some(PipeForms { normal })
     }
 
     /// A record literal or update: its type, then its fields as a list
@@ -622,7 +602,9 @@ impl<'t> Formatter<'t> {
     /// one statement per line; else `{ statement }` when it fits
     /// (D-1155).
     pub(crate) fn block(&mut self, node: SyntaxNode<'t>, body: bool) -> Option<Doc> {
-        if !body {
+        // GAP(case-arm-layout): an arm's block body is always broken, one
+        // statement per line, even one statement that fits.
+        if !body && !is_arm_body(node) {
             let entries = entries(node, Some((SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)));
             if let [entry] = entries.as_slice()
                 && let SyntaxElement::Node(stmt) = entry.elem

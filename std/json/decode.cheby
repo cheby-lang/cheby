@@ -52,7 +52,11 @@ pub type Decoder<T> {
 /// One value that did not fit (D-322, D-323): what the decoder `expected`,
 /// the kind of JSON value `found` there, and the `path` from the decoded
 /// value to it.
-pub exposed type Error { expected: String, found: String, path: List<String> }
+pub exposed type Error {
+  expected: String,
+  found: String,
+  path: List<String>,
+}
 
 /// The errors a decoder recorded below the value it ran on, in the order
 /// visited. No `Under` or `Both` holds `NoErrors`, so a decode without

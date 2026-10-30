@@ -209,10 +209,7 @@ pub fn remove<K, V>(m: Multimap<K, V>, key: K) -> Multimap<K, V> {
     Some(values) => {
       // As in `insert`: `m` ends before the map changes (D-716).
       let Multimap { entries, total } = m
-      Multimap {
-        entries: map::remove(entries, key),
-        total: total - list::length(values),
-      }
+      Multimap { entries: map::remove(entries, key), total: total - list::length(values) }
     }
     None => m
   }

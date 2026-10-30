@@ -219,6 +219,8 @@ codes! {
     E0076 Error 76 CONSTANT_LIMIT "constant whose evaluation exceeded its time or memory limit";
     E0077 Error 77 CONSTANT_EFFECT "constant whose evaluation reached an external function or effect it may not use";
     E0078 Error 78 CONSTANT_OUT_OF_JS_RANGE "constant that exists on `js` and holds an `Int` outside the JS safe range";
+    // Targets and foreign code (chapter 12, D-948).
+    E0079 Error 79 EXTERNAL_INSIDE_FOREIGN_RESULT "native foreign result type that holds an external type below its top level";
     // Warnings.
     W0001 Warning 1 TUPLE_SHAPE "tuple type that hides meaning";
     W0002 Warning 2 UNUSED_BINDING "unused local binding or parameter";

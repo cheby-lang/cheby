@@ -70,8 +70,8 @@ use cheby_mir::{
 /// The report's only line under naive counting.
 pub(crate) const NAIVE_LINE: &str = "reuse: reuse is off (CHEBY_RC=naive)\n";
 
-/// One line before sorting: its place, then its text.
-type Line = ((String, u32, u32), String);
+/// One line before sorting: its place (file, line, column), then its text.
+pub(crate) type Line = ((String, u32, u32), String);
 
 /// The report of `units`, a counted build, for the units of the modules in
 /// `local`: every line with its newline, sorted (module docs). `naive`
@@ -81,6 +81,13 @@ type Line = ((String, u32, u32), String);
 /// # Errors
 ///
 /// An [`Ice`] for malformed MIR or a site outside the source map.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "commands report through `reuse_replay::report` (K4d), which caches lines per unit; tests compare with this"
+    )
+)]
 pub(crate) fn report(
     units: &[MirModule],
     local: &BTreeSet<ModuleId>,
@@ -104,17 +111,24 @@ pub(crate) fn report(
             function_lines(unit, f, sources, names, types, &mut lines)?;
         }
     }
+    Ok(render(lines))
+}
+
+/// The report's text of `lines`, sorted, each with its newline (module
+/// docs).
+pub(crate) fn render(mut lines: Vec<Line>) -> String {
     lines.sort();
     let mut out = String::new();
     for ((path, line, col), text) in lines {
         // Writing to a `String` cannot fail.
         let _ = writeln!(out, "reuse: {path}:{line}:{col}: {text}");
     }
-    Ok(out)
+    out
 }
 
-/// The lines of one function with recorded sites.
-fn function_lines(
+/// The lines of one function with recorded sites, unsorted: also what K4d
+/// caches beside a unit's code record (D-965, `reuse_replay.rs`).
+pub(crate) fn function_lines(
     unit: &MirModule,
     f: &Function,
     sources: &SourceMap,

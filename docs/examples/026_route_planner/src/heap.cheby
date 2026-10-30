@@ -272,7 +272,10 @@ test "every heap keeps both invariants" {
   let built = from_list([5, 3, 8, 1, 9, 2, 7, 6, 4])
   let assert Some((_, once)) = pop(built)
   let assert Some((_, twice)) = pop(once)
-  let refilled = once |> push(_, 0) |> push(_, 10) |> push(_, 3)
+  let refilled = once
+    |> push(_, 0)
+    |> push(_, 10)
+    |> push(_, 3)
   assert holds([built, once, twice, refilled])
   // A hand-built heap with the larger item on top breaks heap order.
   // Only this package can build one, because `Heap` is not `exposed`.

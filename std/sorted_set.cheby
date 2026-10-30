@@ -220,7 +220,10 @@ test "insert adds an element once" {
 // the same `id` and different labels compare `Equal` without being `==`.
 // Satisfaction is not a written use, so the test also names `compare`
 // (D-631).
-priv type Badge { id: Int, label: String }
+priv type Badge {
+  id: Int,
+  label: String,
+}
 
 priv fn compare(a: Badge, b: Badge) -> Order {
   int::compare(a.id, b.id)

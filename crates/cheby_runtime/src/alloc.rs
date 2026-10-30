@@ -1144,6 +1144,13 @@ pub fn out_of_memory(bytes: u64) -> ! {
         fatal(format_args!("{}", crate::ffi::OUT_OF_MEMORY_IN_DROP));
     }
     crate::entry::check_budget(bytes);
+    // D-950: a pool thread acting for a parked fiber records the failure in
+    // the fiber's job and unwinds to the `cheby_ffi_` function's guard,
+    // which returns NULL; the fiber raises it when it resumes.
+    if let Some(job) = crate::ffi_pool::current_job() {
+        job.fail();
+        std::panic::resume_unwind(Box::new(crate::unwind::raise::ChebyUnwind));
+    }
     if crate::entry::current_ctx().is_none() {
         fatal(format_args!("{OUT_OF_MEMORY}"));
     }

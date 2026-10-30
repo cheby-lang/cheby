@@ -24,9 +24,19 @@
 //! words.
 //!
 //! Borrowed Cheby pointers among the arguments stay valid while the fiber
-//! is parked, since it holds them (D-187). Foreign code on a pool thread
-//! never builds Cheby values in M2 (D-191, D-683): the result word comes
-//! back unchanged, and how foreign code builds values waits for OQ-P9 (M3).
+//! is parked, since it holds them (D-187). The result word comes back
+//! unchanged. Every `@blocking` external is a package's: std's blocking
+//! kernels are Rust and use the pool themselves (`sched::blocking`), so no
+//! std code reaches this file. Since D-950 a package's foreign function may
+//! build Cheby values on the pool thread through `cheby.h`: the runtime
+//! lets the pool thread act for the parked fiber (`cheby_runtime`'s
+//! `ffi_pool.rs`), and a call that must unwind after its job (a
+//! cancellation, a failed allocation) comes back with its result word and
+//! the flag set. GAP(blocking-package-shims): when the wrapper hands that
+//! word to `cheby_rt_ffi_value` or `cheby_rt_ffi_external`, the call has no
+//! flag test of its own and the helper releases the result on the fiber
+//! before the wrapper unwinds (`func.rs`'s `ffi_checked_later`, D-171);
+//! a scalar result's call tests the flag right after it, as before.
 
 use cranelift_codegen::ir::immediates::Imm64;
 use cranelift_codegen::ir::{

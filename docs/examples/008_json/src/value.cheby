@@ -98,8 +98,7 @@ priv fn format_number(n: Float) -> String {
 priv fn quote(text: String) -> String {
   // There is no character type, so each code point comes as a
   // one-code-point `String`.
-  let escaped =
-    text
+  let escaped = text
     |> string::to_code_points
     |> list::map(_, escape)
     |> string::join(_, "")
@@ -160,18 +159,21 @@ test "nested values are indented by two spaces per level" {
     ("spouse", Null),
     ("notes", Object([])),
   ])
-  assert show(person) == string::join([
-    "\{",
-    r#"  "name": "Ada","#,
-    r#"  "born": 1815,"#,
-    r#"  "languages": ["#,
-    r#"    "English","#,
-    r#"    "French""#,
-    "  ],",
-    r#"  "spouse": null,"#,
-    r#"  "notes": {}"#,
-    "}",
-  ], "\n")
+  assert show(person) == string::join(
+    [
+      "\{",
+      r#"  "name": "Ada","#,
+      r#"  "born": 1815,"#,
+      r#"  "languages": ["#,
+      r#"    "English","#,
+      r#"    "French""#,
+      "  ],",
+      r#"  "spouse": null,"#,
+      r#"  "notes": {}"#,
+      "}",
+    ],
+    "\n",
+  )
 }
 
 test "arrays inside arrays close at their own depth" {

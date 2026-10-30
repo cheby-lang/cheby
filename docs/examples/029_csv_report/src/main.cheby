@@ -32,13 +32,13 @@
 //! got "3.405"`. The first error stops the program, and nothing is
 //! printed to standard output.
 
+import csv_report::csv
+import csv_report::sales
 import std::env
 import std::io
 import std::list
 import std::result
 import std::string
-import csv_report::csv
-import csv_report::sales
 
 fn main() -> Result<Nil, AppError> {
   use path <- result::try(parse_args(env::args()))
@@ -71,8 +71,7 @@ fn report(path: String, text: String) -> Result<List<String>, AppError> {
   use sold <- result::try(result::map_error(sales::read_sales(records), InvalidSales(path, _)))
   // `summarize` and `format_table` take one argument each, so they are
   // piped bare (D-244).
-  let table =
-    sold
+  let table = sold
     |> sales::summarize
     |> sales::format_table
   Ok(table)
@@ -156,7 +155,9 @@ test "errors show as messages for the user" {
   assert show(MissingPath) == "usage: csv_report FILE"
   assert show(TooManyArguments(3)) == "expected one file name, got 3 arguments"
   let csv_reason = csv::CsvError { line: 4, column: 3, problem: csv::UnterminatedQuote }
-  assert show(InvalidCsv("s.csv", csv_reason)) == "s.csv: line 4, column 3: the quoted field that starts here has no closing quote"
+  assert show(InvalidCsv("s.csv", csv_reason)) ==
+    "s.csv: line 4, column 3: the quoted field that starts here has no closing quote"
   let sales_reason = sales::BadPrice(5, "3.405")
-  assert show(InvalidSales("s.csv", sales_reason)) == "s.csv: line 5: the unit price must look like 12.50, got \"3.405\""
+  assert show(InvalidSales("s.csv", sales_reason)) ==
+    "s.csv: line 5: the unit price must look like 12.50, got \"3.405\""
 }

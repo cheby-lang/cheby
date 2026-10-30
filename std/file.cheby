@@ -42,10 +42,18 @@ pub type File
 
 /// What `info` found about a path: opaque plain data with structural
 /// `==`, read through `size`, `is_file`, `is_dir` and `modified` (D-996).
-pub type Info { size: Int, kind: EntryKind, modified: time::Timestamp }
+pub type Info {
+  size: Int,
+  kind: EntryKind,
+  modified: time::Timestamp,
+}
 
 /// What a path names.
-type EntryKind { RegularFile, Directory, OtherEntry }
+type EntryKind {
+  RegularFile,
+  Directory,
+  OtherEntry,
+}
 
 test "a file handle prints as File" {
   use dir <- with_temp_dir()

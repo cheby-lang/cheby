@@ -367,6 +367,15 @@ fn check_formatted_example(ex: &Example, cache: &Path) -> Result<(), String> {
         }
         return Ok(());
     }
+    // `args` and `env` as the conformance harness passes them: each
+    // `{http_fixture}` is the URL of H1's fixture serving the example's
+    // `site/` (D-1027, D-1249; 031 runs against it from wave 9 on).
+    let run = ex.run_args(&goldens)?;
+    let goldens = example::Goldens {
+        args: run.args,
+        env: run.env,
+        ..goldens
+    };
     let mut args = vec!["run"];
     if !goldens.args.is_empty() {
         args.push("--");
@@ -394,7 +403,8 @@ fn check_formatted_example(ex: &Example, cache: &Path) -> Result<(), String> {
 }
 
 /// The output test of D-1031: every example, formatted in a temporary
-/// copy, runs with its own `stdin`, `args` and `env` and gives its goldens
+/// copy, runs with its own `stdin`, `args` and `env` (each `{http_fixture}`
+/// expanded, D-1027) and gives its goldens
 /// unchanged. Examples that wait for real time (D-725) run after the
 /// others, one at a time.
 #[test]

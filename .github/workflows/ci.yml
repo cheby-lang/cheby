@@ -52,7 +52,11 @@
 #   `skip-run` in its `test.toml`) is also built into an executable from
 #   the two paths under one basename, and the two executables are compared
 #   byte for byte; each one must build (D-934, D-1164). The runtime archive
-#   is built before any executable (D-929). On Linux x86-64 and macOS.
+#   is built before any executable (D-929). Every `.cheby` file of `std/`
+#   and of the examples' `src/` must be in `cheby fmt`'s form at its width
+#   of 100 columns: `cheby fmt --check` fails on any file it would change
+#   (D-1029, D-1252). This job runs it because it already builds
+#   `cheby_cli`. On Linux x86-64 and macOS.
 # - `bench`: generates benchmark projects and reports, never enforces, the
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
@@ -213,6 +217,8 @@ jobs:
         run: cargo build -p cheby_rt_exe --locked
       - name: cheby check in every example
         run: cargo xtask check-examples
+      - name: cheby fmt --check in std and every example (D-1029, D-1252)
+        run: cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')
       - name: Deterministic builds across thread counts and paths
         run: cargo xtask check-determinism
 

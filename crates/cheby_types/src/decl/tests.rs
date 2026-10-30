@@ -705,3 +705,133 @@ fn a_failed_bound_silences_its_parameter() {
     let (_, square) = item(&b, Namespace::Value, "square");
     assert!(matches!(square.sig, ItemSig::Error), "{:?}", square.sig);
 }
+
+// E0079: external values only as direct results (§12.5.1, D-948) ----------
+
+/// An external type `Db` and `rest`.
+fn with_db(rest: &str) -> Build {
+    one(&format!(
+        "@external(native, \"db_close\")\npub type Db\n\n{rest}"
+    ))
+}
+
+/// D-948: an external type inside a `Result`, an `Option`, a tuple, a
+/// list or a type of the package is E0079, with the result type and the
+/// external type named.
+#[test]
+fn ext_result_below_the_top_level_is_an_error() {
+    for (ret, outer) in [
+        ("Result<Db, String>", "`Result`"),
+        ("Option<Db>", "`Option`"),
+        ("(Db, Int)", "a tuple"),
+        ("List<Db>", "`List`"),
+        ("Holder", "`Holder`"),
+        ("Option<Holder>", "`Option`"),
+        ("Wrapped", "`Option`"),
+    ] {
+        let b = with_db(&format!(
+            "pub type Holder {{\n  Holder(Int, Db),\n}}\n\npub type Wrapped = Option<Db>\n\n\
+             @external(native, \"db_open\")\npub fn open(path: String) -> {ret}\n"
+        ));
+        let shown = if ret == "Wrapped" { "Option<Db>" } else { ret };
+        assert_eq!(
+            messages(&b, "E0079"),
+            [format!(
+                "E0079: the native foreign result type `{shown}` holds the external type `Db` \
+                 below its top level [\"native foreign code cannot build this result\", \
+                 \"`Db` is inside {outer}\"]"
+            )],
+            "{ret}: {:?}",
+            b.messages()
+        );
+        assert_eq!(errors(&b), ["E0079"], "{ret}");
+    }
+}
+
+/// D-948: a direct result, parameters that hold external types at any
+/// depth, a type parameter, and a function without `@external(native, …)`
+/// are not checked.
+#[test]
+fn ext_result_direct_results_parameters_and_type_parameters_are_allowed() {
+    let b = with_db(
+        "@external(native, \"db_open\")\npub fn open(path: String) -> Db\n\n\
+         @external(native, \"db_first\")\npub fn first(dbs: List<Option<Db>>, pair: (Db, Int)) -> Int\n\n\
+         @external(native, \"db_any\")\npub fn any<T>(n: Int) -> Option<T>\n\n\
+         @external(native, \"db_maker\")\npub fn maker() -> fn(Int) -> Db\n\n\
+         pub fn wrap(db: Db) -> Option<Db> {\n  Some(db)\n}\n",
+    );
+    assert_eq!(errors(&b), Vec::<String>::new(), "{:?}", b.messages());
+}
+
+/// D-948: the type's own recursion is walked once, and a type of the
+/// package that holds no external type is fine.
+#[test]
+fn ext_result_recursive_types_end() {
+    let b = with_db(
+        "pub type Tree {\n  Leaf,\n  Node(Tree, Tree),\n}\n\n\
+         pub type Chain {\n  End(Db),\n  Link(Chain),\n}\n\n\
+         @external(native, \"db_tree\")\npub fn tree() -> Tree\n\n\
+         @external(native, \"db_chain\")\npub fn chain() -> Chain\n",
+    );
+    assert_eq!(errors(&b), ["E0079"], "{:?}", b.messages());
+    assert_eq!(messages(&b, "E0079").len(), 1);
+    assert!(messages(&b, "E0079")[0].contains("`Chain`"));
+}
+
+/// D-948: the standard library is exempt, since its kernels are Rust.
+#[test]
+fn ext_result_std_is_exempt() {
+    let b = build_with_std(
+        &[(
+            "store",
+            "//! A store.\n\npub type Handle\n\n\
+             @external(native, \"cheby_store_open\")\npub fn open() -> Option<Handle>\n",
+        )],
+        &[(
+            "",
+            &module("import std::store\n\npub fn main() {\n  let _ = store::open()\n}\n"),
+        )],
+    );
+    // (`main` runs on `js` too, which `open` lacks: E0067, not this rule.)
+    assert_eq!(
+        messages(&b, "E0079"),
+        Vec::<String>::new(),
+        "{:?}",
+        b.messages()
+    );
+    // The std module was checked: its function has its signature.
+    assert!(
+        matches!(b.fn_sig("std::store", "open"), ItemSig::Fn(_)),
+        "std::store was not built"
+    );
+}
+
+/// D-948, plan §7 Q4: the rendered error, its primary span on the
+/// `@external(native, …)` attribute and its label on the result type.
+#[test]
+fn ext_result_renders_at_the_attribute() {
+    let b = with_db(
+        "@external(native, \"db_open\")\npub fn open(path: String) -> Result<Db, String>\n",
+    );
+    let rendered = b.rendered();
+    let expected = "error[E0079]: the native foreign result type `Result<Db, String>` holds the \
+                    external type `Db` below its top level\n";
+    assert!(rendered.starts_with(expected), "{rendered}");
+    assert!(
+        rendered.contains(
+            "6 | @external(native, \"db_open\")\n  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ native foreign code cannot build this result\n"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("------------------ `Db` is inside `Result`"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "= help: return `Db` from the foreign function and build the `Result` in Cheby \
+             with a wrapper (§12.5)"
+        ),
+        "{rendered}"
+    );
+}

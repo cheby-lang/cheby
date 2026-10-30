@@ -38,7 +38,25 @@
 //! program printed, which must print the Cheby program's checksum. The
 //! binary is built with `--release` first, or `--rust-bin` names a
 //! prebuilt one and cargo is not run for it.
+//!
+//! With `--split` (D-1254, GAP(split-buckets)), each benchmark's timed runs and stats run are
+//! followed by the split of the time outside `main`, read only from what
+//! `cheby` already prints. Each binary first runs one untimed `cheby
+//! check` and `cheby run` (the warm-up), and builds the benchmark once with
+//! `cheby build -o` into a temporary directory, never into the package.
+//! Then `--split-runs` times (default 5), taking turns binary by binary
+//! and run by run on the round's cache, it times `cheby check`, `cheby run`
+//! and the executable, the last two with `CHEBY_RT_STATS=1` for `main_ms`
+//! and `entries_ms` (D-927). Every split run sets `CHEBY_RT_STATS=1`, which
+//! turns event counting on (D-768), so their `main` is not the timed runs'.
+//! A binary whose `cheby build` fails, such as one without `-o`, gets no
+//! executable and a note. Last, one more untimed `check` and `run` with
+//! `CHEBY_CACHE_LOG` give the counts of the lines that show what each
+//! parsed and missed, for a binary that writes the log. The JSON gets a
+//! `split` object per result; `.github/scripts/bench_split.py` renders the
+//! buckets.
 
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,6 +77,17 @@ const RUST_PACKAGE: &str = "cheby_bench_baselines";
 
 /// What a Rust baseline's row adds to its benchmark's name.
 const RUST_MARK: &str = "@rust-";
+
+/// The environment variable that names the cache's lookup log (D-973).
+const CACHE_LOG_ENV: &str = "CHEBY_CACHE_LOG";
+
+/// `--split`'s timed runs per command when `--split-runs` is not given.
+const SPLIT_RUNS: usize = 5;
+
+/// `--split`'s untimed `check` and `run` per binary before the timed ones:
+/// the first `check` after only `run`s filled the cache may still miss
+/// work that only `check` stores.
+const SPLIT_WARMUP: usize = 1;
 
 /// The command's options.
 #[derive(Debug, clap::Args)]
@@ -121,6 +150,14 @@ pub struct Args {
     /// from it, live or struck through, so it is new in the change (D-896)
     #[arg(long, requires = "accepted_by", value_name = "LOG")]
     accepted_new_since: Option<PathBuf>,
+    /// After each benchmark's timed runs, also time `cheby check`, `cheby
+    /// run` and the executable `cheby build` makes, with the counters, for
+    /// the split of the time outside `main` (D-1254)
+    #[arg(long)]
+    split: bool,
+    /// Timed runs of each command of `--split` per benchmark (default 5)
+    #[arg(long, value_name = "N", requires = "split")]
+    split_runs: Option<usize>,
 }
 
 /// Parses `KEY=VALUE`.
@@ -141,6 +178,8 @@ struct Measured {
     runs: Vec<Duration>,
     checksum: String,
     stats: Value,
+    /// The split of the time outside `main`, with `--split` (D-1254).
+    split: Option<Split>,
 }
 
 impl Measured {
@@ -149,8 +188,7 @@ impl Measured {
     }
 
     fn to_json(&self) -> Value {
-        let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
-        json!({
+        let mut value = json!({
             "group": self.group,
             "name": self.name,
             "n": self.n,
@@ -160,8 +198,17 @@ impl Measured {
             "runs_ns": self.runs.iter().copied().map(nanos).collect::<Vec<_>>(),
             "checksum": self.checksum,
             "stats": self.stats,
-        })
+        });
+        if let (Some(split), Some(fields)) = (&self.split, value.as_object_mut()) {
+            fields.insert("split".to_owned(), split.to_json());
+        }
+        value
     }
+}
+
+/// `d` in whole nanoseconds, saturating.
+fn nanos(d: Duration) -> u64 {
+    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
 pub fn run(root: &Path, args: &Args) -> Result<(), String> {
@@ -193,6 +240,21 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         (None, None) => head_commit(root),
         (None, Some(_)) => "unknown".to_owned(),
     };
+    // The executables and logs of `--split` go to a fresh directory,
+    // deleted when the command ends, never into a benchmark's package.
+    let split_dir = match (args.split, args.split_runs) {
+        (false, _) => None,
+        (true, Some(0)) => return Err("--split-runs must be at least 1".to_owned()),
+        (true, n) => Some((
+            n.unwrap_or(SPLIT_RUNS),
+            cheby_test_support::cache::FreshDir::create("cheby-bench-split")?,
+        )),
+    };
+    let split = split_dir.as_ref().map(|(runs, dir)| SplitSetup {
+        runs: *runs,
+        scratch: dir.path().to_path_buf(),
+        prepare: crate::cache::apply,
+    });
     let load_before = load_average();
     let (results, against_results, notes) = measure_all(
         &benchmarks,
@@ -201,6 +263,7 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         rust.as_ref(),
         &env,
         runs,
+        split.as_ref(),
     )?;
     let meta = Meta {
         commit,
@@ -324,7 +387,9 @@ type Measurements = (Vec<Measured>, Vec<Measured>, Vec<String>);
 
 /// Measures every benchmark, with the `--against` binary interleaved when
 /// there is one, and the Rust baselines after their benchmark. A benchmark
-/// the `--against` binary cannot run is measured alone, with a note.
+/// the `--against` binary cannot run is measured alone, with a note. With
+/// `split`, each benchmark's split follows its stats runs, for every binary
+/// that ran it.
 fn measure_all(
     benchmarks: &[(String, PathBuf)],
     cheby: &Path,
@@ -332,6 +397,7 @@ fn measure_all(
     rust: Option<&RustBaselines>,
     env: &[(String, String)],
     runs: usize,
+    split: Option<&SplitSetup>,
 ) -> Result<Measurements, String> {
     let mut results = Vec::with_capacity(benchmarks.len());
     let mut against_results = Vec::new();
@@ -340,9 +406,20 @@ fn measure_all(
         let name = file_name(dir);
         eprintln!("bench-run: {group}/{name}");
         let probe = against.map(|other| run_once(other, dir, env, false));
-        let measured = match (against, probe) {
+        let mut measured = match (against, probe) {
             (Some(other), Some(Ok(_))) => {
-                let [base, measured] = measure_interleaved([other, cheby], group, dir, env, runs)?;
+                let [mut base, mut measured] =
+                    measure_interleaved([other, cheby], group, dir, env, runs)?;
+                if let Some(setup) = split {
+                    eprintln!("bench-run: {group}/{name}: split");
+                    let binaries = [
+                        (other, base.checksum.as_str()),
+                        (cheby, measured.checksum.as_str()),
+                    ];
+                    let [base_split, split] = measure_split(binaries, group, dir, env, setup)?;
+                    base.split = Some(base_split);
+                    measured.split = Some(split);
+                }
                 against_results.push(base);
                 measured
             }
@@ -356,6 +433,12 @@ fn measure_all(
             }
             _ => measure(cheby, group, dir, env, runs)?,
         };
+        if let (Some(setup), None) = (split, &measured.split) {
+            eprintln!("bench-run: {group}/{name}: split");
+            let binaries = [(cheby, measured.checksum.as_str())];
+            let [split] = measure_split(binaries, group, dir, env, setup)?;
+            measured.split = Some(split);
+        }
         let mut baselines = Vec::new();
         if let Some(rust) = rust.filter(|_| group == RUST_GROUP) {
             for (_, variant) in rust.variants.iter().filter(|(program, _)| *program == name) {
@@ -595,6 +678,7 @@ fn measure_interleaved<const K: usize>(
             runs: times,
             checksum,
             stats: parse_stats(&stderr),
+            split: None,
         });
     }
     out.try_into()
@@ -635,6 +719,384 @@ fn run_once(
         ));
     }
     Ok((elapsed, stdout, stderr))
+}
+
+/// What `--split` needs: the timed runs per command, the directory its
+/// executables and logs go to, and what prepares every command it starts
+/// (the round's cache, [`crate::cache::apply`]).
+struct SplitSetup {
+    runs: usize,
+    scratch: PathBuf,
+    prepare: fn(&mut Command) -> Result<(), String>,
+}
+
+/// One timed process of the split: its wall time, and the `main_ms` and
+/// `entries_ms` of its `CHEBY_RT_STATS=1` line where they parse (D-635).
+#[derive(Debug, Clone, PartialEq)]
+struct StatsRun {
+    wall: Duration,
+    main_ms: Option<f64>,
+    entries_ms: Option<f64>,
+}
+
+impl StatsRun {
+    fn new(wall: Duration, stderr: &str) -> Self {
+        let stats = parse_stats(stderr);
+        let ms = |key: &str| stats.get(key).and_then(Value::as_f64);
+        Self {
+            wall,
+            main_ms: ms("main_ms"),
+            entries_ms: ms("entries_ms"),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "wall_ns": nanos(self.wall),
+            "main_ms": self.main_ms,
+            "entries_ms": self.entries_ms,
+        })
+    }
+}
+
+/// The executable `cheby build -o` made: how long the build took, and the
+/// executable's timed runs.
+#[derive(Debug, Clone, PartialEq)]
+struct ExeSplit {
+    build: Duration,
+    runs: Vec<StatsRun>,
+}
+
+/// The counts of the lines of one `CHEBY_CACHE_LOG` file that show what a
+/// command parsed and missed (D-973, D-1135): `parse <module>`, `parse.std
+/// <module>`, and the `miss` lines of `front` and `front.std`, of every
+/// `code.<kind>` and of `const`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LogCounts {
+    parse: u64,
+    parse_std: u64,
+    front_miss: u64,
+    code_miss: u64,
+    const_miss: u64,
+}
+
+impl LogCounts {
+    fn of(log: &str) -> Self {
+        let mut counts = Self::default();
+        for line in log.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let (Some(&artifact), Some(&last)) = (words.first(), words.last()) else {
+                continue;
+            };
+            let kind = artifact.split('.').next().unwrap_or_default();
+            let count = match (artifact, kind, last) {
+                ("parse", _, _) => &mut counts.parse,
+                ("parse.std", _, _) => &mut counts.parse_std,
+                (_, "front", "miss") => &mut counts.front_miss,
+                (_, "code", "miss") if artifact != "code" => &mut counts.code_miss,
+                ("const", _, "miss") => &mut counts.const_miss,
+                _ => continue,
+            };
+            *count = count.saturating_add(1);
+        }
+        counts
+    }
+
+    fn to_json(self) -> Value {
+        json!({
+            "parse": self.parse,
+            "parse.std": self.parse_std,
+            "front_miss": self.front_miss,
+            "code_miss": self.code_miss,
+            "const_miss": self.const_miss,
+        })
+    }
+}
+
+/// One binary's split of one benchmark (D-1254): the timed `cheby check`s,
+/// `cheby run`s and executable runs, every one with `CHEBY_RT_STATS=1`.
+#[derive(Debug, Clone, PartialEq)]
+struct Split {
+    /// The untimed `check` and `run` before the timed ones.
+    warmup: usize,
+    check: Vec<Duration>,
+    run: Vec<StatsRun>,
+    /// The executable, or why `cheby build` made none.
+    exe: Result<ExeSplit, String>,
+    /// The log's counts for `check` and for `run`, or `None` for a binary
+    /// that writes no log (one without a cache).
+    cache_log: Option<(LogCounts, LogCounts)>,
+}
+
+impl Split {
+    fn to_json(&self) -> Value {
+        let exe = match &self.exe {
+            Ok(exe) => json!({
+                "build_ns": nanos(exe.build),
+                "runs": exe.runs.iter().map(StatsRun::to_json).collect::<Vec<_>>(),
+            }),
+            Err(_) => Value::Null,
+        };
+        let cache_log = self.cache_log.map_or(
+            Value::Null,
+            |(check, run)| json!({"check": check.to_json(), "run": run.to_json()}),
+        );
+        let mut value = json!({
+            "runs": self.check.len(),
+            "stats": true,
+            "warmup": self.warmup,
+            "check_ns": self.check.iter().copied().map(nanos).collect::<Vec<_>>(),
+            "run": self.run.iter().map(StatsRun::to_json).collect::<Vec<_>>(),
+            "exe": exe,
+            "cache_log": cache_log,
+        });
+        if let (Err(note), Some(fields)) = (&self.exe, value.as_object_mut()) {
+            fields.insert("exe_note".to_owned(), json!(note));
+        }
+        value
+    }
+}
+
+/// A finished command: its wall time, its status and its output.
+struct Finished {
+    wall: Duration,
+    success: bool,
+    status: String,
+    stdout: String,
+    stderr: String,
+}
+
+impl Finished {
+    /// The first line of standard error that is not empty, else of
+    /// standard output: what a note says about a failure.
+    fn first_line(&self) -> &str {
+        self.stderr
+            .lines()
+            .chain(self.stdout.lines())
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+    }
+}
+
+/// Starts `program` with `args` in `dir`, with `env`, `setup`'s
+/// preparation, `CHEBY_RT_STATS=1` when `stats`, and `CHEBY_CACHE_LOG` set
+/// to `log` or removed, and waits for it. Only a failure to start it is an
+/// error.
+fn run_timed<S: AsRef<OsStr>>(
+    program: &Path,
+    args: &[S],
+    dir: &Path,
+    env: &[(String, String)],
+    setup: &SplitSetup,
+    stats: bool,
+    log: Option<&Path>,
+) -> Result<Finished, String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(dir);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    (setup.prepare)(&mut cmd)?;
+    if stats {
+        cmd.env(STATS_ENV, "1");
+    } else {
+        cmd.env_remove(STATS_ENV);
+    }
+    match log {
+        Some(path) => cmd.env(CACHE_LOG_ENV, path),
+        None => cmd.env_remove(CACHE_LOG_ENV),
+    };
+    let start = Instant::now();
+    let out = cmd
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", program.display()))?;
+    Ok(Finished {
+        wall: start.elapsed(),
+        success: out.status.success(),
+        status: out.status.to_string(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
+/// `done` if it succeeded, else an error naming `what` and its output.
+fn succeeded(done: Finished, what: &str) -> Result<Finished, String> {
+    if done.success {
+        Ok(done)
+    } else {
+        Err(format!(
+            "{what} failed ({})\n{}{}",
+            done.status, done.stdout, done.stderr
+        ))
+    }
+}
+
+/// A run of a benchmark (`cheby run` or its executable) that succeeded and
+/// printed `checksum`, as a [`StatsRun`].
+fn checked_run(done: Finished, what: &str, checksum: &str) -> Result<StatsRun, String> {
+    let done = succeeded(done, what)?;
+    match parse_output(&done.stdout) {
+        Some((_, printed)) if printed == checksum => Ok(StatsRun::new(done.wall, &done.stderr)),
+        _ => Err(format!(
+            "{what} did not print `checksum: {checksum}` with {STATS_ENV}=1:\n{}",
+            done.stdout
+        )),
+    }
+}
+
+/// The split of one benchmark for each of `binaries`, given with the
+/// checksum its timed runs printed (D-1254; see the module's comment). An
+/// executable is built into `setup.scratch`, never into the package: a
+/// `build/` directory that appears in `dir` is an error.
+fn measure_split<const K: usize>(
+    binaries: [(&Path, &str); K],
+    group: &str,
+    dir: &Path,
+    env: &[(String, String)],
+    setup: &SplitSetup,
+) -> Result<[Split; K], String> {
+    let name = file_name(dir);
+    let what =
+        |cheby: &Path, command: &str| format!("`{} {command}` of {group}/{name}", cheby.display());
+    let check = |cheby: &Path, log: Option<&Path>| -> Result<Duration, String> {
+        let done = run_timed(
+            cheby,
+            &["--color=never", "check"],
+            dir,
+            env,
+            setup,
+            true,
+            log,
+        )?;
+        Ok(succeeded(done, &what(cheby, "check"))?.wall)
+    };
+    let run = |cheby: &Path, checksum: &str, log: Option<&Path>| -> Result<StatsRun, String> {
+        let done = run_timed(cheby, &["--color=never", "run"], dir, env, setup, true, log)?;
+        checked_run(done, &what(cheby, "run"), checksum)
+    };
+    for _ in 0..SPLIT_WARMUP {
+        for (cheby, checksum) in binaries {
+            check(cheby, None)?;
+            run(cheby, checksum, None)?;
+        }
+    }
+    let had_build_dir = dir.join("build").exists();
+    let mut splits = Vec::with_capacity(K);
+    let mut exes = Vec::with_capacity(K);
+    for (i, (cheby, _)) in binaries.iter().enumerate() {
+        let out = setup.scratch.join(format!("exe-{i}")).join(&name);
+        let made = build_exe(cheby, dir, env, setup, &out)?;
+        if !had_build_dir && dir.join("build").exists() {
+            return Err(format!(
+                "`{} build -o` wrote {}: the split builds into a temporary directory only",
+                cheby.display(),
+                dir.join("build").display()
+            ));
+        }
+        exes.push(made.as_ref().ok().map(|_| out));
+        splits.push(Split {
+            warmup: SPLIT_WARMUP,
+            check: Vec::with_capacity(setup.runs),
+            run: Vec::with_capacity(setup.runs),
+            exe: made.map(|build| ExeSplit {
+                build,
+                runs: Vec::with_capacity(setup.runs),
+            }),
+            cache_log: None,
+        });
+    }
+    for _ in 0..setup.runs {
+        for (((cheby, checksum), split), exe) in binaries.iter().zip(&mut splits).zip(&exes) {
+            split.check.push(check(cheby, None)?);
+            split.run.push(run(cheby, checksum, None)?);
+            if let (Some(path), Ok(made)) = (exe, &mut split.exe) {
+                let no_args: [&str; 0] = [];
+                let done = run_timed(path, &no_args, dir, env, setup, true, None)?;
+                let label = format!("the executable {} of {group}/{name}", path.display());
+                made.runs.push(checked_run(done, &label, checksum)?);
+            }
+        }
+    }
+    for (i, ((cheby, checksum), split)) in binaries.iter().zip(&mut splits).enumerate() {
+        let logs =
+            ["check", "run"].map(|command| setup.scratch.join(format!("log-{i}-{command}.txt")));
+        for log in &logs {
+            remove_if_there(log)?;
+        }
+        check(cheby, Some(&logs[0]))?;
+        run(cheby, checksum, Some(&logs[1]))?;
+        split.cache_log = read_counts(&logs)?;
+    }
+    splits
+        .try_into()
+        .map_err(|_| "a binary's split is missing".to_owned())
+}
+
+/// Builds the benchmark in `dir` with `cheby build -o out`: the build's
+/// wall time, or a note on why there is no executable (a binary without
+/// `cheby build` or without `-o`, or a failed build).
+fn build_exe(
+    cheby: &Path,
+    dir: &Path,
+    env: &[(String, String)],
+    setup: &SplitSetup,
+    out: &Path,
+) -> Result<Result<Duration, String>, String> {
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let args = [
+        OsStr::new("--color=never"),
+        OsStr::new("build"),
+        OsStr::new("-o"),
+        out.as_os_str(),
+    ];
+    let done = run_timed(cheby, &args, dir, env, setup, false, None)?;
+    Ok(if done.success && out.is_file() {
+        Ok(done.wall)
+    } else if done.success {
+        Err(format!(
+            "`cheby build -o` exited 0 but wrote no {}",
+            out.display()
+        ))
+    } else {
+        Err(format!(
+            "`cheby build -o` failed ({}): {}",
+            done.status,
+            done.first_line()
+        ))
+    })
+}
+
+/// Deletes `path` if it exists.
+fn remove_if_there(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("{}: {e}", path.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The counts of the `check` and `run` logs, or `None` when the binary
+/// wrote neither (it has no cache). One log without the other is an error.
+fn read_counts(logs: &[PathBuf; 2]) -> Result<Option<(LogCounts, LogCounts)>, String> {
+    let read = |path: &Path| match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(LogCounts::of(&text))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    };
+    let [check, run] = logs;
+    match (read(check)?, read(run)?) {
+        (Some(check), Some(run)) => Ok(Some((check, run))),
+        (None, None) => Ok(None),
+        _ => Err(format!(
+            "only one of {} and {} was written",
+            check.display(),
+            run.display()
+        )),
+    }
 }
 
 /// The Rust baselines of `--rust`: the binary and the `(program, variant)`
@@ -752,6 +1214,7 @@ fn measure_rust(bin: &Path, of: &Measured, variant: &str, runs: usize) -> Result
         runs: times,
         checksum,
         stats: json!({}),
+        split: None,
     })
 }
 
@@ -948,6 +1411,15 @@ fn render(results: &[Measured], baseline: Option<&Baseline>) -> Report {
         "\nWall time of `cheby run` (compilation included), median of {runs} runs. Reported, and \
          enforced only by `--fail-above` (D-718, D-702, D-895)."
     );
+    if let Some(split) = results.iter().find_map(|m| m.split.as_ref()) {
+        let _ = writeln!(
+            table,
+            "\nThe split of the time outside `main` (D-1254): {} timed runs each of `cheby check`, \
+             `cheby run` and the executable per binary, with `{STATS_ENV}=1`, in the JSON's \
+             `split` objects; `.github/scripts/bench_split.py` renders them.",
+            split.check.len()
+        );
+    }
     Report { table, mismatches }
 }
 
@@ -1245,6 +1717,7 @@ mod tests {
             runs: vec![Duration::from_millis(110)],
             checksum: "1".to_owned(),
             stats: json!({}),
+            split: None,
         };
         let mut baseline = Baseline::new();
         baseline.insert(
@@ -1273,6 +1746,7 @@ mod tests {
             runs: vec![Duration::from_millis(ms)],
             checksum: "1".to_owned(),
             stats: json!({}),
+            split: None,
         };
         let results = [at("a", 120), at("b", 95)];
         let mut baseline = Baseline::new();
@@ -1312,6 +1786,7 @@ mod tests {
             runs: vec![Duration::from_millis(100)],
             checksum: checksum.to_owned(),
             stats: json!({}),
+            split: None,
         };
         let mut notes = Vec::new();
         assert_eq!(as_baseline(&[at("1")], &[at("1")], &mut notes).len(), 1);
@@ -1365,6 +1840,7 @@ mod tests {
             runs: vec![Duration::from_millis(millis)],
             checksum: checksum.to_owned(),
             stats: json!({}),
+            split: None,
         };
         let results = [
             row("sorted_map", 900, "7"),
@@ -1388,5 +1864,225 @@ mod tests {
         );
         assert_eq!(report.mismatches.len(), 1, "{:?}", report.mismatches);
         assert!(report.mismatches[0].contains("sorted_map@rust-btree"));
+    }
+
+    #[test]
+    fn bench_split_options_parse() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            args: Args,
+        }
+        use clap::Parser as _;
+        let cli = Cli::try_parse_from(["bench-run", "--split"]).unwrap();
+        assert!(cli.args.split);
+        assert_eq!(cli.args.split_runs, None);
+        let cli = Cli::try_parse_from(["bench-run", "--split", "--split-runs", "3"]).unwrap();
+        assert_eq!(cli.args.split_runs, Some(3));
+        assert!(Cli::try_parse_from(["bench-run", "--split-runs", "3"]).is_err());
+        assert!(!Cli::try_parse_from(["bench-run"]).unwrap().args.split);
+    }
+
+    #[test]
+    fn bench_split_counts_the_cache_log_lines() {
+        let log = "code.plain app hit\ncode.run app miss\ncode.std std::list miss\n\
+                   code.std std::map hit\nconst app::LIMIT miss\nconst app::SEED hit\n\
+                   facts app hit\nfront app miss\nfront other hit\nfront.std std::list miss\n\
+                   key code.run app 7d04e0f6\nmasks app miss\nparse app\nparse other\n\
+                   parse.std std::list\n\n";
+        assert_eq!(
+            LogCounts::of(log),
+            LogCounts {
+                parse: 2,
+                parse_std: 1,
+                front_miss: 2,
+                code_miss: 2,
+                const_miss: 1,
+            }
+        );
+        assert_eq!(LogCounts::of(""), LogCounts::default());
+        assert_eq!(
+            LogCounts::of("parse app\n").to_json(),
+            json!({"parse": 1, "parse.std": 0, "front_miss": 0, "code_miss": 0, "const_miss": 0})
+        );
+    }
+
+    #[test]
+    fn bench_split_reads_a_stats_run() {
+        let stderr = "runtime stats: main 301.2 ms, 2 entries 309.8 ms, peak 10 bytes\n  \
+                      allocations: 5\n";
+        let run = StatsRun::new(Duration::from_millis(412), stderr);
+        assert_eq!(run.main_ms, Some(301.2));
+        assert_eq!(run.entries_ms, Some(309.8));
+        assert_eq!(
+            run.to_json(),
+            json!({"wall_ns": 412_000_000, "main_ms": 301.2, "entries_ms": 309.8})
+        );
+        let none = StatsRun::new(Duration::from_millis(1), "no stats\n");
+        assert_eq!(
+            none.to_json(),
+            json!({"wall_ns": 1_000_000, "main_ms": null, "entries_ms": null})
+        );
+    }
+
+    #[test]
+    fn bench_split_json_has_the_shape_the_gate_reads() {
+        let run = |main| StatsRun {
+            wall: Duration::from_millis(10),
+            main_ms: Some(main),
+            entries_ms: Some(main),
+        };
+        let counts = LogCounts {
+            parse: 1,
+            ..LogCounts::default()
+        };
+        let head = Split {
+            warmup: 1,
+            check: vec![Duration::from_millis(4)],
+            run: vec![run(6.0)],
+            exe: Ok(ExeSplit {
+                build: Duration::from_millis(100),
+                runs: vec![run(5.0)],
+            }),
+            cache_log: Some((LogCounts::default(), counts)),
+        }
+        .to_json();
+        assert_eq!(head["runs"], json!(1));
+        assert_eq!(head["stats"], json!(true));
+        assert_eq!(head["warmup"], json!(1));
+        assert_eq!(head["check_ns"], json!([4_000_000]));
+        assert_eq!(head["run"][0]["main_ms"], json!(6.0));
+        assert_eq!(head["exe"]["build_ns"], json!(100_000_000));
+        assert_eq!(head["exe"]["runs"][0]["wall_ns"], json!(10_000_000));
+        assert_eq!(head["cache_log"]["run"]["parse"], json!(1));
+        assert_eq!(head["cache_log"]["check"]["parse.std"], json!(0));
+        assert!(head.get("exe_note").is_none());
+        let base = Split {
+            warmup: 1,
+            check: vec![],
+            run: vec![],
+            exe: Err("`cheby build -o` failed (exit status: 2): error".to_owned()),
+            cache_log: None,
+        }
+        .to_json();
+        assert_eq!(base["exe"], Value::Null);
+        assert_eq!(base["cache_log"], Value::Null);
+        assert_eq!(
+            base["exe_note"],
+            json!("`cheby build -o` failed (exit status: 2): error")
+        );
+        let measured = Measured {
+            group: "rc".to_owned(),
+            name: "x".to_owned(),
+            n: None,
+            runs: vec![Duration::from_millis(1)],
+            checksum: "1".to_owned(),
+            stats: json!({}),
+            split: None,
+        };
+        assert!(measured.to_json().get("split").is_none());
+    }
+
+    /// Writes an executable shell script.
+    #[cfg(unix)]
+    fn script(path: &Path, text: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::write(path, text).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The whole split against two fake `cheby`s: one with `cheby build -o`
+    /// and a cache log, one without either (as `bbed11b`).
+    #[cfg(unix)]
+    #[test]
+    fn bench_split_times_check_run_and_the_executable() {
+        let fresh = cheby_test_support::cache::FreshDir::create("bench-split-test").unwrap();
+        let root = fresh.path();
+        let bench = root.join("rc").join("app");
+        std::fs::create_dir_all(&bench).unwrap();
+        let measured = root.join("cheby-head");
+        script(
+            &measured,
+            r#"#!/bin/sh
+log() { if [ -n "$CHEBY_CACHE_LOG" ]; then printf '%s\n' "$@" > "$CHEBY_CACHE_LOG"; fi; }
+case "$2" in
+  check) log "front app hit" "parse.std std::list"; exit 0 ;;
+  run)
+    log "code.run app miss" "const app::X miss" "front app hit" "key code.run app 0" "parse app"
+    echo "size: 3"; echo "checksum: 42"
+    if [ "$CHEBY_RT_STATS" = 1 ]; then
+      echo "runtime stats: main 2.5 ms, 2 entries 3.0 ms, peak 10 bytes" >&2
+    fi
+    exit 0 ;;
+  build)
+    printf '%s\n' '#!/bin/sh' 'echo "size: 3"' 'echo "checksum: 42"' \
+      'if [ "$CHEBY_RT_STATS" = 1 ]; then echo "runtime stats: main 2.0 ms, 1 entries 2.0 ms, peak 1 bytes" >&2; fi' \
+      > "$4"
+    chmod +x "$4"; exit 0 ;;
+esac
+exit 3
+"#,
+        );
+        let base = root.join("cheby-base");
+        script(
+            &base,
+            r#"#!/bin/sh
+case "$2" in
+  check) exit 0 ;;
+  run)
+    echo "size: 3"; echo "checksum: 42"
+    if [ "$CHEBY_RT_STATS" = 1 ]; then
+      echo "runtime stats: main 2.2 ms, 2 entries 2.6 ms, peak 10 bytes" >&2
+    fi
+    exit 0 ;;
+  build) echo "error: unexpected argument '-o' found" >&2; exit 2 ;;
+esac
+exit 3
+"#,
+        );
+        let scratch = root.join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let setup = SplitSetup {
+            runs: 2,
+            scratch: scratch.clone(),
+            prepare: |_| Ok(()),
+        };
+        let binaries = [(base.as_path(), "42"), (measured.as_path(), "42")];
+        let [old, new] = measure_split(binaries, "rc", &bench, &[], &setup).unwrap();
+        assert_eq!((new.warmup, new.check.len(), new.run.len()), (1, 2, 2));
+        assert_eq!(new.run[0].main_ms, Some(2.5));
+        assert_eq!(new.run[1].entries_ms, Some(3.0));
+        let exe = new.exe.as_ref().unwrap();
+        assert_eq!(exe.runs.len(), 2);
+        assert_eq!(exe.runs[0].main_ms, Some(2.0));
+        assert!(scratch.join("exe-1").join("app").is_file());
+        let (check, run) = new.cache_log.unwrap();
+        assert_eq!(
+            check,
+            LogCounts {
+                parse_std: 1,
+                ..LogCounts::default()
+            }
+        );
+        assert_eq!(
+            run,
+            LogCounts {
+                parse: 1,
+                code_miss: 1,
+                const_miss: 1,
+                ..LogCounts::default()
+            }
+        );
+        assert_eq!((old.check.len(), old.run.len()), (2, 2));
+        assert_eq!(old.run[0].main_ms, Some(2.2));
+        let note = old.exe.as_ref().unwrap_err();
+        assert!(note.contains("unexpected argument '-o'"), "{note}");
+        assert_eq!(old.cache_log, None);
+        // Nothing was written into the package.
+        assert_eq!(std::fs::read_dir(&bench).unwrap().count(), 0);
+        // A run that prints another checksum fails the split.
+        let err =
+            measure_split([(measured.as_path(), "7")], "rc", &bench, &[], &setup).unwrap_err();
+        assert!(err.contains("did not print `checksum: 7`"), "{err}");
     }
 }

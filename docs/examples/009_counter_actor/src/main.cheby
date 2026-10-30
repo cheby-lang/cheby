@@ -9,18 +9,20 @@
 //! Then a second counter is reset and stopped explicitly, and a
 //! request after the stop fails.
 
+import counter_actor::counter
 import std::duration
 import std::fiber
 import std::io
 import std::result
-import counter_actor::counter
 
 const client_count: Int = 10
 const increments_per_client: Int = 100
 
 fn main() -> Result<Nil, fiber::Panic> {
   use total <- result::try(count_concurrently(client_count, increments_per_client))
-  io::println("{client_count} clients added 1, {increments_per_client} times each: the count is {total}")
+  io::println(
+    "{client_count} clients added 1, {increments_per_client} times each: the count is {total}",
+  )
   reset_and_stop()
 }
 

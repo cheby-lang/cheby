@@ -4,8 +4,8 @@ error[E0043]: `run` is visible only inside its package
 11 |   assert decode::run(decode::int(), value) == Ok(1)
    |                  ^^^
    |
-  ::: std/json/decode.cheby:82:4
+  ::: std/json/decode.cheby:86:4
    |
-82 | fn run<T>(decoder: Decoder<T>, value: tree::Tree) -> Result<T, List<Error>> {
+86 | fn run<T>(decoder: Decoder<T>, value: tree::Tree) -> Result<T, List<Error>> {
    |    --- declared here
 

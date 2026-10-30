@@ -62,7 +62,16 @@ import std::url as urls
 
 /// The request methods of RFC 9110 that programs name, and `Other` for any
 /// other token, kept as it is (D-1005).
-pub exposed type Method { Get, Head, Post, Put, Patch, Delete, Options, Other(String) }
+pub exposed type Method {
+  Get,
+  Head,
+  Post,
+  Put,
+  Patch,
+  Delete,
+  Options,
+  Other(String),
+}
 
 /// A request as a server's handler receives it (D-1004): the path as
 /// received without the query, the path's segments decoded by
@@ -79,16 +88,29 @@ pub exposed type Request {
 
 /// A response: what `get` and `send` return, and what a handler returns
 /// (D-1004).
-pub exposed type Response { status: Int, headers: List<(String, String)>, body: String }
+pub exposed type Response {
+  status: Int,
+  headers: List<(String, String)>,
+  body: String,
+}
 
 /// A failure of the client: one of this module's kinds, or an IO failure
 /// underneath. Equality, hashing and debug printing go through `equal`,
 /// `hash` and `debug` (D-342, D-368, D-1016).
 @std_hooks(equal, hash, debug)
-pub type Error { kind: Kind }
+pub type Error {
+  kind: Kind,
+}
 
 /// The kinds of failure: one per predicate, and an IO failure (D-1016).
-type Kind { InvalidUrl, InvalidHeader, InvalidResponse, TooManyRedirects, Tls, Io(io::Error) }
+type Kind {
+  InvalidUrl,
+  InvalidHeader,
+  InvalidResponse,
+  TooManyRedirects,
+  Tls,
+  Io(io::Error),
+}
 
 /// What two equal errors share: the kind, and for an IO failure what its
 /// `io::Error` hashes (D-368). The runtime hashes this value.
@@ -254,7 +276,12 @@ test "send writes the method, the headers, the body and its length" {
 }
 
 /// The request a call sends, and sends again on a redirect.
-priv type Outgoing { method: Method, target: Target, headers: List<(String, String)>, body: String }
+priv type Outgoing {
+  method: Method,
+  target: Target,
+  headers: List<(String, String)>,
+  body: String,
+}
 
 /// Sends `outgoing` and follows the redirects of its responses, after
 /// `redirects` already followed in a row (D-1008).
@@ -493,8 +520,7 @@ priv fn request_bytes(outgoing: Outgoing) -> bytes::Bytes {
     True => []
     False => [("content-length", "{size}")]
   }
-  let lines =
-    [[("host", target.authority)], outgoing.headers, defaults, length]
+  let lines = [[("host", target.authority)], outgoing.headers, defaults, length]
     |> list::flatten
     |> list::map(_, fn((name, value)) { name + ": " + value + "\r\n" })
   let request_line = method_name(outgoing.method) +
@@ -566,7 +592,11 @@ priv fn is_tchar(byte: U8) -> Bool {
 // Reading responses
 
 /// A response's head and the bytes read after it.
-priv type ResponseHead { status: Int, headers: List<(String, String)>, rest: bytes::Bytes }
+priv type ResponseHead {
+  status: Int,
+  headers: List<(String, String)>,
+  rest: bytes::Bytes,
+}
 
 /// Reads from `connection`, after `buffer`, until the kernel parses a
 /// complete head of at most 64 KiB (D-1074). An interim response, such as
@@ -613,10 +643,17 @@ priv fn read_body(
       Err(Nil) => Err(Error { kind: InvalidResponse })
     }
     False, _ => {
-      let last = codings |> string::join(_, ",") |> string::split(_, ",") |> list::last
+      let last = codings
+        |> string::join(_, ",")
+        |> string::split(_, ",")
+        |> list::last
       case last {
-        Some(coding) when ascii_lower(trim_blanks(coding)) == "chunked" =>
-          read_chunks(connection, head.rest, 0, bytes::new())
+        Some(coding) when ascii_lower(trim_blanks(coding)) == "chunked" => read_chunks(
+          connection,
+          head.rest,
+          0,
+          bytes::new(),
+        )
         _ => read_to_end(connection, head.rest)
       }
     }
@@ -626,8 +663,7 @@ priv fn read_body(
 /// The `content-length` of `headers`: `None` without one, and `Err` unless
 /// every value, repeated or in a list, is the same number.
 priv fn content_length(headers: List<(String, String)>) -> Result<Option<Int>, Nil> {
-  let lengths =
-    values_of(headers, "content-length")
+  let lengths = values_of(headers, "content-length")
     |> list::flat_map(_, fn(value) { string::split(value, ",") })
     |> list::map(_, trim_blanks)
   case lengths {
@@ -792,13 +828,12 @@ priv fn chunk_size(line: String) -> Option<Int> {
   }
   let data = bytes::from_string(digits)
   case !bytes::is_empty(data) && bytes::length(data) <= 15 {
-    True =>
-      bytes::try_fold(data, 0, fn(total, byte) {
-        case urls::hex_value(byte) {
-          Some(value) => Ok(total * 16 + int::from_u8(value))
-          None => Err(Nil)
-        }
-      })
+    True => bytes::try_fold(data, 0, fn(total, byte) {
+      case urls::hex_value(byte) {
+        Some(value) => Ok(total * 16 + int::from_u8(value))
+        None => Err(Nil)
+      }
+    })
       |> result::to_option
     False => None
   }
@@ -815,8 +850,9 @@ test "bodies are read by length, by chunks and to the close" {
   fiber::spawn_detached(fn() {
     fake_server(listener, 5, fn(request) {
       case string::split_once(request, " HTTP/1.1") {
-        Some(("GET /length", _)) =>
-          bytes::from_string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello and more")
+        Some(("GET /length", _)) => bytes::from_string(
+          "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello and more",
+        )
         Some(("GET /chunked", _)) => {
           let chunks = "5;name=value\r\nhello\r\n7\r\n, world\r\n0\r\nx-trailer: 1\r\n\r\n"
           bytes::from_string("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks)
@@ -859,10 +895,12 @@ test "a head over 64 KiB, a body that is not UTF-8 and a cut body are invalid re
           let head = bytes::from_string("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n")
           bytes::append(head, bytes::from_list([0xFF, 0xFE]))
         }
-        Some(("GET /short", _)) =>
-          bytes::from_string("HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc")
-        Some(("GET /lengths", _)) =>
-          bytes::from_string("HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-length: 3\r\n\r\nabc")
+        Some(("GET /short", _)) => bytes::from_string(
+          "HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc",
+        )
+        Some(("GET /lengths", _)) => bytes::from_string(
+          "HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-length: 3\r\n\r\nabc",
+        )
         _ => bytes::from_string("SSH-2.0-OpenSSH_9.6\r\n\r\n")
       }
     })
@@ -1043,12 +1081,13 @@ priv fn is_ipv6(input: String) -> Bool {
 /// `input` without tabs and line breaks, and without the controls and
 /// spaces around it, as WHATWG's parser reads a URL.
 priv fn clean_url(input: String) -> String {
-  let data = bytes::from_string(input) |> bytes::fold(_, bytes::new(), fn(out, byte) {
-    case byte == 0x09 || byte == 0x0A || byte == 0x0D {
-      True => out
-      False => bytes::push(out, byte)
-    }
-  })
+  let data = bytes::from_string(input)
+    |> bytes::fold(_, bytes::new(), fn(out, byte) {
+      case byte == 0x09 || byte == 0x0A || byte == 0x0D {
+        True => out
+        False => bytes::push(out, byte)
+      }
+    })
   let start = skip_bytes(data, 0, fn(byte) { byte <= 0x20 })
   let end = last_kept(data, bytes::length(data), fn(byte) { byte <= 0x20 })
   string::from_bytes_lossy(bytes::slice(data, start, end))
@@ -1084,7 +1123,11 @@ priv fn is_slash(byte: U8) -> Bool {
 }
 
 /// What a path segment means to WHATWG's parser.
-priv type Dots { NoDots, OneDot, TwoDots }
+priv type Dots {
+  NoDots,
+  OneDot,
+  TwoDots,
+}
 
 /// Whether `segment` is `.` or `..`, `%2e` included, in any case.
 priv fn dots(segment: String) -> Dots {
@@ -1105,7 +1148,10 @@ priv fn dots(segment: String) -> Dots {
 priv fn normalize_path(path: String) -> String {
   let segments = case path {
     "" => []
-    _ => path |> string::replace(_, "\\", "/") |> string::split(_, "/") |> list::drop(_, 1)
+    _ => path
+      |> string::replace(_, "\\", "/")
+      |> string::split(_, "/")
+      |> list::drop(_, 1)
   }
   let count = list::length(segments)
   let kept = list::fold(list::enumerate(segments), [], fn(out, (index, segment)) {
@@ -1161,8 +1207,9 @@ priv fn resolve(base: Target, location: String) -> Result<Target, Error> {
     slash_at(0) && slash_at(1) => parse_url(scheme + ":" + reference)
     slash_at(0) => parse_url(site + reference)
     string::starts_with(reference, "?") => parse_url(site + base.path + reference)
-    reference == "" || string::starts_with(reference, "#") =>
-      parse_url(site + base.path + base.query)
+    reference == "" || string::starts_with(reference, "#") => parse_url(
+      site + base.path + base.query,
+    )
     _ => {
       let path = bytes::from_string(base.path)
       let directory = bytes::slice(path, 0, last_kept(path, bytes::length(path), fn(byte) {
@@ -1322,9 +1369,11 @@ test "redirects are followed, and a loop of them ends" {
   fiber::spawn_detached(fn() {
     serve_on(listener, fn(request) {
       case request.path {
-        "/old" => text(301, "") |> with_header(_, "location", "/new")
+        "/old" => text(301, "")
+          |> with_header(_, "location", "/new")
         "/new" => text(200, "moved here")
-        _ => text(302, "") |> with_header(_, "location", "/loop")
+        _ => text(302, "")
+          |> with_header(_, "location", "/loop")
       }
     })
   })
@@ -1478,11 +1527,19 @@ priv fn serve_connection(
 /// What reading the next request of a connection gave: nothing to answer,
 /// because the client closed the connection or a limit of D-1013 passed; a
 /// status to answer before closing (D-1013); or a request for the handler.
-priv type Next { Ended, Refused(Int), Received(Incoming) }
+priv type Next {
+  Ended,
+  Refused(Int),
+  Received(Incoming),
+}
 
 /// A request read from a connection, whether the connection closes after
 /// its response, and the bytes read after it.
-priv type Incoming { request: Request, closes: Bool, rest: bytes::Bytes }
+priv type Incoming {
+  request: Request,
+  closes: Bool,
+  rest: bytes::Bytes,
+}
 
 /// Reads the next request of `connection` after the bytes `buffer` and
 /// answers it, then the ones after it, until the connection closes.
@@ -1567,7 +1624,11 @@ priv fn read_head_within(
 
 /// A request head: its request line, its headers in wire order with
 /// lower-case names, and the bytes read after it.
-priv type RequestHead { line: String, headers: List<(String, String)>, rest: bytes::Bytes }
+priv type RequestHead {
+  line: String,
+  headers: List<(String, String)>,
+  rest: bytes::Bytes,
+}
 
 /// Reads from `connection`, after `buffer`, until the kernel parses a
 /// complete request head (D-1210): `Err(Some(status))` for a head that is
@@ -1605,8 +1666,7 @@ priv fn request_from_head(connection: net::Connection, limits: Limits, head: Req
         Some(pair) => pair
         None => (target, "")
       }
-      let decoded =
-        raw_path
+      let decoded = raw_path
         |> string::split(_, "/")
         |> list::filter(_, fn(part) { part != "" })
         |> list::try_map(_, fn(part) { urls::decode_segment(part) })
@@ -1651,7 +1711,11 @@ priv fn request_from_head(connection: net::Connection, limits: Limits, head: Req
 }
 
 /// How a request's body is framed (RFC 9112 §6).
-priv type Framing { NoBody, Length(Int), Chunked }
+priv type Framing {
+  NoBody,
+  Length(Int),
+  Chunked,
+}
 
 /// The framing of the body of a request with `fields`, or the status that
 /// refuses it: `413` for a `content-length` over the limit, `501` for a
@@ -1665,8 +1729,7 @@ priv fn body_framing(
   fields: List<(String, String)>,
   limits: Limits,
 ) -> Result<Framing, Int> {
-  let codings =
-    values_of(fields, "transfer-encoding")
+  let codings = values_of(fields, "transfer-encoding")
     |> list::flat_map(_, fn(value) { string::split(value, ",") })
     |> list::map(_, fn(coding) { ascii_lower(trim_blanks(coding)) })
     |> list::filter(_, fn(coding) { coding != "" })
@@ -1863,8 +1926,13 @@ priv fn request_trailers(
     None => case seen + bytes::length(buffer) - at > 65_536 {
       True => Err(Some(431))
       False => case net::read_bytes(connection, 65_536) {
-        Ok(Some(more)) =>
-          request_trailers(connection, bytes::append(unread(buffer, at), more), 0, seen, body)
+        Ok(Some(more)) => request_trailers(
+          connection,
+          bytes::append(unread(buffer, at), more),
+          0,
+          seen,
+          body,
+        )
         _ => Err(None)
       }
     }
@@ -1917,8 +1985,7 @@ priv fn response_bytes(method: Method, given: Response, closing: Bool) -> bytes:
   let kept = list::filter(response.headers, fn((name, _)) {
     !list::contains(replaced, ascii_lower(name))
   })
-  let lines =
-    [kept, length, [("date", http_date(time::now()))], ending]
+  let lines = [kept, length, [("date", http_date(time::now()))], ending]
     |> list::flatten
     |> list::map(_, fn((name, value)) { name + ": " + value + "\r\n" })
   let status_line = "HTTP/1.1 {status} " + reason_phrase(status) + "\r\n"
@@ -2008,8 +2075,7 @@ priv fn http_date(stamp: time::Timestamp) -> String {
   let weekday = option::unwrap_or(list::get(weekdays, int::modulo(days, 7)), "")
   let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
   let month_name = option::unwrap_or(list::get(months, month - 1), "")
-  let clock =
-    [of_day / 3_600, of_day / 60 - of_day / 3_600 * 60, of_day - of_day / 60 * 60]
+  let clock = [of_day / 3_600, of_day / 60 - of_day / 3_600 * 60, of_day - of_day / 60 * 60]
     |> list::map(_, two_digits)
     |> string::join(_, ":")
   let year_text = string::pad_start("{year}", 4, "0")
@@ -2180,8 +2246,10 @@ test "a status outside 100 to 999 or a header that send would reject becomes 500
     case request.path {
       "/low" => Response { status: 99, headers: [], body: "low" }
       "/high" => Response { status: 1000, headers: [], body: "high" }
-      "/split" => text(200, "split") |> with_header(_, "x-note", "a\r\nb")
-      "/name" => text(200, "name") |> with_header(_, "bad name", "x")
+      "/split" => text(200, "split")
+        |> with_header(_, "x-note", "a\r\nb")
+      "/name" => text(200, "name")
+        |> with_header(_, "bad name", "x")
       _ => text(200, "fine")
     }
   })
@@ -2464,7 +2532,9 @@ pub fn with_header(response: Response, name: String, value: String) -> Response 
 }
 
 test "with_header replaces every header of that name" {
-  let response = text(200, "hi") |> with_header(_, "X-Trace", "1") |> with_header(_, "x-trace", "2")
+  let response = text(200, "hi")
+    |> with_header(_, "X-Trace", "1")
+    |> with_header(_, "x-trace", "2")
   assert response.headers == [("content-type", "text/plain; charset=utf-8"), ("x-trace", "2")]
 }
 
@@ -2476,8 +2546,9 @@ pub fn add_header(response: Response, name: String, value: String) -> Response {
 }
 
 test "add_header keeps the headers of the same name" {
-  let response =
-    text(200, "hi") |> add_header(_, "Set-Cookie", "a=1") |> add_header(_, "set-cookie", "b=2")
+  let response = text(200, "hi")
+    |> add_header(_, "Set-Cookie", "a=1")
+    |> add_header(_, "set-cookie", "b=2")
   assert list::filter(response.headers, fn((name, _)) { name == "set-cookie" }) == [
     ("set-cookie", "a=1"),
     ("set-cookie", "b=2"),
@@ -2493,7 +2564,8 @@ pub fn header(response: Response, name: String) -> Option<String> {
 }
 
 test "header matches names in any case" {
-  let response = text(405, "") |> with_header(_, "allow", "POST")
+  let response = text(405, "")
+    |> with_header(_, "allow", "POST")
   assert header(response, "allow") == Some("POST")
   assert header(response, "Allow") == Some("POST")
   assert header(response, "location") == None
@@ -2535,13 +2607,12 @@ priv fn ascii_lower(input: String) -> String {
   let data = bytes::from_string(input)
   case bytes::fold(data, False, fn(found, byte) { found || byte >= 0x41 && byte <= 0x5A }) {
     False => input
-    True =>
-      bytes::fold(data, bytes::new(), fn(out, byte) {
-        case byte >= 0x41 && byte <= 0x5A {
-          True => bytes::push(out, byte + 32)
-          False => bytes::push(out, byte)
-        }
-      })
+    True => bytes::fold(data, bytes::new(), fn(out, byte) {
+      case byte >= 0x41 && byte <= 0x5A {
+        True => bytes::push(out, byte + 32)
+        False => bytes::push(out, byte)
+      }
+    })
       |> string::from_bytes_lossy
   }
 }

@@ -32,7 +32,9 @@ import std::time::instant
 /// negative span. `==` and hashing are the built-in structural ones,
 /// which compare points because a `Duration` has one representation. It
 /// satisfies `Compare` and `Show` through `compare` and `show`.
-pub type Timestamp { since_epoch: duration::Duration }
+pub type Timestamp {
+  since_epoch: duration::Duration,
+}
 
 // Kernels
 
@@ -376,7 +378,13 @@ fn after_seconds(rest: List<Int>) -> Result<(Int, Int), Nil> {
 /// The part of an RFC 3339 text after the date's `T`, as read: the time of
 /// day, the nanoseconds of its fraction and its offset in seconds east of
 /// UTC.
-type TimeText { hour: Int, minute: Int, second: Int, nanoseconds: Int, east: Int }
+type TimeText {
+  hour: Int,
+  minute: Int,
+  second: Int,
+  nanoseconds: Int,
+  east: Int,
+}
 
 /// The part after the date's `T`: `HH:MM:SS`, then what `after_seconds`
 /// reads, or `Err(Nil)` for any other text.

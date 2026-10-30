@@ -97,6 +97,31 @@ fn unit_facts_union_equals_collect_facts() {
     );
 }
 
+/// `UTIL` with a test named like its function: `test "check"`.
+const UTIL_NAMED: &str = "fn check(s: String) -> Nil {
+  assert s != \"\"
+}
+
+test \"check\" {
+  check(\"a\")
+}
+";
+
+/// A test that shares a function's text never stands for it: the facts
+/// that name `app::util::check` find the function (RB-2, D-969).
+#[test]
+fn unit_facts_union_skips_a_test_named_like_a_function() {
+    let lowered = lower_package_inferred("app", &[("", MAIN), ("util", UTIL_NAMED)], true).unwrap();
+    let facts = lowered.facts.as_ref().unwrap();
+    assert_eq!(facts.union, facts.collected);
+    let (_, code) = part(&lowered, "app", "code");
+    assert!(
+        code.callees_elsewhere()
+            .contains(&"app::util::check".to_owned()),
+        "{code:?}"
+    );
+}
+
 #[test]
 fn unit_facts_union_over_std() {
     let lowered = lower_std_inferred().unwrap();

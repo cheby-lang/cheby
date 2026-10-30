@@ -6,6 +6,11 @@
 //! `Response` are pure, so the tests below cover them without a server
 //! or a database.
 
+import shop_service::checkout
+import shop_service::checkout::{Product}
+import shop_service::order
+import shop_service::store
+import sql
 import std::http
 import std::int
 import std::io
@@ -13,11 +18,6 @@ import std::json
 import std::list
 import std::result
 import std::string
-import sql
-import shop_service::checkout
-import shop_service::checkout::{Product}
-import shop_service::order
-import shop_service::store
 
 /// What a request asks for.
 type Route {
@@ -43,10 +43,13 @@ type Failure {
 /// for each request, so a slow query holds up only its own request.
 fn handle(pool: sql::Pool, request: http::Request) -> http::Response {
   let outcome = case route(request.method, request.segments) {
-    ListProducts => store::list_products(pool) |> stored(_, products_json)
-    ShowProduct(id) => store::find_product(pool, id) |> found(_, "product", product_json)
+    ListProducts => store::list_products(pool)
+      |> stored(_, products_json)
+    ShowProduct(id) => store::find_product(pool, id)
+      |> found(_, "product", product_json)
     PlaceOrder => place(pool, request.body)
-    ShowOrder(id) => store::find_order(pool, id) |> found(_, "order", stored_order_json)
+    ShowOrder(id) => store::find_order(pool, id)
+      |> found(_, "order", stored_order_json)
     other => Err(Unrouted(other))
   }
   case outcome {
@@ -91,7 +94,10 @@ priv fn place(pool: sql::Pool, body: String) -> Result<http::Response, Failure> 
 }
 
 /// Turns a list from the store into a `200` response.
-priv fn stored<T>(outcome: Result<T, store::StoreError>, encode: fn(T) -> json::Value) -> Result<http::Response, Failure> {
+priv fn stored<T>(
+  outcome: Result<T, store::StoreError>,
+  encode: fn(T) -> json::Value,
+) -> Result<http::Response, Failure> {
   use value <- result::try(result::map_error(outcome, Store))
   Ok(http::json(200, encode(value)))
 }
@@ -116,12 +122,16 @@ priv fn found<T>(
 fn failure_response(failure: Failure) -> http::Response {
   case failure {
     BadJson(_) => error_json(400, "the body is not a valid order", [])
-    Invalid(errors) => error_json(422, "the order has invalid fields", [("fields", json::array(errors, field_error_json))])
+    Invalid(errors) => error_json(422, "the order has invalid fields", [
+      ("fields", json::array(errors, field_error_json)),
+    ])
     Missing(what) => error_json(404, "no such {what}", [])
     Unrouted(WrongMethod(allowed)) => http::with_header(
       error_json(405, "method not allowed", []),
       "allow",
-      allowed |> list::map(_, http::method_name) |> string::join(_, ", "),
+      allowed
+      |> list::map(_, http::method_name)
+      |> string::join(_, ", "),
     )
     Unrouted(_) => error_json(404, "no such page", [])
     Store(store::Rejected(problem)) => rejected_response(problem)
@@ -139,26 +149,35 @@ fn failure_response(failure: Failure) -> http::Response {
 /// because the order conflicts with the shop's current state.
 priv fn rejected_response(problem: checkout::CheckoutError) -> http::Response {
   case problem {
-    checkout::UnknownProduct(id) =>
-      error_json(422, "no such product", [("product_id", json::Int(id))])
-    checkout::OutOfStock { product_id, requested, available } =>
-      error_json(409, "not enough in stock", [
+    checkout::UnknownProduct(id) => error_json(422, "no such product", [
+      ("product_id", json::Int(id)),
+    ])
+    checkout::OutOfStock { product_id, requested, available } => error_json(
+      409,
+      "not enough in stock",
+      [
         ("product_id", json::Int(product_id)),
         ("requested", json::Int(requested)),
         ("available", json::Int(available)),
-      ])
-    checkout::UnknownCode(code) =>
-      error_json(422, "no such discount code", [("discount", json::String(code))])
-    checkout::BelowMinimum { code, minimum_cents } =>
-      error_json(422, "the order is too small for this code", [
-        ("discount", json::String(code)),
-        ("minimum_cents", json::Int(minimum_cents)),
-      ])
+      ],
+    )
+    checkout::UnknownCode(code) => error_json(422, "no such discount code", [
+      ("discount", json::String(code)),
+    ])
+    checkout::BelowMinimum { code, minimum_cents } => error_json(
+      422,
+      "the order is too small for this code",
+      [("discount", json::String(code)), ("minimum_cents", json::Int(minimum_cents))],
+    )
   }
 }
 
 /// Builds an error response with `message` and some extra keys.
-priv fn error_json(status: Int, message: String, extra: List<(String, json::Value)>) -> http::Response {
+priv fn error_json(
+  status: Int,
+  message: String,
+  extra: List<(String, json::Value)>,
+) -> http::Response {
   http::json(status, json::Object([("error", json::String(message)), ..extra]))
 }
 
@@ -254,10 +273,8 @@ test "invalid fields are a 422 that lists every field" {
 
 test "running out of stock is a conflict" {
   let problem = checkout::OutOfStock { product_id: 2, requested: 4, available: 3 }
-  assert sent(failure_response(Store(store::Rejected(problem)))) == (
-    409,
-    r#"{"error":"not enough in stock","product_id":2,"requested":4,"available":3}"#,
-  )
+  assert sent(failure_response(Store(store::Rejected(problem)))) ==
+    (409, r#"{"error":"not enough in stock","product_id":2,"requested":4,"available":3}"#)
 }
 
 test "a placed order shows its totals" {
@@ -268,10 +285,12 @@ test "a placed order shows its totals" {
     shipping_cents: 495,
     total_cents: 4_590,
   }
-  assert json::to_string(placed_json(store::Placed { id: 17, quote })) == r#"{"id":17,"subtotal_cents":4550,"discount_cents":455,"shipping_cents":495,"total_cents":4590}"#
+  assert json::to_string(placed_json(store::Placed { id: 17, quote })) ==
+    r#"{"id":17,"subtotal_cents":4550,"discount_cents":455,"shipping_cents":495,"total_cents":4590}"#
 }
 
 test "a product shows whether it is in stock, not how many" {
   let honey = Product { id: 4, name: "Honey", price_cents: 875, stock: 0 }
-  assert json::to_string(product_json(honey)) == r#"{"id":4,"name":"Honey","price_cents":875,"in_stock":false}"#
+  assert json::to_string(product_json(honey)) ==
+    r#"{"id":4,"name":"Honey","price_cents":875,"in_stock":false}"#
 }

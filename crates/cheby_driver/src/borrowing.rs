@@ -33,8 +33,9 @@
 //! compared with the fresh result in a debug toolchain, and a difference is
 //! an internal error naming the module (D-1131's pattern); a unit loaded
 //! from its code record lowers nothing to compare
-//! (D-1221). Std modules get no records (the
-//! build ID fixes std until K6), nor does the entries unit (D-964), nor a
+//! (D-1221). Std modules get none of these records: std's code records are
+//! `std_cache.rs`'s, keyed by the build ID and the settings (K6, D-980),
+//! nor does the entries unit (D-964), nor a
 //! module without a front record (one with errors is never lowered,
 //! D-964). The records are artifacts (D-264, D-972): nothing in a key or a
 //! record depends on a path, an address, a `DefId` or hash-map order.
@@ -42,8 +43,10 @@
 //! The inference scope (D-968): the package's masks are inferred over the
 //! load set's code units and, in a test build, the tests units of the
 //! modules with a selected test (`backend.rs` lowers exactly those); std's
-//! masks keep today's scope, the build's std units, until K6 infers them
-//! over every std module. D-1194: D-968 says the entries
+//! masks are inferred over every std module, in a front end of std's own,
+//! and std's units never enter the package's inference (K6,
+//! `std_cache.rs`; std's self-test and the dumps for goldens keep the
+//! build's std units as their scope). D-1194: D-968 says the entries
 //! unit contributes no facts, but its statics may hold `main`'s error
 //! dictionary, which names a package function as a value; without that
 //! fact the function would borrow and the dictionary's call would break
@@ -67,6 +70,7 @@ use crate::cache::front::{encode_hint, sealed, unsealed};
 use crate::cache::index::IndexEntry;
 use crate::cache::{BuildKind, CacheLog, Hash128, Key, Settings, StoreShare};
 use crate::frontend::Frontend;
+use crate::warm_keys::KeyView;
 
 /// Where a command's borrowing records go: the store, the lookup log and
 /// each package module's front identity, from the front end's package
@@ -93,14 +97,19 @@ struct ModuleKeys {
 
 impl RecordSink {
     /// The sink of a command over `cache`, whose front end found or wrote
-    /// a front record for each module of `entries`.
-    pub(crate) fn new(cache: &Cache, entries: &[IndexEntry]) -> Self {
+    /// a front record for each module of `entries`: a front end's entries
+    /// after its check, or the package index's vouched ones before it
+    /// (K4d's [`crate::warm_keys::WarmView`]).
+    pub(crate) fn new<'e>(
+        cache: &Cache,
+        entries: impl IntoIterator<Item = &'e IndexEntry>,
+    ) -> Self {
         Self {
             store: cache.store.share(),
             log: cache.log.share(),
             reads: cache.reads,
             modules: entries
-                .iter()
+                .into_iter()
                 .map(|entry| {
                     (
                         entry.path.clone(),
@@ -197,6 +206,24 @@ impl RecordSink {
     /// once per process (D-1139); a write that fails is skipped (D-1129).
     pub(crate) fn code_store(&self, key: &Key, record: &CodeRecord) {
         let _ = self.store.put_record(key, &record.encode());
+    }
+
+    /// K5b's constant entries (`cache::consts`, D-977): the store, the
+    /// lookup log, and whether lookups read the store (`CHEBY_DUMP_DIR`
+    /// bypasses reads, D-965).
+    pub(crate) const fn const_parts(&self) -> (&StoreShare, &CacheLog, bool) {
+        (&self.store, &self.log, self.reads)
+    }
+
+    /// Where std's code records are read and written (K6, `std_cache.rs`):
+    /// `None` when the command bypasses reads (`CHEBY_DUMP_DIR`, D-965),
+    /// whose build lowers std itself.
+    pub(crate) fn std_store(&self) -> Option<crate::std_cache::StdStore<'_>> {
+        self.reads.then(|| crate::std_cache::StdStore {
+            store: self.store.clone(),
+            log: &self.log,
+            reads: self.reads,
+        })
     }
 
     /// Reads the lowering read-set hint `key` (D-955, D-1195): the module
@@ -463,7 +490,7 @@ pub(crate) fn build_kind(roots: &Roots<'_>, mir: MirOptions) -> BuildKind {
 /// command compiles it: its kind, `CHEBY_RC`, unwind edges, the checked
 /// count operations of the poisoning mode, the stack check and the
 /// target.
-fn settings(kind: BuildKind, mir: MirOptions) -> Settings {
+pub(crate) fn settings(kind: BuildKind, mir: MirOptions) -> Settings {
     Settings {
         kind,
         rc_naive: mir.rc == RcMode::Naive,
@@ -502,15 +529,19 @@ pub(crate) type Plan = BTreeMap<(UnitPart, ModuleId), Planned>;
 /// facts (D-1191); whether it is lowered at all is decided by its masks
 /// and code records. Nothing without a cache, nor for std or a module
 /// without a front record (D-964).
-pub(crate) fn plan(front: &Frontend, parts: &[(UnitPart, ModuleId)], read: bool) -> Plan {
-    let Some(sink) = sink(front) else {
+pub(crate) fn plan<V: KeyView + ?Sized>(
+    view: &V,
+    parts: &[(UnitPart, ModuleId)],
+    read: bool,
+) -> Plan {
+    let Some(sink) = view.records() else {
         return Plan::new();
     };
     let build = sink.store.build_id();
     let planned: Vec<Option<((UnitPart, ModuleId), Planned)>> = parts
         .par_iter()
         .map(|&(part, module)| {
-            let info = front.modules.get(module)?;
+            let info = view.module_table().get(module)?;
             if info.package != PackageId::LOCAL {
                 return None;
             }
@@ -565,15 +596,15 @@ pub(crate) struct StoredMasks {
 /// # Errors
 ///
 /// An [`Ice`] if the facts name a def `defs` cannot see.
-pub(crate) fn stored_masks(
-    front: &Frontend,
+pub(crate) fn stored_masks<V: KeyView + ?Sized>(
+    view: &V,
     planned: &Planned,
     module: ModuleId,
     kind: BuildKind,
     facts: &BuildFacts,
     defs: &Defs<'_>,
 ) -> Result<Option<StoredMasks>, Ice> {
-    let (Some(sink), Some(identity)) = (sink(front), planned.identity) else {
+    let (Some(sink), Some(identity)) = (view.records(), planned.identity) else {
         return Ok(None);
     };
     if !sink.reads {
@@ -606,10 +637,11 @@ pub(crate) fn stored_masks(
 
 /// Calls `f` with the interfaces of the whole build, which name every def
 /// a unit, a facts record or a masks record can hold.
-pub(crate) fn with_build_defs<R>(front: &Frontend, f: impl FnOnce(&Defs<'_>) -> R) -> R {
-    let all = all_modules(front);
-    let view = DepView::new(&front.set, &all);
-    f(&build_defs(front, &view))
+pub(crate) fn with_build_defs<V: KeyView + ?Sized, R>(
+    view: &V,
+    f: impl FnOnce(&Defs<'_>) -> R,
+) -> R {
+    view.with_defs(f)
 }
 
 /// What [`write_fresh`] gives each package unit the command lowered.
@@ -804,21 +836,21 @@ pub(crate) struct KeyUnit<'a> {
 /// # Errors
 ///
 /// An [`Ice`] if a name cannot be read.
-pub(crate) fn unit_keys(
-    front: &Frontend,
+pub(crate) fn unit_keys<V: KeyView + ?Sized>(
+    view: &V,
     kind: BuildKind,
     mir: MirOptions,
     units: &[KeyUnit<'_>],
     masks: &borrow::Masks,
 ) -> Result<UnitKeys, Ice> {
-    let Some(sink) = sink(front) else {
+    let Some(sink) = view.records() else {
         return Ok(UnitKeys::default());
     };
     let build = sink.store.build_id();
     let settings = settings(kind, mir);
     let names: Vec<Vec<(&str, &str)>> = units.iter().map(|u| u.facts.callee_names()).collect();
     let flat: Vec<(&str, &str)> = names.iter().flatten().copied().collect();
-    let found = with_build_defs(front, |defs| borrow::find_defs(&flat, defs))?;
+    let found = with_build_defs(view, |defs| borrow::find_defs(&flat, defs))?;
     let mut found = found.into_iter();
     let mut keys = BTreeMap::new();
     for (unit, names) in units.iter().zip(&names) {
@@ -827,8 +859,8 @@ pub(crate) fn unit_keys(
             let Some(def) = found.next().flatten() else {
                 continue;
             };
-            let local = front
-                .modules
+            let local = view
+                .module_table()
                 .get(def.module)
                 .is_some_and(|info| info.package == PackageId::LOCAL);
             if local && def.module != unit.module {

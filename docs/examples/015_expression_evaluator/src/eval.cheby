@@ -10,10 +10,10 @@
 //! checks for zero itself and uses the checked functions of `std::int`,
 //! which return `Err(Nil)` instead of panicking.
 
+import expression_evaluator::expr
 import std::int
 import std::map
 import std::result
-import expression_evaluator::expr
 
 /// The variables defined so far and their values. A map is immutable,
 /// so defining a variable builds a new map, and the old one stays as it
@@ -103,7 +103,10 @@ test "numbers, operators and negation compute as usual" {
 test "division truncates toward zero" {
   let env = map::new()
   assert evaluate(expr::Binary(expr::Divide, expr::Number(7), expr::Number(2)), env) == Ok(3)
-  assert evaluate(expr::Binary(expr::Divide, expr::Negate(expr::Number(7)), expr::Number(2)), env) == Ok(-3)
+  assert evaluate(
+    expr::Binary(expr::Divide, expr::Negate(expr::Number(7)), expr::Number(2)),
+    env,
+  ) == Ok(-3)
 }
 
 test "variables are looked up in the environment" {
@@ -124,7 +127,8 @@ test "division by zero is an error that names the divisor" {
   let n = expr::Variable("n")
   let difference = expr::Binary(expr::Subtract, n, n)
   assert evaluate(expr::Binary(expr::Divide, n, difference), env) == Err(DivisionByZero(difference))
-  assert evaluate(expr::Binary(expr::Divide, n, expr::Number(0)), env) == Err(DivisionByZero(expr::Number(0)))
+  assert evaluate(expr::Binary(expr::Divide, n, expr::Number(0)), env) ==
+    Err(DivisionByZero(expr::Number(0)))
 }
 
 test "a result too large for an Int is an error, not a panic" {
@@ -144,5 +148,6 @@ test "evaluation errors show as messages for the user" {
   assert show(UnknownVariable("y")) == "unknown variable y"
   assert show(DivisionByZero(expr::Number(0))) == "division by zero"
   assert show(DivisionByZero(difference)) == "division by zero: n - n is 0"
-  assert show(Overflow(expr::Binary(expr::Multiply, big, big))) == "the result of 4000000000 * 4000000000 is too large"
+  assert show(Overflow(expr::Binary(expr::Multiply, big, big))) ==
+    "the result of 4000000000 * 4000000000 is too large"
 }

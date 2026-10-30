@@ -16,9 +16,9 @@
 //! Chains of operators are read by tail calls. Parentheses and unary
 //! minus are not: every level of nesting uses a few more stack frames.
 
-import std::result
 import expression_evaluator::expr
 import expression_evaluator::lexer
+import std::result
 
 /// A parsed line.
 type Statement {
@@ -30,7 +30,10 @@ type Statement {
 
 /// Why a line is not a statement, and the position of the token where
 /// that became clear.
-type ParseError { position: Int, problem: Problem }
+type ParseError {
+  position: Int,
+  problem: Problem,
+}
 
 /// What is wrong with the line.
 type Problem {
@@ -56,14 +59,17 @@ fn parse(tokens: List<lexer::Token>) -> Result<Statement, ParseError> {
       lexer::Token { kind: lexer::Let, .. },
       lexer::Token { kind: lexer::Name(name), .. },
       lexer::Token { kind: lexer::Equals, .. },
-      ..rest
+      ..rest,
     ] => {
       use value <- result::try(whole_line(rest))
       Ok(Assign(name, value))
     }
     // The arms are tried in order, so these two only see a `let` line
     // that the first arm rejected.
-    [lexer::Token { kind: lexer::Let, .. }, lexer::Token { kind: lexer::Name(_), .. }, ..rest] => fail(rest, "\"=\"")
+    [lexer::Token { kind: lexer::Let, .. }, lexer::Token { kind: lexer::Name(_), .. }, ..rest] => fail(
+      rest,
+      "\"=\"",
+    )
     [lexer::Token { kind: lexer::Let, .. }, ..rest] => fail(rest, "a name")
     _ => {
       use value <- result::try(whole_line(tokens))
@@ -171,8 +177,10 @@ test "operators follow the usual precedence and group to the left" {
   let one = expr::Number(1)
   let two = expr::Number(2)
   let three = expr::Number(3)
-  assert read("1 + 2 * 3") == Ok(Evaluate(expr::Binary(expr::Add, one, expr::Binary(expr::Multiply, two, three))))
-  assert read("1 * 2 + 3") == Ok(Evaluate(expr::Binary(expr::Add, expr::Binary(expr::Multiply, one, two), three)))
+  assert read("1 + 2 * 3") ==
+    Ok(Evaluate(expr::Binary(expr::Add, one, expr::Binary(expr::Multiply, two, three))))
+  assert read("1 * 2 + 3") ==
+    Ok(Evaluate(expr::Binary(expr::Add, expr::Binary(expr::Multiply, one, two), three)))
   assert read("-1 * 2") == Ok(Evaluate(expr::Binary(expr::Multiply, expr::Negate(one), two)))
   assert read("--1") == Ok(Evaluate(expr::Negate(expr::Negate(one))))
   // Operators of the same precedence group to the left.
@@ -211,20 +219,42 @@ test "errors point at the token where the line goes wrong" {
     position: 4,
     problem: Expected(operand_description, lexer::Operator(expr::Multiply)),
   })
-  assert read("1 2") == Err(ParseError { position: 2, problem: Expected(after_value, lexer::Number(2)) })
-  assert read("x = 5") == Err(ParseError { position: 2, problem: Expected(after_value, lexer::Equals) })
-  assert read("1 + 2)") == Err(ParseError { position: 5, problem: Expected(after_value, lexer::RightParen) })
-  assert read("let 5 = 1") == Err(ParseError { position: 4, problem: Expected("a name", lexer::Number(5)) })
-  assert read("let x 5") == Err(ParseError { position: 6, problem: Expected("\"=\"", lexer::Number(5)) })
-  assert read("let x =") == Err(ParseError { position: 7, problem: Expected(operand_description, lexer::End) })
+  assert read("1 2") == Err(ParseError {
+    position: 2,
+    problem: Expected(after_value, lexer::Number(2)),
+  })
+  assert read("x = 5") == Err(ParseError {
+    position: 2,
+    problem: Expected(after_value, lexer::Equals),
+  })
+  assert read("1 + 2)") == Err(ParseError {
+    position: 5,
+    problem: Expected(after_value, lexer::RightParen),
+  })
+  assert read("let 5 = 1") == Err(ParseError {
+    position: 4,
+    problem: Expected("a name", lexer::Number(5)),
+  })
+  assert read("let x 5") == Err(ParseError {
+    position: 6,
+    problem: Expected("\"=\"", lexer::Number(5)),
+  })
+  assert read("let x =") == Err(ParseError {
+    position: 7,
+    problem: Expected(operand_description, lexer::End),
+  })
   // An unclosed parenthesis is reported together with where it opened.
   assert read("2 * (3 + 4") == Err(ParseError { position: 10, problem: Unclosed(4, lexer::End) })
   assert read("(1 2)") == Err(ParseError { position: 3, problem: Unclosed(0, lexer::Number(2)) })
 }
 
 test "parse errors show as messages for the user" {
-  let misplaced = ParseError { position: 4, problem: Expected(operand_description, lexer::Operator(expr::Multiply)) }
+  let misplaced = ParseError {
+    position: 4,
+    problem: Expected(operand_description, lexer::Operator(expr::Multiply)),
+  }
   assert show(misplaced) == "expected a number, a name, \"-\" or \"(\", found \"*\" at column 5"
   let unclosed = ParseError { position: 10, problem: Unclosed(4, lexer::End) }
-  assert show(unclosed) == "expected \")\" to close the \"(\" at column 5, found end of line at column 11"
+  assert show(unclosed) ==
+    "expected \")\" to close the \"(\" at column 5, found end of line at column 11"
 }

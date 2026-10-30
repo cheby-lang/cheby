@@ -89,7 +89,17 @@ impl<'f> Summaries<'f> {
     pub(crate) fn new(front: &'f Frontend) -> Result<Self, Ice> {
         let mut modules = BTreeMap::new();
         for &module in &front.order {
-            let entries = summarize(front, module)?;
+            // K6: a std module whose front record hit was not checked; its
+            // record holds its summaries in the walk's form (D-980, D-1178).
+            let entries = match crate::std_cache::std_summaries(front, module)? {
+                Some(entries) => entries,
+                // K4d: a warm hit of the package was not checked; its warm
+                // facts hold its summaries in the walk's form (D-1250).
+                None => match front.warm_summaries(module) {
+                    Some(entries) => entries.to_vec(),
+                    None => summarize(front, module)?,
+                },
+            };
             let by_name = entries
                 .iter()
                 .enumerate()

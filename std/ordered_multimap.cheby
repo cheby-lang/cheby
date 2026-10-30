@@ -362,7 +362,10 @@ test "find returns the first matching key in order" {
 /// Returns the keys, with all their values, for which `keep` returns
 /// `True`, in the same order. `keep` is called once per key, in the
 /// multimap's order, O(n log n).
-pub fn filter<K, V>(m: OrderedMultimap<K, V>, keep: fn(K, List<V>) -> Bool) -> OrderedMultimap<K, V> {
+pub fn filter<K, V>(
+  m: OrderedMultimap<K, V>,
+  keep: fn(K, List<V>) -> Bool,
+) -> OrderedMultimap<K, V> {
   let kept = ordered_map::filter(m.entries, keep)
   let total = ordered_map::fold(kept, 0, fn(sum, _, values) { sum + list::length(values) })
   OrderedMultimap { entries: kept, total }

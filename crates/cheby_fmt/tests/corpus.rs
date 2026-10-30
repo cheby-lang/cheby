@@ -26,7 +26,8 @@ use cheby_fmt::{Coverage, coverage, format_source};
 use cheby_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, SyntaxTree, parse};
 use cheby_test_support::{display_relative, example, files_with_extension, repo_root};
 
-/// The widths of the CP2 measurement (D-1030).
+/// The widths of the CP2 measurement (D-1030), from which CP2 chose 100
+/// (D-1252); the corpus tests keep checking all three.
 const WIDTHS: [usize; 3] = [80, 100, 120];
 
 /// Every example and std source, sorted.
@@ -277,9 +278,76 @@ fn fmt_corpus_one_element_tuple_comma_is_compared() {
     );
 }
 
+/// Whether `token` is the `=>` of a `case` arm or a subjectless `case`'s
+/// arm, with only spaces before it on its line: the place padding goes.
+fn is_padded_place(token: SyntaxToken<'_>) -> bool {
+    token.kind() == SyntaxKind::FAT_ARROW
+        && token
+            .parent()
+            .is_some_and(|p| matches!(p.kind(), SyntaxKind::CASE_ARM | SyntaxKind::COND_ARM))
+        && token
+            .prev_token()
+            .is_some_and(|p| p.kind() == SyntaxKind::WHITESPACE)
+        && token
+            .prev_token()
+            .and_then(SyntaxToken::prev_token)
+            .is_some_and(|p| p.kind() != SyntaxKind::NEWLINE)
+}
+
+/// GAP(case-arm-layout): an arm has one space before `=>`, never padding.
+/// Every corpus source with spaces added before each arm's `=>` (the
+/// padding of the withdrawn alignment) formats exactly as the source does,
+/// and in the output every arm's `=>` after its patterns has one space
+/// before it.
+#[test]
+fn fmt_corpus_padded_arms_format_to_one_space() {
+    let root = repo_root();
+    let files = corpus(&root);
+    let mut padded_arms = 0_usize;
+    let mut failures = Vec::new();
+    for path in &files {
+        let name = display_relative(path, &root);
+        let text = std::fs::read_to_string(path).unwrap();
+        let tree = parse_clean(&text).unwrap();
+        let mut padded = String::with_capacity(text.len());
+        let mut last = 0;
+        for token in tree.root().tokens().filter(|t| is_padded_place(*t)) {
+            let start = usize::try_from(token.text_range().start()).unwrap();
+            padded.push_str(text.get(last..start).unwrap());
+            padded.push_str("      ");
+            last = start;
+            padded_arms = padded_arms.saturating_add(1);
+        }
+        padded.push_str(text.get(last..).unwrap());
+        for width in WIDTHS {
+            let want = format_source(&text, width).unwrap();
+            match format_source(&padded, width) {
+                Ok(got) if got == want => {}
+                Ok(got) => failures.push(format!(
+                    "{name} at {width}: the padded source formats differently:\n{}",
+                    first_difference(&want, &got)
+                )),
+                Err(e) => failures.push(format!("{name} at {width}: {e}")),
+            }
+            let out = parse_clean(&want).unwrap();
+            for token in out.root().tokens().filter(|t| is_padded_place(*t)) {
+                if token.prev_token().is_some_and(|p| p.text() != " ") {
+                    let start = usize::try_from(token.text_range().start()).unwrap();
+                    failures.push(format!(
+                        "{name} at {width}: padding before `=>` at byte {start}"
+                    ));
+                }
+            }
+        }
+    }
+    println!("padded {padded_arms} arms in {} corpus files", files.len());
+    assert!(padded_arms > 100, "only {padded_arms} arms padded");
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
 /// Prints, as a Markdown table, how many nodes of each kind the printer
 /// laid out and how many it printed verbatim over the corpus at the
-/// provisional width. Run with `--nocapture` to read it.
+/// formatter's width. Run with `--nocapture` to read it.
 #[test]
 fn fmt_corpus_coverage() {
     let root = repo_root();
@@ -287,7 +355,7 @@ fn fmt_corpus_coverage() {
     let mut total = Coverage::default();
     for path in &files {
         let text = std::fs::read_to_string(path).unwrap();
-        total.add(&coverage(&text, cheby_fmt::PROVISIONAL_WIDTH).unwrap());
+        total.add(&coverage(&text, cheby_fmt::WIDTH).unwrap());
     }
     let mut kinds: Vec<SyntaxKind> = total
         .laid_out
@@ -326,7 +394,7 @@ fn fmt_corpus_coverage() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if let Ok(c) = coverage(&text, cheby_fmt::PROVISIONAL_WIDTH) {
+        if let Ok(c) = coverage(&text, cheby_fmt::WIDTH) {
             checked += 1;
             if !c.verbatim.is_empty() || c.verbatim_items > 0 {
                 println!(
@@ -602,7 +670,7 @@ fn verbatim_by_rule(text: &str) -> (BTreeMap<SyntaxKind, u64>, u64) {
 /// Checks that the printer lays out every node of `text` but those
 /// [`verbatim_by_rule`] allows.
 fn check_no_fallback(text: &str, total: &mut Coverage) -> Result<(), String> {
-    let c = coverage(text, cheby_fmt::PROVISIONAL_WIDTH).map_err(|e| e.to_string())?;
+    let c = coverage(text, cheby_fmt::WIDTH).map_err(|e| e.to_string())?;
     total.add(&c);
     let (allowed, items) = verbatim_by_rule(text);
     if c.verbatim != allowed || c.verbatim_items != items {
@@ -733,8 +801,8 @@ fn changed_lines(before: &str, after: &str) -> usize {
 
 /// Prints, as a Markdown table, how many corpus files and source lines
 /// change when the corpus is formatted at 80, 100 and 120 columns: the
-/// informative measure behind the width's choice at CP2 (D-1030). Run with
-/// `--ignored --nocapture`.
+/// informative measure behind the width's choice at CP2 (D-1030), where the
+/// user chose 100 (D-1252). Run with `--ignored --nocapture`.
 #[test]
 #[ignore = "a measurement, printed on demand"]
 fn fmt_corpus_change_table() {
@@ -770,7 +838,9 @@ fn fmt_corpus_change_table() {
 // (D-1029) changes at each width, split into the two parts it reformats,
 // the lines still over the width and why, and the goldens' locations it
 // would move. The tests below print Markdown tables (every table line
-// starts with `|`) and choose no width.
+// starts with `|`) and choose no width: CP2 chose 100 from them (D-1252),
+// and M3's wave 9 reformatted the corpus at 100, so at 100 they now show
+// no file that changes.
 
 /// The two parts of the corpus that T1b reformats (D-1029): the examples'
 /// sources and `std/`, each sorted.

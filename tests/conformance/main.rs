@@ -32,9 +32,10 @@
 //! (D-545, `cheby_test_support::platform`): M1 is judged on Linux and
 //! macOS. So is every `skip-run` example's trial, which only runs `cheby
 //! check`: `cheby check` evaluates the package's constants with the JIT
-//! once the front end reports no error, and 020 passes the front end. 030
-//! and 031 stop in the front end and build no JIT, but are ignored with
-//! it: their result is report-only before their milestone anyway.
+//! once the front end reports no error. 030, the one `skip-run` example
+//! left since 031 runs against the HTTP fixture (D-1027), stops in the
+//! front end and builds no JIT, but is ignored with it: its result is
+//! report-only before its milestone anyway.
 //!
 //! Thread variants (D-722, `cheby_test_support::threads`): the run trial
 //! and the `::test` trial of every example that is run also run as

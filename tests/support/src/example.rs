@@ -494,9 +494,9 @@ mod tests {
         assert_eq!(ex.run_args(&g).unwrap(), first);
     }
 
-    /// No example holds a placeholder yet (031 gets one in wave 9), so
-    /// every example's arguments and environment are its goldens' as they
-    /// are, and none starts a server.
+    /// Every example without a placeholder (all but 031, see
+    /// `run_args_of_031_name_its_site`) keeps its goldens' arguments and
+    /// environment as they are, and starts no server.
     #[test]
     fn run_args_of_the_examples_without_a_placeholder_are_their_goldens() {
         let resolver = |_: &Path| -> Result<String, String> { panic!("no server is needed") };
@@ -509,6 +509,34 @@ mod tests {
             let run = ex.run_args_with(&g, &resolver).unwrap();
             assert_eq!((run.args, run.env), (g.args, g.env), "{}", ex.name);
         }
+    }
+
+    /// D-1027, GAP(031-site): 031 runs against the fixture. Its `args` is
+    /// the one placeholder, its `site/` holds the five pages, and it is no
+    /// longer check-only.
+    #[test]
+    fn run_args_of_031_name_its_site() {
+        let examples = super::all(&crate::repo_root()).unwrap();
+        let ex = examples
+            .iter()
+            .find(|ex| ex.name == "031_web_scraper")
+            .unwrap();
+        assert!(!ex.config.skip_run);
+        let g = ex.goldens().unwrap();
+        assert_eq!(g.args, [HTTP_FIXTURE]);
+        assert_eq!(g.env, Vec::<(String, String)>::new());
+        let site = ex.dir.join("site");
+        for page in ["index.html", "about", "team", "blog", "first-post"] {
+            assert!(site.join(page).is_file(), "{page}");
+        }
+        let calls = RefCell::new(Vec::new());
+        let resolver = |dir: &Path| {
+            calls.borrow_mut().push(dir.to_path_buf());
+            Ok("http://127.0.0.1:4711".to_owned())
+        };
+        let run = ex.run_args_with(&g, &resolver).unwrap();
+        assert_eq!(run.args, ["http://127.0.0.1:4711"]);
+        assert_eq!(*calls.borrow(), [site]);
     }
 
     #[test]

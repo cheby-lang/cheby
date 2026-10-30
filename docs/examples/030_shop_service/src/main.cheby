@@ -70,12 +70,12 @@
 //!   `decode::column(name, decoder)`, `int`, `text`, `nullable`,
 //!   `success` and `failure`.
 
+import shop_service::routes
+import sql
 import std::env
 import std::http
 import std::int
 import std::result
-import sql
-import shop_service::routes
 
 /// The port to listen on when `PORT` is not set.
 const default_port: Int = 8080

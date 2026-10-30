@@ -1,6 +1,7 @@
 //! `cheby new <name>` (D-1032, spec §13.1): creates the directory `<name>`
 //! in the working directory with the smallest package that runs, in the
-//! form `cheby fmt` produces at every width CP2 may choose (D-1150).
+//! form `cheby fmt` produces at 100 columns, the width CP2 chose (D-1252),
+//! and at the other widths it measured (D-1150).
 //!
 //! D-1214: the files' texts, the silent success and the
 //! error texts are the user's answer to the wave plan's §7 Q6 (1).
@@ -208,13 +209,16 @@ mod tests {
 
     use super::{GITIGNORE, NewError, main_source, manifest, new_package, new_package_with};
 
-    /// The widths CP2 chooses from (D-1150).
+    /// The widths CP2 chose from (D-1150); it chose 100, `cheby_fmt::WIDTH`
+    /// (D-1252). The skeleton stays a fixed point at all three.
     const WIDTHS: [usize; 3] = [80, 100, 120];
 
-    /// The skeleton is a fixed point of the formatter at every candidate
-    /// width, for short and long names (D-1032, D-1150).
+    /// The skeleton is a fixed point of the formatter at every measured
+    /// width, the chosen one included, for short and long names (D-1032,
+    /// D-1150, D-1252).
     #[test]
     fn cheby_new_skeleton_is_a_fmt_fixed_point() {
+        assert!(WIDTHS.contains(&cheby_fmt::WIDTH));
         let long = "a".repeat(130);
         for name in ["app", "my_app", "x1", long.as_str()] {
             let source = main_source(name);

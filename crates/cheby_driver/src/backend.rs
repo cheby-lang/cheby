@@ -283,6 +283,10 @@ fn build_dumping(
     clippy::too_many_arguments,
     reason = "build_dumping's arguments and the scope its tests choose"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one build's steps in order; K5b's lookups of `cheby check`'s constants before it compiles"
+)]
 pub(crate) fn build_scoped(
     front: &Frontend,
     sources: &SourceMap,
@@ -306,19 +310,17 @@ pub(crate) fn build_scoped(
     let mir = kind_options(roots, mir, scope);
     let libraries = front.native_libraries();
     // K4c: package units come from the code cache where their records hit,
-    // and are not lowered. A dump is always of fresh code (D-965), the
-    // reuse report is made while lowering (D-1223),
-    // and the code-generation benchmark compiles everything.
+    // and are not lowered. A dump is always of fresh code (D-965), and the
+    // code-generation benchmark compiles everything. The reuse report reads
+    // records with their cached lines (K4d, D-965, refining D-1223).
     let resolves = |symbol: &str| cheby_jit::resolve_native(symbol, &libraries).is_some();
     let resolves: &(dyn Fn(&str) -> bool + Sync) = &resolves;
     let program = scope == Scope::Whole && !check;
     let reading = Reading {
-        code: dump.is_none()
-            && !capture_clif
-            && !reuse_report
-            && !matches!(roots, Roots::AllFunctions),
+        code: dump.is_none() && !capture_clif && !matches!(roots, Roots::AllFunctions),
         jit: true,
         resolves: program.then_some(resolves),
+        reuse: reuse_report && mir.record_sites,
     };
     let lowered = lower_reading(front, sources, roots, mir, scope, reading)?;
     if let Some(dir) = &code_dump {
@@ -340,6 +342,38 @@ pub(crate) fn build_scoped(
             sources.sort(&mut diagnostics);
             return Ok(Err(diagnostics));
         }
+    }
+    // K5b: `cheby check` looks its constants up first (D-977); when every
+    // one hits, it compiles and evaluates nothing, installs nothing and
+    // replays the cached failures (D-1187).
+    let check_infos = if check {
+        const_infos(front, sources, &lowered.reach)?
+    } else {
+        Vec::new()
+    };
+    let mut check_plan = if check {
+        Some(crate::cache::consts::ConstPlan::new(
+            front,
+            sources,
+            &lowered.reach,
+            &check_infos,
+            mir_options,
+            dump.is_some(),
+        )?)
+    } else {
+        None
+    };
+    if let Some(plan) =
+        check_plan.take_if(|plan| !check_infos.is_empty() && plan.to_evaluate().is_empty())
+    {
+        return Ok(match plan.finish(front, sources, Ok(Vec::new()))? {
+            Ok(_) => Ok(Built {
+                jit: Jit::new().map_err(jit_ice)?,
+                rc_ops,
+                reuse_report,
+            }),
+            Err(diagnostics) => Err(diagnostics),
+        });
     }
     let options = JitOptions {
         stub_unresolved: check || scope == Scope::Whole,
@@ -374,24 +408,42 @@ pub(crate) fn build_scoped(
         // `cheby check`: this build is the evaluation module; it writes the
         // images and installs nothing (D-979).
         Roots::Constants | Roots::Evaluate(_) => {
-            let infos = const_infos(front, sources, &lowered.reach)?;
-            crate::code_cache::name_consts(front, &mut jit, &infos)?;
+            let all: Vec<ConstInfo>;
+            let infos: &[ConstInfo] = if check {
+                &check_infos
+            } else {
+                all = const_infos(front, sources, &lowered.reach)?;
+                &all
+            };
+            crate::code_cache::name_consts(front, &mut jit, infos)?;
             let mode = if check {
                 ConstMode::Check
             } else {
                 ConstMode::Run
             };
-            if let Err(diagnostics) = evaluate_in(front, sources, &mut jit, &infos, mode)? {
+            // K5b: only the constants that miss are evaluated, and their
+            // images or failures stored (D-977).
+            let evaluate = match &check_plan {
+                Some(plan) => plan.to_evaluate(),
+                None => infos.to_vec(),
+            };
+            let evaluated = match evaluate_in(front, sources, &mut jit, &evaluate, mode)? {
+                Err(diagnostics) => Err(diagnostics),
+                Ok(()) => Ok(cheby_consteval::images(&jit, &evaluate)?),
+            };
+            let evaluated = match check_plan {
+                Some(plan) => plan.finish(front, sources, evaluated)?,
+                None => evaluated,
+            };
+            if let Err(diagnostics) = evaluated {
                 return Ok(Err(diagnostics));
             }
-            // The images K5b will store; until then they are only written.
-            cheby_consteval::images(&jit, &infos)?;
             if let Some(dir) = dump {
-                write_const_dump(front, &jit, dir, &infos)?;
+                write_const_dump(front, &jit, dir, &evaluate)?;
             }
             // This JIT is returned with its constants' values, which
             // nothing installs: they stay in place, static (D-539).
-            cheby_consteval::freeze(&jit, &infos)?;
+            cheby_consteval::freeze(&jit, &evaluate)?;
         }
         // The constants `main` or the tests reach are evaluated in a JIT
         // of their own on `plain` code, then installed here from their
@@ -399,8 +451,19 @@ pub(crate) fn build_scoped(
         Roots::Main(_) | Roots::Tests(_) => {
             let infos = const_infos(front, sources, &lowered.reach)?;
             crate::code_cache::name_consts(front, &mut jit, &infos)?;
-            let evaluated =
-                evaluation_module(front, sources, &infos, codegen, mir_options, dump, scope)?;
+            // K5b: the hits come from the store; only the misses are
+            // evaluated, and with none no evaluation module is built (D-977).
+            let evaluated = crate::cache::consts::images_through_cache(
+                front,
+                sources,
+                &lowered.reach,
+                &infos,
+                mir_options,
+                dump.is_some(),
+                |subset| {
+                    evaluation_module(front, sources, subset, codegen, mir_options, dump, scope)
+                },
+            )?;
             match evaluated {
                 Err(diagnostics) => return Ok(Err(diagnostics)),
                 Ok(images) => cheby_consteval::install(&jit, &images, &infos)?,
@@ -416,26 +479,15 @@ pub(crate) fn build_scoped(
 
 /// The text of `--reuse-report` for `lowered` (D-717): it reads the
 /// reachable functions, as before whole modules (D-966), since a whole
-/// module's unreached ones never run.
+/// module's unreached ones never run; a unit loaded from its record
+/// replays the lines cached beside it (K4d, `reuse_replay.rs`).
 fn reuse_report_of(
     front: &Frontend,
     sources: &SourceMap,
     lowered: &Lowered,
     mir: MirOptions,
 ) -> Result<String, Ice> {
-    let local: BTreeSet<ModuleId> = local_modules(front).into_iter().collect();
-    let reached = reached_units(&lowered.units, lowered);
-    crate::reuse_report::report(
-        &reached,
-        &local,
-        sources,
-        &front.globals.names,
-        &crate::reuse_report::Types {
-            table: &front.globals.types,
-            interfaces: &front.set,
-        },
-        mir.rc == RcMode::Naive,
-    )
+    crate::reuse_replay::report(front, sources, lowered, mir)
 }
 
 /// The images of the constants a lowered build of `main` reaches (D-979),
@@ -453,14 +505,25 @@ pub(crate) fn constant_images(
     mir: MirOptions,
 ) -> Result<Result<Vec<ConstImage>, Vec<Diagnostic>>, Ice> {
     let infos = const_infos(front, sources, &lowered.reach)?;
-    evaluation_module(
+    // K5b: the hits by value from the store; the misses evaluated (D-977).
+    crate::cache::consts::images_through_cache(
         front,
         sources,
+        &lowered.reach,
         &infos,
-        codegen_options(mir, false),
         mir,
-        None,
-        command_scope(),
+        false,
+        |subset| {
+            evaluation_module(
+                front,
+                sources,
+                subset,
+                codegen_options(mir, false),
+                mir,
+                None,
+                command_scope(),
+            )
+        },
     )
 }
 
@@ -511,7 +574,7 @@ fn evaluate_in(
 /// D-1187): the constants `infos` (the build's, in D-535's
 /// order, with the build's seeds), lowered from their module set closed
 /// under whole modules (D-593, D-1177) in `plain` code, std's units
-/// without masks too (D-1180), compiled in a JIT of its own that gets
+/// std's one code (K6, D-978, D-980), compiled in a JIT of its own that gets
 /// the package's native libraries as the program's does (D-941),
 /// evaluated, and written as images (D-979). The JIT is dropped when this
 /// returns. With `dump`, its MIR and CLIF go under `consteval/` and the
@@ -540,6 +603,7 @@ fn evaluation_module(
         code: dump.is_none() && !codegen.capture_clif,
         jit: true,
         resolves: None,
+        reuse: false,
     };
     let lowered = lower_reading(front, sources, &roots, mir, scope, reading)?;
     let dir = dump.map(|dir| dir.join(CONSTEVAL_DIR));
@@ -581,9 +645,9 @@ fn evaluation_module(
 /// module (`cheby check`'s build, `Roots::Constants`, with whole modules,
 /// and the one of every other command, `Roots::Evaluate`) evaluates
 /// constants on `plain` code, so it infers no masks; every other build
-/// keeps `mir`. Until std's code comes from the cache (K6), std's units
-/// of an evaluation module are compiled without masks too, rather than
-/// with std's own (D-1180), in every command (D-1187).
+/// keeps `mir`. Std's units are std's one code in every build, its masks
+/// on (K6: `std_options`, D-978, D-980; D-1180's "until std is cached"
+/// ends).
 pub(crate) const fn kind_options(roots: &Roots<'_>, mir: MirOptions, scope: Scope) -> MirOptions {
     let plain = match roots {
         Roots::Constants => matches!(scope, Scope::Whole),
@@ -936,13 +1000,12 @@ pub(crate) fn lower_reading(
         }
         Roots::Evaluate(consts) => {
             for &def in *consts {
-                let c = checked(front, def.module)?
-                    .thir
-                    .consts
-                    .iter()
-                    .find(|c| c.def == def)
-                    .ok_or_else(|| Ice::new(format!("the constant {def:?} has no body")))?;
-                walk_roots.push(Root::Const(c));
+                // Only D-510's walk reads the body: a std hit has none (K6).
+                if scope == Scope::Reached {
+                    let mut consts = checked(front, def.module)?.thir.consts.iter();
+                    let c = consts.find(|c| c.def == def);
+                    walk_roots.push(Root::Const(c.ok_or_else(|| Ice::new("a constant's body"))?));
+                }
                 starts.push(Start::Const(def));
             }
         }
@@ -987,6 +1050,7 @@ pub(crate) fn lower_reading(
         code_modules: &code_modules,
         logs: &logs,
         record_sites: mir.record_sites,
+        whole: scope == Scope::Whole,
     };
     let entries_unit = if entries.is_empty() {
         None
@@ -1020,6 +1084,10 @@ struct Lowering<'a> {
     /// `--reuse-report`'s sites (D-717), recorded only by the package's own
     /// modules.
     record_sites: bool,
+    /// Whether the build lowers whole modules ([`Scope::Whole`]): std's
+    /// units then get std's one code, its masks inferred over every std
+    /// module (D-968, `std_cache.rs`), unless the build is std's self-test.
+    whole: bool,
 }
 
 /// A unit's place in a build: its module's job (build order) and part.
@@ -1101,18 +1169,163 @@ impl Lowering<'_> {
     }
 
     /// The masks [`unit_masks`] gives a code unit, recording its module's
-    /// reads (D-955).
+    /// reads (D-955). A std code unit of a build with std's one code gets
+    /// none here: its masks are std's whole ones (D-968), which the build
+    /// passes as stored masks.
     fn masks_for(
         &self,
         unit: &MirModule,
         facts: &borrow::BuildFacts,
+        std_whole: bool,
     ) -> Result<borrow::Masks, Ice> {
         let log = match unit.unit {
-            UnitKind::Code(module) => self.logs.get(&module).map(|l| &l.code),
+            UnitKind::Code(module) => {
+                if std_whole && is_std(self.front, module) {
+                    return Ok(borrow::Masks::new());
+                }
+                self.logs.get(&module).map(|l| &l.code)
+            }
             _ => None,
         };
         unit_masks(self.front, unit, facts, log)
     }
+}
+
+/// Whether `module` is a std module of `front`.
+fn is_std(front: &Frontend, module: ModuleId) -> bool {
+    front
+        .modules
+        .get(module)
+        .is_some_and(|info| info.package == cheby_iface::PackageId::STD)
+}
+
+/// Whether `roots` are std's own tests: `cargo xtask test-std`'s builds,
+/// under `BuildKind::StdSelfTest` (D-980, D-479), where std is the
+/// package and its masks are inferred over the build's units as a test
+/// build's are (D-779), so they never reach std's one code
+/// (GAP(std-self-test-kind)).
+fn is_self_test(front: &Frontend, roots: &Roots<'_>) -> bool {
+    matches!(roots, Roots::Tests(tests) if tests.iter().any(|t| is_std(front, t.module)))
+}
+
+/// How a lowering gets its std units (K6, D-968, D-980).
+struct StdUnits {
+    /// Whether std's units are std's one code: a build of whole modules
+    /// that is not std's self-test.
+    whole: bool,
+    /// Std's MIR options in this build ([`crate::std_cache::std_mir`]).
+    mir: MirOptions,
+    /// The std units whose code records came from the store or from std's
+    /// first use, which are not lowered: in a JIT host with a cache that
+    /// reads.
+    cached: BTreeMap<At, cheby_codegen_clif::record::CodeRecord>,
+    /// The whole masks of the std units this build lowers itself, by def
+    /// of the build's front end; empty without borrowing.
+    masks: Option<borrow::Masks>,
+}
+
+impl StdUnits {
+    /// The MIR options `unit` is counted with: std's in a build with std's
+    /// one code, `mir` otherwise.
+    fn mir_of(&self, front: &Frontend, unit: &MirModule, mir: MirOptions) -> MirOptions {
+        match unit.unit {
+            UnitKind::Code(module) if self.whole && is_std(front, module) => self.mir,
+            _ => mir,
+        }
+    }
+
+    /// Writes std's whole masks into the std units among `units` (D-968),
+    /// which the build lowered itself; a std unit's calls name only std's
+    /// functions and the package's units call only std's `pub` ones, which
+    /// never borrow (D-787), so no other unit needs them.
+    fn apply_masks(&self, front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice> {
+        let Some(masks) = &self.masks else {
+            return Ok(());
+        };
+        let applied: Vec<Result<(), Ice>> = units
+            .par_iter_mut()
+            .filter(|unit| matches!(unit.unit, UnitKind::Code(m) if is_std(front, m)))
+            .map(|unit| borrow::apply(unit, masks))
+            .collect();
+        applied.into_iter().collect()
+    }
+}
+
+/// Std's MIR options in a build of `roots` lowered with `mir` (after
+/// [`kind_options`]): an evaluation module's `plain` kind turns borrowing
+/// off for the package only, and std keeps its one code, which borrows
+/// (D-978, [`crate::std_cache::std_mir`]); any other build lowers std with
+/// its own options, so a build without borrowing (`CHEBY_RC=naive`, the
+/// oracle of D-718 and D-808) borrows nowhere. `plain` turns borrowing
+/// off alone, and the oracle's options turn reuse off with it
+/// ([`MirOptions::perceus_passes_off`]), so an evaluation module under the
+/// oracle keeps std without borrowing too.
+const fn std_options(roots: &Roots<'_>, mir: MirOptions) -> MirOptions {
+    match roots {
+        Roots::Constants | Roots::Evaluate(_) if mir.reuse => crate::std_cache::std_mir(mir),
+        _ => MirOptions {
+            record_sites: false,
+            ..mir
+        },
+    }
+}
+
+/// The std units of `parts` and how this lowering gets them (K6): in a
+/// build of whole modules that is not std's self-test, a JIT host whose
+/// command reads a cache takes every std unit from its code record under
+/// std's settings, logging `code.std <module> hit|miss`, and a miss is
+/// std's first use (`std_cache.rs`); any other such build lowers its std
+/// units itself and gives them std's whole masks. A self-test, the
+/// code-generation benchmark (`own_scope`) and a dump for goldens
+/// (D-1175) infer std's masks over the build's units, as before.
+fn std_units(
+    cx: &Lowering<'_>,
+    parts: &[At],
+    own_scope: bool,
+    std_mir: MirOptions,
+    reading: Reading<'_>,
+) -> Result<StdUnits, Ice> {
+    let front = cx.front;
+    let whole = cx.whole && !own_scope;
+    let mut out = StdUnits {
+        whole,
+        mir: std_mir,
+        cached: BTreeMap::new(),
+        masks: None,
+    };
+    if !whole {
+        return Ok(out);
+    }
+    let mut std_parts: Vec<(At, String)> = Vec::new();
+    for &at in parts {
+        let module = cx.module(at)?;
+        if at.1 == UnitPart::Code && is_std(front, module) {
+            std_parts.push((at, front.modules.try_get(module)?.path.to_string()));
+        }
+    }
+    if std_parts.is_empty() {
+        return Ok(out);
+    }
+    let store = crate::borrowing::sink(front)
+        .filter(|_| reading.jit)
+        .and_then(crate::borrowing::RecordSink::std_store);
+    if let Some(store) = store {
+        let settings = crate::std_cache::std_settings(&crate::borrowing::settings(
+            crate::cache::BuildKind::Std,
+            std_mir,
+        ));
+        let paths: Vec<String> = std_parts.iter().map(|(_, path)| path.clone()).collect();
+        let mut found = crate::std_cache::std_records(&store, &paths, &settings, std_mir)?;
+        for (at, path) in std_parts {
+            let record = found
+                .remove(&path)
+                .ok_or_else(|| Ice::new(format!("no std record of `{path}`")))?;
+            out.cached.insert(at, record);
+        }
+    } else if std_mir.borrows() {
+        out.masks = Some(crate::std_cache::std_masks_in(front)?);
+    }
+    Ok(out)
 }
 
 /// What a lowering may take from the build cache (K4c).
@@ -1120,9 +1333,7 @@ impl Lowering<'_> {
 pub(crate) struct Reading<'a> {
     /// Whether code and tests records are read (D-914): a unit whose record
     /// hits is not lowered, inferred or compiled, and loads from its
-    /// record. `--reuse-report` reads none, since its lines are made while
-    /// lowering (D-1223), and
-    /// `CHEBY_DUMP_DIR` reads nothing at all (D-965).
+    /// record. `CHEBY_DUMP_DIR` reads nothing at all (D-965).
     pub code: bool,
     /// Whether the build's JIT loads the units' code records, so each
     /// package unit's lookup is logged (`code.<kind>`, `tests.<kind>`), as
@@ -1133,6 +1344,10 @@ pub(crate) struct Reading<'a> {
     /// record that imports one that does not is lowered after all, so
     /// E0053 is decided on its MIR, for the symbols reached functions name.
     pub resolves: Option<&'a (dyn Fn(&str) -> bool + Sync)>,
+    /// `--reuse-report` (K4d, D-965): a record is read only with the reuse
+    /// lines cached beside it, which it replays; one without them is a
+    /// miss, lowered and written with its lines (`reuse_replay.rs`).
+    pub reuse: bool,
 }
 
 /// What [`lower_through_cache`] gives [`lower_scoped`].
@@ -1213,9 +1428,20 @@ fn lower_through_cache(
 ) -> Result<CachedLowering, Ice> {
     use crate::borrowing::{self as records, Planned, StoredMasks};
     let front = cx.front;
-    let kind = records::build_kind(roots, mir);
+    let self_test = is_self_test(front, roots);
+    let kind = if self_test {
+        crate::cache::BuildKind::StdSelfTest
+    } else {
+        records::build_kind(roots, mir)
+    };
     let borrows = mir.borrows();
     let parts = cx.parts();
+    // K6: std's units are std's one code (D-968, D-980), from its records
+    // in a JIT host with a cache, or lowered here with std's whole masks.
+    // The code-generation benchmark (I1) compiles its own build as before,
+    // so its numbers stay comparable (it runs nothing, D-975).
+    let own_scope = self_test || matches!(roots, Roots::AllFunctions);
+    let mut std = std_units(cx, &parts, own_scope, std_options(roots, mir), reading)?;
     let mut keyed = Vec::with_capacity(parts.len());
     for &at in &parts {
         keyed.push((at.1, cx.module(at)?));
@@ -1231,7 +1457,7 @@ fn lower_through_cache(
     let first: BTreeSet<At> = parts
         .iter()
         .copied()
-        .filter(|at| !skipped.contains(at))
+        .filter(|at| !skipped.contains(at) && !std.cached.contains_key(at))
         .collect();
     let mut tags: Vec<Option<At>> = Vec::new();
     let mut units: Vec<MirModule> = Vec::new();
@@ -1277,11 +1503,13 @@ fn lower_through_cache(
             .flat_map(|s| s.by_def.iter().map(|(&def, &mask)| (def, mask)))
             .collect();
         records::infer_with(front, &mut units, facts, &by_def, &|unit, facts| {
-            cx.masks_for(unit, facts)
+            cx.masks_for(unit, facts, std.whole)
         })?
     } else {
         records::Inferred::plain(front, &units)?
     };
+    // The std units lowered here get std's whole masks (D-968).
+    std.apply_masks(front, &mut units)?;
     // 4: the keys, the records of the lowered units, and the lookups.
     let lowered: BTreeSet<At> = tags.iter().flatten().copied().collect();
     let mut reads = unit_reads(front, cx.jobs, &lowered, cx.logs)?;
@@ -1307,12 +1535,16 @@ fn lower_through_cache(
             .resolves
             .is_none_or(|ok| record_resolves(record, ok))
     };
+    // K4d: `--reuse-report` reads a record only with its reuse lines.
+    let readable = |key: &crate::cache::Key| {
+        reading.code && (!reading.reuse || crate::reuse_replay::has_lines(front, key))
+    };
     if let Some(sink) = sink {
         for &at in &parts {
             let Some(key) = keys.keys.get(&(at.1, cx.module(at)?)) else {
                 continue;
             };
-            match sink.code_find(key, reading.code).filter(|r| usable(r)) {
+            match sink.code_find(key, readable(key)).filter(|r| usable(r)) {
                 Some(record) => {
                     cached.insert(at, record);
                 }
@@ -1335,7 +1567,7 @@ fn lower_through_cache(
         // record comparison checks against the stored masks (D-1192).
         let masks = if borrows {
             records::masks_of(&more, inferred.facts(), &|unit, facts| {
-                cx.masks_for(unit, facts)
+                cx.masks_for(unit, facts, std.whole)
             })?
         } else {
             borrow::Masks::new()
@@ -1385,7 +1617,7 @@ fn lower_through_cache(
             };
             if old != new
                 && let Some(record) = sink
-                    .and_then(|s| s.code_find(new, reading.code))
+                    .and_then(|s| s.code_find(new, readable(new)))
                     .filter(|r| usable(r))
             {
                 cached.insert(at, record);
@@ -1397,7 +1629,9 @@ fn lower_through_cache(
             units.push(unit);
         }
     }
-    // 5: the units left, counted, in build order; then the log.
+    // 5: the units left, counted, in build order; then the log. Std's
+    // records join the package's (K6).
+    cached.append(&mut std.cached);
     let mut placed: Vec<(Option<At>, MirModule)> = tags
         .into_iter()
         .zip(units)
@@ -1407,7 +1641,7 @@ fn lower_through_cache(
     let (tags, mut units): (Vec<Option<At>>, Vec<MirModule>) = placed.into_iter().unzip();
     let counted: Vec<Result<(), Ice>> = units
         .par_iter_mut()
-        .map(|unit| count_lowered_with(unit, &mir))
+        .map(|unit| count_lowered_with(unit, &std.mir_of(front, unit, mir)))
         .collect();
     for result in counted {
         result?;
@@ -1587,9 +1821,10 @@ fn reach_in<'a>(
             let with_tests: BTreeSet<ModuleId> = tests.keys().copied().collect();
             let modules = summaries.load_set(&reach, &with_tests)?;
             for (&module, chosen) in tests.iter_mut() {
-                *chosen = checked(front, module)?
-                    .thir
-                    .tests
+                // K4d: a warm hit's tests come from its warm facts (D-1250).
+                *chosen = front
+                    .tests_of(module)
+                    .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?
                     .iter()
                     .filter(|t| crate::test::on_native(front, t))
                     .collect();
@@ -1711,6 +1946,43 @@ fn unit_masks(
     let eligibility =
         borrow::IfaceEligibility::new(own_defs(front, module, &readable)?, &checked.thir);
     Ok(borrow::infer(unit, facts, &eligibility))
+}
+
+/// [`unit_masks`] recording no reads: std's whole inference (D-968,
+/// `std_cache.rs`).
+pub(crate) fn unit_masks_of(
+    front: &Frontend,
+    unit: &MirModule,
+    facts: &borrow::BuildFacts,
+) -> Result<borrow::Masks, Ice> {
+    unit_masks(front, unit, facts, None)
+}
+
+/// The code units of `modules`, each lowered whole (D-966) and checked as
+/// lowered, in parallel, in the order given: std's whole inference scope
+/// (D-968, `std_cache.rs`).
+///
+/// # Errors
+///
+/// An [`Ice`] if a module was not checked or does not lower.
+pub(crate) fn lower_whole(
+    front: &Frontend,
+    sources: &SourceMap,
+    modules: &[ModuleId],
+) -> Result<Vec<MirModule>, Ice> {
+    let all = |_: DefId| true;
+    let lowered: Vec<Result<Option<MirModule>, Ice>> = modules
+        .par_iter()
+        .map(|&module| {
+            let [code, _] = lower_module(front, sources, &all, module, true, None, false, None)?;
+            code.transpose()
+        })
+        .collect();
+    let mut out = Vec::with_capacity(modules.len());
+    for unit in lowered {
+        out.extend(unit?);
+    }
+    Ok(out)
 }
 
 /// The view of `deps` in `front`'s interfaces, recording into `log` if
@@ -1926,7 +2198,7 @@ fn lower_entry_unit(
 /// The reachable constants in evaluation order (D-535: dependencies
 /// first, ties by module order, then name), each with its name's span, its
 /// seed (D-538) and whether it exists on `js` (D-540).
-fn const_infos(
+pub(crate) fn const_infos(
     front: &Frontend,
     sources: &SourceMap,
     reach: &Reach,
@@ -1943,6 +2215,20 @@ fn const_infos(
     // Each module's constants by id, built once per module.
     let mut by_module: BTreeMap<ModuleId, BTreeMap<DefId, &thir::ConstDef>> = BTreeMap::new();
     for def in reach.items() {
+        // K5b: a module a warm command did not check (each of its
+        // constants hit, D-1250) names its constants through its decoded
+        // interface, whose spans are the names' (D-965).
+        if front.checked_quiet(def.module).is_none() {
+            let defs = own_defs(front, def.module, &none)?;
+            if let Some(item) = defs.own.and_then(|own| own.item(def.index))
+                && item.kind == cheby_iface::DefKind::Const
+                && let Some(span) = item.span
+            {
+                names.insert(def, defs.name(def)?.item.into());
+                spans.insert(def, span);
+            }
+            continue;
+        }
         if let std::collections::btree_map::Entry::Vacant(slot) = by_module.entry(def.module) {
             slot.insert(
                 checked(front, def.module)?

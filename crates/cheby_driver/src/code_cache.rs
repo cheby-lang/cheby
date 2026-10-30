@@ -24,10 +24,10 @@
 //!   D-1193), so they are compiled every time and never stored; nor is the
 //!   entries unit (D-964), nor anything of a module with errors, which is
 //!   never lowered.
-//! - `CHEBY_DUMP_DIR` bypasses reads (D-965) and still writes; so does
-//!   `--reuse-report` until K4d replays the reuse lines cached with a
-//!   record, since the report is made while lowering
-//!   (D-1223).
+//! - `CHEBY_DUMP_DIR` bypasses reads (D-965) and still writes.
+//!   `--reuse-report` reads a record only with the reuse lines cached
+//!   beside it, which it replays (K4d, D-965, refining D-1223;
+//!   `reuse_replay.rs`).
 //!
 //! A record from the store has no index of its functions by key, so the
 //! command names its constants' slots by symbol ([`name_consts`]).
@@ -133,11 +133,11 @@ fn test_ordinals(
     module: ModuleId,
     out: &mut Vec<(DefId, u32)>,
 ) -> Result<(), Ice> {
-    let checked = front
-        .checked(module)
+    let tests = front
+        .tests_of(module)
         .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
     let mut next = 0_u32;
-    for test in &checked.thir.tests {
+    for test in tests {
         if crate::test::on_native(front, test) {
             out.push((test.def, next));
             next = next.saturating_add(1);

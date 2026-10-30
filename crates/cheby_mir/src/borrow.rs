@@ -603,7 +603,7 @@ struct Resolver<'d, 'a> {
     /// Module paths to ids, the builtin module as the empty path.
     modules: BTreeMap<String, cheby_iface::ModuleId>,
     /// Per module read so far: each item's text, `None` when two items
-    /// share it.
+    /// share it; tests are left out ([`Resolver::find`]).
     items: BTreeMap<cheby_iface::ModuleId, BTreeMap<String, Option<cheby_iface::DefIndex>>>,
 }
 
@@ -636,6 +636,16 @@ impl<'d, 'a> Resolver<'d, 'a> {
             let iface = self.defs.interface(module).ok_or_else(missing)?;
             let mut texts: BTreeMap<String, Option<cheby_iface::DefIndex>> = BTreeMap::new();
             for (index, item) in iface.items.iter_enumerated() {
+                // Facts and masks name functions and constructors only, never
+                // a test (a test's code is `FnKey::Test`), and a test's name is
+                // free text that may equal a function's (`test "size"` beside
+                // `fn size`). The other items cannot share a text: values are
+                // `snake_case` and types `PascalCase` (§4.1.2), each name space
+                // holds a name once (§7.7), and a constructor's or an interface
+                // function's text carries its parent's name.
+                if item.kind == DefKind::Test {
+                    continue;
+                }
                 let text = item_text(DefId::new(module, index), item, self.defs)?;
                 texts
                     .entry(text)
