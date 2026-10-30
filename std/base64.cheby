@@ -85,8 +85,7 @@ priv fn encode_with(data: bytes::Bytes, url: Bool) -> String {
     let third = bytes::get(data, index + 2)
     case first, second, third {
       Some(a), Some(b), Some(c) => {
-        let full =
-          out
+        let full = out
           |> bytes::push(_, digit(a >> 2, url))
           |> bytes::push(_, digit(((a & 0x03) << 4) | (b >> 4), url))
           |> bytes::push(_, digit(((b & 0x0F) << 2) | (c >> 6), url))
@@ -94,16 +93,16 @@ priv fn encode_with(data: bytes::Bytes, url: Bool) -> String {
         step(index + 3, full)
       }
       Some(a), Some(b), None => {
-        let last =
-          out
+        let last = out
           |> bytes::push(_, digit(a >> 2, url))
           |> bytes::push(_, digit(((a & 0x03) << 4) | (b >> 4), url))
           |> bytes::push(_, digit((b & 0x0F) << 2, url))
         pad(last, 1, url)
       }
       Some(a), None, _ => {
-        let last =
-          out |> bytes::push(_, digit(a >> 2, url)) |> bytes::push(_, digit((a & 0x03) << 4, url))
+        let last = out
+          |> bytes::push(_, digit(a >> 2, url))
+          |> bytes::push(_, digit((a & 0x03) << 4, url))
         pad(last, 2, url)
       }
       None, _, _ => out
@@ -117,7 +116,9 @@ priv fn pad(out: bytes::Bytes, count: Int, url: Bool) -> bytes::Bytes {
   case url, count {
     True, _ => out
     False, 1 => bytes::push(out, 0x3D)
-    False, _ => out |> bytes::push(_, 0x3D) |> bytes::push(_, 0x3D)
+    False, _ => out
+      |> bytes::push(_, 0x3D)
+      |> bytes::push(_, 0x3D)
   }
 }
 
@@ -232,8 +233,7 @@ priv fn decode_digits(data: bytes::Bytes, count: Int, url: Bool) -> Result<bytes
       }
       3 => case first, second, third {
         Some(a), Some(b), Some(c) when c & 0x03 == 0 => {
-          let last =
-            out
+          let last = out
             |> bytes::push(_, (a << 2) | (b >> 4))
             |> bytes::push(_, ((b & 0x0F) << 4) | (c >> 2))
           Ok(last)
@@ -242,8 +242,7 @@ priv fn decode_digits(data: bytes::Bytes, count: Int, url: Bool) -> Result<bytes
       }
       _ => case first, second, third, fourth {
         Some(a), Some(b), Some(c), Some(d) => {
-          let full =
-            out
+          let full = out
             |> bytes::push(_, (a << 2) | (b >> 4))
             |> bytes::push(_, ((b & 0x0F) << 4) | (c >> 2))
             |> bytes::push(_, ((c & 0x03) << 6) | d)

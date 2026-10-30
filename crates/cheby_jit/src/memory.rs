@@ -30,6 +30,20 @@
 //! the JIT's release stores (`Jit::write_slot`, `Jit::set_const`).
 //!
 //! The reservation is released by `free_memory` and on drop.
+//!
+//! **A record's functions in one span** (K4d; D-914, D-922;
+//! GAP(record-placement)). Calls between generated functions are direct
+//! (every generated symbol is colocated, D-913): a `bl` on aarch64 reaches
+//! ±128 MiB, a `call rel32` on x86-64 the whole arena. Before the loader
+//! defines a record's functions it asks for a code run of their total size
+//! ([`Usage::start_code_run`]); the next executable allocations then come,
+//! one after the other, from one segment with room for all of them, so
+//! every direct call inside a record spans at most the record's own code. A
+//! call that still does not reach (between records of a batch larger than
+//! the reach) goes through the veneer cranelift-jit reserves after each
+//! function for every `Arm64Call`, never a wrong branch; and the loader
+//! refuses a record whose code alone is larger than the reach, naming its
+//! module (`load.rs`).
 
 use std::io;
 use std::ptr;
@@ -90,9 +104,19 @@ impl Segment {
 pub(crate) struct Usage {
     reserved: AtomicUsize,
     committed: AtomicUsize,
+    /// Bytes the next executable allocations need in one contiguous run (a
+    /// record's code, module docs), taken by the first of them; 0 for none.
+    code_run: AtomicUsize,
 }
 
 impl Usage {
+    /// Asks that the next executable allocations, `bytes` of them with
+    /// their alignment, come one after the other from one segment (a
+    /// record's functions, module docs).
+    pub(crate) fn start_code_run(&self, bytes: usize) {
+        self.code_run.store(bytes, Ordering::Relaxed);
+    }
+
     /// Bytes of address space reserved: [`ARENA_SIZE`] until the memory is
     /// freed, then 0.
     pub(crate) fn reserved(&self) -> usize {
@@ -115,6 +139,9 @@ pub(crate) struct ReservedArena {
     used: usize,
     segments: Vec<Segment>,
     usage: Arc<Usage>,
+    /// The code run in progress: its segment's index in `segments` and the
+    /// bytes it still holds for the run (module docs).
+    run: Option<(usize, usize)>,
 }
 
 // SAFETY: the arena owns its reservation exclusively; the raw pointer is
@@ -159,6 +186,7 @@ impl ReservedArena {
             used: 0,
             segments: Vec::new(),
             usage,
+            run: None,
         })
     }
 
@@ -200,6 +228,16 @@ impl ReservedArena {
             .ok()
             .filter(|&a| a.is_power_of_two() && a <= self.page)
             .ok_or_else(|| io::Error::other(format!("unsupported JIT alignment {align}")))?;
+        // A record's code, one function after the other (module docs).
+        if protection == Protection::ReadExecute {
+            let want = self.usage.code_run.swap(0, Ordering::Relaxed);
+            if want > 0 {
+                self.run = Some(self.open_run(want, align)?);
+            }
+            if let Some(at) = self.allocate_in_run(size, align) {
+                return Ok(self.address(at));
+            }
+        }
         // An open segment of the same protection with room.
         if let Some(segment) = self
             .segments
@@ -241,7 +279,73 @@ impl ReservedArena {
         Ok(self.address(start))
     }
 
+    /// The segment a code run of `want` bytes takes its allocations from,
+    /// with the bytes it holds for the run: an open executable segment with
+    /// room for all of them, else the last segment grown when it is an open
+    /// executable one at the end of the committed part, else a new one.
+    fn open_run(&mut self, want: usize, align: usize) -> io::Result<(usize, usize)> {
+        let too_large = || io::Error::other("JIT code run too large");
+        if let Some(i) = self
+            .segments
+            .iter()
+            .position(|s| s.protection == Protection::ReadExecute && s.fit(want, align).is_some())
+        {
+            return Ok((i, want));
+        }
+        let used = self.used;
+        let last = self.segments.len().checked_sub(1);
+        let grow = last.and_then(|i| {
+            let s = self.segments.get(i)?;
+            let open = s.protection == Protection::ReadExecute
+                && !s.finalized
+                && s.start.saturating_add(s.len) == used;
+            let need = align_up(s.position, align)?.checked_add(want)?;
+            open.then(|| (i, need.saturating_sub(s.len)))
+        });
+        if let Some((i, missing)) = grow {
+            let pages = align_up(missing.max(1), self.page).ok_or_else(too_large)?;
+            let added = self.commit(pages)?;
+            if let Some(segment) = self.segments.get_mut(i) {
+                segment.len = added.saturating_add(pages).saturating_sub(segment.start);
+                return Ok((i, want));
+            }
+        }
+        let pages = align_up(want.max(1), self.page).ok_or_else(too_large)?;
+        let start = self.commit(pages)?;
+        self.segments.push(Segment {
+            start,
+            len: pages,
+            position: 0,
+            protection: Protection::ReadExecute,
+            finalized: false,
+        });
+        Ok((self.segments.len().saturating_sub(1), want))
+    }
+
+    /// The offset of `size` bytes aligned to `align` in the code run in
+    /// progress, if there is one and they fit; a run they do not fit ends.
+    fn allocate_in_run(&mut self, size: usize, align: usize) -> Option<usize> {
+        let (i, left) = self.run?;
+        let Some(segment) = self.segments.get_mut(i) else {
+            self.run = None;
+            return None;
+        };
+        let Some(offset) = segment.fit(size, align) else {
+            self.run = None;
+            return None;
+        };
+        let end = offset.saturating_add(size);
+        let taken = end.saturating_sub(segment.position);
+        segment.position = end;
+        let at = segment.start.saturating_add(offset);
+        let left = left.saturating_sub(taken);
+        self.run = (left > 0).then_some((i, left));
+        Some(at)
+    }
+
     fn finalize_inner(&mut self, branch_protection: BranchProtection) -> io::Result<()> {
+        // A finalized segment takes no more code.
+        self.run = None;
         if self.base.is_null() {
             return Ok(());
         }
@@ -295,6 +399,7 @@ impl ReservedArena {
         // On failure the range is leaked, never reused.
         self.base = ptr::null_mut();
         self.segments.clear();
+        self.run = None;
         self.used = 0;
     }
 }

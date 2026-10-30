@@ -9,7 +9,10 @@
 //!   its item (§4.1.3, §7.4, D-148, D-149, D-198): see [`visibility`].
 //! - The functions of a standard-library type's `@std_hooks` have the
 //!   hooks' shapes (D-342): see [`hooks`].
+//! - Outside std, a native foreign result type holds an external type only
+//!   at its top level (§12.5.1, D-948, E0079): see [`foreign`].
 
+mod foreign;
 mod hooks;
 mod visibility;
 
@@ -37,6 +40,7 @@ pub(crate) fn check_decls(
     duplicate_fields(input, &mut diags)?;
     visibility::check(input, own, &mut diags)?;
     hooks::check(input, own, &mut diags);
+    foreign::check(input, own, &mut diags)?;
     Ok(diags)
 }
 

@@ -207,7 +207,9 @@ test "try_fold stops at the first error" {
 pub fn push(data: Bytes, byte: U8) -> Bytes
 
 test "push adds one byte" {
-  let data = new() |> push(_, 0x41) |> push(_, 0x42)
+  let data = new()
+    |> push(_, 0x41)
+    |> push(_, 0x42)
   assert data == from_string("AB")
 }
 

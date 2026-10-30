@@ -21,11 +21,11 @@
 //! `queue::Queue` with braces (D-151). It uses the functions instead,
 //! as another package would have to.
 
-import std::io
-import std::list
 import generic_containers::queue
 import generic_containers::stack
 import generic_containers::tree
+import std::io
+import std::list
 
 /// The family to walk. Ada's children are Ben and Cy, Ben's are Dan
 /// and Eve, and Cy's is Fay.
@@ -110,7 +110,9 @@ fn step_line<C: Show>(current: tree::Tree, waiting: C) -> String {
 /// Prints two queues that hold the same items but are not `==`. See
 /// `queue::same_items` for why.
 fn compare_queues() {
-  let pushed = queue::new() |> queue::push(_, 1) |> queue::push(_, 2)
+  let pushed = queue::new()
+    |> queue::push(_, 1)
+    |> queue::push(_, 2)
   let listed = queue::from_list([1, 2])
   let equal = pushed == listed
   let same = queue::same_items(pushed, listed)

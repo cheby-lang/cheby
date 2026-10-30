@@ -19,7 +19,14 @@
 //! - Foreign functions get no `ctx` (ADR-0055): a function finds the
 //!   running fiber through `tls.rs`'s accessor (D-686, D-946). A
 //!   non-blocking foreign call runs on its fiber's thread and cannot
-//!   switch, so the fiber is current for the whole call.
+//!   switch, so the fiber is current for the whole call. A package's
+//!   `@blocking` call runs on a pool thread that acts for its parked fiber
+//!   through the host slot (D-950, `ffi_pool.rs`): what it builds is
+//!   charged to the fiber's domain, a failed allocation is recorded in its
+//!   job and raised on the fiber when it resumes, and once a give-up or a
+//!   halt abandoned the job, its allocations return NULL, `cheby_ffi_drop`
+//!   and `cheby_ffi_dup` do nothing and the output functions return -1
+//!   (`ffi_job_guarded`).
 //! - Arguments are borrowed and results owned (D-187); a function that
 //!   takes a payload (`cheby_ffi_some`, `cheby_ffi_ok`, `cheby_ffi_err`,
 //!   `cheby_ffi_list_new`) takes ownership of it; a NULL argument means no
@@ -85,7 +92,7 @@ use crate::object::{ptr_to_word, read_field, scan_and_layout, word_to_ptr, write
 use crate::panic::{PanicReport, fatal};
 use crate::unwind::guard::{Unwound, guarded};
 use crate::unwind::raise::{ChebyUnwind, raise_from_runtime_at};
-use crate::{alloc, entry, io, list, rc, string, tls, values};
+use crate::{alloc, entry, ffi_pool, io, list, rc, string, tls, values};
 
 /// The prefix of `cheby.h`'s functions (D-945).
 pub const PREFIX: &str = "cheby_ffi_";
@@ -288,11 +295,26 @@ fn tearing_down() -> bool {
 /// (`alloc::out_of_memory`); any other unwinding there is fatal too
 /// (D-171).
 fn ffi_guarded<R: Unwound>(body: impl FnOnce() -> R) -> R {
-    if !in_drop_function() {
-        return guarded(None, body);
-    }
+    let in_drop = in_drop_function();
+    let job = if in_drop {
+        None
+    } else {
+        match ffi_pool::current_job() {
+            Some(job) => Some(job),
+            None => return guarded(None, body),
+        }
+    };
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => value,
+        // D-950: on a pool thread acting for a parked fiber, a failed
+        // allocation recorded itself in the job (`alloc::out_of_memory`);
+        // the fiber raises it when it resumes.
+        Err(payload) if payload.is::<ChebyUnwind>() && !in_drop => {
+            if let Some(job) = job {
+                job.fail();
+            }
+            R::UNWOUND
+        }
         Err(payload) if payload.is::<ChebyUnwind>() => {
             fatal(format_args!("{OUT_OF_MEMORY_IN_DROP}"))
         }
@@ -300,9 +322,32 @@ fn ffi_guarded<R: Unwound>(body: impl FnOnce() -> R) -> R {
     }
 }
 
-/// Whether the running fiber's unwind flag is set: an earlier allocation of
-/// this foreign call failed (D-946), so allocating functions return NULL.
+/// [`ffi_guarded`] for a `cheby_ffi_` function that changes the runtime's
+/// state (an allocation, a count, an output): on a pool thread acting for
+/// a package's `@blocking` call, the call first enters its job under the
+/// per-job lock, and a job that a give-up or a halt abandoned gets
+/// `abandoned` without anything done: NULL, nothing or -1 (D-950,
+/// GAP(ffi-job-lock), `ffi_pool.rs`).
+fn ffi_job_guarded<R: Unwound>(abandoned: R, body: impl FnOnce() -> R) -> R {
+    let Some(job) = ffi_pool::current_job() else {
+        return ffi_guarded(body);
+    };
+    if !job.enter() {
+        return abandoned;
+    }
+    let result = ffi_guarded(body);
+    job.leave();
+    result
+}
+
+/// Whether an earlier allocation of this foreign call failed (D-946), so
+/// allocating functions return NULL: the running fiber's unwind flag is
+/// set, or on a pool thread acting for a parked fiber, its job recorded
+/// the failure (D-950).
 fn unwinding() -> bool {
+    if let Some(job) = ffi_pool::current_job() {
+        return job.failed();
+    }
     entry::current_fiber().is_some_and(|fiber| crate::unwind::flag::get(fiber) != 0)
 }
 
@@ -450,7 +495,7 @@ unsafe fn put_len(out: *mut usize, n: usize) {
 /// `v` is NULL or a live Cheby value (C code's contract, §12.5.1).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_dup(v: *mut c_void) -> *mut c_void {
-    value(ffi_guarded(|| {
+    value(ffi_job_guarded(word(v), || {
         let w = word(v);
         // SAFETY: forwarded from the caller; `dup` skips 0.
         unsafe { rc::dup(w) };
@@ -467,7 +512,7 @@ pub unsafe extern "C" fn cheby_ffi_dup(v: *mut c_void) -> *mut c_void {
 /// `v` is NULL or a reference to a live Cheby value that C code owns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_drop(v: *mut c_void) {
-    ffi_guarded(|| {
+    ffi_job_guarded((), || {
         // SAFETY: forwarded from the caller.
         unsafe { release(word(v)) };
     });
@@ -484,7 +529,7 @@ pub unsafe extern "C" fn cheby_ffi_drop(v: *mut c_void) {
 /// A non-NULL `bytes` points to `len` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_string_new(bytes: *const c_char, len: usize) -> *mut c_void {
-    value(ffi_guarded(|| {
+    value(ffi_job_guarded(0, || {
         // SAFETY: forwarded from the caller.
         match unsafe { input(bytes.cast::<u8>(), len) } {
             Some(data) if !unwinding() => values::string(&String::from_utf8_lossy(data)),
@@ -518,7 +563,7 @@ pub unsafe extern "C" fn cheby_ffi_string_bytes(s: *mut c_void, len: *mut usize)
 /// A non-NULL `data` points to `len` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_bytes_new(data: *const u8, len: usize) -> *mut c_void {
-    value(ffi_guarded(|| {
+    value(ffi_job_guarded(0, || {
         // SAFETY: forwarded from the caller.
         match unsafe { input(data, len) } {
             Some(data) if !unwinding() => values::bytes(data),
@@ -576,7 +621,7 @@ unsafe fn text_data(function: &str, w: Word, want: Want, len: *mut usize) -> usi
 /// Callable with any argument.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_int_new(n: i64) -> *mut c_void {
-    value(ffi_guarded(|| {
+    value(ffi_job_guarded(0, || {
         if unwinding() { 0 } else { values::int_word(n) }
     }))
 }
@@ -609,7 +654,7 @@ pub unsafe extern "C" fn cheby_ffi_int_get(v: *mut c_void) -> i64 {
 /// Callable with any argument.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_float_new(x: f64) -> *mut c_void {
-    value(ffi_guarded(|| {
+    value(ffi_job_guarded(0, || {
         if unwinding() { 0 } else { values::f64_word(x) }
     }))
 }
@@ -702,7 +747,9 @@ fn wrap_payload(payload: Word, make: fn(Word) -> Word) -> Word {
 /// `payload` is NULL or a reference to a live value that C code gives up.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_some(payload: *mut c_void) -> *mut c_void {
-    value(ffi_guarded(|| wrap_payload(word(payload), values::some)))
+    value(ffi_job_guarded(0, || {
+        wrap_payload(word(payload), values::some)
+    }))
 }
 
 /// `cheby_value *cheby_ffi_none(void)`: the static `None`.
@@ -744,7 +791,9 @@ pub unsafe extern "C" fn cheby_ffi_option_get(option: *mut c_void) -> *mut c_voi
 /// As for [`cheby_ffi_some`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_ok(payload: *mut c_void) -> *mut c_void {
-    value(ffi_guarded(|| wrap_payload(word(payload), values::ok)))
+    value(ffi_job_guarded(0, || {
+        wrap_payload(word(payload), values::ok)
+    }))
 }
 
 /// `cheby_value *cheby_ffi_err(cheby_value *payload)`: `Err(payload)`,
@@ -755,7 +804,9 @@ pub unsafe extern "C" fn cheby_ffi_ok(payload: *mut c_void) -> *mut c_void {
 /// As for [`cheby_ffi_some`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_err(payload: *mut c_void) -> *mut c_void {
-    value(ffi_guarded(|| wrap_payload(word(payload), values::err)))
+    value(ffi_job_guarded(0, || {
+        wrap_payload(word(payload), values::err)
+    }))
 }
 
 /// `bool cheby_ffi_result_is_ok(cheby_value *result)`: whether `result` is
@@ -812,7 +863,7 @@ pub unsafe extern "C" fn cheby_ffi_result_get(result: *mut c_void) -> *mut c_voi
 /// reference to a live value that C code gives up.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_list_new(items: *const *mut c_void, n: usize) -> *mut c_void {
-    value(ffi_guarded(|| {
+    value(ffi_job_guarded(0, || {
         let words: Vec<Word> = if items.is_null() {
             if n != 0 {
                 return 0;
@@ -910,7 +961,7 @@ unsafe fn write_out(stream: Stream, bytes: *const c_char, len: usize) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_write_stdout(bytes: *const c_char, len: usize) -> c_int {
     // SAFETY: forwarded from the caller.
-    ffi_guarded(|| unsafe { write_out(Stream::Stdout, bytes, len) })
+    ffi_job_guarded(-1, || unsafe { write_out(Stream::Stdout, bytes, len) })
 }
 
 /// `int cheby_ffi_write_stderr(const char *bytes, size_t len)`: one write
@@ -922,7 +973,7 @@ pub unsafe extern "C" fn cheby_ffi_write_stdout(bytes: *const c_char, len: usize
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_ffi_write_stderr(bytes: *const c_char, len: usize) -> c_int {
     // SAFETY: forwarded from the caller.
-    ffi_guarded(|| unsafe { write_out(Stream::Stderr, bytes, len) })
+    ffi_job_guarded(-1, || unsafe { write_out(Stream::Stderr, bytes, len) })
 }
 
 // The wrappers' helpers -----------------------------------------------------

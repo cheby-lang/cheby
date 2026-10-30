@@ -8,11 +8,11 @@
 //!
 //! Money is a whole number of cents in an `Int`, never a `Float`.
 
+import shop_service::order
 import std::list
 import std::map
 import std::map::{Map}
 import std::result
-import shop_service::order
 
 /// Orders that cost at least this much, after the discount, ship free.
 const free_shipping_from: Int = 5_000
@@ -21,7 +21,12 @@ const free_shipping_from: Int = 5_000
 const shipping_cents: Int = 495
 
 /// A product as the database holds it.
-type Product { id: Int, name: String, price_cents: Int, stock: Int }
+type Product {
+  id: Int,
+  name: String,
+  price_cents: Int,
+  stock: Int,
+}
 
 /// What a discount code takes off.
 type Discount {
@@ -32,10 +37,18 @@ type Discount {
 }
 
 /// A discount code, valid from a subtotal of `minimum_cents`.
-type Code { code: String, discount: Discount, minimum_cents: Int }
+type Code {
+  code: String,
+  discount: Discount,
+  minimum_cents: Int,
+}
 
 /// One priced line of an order.
-type PricedLine { product: Product, quantity: Int, line_cents: Int }
+type PricedLine {
+  product: Product,
+  quantity: Int,
+  line_cents: Int,
+}
 
 /// What an order costs. `total_cents` is `subtotal_cents -
 /// discount_cents + shipping_cents`.
@@ -93,10 +106,17 @@ priv fn price_lines(
     [] => Ok(found)
     [line, ..tail] => case map::get(products, line.product_id) {
       None => Err(UnknownProduct(line.product_id))
-      Some(product) when product.stock < line.quantity =>
-        Err(OutOfStock { product_id: product.id, requested: line.quantity, available: product.stock })
+      Some(product) when product.stock < line.quantity => Err(OutOfStock {
+        product_id: product.id,
+        requested: line.quantity,
+        available: product.stock,
+      })
       Some(product) => {
-        let priced = PricedLine { product, quantity: line.quantity, line_cents: product.price_cents * line.quantity }
+        let priced = PricedLine {
+          product,
+          quantity: line.quantity,
+          line_cents: product.price_cents * line.quantity,
+        }
         price_lines(tail, products, [..found, priced])
       }
     }
@@ -113,8 +133,10 @@ priv fn discount_for(
     None => Ok(0)
     Some(text) => case map::get(codes, text) {
       None => Err(UnknownCode(text))
-      Some(code) when subtotal_cents < code.minimum_cents =>
-        Err(BelowMinimum { code: code.code, minimum_cents: code.minimum_cents })
+      Some(code) when subtotal_cents < code.minimum_cents => Err(BelowMinimum {
+        code: code.code,
+        minimum_cents: code.minimum_cents,
+      })
       Some(code) => case code.discount {
         // `/` truncates, so the shop never gives away a fraction of a
         // cent.
@@ -141,7 +163,12 @@ priv const all_codes: Map<String, Code> = map::from_list([
 ])
 
 /// The sums of a quote, in cents, for the tests.
-priv type Sums { subtotal: Int, discount: Int, shipping: Int, total: Int }
+priv type Sums {
+  subtotal: Int,
+  discount: Int,
+  shipping: Int,
+  total: Int,
+}
 
 /// Returns the sums of an order of `(product_id, quantity)` pairs, for
 /// the tests.
@@ -158,23 +185,56 @@ priv fn sums(pairs: List<(Int, Int)>, discount: Option<String>) -> Result<Sums, 
 
 test "a small order pays for shipping" {
   // 2 * 450 + 1195 = 2095, plus 495 shipping.
-  assert sums([(1, 2), (3, 1)], None) == Ok(Sums { subtotal: 2_095, discount: 0, shipping: 495, total: 2_590 })
-  assert sums([(3, 5)], None) == Ok(Sums { subtotal: 5_975, discount: 0, shipping: 0, total: 5_975 })
+  assert sums([(1, 2), (3, 1)], None) == Ok(Sums {
+    subtotal: 2_095,
+    discount: 0,
+    shipping: 495,
+    total: 2_590,
+  })
+  assert sums([(3, 5)], None) == Ok(Sums {
+    subtotal: 5_975,
+    discount: 0,
+    shipping: 0,
+    total: 5_975,
+  })
 }
 
 test "a percentage is rounded down to a cent" {
-  assert sums([(1, 3), (2, 1)], Some("SPRING10")) == Ok(Sums { subtotal: 4_550, discount: 455, shipping: 495, total: 4_590 })
+  assert sums([(1, 3), (2, 1)], Some("SPRING10")) == Ok(Sums {
+    subtotal: 4_550,
+    discount: 455,
+    shipping: 495,
+    total: 4_590,
+  })
   // 10% of 3585 is 358.5 cents, and the half cent stays with the shop.
-  assert sums([(3, 3)], Some("SPRING10")) == Ok(Sums { subtotal: 3_585, discount: 358, shipping: 495, total: 3_722 })
+  assert sums([(3, 3)], Some("SPRING10")) == Ok(Sums {
+    subtotal: 3_585,
+    discount: 358,
+    shipping: 495,
+    total: 3_722,
+  })
 }
 
 test "free shipping counts the total after the discount" {
-  assert sums([(2, 2)], Some("SPRING10")) == Ok(Sums { subtotal: 6_400, discount: 640, shipping: 0, total: 5_760 })
+  assert sums([(2, 2)], Some("SPRING10")) == Ok(Sums {
+    subtotal: 6_400,
+    discount: 640,
+    shipping: 0,
+    total: 5_760,
+  })
 }
 
 test "a fixed discount needs its minimum subtotal" {
-  assert sums([(1, 2), (3, 1)], Some("WELCOME5")) == Ok(Sums { subtotal: 2_095, discount: 500, shipping: 495, total: 2_090 })
-  assert sums([(1, 3)], Some("WELCOME5")) == Err(BelowMinimum { code: "WELCOME5", minimum_cents: 2_000 })
+  assert sums([(1, 2), (3, 1)], Some("WELCOME5")) == Ok(Sums {
+    subtotal: 2_095,
+    discount: 500,
+    shipping: 495,
+    total: 2_090,
+  })
+  assert sums([(1, 3)], Some("WELCOME5")) == Err(BelowMinimum {
+    code: "WELCOME5",
+    minimum_cents: 2_000,
+  })
 }
 
 test "unknown products and codes are refused" {
@@ -184,5 +244,9 @@ test "unknown products and codes are refused" {
 
 test "an order cannot take more than the stock" {
   assert sums([(2, 4)], None) == Err(OutOfStock { product_id: 2, requested: 4, available: 3 })
-  assert sums([(1, 1), (4, 1)], None) == Err(OutOfStock { product_id: 4, requested: 1, available: 0 })
+  assert sums([(1, 1), (4, 1)], None) == Err(OutOfStock {
+    product_id: 4,
+    requested: 1,
+    available: 0,
+  })
 }

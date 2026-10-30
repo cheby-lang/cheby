@@ -25,13 +25,13 @@
 //! `parser` builds a syntax tree from them, declared in `expr`, and
 //! `eval` computes its value.
 
+import expression_evaluator::eval
+import expression_evaluator::lexer
+import expression_evaluator::parser
 import std::io
 import std::map
 import std::result
 import std::string
-import expression_evaluator::eval
-import expression_evaluator::lexer
-import expression_evaluator::parser
 
 fn main() -> Result<Nil, io::Error> {
   io::println("Enter expressions or let lines, one per line.")

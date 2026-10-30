@@ -400,6 +400,10 @@ fn straight(stmts: Vec<Stmt>, result: u32) -> Vec<Block> {
 #[path = "load_tests.rs"]
 mod load_tests;
 
+// K4d's placement of a record's functions, with this file's builders.
+#[path = "record_placement_tests.rs"]
+mod record_placement_tests;
+
 #[test]
 fn panic_kinds_match_the_runtime() {
     let mir: Vec<u32> = PanicKind::ALL.iter().map(|k| k.code()).collect();

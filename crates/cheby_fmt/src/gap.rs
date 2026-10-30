@@ -160,6 +160,15 @@ impl Parts {
         self.docs.push(doc);
     }
 
+    /// Makes the parts so far one [`Doc::flat_if_fits`], when no gap broke
+    /// the line among them (a `case` arm's patterns, guard and `=>`).
+    pub(crate) fn flat_if_fits(&mut self) {
+        if self.split.is_none() {
+            let docs = std::mem::take(&mut self.docs);
+            self.docs.push(Doc::flat_if_fits(Doc::concat(docs)));
+        }
+    }
+
     /// The parts, nested from the first gap that breaks on.
     pub(crate) fn finish(mut self, indent: usize) -> Doc {
         match self.split {

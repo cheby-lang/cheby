@@ -8,7 +8,9 @@
 import plugins::message
 
 /// Sends messages to one email address.
-type Email { address: String }
+type Email {
+  address: String,
+}
 
 /// Returns a notifier that sends email to `address`.
 fn new(address: String) -> Email {

@@ -90,6 +90,12 @@ pub enum Doc {
     /// the second. Inside a flat group, the first when it has no hard
     /// line break, else the second. `true` when both always break a line.
     Choice(Rc<Doc>, Rc<Doc>, bool),
+    /// The contents printed flat when they have no hard line break and fit
+    /// by themselves in the rest of the line, whatever follows them; else
+    /// printed as they are. A `case` arm's patterns, guard and `=>`, so
+    /// that a body that stays on the arm's line never breaks them
+    /// (GAP(case-arm-layout)).
+    FlatIfFits(Rc<Doc>),
 }
 
 impl Doc {
@@ -172,6 +178,12 @@ impl Doc {
         }
     }
 
+    /// `doc` printed flat when it fits by itself (see [`Doc::FlatIfFits`]).
+    #[must_use]
+    pub fn flat_if_fits(doc: Self) -> Self {
+        Self::FlatIfFits(Rc::new(doc))
+    }
+
     /// `broken` inside a broken group, `flat` inside a flat one.
     #[must_use]
     pub fn if_break(broken: Self, flat: Self) -> Self {
@@ -202,7 +214,7 @@ impl Doc {
         match self {
             Self::Nil | Self::Text(_) | Self::Comment(_) | Self::Line | Self::SoftLine => false,
             Self::HardLine => true,
-            Self::Nest(_, doc) | Self::Flat(doc) => doc.has_hard_break(),
+            Self::Nest(_, doc) | Self::Flat(doc) | Self::FlatIfFits(doc) => doc.has_hard_break(),
             Self::Group(_, breaks) | Self::Choice(_, _, breaks) => *breaks,
             Self::IfBreak(broken, flat) => broken.has_hard_break() || flat.has_hard_break(),
             Self::Concat(docs) => docs.iter().any(Self::has_hard_break),
@@ -322,6 +334,20 @@ impl Printer {
                     doc,
                     ..cmd
                 }),
+                Doc::FlatIfFits(doc) => {
+                    let flat = Cmd {
+                        mode: Mode::Flat,
+                        locked: true,
+                        doc,
+                        ..cmd
+                    };
+                    // Measured alone: what follows does not count.
+                    if !doc.has_hard_break() && self.fits(flat, &[], false) {
+                        stack.push(flat);
+                    } else {
+                        stack.push(Cmd { doc, ..cmd });
+                    }
+                }
                 Doc::Choice(first, second, _) => {
                     let doc = if cmd.mode == Mode::Flat {
                         if first.has_hard_break() {
@@ -472,6 +498,8 @@ impl Printer {
                     },
                     own,
                 )),
+                // Measured as its contents.
+                Doc::FlatIfFits(doc) => stack.push((Cmd { doc, ..cmd }, own)),
                 Doc::Choice(first, second, _) => {
                     if cmd.mode == Mode::Flat {
                         let doc = if first.has_hard_break() {

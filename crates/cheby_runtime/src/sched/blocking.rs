@@ -122,12 +122,14 @@ use super::{
     AfterSwitch, CodeToken, FiberRef, Shared, WaitHeader, WaitState, begin_park, cancel_park,
     hand_off_before_blocking, park,
 };
+use crate::backtrace::Start;
 use crate::ctx::ExecCtx;
+use crate::ffi_pool::{self, FfiJob};
 use crate::fiber_ops::cancel::{self, Cancelled};
-use crate::panic::fatal;
+use crate::panic::{PanicReport, UNKNOWN_LOCATION, fatal};
 use crate::pool::{self, Pool, Submitted};
 use crate::unwind::guard::guarded;
-use crate::unwind::raise::raise_cancel;
+use crate::unwind::raise::{cancel_from_runtime, raise_cancel, raise_from_runtime_at};
 
 /// Runs `job` on the blocking pool while `me` is parked (D-683), or inline
 /// when `me` has no runtime (D-692) or the pool cannot start a thread
@@ -199,13 +201,7 @@ pub(crate) fn run_blocking_in<R: Send + 'static>(
     hooks: &Hooks,
 ) -> Result<R, Cancelled> {
     cancel::check(me)?;
-    let result = match me.sched.runtime() {
-        Some(runtime) if enter(runtime) => on_pool(pool, me, runtime, job, hooks),
-        // A stop gave up on the pool (D-815): the
-        // call runs inline with D-786's mark and the hand-off, as after a
-        // refused pool thread, and the stop's join treats it as D-786 says.
-        Some(_) | None => inline(me, job),
-    };
+    let result = wait_for_job(pool, me, job, hooks);
     // The cancellation was delivered while the job ran: the work finished,
     // and its result is released here, before any Cheby value is made
     // (D-670, D-683).
@@ -214,6 +210,24 @@ pub(crate) fn run_blocking_in<R: Send + 'static>(
         return Err(Cancelled);
     }
     Ok(result)
+}
+
+/// The middle of [`run_blocking_in`], without its two cancellation checks:
+/// runs `job` on `pool` while `me` is parked, or inline (D-692, D-815,
+/// D-817), and returns its result.
+fn wait_for_job<R: Send + 'static>(
+    pool: &'static Pool,
+    me: &ExecCtx,
+    job: impl FnOnce() -> R + Send + 'static,
+    hooks: &Hooks,
+) -> R {
+    match me.sched.runtime() {
+        Some(runtime) if enter(runtime) => on_pool(pool, me, runtime, job, hooks),
+        // A stop gave up on the pool (D-815): the
+        // call runs inline with D-786's mark and the hand-off, as after a
+        // refused pool thread, and the stop's join treats it as D-786 says.
+        Some(_) | None => inline(me, job),
+    }
 }
 
 /// Runs `job` inline on the calling thread with `me` marked as blocked in
@@ -384,6 +398,8 @@ pub(super) fn poll_stop(runtime: &Shared, idle: bool, seen: &mut Option<(Instant
             }
             if at.elapsed() >= STOP_POLL {
                 runtime.pool_given_up.store(true, Ordering::SeqCst);
+                // D-950: the package calls still on the pool are abandoned.
+                abandon_ffi_jobs(runtime);
             }
         }
         _ => *seen = Some((Instant::now(), done)),
@@ -861,6 +877,10 @@ pub unsafe extern "C" fn cheby_rt_blocking_call(
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { crate::fiber_ops::running(ctx) };
+        // D-816: a fiber already being cancelled starts no job.
+        if cancel::check(me).is_err() {
+            raise_cancel(Some(ctx));
+        }
         let words: Vec<u64> = if nargs == 0 || args.is_null() {
             Vec::new()
         } else {
@@ -873,17 +893,87 @@ pub unsafe extern "C" fn cheby_rt_blocking_call(
         // releases its tokens, so without these the code `shim` runs in
         // could be freed under the pool thread.
         let code = me.sched.runtime().map(|runtime| code_tokens(runtime));
+        // D-950: the call's hold on its fiber's domain, through which the
+        // pool thread acts for the parked fiber, registered with the
+        // runtime so that a give-up or a halt can abandon it.
+        let job = FfiJob::new(Arc::clone(me.domain()), std::ptr::from_ref(me));
+        let runtime = me.sched.runtime().map(Arc::clone);
+        if let Some(runtime) = &runtime {
+            register_ffi_job(runtime, &job);
+        }
+        let pool_job = Arc::clone(&job);
         let call = move || {
             let mut out = 0_u64;
             // SAFETY: the caller's shim, given its own copy of the words
             // and a result cell; its code lives while `code` does.
-            unsafe { shim(words.as_ptr(), &raw mut out) };
+            ffi_pool::run_as_job(&pool_job, || unsafe { shim(words.as_ptr(), &raw mut out) });
+            if let Some(runtime) = runtime {
+                unregister_ffi_job(&runtime, &pool_job);
+            }
             drop(code);
             out
         };
-        match run_blocking(me, call) {
-            Ok(word) => word,
-            Err(Cancelled) => raise_cancel(Some(ctx)),
+        let word = wait_for_job(Pool::global(), me, call, &Hooks::default());
+        // GAP(blocking-package-shims): a call that must unwind after its
+        // job returns hands its result word back with the flag set, and
+        // the wrapper's helper (`cheby_rt_ffi_value`, `cheby_rt_ffi_external`)
+        // releases it on the fiber before the wrapper unwinds: an owned
+        // value through the helper's cleanup, an external handle through
+        // its type's drop function (D-950, D-171). A scalar result's call
+        // tests the flag itself, with nothing to release.
+        if job.failed() {
+            // An allocation of the job failed on the pool thread (D-950):
+            // the `out of memory` panic is raised on the fiber now (D-642,
+            // D-946).
+            let report = PanicReport::new(
+                crate::abi::PanicKind::Explicit,
+                Some(crate::alloc::OUT_OF_MEMORY),
+                UNKNOWN_LOCATION,
+            );
+            // SAFETY: the running fiber's context; this is the outermost
+            // Rust frame below the generated call site, and nothing unwinds
+            // from here.
+            unsafe { raise_from_runtime_at(ctx, report, Start::Unknown) };
+            return word;
         }
+        // The cancellation was delivered while the job ran (D-670, D-683):
+        // the work finished, and its result goes back with the flag set.
+        if cancel::check(me).is_err() {
+            cancel_from_runtime(me);
+        }
+        word
     })
+}
+
+/// Registers `job`, a package `@blocking` call's, with `runtime`, so that a
+/// give-up or a halt abandons it (D-950); when the runtime halts or gave up
+/// already, marks it at once. Under the registry's lock, which the
+/// abandoning side takes after it set its flag, so the job is either
+/// marked by [`abandon_ffi_jobs`] or sees the flag here.
+fn register_ffi_job(runtime: &Shared, job: &Arc<FfiJob>) {
+    let mut jobs = runtime.ffi_jobs.lock();
+    jobs.push(Arc::clone(job));
+    if wakes_nothing(runtime) {
+        job.abandon();
+    }
+}
+
+/// Forgets `job` once its shim returned: no `cheby_ffi_` call of it is left.
+fn unregister_ffi_job(runtime: &Shared, job: &Arc<FfiJob>) {
+    let mut jobs = runtime.ffi_jobs.lock();
+    if let Some(at) = jobs.iter().position(|known| Arc::ptr_eq(known, job)) {
+        jobs.swap_remove(at);
+    }
+}
+
+/// Abandons every package `@blocking` call of `runtime` still running (a
+/// give-up, D-815, or a halt, D-073): each is marked under its per-job lock
+/// (D-950, `ffi_pool.rs`). Called after the flag that [`wakes_nothing`]
+/// reads was set, with no other runtime lock held. Lock order: the
+/// registry, then each job's lock.
+pub(super) fn abandon_ffi_jobs(runtime: &Shared) {
+    let jobs = runtime.ffi_jobs.lock();
+    for job in jobs.iter() {
+        job.abandon();
+    }
 }

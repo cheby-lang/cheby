@@ -55,7 +55,9 @@ fn main() {
   // The jobs took well over one interval, so the first beat is already
   // waiting in the channel, and this does not wait.
   case channel::receive(beats) {
-    Ok(first) => io::println("Done. Beat {first} of the heartbeat came in, and the heartbeat stops with the program.")
+    Ok(first) => io::println(
+      "Done. Beat {first} of the heartbeat came in, and the heartbeat stops with the program.",
+    )
     Err(Nil) => io::println("Done. The heartbeat had stopped.")
   }
 }
@@ -98,12 +100,20 @@ test "the third attempt at fetching succeeds" {
 }
 
 test "fetching succeeds under its supervisor" {
-  let quick = supervisor::Policy { max_restarts: 3, deadline: duration::milliseconds(500), backoff_ms: 1 }
-  assert supervisor::supervise(quick, fetch_report, fn(_) { Nil }) == Ok("The report arrived on attempt 3.")
+  let quick = supervisor::Policy {
+    max_restarts: 3,
+    deadline: duration::milliseconds(500),
+    backoff_ms: 1,
+  }
+  assert supervisor::supervise(quick, fetch_report, fn(_) { Nil }) ==
+    Ok("The report arrived on attempt 3.")
 }
 
 test "saving always fails" {
   let quick = supervisor::Policy { ..save_policy, backoff_ms: 1 }
   let outcome = supervisor::supervise(quick, save_report, fn(_) { Nil })
-  assert outcome == Err(supervisor::GaveUp { restarts: 2, cause: supervisor::Crashed("the disk is full") })
+  assert outcome == Err(supervisor::GaveUp {
+    restarts: 2,
+    cause: supervisor::Crashed("the disk is full"),
+  })
 }

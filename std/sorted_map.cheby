@@ -384,7 +384,10 @@ test "insert adds or replaces" {
 
 /// A key ordered by `id` alone. Two badges with the same `id` and
 /// different labels compare `Equal` without being `==`.
-priv type Badge { id: Int, label: String }
+priv type Badge {
+  id: Int,
+  label: String,
+}
 
 priv fn compare(a: Badge, b: Badge) -> Order {
   int::compare(a.id, b.id)
@@ -438,7 +441,11 @@ test "remove drops a key and ignores a missing one" {
 /// Calls `update` once, with `Some` of the value stored under `key` or
 /// `None`, and stores its result under `key`, in one descent. A key
 /// already present stays (D-341).
-pub fn upsert<K: Compare, V>(m: SortedMap<K, V>, key: K, update: fn(Option<V>) -> V) -> SortedMap<K, V> {
+pub fn upsert<K: Compare, V>(
+  m: SortedMap<K, V>,
+  key: K,
+  update: fn(Option<V>) -> V,
+) -> SortedMap<K, V> {
   case m {
     Tip => Bin(1, key, update(None), Tip, Tip)
     Bin(n, k, x, l, r) => case Compare::compare(key, k) {
@@ -814,7 +821,12 @@ priv fn glue<K, V>(l: SortedMap<K, V>, r: SortedMap<K, V>) -> SortedMap<K, V> {
 
 /// The smallest entry of the node `k`, `x`, `l`, `r`, and the tree
 /// without it.
-priv fn min_view<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> (K, V, SortedMap<K, V>) {
+priv fn min_view<K, V>(
+  k: K,
+  x: V,
+  l: SortedMap<K, V>,
+  r: SortedMap<K, V>,
+) -> (K, V, SortedMap<K, V>) {
   case l {
     Tip => (k, x, r)
     Bin(_, kl, xl, ll, lr) => {
@@ -826,7 +838,12 @@ priv fn min_view<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> (K
 
 /// The largest entry of the node `k`, `x`, `l`, `r`, and the tree without
 /// it.
-priv fn max_view<K, V>(k: K, x: V, l: SortedMap<K, V>, r: SortedMap<K, V>) -> (K, V, SortedMap<K, V>) {
+priv fn max_view<K, V>(
+  k: K,
+  x: V,
+  l: SortedMap<K, V>,
+  r: SortedMap<K, V>,
+) -> (K, V, SortedMap<K, V>) {
   case r {
     Tip => (k, x, l)
     Bin(_, kr, xr, rl, rr) => {

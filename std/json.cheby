@@ -38,7 +38,10 @@ pub exposed type Value {
 
 /// A place in JSON text: the line and the column in code points, both
 /// counting from 1 (D-324).
-pub exposed type Position { line: Int, column: Int }
+pub exposed type Position {
+  line: Int,
+  column: Int,
+}
 
 /// Why `parse` failed: the text is not JSON, or the decoder did not accept
 /// it (D-304, ADR-0051).
@@ -85,7 +88,10 @@ pub fn list<T: ToJson>(items: List<T>) -> Value {
 // A type for the test of `list`. Its `to_json` makes it satisfy `ToJson`.
 // User builds skip std tests, and satisfaction is not a written use, so the
 // test also names `to_json`, or it would be reported unused (D-479, D-516).
-priv type Point { x: Int, y: Int }
+priv type Point {
+  x: Int,
+  y: Int,
+}
 
 priv fn to_json(point: Point) -> Value {
   Object([("x", Int(point.x)), ("y", Int(point.y))])
@@ -143,45 +149,48 @@ test "to_pretty_string indents by two spaces" {
     ("extra", Object([])),
     ("none", Array([])),
   ])
-  let expected = string::join([
-    r"{",
-    r#"  "title": "Dune","#,
-    r#"  "tags": ["#,
-    r#"    "classic","#,
-    "    1",
-    "  ],",
-    r#"  "extra": {},"#,
-    r#"  "none": []"#,
-    r"}",
-  ], "\n")
+  let expected = string::join(
+    [
+      r"{",
+      r#"  "title": "Dune","#,
+      r#"  "tags": ["#,
+      r#"    "classic","#,
+      "    1",
+      "  ],",
+      r#"  "extra": {},"#,
+      r#"  "none": []"#,
+      r"}",
+    ],
+    "\n",
+  )
   assert to_pretty_string(document) == expected
   assert to_pretty_string(Int(1)) == "1"
 }
 
 test "to_pretty_string puts each element on its own line at every depth" {
   let document = Array([
-    Object([
-      ("a", Array([Int(1), Array([])])),
-      ("b\"\n", Object([("c", Null)])),
-    ]),
+    Object([("a", Array([Int(1), Array([])])), ("b\"\n", Object([("c", Null)]))]),
     String("x\ny"),
     Float(float::neg_infinity),
   ])
-  let expected = string::join([
-    "[",
-    "  \{",
-    r#"    "a": ["#,
-    "      1,",
-    "      []",
-    "    ],",
-    r#"    "b\"\n": {"#,
-    r#"      "c": null"#,
-    "    }",
-    "  },",
-    r#"  "x\ny","#,
-    "  null",
-    "]",
-  ], "\n")
+  let expected = string::join(
+    [
+      "[",
+      "  \{",
+      r#"    "a": ["#,
+      "      1,",
+      "      []",
+      "    ],",
+      r#"    "b\"\n": {"#,
+      r#"      "c": null"#,
+      "    }",
+      "  },",
+      r#"  "x\ny","#,
+      "  null",
+      "]",
+    ],
+    "\n",
+  )
   assert to_pretty_string(document) == expected
   assert to_string(document) == r#"[{"a":[1,[]],"b\"\n":{"c":null}},"x\ny",null]"#
   assert to_pretty_string(Array([])) == "[]"
@@ -192,12 +201,15 @@ test "to_pretty_string puts each element on its own line at every depth" {
 
 test "to_string escapes every control character, in keys too, and nothing else" {
   let assert Ok(controls) = string::from_code_point_values(lists::range(0, 32))
-  let escaped = string::join([
-    r"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007",
-    r"\b\t\n\u000b\f\r\u000e\u000f",
-    r"\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017",
-    r"\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f",
-  ], "")
+  let escaped = string::join(
+    [
+      r"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007",
+      r"\b\t\n\u000b\f\r\u000e\u000f",
+      r"\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017",
+      r"\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f",
+    ],
+    "",
+  )
   assert to_string(String(controls)) == "\"" + escaped + "\""
   // DEL, the C1 controls and the other non-ASCII code points stay as they
   // are, as `JSON.stringify` writes them.
@@ -402,10 +414,7 @@ test "parse_value keeps integers and floats apart" {
 
 test "parse_value keeps object members in order, repeated keys too" {
   let assert Ok(first) = parse_value(r#"{"b": 1, "a": [true, null]}"#)
-  assert first == Object([
-    ("b", Int(1)),
-    ("a", Array([Bool(True), Null])),
-  ])
+  assert first == Object([("b", Int(1)), ("a", Array([Bool(True), Null]))])
   let assert Ok(reordered) = parse_value(r#"{"a": [true, null], "b": 1}"#)
   assert first != reordered
   let twice = Object([("a", Int(1)), ("a", Int(2))])
@@ -800,9 +809,14 @@ test "a json error shows as a message" {
   let syntax = Syntax(Position { line: 2, column: 6 })
   assert show(syntax) == "invalid JSON at line 2, column 6"
   let year = decode::Error { expected: "Int", found: "String", path: ["year"] }
-  let edition = decode::Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  let edition = decode::Error {
+    expected: "Format",
+    found: "String",
+    path: ["books", "1", "format"],
+  }
   let wrong = Decode([year, edition])
-  assert "{wrong}" == "unexpected JSON: expected Int, found String at year; expected Format, found String at books.1.format"
+  assert "{wrong}" ==
+    "unexpected JSON: expected Int, found String at year; expected Format, found String at books.1.format"
 }
 
 // Tests of `std::json::decode` that need this module.
@@ -1004,9 +1018,15 @@ test "at reads a member through nested objects" {
 
 // A tree of names and an expression, for the tests of `lazy` below. They
 // are named in the tests, so user builds do not report them unused (D-631).
-priv type Node { name: String, children: List<Node> }
+priv type Node {
+  name: String,
+  children: List<Node>,
+}
 
-priv type Expr { Lit(Int), Neg(Expr) }
+priv type Expr {
+  Lit(Int),
+  Neg(Expr),
+}
 
 priv fn named_tree() -> decode::Decoder<Node> {
   let placeholder = Node { name: "", children: [] }
@@ -1078,14 +1098,17 @@ test "the errors of a list of records come in the order visited, with whole path
   let dune = r#"  {"title": "Dune", "year": 1965, "tags": ["sf"], "author": {"name": "F. H."}}"#
   let one = r#"{"books": ["# + dune + "]}"
   assert parse(one, library()) == Ok([("Dune", 1965, "F. H., sf")])
-  let text = string::join([
-    r#"{"books": ["#,
-    dune + ",",
-    r#"  {"title": 2, "year": "1966", "tags": ["sf", 3, null], "author": {"name": 4}},"#,
-    r#"  {"tags": {}, "author": []},"#,
-    "  7",
-    "]}",
-  ], "\n")
+  let text = string::join(
+    [
+      r#"{"books": ["#,
+      dune + ",",
+      r#"  {"title": 2, "year": "1966", "tags": ["sf", 3, null], "author": {"name": 4}},"#,
+      r#"  {"tags": {}, "author": []},"#,
+      "  7",
+      "]}",
+    ],
+    "\n",
+  )
   let errors = [
     mismatch("String", "Int", ["books", "1", "title"]),
     mismatch("Int", "String", ["books", "1", "year"]),
@@ -1100,18 +1123,21 @@ test "the errors of a list of records come in the order visited, with whole path
   ]
   let assert Err(error) = parse(text, library())
   assert error == Decode(errors)
-  let shown = string::join([
-    "unexpected JSON: expected String, found Int at books.1.title",
-    "expected Int, found String at books.1.year",
-    "expected String, found Int at books.1.tags.1",
-    "expected String, found Null at books.1.tags.2",
-    "expected String, found Int at books.1.author.name",
-    "expected Field, found Nothing at books.2.title",
-    "expected Field, found Nothing at books.2.year",
-    "expected Array, found Object at books.2.tags",
-    "expected Object, found Array at books.2.author",
-    "expected Object, found Int at books.3",
-  ], "; ")
+  let shown = string::join(
+    [
+      "unexpected JSON: expected String, found Int at books.1.title",
+      "expected Int, found String at books.1.year",
+      "expected String, found Int at books.1.tags.1",
+      "expected String, found Null at books.1.tags.2",
+      "expected String, found Int at books.1.author.name",
+      "expected Field, found Nothing at books.2.title",
+      "expected Field, found Nothing at books.2.year",
+      "expected Array, found Object at books.2.tags",
+      "expected Object, found Array at books.2.author",
+      "expected Object, found Int at books.3",
+    ],
+    "; ",
+  )
   assert show(error) == shown
   let assert Ok(document) = parse_value(text)
   assert decode_value(document, library()) == Err(errors)
@@ -1204,11 +1230,14 @@ test "nested lists and pairs add each index and key to the path" {
   ]
   let assert Err(error) = parse(r#"{"k": [1, "x"], "": 2, "a.b": [true]}"#, groups)
   assert error == Decode(members)
-  let shown = string::join([
-    "unexpected JSON: expected Int, found String at k.1",
-    "expected Array, found Int at ",
-    "expected Int, found Bool at a.b.0",
-  ], "; ")
+  let shown = string::join(
+    [
+      "unexpected JSON: expected Int, found String at k.1",
+      "expected Array, found Int at ",
+      "expected Int, found Bool at a.b.0",
+    ],
+    "; ",
+  )
   assert show(error) == shown
 }
 

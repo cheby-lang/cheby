@@ -93,6 +93,10 @@ pub(crate) struct Loaded {
     /// The trampolines `cb$tramp$0` to `cb$tramp$4` (D-526), the latest
     /// batch's that defined each.
     pub(crate) trampolines: [Option<FuncId>; 5],
+    /// Per loaded record (tests): its path, the lowest address of its
+    /// functions, the end of the highest, and the code run asked for it.
+    #[cfg(test)]
+    pub(crate) spans: Vec<(String, usize, usize, usize)>,
 }
 
 impl Loaded {
@@ -160,6 +164,10 @@ impl Jit {
     /// symbol nothing defines, a global defined twice, or a record the
     /// module refuses.
     pub(crate) fn load_items(&mut self, items: &[Item<'_>]) -> Result<(), JitError> {
+        let mut runs = Vec::with_capacity(items.len());
+        for item in items {
+            runs.push(code_run(item)?);
+        }
         let slots = self.check_items(items)?;
         self.define_const_slots(&slots)?;
         let signature = ir::Signature::new(self.module.isa().default_call_conv());
@@ -167,14 +175,46 @@ impl Jit {
         for item in items {
             ids.push(self.declare_record(item.record, &signature)?);
         }
-        for (item, ids) in items.iter().zip(&ids) {
+        for ((item, ids), &run) in items.iter().zip(&ids).zip(&runs) {
+            // A record's functions one after the other in one span
+            // (`memory.rs`, GAP(record-placement)).
+            self.memory.start_code_run(run);
             self.define_record(item.record, ids)?;
+            self.memory.start_code_run(0);
         }
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::ice(format!("cannot finalize the batch: {e}")))?;
+        #[cfg(test)]
+        self.note_spans(items, &ids, &runs)?;
         self.register_loaded(items, &ids)?;
         self.note_loaded(items, &ids)
+    }
+
+    /// Where each record's functions landed (tests, [`Loaded::spans`]).
+    #[cfg(test)]
+    fn note_spans(
+        &mut self,
+        items: &[Item<'_>],
+        ids: &[Vec<FuncOrDataId>],
+        runs: &[usize],
+    ) -> Result<(), JitError> {
+        for ((item, ids), &run) in items.iter().zip(ids).zip(runs) {
+            let (mut low, mut high) = (usize::MAX, 0_usize);
+            for function in &item.record.functions {
+                if let FuncOrDataId::Func(id) = id_at(ids, function.symbol)? {
+                    let start = self.module.get_finalized_function(id).addr();
+                    low = low.min(start);
+                    high = high.max(start.saturating_add(function.bytes.len()));
+                }
+            }
+            if high > 0 {
+                self.loaded
+                    .spans
+                    .push((item.path.to_owned(), low, high, run));
+            }
+        }
+        Ok(())
     }
 
     /// Step 1 of the module docs: duplicates, missing generated symbols,
@@ -552,6 +592,67 @@ impl Jit {
         Ok(())
     }
 }
+
+/// How far a direct call reaches: `bl`'s ±128 MiB on aarch64, and on
+/// x86-64 (`call rel32`, ±2 GiB) the whole arena (`memory.rs`).
+pub(crate) const CALL_REACH: usize = if cfg!(target_arch = "aarch64") {
+    128 << 20
+} else {
+    crate::memory::ARENA_SIZE
+};
+
+/// The bytes a record's functions take in one code run (`memory.rs`):
+/// each function's code, the veneer cranelift-jit reserves after it for
+/// each `Arm64Call` (24 bytes), and its alignment's worth of padding at the
+/// least ([`RUN_ALIGN`]).
+///
+/// # Errors
+///
+/// An internal error naming the record's module when its code alone is
+/// larger than a direct call reaches ([`CALL_REACH`]): no placement could
+/// make its calls reach (GAP(record-placement)).
+pub(crate) fn code_run(item: &Item<'_>) -> Result<usize, JitError> {
+    let mut total: usize = 0;
+    for function in &item.record.functions {
+        let veneers = function
+            .relocs
+            .iter()
+            .filter(|r| r.kind == cranelift_codegen::binemit::Reloc::Arm64Call)
+            .count()
+            .saturating_mul(VENEER);
+        let align = usize::try_from(function.align)
+            .unwrap_or(usize::MAX)
+            .max(RUN_ALIGN);
+        total = total
+            .saturating_add(function.bytes.len())
+            .saturating_add(veneers)
+            .saturating_add(align);
+    }
+    if total > CALL_REACH {
+        let module = if item.path.is_empty() {
+            item.record
+                .symbols
+                .iter()
+                .find_map(|s| s.name.strip_prefix(MODULE_RECORD))
+                .unwrap_or("?")
+        } else {
+            item.path
+        };
+        return Err(JitError::ice(format!(
+            "the code record of `{module}` holds {total} bytes of code, more than a direct call reaches ({CALL_REACH} bytes)"
+        )));
+    }
+    Ok(total)
+}
+
+/// The bytes of the veneer cranelift-jit reserves after a function for
+/// each `Arm64Call` (`ldr`, `br` and a pointer).
+const VENEER: usize = 24;
+
+/// The least padding a code run counts per function: above any function
+/// alignment cranelift-jit asks for (the ISA's minimum and the symbol
+/// alignment).
+const RUN_ALIGN: usize = 64;
 
 /// The native symbols the foreign calls of `units` name, and the drop
 /// functions of their external types (D-949), so a batch whose symbols do

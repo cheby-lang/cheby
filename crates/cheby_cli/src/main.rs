@@ -272,9 +272,11 @@ fn run_command() -> ExitCode {
                 reuse_report,
             },
         ),
-        Command::Repl { deny_warnings } => {
-            cheby_repl::run_colored(&cheby_repl::ReplOptions { deny_warnings }, colors)
-        }
+        Command::Repl { deny_warnings } => cheby_repl::run_cached(
+            &cheby_repl::ReplOptions { deny_warnings },
+            colors,
+            build_id::build_id(),
+        ),
         Command::Test {
             filter,
             module,
@@ -644,7 +646,7 @@ fn fmt_one(out: Out, target: &FmtTarget, check: bool) -> Result<bool, ()> {
     let file = sources
         .add_file(name, text.as_str())
         .map_err(|e| fail(e.to_string()))?;
-    let formatted = match cheby_fmt::format_file(file, &text, cheby_fmt::PROVISIONAL_WIDTH) {
+    let formatted = match cheby_fmt::format_file(file, &text, cheby_fmt::WIDTH) {
         Ok(formatted) => formatted,
         Err(e) => {
             write_stderr(&cheby_diag::render_all_with(

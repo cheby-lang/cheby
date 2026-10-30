@@ -59,6 +59,9 @@
 //! nothing.
 
 mod range;
+mod refs;
+#[cfg(test)]
+mod refs_tests;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -75,6 +78,20 @@ use cheby_runtime::{ConstEvalLimits, EntryConfig, EntryMode, EntryOutcome, Panic
 
 pub use cheby_runtime::consteval::image::ConstImage;
 pub use range::ConstTypes;
+pub use refs::image_references;
+
+/// The note of E0076 for a top-level evaluation that ran out of time
+/// (D-536): how [`is_time_limit`] tells it from the memory limit's.
+const TIME_LIMIT_NOTE: &str = "constant evaluation stops an initializer that runs past the limit";
+
+/// Whether `diagnostic` is E0076 for the time limit (D-536): a failure
+/// that depends on the machine's speed, which the cache never stores
+/// (D-964).
+#[must_use]
+pub fn is_time_limit(diagnostic: &Diagnostic) -> bool {
+    diagnostic.code == codes::CONSTANT_LIMIT
+        && diagnostic.notes.iter().any(|n| n == TIME_LIMIT_NOTE)
+}
 
 /// Which command evaluates: `cheby check` installs nothing (D-979); the
 /// others install the images in the JIT that runs code.
@@ -587,7 +604,7 @@ fn over_limit(
                 "evaluating the constant `{name}` took longer than the time limit of {}",
                 duration_text(config.time_limit)
             ),
-            "constant evaluation stops an initializer that runs past the limit".to_owned(),
+            TIME_LIMIT_NOTE.to_owned(),
             "compute less at compile time, or raise `time-limit` in the `[const-eval]` table of \
              `cheby.toml`",
         ),

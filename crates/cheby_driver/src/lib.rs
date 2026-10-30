@@ -71,10 +71,13 @@ mod code_cache;
 mod frontend;
 mod load_set;
 mod native;
+mod reuse_replay;
 mod reuse_report;
 pub mod session;
+mod std_cache;
 pub mod std_lib;
 mod test;
+mod warm_keys;
 
 pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_package::Target;
@@ -607,7 +610,7 @@ fn front_end_for(
         frontend::Mode::Check => cache::index::CommandFamily::Check,
         frontend::Mode::Build | frontend::Mode::StdTests => cache::index::CommandFamily::Build,
     };
-    front_end_family(root, mode, family, target, out, cache)
+    front_end_family(root, mode, family, target, out, cache, None)
 }
 
 /// [`front_end_for`] for a command `family` (D-962): with a cache, the
@@ -615,6 +618,11 @@ fn front_end_for(
 /// `cheby check` the modules it vouches for are not parsed. A front end
 /// that must start again ([`frontend::Stop::Restart`]) is run once more
 /// from the start, every module parsed and every hit decoded at its lookup.
+/// `warm` is `Some` for `cheby run` and `cheby test` (D-1250), with
+/// whether the command prints the reuse report and `cheby run`'s
+/// `--module` path: their front end checks only what their build needs
+/// ([`crate::warm_keys`]); `None` checks every module, as a command that
+/// starts again after its build wanted a hit's body does.
 fn front_end_family(
     root: &Path,
     mode: frontend::Mode,
@@ -622,6 +630,7 @@ fn front_end_family(
     target: Option<Target>,
     out: &mut CheckOutput,
     cache: Option<&Cache>,
+    warm: Option<(bool, Option<&str>)>,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
     let deny_warnings = out.deny_warnings;
     let index_key = cache.map(|cache| {
@@ -634,6 +643,27 @@ fn front_end_family(
         .zip(index_key)
         .and_then(|(cache, key)| cache.store.get_hint(&key).ok().flatten())
         .and_then(|bytes| cache::index::PackageIndex::decode(&bytes).map(|index| (index, bytes)));
+    // D-1250 (K4d): `cheby run` and `cheby test` check only what their
+    // build needs, under the kind and MIR options it reads. An invalid
+    // option checks every module: the build reports it, as before.
+    let build = match (mode, warm) {
+        (frontend::Mode::Build, Some((reuse, main)))
+            if matches!(
+                family,
+                cache::index::CommandFamily::Run | cache::index::CommandFamily::Test
+            ) =>
+        {
+            backend::mir_options_from_env()
+                .ok()
+                .map(|mir| warm_keys::WarmBuild {
+                    mir,
+                    reuse,
+                    tests: family == cache::index::CommandFamily::Test,
+                    main,
+                })
+        }
+        _ => None,
+    };
     for lazy in [true, false] {
         *out = CheckOutput {
             deny_warnings,
@@ -646,6 +676,7 @@ fn front_end_family(
                 index: index.as_ref(),
                 index_key,
                 lazy,
+                build,
             });
         match front_end_once(root, mode, target, out, use_)? {
             Attempt::Done(result) => return Ok(result),
@@ -677,10 +708,15 @@ fn front_end_once(
     out: &mut CheckOutput,
     cache: Option<frontend::CacheUse<'_>>,
 ) -> Result<Attempt, Error> {
-    // Only `cheby check` leaves modules unparsed: every other command
-    // lowers every module (D-1132).
+    // `cheby check` leaves modules unparsed, and so do a warm `cheby run`
+    // and `cheby test` (D-1250), which check only what their build needs;
+    // `--reuse-report` and every other command check every module (D-1132).
     let vouched = cache
-        .filter(|use_| use_.lazy && mode == frontend::Mode::Check)
+        .filter(|use_| {
+            use_.lazy
+                && (mode == frontend::Mode::Check
+                    || (mode == frontend::Mode::Build && use_.build.is_some_and(|b| !b.reuse)))
+        })
         .and_then(|use_| use_.index)
         .map(|(index, _)| index);
     let skip = |path: &ModulePath, hash: cache::Hash128| {
@@ -842,11 +878,80 @@ pub fn prepare_run_cached(
     prepare_run_inner(root, options, Some(cache))
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the public entry points' options, moved in as before D-1250's second attempt"
+)]
 fn prepare_run_inner(
     root: &Path,
     options: RunOptions,
     cache: Option<&Cache>,
 ) -> Result<Prepared, Error> {
+    // D-1250: a warm run checks only what its build needs; a build that
+    // then wants a hit's body starts again with every module checked.
+    match prepare_run_once(root, &options, cache, Some(options.reuse_report)) {
+        Err(Restart::Again(mark)) => {
+            rollback_log(cache, mark);
+            prepare_run_once(root, &options, cache, None).map_err(Restart::into_error)
+        }
+        other => other.map_err(Restart::into_error),
+    }
+}
+
+/// How many lines `cache`'s log holds before a warm attempt (D-1250), so a
+/// restart drops the attempt's lines (D-1135: only the run that finished
+/// is logged).
+pub(crate) fn log_mark(cache: Option<&Cache>) -> Option<usize> {
+    cache.map(|cache| cache.log.mark())
+}
+
+/// Drops the lines `cache`'s log recorded after `mark` ([`log_mark`]).
+pub(crate) fn rollback_log(cache: Option<&Cache>, mark: Option<usize>) {
+    if let (Some(cache), Some(mark)) = (cache, mark) {
+        cache.log.rollback(mark);
+    }
+}
+
+/// Why a warm command's attempt ended without a result (D-1250).
+pub(crate) enum Restart {
+    /// The build wanted the body of a module the front end did not check:
+    /// start again with every module checked, the log back at the mark.
+    Again(Option<usize>),
+    /// Any other failure.
+    Failed(Error),
+}
+
+impl Restart {
+    pub(crate) fn into_error(self) -> Error {
+        match self {
+            Self::Again(_) => Ice::new("a warm build wanted a body after a full check").into(),
+            Self::Failed(error) => error,
+        }
+    }
+}
+
+impl From<Error> for Restart {
+    fn from(error: Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<JitError> for Restart {
+    fn from(error: JitError) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+/// One attempt of [`prepare_run_inner`], `warm` as
+/// [`front_end_family`]'s.
+fn prepare_run_once(
+    root: &Path,
+    options: &RunOptions,
+    cache: Option<&Cache>,
+    warm: Option<bool>,
+) -> Result<Prepared, Restart> {
+    let options = options.clone();
+    let mark = log_mark(cache);
     let mut out = CheckOutput {
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
@@ -858,6 +963,7 @@ fn prepare_run_inner(
         None,
         &mut out,
         cache,
+        warm.map(|reuse| (reuse, options.module_path.as_deref())),
     )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -877,13 +983,16 @@ fn prepare_run_inner(
     // E0053 for a native symbol nothing defines (D-532) and the
     // constant-evaluation errors of the constants `main` reaches (D-535)
     // stop the run.
-    let built = backend::build_reporting(
+    let built = match backend::build_reporting(
         &front,
         &out.sources,
         backend::Roots::Main(main),
         false,
         options.reuse_report,
-    )?;
+    ) {
+        Err(_) if warm.is_some() && front.wanted_body() => return Err(Restart::Again(mark)),
+        built => built?,
+    };
     let (jit, reuse_report) = match built {
         Ok(built) => (built.jit, built.reuse_report.unwrap_or_default()),
         Err(diagnostics) => {
@@ -1208,6 +1317,10 @@ mod native_tests;
 mod positions_tests;
 #[cfg(test)]
 mod reads_tests;
+#[cfg(test)]
+mod reuse_replay_tests;
+#[cfg(test)]
+mod std_cache_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

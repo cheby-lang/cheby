@@ -41,6 +41,9 @@
 //! names and file contents are functions of the bytes callers pass.
 
 pub(crate) mod code_keys;
+pub(crate) mod consts;
+#[cfg(test)]
+mod consts_tests;
 pub mod front;
 pub mod index;
 mod key;

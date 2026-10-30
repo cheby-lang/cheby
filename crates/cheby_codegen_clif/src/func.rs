@@ -450,7 +450,7 @@ pub(crate) fn write_external_drops<M: cranelift_module::Module>(
     Ok(())
 }
 
-/// Whether statement `i` of `stmts` is a non-blocking foreign call whose
+/// Whether statement `i` of `stmts` is a foreign call whose
 /// result a later statement of the block, after nothing but `dup`s and
 /// `drop`s, hands to `cheby_rt_ffi_value` or `cheby_rt_ffi_external` (as
 /// the wrapper of a package's `@external(native, …)` does, `cheby_mir`'s
@@ -461,12 +461,15 @@ pub(crate) fn write_external_drops<M: cranelift_module::Module>(
 /// instruction that unwinds to it. The `drop`s in between release
 /// arguments, which an unwinding releases too. A REPL generation's name
 /// of a helper (`<helper>$cheby$gen<n>`, D-1197) counts as the helper.
+/// GAP(blocking-package-shims): an `@blocking` call counts too (N8c, D-950): a
+/// cancellation or a failed allocation during its job comes back with its
+/// result word and the flag set (`cheby_rt_blocking_call`), and the helper
+/// releases the result on the fiber, an external one through its drop
+/// function (D-171). Only packages' wrappers call the helpers.
 fn ffi_checked_later(stmts: &[Stmt], i: usize) -> bool {
     let Some(Stmt::Assign {
         dst,
-        value: Rvalue::CallForeign {
-            blocking: false, ..
-        },
+        value: Rvalue::CallForeign { .. },
     }) = stmts.get(i)
     else {
         return false;

@@ -20,11 +20,11 @@
 //! 1.15` is `84.06499999999998` in floating point, which rounds to
 //! 84.06, although the exact total is 84.065 and rounds to 84.07.
 
+import money_and_rationals::rational
+import money_and_rationals::split
 import std::io
 import std::list
 import std::string
-import money_and_rationals::rational
-import money_and_rationals::split
 
 /// A dish or drink on the bill, with its price in cents.
 type Item = (String, Int)
@@ -48,7 +48,8 @@ const table: List<Diner> = [("Ana", 2), ("Ben", 1), ("Cy", 1), ("Dee", 1)]
 const tip_percent: Int = 15
 
 fn main() {
-  bill_lines(order, tip_percent, table) |> list::each(_, io::println)
+  bill_lines(order, tip_percent, table)
+  |> list::each(_, io::println)
 }
 
 /// Returns the lines `main` prints for a bill of `items` with a tip of
@@ -68,8 +69,10 @@ fn bill_lines(items: List<Item>, percent: Int, diners: List<Diner>) -> List<Stri
   // weight, in order, so the two lists have the same length.
   fn describe(rest_diners, rest_parts, found) {
     case rest_diners, rest_parts {
-      [(name, shares), ..more_diners], [part, ..more_parts] =>
-        describe(more_diners, more_parts, [..found, diner_line(name, shares, part)])
+      [(name, shares), ..more_diners], [part, ..more_parts] => describe(more_diners, more_parts, [
+        ..found,
+        diner_line(name, shares, part),
+      ])
       _, _ => found
     }
   }

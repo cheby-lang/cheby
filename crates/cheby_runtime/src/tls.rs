@@ -25,7 +25,8 @@
 //!   is free (D-773);
 //! - the host slot: what a thread that runs no fiber charges and counts
 //!   (its current accounting domain and scratch counts), M1's per-thread
-//!   behavior for host code;
+//!   behavior for host code, and on a pool thread the package `@blocking`
+//!   call it acts for (D-950);
 //! - the allocator's free worklist, block cache and quarantine, which stay
 //!   per thread. The fiber current on a thread also holds the address of
 //!   that thread's block cache in its control block, recorded by
@@ -47,6 +48,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use crate::abi::Word;
 use crate::alloc::{BlockCache, Domain, Quarantine};
 use crate::ctx::ExecCtx;
+use crate::ffi_pool::FfiJob;
 
 /// What a thread that runs no fiber charges and counts: host code, such as
 /// a driver freeing an entry's result or a unit test.
@@ -58,6 +60,10 @@ pub(crate) struct Host {
     pub(crate) scratch_live: Cell<u64>,
     /// The most bytes of scratch live on the thread since the last reset.
     pub(crate) scratch_peak: Cell<u64>,
+    /// The package `@blocking` call this pool thread acts for while its
+    /// shim runs, its fiber parked (D-950, `ffi_pool::run_as_job`); `None`
+    /// on every other thread and between calls.
+    pub(crate) job: RefCell<Option<Arc<FfiJob>>>,
 }
 
 /// A shard index not assigned yet.
@@ -149,6 +155,7 @@ thread_local! {
             domain: RefCell::new(None),
             scratch_live: Cell::new(0),
             scratch_peak: Cell::new(0),
+            job: RefCell::new(None),
         }
     };
     /// The worklist of objects whose count reached zero, kept per thread

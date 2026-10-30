@@ -79,6 +79,45 @@ pub fn run(options: ReplOptions) -> ExitCode {
 /// commands (D-467).
 #[must_use]
 pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
+    run_with(options, colors, None)
+}
+
+/// [`run_colored`] with the build cache of the compiler whose build ID is
+/// `build` (D-957, D-959): std's code is loaded from std's records, which
+/// std's first use writes, and nothing of the session is stored (K6,
+/// D-971, D-980, D-964). The cache is `CHEBY_CACHE` or the OS default, its
+/// lookups logged to `CHEBY_CACHE_LOG` (D-973); a fallback to a temporary
+/// cache is noted first, and a relative `CHEBY_CACHE` or an unsafe root is
+/// a tool error, as for the other commands.
+#[must_use]
+pub fn run_cached(
+    options: &ReplOptions,
+    colors: Colors,
+    build: cheby_driver::cache::BuildId,
+) -> ExitCode {
+    use cheby_driver::cache::{CacheEnv, CacheLog};
+    let log = CacheLog::from_var(std::env::var_os("CHEBY_CACHE_LOG"));
+    match cheby_driver::Cache::open(&CacheEnv::from_process(), build, log) {
+        Ok((cache, fallback)) => {
+            // The note `cheby_cli` prints for its other commands (D-959).
+            if let Some(fallback) = fallback {
+                Streams.stderr(&format!(
+                    "note: the build cache cannot be used ({fallback}), so this command uses a \
+                     temporary cache that is deleted when it ends; set CHEBY_CACHE to a writable \
+                     directory to keep the cache between commands\n"
+                ));
+            }
+            run_with(options, colors, Some(cache))
+        }
+        Err(e) => {
+            Streams.stderr(&cheby_diag::render_tool_error(&e.to_string(), colors));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// [`run_colored`], with std's code from `cache` when one is given.
+fn run_with(options: &ReplOptions, colors: Colors, cache: Option<cheby_driver::Cache>) -> ExitCode {
     let mut streams = Streams;
     let dir = match std::env::current_dir() {
         Ok(dir) => dir,
@@ -95,7 +134,7 @@ pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
         colors,
         threads: None,
     };
-    let (mut session, warnings) = match Session::start(&dir, session_options) {
+    let (mut session, warnings) = match Session::start_cached(&dir, session_options, cache) {
         Ok(Start::Ready(session, warnings)) => (session, warnings),
         Ok(Start::Failed(diagnostics)) => {
             streams.stderr(&diagnostics);

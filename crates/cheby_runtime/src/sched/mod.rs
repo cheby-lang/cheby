@@ -296,6 +296,11 @@ pub(crate) struct Shared {
     /// The completions of this runtime's pool jobs so far: the stop gives
     /// up only when none came between its two polls.
     pool_done: AtomicU64,
+    /// The package `@blocking` calls of this runtime's fibers whose shims
+    /// run (D-950, `blocking::register_ffi_job`): a give-up or a halt
+    /// abandons each under its per-job lock. Lock order: this lock, then a
+    /// job's.
+    ffi_jobs: Mutex<Vec<Arc<crate::ffi_pool::FfiJob>>>,
     /// Test hooks of the monitor.
     #[cfg(test)]
     probe: testing::MonitorProbe,
@@ -337,6 +342,8 @@ impl Shared {
     /// termination) and from the host, with no runtime lock held.
     pub(crate) fn begin_halt(&self) {
         self.halting.store(true, Ordering::SeqCst);
+        // D-950: the package `@blocking` calls on the pool are abandoned.
+        blocking::abandon_ffi_jobs(self);
         // No socket event wakes a fiber from now on, as no timer fires.
         self.driver.halt();
         self.request_safepoints();
@@ -1071,6 +1078,7 @@ impl Runtime {
             pool_given_up: AtomicBool::new(false),
             pool_waiting: AtomicUsize::new(0),
             pool_done: AtomicU64::new(0),
+            ffi_jobs: Mutex::new(Vec::new()),
             #[cfg(test)]
             probe: testing::MonitorProbe::default(),
             #[cfg(test)]
@@ -1349,6 +1357,7 @@ impl Runtime {
         let stuck = self.join_workers(false);
         if stuck {
             self.shared.halting.store(true, Ordering::SeqCst);
+            blocking::abandon_ffi_jobs(&self.shared);
         }
         if let Some(monitor) = self.monitor.take() {
             monitor.join().ok();

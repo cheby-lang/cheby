@@ -32,6 +32,17 @@ pub(crate) fn apply(cmd: &mut Command) -> Result<(), String> {
     }
 }
 
+/// A fresh cache of its own, deleted when dropped, whatever
+/// `CHEBY_TEST_KEEP_CACHE` says: for a measurement that must start from an
+/// empty cache (`bench-compile`'s "std first use", D-980).
+///
+/// # Errors
+///
+/// When the directory cannot be created.
+pub(crate) fn fresh(name: &str) -> Result<HarnessCache, String> {
+    HarnessCache::create_with(name, None)
+}
+
 /// Deletes the process's cache, unless `CHEBY_TEST_KEEP_CACHE` named it.
 /// A static is never dropped, so the command calls this when it ends.
 pub(crate) fn finish() {

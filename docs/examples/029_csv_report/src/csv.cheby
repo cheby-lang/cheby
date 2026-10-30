@@ -27,11 +27,18 @@ import std::result
 import std::string
 
 /// The fields of one line, and the number of that line.
-type Record { line: Int, fields: List<String> }
+type Record {
+  line: Int,
+  fields: List<String>,
+}
 
 /// Why a text is not valid CSV, and where. Lines and columns are
 /// counted from 1, and columns in code points.
-type CsvError { line: Int, column: Int, problem: Problem }
+type CsvError {
+  line: Int,
+  column: Int,
+  problem: Problem,
+}
 
 /// What is wrong with the line.
 type Problem {
@@ -172,13 +179,29 @@ test "a CR before the line break is not part of the last field" {
 }
 
 test "an unterminated quote is reported at the opening quote" {
-  assert parse_line(r#"a,"open"#, 4) == Err(CsvError { line: 4, column: 3, problem: UnterminatedQuote })
-  assert parse_line("\"open\r", 4) == Err(CsvError { line: 4, column: 1, problem: UnterminatedQuote })
+  assert parse_line(r#"a,"open"#, 4) == Err(CsvError {
+    line: 4,
+    column: 3,
+    problem: UnterminatedQuote,
+  })
+  assert parse_line("\"open\r", 4) == Err(CsvError {
+    line: 4,
+    column: 1,
+    problem: UnterminatedQuote,
+  })
 }
 
 test "only a comma may follow a closing quote" {
-  assert parse_line(r#""ab"c"#, 2) == Err(CsvError { line: 2, column: 5, problem: TextAfterQuote("c") })
-  assert parse_line(r#""ab" ,c"#, 2) == Err(CsvError { line: 2, column: 5, problem: TextAfterQuote(" ") })
+  assert parse_line(r#""ab"c"#, 2) == Err(CsvError {
+    line: 2,
+    column: 5,
+    problem: TextAfterQuote("c"),
+  })
+  assert parse_line(r#""ab" ,c"#, 2) == Err(CsvError {
+    line: 2,
+    column: 5,
+    problem: TextAfterQuote(" "),
+  })
 }
 
 test "a quote in a bare field is an error" {

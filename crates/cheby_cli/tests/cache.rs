@@ -244,6 +244,22 @@ fn cache_failed_fallback_is_a_tool_error() {
     }
 }
 
+/// The package's `front` and `parse` lines of the log at `path`, in its
+/// order: std's own lines (`front.std`, `parse.std`, K6, D-980) are left
+/// out, as D-1135's lines are package-only.
+fn package_lines(path: &Path) -> String {
+    let mut out = String::new();
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    for line in text
+        .lines()
+        .filter(|l| l.starts_with("front ") || l.starts_with("parse "))
+    {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /// `CHEBY_CACHE_LOG` gets one sorted `front <module> hit|miss` line per
 /// package module (D-973): all misses on a fresh cache, all hits on the
 /// next command. A command also lists each package module it parses
@@ -262,14 +278,11 @@ fn cache_log_lists_front_lookups() {
     let first = cheby(&dir, &["check"], &cache, &tmp, &[("CHEBY_CACHE_LOG", &log)]);
     assert_eq!(first.status, Some(0), "{}", first.stderr);
     assert_eq!(
-        std::fs::read_to_string(&log).unwrap(),
+        package_lines(&log),
         "front app miss\nfront app::greet miss\nparse app\nparse app::greet\n"
     );
     let second = cheby(&dir, &["check"], &cache, &tmp, &[("CHEBY_CACHE_LOG", &log)]);
-    assert_eq!(
-        std::fs::read_to_string(&log).unwrap(),
-        "front app hit\nfront app::greet hit\n"
-    );
+    assert_eq!(package_lines(&log), "front app hit\nfront app::greet hit\n");
     assert_eq!(second.stderr, first.stderr);
     assert_eq!(second.stdout, first.stdout);
 }

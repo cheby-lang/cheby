@@ -226,7 +226,15 @@ pub struct Session {
     /// `:reload` that changed a C source loaded (D-712, D-941,
     /// [`cheby_jit::generation_symbol`]).
     native_generation: u32,
+    /// The build cache std's code is loaded from (K6, D-971, D-980): std's
+    /// records, which std's first use writes; nothing of the session is
+    /// stored (D-964). `None` compiles std in the session, as before.
+    std_store: Option<crate::Cache>,
 }
+
+/// A std module's code record a session loads (K6): its module, path and
+/// record.
+type StdRecord = (ModuleId, String, cheby_codegen_clif::record::CodeRecord);
 
 /// A native symbol that an `@external(native, …)` of a session item
 /// binds: live while the item is the session's definition of its name
@@ -313,6 +321,23 @@ impl Session {
     /// compiler's `CHEBY_RC` and `CHEBY_UNWIND_EDGES`; or if the session's
     /// runtime cannot start its threads.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
+        Self::start_cached(dir, options, None)
+    }
+
+    /// [`Session::start`], loading std's code from `cache`'s records (K6,
+    /// D-971, D-980): the first batch that needs std loads every std
+    /// module's record, which std's first use writes when one is missing;
+    /// nothing of the session is stored (D-964). [`Session::end`] finishes
+    /// the cache (its `CHEBY_CACHE_LOG` and its writes).
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::start`].
+    pub fn start_cached(
+        dir: &Path,
+        options: SessionOptions,
+        cache: Option<crate::Cache>,
+    ) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
         // No borrowing in any package unit a session lowers (D-715, D-808):
         // a later batch could tail-call a function compiled with a mask
@@ -394,6 +419,7 @@ impl Session {
             runtime,
             group: DetachedGroup::new(),
             stuck: Vec::new(),
+            std_store: cache,
         };
         Ok(Start::Ready(Box::new(session), warnings))
     }
@@ -470,6 +496,11 @@ impl Session {
     /// (D-797), and the host ends with that status, printing nothing more.
     /// Later calls do nothing; dropping the session calls it.
     pub fn end(&mut self) -> Option<i32> {
+        // K6: std's records are written and the lookup log with them; a
+        // failure only costs a later command a miss (D-1129).
+        if let Some(cache) = self.std_store.take() {
+            let _ = cache.finish(false);
+        }
         let runtime = self.runtime.take()?;
         for group in std::iter::once(&self.group).chain(&self.stuck) {
             if runtime.teardown(group).halted {
@@ -908,6 +939,7 @@ impl Session {
             )
         }));
         let built = self.lower(entry)?;
+        self.load_std_records(&built.std_records)?;
         // The slots the entry's redefinitions take over keep their old code
         // until the constants the new code reads are filled
         // (`evaluate_and_publish`).
@@ -1975,6 +2007,9 @@ impl ModuleLookup for ReloadLookup<'_, '_> {
 /// What [`Session::lower`] made.
 struct Built {
     units: Vec<MirModule>,
+    /// Std's records, loaded before `units` when this batch is the first
+    /// to need std in a session with a cache (K6).
+    std_records: Vec<StdRecord>,
     /// The items it lowered.
     items: Vec<DefId>,
     /// The modules whose code units it compiles.
@@ -2057,6 +2092,7 @@ impl Session {
         needed: &[ModuleId],
         items: &mut Vec<DefId>,
         lowered: &mut Vec<ModuleId>,
+        records: &mut Vec<StdRecord>,
     ) -> Result<Option<Vec<MirModule>>, Error> {
         let first = crate::backend::command_scope() == crate::backend::Scope::Whole
             && needed
@@ -2066,19 +2102,106 @@ impl Session {
         if !first {
             return Ok(None);
         }
+        // K6 (D-971, D-980): with a cache, std's normal code is every std
+        // module's record, which std's first use writes when one misses.
+        if let Some(cache) = self.std_store.as_ref().filter(|c| c.reads) {
+            let std_mir = crate::std_cache::std_mir(self.mir);
+            let settings = crate::std_cache::std_settings(&crate::borrowing::settings(
+                crate::cache::BuildKind::Std,
+                std_mir,
+            ));
+            let modules: Vec<ModuleId> = self
+                .front
+                .order
+                .iter()
+                .copied()
+                .filter(|&m| m != ModuleId::BUILTIN && self.is_std(m))
+                .collect();
+            let mut paths = Vec::with_capacity(modules.len());
+            for &module in &modules {
+                paths.push(self.front.modules.try_get(module)?.path.to_string());
+            }
+            let at = crate::std_cache::StdStore::of_cache(cache);
+            let mut found = crate::std_cache::std_records(&at, &paths, &settings, std_mir)?;
+            for (module, path) in modules.into_iter().zip(paths) {
+                let record = found
+                    .remove(&path)
+                    .ok_or_else(|| Ice::new(format!("no std record of `{path}`")))?;
+                self.std_compiled(module, items, lowered)?;
+                records.push((module, path, record));
+            }
+            return Ok(Some(Vec::new()));
+        }
         let units = self.lower_std()?;
         for unit in &units {
             if let Some(module) = unit.module() {
-                lowered.push(module);
-                let c = self
-                    .front
-                    .checked(module)
-                    .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
-                items.extend(c.thir.fns.iter().map(|f| f.def));
-                items.extend(c.thir.consts.iter().map(|c| c.def));
+                self.std_compiled(module, items, lowered)?;
             }
         }
         Ok(Some(units))
+    }
+
+    /// K6: loads std's `records` into the session's JIT, in a batch of
+    /// their own before the entry's; std redefines no slot, so nothing
+    /// waits to be published (D-971, D-1220).
+    fn load_std_records(&mut self, records: &[StdRecord]) -> Result<(), Error> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let batch: Vec<cheby_jit::BatchUnit<'_>> = records
+            .iter()
+            .map(|(module, path, record)| cheby_jit::BatchUnit::Record {
+                record,
+                unit: cheby_mir::UnitKind::Code(*module),
+                path,
+            })
+            .collect();
+        self.jit
+            .compile_units(&batch, &cheby_jit::BatchCx { test_ordinals: &[] })?;
+        // A record carries no index of its slots: std's constants are named
+        // by symbol, as `code_cache::name_consts` names a command's (K4c).
+        let mut names = Vec::new();
+        for (module, path, _) in records {
+            let (Some(c), Some(iface)) = (self.front.checked(*module), self.front.set.get(*module))
+            else {
+                continue;
+            };
+            for constant in &c.thir.consts {
+                let item = iface
+                    .item(constant.def.index)
+                    .ok_or_else(|| Ice::new("a std constant without its item"))?;
+                let name = cheby_mir::DefName {
+                    def: constant.def,
+                    module: path.as_str().into(),
+                    item: self.front.globals.names.get(item.name).into(),
+                };
+                let symbol = cheby_codegen_clif::mangle::item(
+                    cheby_codegen_clif::mangle::Kind::Const,
+                    &name,
+                );
+                names.push((constant.def, symbol));
+            }
+        }
+        self.jit.name_consts(names);
+        Ok(())
+    }
+
+    /// Adds std module `module` to what a batch compiles: the module, its
+    /// functions and its constants.
+    fn std_compiled(
+        &self,
+        module: ModuleId,
+        items: &mut Vec<DefId>,
+        lowered: &mut Vec<ModuleId>,
+    ) -> Result<(), Error> {
+        lowered.push(module);
+        let c = self
+            .front
+            .checked(module)
+            .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
+        items.extend(c.thir.fns.iter().map(|f| f.def));
+        items.extend(c.thir.consts.iter().map(|c| c.def));
+        Ok(())
     }
 
     /// Lowers what `entry` reaches that is not compiled yet. MIR lowering
@@ -2108,7 +2231,8 @@ impl Session {
         let mut units = Vec::new();
         let mut items = Vec::new();
         let mut lowered_modules = Vec::new();
-        let std_first = self.std_batch(&reach, &modules, &mut items, &mut lowered_modules)?;
+        let (mut std_records, lowered) = (Vec::new(), &mut lowered_modules);
+        let std_first = self.std_batch(&reach, &modules, &mut items, lowered, &mut std_records)?;
         let std_first = std_first.map(|std| units.extend(std)).is_some();
         let wanted = |def: DefId| reach.contains(def) && !self.compiled.contains(&def);
         for module in modules {
@@ -2175,6 +2299,7 @@ impl Session {
         units.extend(self.lower_entry_units(entry, &thunks, &all)?);
         Ok(Built {
             units,
+            std_records,
             items,
             modules: lowered_modules,
             constants,

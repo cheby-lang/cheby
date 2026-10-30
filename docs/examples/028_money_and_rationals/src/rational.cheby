@@ -71,12 +71,18 @@ pub fn from_percent(percent: Int) -> Rational {
 pub fn add(a: Rational, b: Rational) -> Rational {
   // Inside this function the fields are plain `Int`s, so these
   // operators are the built-in ones.
-  normalize(a.numerator * b.denominator + b.numerator * a.denominator, a.denominator * b.denominator)
+  normalize(
+    a.numerator * b.denominator + b.numerator * a.denominator,
+    a.denominator * b.denominator,
+  )
 }
 
 /// Makes `Rational` satisfy `Sub`, so `a - b` calls this function.
 pub fn sub(a: Rational, b: Rational) -> Rational {
-  normalize(a.numerator * b.denominator - b.numerator * a.denominator, a.denominator * b.denominator)
+  normalize(
+    a.numerator * b.denominator - b.numerator * a.denominator,
+    a.denominator * b.denominator,
+  )
 }
 
 /// Makes `Rational` satisfy `Mul`, so `a * b` calls this function.

@@ -476,3 +476,234 @@ const fn ctype(tag: u8) -> Option<CType> {
         _ => return None,
     })
 }
+
+/// What a warm `cheby run` or `cheby test` reads of a package module it
+/// does not check (K4d, D-1250, GAP(warm-check-before-keys)), stored beside
+/// its front record under [`warm_facts_key`] by a command of either that
+/// checked it: its summaries in the walk's form (`load_set::summarize`,
+/// D-1178: in the order reach's walk meets them, which the front record's
+/// sorted ones are not), its `main` (the item, its name's span in its own
+/// file and its entry, encoded by `warm_keys.rs`; `Opaque` when the entry
+/// names something a decoded interface holds no name for), and its tests
+/// on native in source order (a decoded interface holds no test, D-1121:
+/// a warm command adds them to the hit's decoded interface, so a test's
+/// def names it as a cold build's does).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WarmFacts {
+    /// The summaries, in the walk's form.
+    pub summaries: Vec<ReferenceSummary>,
+    /// The module's `main`.
+    pub main: WarmMain,
+    /// The module's tests on native, in source order; `None` when one's
+    /// entry cannot be named from decoded interfaces (the module is then
+    /// checked under `cheby test`).
+    pub tests: Option<Vec<WarmTest>>,
+    /// The module's private items, in item order (no encoding holds them,
+    /// D-953): its own summaries name them, so a warm command adds them to
+    /// the hit's decoded interface, without signatures.
+    pub private: Vec<WarmItem>,
+}
+
+/// A private item of a [`WarmFacts`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WarmItem {
+    /// Its kind's byte (`warm_keys.rs`).
+    pub kind: u8,
+    /// Its name.
+    pub name: String,
+    /// Its parent, a constructor's type or an interface function's
+    /// interface, as an index into [`WarmFacts::private`].
+    pub parent: Option<u32>,
+    /// Its name's span (start, length) in the module's own file.
+    pub span: (u32, u32),
+}
+
+/// One test of a [`WarmFacts`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WarmTest {
+    /// Its name, as written.
+    pub name: String,
+    /// Its name literal's span (start, length) in the module's own file.
+    pub span: (u32, u32),
+    /// Its entry, as `warm_keys.rs` encodes it.
+    pub entry: Vec<u8>,
+}
+
+/// A module's `main` in its [`WarmFacts`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WarmMain {
+    /// The module has no `main`.
+    None,
+    /// Its item name, its name's span (start, length) and its encoded entry.
+    Entry {
+        /// The item's name.
+        item: String,
+        /// The name's span in the module's own file.
+        span: (u32, u32),
+        /// The entry, as `warm_keys.rs` encodes it.
+        entry: Vec<u8>,
+    },
+    /// A `main` whose entry cannot be named from decoded interfaces: the
+    /// module is checked.
+    Opaque,
+}
+
+/// The first bytes of a [`WarmFacts`] payload.
+const WARM_MAGIC: &[u8; 4] = b"CBWF";
+/// The version of a [`WarmFacts`] payload.
+const WARM_VERSION: u8 = 1;
+
+/// The key of the warm facts of the module whose front identity is `f2`:
+/// `KeyKind::Front` over `F2` and the tag `warm-facts`, so a stale identity
+/// finds none.
+#[must_use]
+pub fn warm_facts_key(f2: Hash128, build: BuildId) -> Key {
+    Key::builder(KeyKind::Front, build)
+        .hash(f2)
+        .str("warm-facts")
+        .finish()
+}
+
+impl WarmFacts {
+    /// The sealed payload.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.raw(WARM_MAGIC);
+        w.u8(WARM_VERSION);
+        w.len(self.summaries.len());
+        for summary in &self.summaries {
+            w.str(&summary.item);
+            w.u8(summary.kind.tag());
+            w.len(summary.mentions.len());
+            for item in &summary.mentions {
+                w.str(&item.module);
+                w.str(&item.item);
+            }
+        }
+        match &self.main {
+            WarmMain::None => w.u8(0),
+            WarmMain::Entry { item, span, entry } => {
+                w.u8(1);
+                w.str(item);
+                w.u32(span.0);
+                w.u32(span.1);
+                w.len(entry.len());
+                w.raw(entry);
+            }
+            WarmMain::Opaque => w.u8(2),
+        }
+        match &self.tests {
+            None => w.u8(0),
+            Some(tests) => {
+                w.u8(1);
+                w.len(tests.len());
+                for test in tests {
+                    w.str(&test.name);
+                    w.u32(test.span.0);
+                    w.u32(test.span.1);
+                    w.len(test.entry.len());
+                    w.raw(&test.entry);
+                }
+            }
+        }
+        w.len(self.private.len());
+        for item in &self.private {
+            w.u8(item.kind);
+            w.str(&item.name);
+            match item.parent {
+                None => w.u8(0),
+                Some(parent) => {
+                    w.u8(1);
+                    w.u32(parent);
+                }
+            }
+            w.u32(item.span.0);
+            w.u32(item.span.1);
+        }
+        sealed(w.finish())
+    }
+
+    /// The facts of a payload, or `None` when it is malformed: a miss.
+    #[must_use]
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let mut r = Reader::new(unsealed(bytes)?);
+        if r.take(WARM_MAGIC.len())? != WARM_MAGIC || r.u8()? != WARM_VERSION {
+            return None;
+        }
+        let mut summaries = Vec::new();
+        for _ in 0..r.len()? {
+            let item = r.str()?.to_owned();
+            let kind = MentionerKind::of_tag(r.u8()?)?;
+            // Unsorted: the walk's order.
+            let mut mentions = Vec::new();
+            for _ in 0..r.len()? {
+                mentions.push(ItemRef {
+                    module: r.str()?.to_owned(),
+                    item: r.str()?.to_owned(),
+                });
+            }
+            summaries.push(ReferenceSummary {
+                item,
+                kind,
+                mentions,
+            });
+        }
+        let main = match r.u8()? {
+            0 => WarmMain::None,
+            1 => {
+                let item = r.str()?.to_owned();
+                let span = (r.u32()?, r.u32()?);
+                let n = r.len()?;
+                WarmMain::Entry {
+                    item,
+                    span,
+                    entry: r.take(n)?.to_vec(),
+                }
+            }
+            2 => WarmMain::Opaque,
+            _ => return None,
+        };
+        let tests = match r.u8()? {
+            0 => None,
+            1 => {
+                let mut tests = Vec::new();
+                for _ in 0..r.len()? {
+                    let name = r.str()?.to_owned();
+                    let span = (r.u32()?, r.u32()?);
+                    let n = r.len()?;
+                    tests.push(WarmTest {
+                        name,
+                        span,
+                        entry: r.take(n)?.to_vec(),
+                    });
+                }
+                Some(tests)
+            }
+            _ => return None,
+        };
+        let mut private = Vec::new();
+        for _ in 0..r.len()? {
+            let kind = r.u8()?;
+            let name = r.str()?.to_owned();
+            let parent = match r.u8()? {
+                0 => None,
+                1 => Some(r.u32()?),
+                _ => return None,
+            };
+            let span = (r.u32()?, r.u32()?);
+            private.push(WarmItem {
+                kind,
+                name,
+                parent,
+                span,
+            });
+        }
+        r.is_done().then_some(Self {
+            summaries,
+            main,
+            tests,
+            private,
+        })
+    }
+}

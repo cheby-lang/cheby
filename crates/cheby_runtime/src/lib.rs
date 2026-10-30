@@ -47,6 +47,7 @@ pub mod desc;
 pub mod entry;
 mod env;
 pub mod ffi;
+mod ffi_pool;
 pub mod fiber;
 pub(crate) mod fiber_ops;
 pub mod file;

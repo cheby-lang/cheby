@@ -22,6 +22,20 @@
 #   base cannot run, or for which it prints another size or checksum, is
 #   left out and listed (D-897). The rounds' JSON is uploaded as an
 #   artifact. Nothing here fails on a ratio: the reading goes to the user.
+# - "Resolve the base" writes the resolved base commit to
+#   `bench-results/base.txt`, so a reading can check which base it was
+#   against (the input defaults to M2's exit, so a dispatch without
+#   `-f base=` is otherwise read against the wrong base).
+# - The split of the time outside `main` (D-1254): after the rounds, one
+#   `bench-run --split` round (`--runs 1`) times, per benchmark and binary,
+#   `cheby check`, `cheby run` and the executable that `cheby build -o`
+#   makes in a temporary directory, the last two with `CHEBY_RT_STATS=1`,
+#   and counts the cache log's lines. Its JSON is `split-001.json`, which
+#   `round-*.json` does not match, and `.github/scripts/bench_split.py`
+#   writes its buckets to the step summary. `cheby build` needs the
+#   measured `cheby`'s runtime archive (D-929), so "Build both" builds it
+#   too. A base without `cheby build`, such as `bbed11b`, gets no
+#   executable and a note.
 
 name: Bench
 
@@ -79,6 +93,8 @@ jobs:
             exit 1
           fi
           echo "BASE=$base" >> "$GITHUB_ENV"
+          mkdir -p bench-results
+          echo "$base" > bench-results/base.txt
           {
             echo "# Bench: \`$GITHUB_SHA\` against \`$base\`"
             echo
@@ -93,6 +109,9 @@ jobs:
           (cd "$RUNNER_TEMP/base" && cargo build --release --locked \
             --package cheby_cli --target-dir "$GITHUB_WORKSPACE/target/bench-base")
           cargo build --release --locked --package cheby_cli
+          # The runtime archive beside the measured `cheby`, for the
+          # split's `cheby build` (D-929).
+          cargo build --release --locked --package cheby_rt_exe
       - name: Rounds of bench-run against the base
         env:
           ROUNDS: ${{ inputs.rounds }}
@@ -112,6 +131,15 @@ jobs:
           python3 -I .github/scripts/bench_rounds.py \
             --title "Run time against \`$BASE\` (D-1035)" bench-results/round-*.json \
             >> "$GITHUB_STEP_SUMMARY"
+      - name: Split of the time outside main (D-1254)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo xtask bench-run --cheby target/release/cheby \
+            --against target/bench-base/release/cheby --commit "$GITHUB_SHA" \
+            --runs 1 --split --json bench-results/split-001.json
+          python3 -I .github/scripts/bench_split.py \
+            --title "Split of the time outside main against \`$BASE\` (D-1254)" \
+            bench-results/split-001.json >> "$GITHUB_STEP_SUMMARY"
       # K7 (wave 10) adds the other two readings of D-1035 here, each with
       # its own steps and its own section of the step summary, and its files
       # under bench-results/: OQ-P11's edit-to-run latency (D-974: a release
@@ -119,7 +147,7 @@ jobs:
       # lines with seed 1 in the shapes `wide` and `deep`, one cold run, then
       # five rounds of each edit, `CHEBY_PHASES` for the breakdown) and
       # D-247's compile throughput.
-      - name: Upload the rounds
+      - name: Upload the rounds, the split and the base
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:

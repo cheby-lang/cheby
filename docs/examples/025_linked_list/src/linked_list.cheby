@@ -133,8 +133,7 @@ pub fn map<T, U>(items: LinkedList<T>, transform: fn(T) -> U) -> LinkedList<U> {
 pub fn show<T: Show>(items: LinkedList<T>) -> String {
   // `T` is a type parameter, so its `show` is called through the
   // interface (D-173).
-  let shown =
-    to_list(items)
+  let shown = to_list(items)
     |> list::map(_, fn(item) { Show::show(item) })
     |> string::join(_, " -> ")
   "[{shown}]"

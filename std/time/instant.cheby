@@ -21,7 +21,9 @@ import std::duration
 /// built-in structural ones, which compare readings because a `Duration`
 /// has one representation (D-650). It satisfies `Compare` through
 /// `compare`, and has no `Show`, since its origin is hidden.
-pub type Instant { since_origin: duration::Duration }
+pub type Instant {
+  since_origin: duration::Duration,
+}
 
 // Building readings
 

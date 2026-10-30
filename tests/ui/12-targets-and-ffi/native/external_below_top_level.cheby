@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @milestone: M3
+// @decisions: D-948
+//! Native foreign code returns a value of an external type only as the
+//! function's direct result (§12.5.1): outside std, `Result<Db, String>` as
+//! a native foreign result is E0079 at the `@external(native, …)`.
+
+@external(native, "db_close")
+pub type Db
+
+@external(native, "db_open")
+pub fn open(path: String) -> Result<Db, String>

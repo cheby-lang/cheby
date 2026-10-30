@@ -83,13 +83,14 @@ fn fmt_expr_call_hugs_a_last_call_that_hugs() {
         ),
         &wrap(src),
     );
-    // Narrower, the hugging call moves to the next line and hugs there.
+    // Narrower, the call breaks on the arm's line: an arm's body never
+    // moves to the next line (GAP(case-arm-layout)).
     body(
         &wrap(src),
         (
             50,
             &wrap(
-                "  [head, ..tail] =>\n      Some(fold(tail, head, fn(best, item) {\n        pick(best, item)\n      }))\n",
+                "  [head, ..tail] => Some(\n      fold(tail, head, fn(best, item) {\n        pick(best, item)\n      }),\n    )\n",
             ),
         ),
         &wrap(src),
@@ -110,16 +111,86 @@ fn fmt_expr_value_after_equals_hugs_before_moving() {
 }
 
 #[test]
-fn fmt_expr_arm_body_moves_to_the_next_line_before_breaking() {
-    // After `=>`, a body that fits flat on the next line goes there.
+fn fmt_expr_arm_body_breaks_on_the_arm_line() {
+    // GAP(case-arm-layout): after `=>`, a body that does not fit flat on
+    // the arm's line breaks there; it never moves to the next line.
     let wrap = |arm: &str| format!("  case x {{\n{arm}  }}\n");
     body(
         &wrap("    Missing(what) => error_json(404, \"no such {what}\", [])\n"),
         (
             50,
-            &wrap("    Missing(what) =>\n      error_json(404, \"no such {what}\", [])\n"),
+            &wrap(
+                "    Missing(what) => error_json(\n      404,\n      \"no such {what}\",\n      [],\n    )\n",
+            ),
         ),
         &wrap("    Missing(what) => error_json(404, \"no such {what}\", [])\n"),
+    );
+    // The next-line body of the old layout comes back to the arm's line,
+    // hugging its last argument when that first line fits.
+    body(
+        &wrap("    Some(name) =>\n      step(names, [..seated, sit(name)])\n"),
+        (
+            44,
+            &wrap("    Some(name) => step(names, [\n      ..seated,\n      sit(name),\n    ])\n"),
+        ),
+        &wrap("    Some(name) => step(names, [..seated, sit(name)])\n"),
+    );
+    // A body that cannot break stays on the arm's line past the width.
+    body(
+        &wrap("    Missing(what) =>\n      \"no such thing as {what} anywhere\"\n"),
+        (
+            30,
+            &wrap("    Missing(what) => \"no such thing as {what} anywhere\"\n"),
+        ),
+        &wrap("    Missing(what) => \"no such thing as {what} anywhere\"\n"),
+    );
+}
+
+#[test]
+fn fmt_expr_arm_block_body_always_breaks() {
+    // GAP(case-arm-layout): an arm's block body is broken even with one
+    // statement that fits.
+    let wrap = |arms: &str| format!("  case x {{\n{arms}  }}\n");
+    let out = wrap(
+        "    Some(0x20) | Some(0x0A) => {\n      read_value(builder, i + 1)\n    }\n    None => done\n    _ => fail\n",
+    );
+    body(
+        &wrap(
+            "    Some(0x20) | Some(0x0A) => { read_value(builder, i + 1) }\n    None => done\n    _ => fail\n",
+        ),
+        (60, &out),
+        &out,
+    );
+    // A closure's or a `let`'s one-statement block keeps D-1155's form.
+    body(
+        "  let g = fn(y) { y + 1 }\n",
+        (40, "  let g = fn(y) { y + 1 }\n"),
+        "  let g = fn(y) { y + 1 }\n",
+    );
+}
+
+#[test]
+fn fmt_expr_arms_have_one_space_before_the_arrow() {
+    // GAP(case-arm-layout): every arm has one space between its patterns
+    // and guard and `=>`, whatever its neighbours; source padded to line
+    // up the arrows formats to one space (and stays there: idempotence).
+    let wrap = |arms: &str| format!("  case op {{\n{arms}  }}\n");
+    let out = wrap(
+        "    Add => a + b\n    Subtract => a - b\n\n    Divide when b == 0 => Err(\"zero\")\n    Divide => Ok(a / b)\n",
+    );
+    body(
+        &wrap(
+            "    Add      => a + b\n    Subtract => a - b\n\n    Divide when b == 0 => Err(\"zero\")\n    Divide             => Ok(a / b)\n",
+        ),
+        (60, &out),
+        &out,
+    );
+    // A subjectless `case`'s arms too.
+    let out = "  case {\n    x < 0 => \"negative\"\n    _ => \"other\"\n  }\n";
+    body(
+        "  case {\n    x < 0 => \"negative\"\n    _     => \"other\"\n  }\n",
+        (60, out),
+        out,
     );
 }
 
@@ -168,40 +239,81 @@ fn fmt_expr_one_operator_lays_out_its_right_operand_as_a_value() {
 
 #[test]
 fn fmt_expr_pipeline_one_stage_per_line() {
+    // GAP(pipes-always-broken): one stage per line even when it fits; as
+    // a statement, the `|>` lines stay at the head's indentation.
+    let out = "  orders\n  |> list::filter(_, is_paid)\n  |> list::map(_, price)\n";
     body(
         "  orders |> list::filter(_, is_paid)\n    |> list::map(_, price)\n",
-        (
-            30,
-            "  orders\n  |> list::filter(_, is_paid)\n  |> list::map(_, price)\n",
-        ),
-        "  orders |> list::filter(_, is_paid) |> list::map(_, price)\n",
+        (30, out),
+        out,
+    );
+    // A single `|>` breaks too.
+    body(
+        "  data |> bytes::to_list\n",
+        (30, "  data\n  |> bytes::to_list\n"),
+        "  data\n  |> bytes::to_list\n",
     );
 }
 
 #[test]
-fn fmt_expr_pipeline_value_moves_to_the_next_line() {
+fn fmt_expr_pipeline_value_stays_on_the_operator_line() {
+    // After `=`, `<-` and `=>`, the head stays on the operator's line and
+    // the `|>` lines go one level deeper (GAP(pipes-always-broken)).
+    let out = "  let total = orders\n    |> list::filter(_, is_paid)\n    |> list::map(_, price)\n";
     body(
         "  let total = orders |> list::filter(_, is_paid) |> list::map(_, price)\n",
+        (32, out),
+        out,
+    );
+    let out = "  use x <- xs\n    |> result::try\n  x\n";
+    body("  use x <- xs |> result::try\n  x\n", (30, out), out);
+    let out = "  case path {\n    \"/old\" => text(301, \"\")\n      |> with_header(_, \"location\", \"/new\")\n    _ => text(404, \"\")\n  }\n";
+    body(
+        "  case path {\n    \"/old\" => text(301, \"\") |> with_header(_, \"location\", \"/new\")\n    _ => text(404, \"\")\n  }\n",
+        (60, out),
+        out,
+    );
+}
+
+#[test]
+fn fmt_expr_pipeline_nested_in_other_constructs() {
+    // A pipe in a call argument, in a one-statement closure and as an
+    // operand breaks; the construct around it breaks as a multi-line
+    // element requires (GAP(pipes-always-broken)).
+    body(
+        "  f(xs |> list::sum)\n",
+        (40, "  f(\n    xs\n    |> list::sum,\n  )\n"),
+        "  f(\n    xs\n    |> list::sum,\n  )\n",
+    );
+    body(
+        "  let g = fn(x) { x |> double }\n",
+        (40, "  let g = fn(x) {\n    x\n    |> double\n  }\n"),
+        "  let g = fn(x) {\n    x\n    |> double\n  }\n",
+    );
+    body(
+        "  assert [\"x\", \"y\"] |> join(_, \"\") == \"xy\"\n",
         (
-            32,
-            "  let total =\n    orders\n    |> list::filter(_, is_paid)\n    |> list::map(_, price)\n",
+            60,
+            "  assert [\"x\", \"y\"]\n    |> join(_, \"\") == \"xy\"\n",
         ),
-        "  let total = orders |> list::filter(_, is_paid) |> list::map(_, price)\n",
+        "  assert [\"x\", \"y\"]\n    |> join(_, \"\") == \"xy\"\n",
     );
 }
 
 #[test]
 fn fmt_expr_pipeline_last_stage_breaks_by_itself() {
+    // The last stage hugs its closure by its own layout, on its own line.
+    let out = "  xs\n  |> list::each(_, fn(x) {\n    io::println(x)\n    io::println(x)\n  })\n";
     let src = "  xs |> list::each(_, fn(x) {\n    io::println(x)\n    io::println(x)\n  })\n";
-    body(src, (30, src), src);
-    // When the last stage cannot hug on that line, one stage per line.
+    body(src, (30, out), out);
+    // When the last stage cannot hug on its line, its arguments break.
     body(
         src,
         (
             20,
             "  xs\n  |> list::each(\n    _,\n    fn(x) {\n      io::println(x)\n      io::println(x)\n    },\n  )\n",
         ),
-        src,
+        out,
     );
     body(
         src,
@@ -209,7 +321,7 @@ fn fmt_expr_pipeline_last_stage_breaks_by_itself() {
             16,
             "  xs\n  |> list::each(\n    _,\n    fn(x) {\n      io::println(\n        x,\n      )\n      io::println(\n        x,\n      )\n    },\n  )\n",
         ),
-        src,
+        out,
     );
 }
 
@@ -273,10 +385,10 @@ fn fmt_expr_case_arms() {
     body(
         "  case shape {\n    Circle(radius) when radius > 0 => area(radius)\n    Square(side) => { side * side }\n    _ => 0\n  }\n",
         (
-            40,
-            "  case shape {\n    Circle(radius) when radius > 0 =>\n      area(radius)\n    Square(side) => { side * side }\n    _ => 0\n  }\n",
+            48,
+            "  case shape {\n    Circle(radius) when radius > 0 => area(\n      radius,\n    )\n    Square(side) => {\n      side * side\n    }\n    _ => 0\n  }\n",
         ),
-        "  case shape {\n    Circle(radius) when radius > 0 => area(radius)\n    Square(side) => { side * side }\n    _ => 0\n  }\n",
+        "  case shape {\n    Circle(radius) when radius > 0 => area(radius)\n    Square(side) => {\n      side * side\n    }\n    _ => 0\n  }\n",
     );
 }
 

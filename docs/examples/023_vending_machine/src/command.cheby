@@ -45,8 +45,7 @@ const help: String = "commands: coin CENTS, select CODE, cancel, restock CODE CO
 fn parse_command(line: String) -> Result<Command, ParseError> {
   // Splitting on single spaces leaves an empty word wherever two spaces
   // meet, so those are dropped.
-  let words =
-    line
+  let words = line
     |> string::trim
     |> string::split(_, " ")
     |> list::filter(_, fn(word) { word != "" })

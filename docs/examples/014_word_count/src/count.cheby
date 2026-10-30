@@ -115,7 +115,8 @@ fn format_lines(entries: List<Entry>) -> List<String> {
       // The first `_` is the pipe's hole in `list::map`. The second is
       // nested in `format_line(_, width)`, so it belongs to
       // `format_line` and makes a capture (D-202, D-244).
-      entries |> list::map(_, format_line(_, width))
+      entries
+      |> list::map(_, format_line(_, width))
     }
   }
 }

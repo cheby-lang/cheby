@@ -606,7 +606,19 @@ impl<'t> Formatter<'t> {
             let comma = inner.iter().any(|c| c.kind() == SyntaxKind::COMMA);
             style.comma = Comma::Kept(comma);
         }
-        self.list(open, inner, close, style)
+        let doc = self.list(open, inner, close, style)?;
+        // GAP(type-bodies-always-broken): a type definition's own body,
+        // its variants or its record fields, is always broken, one element
+        // per line with the trailing comma of a broken list (D-1152),
+        // however short. A record-shaped variant's fields, a variant's
+        // payload and every other list keep the fit-or-break rule.
+        let type_body = matches!(
+            node.kind(),
+            SyntaxKind::VARIANT_LIST | SyntaxKind::RECORD_FIELD_LIST
+        ) && node
+            .parent()
+            .is_some_and(|p| p.kind() == SyntaxKind::TYPE_DECL);
+        Some(if type_body { doc.expand_last() } else { doc })
     }
 
     /// A comma-separated list between the delimiters `open` and `close`.

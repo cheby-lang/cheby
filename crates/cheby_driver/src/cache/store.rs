@@ -359,6 +359,14 @@ impl StoreShare {
         self.shared.build
     }
 
+    /// [`Store::put_blob`]: std's first use writes its front records'
+    /// interface artifacts (K6, D-980).
+    pub(crate) fn put_blob(&self, bytes: &[u8]) -> Result<Hash128, StoreError> {
+        let name = Hash128::of(bytes);
+        put_entry(&self.shared, FileKind::Blob, name, bytes)?;
+        Ok(name)
+    }
+
     /// [`Store::put_record`].
     pub(crate) fn put_record(&self, key: &Key, payload: &[u8]) -> Result<(), StoreError> {
         put_entry(&self.shared, FileKind::Record, key.hash(), payload)

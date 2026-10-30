@@ -47,7 +47,11 @@
 //! `func.rs`), so the helper sees it: the external helper releases the
 //! handle, and the cleanup of the value helper's edge releases the owned
 //! result, before the wrapper unwinds. A scalar or `Nil` result needs no
-//! release: the flag's test after the call unwinds at once.
+//! release: the flag's test after the call unwinds at once. The same holds
+//! for a package's `@blocking` external (D-950): a cancellation or a failed
+//! allocation during its pool job comes back with the result word and the
+//! flag set, and the helper releases the result on the fiber, an external
+//! one through its drop function (D-171).
 
 use cheby_iface::{FnSig, Ice, ItemSig, PackageId, Ty, TyKind, TypeDefKind};
 use cheby_types::thir;

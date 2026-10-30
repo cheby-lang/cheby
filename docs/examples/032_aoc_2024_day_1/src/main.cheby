@@ -13,21 +13,25 @@
 //! the sample is included. Download your own input to solve the real
 //! puzzle.
 
+import aoc_2024_day_1::puzzle
 import std::env
 import std::io
 import std::result
-import aoc_2024_day_1::puzzle
 
 fn main() -> Result<Nil, AppError> {
   // Each step builds a `Result` with an `AppError` in it, and `use`
   // stops at the first `Err`. `result::map_error` wraps each module's
   // error. The `_` in `ReadFailed(path, _)` belongs to that
   // constructor, not to the pipe (D-244).
-  let found_path = env::args() |> parse_args
+  let found_path = env::args()
+    |> parse_args
   use path <- result::try(found_path)
-  let file_text = io::read_file(path) |> result::map_error(_, ReadFailed(path, _))
+  let file_text = io::read_file(path)
+    |> result::map_error(_, ReadFailed(path, _))
   use text <- result::try(file_text)
-  let columns = text |> puzzle::parse |> result::map_error(_, BadInput(path, _))
+  let columns = text
+    |> puzzle::parse
+    |> result::map_error(_, BadInput(path, _))
   use (lefts, rights) <- result::try(columns)
   // Interpolation takes a path, not a call, so the answers are bound
   // first.

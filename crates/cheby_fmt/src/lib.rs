@@ -29,10 +29,10 @@ use cheby_diag::{Diagnostic, FileId};
 
 pub use layout::Coverage;
 
-/// The line width `cheby fmt` uses. D-1150: 100
-/// columns until the user chooses the width at CP2 from the formatter's
-/// measurement of 80, 100 and 120 (D-1030).
-pub const PROVISIONAL_WIDTH: usize = 100;
+/// The line width `cheby fmt` uses: 100 columns, decided at CP2 (D-1252)
+/// from the formatter's measurement of 80, 100 and 120 (D-1030), which
+/// kept D-1150's provisional width as the decided one.
+pub const WIDTH: usize = 100;
 
 /// A source that cannot be formatted because it has grammar errors.
 #[derive(Clone, Debug)]

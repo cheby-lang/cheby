@@ -15,11 +15,11 @@
 //! simpler than `std::json`'s too, with one `Number(Float)` for every
 //! number.
 
+import json::parser
 import std::env
 import std::io
 import std::list
 import std::result
-import json::parser
 
 fn main() -> Result<Nil, AppError> {
   // Each `use` stops at the first `Err` and returns it from `main`.
@@ -91,7 +91,8 @@ test "reformat puts each element and member on its own line" {
   "license": null,
   "deps": {}
 }"#
-  let compact = r#"{"name":"cheby","tags":["fibers","immutable"],"version":0.1,"stable":false,"license":null,"deps":{}}"#
+  let compact =
+    r#"{"name":"cheby","tags":["fibers","immutable"],"version":0.1,"stable":false,"license":null,"deps":{}}"#
   assert reformat(compact) == Ok(expected)
 }
 
@@ -101,7 +102,10 @@ test "reformat leaves pretty-printed JSON as it is" {
 }
 
 test "reformat reports where invalid JSON goes wrong" {
-  assert reformat("[1,]") == Err(parser::ParseError { position: 3, reason: parser::UnexpectedChar("]") })
+  assert reformat("[1,]") == Err(parser::ParseError {
+    position: 3,
+    reason: parser::UnexpectedChar("]"),
+  })
   assert reformat("") == Err(parser::ParseError { position: 0, reason: parser::UnexpectedEnd })
 }
 

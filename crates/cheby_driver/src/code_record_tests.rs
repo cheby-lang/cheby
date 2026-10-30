@@ -149,6 +149,7 @@ impl Pkg {
             None,
             &mut out,
             Some(&cache),
+            Some((false, None)),
         )
         .unwrap()
         .unwrap();
@@ -164,6 +165,7 @@ impl Pkg {
             code: true,
             jit: true,
             resolves: None,
+            reuse: false,
         };
         let lowered =
             crate::backend::lower_reading(&front, &out.sources, &roots, mir, Scope::Whole, reading)
@@ -281,9 +283,13 @@ fn code_record_warm_run_lowers_no_package_unit() {
             assert!(!local.contains(m), "a package unit was lowered: {fresh:?}");
         }
     }
+    // The package's units, each from its record (std's may come from
+    // records too, K6).
     let cached: Vec<UnitKind> = order
         .iter()
-        .filter(|(_, cached)| *cached)
+        .filter(|(unit, cached)| {
+            *cached && matches!(unit, UnitKind::Code(m) | UnitKind::Tests(m) if local.contains(m))
+        })
         .map(|(unit, _)| *unit)
         .collect();
     assert_eq!(cached.len(), MODULES.len(), "{order:?}");
@@ -339,7 +345,8 @@ fn code_record_other_version_is_a_miss_and_written_again() {
         std::fs::write(&path, changed).unwrap();
         spoiled += 1;
     }
-    assert_eq!(spoiled, MODULES.len());
+    // The package's records, and std's once std is cached (K6).
+    assert!(spoiled >= MODULES.len(), "{spoiled}");
     let again = p.run();
     assert_eq!(
         lookups(&again, "code.run"),
@@ -418,15 +425,17 @@ fn code_record_stale_lowering_hint_is_rewritten() {
     );
 }
 
-/// D-965 and D-1223: `--reuse-report` reads
-/// no code record (its lines are made while lowering), logging every lookup
-/// as a miss, and still writes; the report is the same warm as cold.
+/// D-965 (K4d, refining D-1223): `--reuse-report` reads a code record only
+/// with the reuse lines cached beside it. After a plain run, which writes
+/// none, every lookup misses and the units are lowered, which writes the
+/// lines; the next report reads every record. The report is the same warm
+/// as cold.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
-fn code_record_reuse_report_reads_no_record() {
+fn code_record_reuse_report_reads_records_with_lines() {
     let mut p = three("reuse");
     let report = |p: &mut Pkg| {
         let (cache, _) = p.open();
@@ -441,16 +450,25 @@ fn code_record_reuse_report_reads_no_record() {
         };
         program.reuse_report().to_owned()
     };
-    let cold = report(&mut p);
-    p.run();
     let options = RunOptions {
         reuse_report: true,
         ..RunOptions::default()
     };
-    let lines = p.run_with(options);
+    // The cacheless report.
+    let cold = match crate::prepare_run(p.dir(), options.clone()).unwrap() {
+        Prepared::Ready(program) => program.reuse_report().to_owned(),
+        Prepared::CompileFailed(out) => panic!("{}", out.render()),
+    };
+    p.run();
+    let lines = p.run_with(options.clone());
     assert_eq!(
         lookups(&lines, "code.run"),
         all("code.run", &MODULES, "miss")
+    );
+    let lines = p.run_with(options);
+    assert_eq!(
+        lookups(&lines, "code.run"),
+        all("code.run", &MODULES, "hit")
     );
     assert_eq!(report(&mut p), cold);
 }

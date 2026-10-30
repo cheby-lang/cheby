@@ -123,6 +123,11 @@ impl Fixture {
             output: out.render(),
             lookups: lines(&log),
             parses: parses(&log),
+            std_lookups: std::fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("front.std "))
+                .count(),
             parsed,
             checked,
             opens,
@@ -168,11 +173,25 @@ impl Fixture {
         store.flush();
     }
 
-    /// Every front record in the store.
+    /// Every package front record in the store: std's front records (K6,
+    /// D-980) and every code record are left out.
     fn records(&self) -> Vec<FrontRecord> {
+        let std: Vec<String> = crate::std_lib::STD_MODULES
+            .iter()
+            .map(|m| {
+                crate::std_cache::std_front_key(BUILD, &format!("std::{}", m.path))
+                    .hash()
+                    .to_hex()
+            })
+            .collect();
         self.files("rec")
             .iter()
-            .map(|p| FrontRecord::decode(&std::fs::read(p).unwrap()[32..]).unwrap())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_none_or(|n| !std.iter().any(|s| s == n))
+            })
+            .filter_map(|p| FrontRecord::decode(&std::fs::read(p).unwrap()[32..]))
             .collect()
     }
 }
@@ -193,6 +212,8 @@ struct Counted {
     checked: Vec<String>,
     /// Entry files the store opened to read.
     opens: usize,
+    /// The log's `front.std` lookups (K6, D-980).
+    std_lookups: usize,
     /// Entry files the store wrote.
     writes: usize,
 }
@@ -958,7 +979,13 @@ fn index_warm_check_opens_and_writes_nothing() {
         warm.lookups,
         expect_log(&["app", "app::util"], &["app", "app::util"])
     );
-    assert_eq!(warm.opens, 1, "the index only");
+    // K6 (D-980): std's front records and interface artifacts are read too,
+    // three opens per std module (`std_cache_tests.rs`); no package file.
+    assert_eq!(
+        warm.opens,
+        1 + 3 * warm.std_lookups,
+        "the index and std's records only"
+    );
     assert_eq!(warm.writes, 0);
     assert_eq!(warm.output, cold.output);
 }
@@ -1365,8 +1392,9 @@ fn cache_hit_constants_body_edit_fails_evaluation() {
 }
 
 /// No module is checked twice (D-1132): a warm
-/// `cheby check` checks nothing, and a warm `cheby run`, `cheby test` and
-/// build-mode front end check each package module once.
+/// `cheby check` checks nothing; a first `cheby run` and `cheby test` check
+/// each package module once and a warm one checks none (D-1250, K4d); the
+/// build-mode front end of `cheby build` checks each package module once.
 #[test]
 #[cfg_attr(
     windows,
@@ -1380,18 +1408,26 @@ fn cache_hit_no_module_checked_twice() {
     let once = |checked: Vec<String>| {
         assert_eq!(checked, MODULES, "each module once");
     };
-    for _ in 0..2 {
+    for first in [true, false] {
         let (cache, _) = f.open();
         let prepared = prepare_run_cached(f.dir(), RunOptions::default(), &cache).unwrap();
         assert!(matches!(prepared, Prepared::Ready(_)));
-        once(cache.checked_modules());
+        if first {
+            once(cache.checked_modules());
+        } else {
+            assert_eq!(cache.checked_modules(), Vec::<String>::new());
+        }
         cache.finish(false).unwrap();
     }
-    for _ in 0..2 {
+    for first in [true, false] {
         let (cache, _) = f.open();
         let prepared = prepare_test_cached(f.dir(), &TestOptions::default(), &cache).unwrap();
         assert!(matches!(prepared, PreparedTests::Ready(_)));
-        once(cache.checked_modules());
+        if first {
+            once(cache.checked_modules());
+        } else {
+            assert_eq!(cache.checked_modules(), Vec::<String>::new());
+        }
         cache.finish(false).unwrap();
     }
     for _ in 0..2 {
@@ -1470,4 +1506,231 @@ fn hint_empty_lost_hint_misses() {
     let (warm, log) = f.check();
     assert_eq!(log, expect_log(&MODULES, &MODULES));
     assert_eq!(warm, cold);
+}
+
+// D-973's cache-hit tests 1, 2 and 6 (K4d; K8 gathers the eight): each
+// drives `cheby run`'s command function with a cache over a fresh store
+// and reads `CHEBY_CACHE_LOG`'s `code.run` lines (D-1224), never a timing.
+
+/// The root of the code cache-hit tests: it calls `util::check` and
+/// `other::twice`, never anything of `lone`.
+const HIT_MAIN: &str = "//! Root.\n\nimport app::other\nimport app::util\nimport std::io\n\n\
+    fn main() {\n  let ok = util::check(\"x\")\n  let n = other::twice(21)\n  io::println(\"{ok} {n}\")\n}\n";
+/// `check` is package-visible (a `pub` function never borrows, D-787) and
+/// only compares its parameter: it borrows it.
+const HIT_UTIL: &str =
+    "//! Util.\n\n/// Whether `s` is `x`.\nfn check(s: String) -> Bool {\n  s == \"x\"\n}\n";
+/// A body edit of `check` that changes no mask.
+const HIT_UTIL_BODY: &str =
+    "//! Util.\n\n/// Whether `s` is `x`.\nfn check(s: String) -> Bool {\n  s == \"y\"\n}\n";
+/// A body edit of `check` that puts its parameter in a list: it owns it
+/// now, so its mask changes (D-812).
+const HIT_UTIL_MASK: &str =
+    "//! Util.\n\n/// Whether `s` is `x`.\nfn check(s: String) -> Bool {\n  [s] == [\"x\"]\n}\n";
+const HIT_OTHER: &str = "//! Other.\n\nimport app::lone\n\n/// Twice `n`.\npub fn twice(n: Int) -> Int {\n  lone::add(n, n)\n}\n";
+const HIT_LONE: &str =
+    "//! Lone.\n\n/// The sum.\npub fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n";
+
+impl Fixture {
+    /// `cheby run`'s build through the cache: the log's `code.run` lines
+    /// and its `front` lines.
+    fn run_build(&mut self) -> (Vec<String>, Vec<String>) {
+        let (cache, log) = self.open();
+        match prepare_run_cached(self.dir(), RunOptions::default(), &cache).unwrap() {
+            Prepared::Ready(_) => {}
+            Prepared::CompileFailed(out) => panic!("{}", out.render()),
+        }
+        cache.finish(false).unwrap();
+        let text = std::fs::read_to_string(&log).unwrap();
+        let of = |prefix: &str| -> Vec<String> {
+            text.lines()
+                .filter(|l| l.starts_with(prefix))
+                .map(str::to_owned)
+                .collect()
+        };
+        (of("code.run "), lines(&log))
+    }
+}
+
+/// `code.run <module> hit|miss` for each module, missing those of
+/// `misses`.
+fn code_run_lines(all: &[&str], misses: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = all
+        .iter()
+        .map(|m| {
+            let verdict = if misses.contains(m) { "miss" } else { "hit" };
+            format!("code.run {m} {verdict}")
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// The modules of the code cache-hit tests' package.
+const HIT_MODULES: [&str; 4] = ["app", "app::lone", "app::other", "app::util"];
+
+/// Whether the environment's MIR options infer masks (`CHEBY_RC=naive`
+/// infers none, so no edit changes one).
+fn infers_masks() -> bool {
+    crate::backend::mir_options_from_env().is_ok_and(|mir| mir.borrow)
+}
+
+/// Cache-hit test 1 (D-973, D-1193): a body edit that changes no mask
+/// misses only its module's code record; every other module's hits.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_body_edit_misses_only_its_module() {
+    let mut f = Fixture::new(
+        "hit_body",
+        &[
+            ("main.cheby", HIT_MAIN),
+            ("util.cheby", HIT_UTIL),
+            ("other.cheby", HIT_OTHER),
+            ("lone.cheby", HIT_LONE),
+        ],
+    );
+    let (cold, _) = f.run_build();
+    assert_eq!(cold, code_run_lines(&HIT_MODULES, &HIT_MODULES));
+    let (warm, _) = f.run_build();
+    assert_eq!(warm, code_run_lines(&HIT_MODULES, &[]));
+    f.write("util.cheby", HIT_UTIL_BODY);
+    let (edited, _) = f.run_build();
+    assert_eq!(edited, code_run_lines(&HIT_MODULES, &["app::util"]));
+}
+
+/// Cache-hit test 2 (D-973, D-812): an edit that changes the borrow mask of
+/// a package-visible function misses the code of its module and of every
+/// module of the package that calls it (`app`), and nothing else: `other`
+/// and `lone` call nothing of `util`.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_mask_edit_misses_the_callers() {
+    if !infers_masks() {
+        return;
+    }
+    let mut f = Fixture::new(
+        "hit_mask",
+        &[
+            ("main.cheby", HIT_MAIN),
+            ("util.cheby", HIT_UTIL),
+            ("other.cheby", HIT_OTHER),
+            ("lone.cheby", HIT_LONE),
+        ],
+    );
+    let (cold, _) = f.run_build();
+    assert_eq!(cold, code_run_lines(&HIT_MODULES, &HIT_MODULES));
+    f.write("util.cheby", HIT_UTIL_MASK);
+    let (edited, _) = f.run_build();
+    assert_eq!(edited, code_run_lines(&HIT_MODULES, &["app", "app::util"]));
+    let (again, _) = f.run_build();
+    assert_eq!(again, code_run_lines(&HIT_MODULES, &[]));
+}
+
+/// Cache-hit test 6 (D-973, D-955): `app` passes `b::Wrapper` values along
+/// and never reads `c`'s interface in its check, but its borrow inference
+/// walks `Wrapper`'s field into `c::Thing` (a hidden read of its lowering,
+/// `reads_tests.rs`). An interface edit of `c` that adds a field to `Thing`
+/// leaves `app`'s front record a hit and misses its code: its code identity
+/// holds `c`'s interface hash. `lone` reads nothing of `c` and hits.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_reader_lowering_edit_misses_the_reader() {
+    const MAIN: &str = "//! Root.\n\nimport app::b\nimport app::lone\n\n\
+        fn keep(w: b::Wrapper) -> b::Wrapper {\n  w\n}\n\n\
+        fn main() {\n  let _ = keep(b::wrap())\n  let _ = lone::add(1, 2)\n  Nil\n}\n";
+    const B: &str = "//! B.\n\nimport app::c\n\npub type Wrapper { inner: c::Thing }\n\n\
+        pub fn make() -> c::Thing {\n  c::Thing { size: 1 }\n}\n\n\
+        pub fn wrap() -> Wrapper {\n  Wrapper { inner: make() }\n}\n";
+    const C0: &str = "//! C.\n\npub type Thing { size: Int }\n";
+    const C1: &str = "//! C.\n\npub type Thing { size: Int, label: Int }\n";
+    const B1: &str = "//! B.\n\nimport app::c\n\npub type Wrapper { inner: c::Thing }\n\n\
+        pub fn make() -> c::Thing {\n  c::Thing { size: 1, label: 2 }\n}\n\n\
+        pub fn wrap() -> Wrapper {\n  Wrapper { inner: make() }\n}\n";
+    let mut f = Fixture::new(
+        "hit_lowering",
+        &[
+            ("main.cheby", MAIN),
+            ("b.cheby", B),
+            ("c.cheby", C0),
+            ("lone.cheby", HIT_LONE),
+        ],
+    );
+    let all = ["app", "app::b", "app::c", "app::lone"];
+    let (cold, _) = f.run_build();
+    assert_eq!(cold, code_run_lines(&all, &all));
+    f.write("c.cheby", C1);
+    f.write("b.cheby", B1);
+    let (edited, front) = f.run_build();
+    // `app`'s front record hits: its check reads nothing of `c`.
+    assert!(front.contains(&"front app hit".to_owned()), "{front:?}");
+    assert_eq!(edited, code_run_lines(&all, &["app", "app::b", "app::c"]));
+}
+
+/// D-1250 (K4d, GAP(warm-check-before-keys)): the entry of every
+/// example's `main` and of every test it holds, `Result` mains with their
+/// `Show` dictionaries included, round-trips through the warm facts'
+/// encoding by names (`warm_keys::Naming`), so a warm hit's entries unit
+/// gets what a check would give it.
+#[test]
+fn warm_run_entries_round_trip_on_every_example() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+    let mut examples: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.join("cheby.toml").is_file())
+        .collect();
+    examples.sort();
+    let (mut mains, mut results, mut tests) = (0_usize, 0_usize, 0_usize);
+    for example in examples {
+        let mut out = CheckOutput::default();
+        let Some((front, _)) = front_end(&example, frontend::Mode::Build, &mut out).unwrap() else {
+            continue;
+        };
+        let naming = crate::warm_keys::Naming {
+            modules: &front.modules,
+            set: &front.set,
+            globals: &front.globals,
+        };
+        for &m in &front.order {
+            if front.modules.get(m).unwrap().package != cheby_iface::PackageId::LOCAL {
+                continue;
+            }
+            let checked = front.checked_quiet(m).unwrap();
+            let entries = checked
+                .thir
+                .fns
+                .iter()
+                .filter_map(|f| f.entry.as_ref())
+                .chain(checked.thir.tests.iter().map(|t| &t.entry));
+            for entry in entries {
+                let bytes = naming
+                    .encode_entry(entry)
+                    .unwrap_or_else(|| panic!("{}: {entry:?}", example.display()));
+                assert_eq!(naming.decode_entry(&bytes).as_ref(), Some(entry));
+                if matches!(entry, cheby_types::thir::EntryInfo::Result { .. }) {
+                    results += 1;
+                }
+            }
+            mains += checked
+                .thir
+                .fns
+                .iter()
+                .filter(|f| f.entry.is_some())
+                .count();
+            tests += checked.thir.tests.len();
+        }
+    }
+    assert!(
+        mains >= 30 && results >= 15 && tests >= 50,
+        "{mains} {results} {tests}"
+    );
 }

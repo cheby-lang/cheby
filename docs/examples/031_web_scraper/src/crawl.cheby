@@ -40,7 +40,10 @@ type Outcome {
 }
 
 /// One path the crawl visited, and what it found there.
-type Visit { path: String, outcome: Outcome }
+type Visit {
+  path: String,
+  outcome: Outcome,
+}
 
 /// Crawls the site from `start`, with at most `limit` fetches at once
 /// and at most `max_pages` pages in all. Each fetch may take up to
@@ -79,7 +82,8 @@ fn crawl(
       }
     }
   }
-  step([start], set::from_list([start]), 0, []) |> list::sort_with(_, by_path)
+  step([start], set::from_list([start]), 0, [])
+  |> list::sort_with(_, by_path)
 }
 
 /// Fetches `path` within `deadline` and reports the visit on `done`.
@@ -104,7 +108,11 @@ priv fn visit(
 
 /// Picks the links not seen before, in order, while there is room
 /// under `max_pages`. Returns them with `seen` updated.
-fn admit(links: List<String>, seen: set::Set<String>, max_pages: Int) -> (List<String>, set::Set<String>) {
+fn admit(
+  links: List<String>,
+  seen: set::Set<String>,
+  max_pages: Int,
+) -> (List<String>, set::Set<String>) {
   list::fold(links, ([], seen), fn((fresh, known), link) {
     case {
       set::contains(known, link) || set::size(known) >= max_pages => (fresh, known)
@@ -133,7 +141,9 @@ priv fn fake(pages: map::Map<String, List<String>>) -> fn(String) -> Result<Page
     case path, map::get(pages, path) {
       "/slow", _ => {
         // A selector with only a timer arm is a sleep.
-        selector::new() |> selector::after(_, duration::seconds(10), fn() { Nil }) |> selector::select
+        selector::new()
+        |> selector::after(_, duration::seconds(10), fn() { Nil })
+        |> selector::select
         Ok(Page { status: 200, links: [] })
       }
       _, Some(links) => Ok(Page { status: 200, links })
@@ -188,5 +198,7 @@ test "the cap limits the pages visited" {
 }
 
 test "a fetch that panics fails the crawl" {
-  let assert Err(_) = crawl("/", 2, 10, duration::seconds(1), fn(_) -> Result<Page, String> { panic as "bug" })
+  let assert Err(_) = crawl("/", 2, 10, duration::seconds(1), fn(_) -> Result<Page, String> {
+    panic as "bug"
+  })
 }

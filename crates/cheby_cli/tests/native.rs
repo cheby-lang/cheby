@@ -464,3 +464,174 @@ fn native_ffi_output_order() {
     let all = format!("{}{}", test.stdout, test.stderr);
     assert!(all.contains("one\ntwo\nthree\n"), "{all}");
 }
+
+/// `@blocking` C functions of a package (D-950, §12.7): one builds a
+/// `String` with `cheby_ffi_string_new` on a pool thread, and one makes a
+/// value of an external type there, whose drop function writes a line.
+const BLOCKING_C: &str = r#"#include <cheby.h>
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+cheby_value *app_greet(cheby_value *name) {
+    static const char hello[] = "hello from the pool, ";
+    size_t len = 0;
+    const char *bytes = cheby_ffi_string_bytes(name, &len);
+    char *text = malloc(sizeof hello - 1 + len);
+    if (text == NULL) {
+        return NULL;
+    }
+    memcpy(text, hello, sizeof hello - 1);
+    memcpy(text + sizeof hello - 1, bytes, len);
+    cheby_value *out = cheby_ffi_string_new(text, sizeof hello - 1 + len);
+    free(text);
+    return out;
+}
+
+typedef struct {
+    int64_t n;
+} counter;
+
+void *app_counter_open(int64_t n) {
+    counter *c = malloc(sizeof *c);
+    if (c != NULL) {
+        c->n = n;
+    }
+    return c;
+}
+
+int64_t app_counter_get(void *c) {
+    return ((counter *)c)->n;
+}
+
+void app_counter_close(void *c) {
+    free(c);
+    cheby_ffi_write_stdout("closed\n", 7);
+}
+"#;
+
+/// The module that binds [`BLOCKING_C`].
+const BLOCKING_POOL: &str = r#"//! Foreign functions that run on the blocking pool.
+
+/// A counter kept by C code.
+@external(native, "app_counter_close")
+pub type Counter
+
+/// Greets `name` with a `String` built on a pool thread.
+@external(native, "app_greet")
+@blocking
+pub fn greet(name: String) -> String
+
+/// A new counter at `n`, made on a pool thread.
+@external(native, "app_counter_open")
+@blocking
+pub fn open_counter(n: Int) -> Counter
+
+/// The counter's value.
+@external(native, "app_counter_get")
+pub fn count(counter: Counter) -> Int
+"#;
+
+/// The root module: prints what the pool built.
+const BLOCKING_MAIN: &str = r#"//! Prints values that C code built on the blocking pool.
+
+import app::pool
+import std::io
+
+fn main() {
+  io::println(pool::greet("Ada"))
+  let counter = pool::open_counter(41)
+  let n = pool::count(counter) + 1
+  io::println("count: {n}")
+}
+"#;
+
+/// What [`BLOCKING_MAIN`] prints: the drop function runs on the fiber when
+/// the counter's last use is over (D-171), before the count is printed.
+const BLOCKING_OUT: &str = "hello from the pool, Ada\nclosed\ncount: 42\n";
+
+/// The blocking package in `dir/app`.
+fn blocking_package(dir: &Path) -> PathBuf {
+    package(
+        dir,
+        "app",
+        &[
+            (
+                "cheby.toml",
+                "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n\n\
+                 [native]\nsources = [\"src/pool.c\"]\n",
+            ),
+            ("src/pool.c", BLOCKING_C),
+            ("src/pool.cheby", BLOCKING_POOL),
+            ("src/main.cheby", BLOCKING_MAIN),
+        ],
+    )
+}
+
+/// D-950, D-683, D-818: a package's `@blocking` C function runs on the
+/// pool through its `cb$blk$` shim and builds a `String` there, charged to
+/// the calling fiber's domain (the debug leak check, D-710, passes), and
+/// a value of an external type made on the pool is wrapped and dropped on
+/// the fiber; the same under `cheby run` and in an executable.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn native_blocking_builds_values_on_the_pool() {
+    let tmp = FreshDir::create("cheby-native-blocking").unwrap();
+    let root = blocking_package(tmp.path());
+    let run = cheby(&root, &["run"], &[], None);
+    assert_eq!(run.stderr, "");
+    assert_eq!(run.stdout, BLOCKING_OUT);
+    assert_eq!(run.status, Some(0));
+    let exe = tmp.path().join("exe").join("app");
+    let build = cheby(&root, &["build", "-o", exe.to_str().unwrap()], &[], None);
+    assert_eq!(build.status, Some(0), "{}", build.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stderr, "");
+    assert_eq!(ran.stdout, BLOCKING_OUT);
+    assert_eq!(ran.status, Some(0));
+}
+
+/// D-948, D-964: E0079 is a front-end error, so its module is never
+/// cached: a second `cheby check` on the same cache reports it again from
+/// source.
+#[test]
+fn native_ext_result_is_reported_again_on_a_warm_cache() {
+    let tmp = FreshDir::create("cheby-native-e0079").unwrap();
+    let root = package(
+        tmp.path(),
+        "app",
+        &[
+            (
+                "cheby.toml",
+                "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n",
+            ),
+            (
+                "src/main.cheby",
+                "//! A foreign result that holds an external type.\n\n\
+                 @external(native, \"db_close\")\npub type Db\n\n\
+                 @external(native, \"db_open\")\npub fn open(path: String) -> Option<Db>\n\n\
+                 fn main() {}\n",
+            ),
+        ],
+    );
+    let cache = fresh_cache();
+    let check = || {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["check"]).current_dir(&root).env("NO_COLOR", "1");
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    for round in ["cold", "warm"] {
+        let out = check();
+        assert_eq!(out.status, Some(1), "{round}: {}", out.stderr);
+        assert!(
+            out.stderr.starts_with(
+                "error[E0079]: the native foreign result type `Option<Db>` holds the external \
+                 type `Db` below its top level\n"
+            ),
+            "{round}: {}",
+            out.stderr
+        );
+    }
+}

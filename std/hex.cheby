@@ -16,7 +16,9 @@ pub fn encode(data: bytes::Bytes) -> String {
   fn step(index, out) {
     case bytes::get(data, index) {
       Some(byte) => {
-        let more = out |> bytes::push(_, digit(byte >> 4)) |> bytes::push(_, digit(byte & 0x0F))
+        let more = out
+          |> bytes::push(_, digit(byte >> 4))
+          |> bytes::push(_, digit(byte & 0x0F))
         step(index + 1, more)
       }
       None => out

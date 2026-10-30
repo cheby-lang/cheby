@@ -84,13 +84,7 @@ pub type Cache<K, V> {
 pub fn new<K, V>(capacity: Int) -> Cache<K, V> {
   case {
     capacity < 1 => panic as "a cache must hold at least 1 entry, not {capacity}"
-    _ => Cache {
-      capacity,
-      clock: 0,
-      oldest: 0,
-      entries: map::new(),
-      by_tick: map::new(),
-    }
+    _ => Cache { capacity, clock: 0, oldest: 0, entries: map::new(), by_tick: map::new() }
   }
 }
 
@@ -223,8 +217,7 @@ priv fn invariants_hold<K, V>(cache: Cache<K, V>) -> Bool {
   // distinct ticks. With equal sizes, `by_tick` then holds no other
   // ticks.
   let same_size = map::size(cache.entries) == map::size(cache.by_tick)
-  let consistent =
-    cache.entries
+  let consistent = cache.entries
     |> map::to_list
     |> list::all(_, fn((key, (_, tick))) {
       map::get(cache.by_tick, tick) == Some(key) && tick >= cache.oldest && tick < cache.clock
@@ -233,7 +226,9 @@ priv fn invariants_hold<K, V>(cache: Cache<K, V>) -> Bool {
 }
 
 test "a cache returns what was put in it" {
-  let filled = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let filled = new(2)
+    |> put(_, "a", 1)
+    |> put(_, "b", 2)
   assert peek(filled, "a") == Some(1)
   assert peek(filled, "b") == Some(2)
   assert peek(filled, "z") == None
@@ -241,7 +236,9 @@ test "a cache returns what was put in it" {
 }
 
 test "the least recently used key is evicted first" {
-  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let full = new(2)
+    |> put(_, "a", 1)
+    |> put(_, "b", 2)
   let (evicted, after) = put_with_eviction(full, "c", 3)
   assert evicted == Some("a")
   assert peek(after, "a") == None
@@ -250,7 +247,9 @@ test "the least recently used key is evicted first" {
 }
 
 test "a hit refreshes recency, so another key is evicted" {
-  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let full = new(2)
+    |> put(_, "a", 1)
+    |> put(_, "b", 2)
   let (found, refreshed) = get(full, "a")
   assert found == Some(1)
   assert keys_by_recency(refreshed) == ["a", "b"]
@@ -263,7 +262,9 @@ test "a hit refreshes recency, so another key is evicted" {
 }
 
 test "peek does not refresh recency" {
-  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let full = new(2)
+    |> put(_, "a", 1)
+    |> put(_, "b", 2)
   assert peek(full, "a") == Some(1)
   let (evicted, after) = put_with_eviction(full, "c", 3)
   assert evicted == Some("a")
@@ -271,7 +272,9 @@ test "peek does not refresh recency" {
 }
 
 test "overwriting a key that is in the cache evicts nothing" {
-  let full = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let full = new(2)
+    |> put(_, "a", 1)
+    |> put(_, "b", 2)
   let (evicted, after) = put_with_eviction(full, "a", 10)
   assert evicted == None
   assert size(after) == 2
@@ -293,14 +296,17 @@ test "a cache of capacity 1 keeps only the last key used" {
 }
 
 test "a miss returns the same cache" {
-  let filled = new(2) |> put(_, "a", 1)
+  let filled = new(2)
+    |> put(_, "a", 1)
   let (found, same) = get(filled, "z")
   assert found == None
   assert same == filled
 }
 
 test "getting and putting leave the original cache unchanged" {
-  let original = new(2) |> put(_, "a", 1) |> put(_, "b", 2)
+  let original = new(2)
+    |> put(_, "a", 1)
+    |> put(_, "b", 2)
   let (_, after_get) = get(original, "a")
   let after_put = put(original, "c", 3)
   assert keys_by_recency(after_get) == ["a", "b"]

@@ -8,7 +8,9 @@
 import plugins::message
 
 /// Records every message in the log called `name`.
-type Log { name: String }
+type Log {
+  name: String,
+}
 
 /// Returns a notifier that writes to the log called `name`.
 fn new(name: String) -> Log {
@@ -37,7 +39,8 @@ test "a log takes every message" {
 }
 
 test "a log line names the log" {
-  assert notify(new("ops"), message::routine("Lunch", "Pizza at noon")) == "[ops] Lunch: Pizza at noon"
+  assert notify(new("ops"), message::routine("Lunch", "Pizza at noon")) ==
+    "[ops] Lunch: Pizza at noon"
 }
 
 test "a log notifier shows its name" {
