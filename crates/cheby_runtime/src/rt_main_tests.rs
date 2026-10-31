@@ -58,6 +58,7 @@ fn image(entry: EntryFn) -> ProgramImage {
             main_stack: u64::try_from(DEFAULT_ROOT_STACK_SIZE).unwrap(),
             fiber_stack: u64::try_from(DEFAULT_STACK_SIZE).unwrap(),
             constants: Table::empty(),
+            functions: Table::empty(),
         })
     }
 }

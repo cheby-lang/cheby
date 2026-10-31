@@ -50,6 +50,7 @@ use cheby_mir::{AbiSig, FnKey, UnitKind};
 use cheby_runtime::abi::sym;
 use cheby_runtime::image::{self, ModuleRecord};
 
+use crate::timing::Stopwatch;
 use crate::{Jit, JitError, JitRecord, resolve_generation};
 
 /// The prefix of every generated symbol (D-456).
@@ -172,9 +173,13 @@ impl Jit {
         self.define_const_slots(&slots)?;
         let signature = ir::Signature::new(self.module.isa().default_call_conv());
         let mut ids = Vec::with_capacity(items.len());
+        // D-974: each step timed only under `CHEBY_PHASES` (`timing.rs`).
+        let declare = Stopwatch::start();
         for item in items {
             ids.push(self.declare_record(item.record, &signature)?);
         }
+        self.load_times.declare = self.load_times.declare.saturating_add(declare.elapsed());
+        let define = Stopwatch::start();
         for ((item, ids), &run) in items.iter().zip(&ids).zip(&runs) {
             // A record's functions one after the other in one span
             // (`memory.rs`, D-1258).
@@ -182,13 +187,19 @@ impl Jit {
             self.define_record(item.record, ids)?;
             self.memory.start_code_run(0);
         }
+        self.load_times.define = self.load_times.define.saturating_add(define.elapsed());
+        let finalize = Stopwatch::start();
         self.module
             .finalize_definitions()
             .map_err(|e| JitError::ice(format!("cannot finalize the batch: {e}")))?;
+        self.load_times.finalize = self.load_times.finalize.saturating_add(finalize.elapsed());
         #[cfg(test)]
         self.note_spans(items, &ids, &runs)?;
+        let register = Stopwatch::start();
         self.register_loaded(items, &ids)?;
-        self.note_loaded(items, &ids)
+        let noted = self.note_loaded(items, &ids);
+        self.load_times.register = self.load_times.register.saturating_add(register.elapsed());
+        noted
     }
 
     /// Where each record's functions landed (tests, [`Loaded::spans`]).

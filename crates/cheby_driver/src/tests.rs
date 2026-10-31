@@ -131,8 +131,7 @@ fn later_examples_report_only_unshipped_modules() {
                 .strip_prefix("the module `std::")
                 .and_then(|m| m.strip_suffix("` is not supported yet"));
             assert!(
-                code == "E0038"
-                    && module.is_some_and(|m| std_lib::PLANNED_STD_MODULES.contains(&m)),
+                code == "E0038" && module.is_some_and(std_lib::is_planned),
                 "{name}:\n{rendered}"
             );
             imports += 1;
@@ -258,7 +257,7 @@ fn only_unshipped_imports_are_e0038(out: &CheckOutput) -> bool {
             d.message
                 .strip_prefix("the module `std::")
                 .and_then(|m| m.strip_suffix("` is not supported yet"))
-                .is_some_and(|m| std_lib::PLANNED_STD_MODULES.contains(&m))
+                .is_some_and(std_lib::is_planned)
         })
 }
 
@@ -549,15 +548,15 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::ioo\nimport std::process\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::context\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
-    // D-729, D-989: `std::http` shipped (D-1003), so `std::process` is the
-    // unshipped module of the probe until it ships too.
+    // D-989, D-1213: tier 3 ships whole, so tier 4's `std::context`
+    // (D-1049) is the real planned module of the probe.
     assert!(
-        rendered.contains("error[E0038]: the module `std::process` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::context` is not supported yet"),
         "{rendered}"
     );
     assert!(
@@ -565,6 +564,115 @@ fn missing_and_planned_std_modules() {
         "{rendered}"
     );
     assert!(rendered.contains("`std::io`"), "{rendered}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-989: the made-up planned module of this crate's tests is planned and
+/// known only here, never shipped and never in the toolchain's list.
+#[test]
+fn unshipped_probe_is_planned_only_in_unit_tests() {
+    for probe in std_lib::PROBE_PLANNED_STD_MODULES {
+        assert!(std_lib::is_planned(probe), "{probe}");
+        assert!(std_lib::known().contains(probe), "{probe}");
+        assert!(std_lib::find(probe).is_none(), "{probe}");
+        assert!(!std_lib::PLANNED_STD_MODULES.contains(probe), "{probe}");
+    }
+    assert!(!std_lib::is_planned("process"));
+}
+
+/// D-480, D-989: an import of a planned std module that `std/` does not
+/// ship is E0038 at the import, the only diagnostic: paths through it are
+/// not checked. The made-up module keeps the rule tested whatever the
+/// toolchain's own list holds.
+#[test]
+fn unshipped_probe_import_is_the_only_e0038() {
+    let dir = package(
+        "unshipped_probe",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Probe.\n\nimport std::io\nimport std::unshipped_probe\n\nfn main() {\n  let _ = unshipped_probe::anything(1)\n  io::println(\"never\")\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    let rendered = out.render();
+    let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert_eq!(codes, ["E0038"], "{rendered}");
+    assert!(
+        rendered.starts_with(
+            "error[E0038]: the module `std::unshipped_probe` is not supported yet\n --> src/main.cheby:4:8\n"
+        ),
+        "{rendered}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-1072, ADR-0070: `file::File` (the standard-stream handles among
+/// them) and `net::Connection` satisfy `io::Source` and `io::Sink` with no
+/// code of their own, as `dyn` values and as `copy`'s arguments, and
+/// `io::other` builds an `io::Error`: the package checks with no
+/// diagnostic.
+#[test]
+fn io_stream_handles_satisfy_source_and_sink() {
+    let dir = package(
+        "io_streams",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Streams.\n\nimport std::file\nimport std::io\nimport std::net\n\npub fn streams(\n  handle: file::File,\n  connection: net::Connection,\n) -> (List<dyn io::Source>, List<dyn io::Sink>) {\n  ([handle, connection, file::stdin()], [handle, connection, file::stdout(), file::stderr()])\n}\n\npub fn send(handle: file::File, connection: net::Connection) -> Result<Int, io::Error> {\n  io::copy(handle, connection)\n}\n\npub fn refuse() -> io::Error {\n  io::other(\"refused\")\n}\n\nfn main() {\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    assert!(out.diagnostics.is_empty(), "{}", out.render());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-1072: a type whose module has no `read_bytes` does not satisfy
+/// `io::Source`, so `copy` rejects it.
+#[test]
+fn io_stream_copy_needs_a_source() {
+    let dir = package(
+        "io_streams_not_a_source",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Not a stream.\n\nimport std::file\nimport std::io\n\npub fn send(handle: file::File) -> Result<Int, io::Error> {\n  io::copy(42, handle)\n}\n\nfn main() {\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    let rendered = out.render();
+    assert!(
+        rendered.starts_with("error[E0063]: `Int` does not satisfy `io::Source`"),
+        "{rendered}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-480, D-451: a module of `std` that is neither shipped nor planned is
+/// E0039, not E0038, and a near miss of the planned module is suggested.
+#[test]
+fn unshipped_probe_misspelt_is_e0039() {
+    let dir = package(
+        "unshipped_probe_typo",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                b"//! Typo.\n\nimport std::unshipped_prob\n\nfn main() {\n  Nil\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    let rendered = out.render();
+    let codes: Vec<String> = out.diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert_eq!(codes, ["E0039"], "{rendered}");
+    assert!(rendered.contains("`std::unshipped_probe`"), "{rendered}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

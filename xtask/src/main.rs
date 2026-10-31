@@ -45,6 +45,7 @@
 //! developer's cache (D-1128).
 
 mod bench;
+mod bench_oqp11;
 mod bench_run;
 mod cache;
 mod cross_check;

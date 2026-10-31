@@ -181,17 +181,19 @@ impl RecordSink {
     /// unit ([`RecordSink::log_lookup`]). `read` is false when the command
     /// bypasses code-record reads (`--reuse-report`,
     /// D-1223); `CHEBY_DUMP_DIR` bypasses
-    /// every read (D-965). A record that hits is decoded with
-    /// `CodeRecord::decode`'s checks and nothing more, since no fresh
-    /// compile exists to compare (D-1131); one of another `RECORD_VERSION`,
-    /// or that does not decode, is a miss, and the command writes it again.
+    /// every read (D-965). A record is stored sealed with its hash
+    /// ([`crate::cache::seal`], D-960, RB-5): one whose seal does not
+    /// match, of another `RECORD_VERSION`, or that does not decode is a
+    /// miss, and the command writes it again. A record that hits is
+    /// checked by its seal and `CodeRecord::decode`'s checks and nothing
+    /// more, since no fresh compile exists to compare (D-1131).
     pub(crate) fn code_find(&self, key: &Key, read: bool) -> Option<CodeRecord> {
         if !(read && self.reads) {
             return None;
         }
         self.store
             .get_record(key)
-            .and_then(|bytes| CodeRecord::decode(&bytes).ok())
+            .and_then(|bytes| crate::cache::seal::unseal_code(&bytes))
     }
 
     /// Logs a lookup as `artifact subject hit|miss`
@@ -203,9 +205,13 @@ impl RecordSink {
     }
 
     /// Stores `record` under `key`, behind the command (D-1138), at most
-    /// once per process (D-1139); a write that fails is skipped (D-1129).
+    /// once per process (D-1139), sealed with its hash
+    /// ([`crate::cache::seal::seal_code`], D-960, RB-5); a write that fails
+    /// is skipped (D-1129).
     pub(crate) fn code_store(&self, key: &Key, record: &CodeRecord) {
-        let _ = self.store.put_record(key, &record.encode());
+        let _ = self
+            .store
+            .put_record(key, &crate::cache::seal::seal_code(record));
     }
 
     /// K5b's constant entries (`cache::consts`, D-977): the store, the

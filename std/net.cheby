@@ -23,7 +23,9 @@
 import std::bytes
 import std::duration
 import std::fiber
+import std::file
 import std::io
+import std::result
 import std::time
 
 // Handles
@@ -216,6 +218,39 @@ test "a connection carries bytes both ways over loopback" {
   }
   assert collect(bytes::new()) == bytes::from_string("ping")
   assert "{client:?}" == "<Connection>"
+}
+
+// `io::copy` over a connection (D-1072): `Connection` satisfies `io::Source` and `io::Sink`
+// through this module's `read_bytes` and `write_bytes`.
+
+test "copy moves a file through a loopback connection into another file" {
+  fn doubled(data: bytes::Bytes, times: Int) -> bytes::Bytes {
+    case times {
+      0 => data
+      _ => doubled(bytes::append(data, data), times - 1)
+    }
+  }
+  // 128 KiB: more than one of `copy`'s blocks.
+  let data = doubled(bytes::from_string("0123456789abcdef"), 13)
+  use dir <- file::with_temp_dir()
+  use _ <- result::try(io::write_file_bytes(dir + "/sent.bin", data))
+  let assert Ok(listener) = listen("127.0.0.1", 0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let receiver = fiber::spawn(owner, fn() {
+      let assert Ok(peer) = accept(listener)
+      file::with_create(dir + "/received.bin", fn(sink) { io::copy(peer, sink) })
+    })
+    let assert Ok(client) = connect("127.0.0.1", local_port(listener))
+    let sent = file::with_open(dir + "/sent.bin", fn(source) { io::copy(source, client) })
+    let assert Ok(Nil) = shutdown_write(client)
+    (sent, fiber::join(receiver))
+  }
+  let assert Ok((Ok(sent), Ok(received))) = outcome
+  assert sent == bytes::length(data)
+  assert received == bytes::length(data)
+  assert io::read_file_bytes(dir + "/received.bin") == Ok(data)
+  Ok(Nil)
 }
 
 test "a cancelled read takes no bytes" {
@@ -417,8 +452,8 @@ priv fn sys_close(connection: Connection) -> Result<Nil, (Int, String)>
 @external(js, "./net.mjs", "sys_close_listener")
 priv fn sys_close_listener(listener: Listener) -> Result<Nil, (Int, String)>
 
-/// A TLS connection to `host` and `port`, for `std::http` only (D-985,
-/// D-1011). It answers an error until TLS lands.
+/// A TLS connection to `host` and `port`, for `std::http` only (D-985, D-1011): kind 100 when the
+/// connection cannot be secured, the IO kinds for a failed system call.
 @std_context
 @external(native, "cheby_net_sys_connect_tls")
 @external(js, "./net.mjs", "sys_connect_tls")

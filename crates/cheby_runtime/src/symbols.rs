@@ -159,6 +159,7 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     net::kernels(&mut out);
     file::kernels(&mut out);
     crate::http::kernels(&mut out);
+    crate::process::kernels(&mut out);
     // `cheby.h`'s functions, which C code calls (D-945): runtime exports,
     // so E0055 and the C-object check reserve them (D-944, D-1204).
     crate::ffi::kernels(&mut out);
@@ -185,6 +186,7 @@ pub fn complete_modules() -> Vec<&'static str> {
         net::COMPLETE,
         file::COMPLETE,
         crate::http::COMPLETE,
+        crate::process::COMPLETE,
     ]
     .concat()
 }
@@ -440,6 +442,13 @@ mod tests {
                 if context {
                     declared_context.insert(symbol.clone());
                 }
+                // `std::io` binds `bytes::length`'s kernel again for
+                // `copy` (D-1072): one symbol may be bound twice, with one
+                // C signature (E0054, D-455).
+                if module == "io" && symbol == "cheby_bytes_length" {
+                    assert_eq!(declared.get(&symbol), Some(&signature), "{symbol}");
+                    continue;
+                }
                 assert!(
                     declared.insert(symbol.clone(), signature).is_none(),
                     "{symbol} is declared twice"
@@ -601,10 +610,11 @@ mod tests {
             registered_context, declared_context,
             "the kernels that take the context pointer and the `@std_context` declarations differ"
         );
-        // channel and fiber 9 (`fiber::cancel`'s `sys_cancel`, D-1060),
-        // selector 5, random 1, runtime 3.
-        assert_eq!(registered.len(), 9 + 5 + 1 + 3);
-        assert_eq!(registered_context.len(), 9 + 5 + 2);
+        // channel and fiber 10 (`fiber::cancel`'s `sys_cancel`, D-1060, and
+        // `fiber::interruptible`'s `sys_arm_interrupt`, D-1073), selector 5,
+        // random 1, runtime 3.
+        assert_eq!(registered.len(), 10 + 5 + 1 + 3);
+        assert_eq!(registered_context.len(), 10 + 5 + 2);
     }
 
     /// Every kernel of `std::net` has the C signature of its `@external`
@@ -663,6 +673,34 @@ mod tests {
             registered.values().filter(|(_, context)| *context).count(),
             15
         );
+    }
+
+    /// `std::process`'s kernels have the C signatures of their `@external`
+    /// declarations in `std/process.cheby`, after the context pointer, and
+    /// every one is `@std_context` (D-985, D-692, `process.md`): `sys_exit`,
+    /// whose `Never` result is the uniform word.
+    #[test]
+    fn process_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("process.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            if !symbol.starts_with("cheby_process_") {
+                continue;
+            }
+            assert!(context, "{symbol} is not `@std_context`");
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> =
+            crate::process::signatures()
+                .into_iter()
+                .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+                .collect();
+        assert_eq!(registered, declared);
+        assert!(registered.contains_key("cheby_process_sys_exit"));
     }
 
     #[test]

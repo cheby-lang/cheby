@@ -840,6 +840,56 @@ fn act(shared: &Shared, candidate: &Candidate, report: &str) {
     }
 }
 
+/// Ends the test that the running fiber `me` belongs to with `report` as
+/// its failure, as the action ends a deadlocked test (D-859): for
+/// `process::exit` under `cheby test` (D-1023, S7a's kernel). The root is
+/// the registered root of `me`'s domain that is not a `cheby run` root (a
+/// test's domain is its own, D-691). Unless it was reported already (a
+/// deadlock or an earlier `exit` came first: the first report wins, the
+/// later one is dropped), it is marked reported, so the detector leaves
+/// it alone, and `cancel::cancel_deadlocked_root` stores `report` and
+/// cancels its base scope: the root and every fiber of its scopes unwind,
+/// and its catch point gives the host `EntryOutcome::Deadlocked(report)`.
+/// When that cancellation did not reach `me` (a detached fiber, or a root
+/// whose base has ended), the outermost scope of `me`'s chain, its own
+/// base, is cancelled too, so `me` unwinds as well.
+///
+/// Returns whether `me` must now unwind (its cancellation target is set):
+/// the caller then raises the cancellation. False, with nothing done, when
+/// `me` runs no runtime or its domain has no test root. Entered with no
+/// runtime lock held; never runs Cheby code. GAP(test-exit-root).
+pub(crate) fn end_test_root(me: &ExecCtx, report: String) -> bool {
+    let Some(shared) = me.sched.runtime() else {
+        return false;
+    };
+    let root = shared
+        .roots
+        .lock()
+        .iter()
+        .find(|root| !root.run && Arc::ptr_eq(&root.domain, me.domain()))
+        .cloned();
+    let Some(root) = root else {
+        return false;
+    };
+    if let Some((fiber, base)) = root.started.get()
+        && root
+            .reported
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        cancel::cancel_deadlocked_root(fiber, base, report);
+    }
+    if cancel::check(me).is_ok()
+        && let Some(mut top) = me.conc.responsible_scope()
+    {
+        while let Some(parent) = top.parent().cloned() {
+            top = parent;
+        }
+        cancel::cancel(&top);
+    }
+    cancel::check(me).is_err()
+}
+
 #[cfg(test)]
 pub(super) mod tests_support {
     //! The report's rendering, for `deadlock_tests`.

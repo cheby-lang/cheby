@@ -16,9 +16,11 @@
 //! a constant whose walk meets a module the index does not vouch for has
 //! no key before the check and misses (D-1259). A warm command looks
 //! before its check only at the constants its roots reach
-//! ([`misses_before_check_from`], D-1250, D-1259); [`keys_before_check`],
-//! which computes every key, is called by no command yet; N9 uses it or
-//! removes it.
+//! ([`misses_before_check_from`], D-1250, D-1259), `cheby build` among them
+//! (N9). No command computes every constant's key before its check: K5b's
+//! unused `keys_before_check` is removed, and [`keys_from_records`], which
+//! computes them over the vouched entries, stays for the test that holds
+//! them equal to the keys after the check. GAP(consts-keys-before-check).
 //!
 //! The entry holds the constant's image (D-1188) or its failure's
 //! diagnostics, stored structured and replayed as a module's are (D-965);
@@ -965,10 +967,20 @@ impl<'a> Records<'a> {
     }
 }
 
-/// [`keys_before_check`] over the vouched entries alone: each package
-/// constant of a vouched module, as `module::name`, with its key, or
-/// `None` when its constant module set reaches a module the entries do not
-/// vouch for.
+/// D-1250 with D-1134: the key of every package constant of a vouched
+/// module, as `module::name`, from the vouched entries alone: `deps` (the
+/// constant module set with source hashes, D-538, D-593) from their
+/// reference summaries (D-967) and source hashes, never from THIR or a
+/// checked body; `None` when its constant module set reaches a module the
+/// entries do not vouch for. Each key equals the one `const_infos`' `deps`
+/// give after a check ([`keys_after_check`]; the test
+/// `const_cache_keys_before_check_equal_keys_after`). A warm command decides
+/// its misses through [`misses_before_check_from`] instead, which walks
+/// only the constants its roots reach (D-1259).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the keys-before-and-after test reads every key")
+)]
 pub(crate) fn keys_from_records(
     modules: &ModuleTable,
     vouched: &[Option<&IndexEntry>],
@@ -994,32 +1006,6 @@ pub(crate) fn keys_from_records(
         }
     }
     out
-}
-
-/// D-1250 with D-1134: the key of every package constant, as
-/// `module::name`, from plan §2.1's `WarmView` alone: `deps` (the constant
-/// module set with source hashes, D-538, D-593) from the vouched entries'
-/// reference summaries (D-967) and source hashes, never from THIR or a
-/// checked body. Each key equals the one `const_infos`' `deps` give after
-/// a check ([`keys_after_check`]). A constant missing from the list (its
-/// set reaches a module the view does not vouch for) misses. K4d checks a
-/// module for constant evaluation only when one of its constants misses
-/// ([`misses_before_check_from`]).
-#[expect(
-    dead_code,
-    reason = "plan §2.2's contract; K4d decides through `misses_before_check_from`, and N9's \
-              `cheby build` front end (wave 10) reads the keys"
-)]
-pub(crate) fn keys_before_check(
-    view: &crate::warm_keys::WarmView<'_>,
-    settings: &Settings,
-    limits: &ConstLimits,
-) -> Vec<(String, Key)> {
-    let build = view.cache.cache.store.build_id();
-    keys_from_records(view.modules, view.vouched, build, settings, limits)
-        .into_iter()
-        .filter_map(|(path, key)| Some((path, key?)))
-        .collect()
 }
 
 /// The roots a warm command's constants are reached from (D-510, D-534).

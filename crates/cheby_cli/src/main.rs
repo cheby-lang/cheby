@@ -383,6 +383,7 @@ fn open_cache(out: Out) -> Result<cheby_driver::Cache, ExitCode> {
 /// temporary one, before the process exits. A log that cannot be written
 /// is a tool error, and turns `code` into a failure.
 fn finish_cache(out: Out, cache: cheby_driver::Cache, trim: bool, code: ExitCode) -> ExitCode {
+    let _write = cheby_driver::phases::span(cheby_driver::phases::Phase::Write);
     match cache.finish(trim) {
         Ok(()) => code,
         Err(e) => out.error(&format!("cannot write CHEBY_CACHE_LOG: {e}")),
@@ -395,6 +396,7 @@ fn finish_cache(out: Out, cache: cheby_driver::Cache, trim: bool, code: ExitCode
 /// build cache's front records (D-955) and trims the cache at most once a
 /// day at its end (D-961).
 fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
+    let _phases = cheby_driver::phases::command("check");
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
@@ -425,6 +427,7 @@ fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
 /// (D-955); the cache is closed before the program starts, which may end
 /// the process itself, and `cheby run` never trims (D-961).
 fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
+    let _phases = cheby_driver::phases::command("run");
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
@@ -478,6 +481,7 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 /// trimmed at most once a day (D-961) and closed when the build ends,
 /// before any test runs.
 fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
+    let _phases = cheby_driver::phases::command("test");
     let root = match package_root(out) {
         Ok(root) => root,
         Err(code) => return code,
@@ -788,6 +792,7 @@ struct BuildArgs {
 /// cache at most once a day at its end (D-961). It needs the runtime
 /// archive next to `cheby` (`cargo build -p cheby_rt_exe`, D-929).
 fn build(out: Out, args: BuildArgs) -> ExitCode {
+    let _phases = cheby_driver::phases::command("build");
     let js_not_yet = || {
         let code = out.error("`cheby build --target js` is not available yet (planned for M4)");
         out.help("use `cheby check` to type-check the package, or `cheby run` to run it");

@@ -1,13 +1,15 @@
 // @mode: check-fail
-// @decisions: D-477, D-480, D-554, D-729, D-989
+// @decisions: D-477, D-480, D-554, D-729, D-989, D-1049
 //! An import of a standard-library module that the plan defines but
-//! `std/` does not ship yet, `std::process` since `std::http` ships, is
+//! `std/` does not ship yet, `std::context` since tier 3 ships, is
 //! the only E0038, and paths through such an import report nothing more.
 
+import std::context
 import std::io
-import std::process
+
+const verbose: context::Key<Bool> = context::key(False)
 
 fn main() {
-  let _ = process::exit(0)
-  io::println("exited")
+  let _ = context::get(verbose)
+  io::println("planned")
 }

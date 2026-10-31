@@ -11,11 +11,17 @@
 //!   is never cached or shared;
 //! - `cb$image`, local and read-only, in the exact layout of
 //!   `cheby_runtime::image::ProgramImage` (that module's documentation is
-//!   the contract), with the table of module pointers right after its 104
+//!   the contract), with the table of module pointers right after its 120
 //!   bytes, the table's pointer a relocation to `cb$image` itself with
 //!   that offset as addend, as module records point at their own tables,
-//!   then the constants table's bytes ([`ProgramSpec::constants`], D-979),
-//!   pointed at the same way;
+//!   then the table of function bounds (D-1253, `crate::gc`): for each
+//!   module record, relocations to the start and the end of the section
+//!   that holds its kept entries, which the linker defines (the record's
+//!   own weak `__start_cbf_<key>` and `__stop_cbf_<key>` on ELF, tag 0; the
+//!   shared `section$start$__DATA$cb_fns` and `section$end$…` on Mach-O,
+//!   with the record's tag), so the records stay read-only; then the
+//!   constants table's bytes ([`ProgramSpec::constants`], D-979), pointed
+//!   at the same way;
 //! - the C `int main(int argc, char **argv)`, the program's only exported
 //!   symbol (D-917), which returns `cheby_rt_main(argc, argv, &cb$image)`
 //!   (D-925). It reaches `cheby_rt_main` through a local import word
@@ -68,7 +74,7 @@ const TRAMPOLINES: u32 = 5;
 
 /// `ProgramImage`'s size and its fields' offsets, as `image.rs`
 /// documents them.
-const IMAGE_SIZE: u32 = 104;
+const IMAGE_SIZE: u32 = 120;
 const VERSION: usize = 0;
 const UNWIND_EDGES: usize = 4;
 const MODULES_COUNT: usize = 8;
@@ -83,8 +89,21 @@ const FIBER_STACK: usize = 80;
 /// for a program without constants.
 const CONSTANTS_COUNT: usize = 88;
 const CONSTANTS_PTR: u32 = 96;
+/// The function tables (D-1253): one `FunctionBounds` (24 bytes) per
+/// module record, right after the table of module records, its count at
+/// 104 and its pointer at 112 (a relocation to `cb$image` itself), each
+/// bound's `start` and `end` relocations to the linker's bounds of the
+/// record's entries' section and its `tag` at 16 (`crate::gc`).
+const FUNCTIONS_COUNT: usize = 104;
+const FUNCTIONS_PTR: u32 = 112;
+/// A `FunctionBounds`, and its `tag`'s offset.
+const BOUNDS_SIZE: u32 = 24;
+const BOUNDS_TAG: u32 = 16;
 
-const _: () = assert!(std::mem::size_of::<ProgramImage>() == 104);
+const _: () = assert!(std::mem::size_of::<ProgramImage>() == 120);
+const _: () = assert!(std::mem::size_of::<cheby_runtime::image::FunctionBounds>() == 24);
+const _: () = assert!(std::mem::offset_of!(cheby_runtime::image::FunctionBounds, tag) == 16);
+const _: () = assert!(BOUNDS_TAG == 16);
 
 /// What the program object holds besides the entries unit.
 #[derive(Clone, Copy, Debug)]
@@ -139,6 +158,11 @@ pub fn program_object(
     check_record(entries, &isa)?;
     check_entries(entries, spec)?;
     check_stubs(spec.stubs)?;
+    let format = if isa.triple().binary_format.to_string() == "macho" {
+        object::BinaryFormat::MachO
+    } else {
+        object::BinaryFormat::Elf
+    };
     let mut module = new_module(isa, PROGRAM_OBJECT_NAME)?;
     replay_into(&mut module, entries)?;
     let image = module
@@ -152,7 +176,42 @@ pub fn program_object(
                 .map_err(object_error)?,
         );
     }
-    define_image(&mut module, image, spec, &records)?;
+    // D-1253: the bounds of each record's entries' section, which the
+    // linker defines; their names are set raw once the object is finished.
+    // Two records may not share a key (ELF: their section) or a tag
+    // (Mach-O: their entries' mark in the shared section).
+    let mut keys = std::collections::BTreeSet::new();
+    let mut tags = std::collections::BTreeSet::new();
+    let mut symbols: std::collections::BTreeMap<String, DataId> = std::collections::BTreeMap::new();
+    let mut bounds: Vec<(DataId, DataId, u32)> = Vec::with_capacity(records.len());
+    for name in spec.module_records {
+        let key = crate::gc::key(name);
+        let tag = crate::gc::tag(name);
+        if !keys.insert(key.clone()) || !tags.insert(tag) {
+            return Err(LinkError::Object(format!(
+                "two module records share the entries' key `{key}` or tag {tag:#010x}"
+            )));
+        }
+        let (start, end) = crate::gc::bounds(format, &key);
+        let mut ids = [None, None];
+        for (slot, symbol) in ids.iter_mut().zip([start, end]) {
+            let id = if let Some(&id) = symbols.get(&symbol) {
+                id
+            } else {
+                let id = module
+                    .declare_data(&symbol, Linkage::Import, false, false)
+                    .map_err(object_error)?;
+                symbols.insert(symbol, id);
+                id
+            };
+            *slot = Some(id);
+        }
+        let [Some(start), Some(end)] = ids else {
+            return Err(LinkError::Object("a record's bounds".into()));
+        };
+        bounds.push((start, end, crate::gc::image_tag(format, name)));
+    }
+    define_image(&mut module, image, spec, &records, &bounds)?;
     let rt_main = import_word(&mut module, RT_MAIN, true)?;
     let runtime_id = import_word(&mut module, abi::sym::RUNTIME_ID_SYMBOL, false)?;
     define_main(&mut module, image, rt_main, runtime_id)?;
@@ -163,7 +222,22 @@ pub fn program_object(
             define_stub(&mut module, name, unresolved)?;
         }
     }
-    emit(module)
+    if symbols.is_empty() {
+        return emit(module);
+    }
+    let mut product = module.finish();
+    for (name, id) in symbols {
+        let symbol = product.data_symbol(id);
+        let symbol = product.object.symbol_mut(symbol);
+        // The linker's own names, without Mach-O's `_` prefix; weak on ELF,
+        // so the bounds of a section the linker dropped whole are 0 and
+        // the table is empty.
+        symbol.name = name.into_bytes();
+        if format == object::BinaryFormat::Elf {
+            symbol.weak = true;
+        }
+    }
+    product.emit().map_err(|e| LinkError::Object(e.to_string()))
 }
 
 /// D-943's stubs are sorted and distinct, and none names a generated
@@ -258,18 +332,27 @@ fn defined_function(module: &ObjectModule, name: &str) -> Option<FuncOrDataId> {
     }
 }
 
-/// Defines `cb$image` (module documentation).
+/// Defines `cb$image` (module documentation): its header, the table of
+/// module records, the table of function bounds (`bounds`: each record's
+/// start and end symbols and its tag, D-1253), then the constants table.
 fn define_image(
     module: &mut ObjectModule,
     image: DataId,
     spec: &ProgramSpec<'_>,
     records: &[DataId],
+    bounds: &[(DataId, DataId, u32)],
 ) -> Result<(), LinkError> {
     let count = u32::try_from(records.len())
         .map_err(|_| LinkError::Object("too many module records".into()))?;
-    let constants_at = count
+    let functions_at = count
         .checked_mul(8)
         .and_then(|table| table.checked_add(IMAGE_SIZE))
+        .ok_or_else(|| LinkError::Object("too many module records".into()))?;
+    let functions = u32::try_from(bounds.len())
+        .map_err(|_| LinkError::Object("too many module records".into()))?;
+    let constants_at = functions
+        .checked_mul(BOUNDS_SIZE)
+        .and_then(|table| table.checked_add(functions_at))
         .ok_or_else(|| LinkError::Object("too many module records".into()))?;
     let constants_len = u32::try_from(spec.constants.len()).map_err(|_| too_large())?;
     let size = constants_at
@@ -292,6 +375,21 @@ fn define_image(
     put(&mut bytes, MODULES_COUNT, &u64::from(count).to_le_bytes())?;
     put(&mut bytes, MAIN_STACK, &spec.main_stack.to_le_bytes())?;
     put(&mut bytes, FIBER_STACK, &spec.fiber_stack.to_le_bytes())?;
+    put(
+        &mut bytes,
+        FUNCTIONS_COUNT,
+        &u64::from(functions).to_le_bytes(),
+    )?;
+    for (index, &(_, _, tag)) in (0_u32..).zip(bounds) {
+        let at = bound_at(functions_at, index)?
+            .checked_add(BOUNDS_TAG)
+            .ok_or_else(too_large)?;
+        put(
+            &mut bytes,
+            usize::try_from(at).map_err(|_| too_large())?,
+            &tag.to_le_bytes(),
+        )?;
+    }
     let mut desc = DataDescription::new();
     desc.define(bytes.into_boxed_slice());
     desc.set_align(8);
@@ -300,8 +398,19 @@ fn define_image(
         if count > 0 {
             desc.write_data_addr(MODULES_PTR, this, i64::from(IMAGE_SIZE));
         }
+        if functions > 0 {
+            desc.write_data_addr(FUNCTIONS_PTR, this, i64::from(functions_at));
+        }
         if constants_len > 0 {
             desc.write_data_addr(CONSTANTS_PTR, this, i64::from(constants_at));
+        }
+    }
+    for (index, &(start, end, _)) in (0_u32..).zip(bounds) {
+        let at = bound_at(functions_at, index)?;
+        for (word, symbol) in [(0, start), (8, end)] {
+            let target =
+                desc.import_global_value(ModuleRelocTarget::from(FuncOrDataId::Data(symbol)));
+            desc.write_data_addr(at.checked_add(word).ok_or_else(too_large)?, target, 0);
         }
     }
     let entry = defined_function(module, spec.entry).ok_or_else(|| {
@@ -322,6 +431,14 @@ fn define_image(
         desc.write_data_addr(word_at(IMAGE_SIZE, index)?, target, 0);
     }
     module.define_data(image, &desc).map_err(object_error)
+}
+
+/// The offset of the `FunctionBounds` `index` of the table at `base`.
+fn bound_at(base: u32, index: u32) -> Result<u32, LinkError> {
+    index
+        .checked_mul(BOUNDS_SIZE)
+        .and_then(|offset| offset.checked_add(base))
+        .ok_or_else(too_large)
 }
 
 /// The offset of the 8-byte word `index` of a table at `base`.

@@ -103,7 +103,9 @@ const WRITE: u8 = 2;
 /// The bits of a token below its generation: the slot's index plus one.
 const INDEX_BITS: u32 = usize::BITS / 2;
 /// The mask of a token's index part.
-const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
+/// No socket's token has it as its index part: the signal pipe's token
+/// (`sched/signal.rs`) does.
+pub(super) const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
 
 /// The token of slot `index` at `generation`: the index plus one (token 0
 /// is the waker's) below, the generation's low bits above. `None` when the
@@ -257,6 +259,10 @@ pub(crate) struct IoShared {
     registered: AtomicUsize,
     /// Set once a halt starts: nothing is dispatched any more.
     halted: AtomicBool,
+    /// This runtime's descriptor of the signal pipe's reading end, once a
+    /// fiber of the runtime armed a scope (D-1073, `sched/signal.rs`).
+    #[cfg(unix)]
+    signals: std::sync::OnceLock<mio::net::UnixStream>,
 }
 
 impl fmt::Debug for IoShared {
@@ -276,12 +282,48 @@ impl IoShared {
             table: Mutex::new(Table::default()),
             registered: AtomicUsize::new(0),
             halted: AtomicBool::new(false),
+            #[cfg(unix)]
+            signals: std::sync::OnceLock::new(),
         }
     }
 
-    /// Whether any socket is registered: the monitor polls only then.
+    /// Whether any socket, or the signal pipe, is registered: the monitor
+    /// polls only then.
     pub(super) fn has_sockets(&self) -> bool {
-        self.registered.load(Ordering::SeqCst) != 0
+        // D-1073: the signal pipe, once a fiber of the runtime armed a scope.
+        #[cfg(unix)]
+        let signals = self.signals.get().is_some();
+        #[cfg(not(unix))]
+        let signals = false;
+        self.registered.load(Ordering::SeqCst) != 0 || signals
+    }
+
+    /// Registers the signal pipe's reading end that `make` duplicates
+    /// with this poller under `SIGNAL_TOKEN`, readable, unless it is
+    /// registered already (D-1073, `sched/signal.rs`). Called under the
+    /// signal registry's lock, so two fibers never both register.
+    ///
+    /// # Errors
+    ///
+    /// The system's error if the descriptor cannot be duplicated or
+    /// registered; nothing is registered then.
+    #[cfg(unix)]
+    pub(super) fn register_signals(
+        &self,
+        make: impl FnOnce() -> io::Result<mio::net::UnixStream>,
+    ) -> io::Result<()> {
+        if self.signals.get().is_some() {
+            return Ok(());
+        }
+        let mut read = make()?;
+        self.registry.register(
+            &mut read,
+            super::signal::SIGNAL_TOKEN,
+            mio::Interest::READABLE,
+        )?;
+        // The registry's lock is held, so nobody set it meanwhile.
+        let _ = self.signals.set(read);
+        Ok(())
     }
 
     /// A halt started: from now on nothing is dispatched (D-708, C-4).
@@ -295,6 +337,15 @@ impl IoShared {
     /// nothing. Called by the poller's holder, under the poller's lock.
     pub(super) fn dispatch(&self, events: &mio::Events) {
         for event in events {
+            #[cfg(unix)]
+            if event.token() == super::signal::SIGNAL_TOKEN {
+                // D-1073: the handler wrote to the signal pipe; whoever
+                // polled acts on it after releasing the poller.
+                if let Some(read) = self.signals.get() {
+                    super::signal::drain(read);
+                }
+                continue;
+            }
             let mut bits = 0;
             if event.is_readable() || event.is_read_closed() || event.is_error() {
                 bits |= READ;

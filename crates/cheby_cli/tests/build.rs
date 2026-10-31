@@ -770,3 +770,392 @@ fn macho_name_dependent(bytes: &[u8]) -> (Vec<std::ops::Range<usize>>, usize) {
     assert_eq!(ranges.len(), 4, "LC_UUID, LC_CODE_SIGNATURE and __LINKEDIT");
     (ranges, signature.unwrap())
 }
+
+/// The lines of a `CHEBY_CACHE_LOG` file that start with `prefix` and a
+/// space.
+fn log_lines(log: &Path, prefix: &str) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.strip_prefix(prefix).is_some_and(|r| r.starts_with(' ')))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `cheby <args>` in `root` on `cache`, logging to a fresh `log`.
+fn logged(root: &Path, args: &[&str], cache: &HarnessCache, log: &Path) -> RunOutput {
+    let _ = std::fs::remove_file(log);
+    cheby(
+        root,
+        args,
+        cache,
+        &[("CHEBY_CACHE_LOG", log.to_str().unwrap())],
+    )
+}
+
+/// A package `app` with these files under `src/`.
+fn package_files(dir: &Path, manifest_extra: &str, files: &[(&str, &str)]) -> PathBuf {
+    let root = dir.join("app");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("cheby.toml"),
+        format!("name = \"app\"\nversion = \"0.1.0\"\n{manifest_extra}"),
+    )
+    .unwrap();
+    for (path, text) in files {
+        std::fs::write(root.join("src").join(path), text).unwrap();
+    }
+    root
+}
+
+/// The root of [`three_modules`]: two other modules, one with a constant.
+const THREE_MAIN: &str = "//! The root: what the two other modules give.
+
+import app::count
+import app::label
+import std::io
+
+fn main() {
+  let n = count::total()
+  let limit = count::limit
+  io::println(label::name())
+  io::println(\"total: {n}\")
+  io::println(\"limit: {limit}\")
+}
+";
+
+/// A module with a function and a constant; `{step}` is the body edit.
+fn three_count(step: u32) -> String {
+    format!(
+        "//! Counting.
+
+/// The largest count.
+pub const limit: Int = steps(10, 0)
+
+/// The total.
+pub fn total() -> Int {{
+  steps(4, 0) + {step}
+}}
+
+fn steps(n: Int, acc: Int) -> Int {{
+  case n {{
+    0 => acc
+    _ => steps(n - 1, acc + n)
+  }}
+}}
+"
+    )
+}
+
+/// A module with a string; `{name}` is the body edit.
+fn three_label(name: &str) -> String {
+    format!(
+        "//! A label.
+
+/// The program's name.
+pub fn name() -> String {{
+  \"{name}\"
+}}
+"
+    )
+}
+
+/// A three-module package with a constant.
+fn three_modules(dir: &Path) -> PathBuf {
+    package_files(
+        dir,
+        "",
+        &[
+            ("main.cheby", THREE_MAIN),
+            ("count.cheby", &three_count(1)),
+            ("label.cheby", &three_label("counter")),
+        ],
+    )
+}
+
+/// N9 (D-1250, D-914, D-1262, D-1264): after a one-body edit in a
+/// three-module package, a second `cheby build` parses only the edited
+/// module and misses only its `run` code record; it neither parses std nor
+/// misses a std record, evaluates nothing (`const … hit`: the constant's
+/// module set holds `count` only, D-1259, and `label` is edited), and its
+/// executable prints the edit.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_cache_one_body_edit_rebuilds_one_module() {
+    let tmp = FreshDir::create("cheby-build-cache-edit").unwrap();
+    let root = three_modules(tmp.path());
+    let cache = fresh_cache();
+    let exe = tmp.path().join("exe/app");
+    let out = exe.to_str().unwrap();
+    let log = tmp.path().join("build.log");
+    let cold = logged(&root, &["build", "-o", out], &cache, &log);
+    assert_eq!(cold.status, Some(0), "{}", cold.stderr);
+    std::fs::write(root.join("src/label.cheby"), three_label("counted")).unwrap();
+    let warm = logged(&root, &["build", "-o", out], &cache, &log);
+    assert_eq!(warm.status, Some(0), "{}", warm.stderr);
+    assert_eq!(log_lines(&log, "parse"), ["parse app::label"]);
+    let code: Vec<String> = log_lines(&log, "code.run");
+    assert_eq!(code.len(), 3, "{code:?}");
+    let misses: Vec<&String> = code.iter().filter(|l| l.ends_with(" miss")).collect();
+    assert_eq!(misses, ["code.run app::label miss"]);
+    assert_eq!(log_lines(&log, "parse.std"), Vec::<String>::new());
+    let std = log_lines(&log, "code.std");
+    assert_ne!(std, Vec::<String>::new());
+    assert!(std.iter().all(|l| l.ends_with(" hit")), "{std:?}");
+    assert_eq!(log_lines(&log, "const"), ["const app::count::limit hit"]);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stdout, "counted\ntotal: 11\nlimit: 55\n");
+}
+
+/// `cheby build` after `cheby run` misses no code record, std's included,
+/// and evaluates nothing; its executable equals, byte for byte under one
+/// basename, a cold build's on a fresh cache (D-914, D-934); and `cheby
+/// run` after `cheby build` misses nothing either.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_cache_after_run_reads_runs_records() {
+    let tmp = FreshDir::create("cheby-build-cache-run").unwrap();
+    let root = three_modules(tmp.path());
+    let cache = fresh_cache();
+    let log = tmp.path().join("cache.log");
+    let run = logged(&root, &["run"], &cache, &log);
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    let warm_exe = tmp.path().join("warm/app");
+    let warm = logged(
+        &root,
+        &["build", "-o", warm_exe.to_str().unwrap()],
+        &cache,
+        &log,
+    );
+    assert_eq!(warm.status, Some(0), "{}", warm.stderr);
+    for prefix in ["code.run", "code.std", "const"] {
+        let lines = log_lines(&log, prefix);
+        assert!(!lines.is_empty(), "{prefix}");
+        assert!(lines.iter().all(|l| l.ends_with(" hit")), "{lines:?}");
+    }
+    assert_eq!(log_lines(&log, "code.plain"), Vec::<String>::new());
+    let cold_exe = tmp.path().join("cold/app");
+    let cold = build(&root, &cold_exe);
+    assert_eq!(cold.status, Some(0), "{}", cold.stderr);
+    let (x, y) = (
+        std::fs::read(&warm_exe).unwrap(),
+        std::fs::read(&cold_exe).unwrap(),
+    );
+    assert!(
+        x == y,
+        "the executables differ ({} and {} bytes)",
+        x.len(),
+        y.len()
+    );
+    let ran = process::run(Command::new(&warm_exe), None, TIMEOUT).unwrap();
+    assert_same(&warm, &ran, &run);
+    let back = fresh_cache();
+    let built_first = build_on(&root, &tmp.path().join("first/app"), &back);
+    assert_eq!(built_first.status, Some(0), "{}", built_first.stderr);
+    let again = logged(&root, &["run"], &back, &log);
+    assert_eq!(again.status, Some(0), "{}", again.stderr);
+    for prefix in ["code.run", "code.std", "const"] {
+        let lines = log_lines(&log, prefix);
+        assert!(!lines.is_empty(), "{prefix}");
+        assert!(lines.iter().all(|l| l.ends_with(" hit")), "{lines:?}");
+    }
+}
+
+/// `cheby build -o <exe>` of `root` on `cache`.
+fn build_on(root: &Path, exe: &Path, cache: &HarnessCache) -> RunOutput {
+    cheby(root, &["build", "-o", exe.to_str().unwrap()], cache, &[])
+}
+
+/// Under the runtime's poisoning mode (`CHEBY_RT_POISON=1`, as every child
+/// of the harnesses runs; a debug toolchain's checked count operations,
+/// D-565), `cheby build` compiles as `cheby run`'s JIT does: a cold build
+/// links (its program object's trampolines equal the std records', D-918),
+/// a build after `cheby run` reads its checked records and misses none, and
+/// both executables print what `cheby run` prints.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_cache_poisoned_build_reads_runs_records() {
+    let tmp = FreshDir::create("cheby-build-cache-poison").unwrap();
+    let root = copy_of_001(tmp.path());
+    let poison = [("CHEBY_RT_POISON", "1")];
+    let cold_cache = fresh_cache();
+    let cold_exe = tmp.path().join("cold/hello_world");
+    let cold = cheby(
+        &root,
+        &["build", "-o", cold_exe.to_str().unwrap()],
+        &cold_cache,
+        &poison,
+    );
+    assert_eq!(cold.status, Some(0), "{}", cold.stderr);
+    let cache = fresh_cache();
+    let log = tmp.path().join("poison.log");
+    let run = cheby(&root, &["run"], &cache, &poison);
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    let warm_exe = tmp.path().join("warm/hello_world");
+    let warm = cheby(
+        &root,
+        &["build", "-o", warm_exe.to_str().unwrap()],
+        &cache,
+        &[
+            ("CHEBY_RT_POISON", "1"),
+            ("CHEBY_CACHE_LOG", log.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(warm.status, Some(0), "{}", warm.stderr);
+    let code = log_lines(&log, "code.run");
+    assert!(code.iter().all(|l| l.ends_with(" hit")), "{code:?}");
+    for exe in [&cold_exe, &warm_exe] {
+        let ran = process::run(Command::new(exe), None, TIMEOUT).unwrap();
+        assert_same(&warm, &ran, &run);
+    }
+}
+
+/// A copy of 001 under `dir`.
+fn copy_of_001(dir: &Path) -> PathBuf {
+    let root = dir.join("hello_world");
+    copy_dir(&example_001(), &root);
+    root
+}
+
+/// D-942 and D-943 on a warm cache: a `[native]` package whose one
+/// unreached function names a symbol nothing defines. After `cheby run`,
+/// a `cheby build` takes the C object from the cache (`cobj … hit`) and
+/// std's code from its records, lowers the module that names the missing
+/// symbol again as `cheby run` does, the hidden stub still binds the
+/// unreached symbol, and the executable links and prints what `cheby run`
+/// prints.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn build_cache_native_objects_from_the_cache() {
+    let tmp = FreshDir::create("cheby-build-cache-native").unwrap();
+    let root = package_files(
+        tmp.path(),
+        "targets = [\"native\"]\n\n[native]\nsources = [\"src/twice.c\"]\n",
+        &[
+            (
+                "twice.c",
+                "#include <stdint.h>\n\nint64_t app_twice(int64_t n) { return n * 2; }\n",
+            ),
+            (
+                "main.cheby",
+                "//! Doubling in C, and a binding nothing calls.
+
+import std::io
+
+@external(native, \"app_twice\")
+fn twice(n: Int) -> Int
+
+/// A binding nothing defines and nothing calls (D-943).
+@external(native, \"app_missing_unreached\")
+pub fn missing() -> Int
+
+fn main() {
+  let n = twice(21)
+  io::println(\"{n}\")
+}
+",
+            ),
+        ],
+    );
+    let cache = fresh_cache();
+    let log = tmp.path().join("cache.log");
+    let run = logged(&root, &["run"], &cache, &log);
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "42\n");
+    let exe = tmp.path().join("exe/app");
+    let build = logged(&root, &["build", "-o", exe.to_str().unwrap()], &cache, &log);
+    assert_eq!(build.status, Some(0), "{}", build.stderr);
+    let cobj = log_lines(&log, "cobj");
+    assert!(!cobj.is_empty(), "no C object lookup");
+    assert!(cobj.iter().all(|l| l.ends_with(" hit")), "{cobj:?}");
+    // `app`'s record imports the symbol nothing defines, so both commands
+    // lower `app` again to decide E0053 on its MIR (D-943): its lookup is
+    // a miss under `cheby run` and `cheby build` alike, and std's hit.
+    assert_eq!(log_lines(&log, "code.run"), ["code.run app miss"]);
+    let std = log_lines(&log, "code.std");
+    assert!(std.iter().all(|l| l.ends_with(" hit")), "{std:?}");
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_same(&build, &ran, &run);
+}
+
+/// The names of the generated functions an executable keeps (`cb$…` text
+/// symbols, without Mach-O's underscore).
+fn kept_functions(exe: &Path) -> Vec<String> {
+    use object::read::{Object as _, ObjectSymbol as _};
+    let bytes = std::fs::read(exe).unwrap();
+    let file = object::File::parse(&*bytes).unwrap();
+    let mut out: Vec<String> = file
+        .symbols()
+        .filter(|s| s.kind() == object::SymbolKind::Text)
+        .filter_map(|s| s.name().ok())
+        .map(|n| n.strip_prefix('_').unwrap_or(n).to_owned())
+        .filter(|n| n.starts_with("cb$"))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The module with a kept function between two that nothing calls.
+const GC_UTIL: &str = "//! Checks, and two functions nothing calls.
+
+/// Nothing calls this.
+pub fn before(n: Int) -> Int {
+  n + 1
+}
+
+/// Fails when `n` is not positive.
+pub fn check(n: Int) -> Int {
+  assert n > 0
+  n
+}
+
+/// Nothing calls this either.
+pub fn after(n: Int) -> Int {
+  n * 3
+}
+";
+
+/// D-1253: the linker drops the functions of a whole module that nothing
+/// reaches, with their record entries: the executable keeps `check` and
+/// drops `before` and `after`, while `cheby run` loads all three; the
+/// call-site table of the kept function still locates its frame, so a
+/// failed assertion in it reports its location as `cheby run` does.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn link_gc_drops_unreached_functions_and_keeps_locations() {
+    let tmp = FreshDir::create("cheby-build-link-gc").unwrap();
+    let root = package_files(
+        tmp.path(),
+        "",
+        &[
+            (
+                "main.cheby",
+                "//! Calls one function of `util`.
+
+import app::util
+import std::io
+
+fn main() {
+  io::println(\"start\")
+  let _ = util::check(0)
+  Nil
+}
+",
+            ),
+            ("util.cheby", GC_UTIL),
+        ],
+    );
+    let (build, exe) = built(&root, tmp.path(), "app");
+    let kept = kept_functions(&exe);
+    let has = |item: &str| kept.iter().any(|n| n.ends_with(&format!("$util${item}")));
+    assert!(has("check"), "{kept:?}");
+    assert!(!has("before"), "{kept:?}");
+    assert!(!has("after"), "{kept:?}");
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(101), "{}", ran.stderr);
+    assert!(ran.stderr.contains("src/util.cheby:"), "{}", ran.stderr);
+    let cache = fresh_cache();
+    let run = cheby(&root, &["run"], &cache, &[]);
+    assert_same(&build, &ran, &run);
+}

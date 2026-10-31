@@ -551,6 +551,17 @@ fn decode_record(bytes: &[u8], record: &str) -> DecodedRecord {
     let sites = (0..counts[5])
         .map(|f| word(function_table + 40 * f + 24))
         .collect();
+    // D-1253: a replayed record's function table is empty; its entries
+    // sit in the object's entries' section(s), which give the table's
+    // count and each entry's call-site count.
+    let mut counts = counts;
+    let sites = if counts[5] == 0 {
+        let linked = linked_entries(&file, record);
+        counts[5] = u64::try_from(linked.len()).unwrap();
+        linked
+    } else {
+        sites
+    };
     DecodedRecord {
         counts,
         types,
@@ -559,6 +570,33 @@ fn decode_record(bytes: &[u8], record: &str) -> DecodedRecord {
         shapes,
         sites,
     }
+}
+
+/// The call-site count of each `FunctionEntry` of the record `record` in
+/// the entries' sections of `file` (`cheby_link::gc`, D-1253): on Mach-O
+/// the shared section's entries that carry the record's tag in their
+/// `pad`, on ELF the record's own sections, one per entry; 40 bytes per
+/// entry with the count at 24.
+fn linked_entries(file: &::object::File<'_>, record: &str) -> Vec<u64> {
+    use ::object::read::{Object as _, ObjectSection as _};
+    let format = file.format();
+    let name = if format == ::object::BinaryFormat::MachO {
+        cheby_link::gc::MACHO_SECTION.to_owned()
+    } else {
+        cheby_link::gc::section(&cheby_link::gc::key(record))
+    };
+    let tag = cheby_link::gc::image_tag(format, record);
+    let mut out = Vec::new();
+    for section in file.sections().filter(|s| s.name() == Ok(name.as_str())) {
+        let data = section.data().unwrap();
+        assert_eq!(data.len() % 40, 0, "{name}");
+        for entry in data.chunks(40) {
+            if u32_at(entry, 20) == tag {
+                out.push(u64_at(entry, 24));
+            }
+        }
+    }
+    out
 }
 
 /// The field kind a record gives a field of a representation.

@@ -1158,3 +1158,239 @@ fn net_connect_tries_each_address_in_order() {
     assert_eq!(seen.get(2), Some(&Got::Failed(0)));
     drop(listening);
 }
+
+/// TLS on the poller (D-1011, D-984, GAP(tls-connection)): the server is a
+/// host thread with a `rustls` server over a blocking loopback socket,
+/// presenting the test CA's leaf; the fiber's client trusts the test CA
+/// through its own configuration (`net_tls_tests.rs`).
+#[cfg(not(windows))]
+mod tls {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+
+    use parking_lot::Mutex;
+
+    use super::{
+        Got, Slot, THREADS, cancel_and_close, fiber_end, got, open_scope, rt, run_root, spawn_into,
+        yield_until,
+    };
+    use crate::net::hooks::{self, LookupHook};
+    use crate::net::{KIND_TLS, connect_tls_to, read_on, shutdown_on, write_on};
+    use crate::net_tls::tests::{server_config, trusting_test_ca};
+    use crate::sched::testing;
+
+    /// A host listener on `127.0.0.1` and its port.
+    fn host_listener() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
+
+    /// The host's end of one accepted connection, its reads bounded by
+    /// [`testing::hang`].
+    fn accepted(listener: &TcpListener) -> TcpStream {
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(testing::hang())).unwrap();
+        stream
+    }
+
+    /// The bytes of a payload of `size`, not all equal.
+    fn payload(size: usize, salt: u8) -> Vec<u8> {
+        (0..size)
+            .map(|index| u8::try_from(index % 251).unwrap() ^ salt)
+            .collect()
+    }
+
+    /// A secured connection carries 512 KiB each way, more than one
+    /// socket buffer, so both directions wait on the poller; the server's
+    /// `close_notify` ends the client's reads, and `shutdown_write` sends
+    /// the client's.
+    fn round_trip(threads: usize) {
+        const SIZE: usize = 512 << 10;
+        let (listener, port) = host_listener();
+        let host = thread::spawn(move || {
+            let session = rustls::ServerConnection::new(server_config()).unwrap();
+            let mut tls = rustls::StreamOwned::new(session, accepted(&listener));
+            let mut request = vec![0_u8; SIZE];
+            tls.read_exact(&mut request).unwrap();
+            assert_eq!(request, payload(SIZE, 1), "the request");
+            tls.write_all(&payload(SIZE, 2)).unwrap();
+            tls.conn.send_close_notify();
+            tls.flush().unwrap();
+            let mut rest = Vec::new();
+            tls.read_to_end(&mut rest).unwrap();
+            rest
+        });
+        let seen: Arc<Mutex<Vec<u8>>> = Arc::default();
+        {
+            let seen = Arc::clone(&seen);
+            run_root(threads, move |me| {
+                let config = trusting_test_ca();
+                let connection = connect_tls_to(me, &rt(me), "127.0.0.1", i64::from(port), &config)
+                    .unwrap()
+                    .unwrap();
+                write_on(me, &connection, &payload(SIZE, 1))
+                    .unwrap()
+                    .unwrap();
+                let mut received = Vec::new();
+                // Bounded (risk R25): far more rounds than blocks.
+                for _ in 0..100_000 {
+                    match read_on(me, &connection, 65_536).unwrap().unwrap() {
+                        Some(data) => received.extend(data),
+                        None => break,
+                    }
+                }
+                shutdown_on(me, &connection).unwrap().unwrap();
+                *seen.lock() = received;
+                0
+            });
+        }
+        let rest = host.join().unwrap();
+        assert!(rest.is_empty(), "the client sent more than its request");
+        assert!(
+            *seen.lock() == payload(SIZE, 2),
+            "the response at {threads} workers"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "sockets and signals on Windows are M6 (D-935, D-983)"
+    )]
+    fn tls_poller_round_trip() {
+        for threads in THREADS {
+            round_trip(threads);
+        }
+    }
+
+    /// D-984: a fiber parked in the handshake, waiting for a server that
+    /// read the `ClientHello` and never answers, is cancelled at once: it
+    /// unwinds, and its socket is closed, which the server sees as the end
+    /// of the stream long before its read times out.
+    fn cancelled_handshake(threads: usize) {
+        let (listener, port) = host_listener();
+        let heard = Arc::new(AtomicBool::new(false));
+        let host = {
+            let heard = Arc::clone(&heard);
+            thread::spawn(move || {
+                let mut stream = accepted(&listener);
+                let mut first = [0_u8; 1];
+                stream.read_exact(&mut first).unwrap();
+                heard.store(true, Ordering::SeqCst);
+                let mut rest = Vec::new();
+                stream.read_to_end(&mut rest).map(|_| first)
+            })
+        };
+        let slot: Slot = Arc::default();
+        {
+            let slot = Arc::clone(&slot);
+            run_root(threads, move |me| {
+                let scope = open_scope(me);
+                let fiber = {
+                    let slot = Arc::clone(&slot);
+                    spawn_into(me, scope, move |me| {
+                        let config = trusting_test_ca();
+                        let made =
+                            connect_tls_to(me, &rt(me), "127.0.0.1", i64::from(port), &config);
+                        let outcome = got(&made, |_| Vec::new());
+                        let cancelled = outcome == Got::Cancelled;
+                        *slot.lock() = Some(outcome);
+                        fiber_end(me, cancelled)
+                    })
+                };
+                yield_until(me, || heard.load(Ordering::SeqCst));
+                cancel_and_close(me, scope, fiber);
+                0
+            });
+        }
+        assert_eq!(
+            slot.lock().clone(),
+            Some(Got::Cancelled),
+            "{threads} workers"
+        );
+        let first = host.join().unwrap().expect("the server's read timed out");
+        assert_eq!(first, [0x16], "a TLS handshake record");
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "sockets and signals on Windows are M6 (D-935, D-983)"
+    )]
+    fn tls_poller_cancelled_handshake_returns_at_once() {
+        for threads in THREADS {
+            cancelled_handshake(threads);
+        }
+    }
+
+    /// GAP(tls-failure-kinds): a server that answers in plain HTTP is kind
+    /// 100, and so is one whose certificate does not cover the name (a
+    /// hooked `.test` name that resolves to the loopback server); a refused
+    /// connection keeps its IO kind (8).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "sockets and signals on Windows are M6 (D-935, D-983)"
+    )]
+    fn tls_poller_failure_kinds() {
+        let (plain, plain_port) = host_listener();
+        let plain_host = thread::spawn(move || {
+            let mut stream = accepted(&plain);
+            let mut hello = [0_u8; 512];
+            let _ = stream.read(&mut hello).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n")
+                .unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut rest = Vec::new();
+            let _ = stream.read_to_end(&mut rest);
+        });
+        let (named, named_port) = host_listener();
+        let named_host = thread::spawn(move || {
+            let session = rustls::ServerConnection::new(server_config()).unwrap();
+            let mut tls = rustls::StreamOwned::new(session, accepted(&named));
+            let mut nothing = Vec::new();
+            // The client's alert ends the handshake on this side too.
+            tls.read_to_end(&mut nothing).is_err()
+        });
+        let wrong = LookupHook::new(
+            "tls-wrong-name.test",
+            vec![SocketAddr::from(([127, 0, 0, 1], named_port))],
+            true,
+        );
+        hooks::install(&wrong);
+        let (refused, refused_port) = host_listener();
+        drop(refused);
+        let seen: Arc<Mutex<Vec<Got>>> = Arc::default();
+        {
+            let seen = Arc::clone(&seen);
+            run_root(2, move |me| {
+                let config = trusting_test_ca();
+                let runtime = rt(me);
+                *seen.lock() = [
+                    ("127.0.0.1", plain_port),
+                    ("tls-wrong-name.test", named_port),
+                    ("127.0.0.1", refused_port),
+                ]
+                .iter()
+                .map(|&(host, port)| {
+                    let made = connect_tls_to(me, &runtime, host, i64::from(port), &config);
+                    got(&made, |_| Vec::new())
+                })
+                .collect();
+                0
+            });
+        }
+        hooks::remove(&wrong);
+        plain_host.join().unwrap();
+        assert!(named_host.join().unwrap(), "the server heard no alert");
+        assert_eq!(
+            *seen.lock(),
+            vec![Got::Failed(KIND_TLS), Got::Failed(KIND_TLS), Got::Failed(8)]
+        );
+    }
+}

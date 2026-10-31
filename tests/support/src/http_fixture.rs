@@ -24,9 +24,15 @@
 //! `.html` file and for `/`, `text/plain` otherwise), `content-length` and
 //! `connection: close`, and the server closes each connection after its
 //! response.
+//!
+//! A read of the request head that fails with `Interrupted` is tried
+//! again; any other failed read gets `400` with the error's kind in its
+//! body, also printed on the fixture's standard error, so that a flake
+//! such as 031's `400 /` under amd64 emulation can be diagnosed (the log's
+//! wave-9 Open list).
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -154,31 +160,57 @@ fn accept_loop(listener: &TcpListener, root: &Path, stop: &AtomicBool) {
 fn serve(mut stream: TcpStream, root: &Path) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-    let response = match read_head(&mut stream) {
-        Some(head) => respond(&head, root),
-        None => Response::text(400, "bad request\n"),
-    };
+    let response = response_to(&mut stream, root);
     let _ = stream.write_all(&response.bytes());
     let _ = stream.flush();
     let _ = stream.shutdown(Shutdown::Both);
 }
 
-/// The request head up to its blank line, or `None` if the connection
-/// ends or the head grows past [`MAX_HEAD`] first.
-fn read_head(stream: &mut TcpStream) -> Option<String> {
+/// The response to the request `stream` sends. A read that fails with an
+/// error other than `Interrupted` gets `400` with the error's kind in its
+/// body, also printed on the fixture's standard error, so that a flake
+/// can be diagnosed (031's `400 /` under amd64 emulation, the log's wave-9
+/// Open list).
+fn response_to(stream: &mut impl Read, root: &Path) -> Response {
+    match read_head(stream) {
+        Ok(head) => respond(&head, root),
+        Err(HeadError::Bad) => Response::text(400, "bad request\n"),
+        Err(HeadError::Read(kind)) => {
+            eprintln!("http fixture: reading a request head failed: {kind:?}");
+            Response::text(400, &format!("bad request: the read failed: {kind:?}\n"))
+        }
+    }
+}
+
+/// Why [`read_head`] read no head.
+#[derive(Debug, PartialEq, Eq)]
+enum HeadError {
+    /// The connection ended, or the head grew past [`MAX_HEAD`], before
+    /// its blank line.
+    Bad,
+    /// A read failed with this kind of error.
+    Read(ErrorKind),
+}
+
+/// The request head up to its blank line. A read that fails with
+/// `Interrupted` is tried again; any other failed read is
+/// [`HeadError::Read`] with its kind.
+fn read_head(stream: &mut impl Read) -> Result<String, HeadError> {
     let mut head = Vec::new();
     let mut buf = [0_u8; 4096];
     loop {
         if let Some(end) = head.windows(4).position(|w| w == b"\r\n\r\n") {
             head.truncate(end);
-            return Some(String::from_utf8_lossy(&head).into_owned());
+            return Ok(String::from_utf8_lossy(&head).into_owned());
         }
         if head.len() > MAX_HEAD {
-            return None;
+            return Err(HeadError::Bad);
         }
         match stream.read(&mut buf) {
-            Ok(0) | Err(_) => return None,
-            Ok(n) => head.extend_from_slice(buf.get(..n)?),
+            Ok(0) => return Err(HeadError::Bad),
+            Ok(n) => head.extend_from_slice(buf.get(..n).ok_or(HeadError::Bad)?),
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(HeadError::Read(error.kind())),
         }
     }
 }
@@ -305,12 +337,12 @@ impl Response {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::TcpStream;
     use std::path::Path;
     use std::sync::{Arc, Barrier};
 
-    use super::{Server, url_for};
+    use super::{HeadError, Server, read_head, response_to, url_for};
     use crate::cache::FreshDir;
 
     /// A scratch directory with `site/index.html`, `site/about`,
@@ -494,5 +526,78 @@ mod tests {
         // Dropping one stops only that one.
         drop(a);
         assert_eq!(get(&b.url(), "/").0, 200);
+    }
+
+    /// A reader that fails with each of `errors` in turn before it gives
+    /// `bytes`, then the end of the stream.
+    struct Flaky {
+        errors: Vec<ErrorKind>,
+        bytes: &'static [u8],
+    }
+
+    impl Read for Flaky {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.errors.is_empty() {
+                return Err(self.errors.remove(0).into());
+            }
+            let n = self.bytes.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.bytes[..n]);
+            self.bytes = &self.bytes[n..];
+            Ok(n)
+        }
+    }
+
+    /// The wave-9 Open list: a read that fails with `Interrupted` is tried
+    /// again, so the request is answered as if nothing had happened.
+    #[test]
+    fn http_fixture_retries_an_interrupted_read() {
+        let dir = site("http-fixture-interrupted");
+        let root = dir.path().join("site").canonicalize().unwrap();
+        let mut once = Flaky {
+            errors: vec![ErrorKind::Interrupted],
+            bytes: b"GET /about HTTP/1.1\r\nhost: x\r\n\r\n",
+        };
+        assert_eq!(
+            read_head(&mut once),
+            Ok("GET /about HTTP/1.1\r\nhost: x".to_owned())
+        );
+        let mut twice = Flaky {
+            errors: vec![ErrorKind::Interrupted, ErrorKind::Interrupted],
+            bytes: b"GET /about HTTP/1.1\r\n\r\n",
+        };
+        let response = response_to(&mut twice, &root);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"About us\n");
+    }
+
+    /// Any other failed read is `400` with the error's kind in the body
+    /// (and on the fixture's standard error), never a bare `bad request`.
+    #[test]
+    fn http_fixture_reports_the_read_error_kind() {
+        let dir = site("http-fixture-read-error");
+        let root = dir.path().join("site").canonicalize().unwrap();
+        let mut reset = Flaky {
+            errors: vec![ErrorKind::ConnectionReset],
+            bytes: b"GET / HTTP/1.1\r\n\r\n",
+        };
+        assert_eq!(
+            read_head(&mut reset),
+            Err(HeadError::Read(ErrorKind::ConnectionReset))
+        );
+        let mut timed_out = Flaky {
+            errors: vec![ErrorKind::Interrupted, ErrorKind::TimedOut],
+            bytes: b"",
+        };
+        let response = response_to(&mut timed_out, &root);
+        assert_eq!(response.status, 400);
+        let body = String::from_utf8(response.body).unwrap();
+        assert_eq!(body, "bad request: the read failed: TimedOut\n");
+        // A connection that ends before the blank line keeps its old body.
+        let mut ended = Flaky {
+            errors: Vec::new(),
+            bytes: b"GET / HTTP/1.1\r\n",
+        };
+        assert_eq!(read_head(&mut ended), Err(HeadError::Bad));
+        assert_eq!(response_to(&mut ended, &root).body, b"bad request\n");
     }
 }

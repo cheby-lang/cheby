@@ -22,7 +22,7 @@
 //! UTF-8 bytes follow, with no alignment and no terminator.
 //! [`NO_STRING`] (`u32::MAX`) names no string.
 //!
-//! # `cb$image`: [`ProgramImage`], 104 bytes
+//! # `cb$image`: [`ProgramImage`], 120 bytes
 //!
 //! | Offset | Field          | Type                         | Contents                                                                                     |
 //! | ------ | -------------- | ---------------------------- | -------------------------------------------------------------------------------------------- |
@@ -34,10 +34,30 @@
 //! | 72     | `main_stack`   | `u64`                        | the root fiber's stack in bytes: `[runtime] main-stack` after D-660's default and rounding    |
 //! | 80     | `fiber_stack`  | `u64`                        | the default stack of other fibers in bytes: `[runtime] fiber-stack` likewise (D-660, D-927)  |
 //! | 88     | `constants`    | table of bytes               | the constants table: the program's constant images (D-979), empty for a program without any |
+//! | 104    | `functions`    | table of [`FunctionBounds`]  | each module record's function table from the linker (D-1253), or empty                       |
 //!
 //! The constants table is `consteval::image::encode_table`'s bytes: every
 //! image of the constants the program reaches, in D-535's order (its format
 //! is documented in [`crate::consteval::image`]).
+//!
+//! The `functions` table (D-1253, linker GC of record entries) is empty, or
+//! holds one [`FunctionBounds`] per module record, in the order of
+//! `modules`. In an executable, each record's `FunctionEntry`s and their
+//! call sites leave the record for sections tied to their functions, so
+//! the linker drops an entry with its function, and the record's own
+//! `functions` table is empty. [`FunctionBounds`] (24 bytes): `start` at 0
+//! and `end` at 8, the bounds of the section that holds the record's kept
+//! entries, which the linker fills (`__start_…` and `__stop_…` of the
+//! record's own section on ELF; `section$start$…` and `section$end$…` of the
+//! one section all records share on Mach-O, whose 255-section limit allows
+//! no section per module), both 0 when the linker kept none; `tag` (`u32`)
+//! at 16 and `pad` (`u32`, 0) at 20. The record's entries are those in the
+//! bounds whose `pad` word equals `tag`: every entry of an ELF record's own
+//! section (tag and `pad` 0), and in the shared Mach-O section those that
+//! carry the record's tag. The entries otherwise keep their layout, their
+//! `name` an offset into the record's string table (D-1234). The records
+//! stay read-only (D-919), and the program image, built and read by one
+//! toolchain, keeps [`abi::IMAGE_VERSION`] (D-1253).
 //!
 //! # `cb$mod$<path>`: [`ModuleRecord`], 112 bytes
 //!
@@ -303,6 +323,24 @@ pub struct ProgramImage {
     main_stack: u64,
     fiber_stack: u64,
     constants: Table<u8>,
+    functions: Table<FunctionBounds>,
+}
+
+/// Where the linker put the kept `FunctionEntry`s of one module record
+/// (D-1253): the entries of `[start, end)` whose `pad` equals `tag`, or
+/// none when both are null.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionBounds {
+    /// The first entry of the section.
+    pub start: *const FunctionEntry,
+    /// One past the last entry of the section.
+    pub end: *const FunctionEntry,
+    /// The `pad` word of the record's entries: 0 for a section of the
+    /// record's own, the record's tag in a shared one.
+    pub tag: u32,
+    /// 0.
+    pub pad: u32,
 }
 
 /// The parts of a [`ProgramImage`] built in Rust ([`ProgramImage::new`]).
@@ -324,6 +362,9 @@ pub struct ImageParts {
     pub fiber_stack: u64,
     /// The constant image.
     pub constants: Table<u8>,
+    /// Each module record's function table from the linker (D-1253), or
+    /// empty: every record then carries its own.
+    pub functions: Table<FunctionBounds>,
 }
 
 impl ProgramImage {
@@ -333,9 +374,11 @@ impl ProgramImage {
     ///
     /// Every non-null pointer of `parts.modules` points to a
     /// [`ModuleRecord`] that satisfies [`ModuleRecord::new`]'s contract,
-    /// and `parts.entry` and the trampolines satisfy `run_main`'s and the
-    /// callbacks' contracts, for as long as the image or what it installs
-    /// is used.
+    /// each non-null [`FunctionBounds`] of `parts.functions` spans
+    /// initialized `FunctionEntry`s that satisfy it too, as entries of the
+    /// record of the same index, and `parts.entry` and the trampolines
+    /// satisfy `run_main`'s and the callbacks' contracts, for as long as
+    /// the image or what it installs is used.
     #[must_use]
     pub unsafe fn new(parts: ImageParts) -> Self {
         Self {
@@ -351,6 +394,7 @@ impl ProgramImage {
             main_stack: parts.main_stack,
             fiber_stack: parts.fiber_stack,
             constants: parts.constants,
+            functions: parts.functions,
         }
     }
 
@@ -415,6 +459,63 @@ impl ProgramImage {
                 })
             })
             .collect()
+    }
+
+    /// Each of the image's `records` module records' function table from
+    /// the linker (D-1253), in their order; `None` when the image has no
+    /// `functions` table and every record carries its own.
+    fn function_tables(
+        &self,
+        records: usize,
+    ) -> Result<Option<Vec<Vec<FunctionEntry>>>, ImageError> {
+        if self.functions.is_empty() {
+            return Ok(None);
+        }
+        let bounds = self.functions.items().ok_or(ImageError::Malformed {
+            module: None,
+            what: "the table of function bounds",
+        })?;
+        if bounds.len() != records {
+            return Err(ImageError::Malformed {
+                module: None,
+                what: "a table of function bounds that is not one per module record",
+            });
+        }
+        let mut out = Vec::with_capacity(bounds.len());
+        for (index, bound) in bounds.iter().enumerate() {
+            let malformed = ImageError::malformed(index, "the bounds of a function table");
+            if bound.start.is_null() && bound.end.is_null() {
+                out.push(Vec::new());
+                continue;
+            }
+            if bound.start.is_null() || bound.end.is_null() || !bound.start.is_aligned() {
+                return Err(malformed);
+            }
+            let bytes = bound
+                .end
+                .addr()
+                .checked_sub(bound.start.addr())
+                .ok_or(malformed.clone())?;
+            let entry = size_of::<FunctionEntry>();
+            if bytes.checked_rem(entry) != Some(0) || isize::try_from(bytes).is_err() {
+                return Err(malformed);
+            }
+            let len = bytes.checked_div(entry).ok_or(malformed)?;
+            // SAFETY: `ProgramImage::new`'s caller guarantees that non-null
+            // bounds span initialized entries that outlive the image; the
+            // start is non-null and aligned, and the span is a whole number
+            // of entries whose size fits `isize`, as checked above.
+            let span = unsafe { std::slice::from_raw_parts(bound.start, len) };
+            // The record's entries are those whose `pad` holds its tag: all
+            // of a span of its own (tag 0), its share of a shared one.
+            out.push(
+                span.iter()
+                    .filter(|entry| entry.pad == bound.tag)
+                    .copied()
+                    .collect(),
+            );
+        }
+        Ok(Some(out))
     }
 }
 
@@ -609,7 +710,7 @@ const _: () = {
     assert!(offset_of!(Table<u8>, len) == 0);
     assert!(offset_of!(Table<u8>, ptr) == 8);
 
-    assert!(size_of::<ProgramImage>() == 104);
+    assert!(size_of::<ProgramImage>() == 120);
     assert!(offset_of!(ProgramImage, version) == 0);
     assert!(offset_of!(ProgramImage, unwind_edges) == 4);
     assert!(offset_of!(ProgramImage, modules) == 8);
@@ -622,6 +723,13 @@ const _: () = {
     assert!(offset_of!(ProgramImage, main_stack) == 72);
     assert!(offset_of!(ProgramImage, fiber_stack) == 80);
     assert!(offset_of!(ProgramImage, constants) == 88);
+    assert!(offset_of!(ProgramImage, functions) == 104);
+
+    assert!(size_of::<FunctionBounds>() == 24);
+    assert!(offset_of!(FunctionBounds, start) == 0);
+    assert!(offset_of!(FunctionBounds, end) == 8);
+    assert!(offset_of!(FunctionBounds, tag) == 16);
+    assert!(offset_of!(FunctionBounds, pad) == 20);
 
     assert!(size_of::<ModuleRecord>() == 112);
     assert!(offset_of!(ModuleRecord, strings) == 0);
@@ -767,16 +875,19 @@ pub fn install(image: &ProgramImage) -> Result<(), ImageError> {
     // The headers are checked here, before anything is registered; the
     // images are read in place from the table when installed, never copied.
     let images = consteval::image::table_len(table).map_err(ImageError::Constants)?;
+    // D-1253: the records' function tables, from the linker's bounds.
+    let functions = image.function_tables(modules.len())?;
     // One owner for the whole program, never unregistered: an
     // executable's code lives as long as the process (D-867).
     //
     // SAFETY: `ProgramImage::new`'s caller guarantees that every record
-    // of the image satisfies `ModuleRecord::new`'s contract for as long as
-    // the image or what it installs is used: its tables, words, statics,
-    // function values and code stay valid, and its layout words and
-    // constructor statics are writable data nothing else writes while the
-    // image is installed, before any worker starts (D-920).
-    unsafe { register_records(&modules, locate::new_code_owner()) }?;
+    // of the image, and every function table its bounds give, satisfies
+    // `ModuleRecord::new`'s contract for as long as the image or what it
+    // installs is used: its tables, words, statics, function values and
+    // code stay valid, and its layout words and constructor statics are
+    // writable data nothing else writes while the image is installed,
+    // before any worker starts (D-920).
+    unsafe { register_records_with(&modules, functions.as_deref(), locate::new_code_owner()) }?;
     if images == 0 {
         return Ok(());
     }
@@ -989,6 +1100,30 @@ pub unsafe fn type_layouts_at(addresses: &[usize]) -> Result<TypeLayouts, ImageE
 /// JIT batch's before any code of the batch runs), and nothing else writes
 /// them meanwhile.
 pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<(), ImageError> {
+    // SAFETY: forwarded from the caller; every record carries its own
+    // function table.
+    unsafe { register_records_with(records, None, owner) }
+}
+
+/// [`register_records`], with each record's function table taken from
+/// `functions` (one per record, in their order) when it is given: an
+/// executable's, whose linker kept only the entries of live functions
+/// (D-1253). A record whose own `functions` table is not empty beside
+/// such a table is malformed.
+///
+/// # Errors
+///
+/// As [`register_records`].
+///
+/// # Safety
+///
+/// As [`register_records`], for the tables of `functions` as for the
+/// records' own.
+unsafe fn register_records_with(
+    records: &[&ModuleRecord],
+    functions: Option<&[Vec<FunctionEntry>]>,
+    owner: u64,
+) -> Result<(), ImageError> {
     // Every record is checked before anything is registered.
     let mut checked: Vec<CheckedRecord> = Vec::with_capacity(records.len());
     let mut ranges: Vec<CodeRangeDesc> = Vec::new();
@@ -999,7 +1134,13 @@ pub unsafe fn register_records(records: &[&ModuleRecord], owner: u64) -> Result<
         check_free_shapes(index, record, &types)?;
         let externals = external_types(index, record)?;
         let hooks = record_hooks(index, record, types.len())?;
-        code_ranges(index, record, &mut ranges)?;
+        let table = match functions {
+            None => None,
+            Some(tables) => Some(tables.get(index).map(Vec::as_slice).ok_or(
+                ImageError::malformed(index, "a record without its function table"),
+            )?),
+        };
+        code_ranges(index, record, table, &mut ranges)?;
         checked.push(CheckedRecord {
             types,
             externals,
@@ -1289,20 +1430,33 @@ fn record_hooks(
     Ok(out)
 }
 
-/// Appends the call-site ranges of `record`'s functions to `out`.
+/// Appends the call-site ranges of `record`'s functions to `out`: those
+/// of its own `functions` table, or of `linked` when the linker gave the
+/// record's table (D-1253), whose own table is then empty.
 fn code_ranges(
     index: usize,
     record: &ModuleRecord,
+    linked: Option<&[FunctionEntry]>,
     out: &mut Vec<CodeRangeDesc>,
 ) -> Result<(), ImageError> {
     let strings = record
         .strings
         .items()
         .ok_or(ImageError::malformed(index, "the string table"))?;
-    let functions = record
+    let own = record
         .functions
         .items()
         .ok_or(ImageError::malformed(index, "the call-site table"))?;
+    let functions = match linked {
+        None => own,
+        Some(_) if !own.is_empty() => {
+            return Err(ImageError::malformed(
+                index,
+                "a function table in the record beside the linker's",
+            ));
+        }
+        Some(linked) => linked,
+    };
     for function in functions {
         if function.code.is_null() {
             return Err(ImageError::malformed(index, "a function without code"));

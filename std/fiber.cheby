@@ -507,6 +507,48 @@ test "a timeout cancels the scopes inside it without their returning" {
   assert channel::send(keep, 1) == Err(1)
 }
 
+// Interrupts
+
+/// Makes the first SIGINT or SIGTERM that the process receives while
+/// `owner` is open cancel it, with `owner` as the target, as an expired
+/// limit cancels a timed scope (D-790, D-1073). `owner` is the scope that
+/// `interruptible` just opened, and its close stops the signal from
+/// reaching it on every path out. Under `cheby test`, in the REPL and on
+/// Windows it does nothing.
+@std_context
+@external(native, "cheby_fiber_sys_arm_interrupt")
+@external(js, "./fiber.mjs", "sys_arm_interrupt")
+priv fn sys_arm_interrupt(owner: Scope) -> Nil
+
+/// Calls `f` on the calling fiber in a new scope that the first SIGINT or
+/// SIGTERM cancels, for `process::until_interrupted` (D-675, D-1073). `Ok`
+/// holds `f`'s value when it returned first, `Err(Some(p))` holds its panic
+/// when it panicked first, and `Err(None)` comes once a signal cancelled
+/// the scope and everything in it has ended. It is package-visible:
+/// `std::process` cannot build a `Panic`.
+fn interruptible<T>(f: fn() -> T) -> Result<T, Option<Panic>> {
+  let body = fn(owner) {
+    sys_arm_interrupt(owner)
+    f()
+  }
+  case scope_run(False, 0, 0, body) {
+    Ok(value) => Ok(value)
+    Err(Nil) => case take_failure() {
+      (0, text, place) => Err(Some(Panic { message: text, location: place }))
+      _ => Err(None)
+    }
+  }
+}
+
+test "interruptible returns the value of a body that finishes" {
+  assert interruptible(fn() { 6 * 7 }) == Ok(42)
+}
+
+test "interruptible reports a panic as the panic" {
+  let assert Err(Some(failure)) = interruptible(fn() { panic as "crash" })
+  assert message(failure) == "crash"
+}
+
 // Panics
 
 /// Returns the message of the panic: exactly the message line of its

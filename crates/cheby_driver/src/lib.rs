@@ -71,6 +71,7 @@ mod code_cache;
 mod frontend;
 mod load_set;
 mod native;
+pub mod phases;
 mod reuse_replay;
 mod reuse_report;
 pub mod session;
@@ -618,8 +619,8 @@ fn front_end_for(
 /// `cheby check` the modules it vouches for are not parsed. A front end
 /// that must start again ([`frontend::Stop::Restart`]) is run once more
 /// from the start, every module parsed and every hit decoded at its lookup.
-/// `warm` is `Some` for `cheby run` and `cheby test` (D-1250), with
-/// whether the command prints the reuse report and `cheby run`'s
+/// `warm` is `Some` for `cheby run`, `cheby test` and `cheby build`
+/// (D-1250), with whether the command prints the reuse report and the
 /// `--module` path: their front end checks only what their build needs
 /// ([`crate::warm_keys`]); `None` checks every module, as a command that
 /// starts again after its build wanted a hit's body does.
@@ -638,19 +639,26 @@ fn front_end_family(
         cache::index::PackageIndex::key(&root, family, cache.store.build_id())
     });
     // A bad, stale or missing index is ignored (D-962).
+    let index_span = phases::span(phases::Phase::Index);
     let index: Option<(cache::index::PackageIndex, Vec<u8>)> = cache
         .filter(|cache| cache.reads)
         .zip(index_key)
         .and_then(|(cache, key)| cache.store.get_hint(&key).ok().flatten())
         .and_then(|bytes| cache::index::PackageIndex::decode(&bytes).map(|index| (index, bytes)));
-    // D-1250 (K4d): `cheby run` and `cheby test` check only what their
-    // build needs, under the kind and MIR options it reads. An invalid
-    // option checks every module: the build reports it, as before.
+    drop(index_span);
+    // D-1250 (K4d, N9): `cheby run`, `cheby test` and `cheby build` check
+    // only what their build needs, under the kind and MIR options it reads.
+    // An invalid option checks every module: the build reports it, as
+    // before. `cheby build` reads `cheby run`'s code records (D-914), so
+    // its misses are decided as `cheby run`'s are, over its own package
+    // index (D-962). GAP(build-from-records).
     let build = match (mode, warm) {
         (frontend::Mode::Build, Some((reuse, main)))
             if matches!(
                 family,
-                cache::index::CommandFamily::Run | cache::index::CommandFamily::Test
+                cache::index::CommandFamily::Run
+                    | cache::index::CommandFamily::Test
+                    | cache::index::CommandFamily::Build
             ) =>
         {
             backend::mir_options_from_env()
@@ -665,6 +673,7 @@ fn front_end_family(
         _ => None,
     };
     for lazy in [true, false] {
+        let attempt = phases::attempt();
         *out = CheckOutput {
             deny_warnings,
             ..CheckOutput::default()
@@ -680,7 +689,7 @@ fn front_end_family(
             });
         match front_end_once(root, mode, target, out, use_)? {
             Attempt::Done(result) => return Ok(result),
-            Attempt::Again if lazy => {}
+            Attempt::Again if lazy => attempt.restarted(),
             Attempt::Again => break,
         }
     }
@@ -834,6 +843,7 @@ impl Program {
     ///
     /// An [`Error`] if the runtime cannot run the entry.
     pub fn run(self) -> Result<i32, Error> {
+        let _main = phases::span(phases::Phase::Main);
         Ok(self.jit.entry(self.entry)?.run_main(self.config)?)
     }
 
@@ -902,11 +912,13 @@ fn prepare_run_inner(
 /// restart drops the attempt's lines (D-1135: only the run that finished
 /// is logged).
 pub(crate) fn log_mark(cache: Option<&Cache>) -> Option<usize> {
+    phases::begin_attempt();
     cache.map(|cache| cache.log.mark())
 }
 
 /// Drops the lines `cache`'s log recorded after `mark` ([`log_mark`]).
 pub(crate) fn rollback_log(cache: Option<&Cache>, mark: Option<usize>) {
+    phases::attempt_restarted();
     if let (Some(cache), Some(mark)) = (cache, mark) {
         cache.log.rollback(mark);
     }
@@ -1302,6 +1314,8 @@ mod aot_tests;
 #[cfg(test)]
 mod borrowing_tests;
 #[cfg(test)]
+mod build_cache_tests;
+#[cfg(test)]
 mod cache_tests;
 #[cfg(test)]
 mod code_record_repl_tests;
@@ -1314,11 +1328,15 @@ mod load_set_tests;
 #[cfg(test)]
 mod native_tests;
 #[cfg(test)]
+mod phases_tests;
+#[cfg(test)]
 mod positions_tests;
 #[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
 mod reuse_replay_tests;
+#[cfg(test)]
+mod seal_tests;
 #[cfg(test)]
 mod std_cache_tests;
 #[cfg(test)]

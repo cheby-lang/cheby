@@ -50,6 +50,7 @@ mod key;
 mod location;
 mod log;
 pub mod replay;
+pub(crate) mod seal;
 mod store;
 mod trim;
 mod wire;

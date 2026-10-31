@@ -92,8 +92,10 @@ mod memory;
 mod native;
 #[cfg(test)]
 mod start_root_tests;
+mod timing;
 
 pub use native::{NativeLibrary, generation_symbol, resolve as resolve_native, split_generation};
+pub use timing::LoadTimes;
 // The tests compile and run machine code. Windows support is M6 (D-545),
 // so they are not built there. Two attributes, not `all(test, …)`, so
 // Clippy still sees a test module (`allow-unwrap-in-tests`).
@@ -314,6 +316,8 @@ pub struct Jit {
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     /// What the record loader keeps across batches (`load.rs`).
     loaded: load::Loaded,
+    /// What the last batch spent loading ([`Jit::load_times`], D-974).
+    load_times: LoadTimes,
 }
 
 /// One unit of a batch ([`Jit::compile_units`]), in build order.
@@ -477,7 +481,17 @@ impl Jit {
             records: Vec::new(),
             isa,
             loaded: load::Loaded::default(),
+            load_times: LoadTimes::default(),
         })
+    }
+
+    /// What the last [`Jit::compile_units`] (or [`Jit::load_records`])
+    /// spent generating code for its fresh units and declaring, defining,
+    /// finalizing and registering its records (D-974): all zero unless
+    /// `CHEBY_PHASES` names a file, and for a JIT that loaded nothing.
+    #[must_use]
+    pub fn load_times(&self) -> LoadTimes {
+        self.load_times
     }
 
     /// Loads `records`, in build order, as one batch (D-914, D-922,
@@ -554,6 +568,7 @@ impl Jit {
         units: &[BatchUnit<'_>],
         cx: &BatchCx<'_>,
     ) -> Result<Vec<Option<CodeRecord>>, JitError> {
+        self.load_times = LoadTimes::default();
         let mirs: Vec<&MirModule> = units
             .iter()
             .filter_map(|unit| match unit {
@@ -593,8 +608,10 @@ impl Jit {
         let ucx = cheby_codegen_clif::UnitCx {
             named_outside: &|_| true,
         };
+        let codegen = timing::Stopwatch::start();
         let compiled =
             cheby_codegen_clif::jit_unit::records_for_jit(&self.isa, &jobs, &ucx, &self.codegen);
+        self.load_times.codegen = codegen.elapsed();
         let mut fresh = Vec::with_capacity(compiled.len());
         for result in compiled {
             fresh.push(result.map_err(|e| match e {

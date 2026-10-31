@@ -91,13 +91,17 @@ pub(crate) fn compile(
             }
         }
     }
+    let register = crate::phases::span(crate::phases::Phase::Register);
     let fresh = jit.compile_units(
         &batch,
         &BatchCx {
             test_ordinals: &ordinals,
         },
     )?;
+    crate::phases::add_load(jit.load_times());
+    drop(register);
     if let Some(sink) = crate::borrowing::sink(front) {
+        let _records = crate::phases::span(crate::phases::Phase::Records);
         for (unit, record) in batch.iter().zip(&fresh) {
             if let (BatchUnit::Mir(unit), Some(record)) = (unit, record)
                 && let Some((_, key)) = unit_key(lowered, unit)
@@ -109,8 +113,9 @@ pub(crate) fn compile(
     Ok(jit)
 }
 
-/// The part and code key of `unit`, if it is a package unit with one.
-fn unit_key<'a>(
+/// The part and code key of `unit`, if it is a package unit with one
+/// (`cheby build` stores its fresh units' records under them too, N9).
+pub(crate) fn unit_key<'a>(
     lowered: &'a Lowered,
     unit: &cheby_mir::MirModule,
 ) -> Option<(UnitPart, &'a crate::cache::Key)> {

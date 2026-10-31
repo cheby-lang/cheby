@@ -7,8 +7,8 @@ use crate::consteval::{self, image::ConstImageError};
 use crate::entry::Callbacks;
 use crate::image::{
     CallSiteEntry, ConstEntry, CtorEntry, ExternalEntry, FIELD_KINDS, FN_CHEBY_ABI, FieldEntry,
-    FunctionEntry, HookEntry, ImageError, ImageParts, ModuleParts, ModuleRecord, NO_STRING,
-    ProgramImage, Table, TypeEntry, check_version, install, register_records,
+    FunctionBounds, FunctionEntry, HookEntry, ImageError, ImageParts, ModuleParts, ModuleRecord,
+    NO_STRING, ProgramImage, Table, TypeEntry, check_version, install, register_records,
 };
 use crate::layout::{self, FieldKind};
 use crate::locate::{self, Location};
@@ -74,6 +74,7 @@ fn image(records: &[&'static ModuleRecord]) -> ProgramImage {
             main_stack: 64 << 20,
             fiber_stack: 8 << 20,
             constants: Table::empty(),
+            functions: Table::empty(),
         })
     }
 }
@@ -256,6 +257,7 @@ fn image_refuses_malformed_tables() {
             main_stack: constants.main_stack(),
             fiber_stack: constants.fiber_stack(),
             constants: table(vec![1, 2, 3]),
+            functions: Table::empty(),
         })
     };
     assert!(!constants.unwind_edges());
@@ -286,6 +288,7 @@ fn image_rejects_malformed_records() {
             main_stack: 64 << 20,
             fiber_stack: 8 << 20,
             constants: Table::empty(),
+            functions: Table::empty(),
         })
     };
     assert_eq!(install(&null), malformed(Some(0), "a null module record"));
@@ -366,6 +369,7 @@ fn image_version_and_error_messages() {
             main_stack: 64 << 20,
             fiber_stack: 8 << 20,
             constants: Table::empty(),
+            functions: Table::empty(),
         })
     };
     let error = check_version(&old).unwrap_err();
@@ -1157,6 +1161,7 @@ fn const_install_executable_image_fills_slots_from_records() {
             main_stack: image.main_stack(),
             fiber_stack: image.fiber_stack(),
             constants: table(encoded),
+            functions: Table::empty(),
         })
     };
     assert_eq!(install(&image), Ok(()));
@@ -1273,4 +1278,168 @@ fn image_register_records_names_ranges() {
             what: "unknown function flags"
         })
     );
+}
+
+/// An image of `records` whose `main` returns 0, with `functions` as its
+/// function bounds (D-1253).
+fn image_with_bounds(
+    records: &[&'static ModuleRecord],
+    functions: Vec<FunctionBounds>,
+) -> ProgramImage {
+    let base = image(records);
+    // SAFETY: as `image`'s, and each bound spans leaked entries or is
+    // null.
+    unsafe {
+        ProgramImage::new(ImageParts {
+            version: abi::IMAGE_VERSION,
+            unwind_edges: true,
+            modules: table(
+                records
+                    .iter()
+                    .map(|record| std::ptr::from_ref(*record))
+                    .collect(),
+            ),
+            entry: base.entry(),
+            callbacks: Callbacks::default(),
+            main_stack: base.main_stack(),
+            fiber_stack: base.fiber_stack(),
+            constants: Table::empty(),
+            functions: table(functions),
+        })
+    }
+}
+
+/// D-1253: an executable's records carry no function table of their own;
+/// the image's bounds give each record its kept entries, whose names are
+/// offsets into the record's string table, and installation registers
+/// exactly those: a return address in a kept function is located with
+/// its name, null bounds are an empty table, and bounds that are not one
+/// per record or not a whole number of entries, or a record with a table
+/// of its own beside them, are refused before anything is registered.
+#[test]
+fn image_install_takes_function_tables_from_the_bounds() {
+    let (texts, offsets) = strings(&["src/main.cheby", "demo::kept"]);
+    let body = code(0x40);
+    let entries: &'static [FunctionEntry] = Box::leak(
+        vec![FunctionEntry {
+            flags: FN_CHEBY_ABI,
+            name: offsets[1],
+            ..function(body, vec![site(0x10, offsets[0], 7, 9)])
+        }]
+        .into_boxed_slice(),
+    );
+    let span = entries.as_ptr_range();
+    let bounds = |start, end| FunctionBounds {
+        start,
+        end,
+        tag: 0,
+        pad: 0,
+    };
+    let kept = record(texts, Vec::new(), |_| {});
+    let (empty_texts, _) = strings(&[]);
+    let none_kept = record(empty_texts, Vec::new(), |_| {});
+    let null = std::ptr::null();
+    let good = image_with_bounds(
+        &[kept, none_kept],
+        vec![bounds(span.start, span.end), bounds(null, null)],
+    );
+    assert_eq!(install(&good), Ok(()));
+    let ra = body.as_ptr().addr() + 0x10;
+    assert_eq!(locate_return(ra), Some(location("src/main.cheby", 7, 9)));
+    let (_, range) = locate::range_at(body.as_ptr().addr()).unwrap();
+    assert_eq!(
+        range.name.map(|n| n.as_str().to_owned()).as_deref(),
+        Some("demo::kept")
+    );
+
+    let (texts, _) = strings(&["src/main.cheby"]);
+    let other = record(texts, Vec::new(), |_| {});
+    let one_short = image_with_bounds(&[other, other], vec![bounds(null, null)]);
+    assert_eq!(
+        install(&one_short),
+        Err(ImageError::Malformed {
+            module: None,
+            what: "a table of function bounds that is not one per module record"
+        })
+    );
+    let half = span.start.wrapping_byte_add(20);
+    let ragged = image_with_bounds(&[other], vec![bounds(span.start, half)]);
+    assert_eq!(
+        install(&ragged),
+        Err(ImageError::Malformed {
+            module: Some(0),
+            what: "the bounds of a function table"
+        })
+    );
+    let (texts, offsets) = strings(&["demo::own"]);
+    let own = record(
+        texts,
+        vec![FunctionEntry {
+            name: offsets[0],
+            ..function(code(0x20), Vec::new())
+        }],
+        |_| {},
+    );
+    let both = image_with_bounds(&[own], vec![bounds(null, null)]);
+    assert_eq!(
+        install(&both),
+        Err(ImageError::Malformed {
+            module: Some(0),
+            what: "a function table in the record beside the linker's"
+        })
+    );
+}
+
+/// D-1253 on Mach-O: every record's bounds are the one shared section's,
+/// in which the linker interleaves the records' kept entries, and each
+/// record takes the entries whose `pad` holds its tag, so each function is
+/// registered with its own record's names.
+#[test]
+fn image_install_takes_tagged_entries_from_a_shared_section() {
+    let (first_texts, first) = strings(&["src/a.cheby", "a::one"]);
+    let (second_texts, second) = strings(&["src/b.cheby", "b::two", "b::three"]);
+    let (one, two, three) = (code(0x40), code(0x40), code(0x40));
+    let entry = |code, name, path, tag| FunctionEntry {
+        flags: FN_CHEBY_ABI,
+        name,
+        pad: tag,
+        ..function(code, vec![site(0x8, path, 3, 5)])
+    };
+    // The second record's entries on both sides of the first's.
+    let shared: &'static [FunctionEntry] = Box::leak(
+        vec![
+            entry(two, second[1], second[0], 0xb0b),
+            entry(one, first[1], first[0], 0xa0a),
+            entry(three, second[2], second[0], 0xb0b),
+        ]
+        .into_boxed_slice(),
+    );
+    let span = shared.as_ptr_range();
+    let tagged = |tag| FunctionBounds {
+        start: span.start,
+        end: span.end,
+        tag,
+        pad: 0,
+    };
+    let records = [
+        record(first_texts, Vec::new(), |_| {}),
+        record(second_texts, Vec::new(), |_| {}),
+    ];
+    let image = image_with_bounds(&records, vec![tagged(0xa0a), tagged(0xb0b)]);
+    assert_eq!(install(&image), Ok(()));
+    for (body, name, path) in [
+        (one, "a::one", "src/a.cheby"),
+        (two, "b::two", "src/b.cheby"),
+        (three, "b::three", "src/b.cheby"),
+    ] {
+        let (_, range) = locate::range_at(body.as_ptr().addr()).unwrap();
+        assert_eq!(
+            range.name.map(|n| n.as_str().to_owned()).as_deref(),
+            Some(name)
+        );
+        assert_eq!(
+            locate_return(body.as_ptr().addr() + 0x8),
+            Some(location(path, 3, 5))
+        );
+    }
 }

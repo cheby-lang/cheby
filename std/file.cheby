@@ -759,6 +759,46 @@ test "with_temp_dir removes its directory afterwards" {
   assert io::is_not_found(reason)
 }
 
+// `io::copy` over files (D-1072): `File` satisfies `io::Source` and `io::Sink` through this
+// module's `read_bytes` and `write_bytes`, the standard-stream handles among them.
+
+test "copy moves every byte of one file to another" {
+  use dir <- with_temp_dir()
+  let data = bytes::from_string(string::repeat("block ", 20_000))
+  use _ <- result::try(io::write_file_bytes(dir + "/from.bin", data))
+  use copied <- result::try(with_open(dir + "/from.bin", fn(source) {
+    with_create(dir + "/to.bin", fn(sink) { io::copy(source, sink) })
+  }))
+  assert copied == bytes::length(data)
+  assert io::read_file_bytes(dir + "/to.bin") == Ok(data)
+  Ok(Nil)
+}
+
+test "copy stops at the end of an empty file and writes nothing to a standard stream" {
+  use dir <- with_temp_dir()
+  use _ <- result::try(io::write_file(dir + "/empty.txt", ""))
+  let output: dyn io::Sink = stdout()
+  let errors: dyn io::Sink = stderr()
+  use to_output <- result::try(with_open(dir + "/empty.txt", fn(source) {
+    io::copy(source, output)
+  }))
+  use to_errors <- result::try(with_open(dir + "/empty.txt", fn(source) {
+    io::copy(source, errors)
+  }))
+  assert to_output == 0
+  assert to_errors == 0
+  Ok(Nil)
+}
+
+test "copy stops at the first error of its sink" {
+  use dir <- with_temp_dir()
+  use _ <- result::try(io::write_file(dir + "/from.txt", "some text"))
+  // A standard input handle does not write: its sink fails at once.
+  let assert Err(reason) = with_open(dir + "/from.txt", fn(source) { io::copy(source, stdin()) })
+  assert io::is_invalid_input(reason)
+  Ok(Nil)
+}
+
 // Information about a path
 
 /// Returns what the operating system knows about the file or directory at

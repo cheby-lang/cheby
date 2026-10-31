@@ -34,6 +34,11 @@ object.workspace = true
 # `src/build_id.rs`'s tests include `build.rs` (D-957).
 siphasher.workspace = true
 
+# `tests/tls.rs`'s server on loopback (D-1011); TLS is not built on
+# Windows until M6.
+[target.'cfg(not(windows))'.dev-dependencies]
+rustls.workspace = true
+
 # `build.rs` computes the build ID (D-957).
 [build-dependencies]
 siphasher.workspace = true

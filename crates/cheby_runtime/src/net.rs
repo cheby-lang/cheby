@@ -48,6 +48,17 @@
 //! - **Without a scheduler** (D-983, D-714): every kernel ends the program
 //!   with a fatal runtime error that names its operation, so on Windows
 //!   `std::net` is fatal until M6.
+//! - **TLS** (D-1011, `net_tls.rs`): `sys_connect_tls` connects as
+//!   `sys_connect` does, then runs the handshake on the poller, the host
+//!   being the server name. GAP(tls-connection): the session joins the
+//!   connection's state, so `read_bytes`, `write_bytes`, `shutdown_write`
+//!   and `close` work on it through the same kernels, under the same turns
+//!   and with the same waits, which a cancellation interrupts at once
+//!   (D-984). GAP(tls-failure-kinds): `sys_connect_tls` answers kind 100
+//!   ([`KIND_TLS`]) for a connection that cannot be secured and the kinds
+//!   above for a failed system call; on a secured connection, records that
+//!   are not valid TLS are kind 0 with `rustls`'s text. On Windows the
+//!   kernel is fatal, as every socket kernel there is.
 //!
 //! A connection's state ([`ConnectionState`]) is a Rust struct behind the
 //! handle's payload pointer, so the read-ahead buffer that a later
@@ -95,6 +106,12 @@ const KIND_HOST_NOT_FOUND: i64 = 11;
 const KIND_CLOSED: i64 = 12;
 /// `io::is_invalid_input` (D-981).
 const KIND_INVALID_INPUT: i64 = 13;
+/// GAP(tls-failure-kinds): a TLS connection that cannot be secured (the
+/// server's certificate, its name, the handshake), which `std::http` maps
+/// to `is_tls` (D-1211). Outside `std::io`'s codes, as `std::http`'s parse
+/// kernels' 400 and 431 are.
+#[cfg(not(windows))]
+const KIND_TLS: i64 = 100;
 
 /// The listen backlog (D-1183): Rust's `std` and `mio`'s
 /// `TcpListener::bind` use 128.
@@ -354,11 +371,16 @@ impl HandlePayload for ListenerState {
     }
 }
 
-/// A `Connection`'s payload: the socket. A later read-ahead buffer joins it
-/// (D-1076, module documentation).
+/// A `Connection`'s payload: the socket, and for a connection from
+/// `sys_connect_tls` its TLS session (GAP(tls-connection)). A later
+/// read-ahead buffer joins it (D-1076, module documentation).
 #[derive(Debug)]
 pub(crate) struct ConnectionState {
     pub(crate) socket: NetSocket<mio::net::TcpStream>,
+    /// The TLS session, through which every read, write and
+    /// `shutdown_write` goes; `None` for a plain connection.
+    #[cfg(not(windows))]
+    pub(crate) tls: Option<crate::net_tls::TlsClient>,
 }
 
 impl HandlePayload for ConnectionState {
@@ -503,7 +525,11 @@ pub(crate) fn accept_on(
 /// A connection's state over `stream`, registered on the poller.
 fn connection(runtime: &Shared, stream: mio::net::TcpStream) -> Result<ConnectionState, NetError> {
     NetSocket::new(runtime, stream)
-        .map(|socket| ConnectionState { socket })
+        .map(|socket| ConnectionState {
+            socket,
+            #[cfg(not(windows))]
+            tls: None,
+        })
         .map_err(|error| NetError::of(&error, Op::Other))
 }
 
@@ -538,7 +564,10 @@ fn connect_one(
             Err(error) if error.kind() == io::ErrorKind::NotConnected => {
                 Err(io::ErrorKind::WouldBlock.into())
             }
-            Err(error) => Err(error),
+            // A connect that failed between the two calls: macOS answers
+            // `EINVAL` here while the failure itself (`ECONNREFUSED`) is
+            // still pending, so the pending error wins.
+            Err(error) => Err(socket.take_error()?.unwrap_or(error)),
         }
     })?;
     Ok(made.map(|()| state))
@@ -577,6 +606,20 @@ pub(crate) fn read_on(
 ) -> Result<Result<Option<Vec<u8>>, NetError>, Cancelled> {
     let size = usize::try_from(limit.max(1)).map_or(BLOCK, |limit| limit.min(BLOCK));
     let mut buffer = vec![0_u8; size];
+    #[cfg(not(windows))]
+    let read = match &connection.tls {
+        Some(tls) => tls_serialized(me, &connection.socket, Direction::Read, &mut |socket| {
+            let mut socket = socket;
+            tls.read(&mut socket, &mut buffer)
+        })?,
+        None => connection
+            .socket
+            .serialized(me, Direction::Read, &mut |socket| {
+                let mut socket = socket;
+                socket.read(&mut buffer)
+            })?,
+    };
+    #[cfg(windows)]
     let read = connection
         .socket
         .serialized(me, Direction::Read, &mut |socket| {
@@ -605,6 +648,10 @@ pub(crate) fn write_on(
         Err(TurnError::Cancelled) => return Err(Cancelled),
         Err(TurnError::Closed) => return Ok(Err(closed())),
     };
+    #[cfg(not(windows))]
+    if let Some(tls) = &connection.tls {
+        return tls_write(me, socket, tls, data);
+    }
     let mut rest = data;
     while !rest.is_empty() {
         let written = socket.wait_on(me, Direction::Write, &mut |stream| {
@@ -638,6 +685,19 @@ pub(crate) fn shutdown_on(
         Err(TurnError::Cancelled) => return Err(Cancelled),
         Err(TurnError::Closed) => return Ok(Err(closed())),
     };
+    // A TLS session sends `close_notify` first, after every record a write
+    // queued (GAP(tls-connection)).
+    #[cfg(not(windows))]
+    if let Some(tls) = &connection.tls {
+        tls.close_notify();
+        let sent = tls_wait(me, socket, Direction::Write, &mut |stream| {
+            let mut stream = stream;
+            tls.flush(&mut stream)
+        })?;
+        if let Err(error) = sent {
+            return Ok(Err(error));
+        }
+    }
     Ok(match socket.current() {
         Ok(owned) => owned
             .socket()
@@ -645,6 +705,177 @@ pub(crate) fn shutdown_on(
             .map_err(|error| NetError::of(&error, Op::Other)),
         Err(_) => Err(closed()),
     })
+}
+
+/// Why a run of TLS steps failed: as a failed system call, or as TLS.
+#[cfg(not(windows))]
+#[derive(Debug)]
+enum TlsError {
+    /// A system call failed, or the handle was closed.
+    Net(NetError),
+    /// `rustls`'s text.
+    Tls(String),
+}
+
+/// A connection that cannot be secured (GAP(tls-failure-kinds)).
+#[cfg(not(windows))]
+fn not_secured(text: String) -> NetError {
+    NetError {
+        kind: KIND_TLS,
+        message: text,
+    }
+}
+
+/// Runs a TLS `step` on `socket` until it is done, waiting on the poller
+/// in the direction it names each time it is blocked, starting with
+/// `first` (`net_tls.rs`). A cancellation interrupts every wait at once
+/// (D-984). The caller holds the turn of each direction the step uses for
+/// its own ends, or is the only user of the socket.
+#[cfg(not(windows))]
+fn tls_steps<T>(
+    me: &ExecCtx,
+    socket: &NetSocket<mio::net::TcpStream>,
+    first: Direction,
+    step: &mut dyn FnMut(
+        &mio::net::TcpStream,
+    ) -> Result<crate::net_tls::Step<T>, crate::net_tls::Failure>,
+) -> Result<Result<T, TlsError>, Cancelled> {
+    use crate::net_tls::{Failure, Step};
+    let mut dir = first;
+    loop {
+        let want = dir;
+        let mut next = None;
+        let mut failure = None;
+        let outcome = socket.wait_on(me, want, &mut |stream| match step(stream) {
+            Ok(Step::Done(value)) => Ok(Some(value)),
+            Ok(Step::Blocked(blocked)) if blocked == want => Err(io::ErrorKind::WouldBlock.into()),
+            Ok(Step::Blocked(blocked)) => {
+                next = Some(blocked);
+                Ok(None)
+            }
+            Err(Failure::Io(error)) => Err(error),
+            Err(Failure::Tls(text)) => {
+                failure = Some(text);
+                Ok(None)
+            }
+        })?;
+        match outcome {
+            Ok(Some(value)) => return Ok(Ok(value)),
+            Err(error) => return Ok(Err(TlsError::Net(error))),
+            Ok(None) => {}
+        }
+        if let Some(text) = failure {
+            return Ok(Err(TlsError::Tls(text)));
+        }
+        if let Some(blocked) = next {
+            dir = blocked;
+        }
+    }
+}
+
+/// [`tls_steps`] on a secured connection: records that are not valid TLS
+/// are kind 0 with `rustls`'s text (GAP(tls-failure-kinds)).
+#[cfg(not(windows))]
+fn tls_wait<T>(
+    me: &ExecCtx,
+    socket: &NetSocket<mio::net::TcpStream>,
+    first: Direction,
+    step: &mut dyn FnMut(
+        &mio::net::TcpStream,
+    ) -> Result<crate::net_tls::Step<T>, crate::net_tls::Failure>,
+) -> Result<Result<T, NetError>, Cancelled> {
+    Ok(
+        tls_steps(me, socket, first, step)?.map_err(|error| match error {
+            TlsError::Net(error) => error,
+            TlsError::Tls(text) => NetError::other(&text),
+        }),
+    )
+}
+
+/// [`tls_wait`] under the turn of `dir`, as [`NetSocket::serialized`] runs
+/// a plain socket's call.
+#[cfg(not(windows))]
+fn tls_serialized<T>(
+    me: &ExecCtx,
+    socket: &NetSocket<mio::net::TcpStream>,
+    dir: Direction,
+    step: &mut dyn FnMut(
+        &mio::net::TcpStream,
+    ) -> Result<crate::net_tls::Step<T>, crate::net_tls::Failure>,
+) -> Result<Result<T, NetError>, Cancelled> {
+    let _turn = match socket.turn(dir).take(me) {
+        Ok(turn) => turn,
+        Err(TurnError::Cancelled) => return Err(Cancelled),
+        Err(TurnError::Closed) => return Ok(Err(closed())),
+    };
+    tls_wait(me, socket, dir, step)
+}
+
+/// `write_on`'s work on a TLS connection, under the write turn the caller
+/// holds: all of `data` taken by the session, then everything it queued
+/// sent. A cancellation between two waits leaves a prefix sent and may
+/// leave records queued, which the next write or `shutdown_write` sends
+/// first (D-1000).
+#[cfg(not(windows))]
+fn tls_write(
+    me: &ExecCtx,
+    socket: &NetSocket<mio::net::TcpStream>,
+    tls: &crate::net_tls::TlsClient,
+    data: &[u8],
+) -> Result<Result<(), NetError>, Cancelled> {
+    let mut rest = data;
+    while !rest.is_empty() {
+        let taken = tls_wait(me, socket, Direction::Write, &mut |stream| {
+            let mut stream = stream;
+            tls.write(&mut stream, rest)
+        })?;
+        match taken {
+            Ok(0) => return Ok(Err(NetError::other("the TLS session accepted no bytes"))),
+            Ok(count) => rest = rest.get(count..).unwrap_or_default(),
+            Err(error) => return Ok(Err(error)),
+        }
+    }
+    tls_wait(me, socket, Direction::Write, &mut |stream| {
+        let mut stream = stream;
+        tls.flush(&mut stream)
+    })
+}
+
+/// `sys_connect_tls`'s work (D-1011): a connection as [`connect_to`] makes
+/// one, then the handshake with `config` on the poller, `host` being the
+/// server name. Nobody else has the socket during the handshake, so it
+/// takes no turn. A failed handshake or a cancellation drops the
+/// connection, which closes it; no plain connection is ever handed out.
+#[cfg(not(windows))]
+pub(crate) fn connect_tls_to(
+    me: &ExecCtx,
+    runtime: &Shared,
+    host: &str,
+    port: i64,
+    config: &Arc<rustls::ClientConfig>,
+) -> Result<Result<ConnectionState, NetError>, Cancelled> {
+    use crate::net_tls::{Failure, TlsClient};
+    let mut state = match connect_to(me, runtime, host, port)? {
+        Ok(state) => state,
+        Err(error) => return Ok(Err(error)),
+    };
+    let tls = match TlsClient::new(config, host) {
+        Ok(tls) => tls,
+        Err(Failure::Io(error)) => return Ok(Err(NetError::of(&error, Op::Other))),
+        Err(Failure::Tls(text)) => return Ok(Err(not_secured(text))),
+    };
+    let secured = tls_steps(me, &state.socket, Direction::Write, &mut |stream| {
+        let mut stream = stream;
+        tls.handshake(&mut stream)
+    })?;
+    match secured {
+        Ok(()) => {
+            state.tls = Some(tls);
+            Ok(Ok(state))
+        }
+        Err(TlsError::Net(error)) => Ok(Err(error)),
+        Err(TlsError::Tls(text)) => Ok(Err(not_secured(text))),
+    }
 }
 
 /// The running fiber of a kernel's `ctx` and its runtime, or the fatal
@@ -893,9 +1124,11 @@ pub unsafe extern "C" fn cheby_net_sys_close_listener(ctx: *mut ExecCtx, listene
     })
 }
 
-/// The package-visible `sys_connect_tls`'s kernel (D-985, D-1011):
-/// D-1182: until S6 implements TLS it answers an error of kind
-/// 0, after the checks every socket kernel makes.
+/// The package-visible `sys_connect_tls`'s kernel (D-985, D-1011): a
+/// `Connection` to `host` and `port` secured by TLS, after the checks every
+/// socket kernel makes (D-1182). Kind 100 for a connection that cannot be
+/// secured (GAP(tls-failure-kinds)). On Windows it ends the program with a
+/// fatal runtime error, as every socket kernel there does (D-983).
 ///
 /// # Safety
 ///
@@ -909,11 +1142,26 @@ pub unsafe extern "C" fn cheby_net_sys_connect_tls(
 ) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
-        let _ = unsafe { scheduled(ctx, "net::connect_tls") };
+        let (me, runtime) = unsafe { scheduled(ctx, "net::connect_tls") };
         // SAFETY: forwarded from the caller.
-        let _ = unsafe { str_arg(host) };
-        let _ = port;
-        NetError::other("TLS connections are not supported yet").word()
+        let host = unsafe { str_arg(host) };
+        #[cfg(windows)]
+        {
+            let _ = (me, runtime, host, port);
+            needs_scheduler("net::connect_tls")
+        }
+        #[cfg(not(windows))]
+        {
+            let result = match crate::net_tls::config() {
+                Ok(config) => connect_tls_to(me, runtime, host, port, config),
+                Err(crate::net_tls::Failure::Tls(text)) => Ok(Err(not_secured(text))),
+                Err(crate::net_tls::Failure::Io(error)) => Ok(Err(NetError::of(&error, Op::Other))),
+            };
+            outcome(ctx, result, |state| {
+                // SAFETY: the running fiber's context.
+                unsafe { handles::new_handle(ctx, HandleKind::Connection, Box::new(state)) }
+            })
+        }
     })
 }
 

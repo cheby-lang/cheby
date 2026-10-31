@@ -322,7 +322,9 @@ pub(crate) fn build_scoped(
         resolves: program.then_some(resolves),
         reuse: reuse_report && mir.record_sites,
     };
+    let lower_span = crate::phases::span(crate::phases::Phase::Lower);
     let lowered = lower_reading(front, sources, roots, mir, scope, reading)?;
+    drop(lower_span);
     if let Some(dir) = &code_dump {
         write_mir_dumps(dir, &lowered.units)?;
     }
@@ -408,6 +410,7 @@ pub(crate) fn build_scoped(
         // `cheby check`: this build is the evaluation module; it writes the
         // images and installs nothing (D-979).
         Roots::Constants | Roots::Evaluate(_) => {
+            let _consts = crate::phases::span(crate::phases::Phase::Consts);
             let all: Vec<ConstInfo>;
             let infos: &[ConstInfo] = if check {
                 &check_infos
@@ -449,6 +452,7 @@ pub(crate) fn build_scoped(
         // of their own on `plain` code, then installed here from their
         // images before any entry runs (D-978, D-979).
         Roots::Main(_) | Roots::Tests(_) => {
+            let _consts = crate::phases::span(crate::phases::Phase::Consts);
             let infos = const_infos(front, sources, &lowered.reach)?;
             crate::code_cache::name_consts(front, &mut jit, &infos)?;
             // K5b: the hits come from the store; only the misses are
@@ -919,7 +923,10 @@ pub(crate) fn lower_program(
 }
 
 /// Lowers what a command lowers from `roots` ([`command_scope`]), counting
-/// and checking each unit with the MIR options `mir`: [`lower_scoped`].
+/// and checking each unit with the MIR options `mir`: [`lower_scoped`],
+/// reading nothing from the cache (tests of the records; `cheby build`
+/// lowers through the cache since N9, [`lower_reading`]).
+#[cfg(test)]
 pub(crate) fn lower(
     front: &Frontend,
     sources: &SourceMap,
@@ -1335,10 +1342,10 @@ pub(crate) struct Reading<'a> {
     /// hits is not lowered, inferred or compiled, and loads from its
     /// record. `CHEBY_DUMP_DIR` reads nothing at all (D-965).
     pub code: bool,
-    /// Whether the build's JIT loads the units' code records, so each
-    /// package unit's lookup is logged (`code.<kind>`, `tests.<kind>`), as
-    /// a miss when `code` reads none: every JIT host's build, not `cheby
-    /// build`'s, which compiles its units itself (`aot.rs`).
+    /// Whether the build loads the units' code records, a JIT's or an
+    /// executable's (`cheby build` replays them, N9), so each package
+    /// unit's lookup is logged (`code.<kind>`, `tests.<kind>`), as a miss
+    /// when `code` reads none, and std's units come from std's records.
     pub jit: bool,
     /// For a program's build, whether a native symbol resolves (D-943): a
     /// record that imports one that does not is lowered after all, so
@@ -1540,6 +1547,7 @@ fn lower_through_cache(
         reading.code && (!reading.reuse || crate::reuse_replay::has_lines(front, key))
     };
     if let Some(sink) = sink {
+        let _records = crate::phases::span(crate::phases::Phase::Records);
         for &at in &parts {
             let Some(key) = keys.keys.get(&(at.1, cx.module(at)?)) else {
                 continue;

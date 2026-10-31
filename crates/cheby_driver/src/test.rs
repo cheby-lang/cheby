@@ -912,12 +912,18 @@ impl Runner<'_, '_> {
             let base = Base::of(&domain);
             let entry = self.jit.entry(EntryKind::Test(def_of(test)))?;
             let outcome = match entry.run(&self.config(&domain))? {
-                // A write failed (D-306, D-709): the entry thread is parked
-                // for good, so the JIT's code it may run is kept (leaked)
-                // for the rest of the process.
+                // A write failed (D-306, D-709), or the test called
+                // `process::exit` (D-1023): the entry thread is parked for
+                // good, so the JIT's code it may run is kept (leaked) for
+                // the rest of the process. An exit fails only this test.
                 EntryOutcome::Exited(status) => {
                     std::mem::forget(self.jit.code_token());
-                    return Ok(RunEnd::Exited { index, status });
+                    match cheby_runtime::process::take_test_exit() {
+                        Some(exited) => {
+                            TestOutcome::Failed(cheby_runtime::process::test_exit_report(exited))
+                        }
+                        None => return Ok(RunEnd::Exited { index, status }),
+                    }
                 }
                 outcome => judge(outcome, &domain, base, false)?,
             };

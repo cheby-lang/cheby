@@ -208,8 +208,9 @@ fn relocs_of(format: Format, bytes: &[u8], name: &str) -> (BTreeMap<u64, Option<
         .section_by_index(symbol.section_index().unwrap())
         .unwrap();
     let start = symbol.address() - section.address();
-    // The image's 104 bytes and its table of two module records.
-    let size = 104 + 16;
+    // The image's 120 bytes, its table of two module records and their
+    // two function bounds (D-1253).
+    let size = IMAGE_WITH_TABLES;
     let data = section.data().unwrap();
     let mut relocs = BTreeMap::new();
     for (offset, reloc) in section.relocations() {
@@ -226,20 +227,25 @@ fn relocs_of(format: Format, bytes: &[u8], name: &str) -> (BTreeMap<u64, Option<
         };
         relocs.insert(offset - start, target);
     }
-    let end = usize::try_from(start).unwrap() + 104 + 16;
+    let end = usize::try_from(start + IMAGE_WITH_TABLES).unwrap();
     let image = data[usize::try_from(start).unwrap()..end.min(data.len())].to_vec();
     (relocs, image)
 }
+
+/// `cb$image`'s 120 bytes, its table of [`RECORDS`]' two pointers and
+/// their two function bounds of 24 bytes each (D-1253).
+const IMAGE_WITH_TABLES: u64 = 120 + 16 + 48;
 
 fn word(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
 }
 
 /// `cb$image` holds the version, `unwind_edges`, two module records in
-/// build order, the stacks and an empty constants table, with relocations
-/// to its own module table, the entry thunk, the trampolines the program
-/// has (0 and 2) and the module records, and none where a trampoline is
-/// missing.
+/// build order, the stacks, an empty constants table and the two records'
+/// function bounds (D-1253), with relocations to its own module and
+/// bounds tables, the entry thunk, the trampolines the program has (0 and
+/// 2), the module records and the linker's bounds of each record's
+/// entries' section (`crate::gc`), and none where a trampoline is missing.
 #[test]
 fn link_program_image_words() {
     for &format in Format::ALL {
@@ -255,18 +261,42 @@ fn link_program_image_words() {
         assert_eq!(word(&image, 80), 1 << 20);
         assert_eq!(word(&image, 88), 0, "{format:?}: no constants");
         assert_eq!(word(&image, 96), 0, "{format:?}: no constants");
+        assert_eq!(word(&image, 104), 2, "{format:?}: two function bounds");
         let offsets: Vec<u64> = relocs.keys().copied().collect();
         assert_eq!(
             offsets,
-            [16, 24, 32, 48, 104, 112],
+            [16, 24, 32, 48, 112, 120, 128, 136, 144, 160, 168],
             "{format:?}: {relocs:?}"
         );
-        for (offset, wanted) in [(104, RECORDS[0]), (112, RECORDS[1])] {
+        for (offset, wanted) in [(120, RECORDS[0]), (128, RECORDS[1])] {
             assert_eq!(
                 relocs[&offset].as_deref(),
                 Some(wanted),
                 "{format:?}: {relocs:?}"
             );
+        }
+        let object_format = match format {
+            Format::Elf => ::object::BinaryFormat::Elf,
+            Format::MachO => ::object::BinaryFormat::MachO,
+        };
+        for (at, record) in [(136, RECORDS[0]), (160, RECORDS[1])] {
+            let (start, end) = crate::gc::bounds(object_format, &crate::gc::key(record));
+            assert_eq!(relocs[&at].as_deref(), Some(start.as_str()), "{format:?}");
+            assert_eq!(
+                relocs[&(at + 8)].as_deref(),
+                Some(end.as_str()),
+                "{format:?}"
+            );
+            // The tag: the record's on Mach-O, whose entries share one
+            // section; 0 on ELF, whose entries' section is the record's own.
+            let at = usize::try_from(at).unwrap();
+            let tag = u32::from_le_bytes(image[at + 16..at + 20].try_into().unwrap());
+            assert_eq!(
+                tag,
+                crate::gc::image_tag(object_format, record),
+                "{format:?}"
+            );
+            assert_eq!(&image[at + 20..at + 24], &[0; 4], "{format:?}");
         }
         if let Some(Some(entry)) = relocs.get(&24) {
             assert_eq!(entry, ENTRY, "{format:?}");
@@ -275,9 +305,9 @@ fn link_program_image_words() {
 }
 
 /// Whether a relocation in text is PC-relative (D-913).
-/// D-979: the constants table follows the table of module records in
-/// `cb$image`, its count at 88 and a relocation to it at 96; the rest of
-/// the image is unchanged.
+/// D-979: the constants table follows the tables of module records and
+/// function bounds in `cb$image`, its count at 88 and a relocation to it
+/// at 96; the rest of the image is unchanged.
 #[test]
 fn link_program_constants_follow_the_module_table() {
     for &format in Format::ALL {
@@ -300,11 +330,11 @@ fn link_program_constants_follow_the_module_table() {
             .unwrap();
         let start = usize::try_from(symbol.address() - section.address()).unwrap();
         let data = section.data().unwrap();
-        assert_eq!(&data[start + 120..start + 129], table, "{format:?}");
+        assert_eq!(&data[start + 184..start + 193], table, "{format:?}");
         let offsets: Vec<u64> = relocs.keys().copied().collect();
         assert_eq!(
             offsets,
-            [16, 24, 32, 48, 96, 104, 112],
+            [16, 24, 32, 48, 96, 112, 120, 128, 136, 144, 160, 168],
             "{format:?}: {relocs:?}"
         );
     }
@@ -727,10 +757,10 @@ fn program_stubs_call_unresolved_through_an_import_word() {
     }
 }
 
-/// A program without stubs is the object it was before stubs existed:
-/// its length and its content apart from the string tables' layout
-/// ([`layout_free`]) pinned at `bd16c14` (FNV-1a, per format), and no
-/// import of `cheby_rt_unresolved`.
+/// A program without stubs is the object it was without them: its length
+/// and its content apart from the string tables' layout ([`layout_free`])
+/// pinned (FNV-1a, per format; taken again in wave 10 with D-1253's
+/// function bounds), and no import of `cheby_rt_unresolved`.
 #[test]
 fn program_stubs_none_keeps_the_object() {
     for &format in Format::ALL {
@@ -777,8 +807,14 @@ fn with_version_one(format: Format, bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// [`program`]'s object at `bd16c14`, as `(length, FNV-1a of`
-/// [`layout_free`]`)`, on an aarch64 host. The raw bytes were first
+/// [`program`]'s object, as `(length, FNV-1a of` [`layout_free`]`)`, on an
+/// aarch64 host. Wave 10 (N9, D-1253) took these pins again when the
+/// image gained its function bounds: 16 more bytes of header, two bounds
+/// of 24 bytes each (start, end, tag) with their relocations, and the
+/// imported bounds symbols, four on ELF and the shared section's two on
+/// Mach-O (`crate::gc`); `bd16c14`'s pins were (1744,
+/// 6805927779267993231) for ELF and (1128, 11813137239158497229) for
+/// Mach-O. At `bd16c14` the raw bytes were first
 /// pinned by this file's [`program`] on a copy of `bd16c14`'s tree with
 /// the stubs added (FNV-1a 11913639352118050896 for ELF and
 /// 18436484272339440522 for Mach-O, with the runtime ID read as zeros).
@@ -786,8 +822,8 @@ fn with_version_one(format: Format, bytes: &[u8]) -> Vec<u8> {
 /// same under another runtime ID whose digits move the string tables.
 /// Cranelift's x86-64 backend is built only on x86-64 hosts, so no pin
 /// was taken there.
-const PINNED_ELF_AARCH64: (usize, u64) = (1744, 6_805_927_779_267_993_231);
-const PINNED_MACHO_AARCH64: (usize, u64) = (1128, 11_813_137_239_158_497_229);
+const PINNED_ELF_AARCH64: (usize, u64) = (2128, 5_914_861_851_712_781_503);
+const PINNED_MACHO_AARCH64: (usize, u64) = (1312, 10_231_809_143_618_702_932);
 
 /// Stubs that are not sorted and distinct, or that name a generated
 /// symbol, `main` or a runtime internal, are refused without panicking.

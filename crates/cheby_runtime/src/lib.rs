@@ -68,10 +68,15 @@ pub mod locate;
 #[cfg(test)]
 mod locate_tests;
 mod net;
+#[cfg(not(windows))]
+mod net_tls;
 mod num;
 pub mod object;
 pub mod panic;
 mod pool;
+pub mod process;
+#[cfg(test)]
+mod process_tests;
 mod random;
 pub mod rc;
 pub mod reuse;

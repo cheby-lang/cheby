@@ -2,6 +2,25 @@
 //! D-956, D-964, D-965), and the cache-hit tests of D-973 that read the
 //! lookups through `CHEBY_CACHE_LOG`'s file.
 //!
+//! D-973's eight cache-hit tests, which `cargo test -p cheby_driver --
+//! cache_hit_` runs together (K8; each asserts on the log's lines, never
+//! on a timing, D-1224, D-1263):
+//!
+//! | D-973's case                                       | Test                                                                           |
+//! | -------------------------------------------------- | ------------------------------------------------------------------------------ |
+//! | 1 a body edit that changes no mask                 | [`cache_hit_body_edit_misses_only_its_module`]                                 |
+//! | 2 a mask-changing edit                             | [`cache_hit_mask_edit_misses_the_callers`]                                     |
+//! | 3 an edit to a body a constant reaches             | `cache::consts_tests::cache_hit_const_body_edit_reevaluates_only_its_constant` |
+//! | 4 an interface edit                                | [`cache_hit_interface_edit`], [`cache_hit_interface_edit_run`]                 |
+//! | 5 a second run with no edit                        | [`cache_hit_second_run`], [`cache_hit_second_run_run`]                         |
+//! | 6 an interface edit only a reader's lowering reads | [`cache_hit_reader_lowering_edit_misses_the_reader`]                           |
+//! | 7 a constant near the memory limit, both orders    | `cache::consts_tests::cache_hit_const_memory_limit_one_verdict_either_order`   |
+//! | 8 a cached note into a module whose item moved     | [`cache_hit_moved_item`], [`cache_hit_moved_item_run`]                         |
+//!
+//! Tests 4, 5 and 8 read `cheby check`'s front records; their `_run`
+//! variants also read `cheby run`'s code records. The other `cache_hit_`
+//! tests pin further rules of the same lookups.
+//!
 //! Every test opens its own store in a fresh directory, so no test reads
 //! or fills the developer's cache (D-1128).
 
@@ -267,6 +286,9 @@ const C: &str = "//! C.\n\npub type Thing { size: Int }\n\n\
     pub fn show(thing: Thing) -> String {\n  \"thing {thing.size}\"\n}\n";
 const D: &str = "//! D.\n\nfn one() -> Int {\n  1\n}\n";
 const MODULES: [&str; 4] = ["app", "app::b", "app::c", "app::d"];
+/// The modules whose code `cheby run` of [`several`] lowers: `main` reaches
+/// nothing of `d` (D-510).
+const RUN_MODULES: [&str; 3] = ["app", "app::b", "app::c"];
 
 fn several(name: &str) -> Fixture {
     Fixture::new(
@@ -373,6 +395,34 @@ fn cache_hit_second_run() {
     }
 }
 
+/// D-973's "second run with no edit" under `cheby run`'s code records
+/// (K8): after a cold `cheby run`, a second one hits every front record
+/// and every code record, std's included, parses no package module, and
+/// prints and exits as the cacheless build does.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_second_run_run() {
+    let mut f = several("second_run_run");
+    let (fresh, fresh_exit) = f.cold_run();
+    assert_eq!(fresh_exit, 0);
+    let cold = f.run_logged();
+    assert_eq!(cold.code, code_run_lines(&RUN_MODULES, &RUN_MODULES));
+    assert_eq!(cold.front, expect_log(&MODULES, &[]));
+    assert_eq!(cold.parses, MODULES);
+    assert_eq!((cold.output.as_str(), cold.exit), (fresh.as_str(), Some(0)));
+    for _ in 0..2 {
+        let warm = f.run_logged();
+        assert_eq!(warm.code, code_run_lines(&RUN_MODULES, &[]));
+        assert_eq!(warm.front, expect_log(&MODULES, &MODULES));
+        assert_eq!(warm.parses, Vec::<String>::new());
+        assert_eq!(warm.std_misses, Vec::<String>::new());
+        assert_eq!((warm.output.as_str(), warm.exit), (fresh.as_str(), Some(0)));
+    }
+}
+
 /// D-973's "cached note into a module whose item moved", in the
 /// synthetic form (no warning of the compiler points into another module
 /// yet; `.m3-work/wave2/answers.md` Q1): a diagnostic stored in `a`'s
@@ -468,6 +518,107 @@ fn cache_hit_moved_item() {
         "src/b.cheby"
     );
     assert!(out.render().contains("src/b.cheby:6:"), "{}", out.render());
+}
+
+/// D-973's "cached note into a module whose item moved" under `cheby run`
+/// (K8): as [`cache_hit_moved_item`], with a package that compiles, so the
+/// program runs. `a`'s front record and its code record hit; `b`, edited,
+/// misses both; the replayed label lies on the span the fresh front end
+/// gives `target` now, and the program runs from `a`'s cached code.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_moved_item_run() {
+    const A: &str = "//! A.\n\nimport app::b\n\npub fn use_it() -> Int {\n  b::target()\n}\n";
+    const B0: &str = "//! B.\n\npub fn target() -> Int {\n  1\n}\n";
+    const B1: &str = "//! B.\n\n// These lines move `target`\n// down two lines.\n\npub fn target() -> Int {\n  1\n}\n";
+    let mut f = Fixture::new(
+        "moved_item_run",
+        &[
+            (
+                "main.cheby",
+                "//! Root.\n\nimport app::a\nimport std::io\n\n\
+                 fn main() {\n  let n = a::use_it()\n  io::println(\"{n}\")\n}\n",
+            ),
+            ("a.cheby", A),
+            ("b.cheby", B0),
+        ],
+    );
+    let all = ["app", "app::a", "app::b"];
+    let first = f.run_logged();
+    assert_eq!(first.front, expect_log(&all, &[]));
+    assert_eq!(first.code, code_run_lines(&all, &all));
+    assert_eq!(first.exit, Some(0));
+
+    // The synthetic diagnostic, stored in `a`'s record.
+    let (front, _) = front_of(f.dir());
+    let a = module(&front, "app::a");
+    let b = module(&front, "app::b");
+    let old = item_span(&front, b, "target");
+    let a_file = front.modules.get(a).unwrap().file.unwrap();
+    let synthetic = Diagnostic::new(codes::UNUSED_BINDING, "a synthetic warning")
+        .with_primary(item_span(&front, a, "use_it"), "here")
+        .with_secondary(old, "the item it names")
+        .with_note("a note");
+    let span_cx = SpanCx {
+        own: a_file,
+        own_len: u32::try_from(A.len()).unwrap(),
+        modules: &front.modules,
+        set: &front.set,
+        globals: &front.globals,
+    };
+    let blob = replay::encode_diagnostics(&[&[], std::slice::from_ref(&synthetic), &[]], &span_cx)
+        .unwrap();
+    let store = f.store();
+    let f1 = front_key_of(&front, "app::a", A);
+    assert_eq!(store.get_hint(&reads_key(f1, BUILD)).unwrap(), None);
+    let f2 = front_identity(f1, BUILD, &[]);
+    let mut record = FrontRecord::decode(&store.get_record(&f2).unwrap().unwrap()).unwrap();
+    record.diagnostics = store.put_blob(&blob).unwrap();
+    store.put_record(&f2, &record.encode()).unwrap();
+    // The package index holds the record inline and answers first (D-962),
+    // and a warm `cheby run` leaves unparsed only what the index vouches
+    // for (D-1256): without it every module would be checked from source,
+    // which does not reproduce a synthetic diagnostic (D-954). So the
+    // index's entry gets the record too.
+    let mut index = f.index(CommandFamily::Run).unwrap();
+    let entry = index
+        .modules
+        .iter_mut()
+        .find(|e| e.path == "app::a")
+        .unwrap();
+    entry.record = record;
+    store
+        .put_hint(&f.index_key(CommandFamily::Run), &index.encode())
+        .unwrap();
+    store.flush();
+    drop(store);
+
+    // `target` moves; `b`'s interface hash does not change.
+    f.write("b.cheby", B1);
+    let (moved_front, _) = front_of(f.dir());
+    let moved_b = module(&moved_front, "app::b");
+    assert_eq!(
+        moved_front.set.get(moved_b).unwrap().hash,
+        front.set.get(b).unwrap().hash
+    );
+    let new = item_span(&moved_front, moved_b, "target");
+    assert_ne!(new.range, old.range);
+
+    let warm = f.run_logged();
+    assert_eq!(warm.front, expect_log(&all, &["app", "app::a"]));
+    assert_eq!(warm.code, code_run_lines(&all, &["app::b"]));
+    assert_eq!(warm.exit, Some(0));
+    let replayed = warm
+        .diagnostics
+        .iter()
+        .find(|d| d.message == "a synthetic warning")
+        .unwrap();
+    let label = replayed.labels.get(1).unwrap();
+    assert_eq!(label.span, new, "the note follows the moved item");
+    assert!(warm.output.contains("src/b.cheby:6:"), "{}", warm.output);
 }
 
 /// Keys hash exactly the fields D-955 lists, in a fixed encoding: these
@@ -1162,6 +1313,39 @@ fn cache_hit_interface_edit() {
     assert_eq!(warm.output, f.cold_check());
 }
 
+/// D-973's "interface edit" under `cheby run`'s code records (K8, D-955,
+/// D-1193): an edit of `c`'s interface misses `c`'s code, its importer
+/// `b`'s, and the root's, which reads `c`'s interface through a value of
+/// `b` (a hidden read); `d` reads nothing of `c` and hits. The program
+/// prints and exits as the cacheless build does.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cache_hit_interface_edit_run() {
+    let mut f = several("interface_edit_run");
+    let cold = f.run_logged();
+    assert_eq!(cold.code, code_run_lines(&RUN_MODULES, &RUN_MODULES));
+    f.write(
+        "c.cheby",
+        &format!("{C}\npub fn extra() -> Int {{\n  1\n}}\n"),
+    );
+    let (fresh, fresh_exit) = f.cold_run();
+    let warm = f.run_logged();
+    assert_eq!(warm.front, expect_log(&MODULES, &["app::d"]));
+    assert_eq!(
+        warm.code,
+        code_run_lines(&RUN_MODULES, &["app", "app::b", "app::c"])
+    );
+    assert_eq!(warm.parses, ["app", "app::b", "app::c"]);
+    assert_eq!(warm.std_misses, Vec::<String>::new());
+    assert_eq!(
+        (warm.output.as_str(), warm.exit),
+        (fresh.as_str(), Some(fresh_exit))
+    );
+}
+
 /// Deletes the blob `name` from the fixture's store.
 fn delete_blob(f: &Fixture, name: Hash128) {
     let hex = name.to_hex();
@@ -1550,6 +1734,72 @@ impl Fixture {
         };
         (of("code.run "), lines(&log))
     }
+
+    /// `cheby run` through the cache, running the program when it
+    /// compiles (K8: the `_run` variants of tests 4, 5 and 8).
+    fn run_logged(&mut self) -> RunLog {
+        let (cache, log) = self.open();
+        let prepared = prepare_run_cached(self.dir(), RunOptions::default(), &cache).unwrap();
+        cache.finish(false).unwrap();
+        let (output, diagnostics, exit) = match prepared {
+            Prepared::Ready(program) => {
+                let output = program.output().render();
+                let diagnostics = program.output().diagnostics.clone();
+                (output, diagnostics, Some(program.run().unwrap()))
+            }
+            Prepared::CompileFailed(out) => (out.render(), out.diagnostics, None),
+        };
+        let text = std::fs::read_to_string(&log).unwrap();
+        let of = |prefix: &str| -> Vec<String> {
+            text.lines()
+                .filter(|l| l.starts_with(prefix))
+                .map(str::to_owned)
+                .collect()
+        };
+        RunLog {
+            output,
+            diagnostics,
+            exit,
+            code: of("code.run "),
+            front: lines(&log),
+            parses: parses(&log),
+            std_misses: of("code.std ")
+                .into_iter()
+                .filter(|l| l.ends_with(" miss"))
+                .collect(),
+        }
+    }
+
+    /// The cacheless `cheby run`'s rendered warnings and exit status.
+    fn cold_run(&self) -> (String, i32) {
+        match prepare_run(self.dir(), RunOptions::default()).unwrap() {
+            Prepared::Ready(program) => {
+                let output = program.output().render();
+                (output, program.run().unwrap())
+            }
+            Prepared::CompileFailed(out) => panic!("{}", out.render()),
+        }
+    }
+}
+
+/// One `cheby run` through the cache, as [`Fixture::run_logged`] observed
+/// it.
+#[derive(Debug)]
+struct RunLog {
+    /// The build's rendered diagnostics.
+    output: String,
+    /// The build's diagnostics.
+    diagnostics: Vec<Diagnostic>,
+    /// The exit status, when the program compiled and ran.
+    exit: Option<i32>,
+    /// The log's `code.run` lines.
+    code: Vec<String>,
+    /// The log's `front` lines.
+    front: Vec<String>,
+    /// The log's `parse` lines' modules.
+    parses: Vec<String>,
+    /// The log's `code.std` lines that missed.
+    std_misses: Vec<String>,
 }
 
 /// `code.run <module> hit|miss` for each module, missing those of

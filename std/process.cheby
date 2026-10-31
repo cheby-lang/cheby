@@ -1,0 +1,51 @@
+//! The running program as a process: `exit` ends it with a chosen status (D-1022, D-1023), and
+//! `until_interrupted` turns Ctrl-C or a request to stop into a cancellation (D-1073).
+
+import std::fiber
+
+/// Ends the program with exit status `status`, as a termination does (D-709, D-1022): the calling
+/// fiber stops where it is, every other fiber stops without unwinding, no drop function runs, and
+/// standard output is flushed. A status from 0 to 255 is used as given; any other gives 255.
+pub fn exit(status: Int) -> Never {
+  sys_exit(status)
+}
+
+// GAP(process-exit-kernel): the kernel takes the context, flushes standard output and terminates
+// with the clamped status, or 1 when the flush fails (D-306, D-574, D-709).
+@std_context
+@external(native, "cheby_process_sys_exit")
+@external(js, "./process.mjs", "sys_exit")
+priv fn sys_exit(status: Int) -> Never
+
+/// The error of `until_interrupted`: a signal came first, or `body` panicked first, with the
+/// shape of `fiber::Timeout` (D-1073, ADR-0071).
+pub exposed type Interrupt {
+  Interrupted,
+  Panicked(fiber::Panic),
+}
+
+/// Calls `body` on the calling fiber in a new scope, as `fiber::timeout` does, and the first
+/// SIGINT or SIGTERM that the process receives while the scope is open cancels it, with the scope
+/// as the target (D-1073, ADR-0071). `Ok` holds `body`'s value when it returned before a
+/// cancellation reached it, `Err(Panicked(p))` holds its panic when it panicked first, and
+/// `Err(Interrupted)` comes once everything inside has unwound. A signal cancels every such scope
+/// that is open; while none is open, a signal takes the action it always took, and after the
+/// first signal that action is back, so a second Ctrl-C ends the process at once. Under
+/// `cheby test`, in the REPL and on Windows no signal reaches the scope.
+pub fn until_interrupted<T>(body: fn() -> T) -> Result<T, Interrupt> {
+  case fiber::interruptible(body) {
+    Ok(value) => Ok(value)
+    Err(Some(failure)) => Err(Panicked(failure))
+    Err(None) => Err(Interrupted)
+  }
+}
+
+test "until_interrupted returns the value of a body that finishes" {
+  assert until_interrupted(fn() { 6 * 7 }) == Ok(42)
+}
+
+test "until_interrupted reports a panic as Panicked" {
+  let outcome = until_interrupted(fn() { panic as "crash" })
+  let assert Err(Panicked(failure)) = outcome
+  assert fiber::message(failure) == "crash"
+}

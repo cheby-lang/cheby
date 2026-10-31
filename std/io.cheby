@@ -418,6 +418,56 @@ test "an io error shows a fixed message" {
   assert "{reason:?}" == "not found"
 }
 
+// Streams (D-1072, ADR-0070). GAP(io-streams): they sit after `show` so that no std location before
+// it moves.
+
+/// A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the
+/// stream, at most `limit` of them, or `Ok(None)` at its end. `file::File`, `net::Connection` and
+/// the standard-stream handles satisfy it through their modules' `read_bytes` (D-1062, D-1071).
+pub interface Source {
+  fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, Error>
+}
+
+/// A stream that bytes are written to. `write_bytes(sink, data)` writes all of `data`.
+/// `file::File`, `net::Connection` and the standard-stream handles satisfy it through their
+/// modules' `write_bytes` (D-1062, D-1071).
+pub interface Sink {
+  fn write_bytes(Self, bytes::Bytes) -> Result<Nil, Error>
+}
+
+/// Reads blocks of at most 64 KiB from `source` until its end, writes each one to `sink`, and
+/// returns the number of bytes copied (D-1072). It stops at the first `Err` of either side and
+/// returns it; what was written before stays written.
+pub fn copy<S: Source, K: Sink>(source: S, sink: K) -> Result<Int, Error> {
+  copy_from(source, sink, 0)
+}
+
+/// `copy`'s loop, with the bytes copied so far. It reads at most 64 KiB at once (D-1072); the size
+/// is a literal, so that `std::io` declares no constant.
+fn copy_from<S: Source, K: Sink>(source: S, sink: K, copied: Int) -> Result<Int, Error> {
+  case Source::read_bytes(source, 65_536) {
+    Err(reason) => Err(reason)
+    Ok(None) => Ok(copied)
+    Ok(Some(block)) => case Sink::write_bytes(sink, block) {
+      Err(reason) => Err(reason)
+      Ok(_) => copy_from(source, sink, copied + bytes_length(block))
+    }
+  }
+}
+
+/// Returns an `Error` whose text is `message`, of the kind that the operating system's other
+/// failures have, so no predicate holds for it (D-342, D-981, D-1072).
+pub fn other(message: String) -> Error {
+  Error { kind: Other, message }
+}
+
+test "other builds an error with its own text" {
+  let reason = other("upstream closed")
+  assert "{reason}" == "upstream closed"
+  assert !is_not_found(reason)
+  assert reason == other("upstream closed")
+}
+
 // Kernels: each reports a failure as a kind code and the operating
 // system's message (see `from_os`).
 
@@ -460,3 +510,9 @@ fn sys_write_file(path: String, text: String) -> Result<Nil, (Int, String)>
 @external(native, "cheby_io_sys_write_file_bytes")
 @external(js, "./io.mjs", "sys_write_file_bytes")
 fn sys_write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, (Int, String)>
+
+/// `bytes::length`'s own kernel, for `copy`'s count. A call of `bytes::length` would make every
+/// program that uses `std::io` compile all of `std::bytes` with it. GAP(io-streams).
+@external(native, "cheby_bytes_length")
+@external(js, "./bytes.mjs", "length")
+priv fn bytes_length(data: bytes::Bytes) -> Int

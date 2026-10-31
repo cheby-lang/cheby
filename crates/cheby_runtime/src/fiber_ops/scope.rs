@@ -81,6 +81,11 @@ pub(crate) struct ScopeState {
     /// is linked and cancelled by the close (step 2); only the fiber that
     /// opened the scope touches it.
     timer: Mutex<Option<TimerHandle>>,
+    /// The signal registry's slot of a scope of `fiber::interruptible`
+    /// (D-1073, `sched::signal`), set by `sys_arm_interrupt` in the body
+    /// and taken by the close (step 2); only the fiber that opened the
+    /// scope touches it.
+    interrupt: Mutex<Option<usize>>,
     /// Whether the scope was opened timed, by `fiber::timeout` (D-671),
     /// whatever its deadline: its close's wait is named `fiber::timeout` in
     /// a deadlock report, any other's `fiber::scope` (D-858).
@@ -274,6 +279,7 @@ impl ScopeState {
             depth,
             nested_slot: Mutex::new(None),
             timer: Mutex::new(None),
+            interrupt: Mutex::new(None),
             of_timeout: false,
             base: false,
             root: false,
@@ -629,6 +635,33 @@ impl ScopeState {
         self.inner.lock().ended
     }
 
+    /// Arms the scope for SIGINT and SIGTERM (D-1073, `sched::signal`):
+    /// `fiber::sys_arm_interrupt`, called by `owner`, the fiber that opened
+    /// it, in its body. Does nothing when `owner` runs no runtime (an
+    /// isolated entry), when its runtime gives no signal to scopes (`cheby
+    /// test`, the REPL), or when the scope is armed already. A scope that another fiber opened
+    /// is a broken invariant: `fiber::interruptible` arms its own.
+    pub(crate) fn arm_interrupt(self: &Arc<Self>, owner: &ExecCtx) {
+        if self.owner != FiberRef::from_ctx(owner) {
+            fatal(format_args!(
+                "a fiber armed for signals a scope it did not open"
+            ));
+        }
+        let Some(runtime) = owner.sched.runtime() else {
+            return;
+        };
+        let mut slot = self.interrupt.lock();
+        if slot.is_none() {
+            *slot = crate::sched::signal::arm(runtime, self);
+        }
+    }
+
+    /// Whether the scope is armed for signals (D-1073).
+    #[cfg(all(test, unix))]
+    pub(crate) fn interrupt_armed(&self) -> bool {
+        self.interrupt.lock().is_some()
+    }
+
     /// Whether the scope holds a timer its close has not cancelled yet.
     #[cfg(test)]
     pub(crate) fn timed(&self) -> bool {
@@ -904,6 +937,12 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
         if let Some(timer) = timer {
             timer.cancel();
         }
+        // D-1073: a signal no longer reaches the scope; a walk that
+        // upgraded it already finds it ended (step 1) and skips it. When
+        // the first signal's walk cancelled it (`reached`), the close
+        // settles that signal once it has decided (`signal::settle`).
+        let interrupt = state.interrupt.lock().take();
+        let reached = interrupt.is_some_and(crate::sched::signal::disarm);
         // 3. Decide, after the target (D-769): a
         // cancellation of an enclosing scope reached this fiber when that
         // scope was marked, even if the walk has not set its target yet
@@ -926,10 +965,14 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
         };
         if target == AtClose::Outer {
             // The cancellation passes through (D-667): nothing of the body's
-            // unwinding is reported, and no lock is held.
+            // unwinding is reported, and no lock is held. The scope does
+            // not return `Ok`, so a signal that reached it is spent.
             drop(record);
             drop(state);
             drop(handle);
+            if reached {
+                crate::sched::signal::settle(false);
+            }
             raise_cancel(Some(ctx));
         }
         let unwound_cause = match record {
@@ -947,13 +990,17 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
             None => None,
         };
         drop(handle);
-        match own_cause.or(unwound_cause) {
+        let succeeded = match own_cause.or(unwound_cause) {
             Some(failure) => {
                 me.conc.set_last_failure(failure);
                 false
             }
             None => true,
+        };
+        if reached {
+            crate::sched::signal::settle(succeeded);
         }
+        succeeded
     })
 }
 

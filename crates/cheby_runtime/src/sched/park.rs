@@ -74,6 +74,9 @@ impl Parker {
             self.park_driver(&mut **poller, &shared.driver, shared);
             drop(poller);
             shared.fire_due(Instant::now());
+            // D-1073: signals the poll drained cancel their scopes now,
+            // with the poller released, as due timers fire.
+            super::signal::run_pending(shared);
         } else {
             self.park_condvar();
         }

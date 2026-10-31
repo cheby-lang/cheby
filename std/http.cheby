@@ -480,17 +480,18 @@ priv fn exchange(outgoing: Outgoing) -> Result<Response, Error> {
 }
 
 /// A connection to `target`: plain, or for `https` secured by TLS
-/// (D-1011).
+/// (D-1011). An `https` URL never falls back to a plain connection.
 priv fn open(target: Target) -> Result<net::Connection, Error> {
   case target.secure {
     False => result::map_error(net::connect(target.host, target.port), from_io)
     // A connection that a cancellation drops here is closed with it, as
-    // `net::connect`'s is (D-1000). D-1211: until TLS
-    // lands, the kernel answers an error, which is a TLS failure with no
-    // IO failure underneath (D-1182).
+    // `net::connect`'s is (D-1000). GAP(tls-failure-kinds): the kernel's
+    // kind 100 is a connection that cannot be secured (the certificate,
+    // the name, the handshake); every other kind is an IO failure.
     True => case net::sys_connect_tls(target.host, target.port) {
       Ok(connection) => Ok(connection)
-      Err(_) => Err(Error { kind: Tls })
+      Err((100, _)) => Err(Error { kind: Tls })
+      Err((code, message)) => Err(from_io(io::from_os(code, message)))
     }
   }
 }
@@ -498,11 +499,38 @@ priv fn open(target: Target) -> Result<net::Connection, Error> {
 test "an https URL to a plain server is a TLS failure" {
   let assert Ok(listener) = net::listen("127.0.0.1", 0)
   let port = net::local_port(listener)
-  fiber::spawn_detached(fn() { fake_server(listener, 1, fn(_) { reply(400, [], "plain") }) })
+  fiber::spawn_detached(fn() { plain_server(listener) })
   let assert Err(reason) = get("https://127.0.0.1:{port}/")
   assert is_tls(reason)
   assert "{reason}" == "TLS failure"
   assert io_error(reason) == None
+}
+
+test "an https URL to a closed port is an IO failure" {
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  let assert Ok(Nil) = net::close_listener(listener)
+  let assert Err(reason) = get("https://127.0.0.1:{port}/")
+  assert !is_tls(reason)
+  let assert Some(cause) = io_error(reason)
+  assert io::is_connection_refused(cause)
+}
+
+/// Answers one connection to `listener` in plain HTTP as soon as the
+/// client's first bytes arrive, which for a TLS client are its
+/// ClientHello, then waits for the client to close.
+priv fn plain_server(listener: net::Listener) -> Nil {
+  case net::accept(listener) {
+    Ok(connection) => {
+      let _ = net::read_bytes(connection, 65_536)
+      let _ = net::write_bytes(connection, reply(400, [], "plain"))
+      let _ = net::shutdown_write(connection)
+      let _ = net::read_bytes(connection, 65_536)
+      let _ = net::close(connection)
+      Nil
+    }
+    Err(_) => Nil
+  }
 }
 
 /// The bytes of `outgoing`'s request: the request line, `host`, the

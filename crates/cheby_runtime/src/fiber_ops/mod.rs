@@ -123,6 +123,7 @@ pub(crate) mod base;
 pub(crate) mod cancel;
 pub(crate) mod channel;
 pub(crate) mod detached;
+pub(crate) mod interrupt;
 pub(crate) mod join;
 pub(crate) mod scope;
 pub(crate) mod select;
@@ -291,7 +292,7 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 14] {
+fn all() -> [Entry; 15] {
     [
         (
             "cheby_selector_sys_new",
@@ -374,6 +375,12 @@ fn all() -> [Entry; 14] {
         (
             "cheby_fiber_sys_cancel",
             cancel::cheby_fiber_sys_cancel as *const u8,
+            &["Word"],
+            "()",
+        ),
+        (
+            "cheby_fiber_sys_arm_interrupt",
+            interrupt::cheby_fiber_sys_arm_interrupt as *const u8,
             &["Word"],
             "()",
         ),
@@ -476,6 +483,8 @@ mod cancel_races;
 mod cancel_tests;
 #[cfg(test)]
 pub(crate) mod detached_tests;
+#[cfg(test)]
+mod interrupt_tests;
 #[cfg(test)]
 mod models;
 #[cfg(test)]

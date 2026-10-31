@@ -134,6 +134,10 @@ struct Shared {
     /// opened (read by tests only).
     opened: AtomicUsize,
     written: AtomicUsize,
+    /// Test-only: each record this store answered, by name, with its
+    /// payload's length ([`Store::record_reads`]).
+    #[cfg(test)]
+    record_reads: std::sync::Mutex<Vec<(Hash128, usize)>>,
 }
 
 impl Store {
@@ -173,6 +177,8 @@ impl Store {
                 writer: Writer::default(),
                 opened: AtomicUsize::new(0),
                 written: AtomicUsize::new(0),
+                #[cfg(test)]
+                record_reads: std::sync::Mutex::new(Vec::new()),
             }),
         };
         let readme = root.join("README");
@@ -242,6 +248,18 @@ impl Store {
     pub(crate) fn writes(&self) -> usize {
         self.flush();
         self.shared.written.load(Ordering::Relaxed)
+    }
+
+    /// Test-only: every record this store answered since it was opened,
+    /// from its file or from a queued write, by name, with its payload's
+    /// length, in the order read (K8: the bytes a warm run unseals).
+    #[cfg(test)]
+    pub(crate) fn record_reads(&self) -> Vec<(Hash128, usize)> {
+        self.shared
+            .record_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Stores `bytes` as a blob and returns its name, the hash of `bytes`.
@@ -426,6 +444,19 @@ impl Shared {
     /// (D-961). An entry this process has queued or is writing is answered
     /// from its bytes.
     fn get(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
+        let payload = self.get_entry(kind, name);
+        #[cfg(test)]
+        if let (FileKind::Record, Some(bytes)) = (kind, &payload) {
+            self.record_reads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((name, bytes.len()));
+        }
+        payload
+    }
+
+    /// [`Shared::get`]'s read.
+    fn get_entry(&self, kind: FileKind, name: Hash128) -> Option<Vec<u8>> {
         let id = (kind, name);
         let writer = &self.writer;
         if let Some(file) = writer.pending(id) {

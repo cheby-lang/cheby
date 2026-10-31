@@ -84,6 +84,26 @@ fn tuned_with(threads: usize, stress: bool, rescue: bool, detect_deadlocks: bool
     .unwrap()
 }
 
+/// A runtime of `threads` workers whose scopes signals reach, as
+/// `run_main`'s (D-1073, `RuntimeConfig::signals`), with deadlock detection
+/// when `detect_deadlocks`. Unix only, as the signal tests.
+#[cfg(unix)]
+pub(crate) fn with_signals(threads: usize, detect_deadlocks: bool) -> Runtime {
+    Runtime::tuned(
+        &RuntimeConfig {
+            threads: Some(threads),
+            signals: true,
+            ..RuntimeConfig::default()
+        },
+        Tuning {
+            stress_migrate: Some(false),
+            rescue: true,
+            detect_deadlocks,
+        },
+    )
+    .unwrap()
+}
+
 /// An entry configuration for Rust-level roots in test mode.
 pub(crate) fn config(stack_size: usize) -> EntryConfig {
     EntryConfig {

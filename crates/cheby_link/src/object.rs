@@ -24,6 +24,12 @@
 //! `.debug_line` and a minimal `.debug_info` with their sections
 //! (`crate::dwarf`); a record without them, as with
 //! `CHEBY_POSITIONS=off`, and the program object get none.
+//!
+//! D-1253: replay moves the module record's function table out of the
+//! record, each entry into a part of the object tied to its function, so
+//! the linker drops the entry with an unreached function ([`crate::gc`]);
+//! on ELF every function and data object of such a record gets a section
+//! of its own. The record's bytes are otherwise replayed as they are.
 
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::isa::OwnedTargetIsa;
@@ -53,12 +59,66 @@ use crate::LinkError;
 /// refuses a declaration, a definition or the emission.
 pub fn replay(record: &CodeRecord, isa: OwnedTargetIsa, name: &str) -> Result<Vec<u8>, LinkError> {
     check_record(record, &isa)?;
-    let mut module = new_module(isa, name)?;
-    replay_into(&mut module, record)?;
-    // D-938: a record with positions gets its line tables.
-    if record.source.is_none() {
-        return emit(module);
+    // D-1253: the module record's function table leaves the record for
+    // sections the linker drops with their functions (`crate::gc`).
+    let Some(split) = crate::gc::split(record, name)? else {
+        let mut module = new_module(isa, name)?;
+        replay_into(&mut module, record)?;
+        // D-938: a record with positions gets its line tables.
+        if record.source.is_none() {
+            return emit(module);
+        }
+        let funcs = function_ids(&module, record)?;
+        let mut product = module.finish();
+        crate::dwarf::write(&mut product, record, &funcs)?;
+        return product.emit().map_err(|e| LinkError::Object(e.to_string()));
+    };
+    let elf = isa.triple().binary_format.to_string() == "elf";
+    let mut builder = ObjectBuilder::new(isa, name, isa::libcall_names()).map_err(object_error)?;
+    // D-913: no unwind info; Cheby frames unwind by return flags (D-733).
+    builder.unwind_info(false);
+    // ELF: one section per function and per data object, so
+    // `--gc-sections` can drop one, and one live `.data` keeps no
+    // `cb$fnval$…`, and so no function, alive (D-1253).
+    builder.per_function_section(elf);
+    builder.per_data_object_section(elf);
+    let mut module = ObjectModule::new(builder);
+    replay_into(&mut module, &split.record)?;
+    let funcs = function_ids(&module, &split.record)?;
+    let mut by_name = std::collections::BTreeMap::new();
+    for chunk in &split.chunks {
+        if let Some(FuncOrDataId::Func(id)) = module.get_name(&chunk.function) {
+            by_name.insert(chunk.function.as_str(), id);
+        }
     }
+    let mut product = module.finish();
+    let symbols: std::collections::BTreeMap<&str, object::write::SymbolId> = by_name
+        .into_iter()
+        .map(|(name, id)| (name, product.function_symbol(id)))
+        .collect();
+    crate::gc::add_chunks(&mut product.object, &split, &|name| {
+        symbols.get(name).copied()
+    })?;
+    // D-938: a record with positions gets its line tables; the split moved
+    // no function.
+    if record.source.is_some() {
+        crate::dwarf::write(&mut product, record, &funcs)?;
+    }
+    let mut bytes = product
+        .emit()
+        .map_err(|e| LinkError::Object(e.to_string()))?;
+    if elf {
+        crate::gc::patch_link_order(&mut bytes)?;
+    }
+    Ok(bytes)
+}
+
+/// The id of each function of `record`, in its order, in `module`, which
+/// replayed it.
+fn function_ids(
+    module: &ObjectModule,
+    record: &CodeRecord,
+) -> Result<Vec<cranelift_module::FuncId>, LinkError> {
     let mut funcs = Vec::with_capacity(record.functions.len());
     for function in &record.functions {
         let symbol = record
@@ -69,9 +129,7 @@ pub fn replay(record: &CodeRecord, isa: OwnedTargetIsa, name: &str) -> Result<Ve
             _ => return Err(RecordError::Malformed("a definition of the wrong kind").into()),
         }
     }
-    let mut product = module.finish();
-    crate::dwarf::write(&mut product, record, &funcs)?;
-    product.emit().map_err(|e| LinkError::Object(e.to_string()))
+    Ok(funcs)
 }
 
 /// Checks `record` and that `isa` is a target replay writes, with the

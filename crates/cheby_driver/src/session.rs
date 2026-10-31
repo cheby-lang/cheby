@@ -281,6 +281,7 @@ fn session_runtime(front: &Frontend, threads: Option<usize>) -> Result<Option<Ru
         args: Vec::new(),
         program_name: front.package_name.clone(),
         fiber_stack: crate::stack_bytes(front.fiber_stack),
+        signals: false,
     };
     match Runtime::new(&config) {
         Ok(runtime) => Ok(Some(runtime)),

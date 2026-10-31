@@ -29,6 +29,13 @@ siphasher.workspace = true
 socket2.workspace = true
 unicode-segmentation.workspace = true
 
+# TLS for `std::http`'s client (D-1011): not on Windows until M6, where
+# `ring` needs `clang` for arm64 and sockets are fatal anyway (D-983).
+[target.'cfg(not(windows))'.dependencies]
+ring.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+
 [build-dependencies]
 siphasher.workspace = true
 

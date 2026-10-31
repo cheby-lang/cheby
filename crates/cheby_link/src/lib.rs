@@ -38,6 +38,7 @@ pub mod cc;
 mod dwarf;
 #[cfg(test)]
 mod dwarf_tests;
+pub mod gc;
 pub mod link;
 pub mod native_libs;
 pub mod object;

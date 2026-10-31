@@ -13,10 +13,13 @@
 //!   then the archive's system libraries ([`crate::native_libs`]): the
 //!   package's native code comes where D-1112's line leaves room for it
 //!   (D-940, D-1198).
-//! - Flags: on Linux `-pie -Wl,--gc-sections -Wl,--eh-frame-hdr
-//!   -Wl,-z,relro,-z,now -Wl,--build-id=sha1`; on macOS `-arch arm64
-//!   -mmacosx-version-min=<the archive's minimum> -Wl,-dead_strip -Wl,-S`
-//!   (the minimum is 11.0; no debug map).
+//! - Flags: on Linux `-pie -Wl,--gc-sections -Wl,-z,start-stop-gc
+//!   -Wl,--eh-frame-hdr -Wl,-z,relro,-z,now -Wl,--build-id=sha1`
+//!   (`-z start-stop-gc` since D-1253, so the program object's
+//!   `__start_`/`__stop_` references keep no record entries alive,
+//!   `crate::gc`); on macOS `-arch arm64 -mmacosx-version-min=<the
+//!   archive's minimum> -Wl,-dead_strip -Wl,-S` (the minimum is 11.0; no
+//!   debug map).
 //! - The objects are written into a fresh private temporary directory,
 //!   each named after its module path (`hello_world.o`, `std::io.o`; the
 //!   program object `cb$program.o`), and `cc` runs in that directory with
@@ -94,33 +97,101 @@ pub struct LinkJob<'a> {
     pub output: &'a Path,
 }
 
+/// The kind of host a link line is for (module documentation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkHost {
+    /// macOS: ld64 through `cc`.
+    MacOs,
+    /// Linux: GNU ld (or lld) through `cc`.
+    Linux,
+}
+
+impl LinkHost {
+    /// The host this `cheby` links for.
+    #[must_use]
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Linux
+        }
+    }
+}
+
 /// The flags of the link line for the host, before the output and the
 /// inputs (module documentation).
 #[must_use]
 pub fn flags() -> Vec<String> {
-    if cfg!(target_os = "macos") {
-        let arch = if cfg!(target_arch = "aarch64") {
-            "arm64"
-        } else {
-            std::env::consts::ARCH
-        };
-        let mut flags = vec!["-arch".to_owned(), arch.to_owned()];
-        if let Some(min) = native_libs::macos_min_version() {
-            flags.push(format!("-mmacosx-version-min={min}"));
+    flags_for(LinkHost::current())
+}
+
+/// The flags of the link line for `host` (module documentation). On Linux,
+/// `-z start-stop-gc` keeps the program object's `__start_`/`__stop_`
+/// references from keeping the record entries' sections, and so every
+/// function, alive (D-1253; GNU ld 2.37, lld 13).
+#[must_use]
+pub fn flags_for(host: LinkHost) -> Vec<String> {
+    match host {
+        LinkHost::MacOs => {
+            let arch = if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                std::env::consts::ARCH
+            };
+            let mut flags = vec!["-arch".to_owned(), arch.to_owned()];
+            if let Some(min) = native_libs::macos_min_version() {
+                flags.push(format!("-mmacosx-version-min={min}"));
+            }
+            flags.extend(["-Wl,-dead_strip", "-Wl,-S"].map(str::to_owned));
+            flags
         }
-        flags.extend(["-Wl,-dead_strip", "-Wl,-S"].map(str::to_owned));
-        flags
-    } else {
-        [
+        LinkHost::Linux => [
             "-pie",
             "-Wl,--gc-sections",
+            START_STOP_GC,
             "-Wl,--eh-frame-hdr",
             "-Wl,-z,relro,-z,now",
             "-Wl,--build-id=sha1",
         ]
         .map(str::to_owned)
-        .to_vec()
+        .to_vec(),
     }
+}
+
+/// D-1253's flag on D-1112's Linux link line. It applies to the whole
+/// line, so the package's own C objects (`[native]` sources) and the
+/// archive's members link under it too: a C section registry read only
+/// through `__start_`/`__stop_` (entries marked `used` but not `retain`)
+/// is dropped by `--gc-sections` under `cheby build` on Linux, where GNU
+/// ld's default would keep it, while `cheby run`'s shared library (no GC,
+/// `crate::shlib`) keeps it (the review's SOUND-1). Whether to log that
+/// rule or scope the flag is the logging session's (GAP(link-gc-sections)).
+pub const START_STOP_GC: &str = "-Wl,-z,start-stop-gc";
+
+/// The command that links `names` (the objects' files in `objects`, in
+/// order) with `job`'s archive and libraries into `staged`, for `host`
+/// (module documentation): what [`link`] runs.
+#[must_use]
+pub fn command(
+    host: LinkHost,
+    job: &LinkJob<'_>,
+    objects: &Path,
+    staged: &Path,
+    names: &[String],
+) -> Command {
+    let mut cmd = Command::new(CC);
+    for var in REMOVED_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.current_dir(objects)
+        .args(flags_for(host))
+        .arg("-o")
+        .arg(staged)
+        .args(names)
+        .arg(job.archive)
+        .args(job.libraries.iter().map(|name| format!("-l{name}")))
+        .args(native_libs::link_args());
+    cmd
 }
 
 /// The file name of an object in the temporary directory: its module
@@ -177,18 +248,7 @@ pub fn link(job: &LinkJob<'_>) -> Result<(), LinkError> {
     sweep_dead(out_dir, STAGING_PREFIX);
     let staging = PrivateDir::create(out_dir, STAGING_PREFIX)?;
     let staged = staging.path.join(name);
-    let mut cmd = Command::new(CC);
-    for var in REMOVED_VARS {
-        cmd.env_remove(var);
-    }
-    cmd.current_dir(&objects.path)
-        .args(flags())
-        .arg("-o")
-        .arg(&staged)
-        .args(&names)
-        .arg(job.archive)
-        .args(job.libraries.iter().map(|name| format!("-l{name}")))
-        .args(native_libs::link_args());
+    let mut cmd = command(LinkHost::current(), job, &objects.path, &staged, &names);
     let output = cmd.output().map_err(|e| LinkError::NoCc(e.to_string()))?;
     if !output.status.success() {
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();

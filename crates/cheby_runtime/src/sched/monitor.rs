@@ -195,6 +195,8 @@ pub(super) fn main(shared: &Shared) {
             shared.fire_due(now);
         }
         poll_sockets(shared);
+        // D-1073: as a poll holder does after its poll.
+        super::signal::run_pending(shared);
         let mut busy = false;
         // In the migration stress mode a lone fiber yields too, so that it
         // moves between workers (D-687).

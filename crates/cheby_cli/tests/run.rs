@@ -183,18 +183,19 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::io\nimport std::process\n\nfn main() {\n  io::println(\"never\")\n}\n",
+                "//! Unsupported.\n\nimport std::context\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
     // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
-    // of an unshipped std module stays E0038 (D-480), and since `std::http`
-    // ships (D-1003) `std::process` is the unshipped one (D-729, D-989).
+    // of an unshipped std module stays E0038 (D-480). Tier 3 ships whole,
+    // so tier 4's `std::context` (D-1049) is the planned module of the
+    // probe (D-989, D-1213).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: the module `std::process` is not supported yet"),
+            .starts_with("error[E0038]: the module `std::context` is not supported yet"),
         "{}",
         out.stderr
     );
@@ -216,7 +217,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             ),
             (
                 "src/pick.cheby",
-                "//! Reaches an unshipped module.\n\nimport std::process\n\npub fn pick(text: String) -> String {\n  text\n}\n",
+                "//! Reaches an unshipped module.\n\nimport std::context\n\npub fn pick(text: String) -> String {\n  text\n}\n",
             ),
         ],
     );
@@ -224,11 +225,11 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
     assert_eq!(out.stdout, "");
     // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
     // of an unshipped std module in a module `main` reaches stays E0038
-    // (D-480), with `std::process` the unshipped one since `std::http`
-    // ships (D-1003, D-729, D-989).
+    // (D-480), with tier 4's `std::context` the planned one since tier 3
+    // ships whole (D-1049, D-989, D-1213).
     assert!(
         out.stderr.starts_with(
-            "error[E0038]: the module `std::process` is not supported yet\n --> src/pick.cheby:3:8\n"
+            "error[E0038]: the module `std::context` is not supported yet\n --> src/pick.cheby:3:8\n"
         ),
         "{}",
         out.stderr

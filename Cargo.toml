@@ -63,7 +63,11 @@ object = { version = "0.39", default-features = false, features = ["read", "std"
 parking_lot = "0.12"
 proptest = "1.11"
 rayon = "1.12"
+# HTTPS for `std::http`'s client (D-1011, D-1036): only on targets other
+# than Windows until M6.
+ring = "0.17.14"
 rustc-hash = "2.1"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustyline = { version = "18.0", default-features = false }
 ryu = "1"
 serde_json = "1"
@@ -75,6 +79,7 @@ unicode-width = "0.2"
 # The instruction-cache maintenance cranelift-jit itself uses; the version
 # follows cranelift (0.135 is Wasmtime 48).
 wasmtime-internal-jit-icache-coherence = "48"
+webpki-roots = "1.0.10"
 windows-sys = "0.61"
 
 [workspace.lints.rust]

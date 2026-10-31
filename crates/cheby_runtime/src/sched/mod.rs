@@ -44,6 +44,7 @@ mod lifecycle;
 mod monitor;
 mod park;
 mod poll;
+pub(crate) mod signal;
 mod timer;
 pub(crate) mod turn;
 mod wait;
@@ -59,6 +60,7 @@ use std::time::Instant;
 use crossbeam_deque::Injector;
 use parking_lot::Mutex;
 
+pub(crate) use deadlock::end_test_root;
 pub(crate) use fiber::{
     AfterSwitch, FiberRef, FiberSched, StartFn, Unlock, Unlocks, WaitOp, begin_park, cancel_park,
     leave_callback, park,
@@ -153,17 +155,26 @@ pub struct RuntimeConfig {
     /// The stack size in bytes of a fiber spawned without one (D-660's
     /// `fiber-stack`); [`Shared::fiber_stack`] reports it.
     pub fiber_stack: usize,
+    /// Whether SIGINT and SIGTERM reach the scopes of
+    /// `process::until_interrupted` (D-1073, `signal`): true only for the
+    /// runtime of `run_main`, which `cheby run` and executables use. Under
+    /// `cheby test`, `xtask test-std` and in the REPL's session no signal
+    /// reaches a scope, so Ctrl-C keeps the host's behavior.
+    /// GAP(interrupt-hosts).
+    pub signals: bool,
 }
 
 impl Default for RuntimeConfig {
-    /// `CHEBY_THREADS`' count, no arguments, no program name, and
-    /// [`DEFAULT_STACK_SIZE`] for spawned fibers.
+    /// `CHEBY_THREADS`' count, no arguments, no program name,
+    /// [`DEFAULT_STACK_SIZE`] for spawned fibers, and no signal reaching a
+    /// scope.
     fn default() -> Self {
         Self {
             threads: None,
             args: Vec::new(),
             program_name: String::new(),
             fiber_stack: DEFAULT_STACK_SIZE,
+            signals: false,
         }
     }
 }
@@ -247,6 +258,9 @@ pub(crate) struct Shared {
     timers: timer::Timers,
     /// The poller one idle worker blocks in (D-680).
     driver: poll::Driver,
+    /// Whether signals reach `until_interrupted`'s scopes
+    /// ([`RuntimeConfig::signals`], D-1073).
+    signals: signal::Reach,
     /// The default stack size of a spawned fiber (D-660).
     fiber_stack: usize,
     /// The thread count's target ([`Shared::set_thread_count`]).
@@ -568,6 +582,12 @@ impl Shared {
     /// Whether a halt has started (D-073, D-708).
     pub(crate) fn halting(&self) -> bool {
         self.halting.load(Ordering::SeqCst)
+    }
+
+    /// Whether signals reach `until_interrupted`'s scopes
+    /// ([`RuntimeConfig::signals`], D-1073).
+    pub(crate) fn signals(&self) -> bool {
+        self.signals == signal::Reach::Scopes
     }
 
     /// How many pinned fibers a stop left alone after their worker ended
@@ -1063,6 +1083,11 @@ impl Runtime {
             monitor: MonitorWake::default(),
             timers: timer::Timers::new(Instant::now()),
             driver,
+            signals: if config.signals {
+                signal::Reach::Scopes
+            } else {
+                signal::Reach::Host
+            },
             fiber_stack: config.fiber_stack,
             thread_target: AtomicUsize::new(threads),
             default_group: DetachedGroup::new(),
@@ -1475,6 +1500,8 @@ mod park_models;
 mod poll_tests;
 #[cfg(test)]
 mod retire_models;
+#[cfg(test)]
+mod signal_models;
 #[cfg(test)]
 mod slot_cache_tests;
 #[cfg(test)]

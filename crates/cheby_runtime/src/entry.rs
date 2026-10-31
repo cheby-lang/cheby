@@ -785,6 +785,9 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         args: config.args.clone(),
         program_name: config.program_name.clone(),
         fiber_stack: config.fiber_stack,
+        // `cheby run` and executables: SIGINT and SIGTERM reach the scopes
+        // of `process::until_interrupted` (D-1073); no other host's do.
+        signals: true,
     }) {
         Ok(runtime) => Some(runtime),
         Err(RuntimeError::Unsupported) => {

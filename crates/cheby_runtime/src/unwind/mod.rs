@@ -1058,6 +1058,9 @@ mod tests {
                         or a plain function calling that body";
     const SLOW_BODY: &str = "runs the slow path in its guard (`stack_slow_at`), which sets the flag \
                              and returns (D-700)";
+    const SIGNAL_HANDLER: &str = "a signal handler (D-1073): one atomic store, one atomic load, \
+                                  `write` and `errno`, nothing that can panic, and never an entry \
+                                  from Cheby code";
 
     /// The `extern "C"` functions of the crate that never unwind, with the
     /// reason, by file (relative to `src/`) and name (`$name` inside a
@@ -1134,6 +1137,7 @@ mod tests {
         ("io.rs", "cheby_io_eprint", PRINTS),
         ("io.rs", "cheby_io_eprintln", PRINTS),
         ("sched/fiber.rs", "fiber_start", FIBER_BASE),
+        ("sched/signal.rs", "on_signal", SIGNAL_HANDLER),
         ("fiber/switch/aarch64.rs", "switch", SWITCH),
         ("fiber/switch/aarch64.rs", "fiber_entry", FIRST_FRAME),
         ("fiber/switch/x86_64_sysv.rs", "switch", SWITCH),

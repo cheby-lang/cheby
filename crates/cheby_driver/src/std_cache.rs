@@ -626,6 +626,7 @@ pub(crate) fn std_records(
     settings: &Settings,
     mir: MirOptions,
 ) -> Result<BTreeMap<String, CodeRecord>, Ice> {
+    let _std = crate::phases::span(crate::phases::Phase::Std);
     let build = at.store.build_id();
     let mut found = BTreeMap::new();
     let mut missed = false;
@@ -634,7 +635,7 @@ pub(crate) fn std_records(
         let record = if at.reads {
             at.store
                 .get_record(&key)
-                .and_then(|bytes| CodeRecord::decode(&bytes).ok())
+                .and_then(|bytes| crate::cache::seal::unseal_code(&bytes))
         } else {
             None
         };
@@ -682,6 +683,7 @@ pub(crate) fn first_use(
     mir: MirOptions,
 ) -> Result<FirstUse, Ice> {
     use crate::cache::Hash128;
+    let _std = crate::phases::span(crate::phases::Phase::Std);
     let whole = whole_std()?;
     for module in &whole.modules {
         at.log.parsed_std(module);
@@ -690,7 +692,9 @@ pub(crate) fn first_use(
     let build = at.store.build_id();
     for (module, record) in &code {
         let key = std_code_key_at(build, module, settings, mir.positions);
-        let _ = at.store.put_record(&key, &record.encode());
+        let _ = at
+            .store
+            .put_record(&key, &crate::cache::seal::seal_code(record));
     }
     // Std reports no diagnostics: every record names the blob of the front
     // end's three empty lists (`frontend.rs`'s `DIAGNOSTIC_LISTS`).

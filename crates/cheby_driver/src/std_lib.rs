@@ -149,6 +149,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/ordered_set.cheby"),
     },
     StdModule {
+        path: "process",
+        source: include_str!("../../../std/process.cheby"),
+    },
+    StdModule {
         path: "random",
         source: include_str!("../../../std/random.cheby"),
     },
@@ -221,10 +225,14 @@ pub const STD_MODULES: &[StdModule] = &[
 /// M1 module is promoted; later tiers may stage modules here again.
 pub const STAGED_STD_MODULES: &[StdModule] = &[];
 
-/// Modules the standard-library spec plans that `std/` does not ship yet:
-/// the rest of tier 2 and tier 3 (`docs/plan/stdlib.md`). Importing one is
-/// E0038, not E0039 (D-451). Sorted.
-pub const PLANNED_STD_MODULES: &[&str] = &["context", "process"];
+/// Modules the standard-library spec plans that `std/` does not ship yet.
+/// Importing one is E0038, not E0039 (D-451). Sorted.
+///
+/// Tier 3 ships whole in M3 (D-989), so no tier-3 module is planned; only
+/// `std::context`, which starts tier 4 and lands in M4 (D-1049), stays,
+/// so that `import std::context` keeps D-480's "not supported yet" for a
+/// module its page describes. GAP(planned-std-modules).
+pub const PLANNED_STD_MODULES: &[&str] = &["context"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -242,11 +250,6 @@ pub const PLANNED_STD_MODULES: &[&str] = &["context", "process"];
 /// since (D-728). An entry's comment names what its test needs and the
 /// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // `io::Source`, `io::Sink`, `copy` and `other`, S7 (D-1072). The `copy`
-    // test also needs S3's `file::with_temp_dir`, so it lives in
-    // `std/file.cheby`.
-    ("io", "copy moves every byte of one file to another", "M3"),
-    ("io", "other builds an error with its own text", "M3"),
     // Seeded random streams need `std::context`, M4's workstream 4.6
     // (D-1048, D-1049).
     (
@@ -342,10 +345,30 @@ pub fn find(path: &str) -> Option<&'static StdModule> {
     STD_MODULES.iter().find(|m| m.path == path)
 }
 
+/// The made-up planned module of this crate's unit tests (D-989): E0038
+/// stays tested on a module that no page describes and no build of the
+/// toolchain plans, whatever the real list holds. Only `cfg(test)` builds
+/// of this crate see it, through [`is_planned`] and [`known`]; the
+/// toolchain and every other crate's tests never do.
+/// GAP(unshipped-probe).
+#[cfg(test)]
+pub(crate) const PROBE_PLANNED_STD_MODULES: &[&str] = &["unshipped_probe"];
+
+/// The planned modules [`is_planned`] and [`known`] read:
+/// [`PLANNED_STD_MODULES`], and under `cfg(test)` the made-up
+/// [`PROBE_PLANNED_STD_MODULES`].
+fn planned() -> impl Iterator<Item = &'static str> {
+    #[cfg(test)]
+    let probes = PROBE_PLANNED_STD_MODULES;
+    #[cfg(not(test))]
+    let probes: &[&str] = &[];
+    PLANNED_STD_MODULES.iter().chain(probes).copied()
+}
+
 /// Whether `path` (under `std`) is planned but not shipped.
 #[must_use]
 pub fn is_planned(path: &str) -> bool {
-    PLANNED_STD_MODULES.contains(&path)
+    planned().any(|planned| planned == path)
 }
 
 /// Every std module path the toolchain knows, shipped or planned.
@@ -354,7 +377,7 @@ pub fn known() -> Vec<&'static str> {
     let mut all: Vec<&'static str> = STD_MODULES
         .iter()
         .map(|m| m.path)
-        .chain(PLANNED_STD_MODULES.iter().copied())
+        .chain(planned())
         .collect();
     all.sort_unstable();
     all
@@ -560,8 +583,8 @@ mod tests {
     /// D-673). The rest of tier 2 stays planned. M3 ships `std::time` and
     /// its submodule `std::time::instant` (D-985, D-1057), `std::net`
     /// (D-998), `std::file` (D-996), and `std::http`'s client with
-    /// `std::url` (D-1003, D-1069), so they are no longer planned; `std::process` is the unshipped
-    /// module of the probes since `std::http` ships (D-729, D-989).
+    /// `std::url` (D-1003, D-1069), so they are no longer planned;
+    /// `m3_tier3_modules_ship` checks tier 3 whole.
     #[test]
     fn m2_tier2_modules_ship() {
         // The modules of timers and selectors first, then the first slice's.
@@ -571,8 +594,6 @@ mod tests {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
         }
-        assert!(is_planned("process"), "std::process is not planned");
-        assert!(find("process").is_none(), "std::process is shipped");
         // D-996, D-992, D-1066: `std::file` ships in M3, with its file in
         // `std/`, so importing it is no longer E0038 (D-480).
         assert!(
@@ -581,9 +602,7 @@ mod tests {
         );
         assert!(find("file").is_some(), "std::file is not shipped");
         assert!(!is_planned("file"), "std::file is still planned");
-        // D-1003, D-1069: `std::http`'s client and `std::url` ship in M3,
-        // and `std::process` is the unshipped module of the probes until
-        // it ships too (D-729, D-989).
+        // D-1003, D-1069: `std::http`'s client and `std::url` ship in M3.
         for path in ["http", "url"] {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
@@ -596,6 +615,37 @@ mod tests {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
         }
+    }
+
+    /// M3 ships tier 3 whole (D-985, D-989): `std::time` and
+    /// `std::time::instant`, `std::net`, `std::file`, `std::http`,
+    /// `std::url`, `std::base64` and `std::hex` (D-1054), and
+    /// `std::process` (D-1022), each with its file in `std/`. No tier-3
+    /// module stays planned; the planned list holds only tier 4's
+    /// `std::context` (D-1049), GAP(planned-std-modules).
+    #[test]
+    fn m3_tier3_modules_ship() {
+        for path in [
+            "time",
+            "time::instant",
+            "net",
+            "file",
+            "http",
+            "url",
+            "base64",
+            "hex",
+            "process",
+        ] {
+            assert!(
+                repo().join(display_path(path)).exists(),
+                "{} is missing",
+                display_path(path)
+            );
+            assert!(find(path).is_some(), "std::{path} is not shipped");
+            assert!(!is_planned(path), "std::{path} is still planned");
+        }
+        assert_eq!(PLANNED_STD_MODULES, &["context"]);
+        assert!(find("context").is_none(), "std::context is shipped");
     }
 
     /// M2 ships tier 1's seven collections, written in Cheby (D-664,

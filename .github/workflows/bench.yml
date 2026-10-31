@@ -36,6 +36,19 @@
 #   measured `cheby`'s runtime archive (D-929), so "Build both" builds it
 #   too. A base without `cheby build`, such as `bbed11b`, gets no
 #   executable and a note.
+# - With `-f compile=true` (default false, so a stop-line dispatch stays
+#   about 30 minutes), two more steps run after the split (K7, D-1035,
+#   D-974): OQ-P11's rounds with RB-3's restart causes (`bench-compile
+#   --oqp11 --restarts`: `wide` and `deep` at 1M lines with seed 1, a cold
+#   run, five body edits and five `main` edits under `CHEBY_PHASES`, and the
+#   restart causes at 100k and 1M), then D-247's throughput with the cold
+#   `check` and `build` columns at 100k and 1M (`bench-compile --shapes
+#   100k,1m`). `.github/scripts/bench_oqp11.py` writes their tables to the
+#   step summary, and `oqp11.json` and `compile.json` upload with the rest.
+#   They add about 25-50 minutes. Each has `continue-on-error` and its own
+#   timeout, so a failure or a hang of theirs never fails or cancels the
+#   rounds, the split or the upload that carry the stop line (D-1255;
+#   GAP(bench-yml-readings)).
 
 name: Bench
 
@@ -50,6 +63,10 @@ on:
         description: Rounds of `bench-run --against`
         type: number
         default: 3
+      compile:
+        description: Also read OQ-P11, RB-3's restarts and D-247's throughput (about 25-50 minutes more)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -140,13 +157,36 @@ jobs:
           python3 -I .github/scripts/bench_split.py \
             --title "Split of the time outside main against \`$BASE\` (D-1254)" \
             bench-results/split-001.json >> "$GITHUB_STEP_SUMMARY"
-      # K7 (wave 10) adds the other two readings of D-1035 here, each with
-      # its own steps and its own section of the step summary, and its files
-      # under bench-results/: OQ-P11's edit-to-run latency (D-974: a release
-      # `cheby`, a fresh `CHEBY_CACHE` per shape, `bench/gen` projects of 1M
-      # lines with seed 1 in the shapes `wide` and `deep`, one cold run, then
-      # five rounds of each edit, `CHEBY_PHASES` for the breakdown) and
-      # D-247's compile throughput.
+      # The other two readings of D-1035 (K7), only with `-f compile=true`.
+      # OQ-P11's edit-to-run latency (D-974: the release `cheby`, a fresh
+      # `CHEBY_CACHE` per shape, `bench/gen` projects of 1M lines with seed 1
+      # in the shapes `wide` and `deep`, one cold run, then five rounds of
+      # each edit, `CHEBY_PHASES` for the breakdown) with RB-3's restart
+      # causes (D-1256).
+      - name: OQ-P11 and RB-3's restarts (D-974, D-1256)
+        if: ${{ inputs.compile }}
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          mkdir -p bench-results
+          cargo xtask bench-compile --cheby target/release/cheby --oqp11 --restarts \
+            --json bench-results/oqp11.json
+          python3 -I .github/scripts/bench_oqp11.py \
+            --title "OQ-P11 and RB-3's restarts (D-974, D-1256)" \
+            bench-results/oqp11.json >> "$GITHUB_STEP_SUMMARY"
+      # D-247's compile throughput and the cold `check` and `build` columns
+      # (D-975, D-1266) at 100k and 1M lines.
+      - name: Compile throughput and the cold columns (D-247, D-975)
+        if: ${{ inputs.compile }}
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          mkdir -p bench-results
+          cargo xtask bench-compile --cheby target/release/cheby --shapes 100k,1m \
+            --json bench-results/compile.json
+          python3 -I .github/scripts/bench_oqp11.py \
+            --title "Cold check and build (D-975, D-1266)" \
+            bench-results/compile.json >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the rounds, the split and the base
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

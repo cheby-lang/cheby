@@ -1,6 +1,6 @@
-error[E0038]: the module `std::process` is not supported yet
- --> tests/ui/07-modules-and-packages/unshipped_std_module.cheby:8:8
+error[E0038]: the module `std::context` is not supported yet
+ --> tests/ui/07-modules-and-packages/unshipped_std_module.cheby:7:8
   |
-8 | import std::process
+7 | import std::context
   |        ^^^^^^^^^^^^
 

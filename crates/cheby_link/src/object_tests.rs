@@ -30,6 +30,7 @@ use cheby_mir::{
 use crate::LinkError;
 use crate::object::replay;
 
+mod link_gc;
 mod two_units;
 
 /// The object formats replay writes, by the triple that picks them.

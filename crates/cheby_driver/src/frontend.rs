@@ -394,6 +394,7 @@ impl DriverLookup<'_> {
     }
 
     fn load_std(&mut self, path: &str, module_path: ModulePath) -> Result<ModuleId, Ice> {
+        let _std = crate::phases::span(crate::phases::Phase::Std);
         let source =
             std_lib::find(path).ok_or_else(|| Ice::new("loading an unknown std module"))?;
         let display = std_lib::display_path(path);
@@ -2264,6 +2265,7 @@ pub(crate) fn read_modules(
 
     // Each file is read once and hashed in the same pass, on the worker
     // pool (D-963, D-1130).
+    let hash_span = crate::phases::span(crate::phases::Phase::Hash);
     let bytes: Vec<std::io::Result<(Vec<u8>, crate::SourceHashes)>> = files
         .par_iter()
         .map(|file| {
@@ -2273,6 +2275,7 @@ pub(crate) fn read_modules(
             })
         })
         .collect();
+    drop(hash_span);
     // Into the source map in order: (file, text to parse, `None` for a file
     // that is not parsed, or the E0001 diagnostic of a file that is not
     // UTF-8).
@@ -2311,6 +2314,7 @@ pub(crate) fn read_modules(
             }
         }
     }
+    let _parse = crate::phases::span(crate::phases::Phase::Parse);
     let parsed: Vec<(crate::ParsedFile, Vec<Diagnostic>)> = added
         .into_par_iter()
         .map(|(file, text)| match text {
@@ -2414,6 +2418,7 @@ pub(crate) fn run_cached(
         && front.complete
         && !diagnostics.iter().any(Diagnostic::is_error)
     {
+        let _records = crate::phases::span(crate::phases::Phase::Records);
         crate::warm_keys::store_facts(&front)?;
     }
     // D-941: the commands that run or build code compile the package's C
@@ -2513,7 +2518,7 @@ fn run_inner(
     let mut std_error = None;
     // K6: std's front records are read instead of parsing std (D-980), in
     // the first attempt of a command that does not lower std itself
-    // (`cheby build` does until N9).
+    // (`cheby build` reads them too since N9, D-1262).
     let std_cache = cache.map(|use_| use_.cache);
     let std_hits_ok = crate::std_cache::FRONT_HITS
         && cache.is_some_and(|use_| {
@@ -2713,6 +2718,7 @@ fn run_inner(
         .collect();
     unparsed.resize(len, false);
     syntax.resize(len, None);
+    let check_span = crate::phases::span(crate::phases::Phase::Check);
     // D-1250: a warm `cheby run` or `cheby test` knows before its check
     // which modules miss (K4d).
     let misses = match cache {
@@ -3081,6 +3087,8 @@ fn run_inner(
         }
         _ => lowerable,
     };
+    drop(check_span);
+    let _index = crate::phases::span(crate::phases::Phase::Index);
     let records = cache.map(|use_| crate::borrowing::RecordSink::new(use_.cache, &entries));
     if let Some(use_) = cache {
         finish_cache(
