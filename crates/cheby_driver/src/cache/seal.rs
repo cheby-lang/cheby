@@ -7,7 +7,7 @@
 //! whose seal does not match, or that then does not decode, is a miss, which
 //! the command writes again (D-960): in release builds as in debug builds,
 //! since a record, unlike a blob, is not named by its hash.
-//! GAP(seal-code-records): the seal is checked in every build and is a second
+//! D-1282: the seal is checked in every build and is a second
 //! hash of the record's bytes beside `Shared::get`'s digest (`store.rs`).
 //!
 //! `CodeRecord`'s own bytes and `RECORD_VERSION` do not change (D-1253): the

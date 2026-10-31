@@ -160,7 +160,7 @@ pub struct RuntimeConfig {
     /// runtime of `run_main`, which `cheby run` and executables use. Under
     /// `cheby test`, `xtask test-std` and in the REPL's session no signal
     /// reaches a scope, so Ctrl-C keeps the host's behavior.
-    /// GAP(interrupt-hosts).
+    /// D-1300.
     pub signals: bool,
 }
 

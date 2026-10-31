@@ -1,7 +1,7 @@
 //! What the last batch spent in each step of loading (D-974): the hidden
 //! `CHEBY_PHASES` variable's phases `codegen`, `declare`, `define`,
 //! `finalize` and `register`, which the driver moves out of the span
-//! around [`crate::Jit::compile_units`] (GAP(phases-format)).
+//! around [`crate::Jit::compile_units`] (D-1277).
 //!
 //! The clock is read only when `CHEBY_PHASES` names a file; the variable
 //! is read once per process. Unset, every time is zero.

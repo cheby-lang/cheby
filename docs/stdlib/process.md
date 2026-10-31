@@ -27,7 +27,7 @@ Ends the program with exit status `status`, as a termination does (D-709, D-1022
 1. **Other fibers.** The calling fiber stops where it is. Every other fiber, including the root fiber and detached fibers, stops without unwinding. No drop function and no user code runs, so the handles they hold are not closed by the program. The operating system closes files and sockets when the process ends, and since file writes are not buffered ([`file.md`](file.md), D-994), nothing written with `std::file` is lost.
 2. **Output.** Standard output is flushed, so everything that any fiber wrote with `io::print` or `io::println` before `exit` was called appears. Output that other fibers write while `exit` runs may or may not appear. If the flush fails, the status is 1, as for any failed flush (D-306), unless an `io::write_stdout` has already reported that failure (D-574).
 3. **The status.** A `status` from 0 to 255 is the exit status. Any other value, negative or larger, gives 255, so a failure never wraps to success (D-1022).
-4. **Hosts.** Under `cheby run` and in an executable, the process ends with the status. Under `cheby test`, the test that called `exit` fails with the report `process::exit called with status N`, its fibers are stopped as when a test ends, and the other tests run on (D-723, D-1023). In the REPL, the session ends with the status, as after any termination (D-828, D-1023).
+4. **Hosts.** Under `cheby run` and in an executable, the process ends with the status. Under `cheby test`, the test that called `exit` fails with the report `process::exit called with status N`, its fibers are cancelled and unwind as when a test ends, so unlike item 1 their cleanup runs, and the other tests run on (D-723, D-724, D-1023, D-1294). In the REPL, the session ends with the status, as after any termination (D-828, D-1023).
 5. **Checks.** A toolchain built with debug assertions does not run the leak check after `exit`, because fibers were stopped holding their values (§10.10, D-710).
 
 The statuses 101, 102 and 103, which the runtime uses for a panic, a failed leak check and a deadlock, are not reserved: a program may exit with them, and then they mean what the program says.
@@ -60,14 +60,14 @@ pub fn until_interrupted<T>(body: fn() -> T) -> Result<T, Interrupt>
 
 Calls `body` on the calling fiber in a new scope, as `fiber::timeout` does, and the first `SIGINT` or `SIGTERM` that the process receives while the scope is open cancels it, with the scope as the target ([§10.7](../spec/10-concurrency.md#107-cancellation), D-103, D-1073). Ctrl-C in a terminal sends `SIGINT`, and a container's stop sends `SIGTERM`. Everything inside unwinds, so handles close, `with_*` scopes end, and the program's own error path runs, where a signal would otherwise kill the process with buffered output lost.
 
-- If `body` returns before a cancellation reaches it, `until_interrupted` returns `Ok` with its value.
+- If `body` returns before a cancellation reaches it, `until_interrupted` returns `Ok` with its value. When a signal cancelled the scope and every scope it cancelled returned so, the signal reached nothing: the last of them to close sends it again before `until_interrupted` returns, and the process takes the default action, with buffered output lost, as when no scope is open (item 1, D-1299).
 - If `body` panics first, it returns `Err(Panicked(p))`.
 - Otherwise it returns `Err(Interrupted)`, once every frame of `body` has unwound and every fiber in the scopes it opened has ended.
 
 The signal's effect:
 
-1. **Every scope.** A signal cancels every `until_interrupted` scope open in the program. A signal while none is open takes the default action, as before (D-1073).
-2. **A second signal.** After the first signal the default action is restored, so a second Ctrl-C ends the process at once while a shutdown is stuck (D-1073).
+1. **Every scope.** A signal cancels every `until_interrupted` scope open in the program when it arrives. A signal while none is open takes the default action, as before, and so does one that interrupts no scope, because each closed first or its body returned before the cancellation reached it (D-1073, D-1299).
+2. **A second signal.** After the first signal the default action is restored for the rest of the process, so a second Ctrl-C ends the process at once while a shutdown is stuck, even after another `until_interrupted` scope opens (D-1073, D-1299).
 3. **Deadlocks.** An open scope is not pending work, so a program whose fibers all block on channels inside one is still reported as deadlocked, as with an idle `net::Listener` (§10.4, D-984, D-1073).
 4. **Hosts.** Under `cheby test` and in the REPL, no signal reaches the scope: Ctrl-C keeps the host's behavior, and `body` runs as in any scope (§13.5, §13.6, D-1073). On Windows no signal reaches the scope until M6, which brings `SetConsoleCtrlHandler`.
 5. **The exit status.** `main` that returns after `Err(Interrupted)` exits with the status of its result (§10.10). A program that wants the shell's convention calls `exit(130)` (D-1073).

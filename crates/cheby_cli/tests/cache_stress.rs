@@ -12,7 +12,7 @@
 //! its ready file and then waits, spinning, for the start file, which the
 //! test creates once all eight ready files exist (R26's rule: a test waits
 //! on a condition, never on a timer).
-//! GAP(stress-over-check): "what a cacheless `cheby check` prints" is the
+//! D-1284: "what a cacheless `cheby check` prints" is the
 //! output of a `cheby check` with `CHEBY_DUMP_DIR` set, which reads no
 //! cache entry (D-965), on a cache of its own.
 

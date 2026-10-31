@@ -50,11 +50,11 @@
 //!   `std::net` is fatal until M6.
 //! - **TLS** (D-1011, `net_tls.rs`): `sys_connect_tls` connects as
 //!   `sys_connect` does, then runs the handshake on the poller, the host
-//!   being the server name. GAP(tls-connection): the session joins the
+//!   being the server name. D-1290: the session joins the
 //!   connection's state, so `read_bytes`, `write_bytes`, `shutdown_write`
 //!   and `close` work on it through the same kernels, under the same turns
 //!   and with the same waits, which a cancellation interrupts at once
-//!   (D-984). GAP(tls-failure-kinds): `sys_connect_tls` answers kind 100
+//!   (D-984). D-1291: `sys_connect_tls` answers kind 100
 //!   ([`KIND_TLS`]) for a connection that cannot be secured and the kinds
 //!   above for a failed system call; on a secured connection, records that
 //!   are not valid TLS are kind 0 with `rustls`'s text. On Windows the
@@ -106,10 +106,13 @@ const KIND_HOST_NOT_FOUND: i64 = 11;
 const KIND_CLOSED: i64 = 12;
 /// `io::is_invalid_input` (D-981).
 const KIND_INVALID_INPUT: i64 = 13;
-/// GAP(tls-failure-kinds): a TLS connection that cannot be secured (the
-/// server's certificate, its name, the handshake), which `std::http` maps
-/// to `is_tls` (D-1211). Outside `std::io`'s codes, as `std::http`'s parse
-/// kernels' 400 and 431 are.
+/// D-1291: a TLS connection that cannot be secured (a certificate the
+/// roots do not vouch for, a name the certificate does not cover, an
+/// alert, a peer that does not speak TLS, the end of the stream during the
+/// handshake, a host that is not a valid server name), which `std::http`'s
+/// `open` maps to the error for which `is_tls` holds; a failed system call
+/// keeps D-981's kinds and is an IO failure. Outside `std::io`'s codes, as
+/// `std::http`'s parse kernels' 400 and 431 are.
 #[cfg(not(windows))]
 const KIND_TLS: i64 = 100;
 
@@ -372,7 +375,7 @@ impl HandlePayload for ListenerState {
 }
 
 /// A `Connection`'s payload: the socket, and for a connection from
-/// `sys_connect_tls` its TLS session (GAP(tls-connection)). A later
+/// `sys_connect_tls` its TLS session (D-1290). A later
 /// read-ahead buffer joins it (D-1076, module documentation).
 #[derive(Debug)]
 pub(crate) struct ConnectionState {
@@ -686,7 +689,7 @@ pub(crate) fn shutdown_on(
         Err(TurnError::Closed) => return Ok(Err(closed())),
     };
     // A TLS session sends `close_notify` first, after every record a write
-    // queued (GAP(tls-connection)).
+    // queued (D-1290).
     #[cfg(not(windows))]
     if let Some(tls) = &connection.tls {
         tls.close_notify();
@@ -717,7 +720,7 @@ enum TlsError {
     Tls(String),
 }
 
-/// A connection that cannot be secured (GAP(tls-failure-kinds)).
+/// A connection that cannot be secured (D-1291).
 #[cfg(not(windows))]
 fn not_secured(text: String) -> NetError {
     NetError {
@@ -774,7 +777,7 @@ fn tls_steps<T>(
 }
 
 /// [`tls_steps`] on a secured connection: records that are not valid TLS
-/// are kind 0 with `rustls`'s text (GAP(tls-failure-kinds)).
+/// are kind 0 with `rustls`'s text (D-1291).
 #[cfg(not(windows))]
 fn tls_wait<T>(
     me: &ExecCtx,
@@ -1127,7 +1130,7 @@ pub unsafe extern "C" fn cheby_net_sys_close_listener(ctx: *mut ExecCtx, listene
 /// The package-visible `sys_connect_tls`'s kernel (D-985, D-1011): a
 /// `Connection` to `host` and `port` secured by TLS, after the checks every
 /// socket kernel makes (D-1182). Kind 100 for a connection that cannot be
-/// secured (GAP(tls-failure-kinds)). On Windows it ends the program with a
+/// secured (D-1291). On Windows it ends the program with a
 /// fatal runtime error, as every socket kernel there does (D-983).
 ///
 /// # Safety

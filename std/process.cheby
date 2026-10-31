@@ -3,15 +3,19 @@
 
 import std::fiber
 
-/// Ends the program with exit status `status`, as a termination does (D-709, D-1022): the calling
-/// fiber stops where it is, every other fiber stops without unwinding, no drop function runs, and
-/// standard output is flushed. A status from 0 to 255 is used as given; any other gives 255.
+/// Ends the program with exit status `status`, as a termination does (D-709, D-1022, D-1293): the
+/// calling fiber stops where it is, every other fiber stops without unwinding, no drop function
+/// runs, and standard output is flushed. A status from 0 to 255 is used as given; any other gives
+/// 255. In the REPL the session ends with the status (D-828). Under `cheby test` only the calling
+/// test ends, and it fails with the report `process::exit called with status N`: its fibers are
+/// cancelled and unwind, so their cleanup runs, and the other tests run on (D-1023, D-1294).
 pub fn exit(status: Int) -> Never {
   sys_exit(status)
 }
 
-// GAP(process-exit-kernel): the kernel takes the context, flushes standard output and terminates
-// with the clamped status, or 1 when the flush fails (D-306, D-574, D-709).
+// D-1293: the kernel takes the context. Outside `cheby test` it flushes standard output and
+// terminates with the clamped status, or 1 when the flush fails (D-306, D-574, D-709); under
+// `cheby test` it ends only the calling test (D-1294).
 @std_context
 @external(native, "cheby_process_sys_exit")
 @external(js, "./process.mjs", "sys_exit")

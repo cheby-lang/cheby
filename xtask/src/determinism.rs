@@ -49,7 +49,7 @@
 //!    build's cache and copy, and a runnable example is run again with
 //!    `cheby run`, each without `CHEBY_DUMP_DIR`, so they read the cache.
 //!    Their exit status, standard output and standard error must equal the
-//!    first build's cold ones. GAP(determinism-warm): a constant's value is
+//!    first build's cold ones. D-1283: a constant's value is
 //!    compared through its cache entry. Every `const` lookup of the warm
 //!    commands (`CHEBY_CACHE_LOG`, D-1224) must hit, so each value the warm
 //!    commands use is the entry the cold build wrote, which item 3 compared
@@ -379,7 +379,7 @@ fn build_project(ctx: &Ctx<'_>, project: &Project) -> Result<Outcome, String> {
 /// run again on the first build's copy and cache, without
 /// `CHEBY_DUMP_DIR`. Their exit status and outputs must equal the first
 /// build's cold ones, and every constant lookup must hit
-/// (GAP(determinism-warm), module documentation).
+/// (D-1283, module documentation).
 fn warm_again(ctx: &Ctx<'_>, project: &Project, outcome: &mut Outcome) -> Result<(), String> {
     let name = project.name.as_str();
     let [(label, top, jobs), _] = BUILDS;
@@ -943,7 +943,7 @@ mod tests {
         std::fs::remove_dir_all(&base).unwrap();
     }
 
-    /// Module documentation item 5 (GAP(determinism-warm)): a warm command
+    /// Module documentation item 5 (D-1283): a warm command
     /// equals the cold build when its record is the cold one's text and
     /// no constant lookup missed; another output line or a constant
     /// evaluated again is a difference, and a command that looked nothing

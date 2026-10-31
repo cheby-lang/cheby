@@ -4,7 +4,7 @@
 //! (`crates/cheby_runtime/tests/tls/`); the client trusts the test CA, or
 //! only `webpki-roots`, through its own configuration, never through the
 //! process's [`roots`] and its test variable. Every test is offline.
-//! GAP(tls-test-ca): the README there gives the OpenSSL commands that made
+//! D-1292: the README there gives the OpenSSL commands that made
 //! the certificates; the CA's key was deleted after it signed the leaf.
 //!
 //! The socket-level tests (the poller's waits, a cancelled handshake) are
@@ -235,7 +235,7 @@ fn tls_wrong_name_is_a_tls_failure() {
     }
 }
 
-/// GAP(tls-failure-kinds): a peer that answers in plain HTTP is a TLS
+/// D-1291: a peer that answers in plain HTTP is a TLS
 /// failure, not an IO failure, and so is the end of the stream in the
 /// middle of the handshake.
 #[test]

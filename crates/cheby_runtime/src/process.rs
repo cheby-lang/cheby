@@ -14,7 +14,7 @@
 //! [`test_exit_report`]); the REPL ends the session with the status, as
 //! after any termination (D-828).
 //!
-//! GAP(process-exit-kernel): the kernel is `@std_context` (`process.md`'s
+//! D-1293: the kernel is `@std_context` (`process.md`'s
 //! kernel paragraph) and its C result is the uniform word of `Never`, which
 //! it never returns.
 

@@ -1,4 +1,4 @@
-//! `CHEBY_PHASES` from the command line (D-974, GAP(phases-format)): a cold
+//! `CHEBY_PHASES` from the command line (D-974, D-1277): a cold
 //! and a warm `cheby run` of a small package write every phase they pass
 //! in the file's format, a warm run that starts again writes `restart`
 //! (D-1256), `cheby build` writes `link`, `cheby check` and `cheby test`

@@ -164,8 +164,9 @@ pub fn flags_for(host: LinkHost) -> Vec<String> {
 /// through `__start_`/`__stop_` (entries marked `used` but not `retain`)
 /// is dropped by `--gc-sections` under `cheby build` on Linux, where GNU
 /// ld's default would keep it, while `cheby run`'s shared library (no GC,
-/// `crate::shlib`) keeps it (the review's SOUND-1). Whether to log that
-/// rule or scope the flag is the logging session's (GAP(link-gc-sections)).
+/// `crate::shlib`) keeps it (the review's SOUND-1). D-1288: the flag stays
+/// on the whole line, and package C code marks such entries
+/// `__attribute__((retain))` (§12.5.4).
 pub const START_STOP_GC: &str = "-Wl,-z,start-stop-gc";
 
 /// The command that links `names` (the objects' files in `objects`, in

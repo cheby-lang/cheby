@@ -6,8 +6,8 @@
 //! restart causes instead (`bench_oqp11.rs`; D-974, D-1256).
 //!
 //! Every row also has the cold columns (D-975, D-1266,
-//! GAP(cold-columns)): a cold `cheby check` and a cold `cheby build -o
-//! <temporary directory>/bench` (not for the `huge_literals` shapes), each
+//! D-1280): a cold `cheby check` and a cold `cheby build -o
+//! <project>.build/bench` (not for the `huge_literals` shapes), each
 //! the fastest of the row's runs on an empty cache of its own, so std's
 //! first use is inside them, and the same two on a cache that `cheby
 //! check` of `small-10000` (seed 2) filled with std's records first, so
@@ -446,7 +446,7 @@ fn std_fill_project(base: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// The cold columns of a row (D-975, D-1266, GAP(cold-columns)).
+/// The cold columns of a row (D-975, D-1266, D-1280).
 #[derive(Clone, Copy, Debug, Default)]
 struct Cold {
     /// `cheby check` on an empty cache: std's first use inside it.
@@ -461,8 +461,9 @@ struct Cold {
 }
 
 /// The cold columns of the project in `dir` (D-975, D-1266,
-/// GAP(cold-columns)): a cold `cheby check` and a cold `cheby build -o
-/// <temporary directory>/bench` (when `build`), each the fastest of `runs`
+/// D-1280): a cold `cheby check` and a cold
+/// `cheby build -o <dir>.build/bench` (when `build`; the directory beside
+/// `dir` is removed afterwards), each the fastest of `runs`
 /// runs on an empty cache of its own, so std's first use is inside them;
 /// then the same two on a cache that `cheby check` of `fill` filled with
 /// std's records first, so std's first use reads apart.

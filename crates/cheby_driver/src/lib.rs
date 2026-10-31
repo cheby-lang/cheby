@@ -651,7 +651,7 @@ fn front_end_family(
     // An invalid option checks every module: the build reports it, as
     // before. `cheby build` reads `cheby run`'s code records (D-914), so
     // its misses are decided as `cheby run`'s are, over its own package
-    // index (D-962). GAP(build-from-records).
+    // index (D-962). D-1285.
     let build = match (mode, warm) {
         (frontend::Mode::Build, Some((reuse, main)))
             if matches!(

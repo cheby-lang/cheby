@@ -41,7 +41,7 @@
 //!   the kept functions and no entry can dangle.
 //!
 //! Code records, the JIT and `RECORD_VERSION` do not change (D-1253): the
-//! split is a step of replay. GAP(link-gc-sections): the section names,
+//! split is a step of replay. D-1288: the section names,
 //! the key, `-z start-stop-gc` and the image's bounds table.
 
 use std::mem::{offset_of, size_of};

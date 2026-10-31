@@ -269,7 +269,7 @@ Two interfaces stand for streams of bytes, so that one function can take a file,
 - **Satisfied for free.** `file::File`, `net::Connection` and the standard-stream handles of `std::file` satisfy both interfaces through their modules' `read_bytes` and `write_bytes`, with no code of their own, because satisfaction looks only at the type's own module ([§8.2](../spec/08-interfaces.md#82-satisfaction), D-1062, D-1071). `std::io` imports neither `std::file` nor `std::net` (D-145).
 - **`dyn`.** Both interfaces are `dyn`-safe, so a `dyn io::Source` holds any source ([§8.6](../spec/08-interfaces.md#86-dyn-values)).
 - **A program's own streams.** Values are immutable (D-017), so a type of the program satisfies `Source` only by wrapping something that has state, such as a handle or a channel. It reports a failure with an error built by [`other`](#other).
-- **Written in Cheby.** [`copy`](#copy) and [`other`](#other) are Cheby with no kernels (D-1072).
+- **Written in Cheby.** [`copy`](#copy) and [`other`](#other) are Cheby and add no kernel. `copy` counts bytes through a private binding of `bytes::length`'s own kernel, so that a program that uses `std::io` does not compile all of `std::bytes` (D-1072, D-1297).
 
 ### `Source`
 

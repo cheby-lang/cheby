@@ -9,7 +9,7 @@
 //! `interruptible` reads that as an interruption; an `f` that returned
 //! before the cancellation reached it gives `Ok` (D-671's rule). The close
 //! disarms the scope on every path out (`scope.rs`, step 2). The signal
-//! path is `sched/signal.rs`. GAP(interrupt-scope-ops).
+//! path is `sched/signal.rs`. D-1298.
 
 use crate::abi::Word;
 use crate::ctx::ExecCtx;

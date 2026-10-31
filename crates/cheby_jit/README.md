@@ -22,6 +22,7 @@ The JIT: a Cranelift `JITModule` that compiles batches of MIR units, the runtime
 | `load.rs`             | Loading code records into the JIT, one batch per command: declarations, definitions, finalizing and registration (D-914, D-918, D-1169)                                                           |
 | `memory.rs`           | The address-space reservation, its segments and their protection                                                                                                                                  |
 | `native.rs`           | `NativeLibrary` (a package's shared library, `dlopen`ed and never closed) and D-941's resolver: the runtime, the package libraries in order, the process; library generations of a REPL `:reload` |
+| `timing.rs`           | `LoadTimes`: what the last batch spent generating code and declaring, defining, finalizing and registering its records, the JIT's clocks for `CHEBY_PHASES` (D-974, D-1277)                       |
 | `tests/`              | End-to-end tests that compile and run small programs: scalars, objects, control, closures, literals, reuse, borrowing, unwinding, large frames, `@blocking`, `@std_context` and REPL redefinition |
 | `start_root_tests.rs` | Running entries as root fibers                                                                                                                                                                    |
 

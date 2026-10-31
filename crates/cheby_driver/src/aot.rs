@@ -308,7 +308,7 @@ fn build_once(
     // lowered, std's units come from std's code records (D-1264), and every
     // lookup is logged as `cheby run`'s are. A record that imports a symbol
     // D-943's build resolver cannot find is lowered after all, so E0053 is
-    // decided on its MIR. GAP(build-from-records).
+    // decided on its MIR. D-1285.
     let build_resolver = BuildResolver::new(front.native.library.as_deref());
     let found = |symbol: &str| build_resolver.resolves(symbol);
     let reading = backend::Reading {
@@ -354,7 +354,7 @@ fn build_once(
     // entries where they hit, so a warm build evaluates nothing and builds
     // no evaluation module (D-977, D-1261), and the misses evaluated in a
     // module of their own on `plain` code as under `cheby run`.
-    // GAP(build-constants-from-entries).
+    // D-1286.
     let images = match backend::constant_images(&front, &out.sources, &lowered, mir) {
         Err(_) if again() => return Err(crate::Restart::Again(mark)),
         images => images.map_err(Error::from)?,
@@ -531,7 +531,7 @@ fn compile_lowered<'a>(
 /// in a debug toolchain, D-565). The code keys hold that mode
 /// (`checked_counts`), so a build under poisoning reads and writes the
 /// checked records `cheby run` does, and its program object's local copies
-/// of the trampolines equal the std records' (D-918). GAP(build-from-records).
+/// of the trampolines equal the std records' (D-918). D-1285.
 fn build_codegen(mir: cheby_mir::MirOptions) -> cheby_codegen_clif::CodegenOptions {
     cheby_codegen_clif::CodegenOptions {
         checked_rc: cheby_jit::JitOptions::from_env().checked_rc,
@@ -569,8 +569,8 @@ impl NamedOutside<'_> {
 /// every item global hidden (D-1220) and an empty seed, in parallel on
 /// rayon's global pool and taken in the order given (D-923, D-264). The
 /// record is then the one `cheby run` stores under the unit's code key
-/// (D-914), whichever command compiled it. GAP(build-from-records): this
-/// refines D-1220's "`cheby build` keeps D-1110's rule" for code units.
+/// (D-914), whichever command compiled it. D-1285: this
+/// replaces D-1220's "`cheby build` keeps D-1110's rule" for code units.
 fn fresh_records(
     units: &[&MirModule],
     codegen: &cheby_codegen_clif::CodegenOptions,

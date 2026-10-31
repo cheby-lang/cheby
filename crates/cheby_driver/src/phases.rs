@@ -1,5 +1,5 @@
 //! The phase timer behind the hidden `CHEBY_PHASES` variable (D-974,
-//! GAP(phases-format)).
+//! D-1277).
 //!
 //! When `CHEBY_PHASES` names a file, `cheby check`, `run`, `test` and
 //! `build` time each phase of the command on the command's thread and

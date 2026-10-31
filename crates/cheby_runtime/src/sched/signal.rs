@@ -1,7 +1,7 @@
 //! SIGINT and SIGTERM for `process::until_interrupted` (D-1073, ADR-0071):
 //! a self-pipe on the poller, and the walk that cancels every open scope of
 //! `fiber::interruptible`, as an expired timer cancels a timed scope
-//! (D-790). GAP(signal-self-pipe).
+//! (D-790). D-1299.
 //!
 //! - **The registry** ([`Registry`], process-global): the scopes armed by
 //!   `fiber::sys_arm_interrupt` (`fiber_ops/interrupt.rs`), held weakly,
@@ -45,12 +45,12 @@
 //!   every scope its walk cancelled returned `Ok`, its body having
 //!   returned before the cancellation reached it (D-671's rule): the
 //!   signal reached nothing, as if no scope had been open, and the close
-//!   of the last of them sends it again ([`settle`]). GAP(signal-self-pipe).
+//!   of the last of them sends it again ([`settle`]). D-1299.
 //! - **Hosts.** Only a runtime made by `run_main`, for `cheby run` and
 //!   executables, arms (`Shared::signals`); the runtimes of `cheby test`,
 //!   `xtask test-std` and the REPL's session never do, nor does an entry
 //!   that runs no runtime, so Ctrl-C keeps the host's behavior there. On
-//!   Windows nothing is armed until M6. GAP(interrupt-hosts).
+//!   Windows nothing is armed until M6. D-1300.
 //! - **Deadlocks.** An armed scope adds nothing to any pending count, so a
 //!   program whose fibers all block inside one is still reported (D-984's
 //!   rule for an idle `Listener`).

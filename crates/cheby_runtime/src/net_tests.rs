@@ -1159,7 +1159,7 @@ fn net_connect_tries_each_address_in_order() {
     drop(listening);
 }
 
-/// TLS on the poller (D-1011, D-984, GAP(tls-connection)): the server is a
+/// TLS on the poller (D-1011, D-984, D-1290): the server is a
 /// host thread with a `rustls` server over a blocking loopback socket,
 /// presenting the test CA's leaf; the fiber's client trusts the test CA
 /// through its own configuration (`net_tls_tests.rs`).
@@ -1327,7 +1327,7 @@ mod tls {
         }
     }
 
-    /// GAP(tls-failure-kinds): a server that answers in plain HTTP is kind
+    /// D-1291: a server that answers in plain HTTP is kind
     /// 100, and so is one whose certificate does not cover the name (a
     /// hooked `.test` name that resolves to the loopback server); a refused
     /// connection keeps its IO kind (8).

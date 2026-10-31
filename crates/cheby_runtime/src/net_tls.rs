@@ -13,14 +13,14 @@
 //!   would block, and then says which direction to wait for ([`Step`]);
 //!   `net.rs` waits on the poller and calls the step again. So the steps
 //!   run the same over a socket and over the in-memory pipes of the unit
-//!   tests (`net_tls_tests.rs`). GAP(tls-connection): the session lives in
+//!   tests (`net_tls_tests.rs`). D-1290: the session lives in
 //!   the `Connection` handle's state, and `read_bytes`, `write_bytes`,
 //!   `shutdown_write` and `close` go through it.
 //! - **Failures** ([`Failure`]): a failed system call is an IO failure; a
 //!   certificate the roots do not vouch for, a name the certificate does
 //!   not cover, an alert, a peer that does not speak TLS and an end of the
 //!   stream in the middle of the handshake are TLS failures
-//!   (GAP(tls-failure-kinds)).
+//!   (D-1291).
 //!
 //! The module keeps no thread-local storage (D-686): the root store and
 //! the configuration are process-wide statics.
@@ -208,7 +208,7 @@ impl TlsClient {
     /// The next step of a read into `buffer`: the count of plaintext bytes,
     /// 0 at the end of the stream.
     ///
-    /// GAP(tls-connection): a server that closes the connection without
+    /// D-1290: a server that closes the connection without
     /// `close_notify` ends the stream as one that sends it does, as
     /// HTTP/1.1's framing checks a response's length itself.
     ///

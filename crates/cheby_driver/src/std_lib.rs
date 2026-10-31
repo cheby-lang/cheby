@@ -231,7 +231,7 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Tier 3 ships whole in M3 (D-989), so no tier-3 module is planned; only
 /// `std::context`, which starts tier 4 and lands in M4 (D-1049), stays,
 /// so that `import std::context` keeps D-480's "not supported yet" for a
-/// module its page describes. GAP(planned-std-modules).
+/// module its page describes. D-1295.
 pub const PLANNED_STD_MODULES: &[&str] = &["context"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
@@ -350,7 +350,7 @@ pub fn find(path: &str) -> Option<&'static StdModule> {
 /// toolchain plans, whatever the real list holds. Only `cfg(test)` builds
 /// of this crate see it, through [`is_planned`] and [`known`]; the
 /// toolchain and every other crate's tests never do.
-/// GAP(unshipped-probe).
+/// D-1296.
 #[cfg(test)]
 pub(crate) const PROBE_PLANNED_STD_MODULES: &[&str] = &["unshipped_probe"];
 
@@ -622,7 +622,7 @@ mod tests {
     /// `std::url`, `std::base64` and `std::hex` (D-1054), and
     /// `std::process` (D-1022), each with its file in `std/`. No tier-3
     /// module stays planned; the planned list holds only tier 4's
-    /// `std::context` (D-1049), GAP(planned-std-modules).
+    /// `std::context` (D-1049), D-1295.
     #[test]
     fn m3_tier3_modules_ship() {
         for path in [

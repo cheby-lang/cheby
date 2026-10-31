@@ -188,7 +188,11 @@ keeps the trailer only if its message keeps it.
 `cargo xtask bench-compile` reports compile speed on generated projects (D-247). Since D-718 its
 build rows also show `code KiB`, the machine code the JIT defined, and `RC ops`, the `dup` and `drop`
 statements of every MIR unit. It takes `--shapes 10k,100k,1m`, `--cheby PATH`, `--env K=V` and
-`--json OUT` as well.
+`--json OUT` as well. Every row also has a cold `cheby check` and a cold `cheby build`, on an empty
+cache and on one that std's records fill first (D-1280). Instead of the rows, `--oqp11` reads
+OQ-P11's rounds on `wide` and `deep` at `--lines` lines (1M by default), with `--rounds` rounds of
+each edit (5 by default), and `--restarts` times RB-3's three causes of a warm restart (D-1278,
+D-1279). `--from DIR` takes pre-generated projects for them.
 
 ## The Rust baselines
 

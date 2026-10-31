@@ -857,7 +857,7 @@ fn act(shared: &Shared, candidate: &Candidate, report: &str) {
 /// Returns whether `me` must now unwind (its cancellation target is set):
 /// the caller then raises the cancellation. False, with nothing done, when
 /// `me` runs no runtime or its domain has no test root. Entered with no
-/// runtime lock held; never runs Cheby code. GAP(test-exit-root).
+/// runtime lock held; never runs Cheby code. D-1294.
 pub(crate) fn end_test_root(me: &ExecCtx, report: String) -> bool {
     let Some(shared) = me.sched.runtime() else {
         return false;

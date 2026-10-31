@@ -418,7 +418,7 @@ test "an io error shows a fixed message" {
   assert "{reason:?}" == "not found"
 }
 
-// Streams (D-1072, ADR-0070). GAP(io-streams): they sit after `show` so that no std location before
+// Streams (D-1072, ADR-0070). D-1297: they sit after `show` so that no std location before
 // it moves.
 
 /// A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the
@@ -512,7 +512,7 @@ fn sys_write_file(path: String, text: String) -> Result<Nil, (Int, String)>
 fn sys_write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, (Int, String)>
 
 /// `bytes::length`'s own kernel, for `copy`'s count. A call of `bytes::length` would make every
-/// program that uses `std::io` compile all of `std::bytes` with it. GAP(io-streams).
+/// program that uses `std::io` compile all of `std::bytes` with it. D-1297.
 @external(native, "cheby_bytes_length")
 @external(js, "./bytes.mjs", "length")
 priv fn bytes_length(data: bytes::Bytes) -> Int

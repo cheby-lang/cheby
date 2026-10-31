@@ -6,7 +6,7 @@
 //! renders them. On x86-64 they run in `.github/workflows/bench.yml`'s two
 //! steps that only `-f compile=true` turns on, each with
 //! `continue-on-error` and its own timeout, so they never fail the stop
-//! line's job (D-1035, D-1255; GAP(bench-yml-readings)).
+//! line's job (D-1035, D-1255, D-1281).
 //!
 //! - `--oqp11`: for `bench/gen`'s `wide` and `deep` projects of `--lines`
 //!   lines (1M by default) with seed 1, generated or copied from `--from
@@ -14,7 +14,7 @@
 //!   run`, timed and reported; then `--rounds` rounds (5) of an edit to one
 //!   function body in a module `main` imports (`bench.rs`'s
 //!   `edit_one_body`) followed by `cheby run`, and as many rounds of an edit
-//!   to `main`'s own body ([`main_edit`], GAP(oqp11-edits)). Each reading
+//!   to `main`'s own body ([`main_edit`], D-1278). Each reading
 //!   is the median of its rounds' whole-command times. Every run writes
 //!   `CHEBY_PHASES`, and each phase's median sits beside the reading. Every
 //!   run's output must equal the cold run's.
@@ -29,7 +29,7 @@
 //!   one-body edit (`one_body`) as references; and one sample row of `mask`
 //!   under `cheby test`. The edit sites live in a fixture module the tool
 //!   adds to its own copy of each project ([`add_fixture`],
-//!   GAP(restart-measure)); `bench/gen`'s output never changes. Every
+//!   D-1279); `bench/gen`'s output never changes. Every
 //!   measured round reaches a state never seen before (a fresh field name
 //!   or a further mask each round; for `settings` a fresh cache per round,
 //!   filled by one untimed run with positions on), and each cause starts
@@ -247,7 +247,7 @@ pub(crate) fn rounds_json(runs: &[Ran]) -> Value {
     })
 }
 
-/// The edit to `main`'s own body (GAP(oqp11-edits)): a statement `let _k7 =
+/// The edit to `main`'s own body (D-1278): a statement `let _k7 =
 /// <n>` first in `main`, inserted on the first edit and given the value
 /// `n` on each later one. `main` binds the value to nothing, so the
 /// program prints what it printed; the module's source, and so its front
@@ -410,7 +410,7 @@ pub(crate) fn oqp11(cx: &Cx<'_>) -> Result<Value, String> {
 
 /// Checks the output of round `round` (from 1) of `edit_one_body`, which
 /// adds 1 to one counter per round, so the printed total grows by the same
-/// step each round (GAP(oqp11-edits)): `run` must print an integer, `cold`
+/// step each round (D-1278): `run` must print an integer, `cold`
 /// plus `round` times the first round's growth (`first`, `None` in round
 /// 1).
 pub(crate) fn body_edit_output(
@@ -599,7 +599,7 @@ fn fixture_sources() -> [(&'static str, String); 5] {
     ]
 }
 
-/// Adds the restart fixture (GAP(restart-measure)) to the project in
+/// Adds the restart fixture (D-1279) to the project in
 /// `dir`, a copy of `bench/gen`'s output: its modules under `src/k7/`, and
 /// in `main` the imports of `caller` and `reader` after the others and a
 /// call of each first in its body, whose values it drops, so the program
@@ -905,7 +905,7 @@ mod tests {
         }
     }
 
-    /// GAP(oqp11-edits): the edit inserts `let _k7 = <n>` first in `main`,
+    /// D-1278: the edit inserts `let _k7 = <n>` first in `main`,
     /// then changes only its value; the rest of `main` stays.
     #[test]
     fn oqp11_main_edit_sets_one_statement() {
@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(value.get("restarted"), Some(&json!(1)));
     }
 
-    /// The fixture's edit sites (GAP(restart-measure)): `main` imports the
+    /// The fixture's edit sites (D-1279): `main` imports the
     /// fixture after its own imports, so `edit_one_body` still finds the
     /// generated module first, and calls it first in its body.
     #[test]

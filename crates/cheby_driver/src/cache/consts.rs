@@ -20,7 +20,7 @@
 //! (N9). No command computes every constant's key before its check: K5b's
 //! unused `keys_before_check` is removed, and [`keys_from_records`], which
 //! computes them over the vouched entries, stays for the test that holds
-//! them equal to the keys after the check. GAP(consts-keys-before-check).
+//! them equal to the keys after the check. D-1287.
 //!
 //! The entry holds the constant's image (D-1188) or its failure's
 //! diagnostics, stored structured and replayed as a module's are (D-965);

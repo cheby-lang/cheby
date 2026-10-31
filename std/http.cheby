@@ -485,7 +485,7 @@ priv fn open(target: Target) -> Result<net::Connection, Error> {
   case target.secure {
     False => result::map_error(net::connect(target.host, target.port), from_io)
     // A connection that a cancellation drops here is closed with it, as
-    // `net::connect`'s is (D-1000). GAP(tls-failure-kinds): the kernel's
+    // `net::connect`'s is (D-1000). D-1291: the kernel's
     // kind 100 is a connection that cannot be secured (the certificate,
     // the name, the handshake); every other kind is an IO failure.
     True => case net::sys_connect_tls(target.host, target.port) {

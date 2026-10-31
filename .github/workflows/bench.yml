@@ -47,8 +47,8 @@
 #   step summary, and `oqp11.json` and `compile.json` upload with the rest.
 #   They add about 25-50 minutes. Each has `continue-on-error` and its own
 #   timeout, so a failure or a hang of theirs never fails or cancels the
-#   rounds, the split or the upload that carry the stop line (D-1255;
-#   GAP(bench-yml-readings)).
+#   rounds, the split or the upload that carry the stop line (D-1255,
+#   D-1281).
 
 name: Bench
 

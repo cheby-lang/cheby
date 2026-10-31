@@ -248,6 +248,8 @@ cc -c -O2 -fPIC -g0 -ffile-prefix-map=<package root>=. -ffile-prefix-map=<header
 
 The compiler's output is shown only when it fails, which is a tool error that names the source. Compiled objects are cached, keyed by the source, the C compiler, the flags, `cheby.h` and every file the compile read (D-942). Under `cheby run`, each package with a `[native]` table becomes one shared library, built with `cc -shared -Wl,-z,defs` on Linux and `cc -dynamiclib` on macOS from the package's objects, its `libraries` and a small object that forwards the calls of `cheby.h` to the running `cheby`. It is loaded with `dlopen` and never unloaded (D-941). Until M6, on Windows, every command that would compile or load native code refuses a table that names sources or libraries with a tool error that says it is not available yet (D-1202).
 
+_Note:_ executables are linked with dead-code elimination. On Linux the reference implementation links with `-Wl,-z,start-stop-gc`, so a section that the package's C code reads only through the linker's `__start_` and `__stop_` symbols is kept in an executable only when its entries are marked `__attribute__((retain))`. `cheby run`, `cheby test` and the REPL keep such a section either way, so C code that collects entries in a section marks them `retain` (D-1288).
+
 ## 12.6 Target-specific code
 
 `@target(native)` or `@target(js)` on an item makes it exist only when compiling for that target (D-056):

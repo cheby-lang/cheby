@@ -1,4 +1,4 @@
-//! Tests of the phase timer (D-974, GAP(phases-format)): the file's
+//! Tests of the phase timer (D-974, D-1277): the file's
 //! format, exclusive spans, `add` moving time, restarts and the unset
 //! variable.
 
