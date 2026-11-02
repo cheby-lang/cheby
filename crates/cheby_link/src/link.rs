@@ -162,11 +162,13 @@ pub fn flags_for(host: LinkHost) -> Vec<String> {
 /// line, so the package's own C objects (`[native]` sources) and the
 /// archive's members link under it too: a C section registry read only
 /// through `__start_`/`__stop_` (entries marked `used` but not `retain`)
-/// is dropped by `--gc-sections` under `cheby build` on Linux, where GNU
-/// ld's default would keep it, while `cheby run`'s shared library (no GC,
-/// `crate::shlib`) keeps it (the review's SOUND-1). D-1288: the flag stays
-/// on the whole line, and package C code marks such entries
-/// `__attribute__((retain))` (§12.5.4).
+/// may be dropped by `--gc-sections` under `cheby build` on Linux, where
+/// GNU ld's default would keep it, while `cheby run`'s shared library (no
+/// GC, `crate::shlib`) keeps it (the review's SOUND-1). GNU ld 2.40 keeps
+/// it anyway when more than one relocation names `__start_`, as aarch64's
+/// default GOT access does (D-1306). D-1288: the flag stays on the whole
+/// line, and package C code marks such entries `__attribute__((retain))`
+/// (§12.5.4).
 pub const START_STOP_GC: &str = "-Wl,-z,start-stop-gc";
 
 /// The command that links `names` (the objects' files in `objects`, in

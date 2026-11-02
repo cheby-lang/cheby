@@ -12,8 +12,10 @@ FILE is the JSON of `bench-compile --oqp11 --restarts` (`oqp11.json`) or of a pl
   enforced), every phase's share of the median with its rank and whether it is the largest, and
   the three fallback gates' inputs: code generation (`codegen`: lazy compilation, D-923), loading
   (`declare` alone and `declare + define + finalize`: our own loader, D-914, read on `deep`) and
-  hashing (`hash`: a stat cache, D-963). The rule CP3 would apply to them is only proposed here
-  (GAP(oqp11-gates)); the user decides at CP3 (D-974).
+  hashing (`hash`: a stat cache, D-963), and D-1301's verdict on each edit: a gate triggers on a
+  reading that misses 500 ms when its phase is the largest of the edit's breakdown and at least
+  40% of the median, with the loader's three phases one phase on `deep`. M3 builds no fallback,
+  so a gate that triggers is reported (D-1302).
 - RB-3's restart causes (D-1256): per row the median, how many runs started again, the first
   attempt's time, the modules checked again and the logged run's parses. A row with no runs, or
   of a cause whose runs did not all start again, is a tool failure upstream and is never rendered
@@ -30,8 +32,16 @@ import json
 import sys
 
 BUDGET_NS = 500_000_000
-# GAP(oqp11-gates): the rule proposed for CP3 (not applied here).
-PROPOSED_SHARE = 0.40
+# D-1301: the share of the median that a gate's phase must reach.
+GATE_SHARE = 0.40
+# D-1301: our own loader's phase, its three summed, read on `deep` only.
+LOADER = ("declare", "define", "finalize")
+# D-1301's gates: the fallback, the phases summed as its phase, and the shape it is read on.
+GATES = (
+    ("lazy compilation (D-923)", ("codegen",), None),
+    ("our own loader (D-914)", LOADER, "deep"),
+    ("a stat cache (D-963)", ("hash",), None),
+)
 CAUSES = ("reader_lowering", "mask", "settings")
 
 
@@ -71,6 +81,28 @@ def miss(median_ns):
     return f"within ({secs(BUDGET_NS - median_ns)} to spare)"
 
 
+def triggered(shape, median_ns, phases):
+    """The fallbacks whose gate D-1301's rule triggers on one edit's reading: the reading
+    misses 500 ms, and the gate's phase is at least 40% of the median and no smaller than any
+    other phase. On `deep` the loader's three phases count as one phase for every gate;
+    elsewhere each is a phase of its own, and the loader's gate is not read."""
+    if median_ns <= BUDGET_NS:
+        return []
+    units = {(k,): v for k, v in phases.items()}
+    if shape == "deep":
+        units = {k: v for k, v in units.items() if k[0] not in LOADER}
+        units[LOADER] = sum(phases.get(n, 0) for n in LOADER)
+    fired = []
+    for fallback, names, shape_only in GATES:
+        if shape_only is not None and shape != shape_only:
+            continue
+        ns = units.get(names, 0)
+        others = [v for k, v in units.items() if k != names]
+        if ns > 0 and ns >= GATE_SHARE * median_ns and all(ns >= v for v in others):
+            fired.append(fallback)
+    return fired
+
+
 def edit_section(shape, kind, edit, out):
     median_ns = need_ns(edit.get("median_ns"), f"`{shape}`'s {kind} median_ns")
     phases = {
@@ -108,13 +140,25 @@ def edit_section(shape, kind, edit, out):
             f"{'yes' if is_largest else ('-' if len(names) > 1 else 'no')} | {note} |"
         )
 
-    out.append("| Fallback gate (input only) | Phases | Median | Share | Rank | Largest | Note |")
-    out.append("| -------------------------- | ------ | ------ | ----- | ---- | ------- | ---- |")
+    out.append(
+        "| Fallback gate (D-1301's inputs; its verdict below) | Phases | Median | Share | Rank "
+        "| Largest | Note |"
+    )
+    out.append(
+        "| ------------------------------------------------- | ------ | ------ | ----- | ---- "
+        "| ------- | ---- |"
+    )
     gate("Code generation: lazy compilation (D-923)", ["codegen"], "")
     loading_note = "read on `deep` (D-974)" if shape == "deep" else "D-974 reads it on `deep`"
-    gate("Loading: our own loader (D-914)", ["declare"], loading_note)
+    gate("Loading, `declare` alone (D-974's word; not D-1301's gate)", ["declare"], loading_note)
     gate("Loading: our own loader (D-914)", ["declare", "define", "finalize"], loading_note)
     gate("Hashing: a stat cache (D-963)", ["hash"], "")
+    out.append("")
+    fired = triggered(shape, median_ns, phases)
+    out.append(
+        "D-1301's rule on this reading: "
+        + (f"the gate of {' and of '.join(fired)} triggers." if fired else "no gate triggers.")
+    )
     out.append("")
 
 
@@ -145,10 +189,11 @@ def render_oqp11(o, out):
             if s.get(kind):
                 edit_section(name, kind, s[kind], out)
     out.append(
-        "Proposed for CP3, not applied (GAP(oqp11-gates)): a fallback's gate triggers on a reading "
-        f"that misses 500 ms when its phase is the largest of that edit kind's breakdown and at "
-        f"least {PROPOSED_SHARE:.0%} of the median (loading: `declare`, or `declare + define + "
-        "finalize`, on `deep`). The user decides at CP3 (D-974)."
+        "The fallback gates' rule (D-1301): a fallback's gate triggers on a reading that misses "
+        "500 ms when its phase is the largest of that edit kind's breakdown and at least "
+        f"{GATE_SHARE:.0%} of the median; on `deep` loading is `declare + define + finalize`, "
+        "one phase for every gate. M3 builds no fallback, so a gate that triggers is reported "
+        "with OQ-P11's reading (D-1302, D-1304)."
     )
     out.append("")
 
@@ -195,7 +240,7 @@ def render_restarts(r, out):
         "lowering reads), `mask` (a package-visible function's borrow mask, D-812) and `settings` "
         "(`CHEBY_POSITIONS=off` after a run with positions on) start the command again. First "
         "attempt: the median of `restart` in `CHEBY_PHASES`. Parses: the untimed logged run's "
-        "`parse` and `parse.std` lines (D-1135, D-1263). CP3 picks the fix (D-1256)."
+        "`parse` and `parse.std` lines (D-1135, D-1263). The fix comes after M3 (D-1303)."
     )
     if failures:
         out.append("")

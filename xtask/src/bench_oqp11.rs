@@ -1,12 +1,12 @@
 //! `cargo xtask bench-compile --oqp11` and `--restarts` (K7): OQ-P11's
 //! edit-to-run rounds (D-974) and the three causes that start a warm
 //! command again (D-1256, the review's RB-3). Reported, never enforced: the
-//! budget (D-247's 500 ms) and the three fallback gates are CP3's inputs,
-//! which the user decides on (D-974); `.github/scripts/bench_oqp11.py`
-//! renders them. On x86-64 they run in `.github/workflows/bench.yml`'s two
-//! steps that only `-f compile=true` turns on, each with
-//! `continue-on-error` and its own timeout, so they never fail the stop
-//! line's job (D-1035, D-1255, D-1281).
+//! budget (D-247's 500 ms, which X1 reads, D-1304) and the three fallback
+//! gates, whose rule is D-1301's; `.github/scripts/bench_oqp11.py`
+//! renders them and evaluates the rule. On x86-64 they run in
+//! `.github/workflows/bench.yml`'s two steps that only `-f compile=true`
+//! turns on, each with `continue-on-error` and its own timeout, so they
+//! never fail the stop line's job (D-1035, D-1255, D-1281).
 //!
 //! - `--oqp11`: for `bench/gen`'s `wide` and `deep` projects of `--lines`
 //!   lines (1M by default) with seed 1, generated or copied from `--from
@@ -1167,7 +1167,9 @@ mod tests {
             "| `codegen` | 0.400 s | 50.0% | 1 | yes |",
             "lazy compilation (D-923)",
             "`declare` + `define` + `finalize`",
-            "GAP(oqp11-gates)",
+            "The fallback gates' rule (D-1301)",
+            "D-1301's rule on this reading: the gate of lazy compilation (D-923) triggers.",
+            "D-1301's rule on this reading: no gate triggers.",
             "| `wide` | 100000 | `run` | `mask` | 0.141 s | 1 of 1 | 0.060 s | 403 of 403 | 403 | 23 |",
             "not a reading: 1 of 2 runs started again",
             "| 10000 lines, `wide` | 0.300 s | 0.100 s | 0.200 s | 0.900 s | 0.700 s | 0.200 s |",
@@ -1177,6 +1179,25 @@ mod tests {
                 "{wanted}\n{text}"
             );
         }
+        // D-1301: on `deep` the loader's three phases are one phase for every
+        // gate, and on `wide` each is a phase of its own and the loader's gate
+        // is not read.
+        let split = |median: u64| {
+            json!({"runs_ns": [median], "median_ns": median, "restarted": 0,
+                   "phases_median": {"codegen": median / 20 * 9, "declare": median / 8,
+                                     "define": median / 4, "finalize": median / 8}})
+        };
+        let three_phases = json!({"oqp11": {"lines": 1_000_000, "rounds": 1, "shapes": {
+            "deep": {"modules": 4000, "cold_ns": 1, "body_edit": split(800_000_000)},
+            "wide": {"modules": 40, "cold_ns": 1, "body_edit": split(800_000_000)}}}});
+        let gated = render(&three_phases).map(|r| r.1).unwrap_or_default();
+        for fired in [
+            "the gate of our own loader (D-914) triggers.",
+            "the gate of lazy compilation (D-923) triggers.",
+        ] {
+            assert_eq!(gated.matches(fired).count(), 1, "{gated}");
+        }
+        assert!(!gated.contains(" and of "), "{gated}");
         let cold_only = json!({"rows": full.get("rows").cloned().unwrap_or_default()});
         assert_eq!(render(&cold_only).map(|r| r.0), Some(0));
         let nothing = json!({"rows": [{"lines": 10000, "shape": "wide"}]});

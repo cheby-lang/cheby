@@ -674,8 +674,9 @@ fn registry_c(attrs: &str) -> String {
 
 /// The registry package with the entries' attributes `attrs`: `cheby run`
 /// and `cheby test` (the shared library, linked without GC) see all three
-/// entries, and the executable that `cheby build` links prints `built`.
-fn registry_case(attrs: &str, built: &str) {
+/// entries, and the executable that `cheby build` links prints one of
+/// `built`.
+fn registry_case(attrs: &str, built: &[&str]) {
     let tmp = FreshDir::create("cheby-native-registry").unwrap();
     let c = registry_c(attrs);
     let root = package(
@@ -699,30 +700,35 @@ fn registry_case(attrs: &str, built: &str) {
     assert_eq!(link.status, Some(0), "{}", link.stderr);
     assert_eq!(link.stdout, "");
     let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
-    assert_eq!(ran.stdout, built);
+    assert!(built.contains(&ran.stdout.as_str()), "{:?}", ran.stdout);
     assert_eq!(ran.status, Some(0));
 }
 
-/// D-1288, §12.5.4: `cheby build` links with `-z start-stop-gc` on Linux,
-/// so a section that the package's C code reads only through `__start_`
-/// and `__stop_`, with entries marked `used` but not `retain`, is dropped
-/// from the executable, while `cheby run` and `cheby test` keep it.
+/// D-1288, D-1306, §12.5.4: `cheby build` links with `-z start-stop-gc` on
+/// Linux, and a section that the package's C code reads only through
+/// `__start_` and `__stop_`, with entries marked `used` but not `retain`,
+/// may be dropped from the executable or kept: GNU ld 2.40 keeps it when
+/// more than one relocation names `__start_`, as aarch64's default GOT
+/// access does, and drops it from x86-64 code at `-O2`. The build links and
+/// its executable exits 0 either way, and `cheby run` and `cheby test` keep
+/// the section.
 #[test]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "ELF's __start_/__stop_ and -z start-stop-gc are Linux's (D-1288); executables on Windows are M6 (D-935)"
 )]
-fn native_start_stop_section_without_retain_is_dropped() {
-    registry_case("used, ", "entries: 0\n");
+fn native_start_stop_section_without_retain_may_be_dropped() {
+    registry_case("used, ", &["entries: 0\n", "entries: 3\n"]);
 }
 
-/// D-1288, §12.5.4: entries marked `__attribute__((retain))` keep their
-/// section in the executable that `cheby build` links on Linux.
+/// D-1288, D-1306, §12.5.4: entries marked `__attribute__((retain))` keep
+/// their section in the executable that `cheby build` links on Linux, with
+/// every linker.
 #[test]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "ELF's __start_/__stop_ and -z start-stop-gc are Linux's (D-1288); executables on Windows are M6 (D-935)"
 )]
 fn native_start_stop_section_with_retain_is_kept() {
-    registry_case("used, retain, ", "entries: 3\n");
+    registry_case("used, retain, ", &["entries: 3\n"]);
 }

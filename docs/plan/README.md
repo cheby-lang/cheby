@@ -366,6 +366,11 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1281    | `bench.yml` with `-f compile=true` reads OQ-P11, the restarts and D-247 in steps that never fail it |
 | D-1283    | `check-determinism` writes `build`, `run` and `test` into both caches; every warm constant must hit |
 | D-1284    | D-960's stress test: eight `cheby check` processes start together on one cold cache, in five rounds |
+| D-1301    | A K9 gate triggers on a reading over 500 ms when its phase is the largest and at least 40%          |
+| D-1302    | No K9 fallback in M3; the best, our own loader, still leaves `deep` at about 2.7 s and 3.4 s        |
+| D-1303    | RB-3's warm restart stays for M3; a partial second check is designed in M4 with the warm start      |
+| D-1304    | X1 reads D-247's 500 ms and brings options to revise it, such as a budget per shape                 |
+| D-1305    | The cache's cold cost is accepted at CP3; a cold `run`'s profile is read in X1's window             |
 
 ## Open questions
 
@@ -383,7 +388,7 @@ Each open question is answered through a decision-log entry before the task that
 | OQ-P8  | IO poller: `mio`, a custom poller, and whether io_uring is used in v1                                                                  | M2        | D-680                      |
 | OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | D-940                      |
 | OQ-P10 | Whether the D-247 throughput budget holds, checked against M1 measurements                                                             | M1 exit   | D-644                      |
-| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open; protocol in D-974    |
+| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open; D-974, D-1304        |
 | OQ-P12 | Whether the release-to-debug ratio of D-267 holds                                                                                      | M6        | open                       |
 | OQ-P13 | The factor by which a Cheby collection may be slower than a Rust kernel before it moves (D-274, D-336)                                 | M2 exit   | D-854, D-855               |
 | OQ-P14 | File IO, standard input and `std::env` on JS hosts, including hosts without a process such as browsers (OQ-io-3, OQ-env-1)             | M4 start  | open                       |

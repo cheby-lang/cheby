@@ -63,6 +63,10 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 - `random`'s `split`, `next_bool`, `choose` and `shuffle`, `channel`'s `fold`, `try_fold`, `to_list` and `send_all`, `std::base64`, `std::hex`, `to_base`, the wrapping conversions, `string::lines` and `from_bytes_lossy`, and `result`'s and `decode`'s additions are Cheby and owe M4 nothing beyond passing their tests on Node. `random`'s private `derived(generator, n)` is D-1048's derivation, for 4.6's seeded streams to reuse.
 - The tests of these functions in `fiber.md`, `channel.md` and `selector.md` leave `PENDING_SPEC_TESTS` (D-741).
 
+### 4.8 The warm restart, from M3
+
+- A design step, in an entry of its own, for a partial second check: when a warm `cheby run` or `cheby test` finds hits whose code records miss, it checks again only those modules and what their lowering needs, instead of starting again with every module parsed after D-1256's three causes. It is designed together with the work on the warm start that M3's exit reads (D-1303, D-1304).
+
 ## Exit criteria
 
 - Every example passes on Node with the native goldens, except where the JS panics of §12.4 are the expected result and the example records it.
