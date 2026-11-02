@@ -12,7 +12,8 @@
 //! Each test runs its program as a child at `CHEBY_THREADS` 1, 2 and 4. A
 //! test that waits ends through the child's output or through closing its
 //! standard input, never through a timeout: [`PATIENCE`] only stops a hung
-//! child. Time is asserted only as a lower bound.
+//! child. Time is asserted only as a lower bound, and a wait is measured by
+//! the program, not by when its lines reach the test.
 //!
 //! `BLOCKING_IO_CHEBY`, when set, names the `cheby` the tests run instead
 //! of the one cargo built, so that a loop runs a copy that no build
@@ -105,9 +106,9 @@ fn run_with_input(dir: &Path, threads: &str, input: Option<&[u8]>) -> process::R
 struct Running {
     child: Child,
     stdin: Option<ChildStdin>,
-    /// Each line of standard output with the instant the reader thread took
-    /// it from the pipe.
-    lines: Receiver<(Instant, String)>,
+    /// Each line of standard output, as the reader thread took it from the
+    /// pipe.
+    lines: Receiver<String>,
     stderr: Option<JoinHandle<String>>,
     threads: &'static str,
     /// The child's build cache, deleted with this value.
@@ -140,7 +141,7 @@ impl Running {
         std::thread::spawn(move || {
             for line in stdout.lines() {
                 let Ok(line) = line else { break };
-                if sender.send((Instant::now(), line)).is_err() {
+                if sender.send(line).is_err() {
                     break;
                 }
             }
@@ -162,16 +163,8 @@ impl Running {
 
     /// The next line of standard output; fails if none comes within
     /// [`PATIENCE`] or the output ends first.
-    fn next_line(&mut self, what: &str) -> String {
-        self.next_line_at(what).1
-    }
-
-    /// The next line of standard output with the instant the reader thread
-    /// took it from the pipe, so that a lower bound on the time between two
-    /// lines does not include the test thread's own wake-ups; fails if none
-    /// comes within [`PATIENCE`] or the output ends first.
     #[expect(clippy::panic, reason = "a test helper: a missing line fails the test")]
-    fn next_line_at(&mut self, what: &str) -> (Instant, String) {
+    fn next_line(&mut self, what: &str) -> String {
         match self.lines.recv_timeout(PATIENCE) {
             Ok(line) => line,
             Err(RecvTimeoutError::Timeout) => {
@@ -194,7 +187,7 @@ impl Running {
 
     /// A line of standard output that has already arrived, if any.
     fn arrived(&self) -> Option<String> {
-        self.lines.try_recv().ok().map(|(_, line)| line)
+        self.lines.try_recv().ok()
     }
 
     /// Writes `text` to the child's standard input and flushes it.
@@ -239,7 +232,7 @@ impl Running {
             std::thread::sleep(Duration::from_millis(5));
         };
         let mut rest = Vec::new();
-        while let Ok((_, line)) = self.lines.recv_timeout(PATIENCE) {
+        while let Ok(line) = self.lines.recv_timeout(PATIENCE) {
             rest.push(line);
         }
         let stderr = self.stderr();
@@ -444,16 +437,22 @@ fn blocking_io_a_reader_gets_every_piped_line_in_order() {
 }
 
 /// A 100 ms timeout around `io::read_line`, then a second read.
-const TIMED_READ: &str = r#"//! A 100 ms timeout around `io::read_line`, then a second read.
+const TIMED_READ: &str = r#"//! A 100 ms timeout around `io::read_line`, then a second read. The
+//! timeout's result line says how long the program waited for it.
 
 import std::duration
 import std::fiber
 import std::io
+import std::time
 
 fn main() {
   io::println("waiting")
+  let start = time::monotonic()
   case fiber::timeout(duration::milliseconds(100), fn() { io::read_line() }) {
-    Err(fiber::TimedOut) => io::println("TimedOut")
+    Err(fiber::TimedOut) => {
+      let waited = duration::to_milliseconds(time::elapsed(start))
+      io::println("TimedOut after {waited} ms")
+    }
     Err(fiber::Panicked(_)) => io::println("panicked")
     Ok(_) => io::println("returned in time")
   }
@@ -465,12 +464,29 @@ fn main() {
 }
 "#;
 
-/// The lower bound on the time from `waiting` to `TimedOut` that the tests
-/// assert, both taken when the reader thread took the line from the pipe
-/// ([`Running::next_line_at`]): the timeout's 100 ms, less 10 ms for the
-/// pipe's delivery of `waiting` to the reader thread, which may come later
-/// than the delivery of `TimedOut`.
-const TIMED_OUT_AFTER: Duration = Duration::from_millis(90);
+/// The lower bound on the wait for `TimedOut` that the tests assert: the
+/// timeout's 100 ms. The program measures the wait itself, from before the
+/// timeout to its result, with `time::monotonic`, which reads the clock the
+/// timers use (D-1021), and a timer never fires before its deadline. The
+/// test never times the lines as they reach it: a test process that is not
+/// scheduled for longer than the timeout reads `waiting` and `TimedOut`
+/// together, microseconds apart, though the program waited its 100 ms.
+const TIMED_OUT_AFTER: Duration = Duration::from_millis(100);
+
+/// Checks that `line` is a timeout's result line, `TimedOut after <n> ms`,
+/// with a wait of at least [`TIMED_OUT_AFTER`].
+fn assert_timed_out(line: &str, threads: &str) {
+    let waited = line
+        .strip_prefix("TimedOut after ")
+        .and_then(|rest| rest.strip_suffix(" ms"))
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .map(Duration::from_millis);
+    assert!(
+        waited.is_some_and(|waited| waited >= TIMED_OUT_AFTER),
+        "CHEBY_THREADS={threads}: expected `TimedOut after <n> ms` with at least \
+         {TIMED_OUT_AFTER:?}, got {line:?}"
+    );
+}
 
 /// D-1065, which refines D-670 (M2's `blocking_io_a_timeout_around_read_line_waits_for_the_line`,
 /// rewritten to the new rule): a cancellation abandons a refill of
@@ -483,15 +499,8 @@ fn blocking_io_a_timeout_around_read_line_abandons_the_refill() {
     let dir = package("timed_read", TIMED_READ);
     for threads in THREADS {
         let mut child = Running::start(&dir, threads);
-        let (waiting, first) = child.next_line_at("first line");
-        assert_eq!(first, "waiting");
-        let (timed_out, result) = child.next_line_at("timeout's result");
-        assert_eq!(result, "TimedOut", "CHEBY_THREADS={threads}");
-        let gap = timed_out.saturating_duration_since(waiting);
-        assert!(
-            gap >= TIMED_OUT_AFTER,
-            "CHEBY_THREADS={threads}: `TimedOut` {gap:?} after `waiting`"
-        );
+        assert_eq!(child.next_line("first line"), "waiting");
+        assert_timed_out(&child.next_line("timeout's result"), threads);
         child.write("first\n");
         assert_eq!(
             child.next_line("next read's line"),
@@ -877,18 +886,24 @@ fn stdin_mix_handle_and_io_reads_keep_the_input_order() {
 /// A 100 ms timeout around `file::read_line(file::stdin())`, then a second
 /// read through `io::read_line`.
 const TIMED_HANDLE_READ: &str = r#"//! A 100 ms timeout around `file::read_line(file::stdin())`, then a
-//! second read through `io::read_line`.
+//! second read through `io::read_line`. The timeout's result line says how
+//! long the program waited for it.
 
 import std::duration
 import std::fiber
 import std::file
 import std::io
+import std::time
 
 fn main() {
   io::println("waiting")
   let input = file::stdin()
+  let start = time::monotonic()
   case fiber::timeout(duration::milliseconds(100), fn() { file::read_line(input) }) {
-    Err(fiber::TimedOut) => io::println("TimedOut")
+    Err(fiber::TimedOut) => {
+      let waited = duration::to_milliseconds(time::elapsed(start))
+      io::println("TimedOut after {waited} ms")
+    }
     Err(fiber::Panicked(_)) => io::println("panicked")
     Ok(_) => io::println("returned in time")
   }
@@ -909,15 +924,8 @@ fn stdin_mix_a_cancelled_handle_refill_loses_no_line() {
     let dir = package("timed_handle_read", TIMED_HANDLE_READ);
     for threads in THREADS {
         let mut child = Running::start(&dir, threads);
-        let (waiting, first) = child.next_line_at("first line");
-        assert_eq!(first, "waiting");
-        let (timed_out, result) = child.next_line_at("timeout's result");
-        assert_eq!(result, "TimedOut", "CHEBY_THREADS={threads}");
-        let gap = timed_out.saturating_duration_since(waiting);
-        assert!(
-            gap >= TIMED_OUT_AFTER,
-            "CHEBY_THREADS={threads}: `TimedOut` {gap:?} after `waiting`"
-        );
+        assert_eq!(child.next_line("first line"), "waiting");
+        assert_timed_out(&child.next_line("timeout's result"), threads);
         child.write("first\n");
         assert_eq!(
             child.next_line("next read's line"),

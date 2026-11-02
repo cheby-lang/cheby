@@ -635,3 +635,94 @@ fn native_ext_result_is_reported_again_on_a_warm_cache() {
         );
     }
 }
+
+/// D-1288's package: native only, one C source that collects three entries
+/// in the section `app_reg`.
+const REGISTRY_MANIFEST: &str = "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n\n\
+                                 [native]\nsources = [\"src/registry.c\"]\n";
+
+/// The module that binds the C function.
+const REGISTRY: &str = "//! A registry that the package's C code collects in a section.\n\n\
+                        /// How many entries the C code finds in its section.\n\
+                        @external(native, \"app_entries\")\npub fn entries() -> Int\n";
+
+/// The root module: `main` prints the count, and a test asserts it under
+/// `cheby test`.
+const REGISTRY_MAIN: &str = "//! Prints how many entries the C registry holds.\n\n\
+                             import app::registry\nimport std::io\n\n\
+                             fn main() {\n  let n = registry::entries()\n  io::println(\"entries: {n}\")\n}\n\n\
+                             test \"the registry keeps its three entries under cheby test\" {\n  \
+                             assert registry::entries() == 3\n}\n";
+
+/// The C source: three entries with the attributes `attrs` in the section
+/// `app_reg`, read only through the linker's weak `__start_app_reg` and
+/// `__stop_app_reg` (D-1288, §12.5.4). A dropped section leaves both
+/// undefined, so the count is 0.
+fn registry_c(attrs: &str) -> String {
+    format!(
+        "#include <stdint.h>\n\n\
+         static const int64_t app_one __attribute__(({attrs}section(\"app_reg\"))) = 1;\n\
+         static const int64_t app_two __attribute__(({attrs}section(\"app_reg\"))) = 2;\n\
+         static const int64_t app_three __attribute__(({attrs}section(\"app_reg\"))) = 3;\n\n\
+         extern const int64_t __start_app_reg[] __attribute__((weak));\n\
+         extern const int64_t __stop_app_reg[] __attribute__((weak));\n\n\
+         int64_t app_entries(void) {{\n  \
+         if (!__start_app_reg || !__stop_app_reg) {{\n    return 0;\n  }}\n  \
+         return __stop_app_reg - __start_app_reg;\n}}\n"
+    )
+}
+
+/// The registry package with the entries' attributes `attrs`: `cheby run`
+/// and `cheby test` (the shared library, linked without GC) see all three
+/// entries, and the executable that `cheby build` links prints `built`.
+fn registry_case(attrs: &str, built: &str) {
+    let tmp = FreshDir::create("cheby-native-registry").unwrap();
+    let c = registry_c(attrs);
+    let root = package(
+        tmp.path(),
+        "app",
+        &[
+            ("cheby.toml", REGISTRY_MANIFEST),
+            ("src/registry.c", c.as_str()),
+            ("src/registry.cheby", REGISTRY),
+            ("src/main.cheby", REGISTRY_MAIN),
+        ],
+    );
+    let run = cheby(&root, &["run"], &[], None);
+    assert_eq!(run.stderr, "");
+    assert_eq!(run.stdout, "entries: 3\n");
+    assert_eq!(run.status, Some(0));
+    let test = cheby(&root, &["test"], &[], None);
+    assert_eq!(test.status, Some(0), "{}{}", test.stdout, test.stderr);
+    let exe = tmp.path().join("exe").join("app");
+    let link = cheby(&root, &["build", "-o", exe.to_str().unwrap()], &[], None);
+    assert_eq!(link.status, Some(0), "{}", link.stderr);
+    assert_eq!(link.stdout, "");
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.stdout, built);
+    assert_eq!(ran.status, Some(0));
+}
+
+/// D-1288, §12.5.4: `cheby build` links with `-z start-stop-gc` on Linux,
+/// so a section that the package's C code reads only through `__start_`
+/// and `__stop_`, with entries marked `used` but not `retain`, is dropped
+/// from the executable, while `cheby run` and `cheby test` keep it.
+#[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "ELF's __start_/__stop_ and -z start-stop-gc are Linux's (D-1288); executables on Windows are M6 (D-935)"
+)]
+fn native_start_stop_section_without_retain_is_dropped() {
+    registry_case("used, ", "entries: 0\n");
+}
+
+/// D-1288, §12.5.4: entries marked `__attribute__((retain))` keep their
+/// section in the executable that `cheby build` links on Linux.
+#[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "ELF's __start_/__stop_ and -z start-stop-gc are Linux's (D-1288); executables on Windows are M6 (D-935)"
+)]
+fn native_start_stop_section_with_retain_is_kept() {
+    registry_case("used, retain, ", "entries: 3\n");
+}
