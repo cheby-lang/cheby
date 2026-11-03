@@ -3,14 +3,16 @@
 //! `cheby_rt_blocking_call`). The shims stand in for generated `cb$blk$`
 //! shims (D-818): `extern "C"` functions over argument words that call
 //! `cheby.h`'s functions as C code would. Tests named `ffi_pool_job_…` run
-//! a job to its end; `ffi_abandon_…` abandon one by a give-up or a halt and
-//! run in a child process, since they leave a fiber parked for good (as
-//! `pool::tests` does). The protocol is modelled in `ffi_models.rs`
-//! (`ffi_pool_model_*`).
+//! a job to its end; `ffi_pool_abandon_…` abandon one by a give-up or a
+//! halt, most of them in a child process, since they leave a fiber parked
+//! for good (as `pool::tests` does). Every name holds `pool_`, so
+//! `cargo test -p cheby_runtime pool_` runs them all. The protocol is
+//! modelled in `ffi_models.rs` (`ffi_pool_model_*`).
 
 use std::ffi::c_void;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,7 +27,7 @@ use crate::fiber_ops::detached_tests::{config, detach, runtime, unwinding};
 use crate::pool::THREAD_NAME;
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::sched::{DetachedGroup, testing};
-use crate::{rc, string, values};
+use crate::{layout, list, rc, string, values};
 
 /// Waits on the host until `ready` holds, or panics after
 /// [`testing::hang`].
@@ -88,6 +90,31 @@ struct Probe {
     rounds: AtomicUsize,
     /// The thread the shim ran on.
     thread: Mutex<Option<thread::ThreadId>>,
+    /// The reference a shim duplicated from its borrowed argument and keeps
+    /// for a later call ([`keep_shim`], [`drop_kept_shim`]).
+    kept: AtomicU64,
+    /// The address of the control block of the fiber that owns the test's
+    /// value of [`PoolNode`]'s type.
+    owner: AtomicUsize,
+    /// What [`drop_pool_node`] saw: how many times it ran, whether on a
+    /// pool thread, whether with the owner fiber current, and whether after
+    /// the shim that released the last reference had returned.
+    drops: AtomicUsize,
+    drop_on_pool: AtomicBool,
+    drop_owner_current: AtomicBool,
+    drop_after_shim: AtomicBool,
+    /// How many drops had run when the second call returned to the fiber,
+    /// and the domain's live objects then, less those at the root's start.
+    drops_at_return: AtomicUsize,
+    live_left: AtomicI64,
+    /// Calls that ran inline after a give-up with their allocation and
+    /// their output done, the abandoned jobs of their fiber afterwards, and
+    /// whether the fiber was woken after a call that a halt marked.
+    inline_ok: AtomicUsize,
+    kept_jobs: AtomicUsize,
+    woken: AtomicBool,
+    /// Counts of the abandoned list a test reads on its fiber, in order.
+    counts: Mutex<Vec<usize>>,
 }
 
 impl Probe {
@@ -572,6 +599,198 @@ fn ffi_pool_job_inline_for_another_fiber_raises_on_it() {
     assert!(stderr.contains("inline ok\n"), "{stderr}");
 }
 
+// The last reference released on a pool thread (wave 9's FFI item, part (i))
+
+/// The handle of the test external type `PoolNode`: the probe its drop
+/// function reports to.
+struct PoolNode {
+    probe: Arc<Probe>,
+}
+
+/// The drop function of the test external type `PoolNode`: records where
+/// it ran and frees the handle. It asserts nothing, since it runs inside
+/// the runtime's free.
+unsafe extern "C" fn drop_pool_node(handle: *mut c_void) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: every handle of `PoolNode` is a leaked `Box<PoolNode>`, and
+    // its drop function runs once per value.
+    let node = unsafe { Box::from_raw(handle.cast::<PoolNode>()) };
+    let probe = &node.probe;
+    probe.drop_on_pool.store(
+        thread::current().name() == Some(THREAD_NAME),
+        Ordering::SeqCst,
+    );
+    probe.drop_owner_current.store(
+        tls::current_fiber().addr() == probe.owner.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    probe
+        .drop_after_shim
+        .store(probe.done.load(Ordering::SeqCst), Ordering::SeqCst);
+    probe.drops.fetch_add(1, Ordering::SeqCst);
+}
+
+/// The key of the test external type `PoolNode`, registered once.
+fn pool_node_key() -> u64 {
+    static KEY: OnceLock<u64> = OnceLock::new();
+    *KEY.get_or_init(|| {
+        let key = layout::type_key("ffi_pool_tests", "PoolNode");
+        layout::register_external_with_drop("PoolNode", key, Some(drop_pool_node)).unwrap();
+        key
+    })
+}
+
+/// A new value of `PoolNode`, owned by the running fiber `me`, whose drop
+/// function reports to `probe`.
+fn pool_node(me: &crate::ctx::ExecCtx, probe: &Arc<Probe>) -> Word {
+    let handle = Box::into_raw(Box::new(PoolNode {
+        probe: Arc::clone(probe),
+    }));
+    let handle = Word::try_from(handle.expose_provenance()).unwrap();
+    // SAFETY: the running fiber's control block and a handle of `PoolNode`.
+    unsafe { crate::ffi::cheby_rt_ffi_external(ctx_ptr(me), handle, pool_node_key()) }
+}
+
+/// A shim that duplicates its borrowed second argument and keeps the copy
+/// in the probe, as C code that keeps a value for a later call does: C
+/// code reaches a value's last reference only so (D-187, D-945).
+unsafe extern "C" fn keep_shim(args: *const u64, out: *mut u64) {
+    // SAFETY: the test's probe.
+    let probe = unsafe { probe(args) };
+    // SAFETY: the second word is a value the parked fiber holds.
+    let borrowed = value_of(unsafe { *args.add(1) });
+    // SAFETY: a live borrowed value.
+    let copy = unsafe { cheby_ffi_dup(borrowed) };
+    probe.kept.store(word_of(copy), Ordering::SeqCst);
+    // SAFETY: the runtime's result cell.
+    unsafe { out.write(0) };
+}
+
+/// A shim that releases the reference [`keep_shim`] kept, the last one of
+/// its value, then records that it is done.
+unsafe extern "C" fn drop_kept_shim(args: *const u64, out: *mut u64) {
+    // SAFETY: the test's probe.
+    let probe = unsafe { probe(args) };
+    record_thread(probe);
+    // SAFETY: the reference the first call kept, which C code owns.
+    unsafe { cheby_ffi_drop(value_of(probe.kept.swap(0, Ordering::SeqCst))) };
+    probe.done.store(true, Ordering::SeqCst);
+    // SAFETY: the runtime's result cell.
+    unsafe { out.write(0) };
+}
+
+/// On a root fiber: builds a value of `PoolNode`, held by itself or, with
+/// `in_list`, by a `List` of it; a first `@blocking` call keeps a
+/// duplicate of what the fiber holds, the fiber releases its own
+/// reference, and a second call releases the duplicate on its pool
+/// thread, the last reference. Returns the probe.
+fn last_reference_on_the_pool(in_list: bool) -> Arc<Probe> {
+    pool_node_key();
+    let domain = Domain::new();
+    let probe = Probe::new();
+    let p = Arc::clone(&probe);
+    let d = Arc::clone(&domain);
+    let outcome = on_root(2, &domain, move |me| {
+        p.owner.store(ctx_ptr(me).addr(), Ordering::SeqCst);
+        let before = d.live_objects();
+        let node = pool_node(me, &p);
+        let held = if in_list {
+            list::from_iter([node])
+        } else {
+            node
+        };
+        let first = [p.word(), held];
+        // SAFETY: the running fiber's context, two words for a shim that
+        // reads them while this closure keeps the probe and the value
+        // alive, and static code.
+        let kept = unsafe { cheby_rt_blocking_call(ctx_ptr(me), keep_shim, first.as_ptr(), 2) };
+        // SAFETY: the fiber's own reference; the shim kept another.
+        unsafe { rc::drop(held) };
+        let second = [p.word()];
+        // SAFETY: as above, with one word.
+        let dropped =
+            unsafe { cheby_rt_blocking_call(ctx_ptr(me), drop_kept_shim, second.as_ptr(), 1) };
+        p.drops_at_return
+            .store(p.drops.load(Ordering::SeqCst), Ordering::SeqCst);
+        p.live_left
+            .store(d.live_objects().saturating_sub(before), Ordering::SeqCst);
+        let clean = !unwinding(me) && kept == 0 && dropped == 0;
+        drop(p);
+        u64::from(clean)
+    });
+    assert_eq!(
+        outcome,
+        EntryOutcome::Returned(1),
+        "a call failed or raised"
+    );
+    probe
+}
+
+/// What D-171 asks of the drop function of a value whose last reference a
+/// pool thread released for its parked fiber (D-950): it ran once, on the
+/// fiber, after the shim returned and before the call returned to the
+/// fiber's code, and nothing of the value is left in the fiber's domain.
+fn check_dropped_on_the_fiber(probe: &Probe) {
+    assert!(
+        probe.on_pool.load(Ordering::SeqCst),
+        "the second call did not run on a pool thread"
+    );
+    assert_eq!(
+        probe.drops.load(Ordering::SeqCst),
+        1,
+        "the drop function did not run exactly once"
+    );
+    assert_eq!(
+        probe.drops_at_return.load(Ordering::SeqCst),
+        1,
+        "the drop function had not run when the call returned to the fiber"
+    );
+    assert!(
+        !probe.drop_on_pool.load(Ordering::SeqCst),
+        "the drop function ran on the pool thread (D-171)"
+    );
+    assert!(
+        probe.drop_owner_current.load(Ordering::SeqCst),
+        "the drop function ran without its owner fiber current"
+    );
+    assert!(
+        probe.drop_after_shim.load(Ordering::SeqCst),
+        "the drop function ran before the releasing shim returned"
+    );
+    assert_eq!(
+        probe.live_left.load(Ordering::SeqCst),
+        0,
+        "objects of the value are left in the fiber's domain"
+    );
+}
+
+/// D-171, D-949, D-950: a `cheby_ffi_drop` on a pool thread that releases
+/// the last reference to a value of an external type leaves its drop
+/// function to the fiber the pool thread acts for, which runs it when the
+/// call returns.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_job_drop_of_the_last_reference_runs_on_the_fiber() {
+    check_dropped_on_the_fiber(&last_reference_on_the_pool(false));
+}
+
+/// D-171, D-949, D-950: the same when the pool thread releases a `List`
+/// holding the last reference, so that the free cascades through the list
+/// to the value.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_job_drop_of_a_list_holding_the_last_reference_runs_on_the_fiber() {
+    check_dropped_on_the_fiber(&last_reference_on_the_pool(true));
+}
+
 // Abandoned jobs (child processes) -----------------------------------------
 
 /// How long a child process may take, at most, to exit.
@@ -667,10 +886,17 @@ unsafe extern "C" fn abandoned_shim(args: *const u64, out: *mut u64) {
 /// fresh domain, which it returns with the probe once the shim runs.
 fn abandoned_job() -> (crate::sched::Runtime, Arc<Domain>, Arc<Probe>) {
     let runtime = runtime(1);
+    let (domain, probe) = abandoned_root(&runtime);
+    (runtime, domain, probe)
+}
+
+/// Starts [`abandoned_job`]'s root on `runtime`; returns its domain and
+/// probe once its shim runs.
+fn abandoned_root(runtime: &crate::sched::Runtime) -> (Arc<Domain>, Arc<Probe>) {
     let domain = Domain::new();
     let probe = Probe::new();
     let p = Arc::clone(&probe);
-    let _root = testing::start_root_with(&runtime, &config(&domain), move |me| {
+    let _root = testing::start_root_with(runtime, &config(&domain), move |me| {
         let kept = values::string("borrowed");
         let args = [p.word(), kept];
         // SAFETY: the running fiber's context, a probe this closure keeps
@@ -678,7 +904,7 @@ fn abandoned_job() -> (crate::sched::Runtime, Arc<Domain>, Arc<Probe>) {
         unsafe { cheby_rt_blocking_call(ctx_ptr(me), abandoned_shim, args.as_ptr(), 2) }
     });
     wait_until(|| probe.running.load(Ordering::SeqCst));
-    (runtime, domain, probe)
+    (domain, probe)
 }
 
 /// What an abandoned job's calls did, checked in the child.
@@ -721,7 +947,7 @@ fn check_abandoned(domain: &Arc<Domain>, probe: &Probe) {
     windows,
     ignore = "runs entries on fibers; Windows support is M6 (D-545)"
 )]
-fn ffi_abandon_after_a_give_up() {
+fn ffi_pool_abandon_after_a_give_up() {
     const CHILD: &str = "CHEBY_RT_TEST_FFI_ABANDON_GIVE_UP";
     if std::env::var_os(CHILD).is_some() {
         let (runtime, domain, probe) = abandoned_job();
@@ -729,7 +955,7 @@ fn ffi_abandon_after_a_give_up() {
         check_abandoned(&domain, &probe);
         return;
     }
-    let (status, stderr) = child("ffi_abandon_after_a_give_up", CHILD);
+    let (status, stderr) = child("ffi_pool_abandon_after_a_give_up", CHILD);
     assert!(status.success(), "{status}: {stderr}");
     assert!(stderr.contains("abandoned ok\n"), "{stderr}");
 }
@@ -740,7 +966,7 @@ fn ffi_abandon_after_a_give_up() {
     windows,
     ignore = "runs entries on fibers; Windows support is M6 (D-545)"
 )]
-fn ffi_abandon_after_a_halt() {
+fn ffi_pool_abandon_after_a_halt() {
     const CHILD: &str = "CHEBY_RT_TEST_FFI_ABANDON_HALT";
     if std::env::var_os(CHILD).is_some() {
         let (runtime, domain, probe) = abandoned_job();
@@ -748,7 +974,254 @@ fn ffi_abandon_after_a_halt() {
         check_abandoned(&domain, &probe);
         return;
     }
-    let (status, stderr) = child("ffi_abandon_after_a_halt", CHILD);
+    let (status, stderr) = child("ffi_pool_abandon_after_a_halt", CHILD);
     assert!(status.success(), "{status}: {stderr}");
     assert!(stderr.contains("abandoned ok\n"), "{stderr}");
+}
+
+// Calls that register after a give-up or a halt (wave 9's FFI item, part (ii))
+
+/// A shim that waits at its gate, then returns 0: a call that blocks
+/// inline on its worker after a refused pool thread (D-786, D-817).
+unsafe extern "C" fn gated_shim(args: *const u64, out: *mut u64) {
+    // SAFETY: the test's probe.
+    let probe = unsafe { probe(args) };
+    record_thread(probe);
+    probe.running.store(true, Ordering::SeqCst);
+    probe.pass();
+    // SAFETY: the runtime's result cell.
+    unsafe { out.write(0) };
+}
+
+/// A shim that builds a `String`, writes a line through the output
+/// function and returns the `String`; it counts the call in `inline_ok`
+/// when it ran with the probe's owner fiber current and both worked.
+unsafe extern "C" fn inline_shim(args: *const u64, out: *mut u64) {
+    // SAFETY: the test's probe.
+    let probe = unsafe { probe(args) };
+    record_thread(probe);
+    let own = tls::current_fiber().addr() == probe.owner.load(Ordering::SeqCst);
+    let text = b"inline output\n";
+    // SAFETY: valid bytes; the result is the call's owned result.
+    let made = unsafe { cheby_ffi_string_new(text.as_ptr().cast(), text.len()) };
+    // SAFETY: valid bytes.
+    let wrote = unsafe { cheby_ffi_write_stdout(text.as_ptr().cast(), text.len()) };
+    if own && !made.is_null() && wrote == 0 {
+        probe.inline_ok.fetch_add(1, Ordering::SeqCst);
+    }
+    // SAFETY: the runtime's result cell.
+    unsafe { out.write(word_of(made)) };
+}
+
+/// How many calls the fiber makes after the give-up.
+const CALLS_AFTER: usize = 3;
+
+/// The child's body of [`ffi_pool_abandon_calls_after_a_give_up_are_not_kept`]:
+/// on a runtime of two workers, while the process's pool refuses every
+/// thread and none runs, a root blocks inline in a call on its worker
+/// (D-786, D-817); then, with threads allowed again, a second root waits
+/// on the pool as in [`abandoned_job`]. The stop detaches the first
+/// root's worker and gives up on the pool (D-815). The first root then
+/// goes on running and makes [`CALLS_AFTER`] calls, which run inline on
+/// its own fiber (D-1268).
+fn calls_after_a_give_up() {
+    let runtime = runtime(2);
+    let pool = crate::pool::Pool::global();
+    pool.refuse_threads(true);
+    let domain = Domain::new();
+    let probe = Probe::new();
+    let hold = Probe::new();
+    let (p, h) = (Arc::clone(&probe), Arc::clone(&hold));
+    let _root = testing::start_root_with(&runtime, &config(&domain), move |me| {
+        p.owner.store(ctx_ptr(me).addr(), Ordering::SeqCst);
+        let args = [p.word()];
+        // SAFETY: the running fiber's context, one argument word for a shim
+        // whose probe this closure keeps alive, and static code.
+        unsafe { cheby_rt_blocking_call(ctx_ptr(me), gated_shim, args.as_ptr(), 1) };
+        for _ in 0..CALLS_AFTER {
+            // SAFETY: as above.
+            let word =
+                unsafe { cheby_rt_blocking_call(ctx_ptr(me), inline_shim, args.as_ptr(), 1) };
+            // SAFETY: the call's owned result, or 0.
+            unsafe { rc::drop(word) };
+        }
+        p.kept_jobs
+            .store(abandoned_by(ctx_ptr(me).addr()), Ordering::SeqCst);
+        p.done.store(true, Ordering::SeqCst);
+        // The runtime has stopped: the fiber waits here until the process
+        // ends.
+        h.pass();
+        values::nil()
+    });
+    wait_until(|| probe.running.load(Ordering::SeqCst));
+    pool.refuse_threads(false);
+    let (_waiting, waiting_probe) = abandoned_root(&runtime);
+    runtime.shutdown();
+    probe.open.store(true, Ordering::SeqCst);
+    wait_until(|| probe.done.load(Ordering::SeqCst));
+    waiting_probe.open.store(true, Ordering::SeqCst);
+    assert!(
+        !probe.on_pool.load(Ordering::SeqCst),
+        "a call after the give-up ran on a pool thread"
+    );
+    assert_eq!(
+        probe.inline_ok.load(Ordering::SeqCst),
+        CALLS_AFTER,
+        "a call after the give-up did not run on its own fiber with its allocation and output"
+    );
+    assert_eq!(
+        probe.kept_jobs.load(Ordering::SeqCst),
+        0,
+        "the abandoned list keeps jobs of calls that ran inline on their own fiber"
+    );
+    eprintln!("calls after a give-up ok");
+}
+
+/// D-815, D-786, D-1268, D-1269 as wave 12 refines it
+/// (`GAP(ffi-inline-abandon)`): calls that a fiber makes after a stop gave
+/// up on the pool run inline on that fiber, their allocations and output
+/// work, and the abandoned list keeps no job of them, nor of the call the
+/// give-up marked while it ran inline.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_abandon_calls_after_a_give_up_are_not_kept() {
+    const CHILD: &str = "CHEBY_RT_TEST_FFI_CALLS_AFTER_A_GIVE_UP";
+    if std::env::var_os(CHILD).is_some() {
+        calls_after_a_give_up();
+        return;
+    }
+    let (status, stderr) = child("ffi_pool_abandon_calls_after_a_give_up_are_not_kept", CHILD);
+    assert!(status.success(), "{status}: {stderr}");
+    assert!(stderr.contains("calls after a give-up ok\n"), "{stderr}");
+}
+
+/// D-1269 as wave 12 refines it (`GAP(ffi-inline-abandon)`): a job that a
+/// give-up marked between its registration and its run, the race of
+/// `register_ffi_job` with `enter`'s test of the give-up, and that then
+/// ran inline on its own fiber, leaves the abandoned list once it is
+/// unregistered; a marked job run from a thread that is no fiber, as a
+/// pool thread runs it, stays there.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_abandon_a_job_marked_while_it_ran_inline_is_released() {
+    let domain = Domain::new();
+    let probe = Probe::new();
+    probe.open.store(true, Ordering::SeqCst);
+    let p = Arc::clone(&probe);
+    let outcome = on_root(1, &domain, move |me| {
+        let owner = ctx_ptr(me).addr();
+        let mut counts = vec![abandoned_by(owner)];
+        let job = FfiJob::new(Arc::clone(me.domain()), ctx_ptr(me));
+        let marked = job.abandon().is_some();
+        counts.push(abandoned_by(owner));
+        let args = [p.word()];
+        let mut out = 0_u64;
+        // SAFETY: a shim given its probe's word and a result cell, on the
+        // job's own fiber.
+        run_as_job(&job, || unsafe { build_shim(args.as_ptr(), &raw mut out) });
+        // SAFETY: the shim's owned result, or 0.
+        unsafe { rc::drop(out) };
+        release_if_ran_inline(&job);
+        counts.push(abandoned_by(owner));
+        let other = FfiJob::new(Domain::new(), ctx_ptr(me));
+        let other_marked = other.abandon().is_some();
+        let o = Arc::clone(&other);
+        let ran = thread::spawn(move || run_as_job(&o, || true))
+            .join()
+            .unwrap_or(false);
+        release_if_ran_inline(&other);
+        counts.push(abandoned_by(owner));
+        *p.counts.lock() = counts;
+        drop(p);
+        u64::from(marked && other_marked && ran)
+    });
+    assert_eq!(outcome, EntryOutcome::Returned(1), "{outcome:?}");
+    assert!(
+        !probe.on_pool.load(Ordering::SeqCst),
+        "the inline shim ran on a pool thread"
+    );
+    let counts = probe.counts.lock().clone();
+    let &[before, marked, released, kept] = counts.as_slice() else {
+        panic!("the root read {counts:?}");
+    };
+    assert_eq!(
+        marked,
+        before.saturating_add(1),
+        "the mark did not keep the job"
+    );
+    assert_eq!(
+        released, before,
+        "a job marked while it ran inline on its own fiber stayed in the abandoned list"
+    );
+    assert_eq!(
+        kept,
+        before.saturating_add(1),
+        "a marked job run off its fiber left the abandoned list"
+    );
+}
+
+/// The child's body of [`ffi_pool_abandon_a_call_after_a_halt_runs_marked`]:
+/// a root starts a halt itself, as a termination does (D-073, D-708),
+/// runs on until its next entry check, and makes a call first.
+fn call_after_a_halt() {
+    let runtime = runtime(1);
+    let domain = Domain::new();
+    let probe = Probe::new();
+    let p = Arc::clone(&probe);
+    let _root = testing::start_root_with(&runtime, &config(&domain), move |me| {
+        p.owner.store(ctx_ptr(me).addr(), Ordering::SeqCst);
+        let kept = values::string("borrowed");
+        let args = [p.word(), kept];
+        if let Some(shared) = me.sched.runtime() {
+            shared.begin_halt();
+        }
+        // SAFETY: the running fiber's context, a probe this closure keeps
+        // alive and a `String` it holds, and static code.
+        let word = unsafe { cheby_rt_blocking_call(ctx_ptr(me), abandoned_shim, args.as_ptr(), 2) };
+        p.woken.store(true, Ordering::SeqCst);
+        word
+    });
+    wait_until(|| probe.running.load(Ordering::SeqCst));
+    check_abandoned(&domain, &probe);
+    assert_eq!(
+        abandoned_by(probe.owner.load(Ordering::SeqCst)),
+        1,
+        "the halt's list does not keep the call's job"
+    );
+    // A completion during a halt wakes nothing (D-815, D-073).
+    thread::sleep(testing::scaled(Duration::from_millis(50)));
+    runtime.halt();
+    assert!(
+        !probe.woken.load(Ordering::SeqCst),
+        "the fiber was woken during the halt"
+    );
+    eprintln!("call after a halt ok");
+}
+
+/// D-1269, D-073, D-708, D-815: a `@blocking` call that registers its job
+/// after a halt began is submitted with its job already marked: its
+/// allocation returns NULL, its output returns -1, its job is kept until
+/// the process exits, and its completion does not wake the fiber. This
+/// pins D-1269's logged rule ("marks it at once when the runtime already
+/// halts"), which wave 12 keeps.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_abandon_a_call_after_a_halt_runs_marked() {
+    const CHILD: &str = "CHEBY_RT_TEST_FFI_CALL_AFTER_A_HALT";
+    if std::env::var_os(CHILD).is_some() {
+        call_after_a_halt();
+        return;
+    }
+    let (status, stderr) = child("ffi_pool_abandon_a_call_after_a_halt_runs_marked", CHILD);
+    assert!(status.success(), "{status}: {stderr}");
+    assert!(stderr.contains("call after a halt ok\n"), "{stderr}");
 }
