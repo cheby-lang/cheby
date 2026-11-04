@@ -466,3 +466,410 @@ fn ffi_pool_model_an_unchecked_entry_fails() {
 fn ffi_pool_model_an_unlocked_mark_fails() {
     pool_model(PoolVariant::UnlockedFreeIdle);
 }
+
+// Drop functions a pool thread leaves to the owner fiber (D-171, D-950) -----
+//
+// GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: a
+// `cheby_ffi_drop` on a pool thread that releases the last reference to a
+// value of an external type runs its free there, but the type's drop
+// function waits for the fiber the job acts for. The protocol, as `ffi.rs`,
+// `ffi_pool.rs` and `sched/blocking.rs` implement it:
+//
+// - the release enters its job (the per-job lock and the mark, above); the
+//   finalizer then pushes the drop function and its handle onto the job's
+//   deferral list under that list's leaf lock (`ffi::finalize_external`,
+//   `FfiJob::defer_drop`);
+// - the job's completion wakes the owner fiber unless a give-up's flag is
+//   set (`Completion::complete`, `wakes_nothing`);
+// - the woken owner takes the list and runs each drop function on the
+//   fiber (`FfiJob::take_deferred`, `ffi::run_deferred_drops`, called by
+//   `cheby_rt_blocking_call` right after `wait_for_job`);
+// - a give-up sets its flag, then marks the job (D-815, D-1269): its fiber
+//   is never resumed, so what the job deferred stays in the list, unrun.
+//
+// Whatever the interleaving: no drop function runs on the pool thread, each
+// runs at most once, every one the job deferred ran on the owner when the
+// owner was woken, and none ran when the job was abandoned. The
+// `#[should_panic]` twin runs the drop function where the release happens.
+//
+// | Model step              | Mirrors (path under `crates/cheby_runtime/src/`, function)              |
+// | ----------------------- | ----------------------------------------------------------------------- |
+// | `DeferJob::release`     | `ffi.rs` `cheby_ffi_drop`, `finalize_external`; `FfiJob::defer_drop`     |
+// | `DeferJob::take`        | `ffi_pool.rs` `FfiJob::take_deferred`; `ffi.rs` `run_deferred_drops`     |
+// | `defer_model` give-up   | `sched/blocking.rs` `poll_stop`, `abandon_ffi_jobs`; `FfiJob::abandon`  |
+// | `defer_model` wake      | `sched/blocking.rs` `Completion::complete`, `cheby_rt_blocking_call`    |
+
+/// Which variant of the deferral protocol a model runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeferVariant {
+    /// The runtime's protocol.
+    Runtime,
+    /// The drop function runs where the release happens.
+    DropWhereReleased,
+}
+
+/// How many values of an external type the pool thread releases.
+const DEFERRED: usize = 2;
+
+/// One package `@blocking` call's job, the drop functions it defers, and
+/// what ran.
+struct DeferJob {
+    variant: DeferVariant,
+    state: Mutex<JobState>,
+    /// The deferral list: the handles whose drop functions wait.
+    deferred: Mutex<Vec<usize>>,
+    /// The give-up's flag, set before its mark.
+    given_up: AtomicUsize,
+    /// How many releases entered the job.
+    released: AtomicUsize,
+    /// How many times each handle's drop function ran.
+    runs: [AtomicUsize; DEFERRED],
+}
+
+impl DeferJob {
+    /// Enters one call: false when the job is abandoned.
+    fn enter(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.abandoned {
+            return false;
+        }
+        state.in_call = state.in_call.saturating_add(1);
+        true
+    }
+
+    /// Ends a call that entered.
+    fn leave(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.in_call = state.in_call.saturating_sub(1);
+    }
+
+    /// The give-up's mark.
+    fn abandon(&self) {
+        self.state.lock().unwrap().abandoned = true;
+    }
+
+    /// A drop function, given its handle; `on_pool` says where it runs.
+    fn drop_function(&self, handle: usize, on_pool: bool) {
+        assert!(!on_pool, "a drop function ran on the pool thread");
+        if let Some(runs) = self.runs.get(handle) {
+            runs.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The pool thread releases the last reference of value `handle`: the
+    /// free runs here, and the drop function is deferred (or, in the twin,
+    /// runs here).
+    fn release(&self, handle: usize) {
+        self.released.fetch_add(1, Ordering::SeqCst);
+        match self.variant {
+            DeferVariant::Runtime => self.deferred.lock().unwrap().push(handle),
+            DeferVariant::DropWhereReleased => self.drop_function(handle, true),
+        }
+    }
+
+    /// The owner, resumed, takes the list and runs it on the fiber.
+    fn take(&self) {
+        let deferred = std::mem::take(&mut *self.deferred.lock().unwrap());
+        for handle in deferred {
+            self.drop_function(handle, false);
+        }
+    }
+
+    /// How many drop functions ran.
+    fn ran(&self) -> usize {
+        self.runs
+            .iter()
+            .map(|runs| runs.load(Ordering::SeqCst))
+            .sum()
+    }
+}
+
+/// Runs the deferral model of `variant`: the pool thread releases
+/// [`DEFERRED`] values, each in a call of its own, then completes; a
+/// give-up races it; the owner drains the list if it is woken.
+fn defer_model(variant: DeferVariant) {
+    let mut builder = loom::model::Builder::new();
+    if builder.preemption_bound.is_none() {
+        builder.preemption_bound = Some(3);
+    }
+    builder.check(move || {
+        let job = Arc::new(DeferJob {
+            variant,
+            state: Mutex::new(JobState::default()),
+            deferred: Mutex::new(Vec::new()),
+            given_up: AtomicUsize::new(0),
+            released: AtomicUsize::new(0),
+            runs: std::array::from_fn(|_| AtomicUsize::new(0)),
+        });
+        let pool = {
+            let job = Arc::clone(&job);
+            thread::spawn(move || {
+                for handle in 0..DEFERRED {
+                    if job.enter() {
+                        job.release(handle);
+                        job.leave();
+                    }
+                }
+                // The completion: it wakes the owner unless the give-up's
+                // flag is set.
+                job.given_up.load(Ordering::SeqCst) == 0
+            })
+        };
+        let give_up = {
+            let job = Arc::clone(&job);
+            thread::spawn(move || {
+                job.given_up.store(1, Ordering::SeqCst);
+                job.abandon();
+            })
+        };
+        // The owner waits on the completion.
+        let woken = pool.join().unwrap();
+        if woken {
+            job.take();
+        }
+        give_up.join().unwrap();
+        for runs in &job.runs {
+            assert!(
+                runs.load(Ordering::SeqCst) <= 1,
+                "a drop function ran twice"
+            );
+        }
+        let released = job.released.load(Ordering::SeqCst);
+        if woken {
+            assert_eq!(job.ran(), released, "a deferred drop function never ran");
+        } else {
+            assert_eq!(job.ran(), 0, "an abandoned job's drop function ran");
+            assert_eq!(
+                job.deferred.lock().unwrap().len(),
+                released,
+                "an abandoned job's deferred handle was touched"
+            );
+        }
+    });
+}
+
+/// GAP(ffi-pool-drop): the runtime's protocol: every drop function a pool
+/// thread's release defers runs once, on the owner fiber, when it is
+/// woken, and none runs for an abandoned job.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom switches stacks; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_model_deferred_drops_run_on_the_owner() {
+    defer_model(DeferVariant::Runtime);
+}
+
+/// The twin that runs the drop function where the release happens: on the
+/// pool thread, against D-171.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom switches stacks; Windows support is M6 (D-545)"
+)]
+#[should_panic(expected = "a drop function ran on the pool thread")]
+fn ffi_pool_model_a_drop_on_the_pool_thread_fails() {
+    defer_model(DeferVariant::DropWhereReleased);
+}
+
+// A call inline on its own fiber after a racing give-up (D-815, D-1269) -----
+//
+// GAP(ffi-inline-abandon), refining D-1269 (and D-815, D-950): registration
+// marks a job only while the runtime halts, no longer once its stop gave
+// up, and a job that a give-up marked while it ran inline on its own fiber
+// leaves the abandoned list after it. The protocol:
+//
+// - the fiber registers its job under the registry's lock
+//   (`blocking::register_ffi_job`);
+// - a give-up sets its flag, then, under the registry's lock, marks each
+//   registered job under the job's lock and pushes it onto the leaf
+//   `ABANDONED` list (`poll_stop`, `abandon_ffi_jobs`, `FfiJob::abandon`);
+// - the fiber's `enter` reads the flag: set, the call runs inline on its
+//   own fiber, which records that the job ran inline (`run_as_job`); unset,
+//   the job goes to a pool thread, whose calls enter the job;
+// - when the shim returned, the job is unregistered under the registry's
+//   lock (`unregister_ffi_job`), and only then, on the fiber, a job that
+//   ran inline is taken off `ABANDONED` (`ffi_pool::release_if_ran_inline`):
+//   a give-up that held the registry's lock has pushed it by then, and a
+//   later one no longer finds it.
+//
+// Whatever the interleaving: a job that ran inline is not in `ABANDONED` at
+// the end and no pool thread touched its domain, and a marked job that went
+// to a pool thread stays there (D-950). The `#[should_panic]` twin releases
+// before it unregisters, so a give-up can push the job after the release.
+// The teardown half of the protocol is `pool_model`'s, whose twin
+// `ffi_pool_model_freeing_an_abandoned_domain_fails` still fails.
+//
+// | Model step               | Mirrors (path under `crates/cheby_runtime/src/`, function)            |
+// | ------------------------ | --------------------------------------------------------------------- |
+// | `inline_model` register  | `sched/blocking.rs` `register_ffi_job`                                |
+// | `inline_model` give-up   | `sched/blocking.rs` `poll_stop`, `abandon_ffi_jobs`; `FfiJob::abandon` |
+// | `inline_model` entry     | `sched/blocking.rs` `enter`, `wait_for_job`; `ffi_pool.rs` `run_as_job` |
+// | `release_inline`         | `ffi_pool.rs` `release_if_ran_inline`                                  |
+
+/// Which variant of the inline-release protocol a model runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InlineVariant {
+    /// The runtime's protocol.
+    Runtime,
+    /// The release comes before the unregistration.
+    ReleaseBeforeUnregister,
+}
+
+/// A package `@blocking` call's job in the inline-release model.
+struct InlineJob {
+    state: Mutex<JobState>,
+    /// Set by `run_as_job` on the job's own fiber.
+    ran_inline: AtomicUsize,
+    /// Set when a pool thread's call entered the job and charged its domain.
+    pool_touched: AtomicUsize,
+}
+
+impl InlineJob {
+    /// A job not marked, not run.
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(JobState::default()),
+            ran_inline: AtomicUsize::new(0),
+            pool_touched: AtomicUsize::new(0),
+        })
+    }
+}
+
+/// The registry and the abandoned list of the inline-release model.
+type Jobs = Arc<Mutex<Vec<Arc<InlineJob>>>>;
+
+/// `ffi_pool::release_if_ran_inline`: takes a job that ran inline off the
+/// abandoned list.
+fn release_inline(abandoned: &Jobs, job: &Arc<InlineJob>) {
+    if job.ran_inline.load(Ordering::SeqCst) != 0 {
+        abandoned
+            .lock()
+            .unwrap()
+            .retain(|known| !Arc::ptr_eq(known, job));
+    }
+}
+
+/// Takes `job` out of the registry.
+fn unregister(registry: &Jobs, job: &Arc<InlineJob>) {
+    registry
+        .lock()
+        .unwrap()
+        .retain(|known| !Arc::ptr_eq(known, job));
+}
+
+/// Runs the inline-release model of `variant`: a fiber registers its job
+/// and enters while a give-up races it.
+fn inline_model(variant: InlineVariant) {
+    let mut builder = loom::model::Builder::new();
+    if builder.preemption_bound.is_none() {
+        builder.preemption_bound = Some(3);
+    }
+    builder.check(move || {
+        let job = InlineJob::new();
+        let registry: Jobs = Arc::new(Mutex::new(Vec::new()));
+        let abandoned: Jobs = Arc::new(Mutex::new(Vec::new()));
+        let flag = Arc::new(AtomicUsize::new(0));
+        let give_up = {
+            let (registry, abandoned, flag) = (
+                Arc::clone(&registry),
+                Arc::clone(&abandoned),
+                Arc::clone(&flag),
+            );
+            thread::spawn(move || {
+                flag.store(1, Ordering::SeqCst);
+                let jobs = registry.lock().unwrap();
+                for known in jobs.iter() {
+                    let first = {
+                        let mut state = known.state.lock().unwrap();
+                        let first = !state.abandoned;
+                        state.abandoned = true;
+                        first
+                    };
+                    if first {
+                        abandoned.lock().unwrap().push(Arc::clone(known));
+                    }
+                }
+            })
+        };
+        // The fiber: registration, then `enter`'s test of the give-up.
+        registry.lock().unwrap().push(Arc::clone(&job));
+        let inline = flag.load(Ordering::SeqCst) != 0;
+        if inline {
+            // `run_as_job` on the job's own fiber: the shim's calls act for
+            // the fiber itself, and no pool thread sees the job.
+            job.ran_inline.store(1, Ordering::SeqCst);
+            if variant == InlineVariant::ReleaseBeforeUnregister {
+                release_inline(&abandoned, &job);
+            }
+            unregister(&registry, &job);
+            if variant == InlineVariant::Runtime {
+                release_inline(&abandoned, &job);
+            }
+        } else {
+            let pool = {
+                let (job, registry) = (Arc::clone(&job), Arc::clone(&registry));
+                thread::spawn(move || {
+                    let entered = {
+                        let mut state = job.state.lock().unwrap();
+                        if state.abandoned {
+                            false
+                        } else {
+                            state.in_call = state.in_call.saturating_add(1);
+                            true
+                        }
+                    };
+                    if entered {
+                        job.pool_touched.store(1, Ordering::SeqCst);
+                        let mut state = job.state.lock().unwrap();
+                        state.in_call = state.in_call.saturating_sub(1);
+                    }
+                    unregister(&registry, &job);
+                })
+            };
+            pool.join().unwrap();
+            // A marked job's completion wakes nothing: the fiber is never
+            // resumed and releases nothing (D-815).
+        }
+        give_up.join().unwrap();
+        let kept = abandoned
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|known| Arc::ptr_eq(known, &job));
+        if inline {
+            assert!(!kept, "an inline job stayed in the abandoned list");
+            assert_eq!(
+                job.pool_touched.load(Ordering::SeqCst),
+                0,
+                "a pool thread touched an inline job's domain"
+            );
+        } else if job.state.lock().unwrap().abandoned {
+            assert!(kept, "a marked pool job left the abandoned list");
+        }
+    });
+}
+
+/// GAP(ffi-inline-abandon): the runtime's protocol: a job that a racing
+/// give-up marked and that then ran inline leaves the abandoned list, and
+/// a marked job on a pool thread stays in it.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom switches stacks; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_model_an_inline_job_after_a_racing_give_up_is_released() {
+    inline_model(InlineVariant::Runtime);
+}
+
+/// The twin that releases before it unregisters: a give-up that still
+/// finds the job registered pushes it after the release, and it stays.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "loom switches stacks; Windows support is M6 (D-545)"
+)]
+#[should_panic(expected = "an inline job stayed in the abandoned list")]
+fn ffi_pool_model_a_release_before_unregistering_fails() {
+    inline_model(InlineVariant::ReleaseBeforeUnregister);
+}

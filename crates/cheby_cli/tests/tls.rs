@@ -35,6 +35,32 @@ fn tls_https_get_without_the_test_root_is_a_tls_failure() {
     https::without_the_test_root();
 }
 
+/// D-1292, D-1011: an executable that `cheby build` linked with the debug
+/// runtime archive reads `CHEBY_RT_TEST_TLS_ROOT` as `cheby run` does: with
+/// the test root it trusts the test CA, and the body arrives.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "sockets and signals on Windows are M6 (D-935, D-983)"
+)]
+fn tls_executable_with_the_test_root_reads_the_body() {
+    #[cfg(not(windows))]
+    https::executable_with_the_test_root();
+}
+
+/// D-1292, D-1011: the same executable without the test root trusts only
+/// `webpki-roots`: it connects, its handshake fails, and the server reads
+/// no request.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "sockets and signals on Windows are M6 (D-935, D-983)"
+)]
+fn tls_executable_without_the_test_root_is_a_tls_failure() {
+    #[cfg(not(windows))]
+    https::executable_without_the_test_root();
+}
+
 /// The package, the runs and the server.
 #[cfg(not(windows))]
 #[expect(
@@ -130,6 +156,114 @@ fn main() {
         );
         assert_eq!(output.stdout, "TLS failure\n", "{shown}");
         assert!(request.is_err(), "the server read a request: {request:?}");
+    }
+
+    /// The trusted executable (D-1292): built first, so that the server's
+    /// [`PATIENCE`] covers only the run.
+    pub(super) fn executable_with_the_test_root() {
+        let exe = build("exe-trusted");
+        let server = Server::start();
+        let output = run_executable(&exe, server.port, true);
+        let request = server.finish();
+        let shown = format!("{}\n{}", output.stdout, output.stderr);
+        assert_eq!(
+            output.status,
+            Some(0),
+            "{}: {shown}",
+            output.describe_status()
+        );
+        assert_eq!(output.stdout, format!("body: {BODY}\n"), "{shown}");
+        let request = request.unwrap_or_else(|error| panic!("the server failed: {error}"));
+        assert!(request.starts_with("GET / HTTP/1.1\r\n"), "{request}");
+        assert!(
+            request.to_ascii_lowercase().contains("host: localhost:"),
+            "{request}"
+        );
+        remove_build(&exe);
+    }
+
+    /// The untrusted executable (D-1292): it connects, and the handshake
+    /// fails.
+    pub(super) fn executable_without_the_test_root() {
+        let exe = build("exe-untrusted");
+        let server = Server::start();
+        let output = run_executable(&exe, server.port, false);
+        let request = server.finish();
+        let shown = format!("{}\n{}", output.stdout, output.stderr);
+        assert_eq!(
+            output.status,
+            Some(0),
+            "{}: {shown}",
+            output.describe_status()
+        );
+        assert_eq!(output.stdout, "TLS failure\n", "{shown}");
+        match request {
+            Ok(request) => panic!("the server read a request: {request}"),
+            Err(error) => assert_ne!(
+                error, "no connection came",
+                "the executable never connected"
+            ),
+        }
+        remove_build(&exe);
+    }
+
+    /// Builds the package `name` with `cheby build` into an executable of
+    /// its own directory and returns its path. `CHEBY_RT_ARCHIVE` is
+    /// removed, so the debug runtime archive beside the debug `cheby`
+    /// links it (D-929), and only a debug runtime reads the test root.
+    fn build(name: &str) -> PathBuf {
+        let dir = package(name);
+        let out = Path::new(TMP)
+            .join("tls-exe")
+            .join(format!("{name}-{}", std::process::id()));
+        if out.exists() {
+            std::fs::remove_dir_all(&out).unwrap();
+        }
+        std::fs::create_dir_all(&out).unwrap();
+        let exe = out.join("app");
+        let cache = HarnessCache::create(&format!("cli-tls-{name}")).unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_cheby"));
+        cmd.args(["--color=never", "build", "-o"])
+            .arg(&exe)
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_RT_ARCHIVE");
+        cache.apply(&mut cmd);
+        let output = process::run(cmd, None, PATIENCE).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let shown = format!("{}\n{}", output.stdout, output.stderr);
+        assert_eq!(
+            output.status,
+            Some(0),
+            "cheby build {}: {shown}",
+            output.describe_status()
+        );
+        assert_eq!(output.stdout, "", "cheby build printed: {shown}");
+        assert!(exe.is_file(), "no executable at {}", exe.display());
+        exe
+    }
+
+    /// Runs the executable `exe` on `https://localhost:<port>/`, `with_root`
+    /// deciding whether the runtime trusts the test CA.
+    fn run_executable(exe: &Path, port: u16, with_root: bool) -> RunOutput {
+        let mut cmd = Command::new(exe);
+        cmd.arg(format!("https://localhost:{port}/"))
+            .env("NO_COLOR", "1");
+        if with_root {
+            let ca =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../cheby_runtime/tests/tls/ca.pem");
+            cmd.env(TEST_ROOT, ca);
+        } else {
+            cmd.env_remove(TEST_ROOT);
+        }
+        process::run(cmd, None, PATIENCE).unwrap()
+    }
+
+    /// Removes the directory [`build`] made for `exe`.
+    fn remove_build(exe: &Path) {
+        if let Some(out) = exe.parent() {
+            std::fs::remove_dir_all(out).unwrap();
+        }
     }
 
     /// The package `name` in this test binary's scratch directory.

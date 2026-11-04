@@ -62,7 +62,10 @@
 //! `EXTERNAL_HANDLE`'s finalizer, calls it once, inline on the fiber that
 //! released the last reference, from the free worklist, in cleanup pads
 //! too, never with a NULL handle, and not while a teardown tears the
-//! fiber's group down (D-949, D-710). While it runs, the thread's
+//! fiber's group down (D-949, D-710). GAP(ffi-pool-drop): a release on a
+//! thread acting for a package `@blocking` call's parked fiber leaves the
+//! drop function to that fiber, which runs it when the call returns
+//! ([`run_deferred_drops`]). While it runs, the thread's
 //! drop-function mark is set (`tls::with_drop_mark`, D-946):
 //!
 //! - `cheby_ffi_drop` and every other release a `cheby_ffi_` function
@@ -272,11 +275,52 @@ pub(crate) unsafe fn finalize_external(word: Word, release: &mut dyn FnMut(Word)
     // SAFETY: a value of an external type holds its handle at offset 8
     // (D-590).
     let handle = unsafe { read_field(obj, 8) };
-    if handle == 0 || tearing_down() {
+    if handle == 0 {
+        return;
+    }
+    // GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: on a
+    // thread acting for a job's parked fiber (a pool thread, or a worker
+    // running another fiber's job inline), the drop function waits for
+    // that fiber, which released the last reference through the job: the
+    // job keeps it with the handle, and the fiber runs it when the call
+    // returns ([`run_deferred_drops`]). The value's block is freed here,
+    // charged to the job's domain (D-950).
+    if let Some(job) = ffi_pool::current_job() {
+        job.defer_drop(drop, handle);
+        return;
+    }
+    if tearing_down() {
         return;
     }
     // SAFETY: the type's drop function with the handle its value owned.
     unsafe { run_drop(drop, handle, release) };
+}
+
+/// GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: runs, on
+/// the fiber that `job` acts for and in the order of their releases, the
+/// drop functions that its calls left to it ([`finalize_external`]), each
+/// as the finalizer would: under the thread's drop-function mark, with
+/// every reference it released then given to `rc::drop`. Skipped, the
+/// handles dropped unrun, while a teardown tears the fiber's group down,
+/// as the finalizer skips them (D-710). Called by `cheby_rt_blocking_call`
+/// on the fiber right after the job returned, with no lock held.
+pub(crate) fn run_deferred_drops(job: &ffi_pool::FfiJob) {
+    let deferred = job.take_deferred();
+    if deferred.is_empty() || tearing_down() {
+        return;
+    }
+    for (drop, handle) in deferred {
+        // SAFETY: the drop function of an external type with the non-NULL
+        // handle its dead value owned, which the finalizer left to this
+        // fiber and which nothing else holds; this thread holds no cell of
+        // the drop-function mark here.
+        unsafe {
+            run_drop(drop, handle, &mut |word| {
+                // SAFETY: a reference the drop function gave up.
+                rc::drop(word);
+            });
+        }
+    }
 }
 
 /// Whether the running fiber's group is being torn down (D-710).
