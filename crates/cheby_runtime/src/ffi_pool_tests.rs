@@ -24,6 +24,7 @@ use crate::ffi::{
     cheby_ffi_write_stdout,
 };
 use crate::fiber_ops::detached_tests::{config, detach, runtime, unwinding};
+use crate::handles::{HandleKind, HandlePayload, new_handle};
 use crate::pool::THREAD_NAME;
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::sched::{DetachedGroup, testing};
@@ -103,6 +104,12 @@ struct Probe {
     drop_on_pool: AtomicBool,
     drop_owner_current: AtomicBool,
     drop_after_shim: AtomicBool,
+    /// What a [`ThreadProbe`] finalizer saw beyond those: its thread, that
+    /// thread's name, and the address of the fiber current there (0 for
+    /// none).
+    drop_thread: Mutex<Option<thread::ThreadId>>,
+    drop_thread_name: Mutex<Option<String>>,
+    drop_fiber: AtomicUsize,
     /// How many drops had run when the second call returned to the fiber,
     /// and the domain's live objects then, less those at the root's start.
     drops_at_return: AtomicUsize,
@@ -681,13 +688,21 @@ unsafe extern "C" fn drop_kept_shim(args: *const u64, out: *mut u64) {
     unsafe { out.write(0) };
 }
 
-/// On a root fiber: builds a value of `PoolNode`, held by itself or, with
+/// [`last_reference_of`] for a value of `PoolNode`.
+fn last_reference_on_the_pool(in_list: bool) -> Arc<Probe> {
+    pool_node_key();
+    last_reference_of(in_list, pool_node)
+}
+
+/// On a root fiber: builds a value with `make`, held by itself or, with
 /// `in_list`, by a `List` of it; a first `@blocking` call keeps a
 /// duplicate of what the fiber holds, the fiber releases its own
 /// reference, and a second call releases the duplicate on its pool
 /// thread, the last reference. Returns the probe.
-fn last_reference_on_the_pool(in_list: bool) -> Arc<Probe> {
-    pool_node_key();
+fn last_reference_of(
+    in_list: bool,
+    make: impl FnOnce(&crate::ctx::ExecCtx, &Arc<Probe>) -> Word + Send + 'static,
+) -> Arc<Probe> {
     let domain = Domain::new();
     let probe = Probe::new();
     let p = Arc::clone(&probe);
@@ -695,7 +710,7 @@ fn last_reference_on_the_pool(in_list: bool) -> Arc<Probe> {
     let outcome = on_root(2, &domain, move |me| {
         p.owner.store(ctx_ptr(me).addr(), Ordering::SeqCst);
         let before = d.live_objects();
-        let node = pool_node(me, &p);
+        let node = make(me, &p);
         let held = if in_list {
             list::from_iter([node])
         } else {
@@ -1457,12 +1472,13 @@ fn ffi_pool_job_drop_of_a_call_whose_allocation_failed_runs_on_the_fiber() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// The child's body of
-/// [`ffi_pool_job_drop_inline_for_another_fiber_runs_on_that_fiber`]: as
-/// [`refused_pair`], each root keeps the last reference to a value of its
-/// own and its call releases it. One root runs both jobs.
-fn inline_drops() {
-    pool_node_key();
+/// As [`refused_pair`], each root keeps the last reference to a value of its
+/// own that `make` builds, and its call releases it. One root runs both
+/// jobs. Each root returns 1 when its call neither raised nor returned a
+/// value.
+fn refused_releases(
+    make: impl FnOnce(&crate::ctx::ExecCtx, &Arc<Probe>) -> Word + Copy + Send + 'static,
+) -> [Ran; 2] {
     let pool = crate::pool::Pool::global();
     pool.refuse_until_queued(2);
     pool.refuse_threads(true);
@@ -1473,7 +1489,7 @@ fn inline_drops() {
         let p = Arc::clone(&probe);
         let root = testing::start_root_with(&runtime, &config(&domain), move |me| {
             p.owner.store(ctx_ptr(me).addr(), Ordering::SeqCst);
-            keep_the_last_reference(&p, pool_node(me, &p));
+            keep_the_last_reference(&p, make(me, &p));
             let args = [p.word()];
             // SAFETY: the running fiber's context, one argument word for a
             // shim whose probe this closure keeps alive, and static code.
@@ -1488,10 +1504,24 @@ fn inline_drops() {
         (root, probe, domain)
     };
     let (a, b) = (start(), start());
+    let ended = |(root, probe, domain): (std::sync::mpsc::Receiver<EntryOutcome>, _, _)| {
+        let outcome = root.recv_timeout(testing::hang()).expect("a root hung");
+        (outcome, probe, domain)
+    };
+    let pair = [ended(a), ended(b)];
+    runtime.shutdown();
+    pool.refuse_threads(false);
+    pair
+}
+
+/// The child's body of
+/// [`ffi_pool_job_drop_inline_for_another_fiber_runs_on_that_fiber`]: one
+/// root runs both jobs of [`refused_releases`].
+fn inline_drops() {
+    pool_node_key();
     let mut threads = Vec::new();
     let mut after_shim = 0_usize;
-    for (root, probe, domain) in [a, b] {
-        let outcome = root.recv_timeout(testing::hang()).expect("a root hung");
+    for (outcome, probe, domain) in refused_releases(pool_node) {
         assert_eq!(outcome, EntryOutcome::Returned(1), "{outcome:?}");
         assert_eq!(
             (
@@ -1514,8 +1544,6 @@ fn inline_drops() {
         threads.push(*probe.thread.lock());
         assert_eq!(domain.live_objects(), 0, "objects leaked");
     }
-    runtime.shutdown();
-    pool.refuse_threads(false);
     assert!(threads[0].is_some(), "a shim did not run");
     assert_eq!(threads[0], threads[1], "no root ran the other's job");
     assert_eq!(
@@ -1766,4 +1794,282 @@ fn ffi_pool_abandon_a_job_that_deferred_keeps_its_drop_unrun() {
     );
     assert!(status.success(), "{status}: {stderr}");
     assert!(stderr.contains("kept unrun ok\n"), "{stderr}");
+}
+
+// The last reference to a std handle released off its fiber (the M3 CP4
+// review's Open list: D-1307 covers user external types only). These tests
+// read which thread a std handle's finalizer runs on, for each actor of a
+// `@blocking` call: `handles::handle_finalize` has no job test.
+
+/// The kinds with a payload, 40 to 43 and 45 to 47: every std handle that
+/// has a finalizer.
+const STD_KINDS: [HandleKind; 7] = [
+    HandleKind::Sender,
+    HandleKind::Receiver,
+    HandleKind::Fiber,
+    HandleKind::Scope,
+    HandleKind::File,
+    HandleKind::Listener,
+    HandleKind::Connection,
+];
+
+/// A test payload for any of [`STD_KINDS`]. A real `Sender`'s finalizer
+/// shows no thread, so this one goes through the same path, the kind, the
+/// vtable, `handle_finalize` and `finalize_payload`, and records where it
+/// ran in the probe.
+struct ThreadProbe {
+    probe: Arc<Probe>,
+}
+
+impl HandlePayload for ThreadProbe {
+    fn finalize(self: Box<Self>, _release: &mut dyn FnMut(Word)) {
+        let probe = &self.probe;
+        let on_pool = thread::current().name() == Some(THREAD_NAME);
+        probe.drop_on_pool.store(on_pool, Ordering::SeqCst);
+        *probe.drop_thread.lock() = Some(thread::current().id());
+        *probe.drop_thread_name.lock() = thread::current().name().map(str::to_owned);
+        let fiber = tls::current_fiber().addr();
+        probe.drop_fiber.store(fiber, Ordering::SeqCst);
+        probe.drop_owner_current.store(
+            fiber == probe.owner.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        probe
+            .drop_after_shim
+            .store(probe.done.load(Ordering::SeqCst), Ordering::SeqCst);
+        probe.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// A new handle of `kind`, owned by the running fiber `me`, whose finalizer
+/// reports to `probe`.
+fn std_handle(me: &crate::ctx::ExecCtx, probe: &Arc<Probe>, kind: HandleKind) -> Word {
+    let payload = Box::new(ThreadProbe {
+        probe: Arc::clone(probe),
+    });
+    // SAFETY: the running fiber's control block.
+    unsafe { new_handle(ctx_ptr(me), kind, payload) }
+}
+
+/// What the finalizer of a handle of `kind` read, for the test's output.
+fn read_line(actor: &str, kind: HandleKind, probe: &Probe) -> String {
+    let fiber = probe.drop_fiber.load(Ordering::SeqCst);
+    let owner = probe.drop_owner_current.load(Ordering::SeqCst);
+    let fiber = match (fiber, owner) {
+        (0, _) => "none",
+        (_, true) => "owner",
+        (_, false) => "another",
+    };
+    format!(
+        "std-handle read: {actor}: {kind:?}: thread {:?}, fiber current: {fiber}, after the shim: {}",
+        probe.drop_thread_name.lock(),
+        probe.drop_after_shim.load(Ordering::SeqCst),
+    )
+}
+
+/// What the code does with a std handle whose last reference a pool thread
+/// released for its parked fiber: its finalizer ran once, on the pool thread
+/// that ran the shim, inside the release, with no fiber of the job current,
+/// and nothing of the value is left in the fiber's domain. D-1307's deferral
+/// does not reach it.
+fn check_finalized_on_the_pool(kind: HandleKind, probe: &Probe) {
+    assert!(
+        probe.on_pool.load(Ordering::SeqCst),
+        "{kind:?}: the second call did not run on a pool thread"
+    );
+    assert_eq!(
+        probe.drops.load(Ordering::SeqCst),
+        1,
+        "{kind:?}: not finalized exactly once"
+    );
+    assert_eq!(
+        probe.drops_at_return.load(Ordering::SeqCst),
+        1,
+        "{kind:?}: not finalized when the call returned to the fiber"
+    );
+    assert!(
+        probe.drop_on_pool.load(Ordering::SeqCst),
+        "{kind:?}: the finalizer did not run on a pool thread"
+    );
+    assert_eq!(
+        *probe.drop_thread.lock(),
+        *probe.thread.lock(),
+        "{kind:?}: the finalizer ran on another thread than the shim"
+    );
+    assert!(
+        !probe.drop_after_shim.load(Ordering::SeqCst),
+        "{kind:?}: the finalizer ran after the shim returned"
+    );
+    assert!(
+        !probe.drop_owner_current.load(Ordering::SeqCst),
+        "{kind:?}: the finalizer ran with the owner fiber current"
+    );
+    assert_eq!(
+        probe.live_left.load(Ordering::SeqCst),
+        0,
+        "{kind:?}: objects of the value are left in the fiber's domain"
+    );
+}
+
+/// D-171, D-703, D-950, D-1307: a `cheby_ffi_drop` on a pool thread that
+/// releases the last reference to a std handle of any kind runs its
+/// finalizer there.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_job_std_handle_on_the_pool_finalizer_thread() {
+    for kind in STD_KINDS {
+        let probe = last_reference_of(false, move |me, p| std_handle(me, p, kind));
+        check_finalized_on_the_pool(kind, &probe);
+        eprintln!("{}", read_line("pool", kind, &probe));
+    }
+}
+
+/// D-171, D-703, D-950, D-1307: the same when the pool thread releases a
+/// `List` that holds the last reference, so that the free cascades through
+/// the list to the handle.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_job_std_handle_in_a_list_on_the_pool_finalizer_thread() {
+    for kind in STD_KINDS {
+        let probe = last_reference_of(true, move |me, p| std_handle(me, p, kind));
+        check_finalized_on_the_pool(kind, &probe);
+        eprintln!("{}", read_line("pool, in a list", kind, &probe));
+    }
+}
+
+/// The control of the two tests above: the fiber's own `rc::drop` of the
+/// last reference, with no job installed, finalizes on the fiber, so the
+/// probe reads both answers.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_job_std_handle_on_its_fiber_finalizer_thread() {
+    for kind in STD_KINDS {
+        let domain = Domain::new();
+        let probe = Probe::new();
+        let p = Arc::clone(&probe);
+        let outcome = on_root(2, &domain, move |me| {
+            p.owner.store(ctx_ptr(me).addr(), Ordering::SeqCst);
+            let handle = std_handle(me, &p, kind);
+            let no_job = current_job().is_none();
+            // SAFETY: the fiber's own reference, the last one.
+            unsafe { rc::drop(handle) };
+            drop(p);
+            u64::from(no_job)
+        });
+        assert_eq!(outcome, EntryOutcome::Returned(1), "{kind:?}: {outcome:?}");
+        assert_eq!(
+            probe.drops.load(Ordering::SeqCst),
+            1,
+            "{kind:?}: not finalized exactly once"
+        );
+        assert!(
+            !probe.drop_on_pool.load(Ordering::SeqCst),
+            "{kind:?}: the finalizer ran on a pool thread"
+        );
+        assert!(
+            probe.drop_owner_current.load(Ordering::SeqCst),
+            "{kind:?}: the finalizer ran without its owner fiber current"
+        );
+        assert_eq!(domain.live_objects(), 0, "{kind:?}: objects leaked");
+        eprintln!("{}", read_line("the fiber's own drop", kind, &probe));
+    }
+}
+
+/// The child's body of
+/// [`ffi_pool_job_std_handle_inline_for_another_fiber_finalizer_thread`]:
+/// per kind, one root runs both jobs of [`refused_releases`]. Each handle is
+/// finalized inside its release on that root's thread. The job of the fiber
+/// that ran both has its owner current. The other's finalizer, the second
+/// actor of D-1307, runs with no fiber current at all: the fiber that runs
+/// another's job stops being current for the shim (D-1268).
+fn inline_std_handles() {
+    for kind in STD_KINDS {
+        let pair = refused_releases(move |me, p| std_handle(me, p, kind));
+        let mut for_another = 0_usize;
+        for (outcome, probe, domain) in &pair {
+            assert_eq!(*outcome, EntryOutcome::Returned(1), "{kind:?}: {outcome:?}");
+            assert_eq!(
+                (
+                    probe.drops.load(Ordering::SeqCst),
+                    probe.drops_at_return.load(Ordering::SeqCst)
+                ),
+                (1, 1),
+                "{kind:?}: not finalized once before the call returned"
+            );
+            assert!(
+                !probe.on_pool.load(Ordering::SeqCst),
+                "{kind:?}: a shim ran on a pool thread"
+            );
+            assert!(
+                !probe.drop_on_pool.load(Ordering::SeqCst),
+                "{kind:?}: the finalizer ran on a pool thread"
+            );
+            assert_eq!(
+                *probe.drop_thread.lock(),
+                *probe.thread.lock(),
+                "{kind:?}: the finalizer ran on another thread than the shim"
+            );
+            assert!(
+                !probe.drop_after_shim.load(Ordering::SeqCst),
+                "{kind:?}: the finalizer ran after the shim returned"
+            );
+            assert_eq!(domain.live_objects(), 0, "{kind:?}: objects leaked");
+            if !probe.drop_owner_current.load(Ordering::SeqCst) {
+                for_another = for_another.saturating_add(1);
+                assert_eq!(
+                    probe.drop_fiber.load(Ordering::SeqCst),
+                    0,
+                    "{kind:?}: the fiber that ran the job was still current (D-1268)"
+                );
+                eprintln!("{}", read_line("inline for another fiber", kind, probe));
+            }
+        }
+        assert_eq!(
+            *pair[0].1.thread.lock(),
+            *pair[1].1.thread.lock(),
+            "{kind:?}: no root ran the other's job"
+        );
+        assert_eq!(
+            for_another, 1,
+            "{kind:?}: one job ran on its own fiber, the other for another fiber"
+        );
+    }
+    eprintln!("inline std handles ok");
+}
+
+/// D-171, D-703, D-817, D-1268, D-1307: the second actor. A fiber that runs
+/// another fiber's job inline after a refused thread acts for that fiber,
+/// and the release of a std handle's last reference finalizes it there.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs entries on fibers; Windows support is M6 (D-545)"
+)]
+fn ffi_pool_job_std_handle_inline_for_another_fiber_finalizer_thread() {
+    const CHILD: &str = "CHEBY_RT_TEST_FFI_INLINE_OTHER_STD_HANDLE";
+    if std::env::var_os(CHILD).is_some() {
+        inline_std_handles();
+        return;
+    }
+    let (status, stderr) = child(
+        "ffi_pool_job_std_handle_inline_for_another_fiber_finalizer_thread",
+        CHILD,
+    );
+    assert!(status.success(), "{status}: {stderr}");
+    assert!(stderr.contains("inline std handles ok\n"), "{stderr}");
+    for line in stderr
+        .lines()
+        .filter(|l| l.starts_with("std-handle read: "))
+    {
+        eprintln!("{line}");
+    }
 }

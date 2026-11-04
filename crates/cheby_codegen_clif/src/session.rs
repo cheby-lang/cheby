@@ -193,7 +193,7 @@ fn is_item_name(name: &str) -> bool {
 }
 
 /// Whether `module` is the path of a REPL entry module, `<repl:N>`.
-fn is_entry_module(module: &str) -> bool {
+pub(crate) fn is_entry_module(module: &str) -> bool {
     module.starts_with("<repl:") && module.ends_with('>')
 }
 

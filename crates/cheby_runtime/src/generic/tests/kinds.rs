@@ -272,10 +272,33 @@ static POINT_DESC: StaticNominal = StaticNominal::new(
     std::ptr::from_ref(&POINT).cast::<u8>(),
     std::ptr::from_ref(&GEO).cast::<u8>(),
 );
-/// Another type with the same name and module, such as a REPL
-/// redefinition: a different nominal type (§8.6.1).
+/// A copy of `POINT_DESC`, as another object holds one (D-918): other
+/// objects, one type key, one type (GAP(dyn-identity)).
+static GEO_COPY: StaticText<3> = StaticText::new(b"geo");
+static POINT_COPY: StaticText<5> = StaticText::new(b"Point");
+static POINT_COPIED: StaticNominal = StaticNominal::new(
+    std::ptr::from_ref(&POINT_COPY).cast::<u8>(),
+    std::ptr::from_ref(&GEO_COPY).cast::<u8>(),
+);
+/// A REPL redefinition of `Point`, as code generation emits it: the same
+/// printed name, and the module path of the entry that declared it, so a
+/// different nominal type (§8.6.1).
+static ENTRY: StaticText<8> = StaticText::new(b"<repl:7>");
 static POINT_AGAIN: StaticNominal = StaticNominal::new(
     std::ptr::from_ref(&POINT).cast::<u8>(),
+    std::ptr::from_ref(&ENTRY).cast::<u8>(),
+);
+/// A type of one printed name in a reloaded version of the module, whose
+/// path carries the reload's generation (D-625).
+static GEO_RELOADED: StaticText<7> = StaticText::new(b"geo<r1>");
+static POINT_RELOADED: StaticNominal = StaticNominal::new(
+    std::ptr::from_ref(&POINT).cast::<u8>(),
+    std::ptr::from_ref(&GEO_RELOADED).cast::<u8>(),
+);
+/// Another name in the same module.
+static LINE: StaticText<4> = StaticText::new(b"Line");
+static LINE_DESC: StaticNominal = StaticNominal::new(
+    std::ptr::from_ref(&LINE).cast::<u8>(),
     std::ptr::from_ref(&GEO).cast::<u8>(),
 );
 
@@ -332,6 +355,10 @@ fn descriptors_compare_by_structure_and_print_as_types() {
         assert_eq!(eq(builtin("int"), builtin("i64")), Ok(false));
         let point = POINT_DESC.word();
         assert_eq!(eq(point, POINT_AGAIN.word()), Ok(false));
+        assert_eq!(eq(point, POINT_RELOADED.word()), Ok(false));
+        assert_eq!(eq(point, LINE_DESC.word()), Ok(false));
+        assert_eq!(eq(point, POINT_COPIED.word()), Ok(true));
+        assert_eq!(hashed(point), hashed(POINT_COPIED.word()));
         let point_applied = applied(point, &[]);
         assert_eq!(eq(point, point_applied), Ok(true));
         assert_eq!(hashed(point), hashed(point_applied));

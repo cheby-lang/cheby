@@ -19,7 +19,7 @@ use crate::jit_unit::Seed;
 use crate::layout::builtin_layout_id;
 use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
-use crate::session::{SessionName, SessionNames};
+use crate::session::{SessionName, SessionNames, is_entry_module};
 use crate::sig;
 use crate::{CodegenError, ForeignImport};
 
@@ -250,6 +250,26 @@ impl std::fmt::Debug for Decls {
             .field("statics", &self.statics.len())
             .finish_non_exhaustive()
     }
+}
+
+/// Refuses a nominal descriptor whose symbol its module path does not
+/// give, outside a REPL entry: the runtime tells types apart by the module
+/// word, which the validator holds to that path, so what tells two types
+/// apart in a symbol must be in the word too (GAP(dyn-identity)).
+pub(crate) fn check_nominal_symbol(
+    object: &StaticObject,
+    symbol: &str,
+) -> Result<(), CodegenError> {
+    if object.layout != LayoutRef::DescNominal
+        || is_entry_module(&object.module)
+        || symbol == mangle::static_object(Kind::Desc, &object.module, &object.name)
+    {
+        return Ok(());
+    }
+    Err(CodegenError::ice(format!(
+        "the symbol `{symbol}` of a nominal descriptor does not follow its module path `{}`",
+        object.module
+    )))
 }
 
 /// The contents of a static object in a form that does not depend on its
@@ -1790,6 +1810,7 @@ impl Decls {
         let mut ids = Vec::with_capacity(unit.statics.len());
         for object in &unit.statics {
             let symbol = self.static_symbol(object);
+            check_nominal_symbol(object, &symbol)?;
             let print = static_print(self, unit, object);
             match self.static_prints.get(&symbol) {
                 Some(earlier) if *earlier != print => {

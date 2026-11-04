@@ -1126,3 +1126,23 @@ fn alone_check_accepts_only_generated_imports() {
     assert!(!decls.is_generated_import("cheby_rt_alloc"));
     assert!(!decls.is_generated_import("cb$libcall$Memcpy"));
 }
+
+/// GAP(dyn-identity): a nominal descriptor's symbol follows its module path,
+/// which is the word the runtime compares, but for a REPL entry's, whose
+/// symbol carries the generation.
+#[test]
+fn a_nominal_symbol_follows_its_module_path() {
+    let object = |module: &str| StaticObject {
+        id: StaticId::from_u32(0),
+        kind: StaticKind::Desc,
+        module: module.into(),
+        name: "T".into(),
+        layout: LayoutRef::DescNominal,
+        fields: Box::new([]),
+        strings: IndexVec::new(),
+    };
+    decls::check_nominal_symbol(&object("app::m"), "cb$desc$app$m$$T").unwrap();
+    decls::check_nominal_symbol(&object("<repl:3>"), "cb$desc$<repl>$$T$r1").unwrap();
+    let err = decls::check_nominal_symbol(&object("app::m"), "cb$desc$pkg$app$m$$T").unwrap_err();
+    assert!(err.to_string().contains("does not follow"), "{err}");
+}
