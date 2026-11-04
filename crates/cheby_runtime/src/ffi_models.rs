@@ -469,9 +469,9 @@ fn ffi_pool_model_an_unlocked_mark_fails() {
 
 // Drop functions a pool thread leaves to the owner fiber (D-171, D-950) -----
 //
-// GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: a
+// D-1307: a
 // `cheby_ffi_drop` on a pool thread that releases the last reference to a
-// value of an external type runs its free there, but the type's drop
+// value of a user external type runs its free there, but the type's drop
 // function waits for the fiber the job acts for. The protocol, as `ffi.rs`,
 // `ffi_pool.rs` and `sched/blocking.rs` implement it:
 //
@@ -648,7 +648,7 @@ fn defer_model(variant: DeferVariant) {
     });
 }
 
-/// GAP(ffi-pool-drop): the runtime's protocol: every drop function a pool
+/// D-1307: the runtime's protocol: every drop function a pool
 /// thread's release defers runs once, on the owner fiber, when it is
 /// woken, and none runs for an abandoned job.
 #[test]
@@ -674,7 +674,7 @@ fn ffi_pool_model_a_drop_on_the_pool_thread_fails() {
 
 // A call inline on its own fiber after a racing give-up (D-815, D-1269) -----
 //
-// GAP(ffi-inline-abandon), refining D-1269 (and D-815, D-950): registration
+// D-1308: registration
 // marks a job only while the runtime halts, no longer once its stop gave
 // up, and a job that a give-up marked while it ran inline on its own fiber
 // leaves the abandoned list after it. The protocol:
@@ -850,7 +850,7 @@ fn inline_model(variant: InlineVariant) {
     });
 }
 
-/// GAP(ffi-inline-abandon): the runtime's protocol: a job that a racing
+/// D-1308: the runtime's protocol: a job that a racing
 /// give-up marked and that then ran inline leaves the abandoned list, and
 /// a marked job on a pool thread stays in it.
 #[test]

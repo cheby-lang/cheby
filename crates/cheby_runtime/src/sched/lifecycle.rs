@@ -117,7 +117,7 @@ pub struct DetachedGroup {
     jobs: Mutex<TrackedJobs>,
     /// Set while [`Runtime::teardown`] tears the group's fibers down: the
     /// values they release meanwhile call no user drop function (D-949,
-    /// D-710; `ffi::finalize_external`).
+    /// D-710; `ffi::finalize_external`, `ffi::run_deferred_drops`).
     tearing_down: AtomicBool,
 }
 

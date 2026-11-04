@@ -371,6 +371,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1303    | RB-3's warm restart stays for M3; a partial second check is designed in M4 with the warm start      |
 | D-1304    | X1 reads D-247's 500 ms and brings options to revise it, such as a budget per shape                 |
 | D-1305    | The cache's cold cost is accepted at CP3; a cold `run`'s profile is read in X1's window             |
+| D-1310    | Wave 12's x86-64 reading is carried to the committed tree, once; D-1272 stands for later waves      |
 
 ## Open questions
 

@@ -96,10 +96,10 @@ Channels close when their last `Sender` or last `Receiver` is dropped ([§10.5](
 
 The native drop function of a user external type is a C function `void f(void *handle)` ([§12.5.3](12-targets-and-ffi.md#1253-external-types)). Its contract is weaker than that of the standard library's drop functions, because C code cannot be checked (D-949):
 
-- It is called once, on the fiber that released the last reference, while that fiber runs or unwinds, and never with a NULL handle.
+- It is called once, on the fiber that released the last reference, while that fiber runs or unwinds, and never with a NULL handle. A release by a `@blocking` function is its calling fiber's, and on the pool's thread the drop function runs when the call returns ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)) (D-1307).
 - It may release Cheby values with `cheby_ffi_drop`, build values with `cheby.h`, and write with `cheby_ffi_write_stdout` and `cheby_ffi_write_stderr` ([§12.5.1](12-targets-and-ffi.md#1251-native-abi)).
 - It should return quickly, like every foreign call without `@blocking` ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)). If it blocks, it blocks its thread. A drop function cannot be `@blocking`.
-- It is not called for the handles that detached fibers still hold when the program ends ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-710).
+- It is not called for the handles that detached fibers still hold when the program ends ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-710), nor for the handles that a `@blocking` call left to its fiber, when the call is abandoned or the fiber is being stopped as the program ends ([§12.7](12-targets-and-ffi.md#127-blocking-foreign-calls)) (D-710, D-1307).
 
 _Note:_ the drop functions of the standard library's handles never block, suspend, panic or run Cheby code ([§10.5](10-concurrency.md#105-channels)) (D-672, D-703). The reference implementation runs them from M2, and the drop functions of user external types from M3 (D-703, D-949). While a drop function runs, a `cheby_ffi_drop` that releases another handle queues its release behind the running one instead of starting a nested release, so a chain of handles that each hold the next does not grow the stack (D-949).
 

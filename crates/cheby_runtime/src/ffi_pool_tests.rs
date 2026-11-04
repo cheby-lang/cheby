@@ -1077,8 +1077,8 @@ fn calls_after_a_give_up() {
     eprintln!("calls after a give-up ok");
 }
 
-/// D-815, D-786, D-1268, D-1269 as wave 12 refines it
-/// (`GAP(ffi-inline-abandon)`): calls that a fiber makes after a stop gave
+/// D-815, D-786, D-1268, D-1269 as D-1308 refines it:
+/// calls that a fiber makes after a stop gave
 /// up on the pool run inline on that fiber, their allocations and output
 /// work, and the abandoned list keeps no job of them, nor of the call the
 /// give-up marked while it ran inline.
@@ -1098,7 +1098,7 @@ fn ffi_pool_abandon_calls_after_a_give_up_are_not_kept() {
     assert!(stderr.contains("calls after a give-up ok\n"), "{stderr}");
 }
 
-/// D-1269 as wave 12 refines it (`GAP(ffi-inline-abandon)`): a job that a
+/// D-1269 as D-1308 refines it: a job that a
 /// give-up marked between its registration and its run, the race of
 /// `register_ffi_job` with `enter`'s test of the give-up, and that then
 /// ran inline on its own fiber, leaves the abandoned list once it is
@@ -1209,7 +1209,7 @@ fn call_after_a_halt() {
 /// allocation returns NULL, its output returns -1, its job is kept until
 /// the process exits, and its completion does not wake the fiber. This
 /// pins D-1269's logged rule ("marks it at once when the runtime already
-/// halts"), which wave 12 keeps.
+/// halts"), which D-1308 keeps.
 #[test]
 #[cfg_attr(
     windows,
@@ -1292,7 +1292,7 @@ fn calls_after_a_give_up_without_a_halt() {
     eprintln!("not marked ok");
 }
 
-/// D-1269 as wave 12 refines it (`GAP(ffi-inline-abandon)`): a job that
+/// D-1269 as D-1308 refines it: a job that
 /// registers after a give-up with no halt is not marked at its registration
 /// (a halt still marks one, [`ffi_pool_abandon_a_call_after_a_halt_runs_marked`]),
 /// so it is never on the abandoned list, even while its call runs.
@@ -1364,7 +1364,7 @@ unsafe extern "C" fn drop_then_wait_shim(args: *const u64, out: *mut u64) {
     unsafe { out.write(0) };
 }
 
-/// D-171, D-816, D-950, `GAP(ffi-pool-drop)`: a call cancelled while its
+/// D-171, D-816, D-950, D-1307: a call cancelled while its
 /// shim runs still runs the drop function its job left to the fiber, once,
 /// before the cancellation unwinds the fiber.
 #[test]
@@ -1417,7 +1417,7 @@ fn ffi_pool_job_drop_of_a_cancelled_call_runs_on_the_fiber() {
     assert_eq!(domain.live_objects(), 0, "objects leaked");
 }
 
-/// D-171, D-946, D-950, `GAP(ffi-pool-drop)`: a call whose allocation fails
+/// D-171, D-946, D-950, D-1307: a call whose allocation fails
 /// after its release still runs the drop function on the fiber, before the
 /// `out of memory` panic is raised there.
 #[test]
@@ -1525,7 +1525,7 @@ fn inline_drops() {
     eprintln!("inline drops ok");
 }
 
-/// D-171, D-817, D-950, D-1268, `GAP(ffi-pool-drop)`: a fiber that runs
+/// D-171, D-817, D-950, D-1268, D-1307: a fiber that runs
 /// another fiber's job inline acts for that fiber as a pool thread would:
 /// the drop function waits for the job's own fiber, while the job that ran
 /// inline on its own fiber runs its drop function there at once.
@@ -1624,7 +1624,7 @@ fn chain_node(
     unsafe { crate::ffi::cheby_rt_ffi_external(ctx_ptr(me), handle, chain_node_key()) }
 }
 
-/// D-171, D-949, `GAP(ffi-pool-drop)`: the drop function a job left to its
+/// D-171, D-949, D-1307: the drop function a job left to its
 /// fiber runs under the drop-function mark, so a `cheby_ffi_drop` inside it
 /// queues onto the running worklist: a chain of three values ends in order,
 /// all on the fiber.
@@ -1668,7 +1668,7 @@ fn ffi_pool_job_drop_of_a_chain_runs_on_the_fiber_in_order() {
     assert_eq!(probe.live_left.load(Ordering::SeqCst), 0, "objects leaked");
 }
 
-/// D-710, D-949, `GAP(ffi-pool-drop)`: a fiber whose group is being torn
+/// D-710, D-949, D-1307: a fiber whose group is being torn
 /// down does not run the drop functions its job left to it, as the
 /// finalizer runs none there; the value's block is freed all the same.
 #[test]
@@ -1746,7 +1746,7 @@ fn deferred_then_abandoned() {
     eprintln!("kept unrun ok");
 }
 
-/// D-815, D-949, `GAP(ffi-pool-drop)`: a job that a give-up abandoned after
+/// D-815, D-949, D-1307: a job that a give-up abandoned after
 /// it took a drop function never resumes its fiber, so the handle stays
 /// with the job, unrun, on every thread.
 #[test]

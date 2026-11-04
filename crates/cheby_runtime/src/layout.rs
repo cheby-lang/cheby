@@ -967,7 +967,9 @@ unsafe fn external_children(_: Word, _: &mut dyn FnMut(Word)) {}
 /// Its finalizer calls the type's native drop function, if its layout has
 /// one ([`register_external_with_drop`]), once, inline on the releasing
 /// fiber, never with a NULL handle and never during a teardown
-/// (`ffi::finalize_external`, D-949, D-703, D-710).
+/// (`ffi::finalize_external`, D-949, D-703, D-710). On a thread acting for
+/// a package `@blocking` call's parked fiber it leaves the call to that
+/// fiber (D-1307).
 pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
     name: "external handle",
     size: external_size,

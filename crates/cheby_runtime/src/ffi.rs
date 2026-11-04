@@ -62,7 +62,7 @@
 //! `EXTERNAL_HANDLE`'s finalizer, calls it once, inline on the fiber that
 //! released the last reference, from the free worklist, in cleanup pads
 //! too, never with a NULL handle, and not while a teardown tears the
-//! fiber's group down (D-949, D-710). GAP(ffi-pool-drop): a release on a
+//! fiber's group down (D-949, D-710). D-1307: a release on a
 //! thread acting for a package `@blocking` call's parked fiber leaves the
 //! drop function to that fiber, which runs it when the call returns
 //! ([`run_deferred_drops`]). While it runs, the thread's
@@ -258,7 +258,8 @@ fn handle_addr(handle: Word) -> usize {
 /// `EXTERNAL_HANDLE`'s finalizer (D-949, D-703): calls the drop function
 /// of the dying value's layout, if it has one, with its handle, unless the
 /// handle is NULL or a teardown tears the releasing fiber's group down
-/// (D-710).
+/// (D-710). On a thread acting for a job's parked fiber it leaves the call
+/// to that fiber (D-1307).
 ///
 /// # Safety
 ///
@@ -278,7 +279,7 @@ pub(crate) unsafe fn finalize_external(word: Word, release: &mut dyn FnMut(Word)
     if handle == 0 {
         return;
     }
-    // GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: on a
+    // D-1307: on a
     // thread acting for a job's parked fiber (a pool thread, or a worker
     // running another fiber's job inline), the drop function waits for
     // that fiber, which released the last reference through the job: the
@@ -296,7 +297,7 @@ pub(crate) unsafe fn finalize_external(word: Word, release: &mut dyn FnMut(Word)
     unsafe { run_drop(drop, handle, release) };
 }
 
-/// GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: runs, on
+/// D-1307: runs, on
 /// the fiber that `job` acts for and in the order of their releases, the
 /// drop functions that its calls left to it ([`finalize_external`]), each
 /// as the finalizer would: under the thread's drop-function mark, with

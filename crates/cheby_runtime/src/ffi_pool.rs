@@ -33,24 +33,25 @@
 //!   moves a reference to the job, and so to its domain, into a list kept
 //!   until the process exits ([`ABANDONED`]), because a call that entered
 //!   before the mark may still charge it, and C code may still read the
-//!   borrowed arguments the parked fiber holds (D-950).
-//! - GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: a call
-//!   that releases the last reference to a value of an external type frees
-//!   the value's block on this thread, charged to the fiber's domain, but
-//!   leaves the type's drop function to the fiber: the job keeps it with
-//!   its handle ([`FfiJob::defer_drop`], from `ffi::finalize_external`),
-//!   and the fiber runs it when the call returns, before anything else
-//!   (`ffi::run_deferred_drops`). A job that a give-up or a halt abandoned
-//!   never resumes its fiber, so its handles stay with it, unrun (D-815).
+//!   borrowed arguments the parked fiber holds (D-950). D-1308 takes a
+//!   job that ran inline on its own fiber off that list (below).
+//! - D-1307: a call that releases the last reference to a value of a user
+//!   external type frees the value's block on this thread, charged to the
+//!   fiber's domain, but leaves the type's drop function to the fiber: the
+//!   job keeps it with its handle ([`FfiJob::defer_drop`], from
+//!   `ffi::finalize_external`), and the fiber runs it when the call
+//!   returns, before anything else (`ffi::run_deferred_drops`). A job that
+//!   a give-up or a halt abandoned on a pool thread or on another fiber's
+//!   worker never resumes its fiber, so its handles stay with it, unrun
+//!   (D-815).
 //!
 //! A call that runs inline on its own fiber (no runtime, a refused pool
 //! thread, a stop that gave up, D-692, D-815, D-817) needs no job: its
 //! fiber is current there, and `cheby.h` acts for it directly.
-//! GAP(ffi-inline-abandon), refining D-1269: such a job is marked at its
-//! registration only during a halt, and when a give-up or a halt marked it
-//! while it ran inline, it leaves the abandoned list once it is
-//! unregistered ([`release_if_ran_inline`]), since no pool thread acted
-//! for it.
+//! D-1308: such a job is marked at its
+//! registration only during a halt, and a marked job that ran inline
+//! leaves the abandoned list once it is unregistered
+//! ([`release_if_ran_inline`]), since no pool thread acted for it.
 //! D-1268: after a refused pool thread, a fiber runs
 //! every queued job inline (D-817), other fibers' among them. For another
 //! fiber's job, [`run_as_job`] makes the running fiber stop being current
@@ -90,14 +91,13 @@ pub(crate) struct FfiJob {
     /// Set by the pool thread when an allocation of the job failed
     /// (D-946); read by the fiber after its wake.
     failed: AtomicBool,
-    /// GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: the
-    /// drop functions, with their handles, of the values of external types
-    /// whose last reference a call of the job released on a thread acting
-    /// for the parked fiber ([`FfiJob::defer_drop`]); the fiber runs them
-    /// when the call returns (`ffi::run_deferred_drops`). A leaf lock, never
-    /// held with another lock or across a call.
+    /// D-1307: the drop functions, with their handles, of the values of
+    /// user external types whose last reference a call of the job released
+    /// on a thread acting for the parked fiber ([`FfiJob::defer_drop`]); the
+    /// fiber runs them when the call returns (`ffi::run_deferred_drops`). A
+    /// leaf lock, never held with another lock or across a call.
     deferred: Mutex<Vec<(ExternalDrop, Word)>>,
-    /// GAP(ffi-inline-abandon), refining D-1269: set by [`run_as_job`] when
+    /// D-1308: set by [`run_as_job`] when
     /// the job ran inline on its own fiber, so no pool thread ever acted
     /// for it ([`release_if_ran_inline`]).
     ran_inline: AtomicBool,
@@ -114,7 +114,8 @@ struct JobState {
 
 /// The jobs a give-up or a halt abandoned, kept with their domains until
 /// the process exits (D-950: teardown never frees a domain that an
-/// abandoned job names). A leaf lock.
+/// abandoned job names), but for a job that ran inline on its own fiber,
+/// which leaves once it is unregistered (D-1308). A leaf lock.
 static ABANDONED: Mutex<Vec<Arc<FfiJob>>> = Mutex::new(Vec::new());
 
 impl FfiJob {
@@ -156,7 +157,8 @@ impl FfiJob {
 
     /// Marks the job abandoned under the per-job lock (a give-up or a halt,
     /// D-815, D-950) and keeps it, with its domain, until the process
-    /// exits. Returns the number of the job's calls in flight at the mark,
+    /// exits, unless it ran inline on its own fiber (D-1308). Returns the
+    /// number of the job's calls in flight at the mark,
     /// or `None` when it was marked already.
     pub(crate) fn abandon(self: &Arc<Self>) -> Option<u32> {
         let in_flight = {
@@ -176,7 +178,7 @@ impl FfiJob {
         self.state.lock().abandoned
     }
 
-    /// GAP(ffi-pool-drop): keeps the drop function `drop` of a value of an
+    /// D-1307: keeps the drop function `drop` of a value of a user
     /// external type whose last reference a call of the job released off
     /// the parked fiber, with the value's non-NULL `handle`, for the fiber
     /// to run when the call returns (D-171, D-949). Under the leaf lock of
@@ -185,7 +187,7 @@ impl FfiJob {
         self.deferred.lock().push((drop, handle));
     }
 
-    /// GAP(ffi-pool-drop): takes the drop functions the job's calls left
+    /// D-1307: takes the drop functions the job's calls left
     /// to its fiber, in the order of their releases.
     pub(crate) fn take_deferred(&self) -> Vec<(ExternalDrop, Word)> {
         std::mem::take(&mut *self.deferred.lock())
@@ -238,7 +240,7 @@ pub(crate) fn run_as_job<R>(job: &Arc<FfiJob>, call: impl FnOnce() -> R) -> R {
     }
     let current = tls::current_fiber();
     if !current.is_null() && current.addr() == job.owner {
-        // GAP(ffi-inline-abandon): no pool thread acts for this job.
+        // D-1308: no pool thread acts for this job.
         job.ran_inline.store(true, Ordering::SeqCst);
         return call();
     }
@@ -281,8 +283,8 @@ fn replace_job(job: Option<Arc<FfiJob>>) -> Option<Arc<FfiJob>> {
     .flatten()
 }
 
-/// GAP(ffi-inline-abandon), refining D-1269 (with D-815 and D-950): takes
-/// `job` off the abandoned list when a give-up or a halt marked it while it
+/// D-1308: takes
+/// `job` off the abandoned list when a give-up or a halt marked it and it
 /// ran inline on its own fiber ([`run_as_job`]). D-1269 keeps an abandoned
 /// job's domain because a pool thread's call may still charge it and C code
 /// may still read the parked fiber's arguments; neither holds for a job

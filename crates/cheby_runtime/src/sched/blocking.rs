@@ -914,17 +914,17 @@ pub unsafe extern "C" fn cheby_rt_blocking_call(
             out
         };
         let word = wait_for_job(Pool::global(), me, call, &Hooks::default());
-        // GAP(ffi-pool-drop), refining D-171, D-949, D-950 and D-1268: the
-        // drop functions the job left to this fiber (the last reference to
-        // a value of an external type, released on a thread acting for it)
-        // run now, on the fiber, before anything else, so that every path
-        // that resumes the fiber runs them: the plain return, a cancelled
-        // call (D-816) and a failed allocation (D-946). A job that a
-        // give-up or a halt abandoned never resumes its fiber, and its
-        // handles stay with it, unrun (D-815, D-949).
+        // D-1307: the drop functions the job left to this fiber (the last
+        // reference to a value of a user external type, released on a thread
+        // acting for it) run now, on the fiber, before anything else, so
+        // that every path that resumes the fiber runs them: the plain
+        // return, a cancelled call (D-816) and a failed allocation (D-946).
+        // A job that a give-up or a halt abandoned on a pool thread or on
+        // another fiber's worker never resumes its fiber, and its handles
+        // stay with it, unrun (D-815, D-949).
         crate::ffi::run_deferred_drops(&job);
-        // GAP(ffi-inline-abandon), refining D-1269: a job that a give-up or
-        // a halt marked while it ran inline on this fiber leaves the
+        // D-1308: a job that a give-up or
+        // a halt marked and that ran inline on this fiber leaves the
         // abandoned list. Its shim returned and `call` unregistered it, so
         // no call of it is in flight and no later mark finds it.
         ffi_pool::release_if_ran_inline(&job);
@@ -961,11 +961,11 @@ pub unsafe extern "C" fn cheby_rt_blocking_call(
 
 /// Registers `job`, a package `@blocking` call's, with `runtime`, so that a
 /// give-up or a halt abandons it (D-950); when the runtime halts already,
-/// marks it at once (D-1269). Under the registry's lock, which the
-/// abandoning side takes after it set its flag, so the job is either
-/// marked by [`abandon_ffi_jobs`] or sees the flag here.
+/// marks it at once (D-1269, D-1308). Under the registry's lock, which the
+/// abandoning side takes after it set its flag, so during a halt the job
+/// is either marked by [`abandon_ffi_jobs`] or sees the flag here.
 ///
-/// GAP(ffi-inline-abandon), refining D-1269 (with D-815 and D-950): a job
+/// D-1308: a job
 /// that registers after a give-up is not marked. Its call runs inline on
 /// its own fiber ([`enter`] reads the give-up after this registration), so
 /// no pool thread acts for it and nothing outside its fiber can use its
