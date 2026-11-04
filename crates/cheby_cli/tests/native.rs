@@ -732,3 +732,125 @@ fn native_start_stop_section_without_retain_may_be_dropped() {
 fn native_start_stop_section_with_retain_is_kept() {
     registry_case("used, retain, ", &["entries: 3\n"]);
 }
+
+/// C code that keeps a duplicate of a `Sender` between two `@blocking`
+/// calls, as C code reaches a value's last reference (D-187, D-945).
+const KEPT_SENDER_C: &str = r"#include <stdint.h>
+#include <cheby.h>
+
+static cheby_value *kept;
+
+int64_t keep_it(cheby_value *s) {
+  kept = cheby_ffi_dup(s);
+  return 0;
+}
+
+int64_t drop_it(void) {
+  cheby_ffi_drop(kept);
+  kept = 0;
+  return 0;
+}
+";
+
+/// Hands a `Sender` to C, which releases its last reference in a second
+/// `@blocking` call, then receives on the closed channel.
+const RELEASED_SENDER_MAIN: &str = r#"//! Releases a `Sender`'s last reference from a `@blocking` call.
+
+import std::channel
+import std::io
+
+@external(native, "keep_it")
+@blocking
+fn keep_it(s: channel::Sender<Int>) -> Int
+
+@external(native, "drop_it")
+@blocking
+fn drop_it() -> Int
+
+fn hand(s: channel::Sender<Int>) -> Int {
+  keep_it(s)
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let a = hand(tx)
+  let b = drop_it()
+  let got = channel::receive(rx)
+  io::println("{a} {b} {got:?}")
+}
+"#;
+
+/// [`RELEASED_SENDER_MAIN`] with no release: C code keeps the `Sender`, so
+/// the channel stays open and nothing can wake the receiver.
+const KEPT_SENDER_MAIN: &str = r#"//! Keeps a `Sender` in C code, so that the receiver never wakes.
+
+import std::channel
+import std::io
+
+@external(native, "keep_it")
+@blocking
+fn keep_it(s: channel::Sender<Int>) -> Int
+
+fn hand(s: channel::Sender<Int>) -> Int {
+  keep_it(s)
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let a = hand(tx)
+  let got = channel::receive(rx)
+  io::println("{a} {got:?}")
+}
+"#;
+
+/// A package with [`KEPT_SENDER_C`] and the root module `main` in `dir/app`,
+/// run under `cheby run` and as an executable.
+fn run_kept_sender(dir: &Path, main: &str) -> [RunOutput; 2] {
+    let root = package(
+        dir,
+        "app",
+        &[
+            (
+                "cheby.toml",
+                "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n\n\
+                 [native]\nsources = [\"src/kept.c\"]\n",
+            ),
+            ("src/kept.c", KEPT_SENDER_C),
+            ("src/main.cheby", main),
+        ],
+    );
+    let run = cheby(&root, &["run"], &[], None);
+    let exe = dir.join("exe").join("app");
+    let build = cheby(&root, &["build", "-o", exe.to_str().unwrap()], &[], None);
+    assert_eq!(build.status, Some(0), "{}", build.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    [run, ran]
+}
+
+/// D-672, D-703, D-950: a `Sender` whose last reference a package's
+/// `@blocking` call releases closes its channel, so the receiver reads
+/// `Err(Nil)` (`ffi_pool_job_std_handle_on_the_pool_finalizer_thread` reads
+/// the thread); the same under `cheby run` and in an executable.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn native_blocking_release_of_a_sender_closes_its_channel() {
+    let tmp = FreshDir::create("cheby-native-sender-release").unwrap();
+    for ran in run_kept_sender(tmp.path(), RELEASED_SENDER_MAIN) {
+        assert_eq!(ran.stderr, "");
+        assert_eq!(ran.stdout, "0 0 Err(Nil)\n");
+        assert_eq!(ran.status, Some(0));
+    }
+}
+
+/// The control of the test above: with no release the channel stays open
+/// and the program ends in a deadlock, so `Err(Nil)` there comes from the
+/// release.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn native_blocking_kept_sender_ends_in_a_deadlock() {
+    let tmp = FreshDir::create("cheby-native-sender-kept").unwrap();
+    for ran in run_kept_sender(tmp.path(), KEPT_SENDER_MAIN) {
+        assert_eq!(ran.stdout, "");
+        assert_eq!(ran.status, Some(103), "{}", ran.stderr);
+    }
+}

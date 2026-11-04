@@ -942,3 +942,377 @@ fn warm_run_test_named_like_a_function() {
         same_output(&ran[1], &ran[2]);
     }
 }
+
+/// What the converting modules of [`dyn_package`] share.
+const DYN_KINDS: &str = "//! What the converting modules share.
+
+/// Satisfied by every type.
+interface Any
+
+/// A generic box.
+type Box<T> {
+  value: T,
+}
+
+/// One field.
+type Point {
+  x: Int,
+}
+
+/// Holds a function, so `==` panics once the descriptors agree.
+type Holder {
+  f: fn(Int) -> Int,
+}
+
+/// Text of a point.
+fn show(p: Point) -> String {
+  let x = p.x
+  \"point {x}\"
+}
+
+/// Boxes `x` for a type parameter: the descriptor is built at run time.
+fn wrap<T: Any>(x: T) -> dyn Any {
+  let b: dyn Any = Box { value: x }
+  b
+}
+";
+
+/// `left` and `right` of [`dyn_package`], the same text: each conversion
+/// happens in the module's own unit, and `Own` and `I` are declared in
+/// each, so they share a printed name and a shape and nothing else.
+const DYN_SIDE: &str = "//! Converts in a unit of its own.
+
+import dynid::kinds
+
+/// Declared in both modules.
+type Own {
+  x: Int,
+}
+
+/// Declared in both modules.
+interface I
+
+/// Declared in both modules, beside `Own`.
+type Other {
+  x: Int,
+}
+
+/// A user type.
+fn plain(x: Int) -> dyn kinds::Any {
+  let b: dyn kinds::Any = kinds::Point { x }
+  b
+}
+
+/// A function value inside a user type.
+fn holder() -> dyn kinds::Any {
+  let b: dyn kinds::Any = kinds::Holder { f: fn(x: Int) -> Int { x } }
+  b
+}
+
+/// A generic type with a user argument, a static descriptor.
+fn generic(x: Int) -> dyn kinds::Any {
+  let b: dyn kinds::Any = kinds::Box { value: kinds::Point { x } }
+  b
+}
+
+/// A descriptor built at run time.
+fn built(x: Int) -> dyn kinds::Any {
+  kinds::wrap(kinds::Point { x })
+}
+
+/// A tuple with a user type.
+fn tuple(x: Int) -> dyn kinds::Any {
+  let b: dyn kinds::Any = (x, kinds::Point { x })
+  b
+}
+
+/// `dyn` of the builtin interface.
+fn show(x: Int) -> dyn Show {
+  let b: dyn Show = kinds::Point { x }
+  b
+}
+
+/// A list of `dyn Show`, boxed.
+fn shows() -> dyn kinds::Any {
+  let xs: List<dyn Show> = []
+  let b: dyn kinds::Any = xs
+  b
+}
+
+/// A list of `dyn` of a user interface, boxed.
+fn anys() -> dyn kinds::Any {
+  let xs: List<dyn kinds::Any> = []
+  let b: dyn kinds::Any = xs
+  b
+}
+
+/// This module's own type.
+fn own(x: Int) -> dyn kinds::Any {
+  let b: dyn kinds::Any = Own { x }
+  b
+}
+
+/// This module's own type inside a generic type of another module.
+fn own_boxed(x: Int) -> dyn kinds::Any {
+  let b: dyn kinds::Any = kinds::Box { value: Own { x } }
+  b
+}
+
+/// A list that differs from the other module's only by which `I`.
+fn own_dyns() -> dyn kinds::Any {
+  let xs: List<dyn I> = []
+  let b: dyn kinds::Any = xs
+  b
+}
+
+/// An empty list: no value to compare, so only the descriptor differs.
+fn own_list() -> dyn kinds::Any {
+  let xs: List<Own> = []
+  let b: dyn kinds::Any = xs
+  b
+}
+
+/// An empty list of this module's other type.
+fn other_list() -> dyn kinds::Any {
+  let xs: List<Other> = []
+  let b: dyn kinds::Any = xs
+  b
+}
+";
+
+/// A `priv` type converted in its module's code unit and in its tests
+/// unit.
+const DYN_SECRET: &str = "//! A private type, converted here.
+
+import dynid::kinds
+
+priv type S {
+  x: Int,
+}
+
+/// A boxed private value.
+fn boxed(x: Int) -> dyn kinds::Any {
+  let b: dyn kinds::Any = S { x }
+  b
+}
+
+test \"a tests unit names the private type\" {
+  let a: dyn kinds::Any = S { x: 1 }
+  assert a == boxed(1)
+}
+";
+
+/// A package `dynid` in `dir` whose root is `main`, with the modules
+/// `kinds`, `left`, `right` and `secret`.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: failing to write the package fails the test"
+)]
+fn dyn_package(dir: &Path, main: &str) -> PathBuf {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("cheby.toml"),
+        "name = \"dynid\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    for (file, text) in [
+        ("main.cheby", main),
+        ("kinds.cheby", DYN_KINDS),
+        ("left.cheby", DYN_SIDE),
+        ("right.cheby", DYN_SIDE),
+        ("secret.cheby", DYN_SECRET),
+    ] {
+        std::fs::write(dir.join("src").join(file), text).unwrap();
+    }
+    dir.to_path_buf()
+}
+
+/// §8.6.1, D-530, GAP(dyn-identity): `dyn` values of one type that two
+/// units converted are equal, for every shape of descriptor, on a cold run
+/// and on a warm one, which loads the copies from two records (D-918), and
+/// in a constant's initializer, whose value the program then holds.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn dyn_values_of_two_modules_are_equal_on_a_run() {
+    let scratch = Scratch::new("dyn-equal");
+    let dir = dyn_package(
+        &scratch.path().join("dynid"),
+        "//! Compares what two modules converted.
+
+import dynid::left
+import dynid::right
+import std::io
+
+/// Evaluated when the program is built, across the same two units.
+const at_build: Bool = left::plain(1) == right::plain(1)
+
+fn main() {
+  let plain = left::plain(1) == right::plain(1)
+  let generic = left::generic(1) == right::generic(1)
+  let built = left::built(1) == right::built(1)
+  let tuple = left::tuple(1) == right::tuple(1)
+  let show = left::show(1) == right::show(1)
+  let shows = left::shows() == right::shows()
+  let anys = left::anys() == right::anys()
+  let mixed = left::built(1) == right::generic(1)
+  let values = left::plain(1) == right::plain(2)
+  let ints = left::tuple(1) == right::tuple(2)
+  io::println(\"{plain} {generic} {built} {tuple} {show} {shows} {anys} {mixed}\")
+  io::println(\"{values} {ints} {at_build}\")
+}
+",
+    );
+    let (first, second) = twice(&scratch, &dir, &["run"], &[]);
+    assert_eq!(first.out.status, Some(0), "{}", first.out.stderr);
+    assert_eq!(
+        first.out.stdout,
+        "True True True True True True True True\nFalse False True\n"
+    );
+    let hits: Vec<String> = ["dynid", "dynid::kinds", "dynid::left", "dynid::right"]
+        .iter()
+        .map(|m| format!("code.run {m} hit"))
+        .collect();
+    assert_eq!(code_lookups(&second.log, "run"), hits);
+    same_output(&first, &second);
+}
+
+/// §3.13, D-233, GAP(dyn-identity): a function value inside `dyn` panics
+/// when the two types are one, so the two units' descriptors must agree
+/// before the walk reaches it: an answer of False would hide the panic.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn a_function_inside_dyn_values_of_two_modules_panics() {
+    let scratch = Scratch::new("dyn-function");
+    let dir = dyn_package(
+        &scratch.path().join("dynid"),
+        "//! Reaches a function value.
+
+import dynid::left
+import dynid::right
+import std::io
+
+fn main() {
+  let same = left::holder() == right::holder()
+  io::println(\"{same}\")
+}
+",
+    );
+    let (first, second) = twice(&scratch, &dir, &["run"], &[]);
+    assert_eq!(first.out.status, Some(101), "{}", first.out.stderr);
+    assert_eq!(first.out.stdout, "");
+    assert!(
+        first.out.stderr.contains("function"),
+        "{}",
+        first.out.stderr
+    );
+    same_output(&first, &second);
+}
+
+/// §8.6.1, D-530, GAP(dyn-identity): a `Set` holds one value that two
+/// modules converted once, and a `Map` finds it through the other module's
+/// key: equal values hash alike and now compare alike.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn set_and_map_of_dyn_values_of_two_modules() {
+    let scratch = Scratch::new("dyn-set");
+    let dir = dyn_package(
+        &scratch.path().join("dynid"),
+        "//! A `Set` and a `Map` of what two modules converted.
+
+import dynid::kinds
+import dynid::left
+import dynid::right
+import std::io
+import std::map
+import std::set
+
+fn main() {
+  let none: set::Set<dyn kinds::Any> = set::new()
+  let one = set::insert(none, left::plain(1))
+  let both = set::insert(one, right::plain(1))
+  let set_size = set::size(both)
+  let shows: set::Set<dyn Show> = set::new()
+  let show_size = set::size(set::insert(set::insert(shows, left::show(1)), right::show(1)))
+  let empty: map::Map<dyn kinds::Any, Int> = map::new()
+  let first = map::insert(empty, left::generic(1), 1)
+  let second = map::insert(first, right::generic(1), 2)
+  let map_size = map::size(second)
+  let found = map::get(second, left::generic(1))
+  io::println(\"{set_size} {show_size} {map_size} {found}\")
+}
+",
+    );
+    let (first, second) = twice(&scratch, &dir, &["run"], &[]);
+    assert_eq!(first.out.status, Some(0), "{}", first.out.stderr);
+    assert_eq!(first.out.stdout, "1 1 1 Some(2)\n");
+    same_output(&first, &second);
+}
+
+/// §8.6.1, GAP(dyn-identity): types with one printed name in two modules
+/// stay different types, alone, as an argument, and as the interface of a
+/// `dyn` type; and two names in one module do too, so the key reads both
+/// the name and the module path. Only the empty lists read descriptors
+/// alone: a value's own constructor would tell the others apart (D-559).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn types_of_one_printed_name_stay_apart_on_a_run() {
+    let scratch = Scratch::new("dyn-apart");
+    let dir = dyn_package(
+        &scratch.path().join("dynid"),
+        "//! What must not compare equal.
+
+import dynid::kinds
+import dynid::left
+import dynid::right
+import std::io
+import std::set
+
+fn main() {
+  let own = left::own(1) == right::own(1)
+  let boxed = left::own_boxed(1) == right::own_boxed(1)
+  let dyns = left::own_dyns() == right::own_dyns()
+  let lists = left::own_list() == right::own_list()
+  let names = left::own_list() == left::other_list()
+  let none: set::Set<dyn kinds::Any> = set::new()
+  let size = set::size(set::insert(set::insert(none, left::own(1)), right::own(1)))
+  let same = left::own(1) == left::own(1)
+  io::println(\"{own} {boxed} {dyns} {lists} {names} {size} {same}\")
+}
+",
+    );
+    let (first, second) = twice(&scratch, &dir, &["run"], &[]);
+    assert_eq!(first.out.status, Some(0), "{}", first.out.stderr);
+    assert_eq!(first.out.stdout, "False False False False False 2 True\n");
+    same_output(&first, &second);
+}
+
+/// §8.6.1, GAP(dyn-identity): a module's code unit and its tests unit
+/// each hold a copy of a `priv` type's descriptor, and a value from each
+/// compares equal.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn a_module_tests_unit_agrees_with_its_code_unit() {
+    let scratch = Scratch::new("dyn-tests");
+    let dir = dyn_package(
+        &scratch.path().join("dynid"),
+        "//! Nothing but a main.\n\nfn main() {\n}\n",
+    );
+    let (first, second) = twice(&scratch, &dir, &["test"], &[]);
+    assert_eq!(first.out.status, Some(0), "{}", first.out.stdout);
+    same_output(&first, &second);
+}

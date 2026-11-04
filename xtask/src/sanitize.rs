@@ -1114,6 +1114,19 @@ struct PassResult {
     summary: String,
 }
 
+/// The words that follow `cheby run` for `ex`, with `--` before them, and
+/// the environment of its run, both with `{http_fixture}` expanded (D-1027).
+fn poison_off_args(
+    ex: &example::Example,
+    goldens: &example::Goldens,
+) -> Result<example::RunArgs, String> {
+    let mut run = ex.run_args(goldens)?;
+    if !run.args.is_empty() {
+        run.args.insert(0, "--".to_owned());
+    }
+    Ok(run)
+}
+
 /// Runs every example's run trial with the sanitized `cheby` and
 /// `CHEBY_RT_POISON=0`, as the conformance harness runs the base trial
 /// (the example's `env` file, `NO_COLOR=1`, no `CHEBY_THREADS` or
@@ -1138,15 +1151,14 @@ fn examples_poison_off(cx: &Context, cheby: &Path, leaks: Leaks) -> Result<PassR
         let mut cmd = Command::new(cheby);
         cmd.arg("--color=never").arg("run").current_dir(&ex.dir);
         crate::cache::apply(&mut cmd)?;
-        if !goldens.args.is_empty() {
-            cmd.arg("--").args(&goldens.args);
-        }
+        let run = poison_off_args(&ex, &goldens)?;
+        cmd.args(&run.args);
         for var in MODE_VARIABLES {
             cmd.env_remove(var);
         }
         threads::apply(
             &mut cmd,
-            &threads::child_env(&goldens.env, threads::Variant::Unset),
+            &threads::child_env(&run.env, threads::Variant::Unset),
         );
         cmd.env("CHEBY_RT_POISON", "0");
         if let Some((var, value)) = &options {
@@ -1535,6 +1547,37 @@ mod tests {
         assert_eq!(select(all.clone(), &[]).unwrap().len(), all.len());
         let err = select(plan(Sanitizer::Thread), &["examples-poison-off".to_owned()]).unwrap_err();
         assert!(err.contains("no step `examples-poison-off`"), "{err}");
+    }
+
+    /// D-1027: the poison-off pass gives 031 the fixture's URL, never the
+    /// placeholder, and an example without one its goldens as they are.
+    #[test]
+    fn poison_off_args_expand_the_http_fixture() {
+        let examples = example::all(&cheby_test_support::repo_root()).unwrap();
+        let find = |name: &str| examples.iter().find(|ex| ex.name == name).unwrap();
+        let scraper = find("031_web_scraper");
+        let goldens = scraper.goldens().unwrap();
+        assert_eq!(goldens.args, [example::HTTP_FIXTURE]);
+        let run = poison_off_args(scraper, &goldens).unwrap();
+        assert!(
+            !run.args
+                .iter()
+                .any(|arg| arg.contains(example::HTTP_FIXTURE)),
+            "{:?}",
+            run.args
+        );
+        assert_eq!(run.args.len(), 2, "{:?}", run.args);
+        assert_eq!(run.args[0], "--");
+        assert!(run.args[1].starts_with("http://"), "{:?}", run.args);
+        let hello = find("001_hello_world");
+        let goldens = hello.goldens().unwrap();
+        let run = poison_off_args(hello, &goldens).unwrap();
+        assert_eq!((run.args, run.env), (goldens.args, goldens.env));
+        let greet = find("002_greet");
+        let goldens = greet.goldens().unwrap();
+        let run = poison_off_args(greet, &goldens).unwrap();
+        assert_eq!(run.args[0], "--");
+        assert_eq!(run.args[1..], goldens.args);
     }
 
     #[test]

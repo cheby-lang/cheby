@@ -1159,3 +1159,37 @@ fn main() {
     let run = cheby(&root, &["run"], &cache, &[]);
     assert_same(&build, &ran, &run);
 }
+
+/// §8.6.1, D-530, GAP(dyn-identity): `dyn` values of one type that two
+/// objects converted are equal in an executable, as under `cheby run`, a
+/// `Set` holds one of them, and a same-named type of another module stays
+/// another type. Each object holds its own copy of the descriptor
+/// (D-918).
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn dyn_values_of_two_objects_are_equal_in_an_executable() {
+    const KINDS: &str = "//! Shared.\n\n/// Everything.\ninterface Any\n\n/// One field.\ntype Point {\n  x: Int,\n}\n";
+    const SIDE: &str = "//! Converts here.\n\nimport dynid::kinds\n\n/// Declared in both.\ntype Own {\n  x: Int,\n}\n\n/// A shared type.\nfn make(x: Int) -> dyn kinds::Any {\n  let b: dyn kinds::Any = kinds::Point { x }\n  b\n}\n\n/// This module's type.\nfn own(x: Int) -> dyn kinds::Any {\n  let b: dyn kinds::Any = Own { x }\n  b\n}\n\n/// An empty list: only the descriptor differs.\nfn list() -> dyn kinds::Any {\n  let xs: List<Own> = []\n  let b: dyn kinds::Any = xs\n  b\n}\n";
+    const MAIN: &str = "//! Compares.\n\nimport dynid::kinds\nimport dynid::left\nimport dynid::right\nimport std::io\nimport std::set\n\nfn main() {\n  let same = left::make(1) == right::make(1)\n  let other = left::make(1) == right::make(2)\n  let own = left::own(1) == right::own(1)\n  let list = left::list() == right::list()\n  let none: set::Set<dyn kinds::Any> = set::new()\n  let size = set::size(set::insert(set::insert(none, left::make(1)), right::make(1)))\n  io::println(\"{same} {other} {own} {list} {size}\")\n}\n";
+    let tmp = FreshDir::create("cheby-build-dyn").unwrap();
+    let root = package(tmp.path(), "dynid", MAIN);
+    for (file, text) in [
+        ("kinds.cheby", KINDS),
+        ("left.cheby", SIDE),
+        ("right.cheby", SIDE),
+    ] {
+        std::fs::write(root.join("src").join(file), text).unwrap();
+    }
+    let (out, exe) = built(&root, tmp.path(), "dynid");
+    let cache = fresh_cache();
+    let ran = cheby(&root, &["run"], &cache, &[]);
+    let mut cmd = Command::new(&exe);
+    cmd.current_dir(tmp.path());
+    let exe_out = process::run(cmd, None, TIMEOUT).unwrap();
+    assert_eq!(
+        exe_out.stdout, "True False False False 1\n",
+        "{}",
+        exe_out.stderr
+    );
+    assert_same(&out, &exe_out, &ran);
+}

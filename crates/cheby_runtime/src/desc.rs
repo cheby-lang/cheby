@@ -3,12 +3,12 @@
 //! descriptor objects for structural equality, hashing and debug text
 //! (D-530).
 //!
-//! - A **nominal descriptor** (layout [`layout::DESC_NOMINAL`]) is one
-//!   static object per type: the header, then the type's printed name and
-//!   its module path, both static `String`s. User types get theirs from
-//!   code generation (`cb$desc$<module path>$$<Type>`); builtin types use
-//!   the statics below, whose module path is empty, as in their type keys
-//!   (D-559).
+//! - A **nominal descriptor** (layout [`layout::DESC_NOMINAL`]) is a static
+//!   object: the header, then the type's printed name and its module path,
+//!   both static `String`s. User types get theirs from code generation
+//!   (`cb$desc$<module path>$$<Type>`), a copy in each object that names
+//!   them; builtin types use the statics below, whose module path is
+//!   empty, as in their type keys (D-559).
 //! - A **descriptor** (layout [`layout::DESC`]) is the header, a nominal
 //!   descriptor, then the descriptors of the type arguments; with more
 //!   than 254 fields its scan count is escaped (D-555): the nominal
@@ -23,13 +23,21 @@
 //! `Tuple` for tuples and `Fn` for function types, with an empty module
 //! path (D-581).
 //!
-//! Two descriptors are equal when their nominal descriptors are the same
-//! object and their arguments are equal (D-530, D-582). Each type has exactly one
-//! nominal descriptor per JIT (D-561), so identity of nominal descriptors
-//! is identity of nominal types: a type redefined in the REPL, or a type
-//! of another major version of a package, has another one (§8.6.1). Hashing
-//! uses the nominal descriptor's module path and name, never its address,
-//! so hashes do not depend on where objects live (D-264).
+//! Two descriptors are equal when their nominal descriptors name one type
+//! and their arguments are equal (D-530, GAP(dyn-identity)). A type
+//! has many nominal descriptors, a copy in each object or record that
+//! names it (D-918), so an address does not identify a type. Its **type
+//! key** does: the printed name and the module path, the two words every
+//! nominal descriptor holds ([`same_nominal`]). The module path is the
+//! compiler's own, which no two declarations of one name share: a REPL
+//! entry's is `<repl:N>`, so a type redefined in the REPL has another key
+//! (§8.6.1, D-547), and a reloaded module's is `app::prices<r1>` (D-625).
+//! Package identity must reach this word when it reaches symbols, or two
+//! packages of one `name` would share a key (§7.1, M5): the MIR validator
+//! and `Decls::declare_statics` refuse a word that is not the symbol's.
+//!
+//! Hashing writes the same two words and never an address, so equal types
+//! hash alike and hashes do not depend on where objects live (D-264).
 
 use std::cell::UnsafeCell;
 
@@ -271,6 +279,18 @@ pub(crate) unsafe fn parts(word: Word) -> Option<Parts> {
         }
         _ => None,
     }
+}
+
+/// Whether two live nominal descriptors name one type: the same object, or
+/// two copies with one type key, the printed name and the module path
+/// (D-918, GAP(dyn-identity)).
+///
+/// # Safety
+///
+/// `a` and `b` are live nominal descriptors whose fields are `String`s.
+pub(crate) unsafe fn same_nominal(a: Word, b: Word) -> bool {
+    // SAFETY: the caller's.
+    a == b || unsafe { names(a) == names(b) }
 }
 
 /// The printed name and module path of a live nominal descriptor.

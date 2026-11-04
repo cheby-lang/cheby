@@ -368,7 +368,10 @@ impl Statics<'_, '_> {
 
     /// The nominal descriptor of the type `def`: the runtime's for a
     /// builtin type, else `cb$desc$<module path>$$<Type>` holding the
-    /// type's name and module path (D-523, D-524).
+    /// type's name and module path (D-523, D-524). The two are its type
+    /// key, which the runtime compares (GAP(dyn-identity)), so the
+    /// module path written here must stay the compiler's own, `<repl:N>`
+    /// and `app::prices<r1>` included, never a path made for display.
     ///
     /// # Errors
     ///
@@ -399,8 +402,8 @@ impl Statics<'_, '_> {
     /// The nominal descriptor of the type `dyn iface`:
     /// `cb$desc$<module path of iface>$$dyn$<iface>` (D-523, D-579),
     /// holding the printed name `dyn <iface>` and the interface's module
-    /// path. One object per JIT (D-561), so `dyn I` is one nominal type
-    /// (D-582). The builtin `Show` has an empty module path, giving
+    /// path, which together are its type key (GAP(dyn-identity)).
+    /// The builtin `Show` has an empty module path, giving
     /// `cb$desc$$$dyn$Show` (D-603): the first `$$` still
     /// ends the module path (D-579).
     ///
