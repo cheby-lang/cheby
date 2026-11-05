@@ -15,10 +15,13 @@
 //! - **Run queues** (D-689): per worker a runnext slot, a Chase-Lev deque
 //!   and a queue of fibers only it may run; one global injector. See
 //!   `worker` for the search order and `idle` for Tokio's protocol.
-//! - **Migration and pinning** (D-687): fibers resume on any worker except
-//!   while a kernel callback is on their stack. With
-//!   `CHEBY_RT_STRESS_MIGRATE=1`, debug builds resume every unpinned fiber
-//!   on another worker than the one it last ran on.
+//! - **Migration and pinning** (D-687, D-1320, D-1323): fibers resume on
+//!   any worker except while a kernel callback is on their stack. With
+//!   `CHEBY_RT_STRESS_MIGRATE=1` and another live worker, debug builds send
+//!   an unpinned fiber that has run to the next idle worker's targeted
+//!   queue, where idle means running no fiber with that queue empty. A
+//!   fiber that has never run, or that finds no idle worker, goes to the
+//!   global queue.
 //! - **Preemption** (D-688): the `monitor` asks a fiber that ran 10 ms to
 //!   yield.
 //! - **Code lifetime** (D-708): a runtime holds the [`CodeToken`] of every
@@ -91,8 +94,9 @@ pub const THREADS_ENV: &str = "CHEBY_THREADS";
 /// The most worker threads a runtime has (D-658).
 pub const MAX_THREADS: usize = 1024;
 
-/// The debugging switch that resumes unpinned fibers on another worker
-/// (D-687), honored by debug builds only.
+/// The debugging switch of the migration stress mode, which moves an
+/// unpinned fiber that has run to another worker when one is idle (D-687,
+/// D-1320, D-1323), honored by debug builds only.
 pub const STRESS_MIGRATE_ENV: &str = "CHEBY_RT_STRESS_MIGRATE";
 
 /// The thread count `value` of `CHEBY_THREADS` gives (D-658): unset or
@@ -478,7 +482,9 @@ impl Shared {
     ///
     /// # Errors
     ///
-    /// The system's error if the thread cannot start; the slot stays free.
+    /// The system's error if the thread cannot start; the slot stays free,
+    /// and a fiber queued on it meanwhile goes to the global queue (D-795,
+    /// D-1324).
     fn start_worker(
         self: &Arc<Self>,
         index: usize,
@@ -497,21 +503,60 @@ impl Shared {
         // stop exit as the others.
         worker.set_live();
         self.idle.add_worker();
-        let shared = Arc::clone(self);
-        match std::thread::Builder::new()
-            .name(format!("cheby-worker-{index}"))
-            .spawn(move || worker::main(&shared, index))
-        {
+        match self.spawn_worker(index) {
             Ok(handle) => {
                 threads.push((index, handle));
                 Ok(())
             }
             Err(error) => {
-                drop(worker.end());
+                // The slot has been live since `set_live`, so the migration
+                // stress mode may have queued a fiber on it, and no thread
+                // will read that queue (D-795, D-1324).
+                let left = worker.end();
                 self.idle.remove_worker(index);
+                self.requeue_left(left);
                 Err(error)
             }
         }
+    }
+
+    /// Starts the thread of worker `index`.
+    ///
+    /// # Errors
+    ///
+    /// The system's error if the thread cannot start.
+    fn spawn_worker(self: &Arc<Self>, index: usize) -> std::io::Result<JoinHandle<()>> {
+        #[cfg(test)]
+        self.probe.worker_thread()?;
+        let shared = Arc::clone(self);
+        std::thread::Builder::new()
+            .name(format!("cheby-worker-{index}"))
+            .spawn(move || worker::main(&shared, index))
+    }
+
+    /// Hands the fibers an ended slot's targeted queue still held to the
+    /// global queue, and wakes a parked worker for them (D-795, D-1324).
+    /// A pinned fiber here is fatal. Outside a stop or a halt none can be
+    /// here, since a worker leaves only once no fiber is pinned to it. In a
+    /// stop, `end_if_idle` does not read the count, and a slot restarted
+    /// then can be refused its thread, which no host reaches (D-1324). A
+    /// halt can also end a retiring worker with a fiber pinned to it. This
+    /// takes neither the thread registry's lock nor a lock held around that
+    /// one, so a caller may hold that lock or not.
+    fn requeue_left(&self, left: Vec<FiberRef>) {
+        if left.is_empty() {
+            return;
+        }
+        for fiber in left {
+            // SAFETY: a queued fiber is not retired.
+            if unsafe { fiber.ctx() }.sched.pinned() {
+                crate::panic::fatal(format_args!(
+                    "a fiber pinned to a retired worker was left behind"
+                ));
+            }
+            self.injector.push(fiber);
+        }
+        self.notify_parked();
     }
 
     /// Asks live worker `index` to retire at its next scheduling point:
@@ -564,18 +609,7 @@ impl Shared {
         }
         let left = worker.end();
         drop(threads);
-        if !left.is_empty() {
-            for fiber in left {
-                // SAFETY: a queued fiber is not retired.
-                if unsafe { fiber.ctx() }.sched.pinned() {
-                    crate::panic::fatal(format_args!(
-                        "a fiber pinned to a retired worker was left behind"
-                    ));
-                }
-                self.injector.push(fiber);
-            }
-            self.notify_parked();
-        }
+        self.requeue_left(left);
         true
     }
 
@@ -766,11 +800,39 @@ impl Shared {
         }
     }
 
+    /// Places an unpinned fiber in the migration stress mode. With another
+    /// live worker it goes to the next idle one, which runs no fiber and has
+    /// an empty targeted queue, so that a fiber that has run moves (D-1320,
+    /// D-1323). A targeted queue has one reader, so a fiber that has not run,
+    /// or that finds no idle worker, goes where any worker takes it, never
+    /// behind a worker another fiber keeps. With no other live worker the
+    /// mode steps aside. Out of line, so that its frame stays off the normal
+    /// path in release, where the mode is off.
+    #[cold]
+    #[inline(never)]
+    fn schedule_stressed(&self, fiber: FiberRef, from: Option<usize>, place: Where) {
+        // SAFETY: a runnable fiber is not retired.
+        let sched = &unsafe { fiber.ctx() }.sched;
+        if self.workers.next_live_after(sched.worker()).is_none() {
+            self.place(fiber, from, place);
+            return;
+        }
+        match self.workers.next_idle_after(sched.worker()) {
+            Some(idle) if sched.resumes() > 0 => self.push_targeted(idle, fiber),
+            _ => {
+                self.injector.push(fiber);
+                self.notify_parked();
+            }
+        }
+    }
+
     /// Makes a runnable fiber run: on its worker while it is pinned
-    /// (D-687), on another worker in the migration stress mode, otherwise
-    /// where `place` says. `from` is the worker the calling thread is, if
-    /// it is one of this runtime's: its runnext slot and deque are used
-    /// only from that thread.
+    /// (D-687), on the next idle worker or from the global queue in the
+    /// migration stress mode while another worker is live (D-1320, D-1323),
+    /// otherwise where `place` says. An idle worker runs no fiber and has an
+    /// empty targeted queue. `from` is the worker the calling thread is, if
+    /// it is one of this runtime's: its runnext slot and deque are used only
+    /// from that thread.
     fn schedule(&self, fiber: FiberRef, from: Option<usize>, place: Where) {
         // SAFETY: a runnable fiber is not retired.
         let sched = &unsafe { fiber.ctx() }.sched;
@@ -778,13 +840,17 @@ impl Shared {
             self.push_targeted(sched.worker(), fiber);
             return;
         }
-        // To the next live worker, if there is another one.
-        if self.stress_migrate
-            && let Some(target) = self.workers.next_live_after(sched.worker())
-        {
-            self.push_targeted(target, fiber);
+        if self.stress_migrate {
+            self.schedule_stressed(fiber, from, place);
             return;
         }
+        self.place(fiber, from, place);
+    }
+
+    /// Queues an unpinned fiber where `place` says. `from` is the worker the
+    /// calling thread is, if it is one of this runtime's: its runnext slot
+    /// and deque are used only from that thread.
+    fn place(&self, fiber: FiberRef, from: Option<usize>, place: Where) {
         // A worker that has drained its queues to leave takes no more.
         let here = from
             .and_then(|index| self.worker(index))

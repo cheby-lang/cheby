@@ -186,7 +186,8 @@ impl Workers {
     }
 
     /// The first live slot after `index`, going round, other than `index`
-    /// itself: where the migration stress mode moves a fiber (D-687).
+    /// itself: the migration stress mode acts only when there is one
+    /// (D-687, D-1320).
     pub(super) fn next_live_after(&self, index: usize) -> Option<usize> {
         let count = self.filled();
         (1..count)
@@ -196,6 +197,26 @@ impl Workers {
                     && self
                         .get(other)
                         .is_some_and(|worker| worker.life() == life::LIVE)
+            })
+    }
+
+    /// The first idle slot after `index`, going round, other than `index`
+    /// itself: where the migration stress mode moves a fiber that has run
+    /// (D-1320, D-1323). Idle means live, running no fiber, and with an
+    /// empty targeted queue: a worker woken for a fiber runs none until it
+    /// takes that fiber, and a second one queued meanwhile would wait
+    /// behind it.
+    pub(super) fn next_idle_after(&self, index: usize) -> Option<usize> {
+        let count = self.filled();
+        (1..count)
+            .map(|step| index.wrapping_add(step).checked_rem(count).unwrap_or(0))
+            .find(|&other| {
+                other != index
+                    && self.get(other).is_some_and(|worker| {
+                        worker.life() == life::LIVE
+                            && worker.running().is_null()
+                            && !worker.has_targeted()
+                    })
             })
     }
 }
@@ -217,7 +238,9 @@ pub(crate) struct WorkerShared {
     /// The worker's own context while a fiber runs. Only its thread uses
     /// it: the worker loop and the fiber it runs.
     saved: std::cell::UnsafeCell<Saved>,
-    /// The fiber it runs, or null; the monitor reads it.
+    /// The fiber it runs, or null. The monitor and `look_at_running` read
+    /// it to reach that fiber; `join_workers` and the migration stress
+    /// mode's search only compare it with null.
     running: AtomicPtr<ExecCtx>,
     /// How many fibers it has resumed; the monitor compares samples.
     resumes: AtomicU64,

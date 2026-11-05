@@ -12,7 +12,7 @@
 //! would only move it off its worker's warm caches
 //! (D-737; no program can observe the
 //! difference). The migration stress mode preempts lone fibers too, so
-//! that every long-running program migrates between workers.
+//! that a long-running fiber moves whenever another worker is idle (D-1320).
 //!
 //! On every tick it also fires the timers that are due
 //! (D-682, D-789): nobody polls while every worker runs

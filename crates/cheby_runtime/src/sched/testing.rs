@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use super::fiber::state as fiber_state;
 use super::{
     AfterSwitch, FiberRef, Runtime, RuntimeConfig, Tuning, Unlock, park, spawn_fiber, wake,
 };
@@ -231,6 +232,17 @@ impl Mailbox {
     pub(crate) fn peek(&self) -> Option<u64> {
         self.state.lock().0
     }
+
+    /// Whether a receiver waits here and has finished parking, so that a
+    /// send queues it from the sender's thread, not from its worker's.
+    pub(crate) fn parked(&self) -> bool {
+        let state = self.state.lock();
+        state.1.as_ref().is_some_and(|fiber| {
+            // SAFETY: a receiver registered here and not woken yet is not
+            // retired.
+            unsafe { fiber.ctx() }.sched.state().load(Ordering::SeqCst) == fiber_state::PARKED
+        })
+    }
 }
 
 /// Test hooks of one runtime's monitor: a delay between reading a worker's
@@ -238,8 +250,8 @@ impl Mailbox {
 /// in which that fiber could be retired, a count of requests aimed at a
 /// retired control block (which must stay 0, I-8), a switch that keeps
 /// it from firing timers, a hold on one worker right after it ended at a
-/// stop (D-821), and a hold on the stop's give-up on
-/// the blocking pool (D-815).
+/// stop (D-821), a hold on the stop's give-up on
+/// the blocking pool (D-815), and a refusal of new worker threads (D-795).
 #[derive(Debug, Default)]
 pub(crate) struct MonitorProbe {
     /// Milliseconds the monitor sleeps before each request.
@@ -281,6 +293,9 @@ pub(crate) struct MonitorProbe {
     between_passes: parking_lot::Mutex<Option<PassHook>>,
     /// Run by the collect step before it locates a fiber's wait.
     before_locate: parking_lot::Mutex<Option<PassHook>>,
+    /// While set, the system "refuses" every new worker thread, after this
+    /// runs ([`MonitorProbe::refuse_workers`]).
+    refuse_workers: parking_lot::Mutex<Option<PassHook>>,
 }
 
 /// A hook the detector runs between its two passes (a test's).
@@ -350,6 +365,26 @@ impl MonitorProbe {
     /// a fiber's wait.
     pub(crate) fn set_before_locate(&self, hook: Option<PassHook>) {
         *self.before_locate.lock() = hook;
+    }
+
+    /// While `hook` is set, the system "refuses" every new worker thread.
+    /// The hook runs first, in the window after the slot went `LIVE`, on
+    /// the thread that starts the worker, under the thread registry's lock
+    /// (D-795, D-1324). `None` turns the refusal off.
+    pub(crate) fn refuse_workers(&self, hook: Option<PassHook>) {
+        *self.refuse_workers.lock() = hook;
+    }
+
+    /// What the system answers for a new worker thread: a refusal, after
+    /// the hook of [`MonitorProbe::refuse_workers`] ran with the probe's
+    /// lock released, if one is set.
+    pub(crate) fn worker_thread(&self) -> std::io::Result<()> {
+        let hook = self.refuse_workers.lock().clone();
+        let Some(hook) = hook else {
+            return Ok(());
+        };
+        (hook.0)();
+        Err(std::io::Error::other("a refused thread (test hook)"))
     }
 
     /// A worker left a fiber frozen.

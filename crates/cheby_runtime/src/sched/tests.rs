@@ -459,7 +459,8 @@ fn the_monitor_never_touches_a_fiber_another_worker_retired() {
 }
 
 /// D-687: a pinned fiber resumes on its worker; in the migration stress
-/// mode an unpinned one resumes on another.
+/// mode an unpinned one resumes on another, since a lone fiber always finds
+/// an idle worker (D-1320).
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn pinned_fibers_stay_and_the_stress_mode_migrates_the_others() {
@@ -836,4 +837,201 @@ fn code_tokens_are_released_after_the_runtime_stops() {
     assert!(!*freed.lock().unwrap());
     runtime.shutdown();
     assert!(*freed.lock().unwrap());
+}
+
+/// D-687, D-1320: the migration stress mode moves a fiber that has run, so
+/// it never leaves a new fiber behind a worker another fiber keeps, while a
+/// worker sits idle. This test does not depend on the setting: every CI run
+/// reads it except on Windows, where it is ignored, while the six `ffi_pool`
+/// tests of this shape run in the stress mode only under the nightly's
+/// `runtime-stress` step. A fiber that has never run stays out of a targeted
+/// queue by another test, `the_stress_mode_keeps_a_new_fiber_off_a_worker_that_looks_idle`.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn the_stress_mode_starts_a_new_fiber_beside_a_busy_worker() {
+    let runtime = tuned(2, true, true);
+    let started = Arc::new(AtomicBool::new(false));
+    let (first_saw, second_sets) = (Arc::clone(&started), started);
+    let first = start_root(&runtime, DEFAULT_STACK_SIZE, move |_| {
+        // No safepoint: this fiber keeps its worker until the other runs.
+        let begun = Instant::now();
+        while !first_saw.load(Ordering::SeqCst) && begun.elapsed() < scaled(Duration::from_secs(2))
+        {
+            std::hint::spin_loop();
+        }
+        u64::from(first_saw.load(Ordering::SeqCst))
+    });
+    let second = start_root(&runtime, DEFAULT_STACK_SIZE, move |_| {
+        second_sets.store(true, Ordering::SeqCst);
+        0
+    });
+    let seen = first.recv_timeout(hang()).unwrap();
+    second.recv_timeout(hang()).unwrap();
+    assert!(matches!(seen, EntryOutcome::Returned(1)), "{seen:?}");
+}
+
+/// Yields until `me` runs on worker `index`, at most `scaled(2 s)`, and says
+/// whether it got there. In the stress mode a yield moves a fiber only while
+/// the other worker is idle, so a count of yields could run out.
+fn reach_worker(me: &ExecCtx, index: usize) -> bool {
+    let begun = Instant::now();
+    while me.sched.worker() != index && begun.elapsed() < scaled(Duration::from_secs(2)) {
+        park(me, AfterSwitch::Requeue);
+    }
+    me.sched.worker() == index
+}
+
+/// D-687, D-1320: a resumed fiber stays out of a busy worker's targeted
+/// queue. Worker 1 keeps a fiber with no safepoint while a fiber on worker 0
+/// yields ten times. Each yield finds no idle worker and goes to the global
+/// queue, where worker 0 takes it. Behind the keeper, it would not run until
+/// the keeper gave up. This test does not depend on the setting.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn the_stress_mode_keeps_a_resumed_fiber_off_a_busy_worker() {
+    let runtime = tuned(2, true, true);
+    let released = Arc::new(AtomicBool::new(false));
+    let (placed, on_one) = mpsc::channel();
+    let keeper = {
+        let released = Arc::clone(&released);
+        start_root(&runtime, DEFAULT_STACK_SIZE, move |me| {
+            let arrived = reach_worker(me, 1);
+            placed.send(arrived).unwrap();
+            // No safepoint: this fiber keeps its worker until the other ends.
+            let begun = Instant::now();
+            while arrived
+                && !released.load(Ordering::SeqCst)
+                && begun.elapsed() < scaled(Duration::from_secs(2))
+            {
+                std::hint::spin_loop();
+            }
+            u64::from(released.load(Ordering::SeqCst))
+        })
+    };
+    assert!(on_one.recv_timeout(hang()).unwrap(), "worker 1 not reached");
+    let mover = {
+        let released = Arc::clone(&released);
+        start_root(&runtime, DEFAULT_STACK_SIZE, move |me| {
+            for _ in 0..10 {
+                park(me, AfterSwitch::Requeue);
+            }
+            released.store(true, Ordering::SeqCst);
+            0
+        })
+    };
+    let seen = keeper.recv_timeout(hang()).unwrap();
+    mover.recv_timeout(hang()).unwrap();
+    assert!(matches!(seen, EntryOutcome::Returned(1)), "{seen:?}");
+}
+
+/// D-687, D-1320, D-1323: a worker that has a fiber queued is not idle, even
+/// while it runs none. Fibers A and B last ran on worker 0. Worker 1 runs
+/// nothing and waits at the monitor's gate, so it looks idle and takes no
+/// fiber until both are woken, and one round decides with no race. A goes to
+/// worker 1's targeted queue and keeps that worker until B has run. B finds
+/// that queue taken and goes to the global queue, where worker 0 takes it.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn the_stress_mode_queues_one_woken_fiber_per_idle_worker() {
+    let runtime = tuned(2, true, true);
+    let (mail_a, mail_b) = (Arc::new(Mailbox::default()), Arc::new(Mailbox::default()));
+    let b_ran = Arc::new(AtomicBool::new(false));
+    let a = {
+        let (mail, seen) = (Arc::clone(&mail_a), Arc::clone(&b_ran));
+        start_root(&runtime, DEFAULT_STACK_SIZE, move |me| {
+            assert!(reach_worker(me, 0));
+            mail.receive(me);
+            // No safepoint: this fiber keeps its worker until the other runs.
+            let begun = Instant::now();
+            while !seen.load(Ordering::SeqCst) && begun.elapsed() < scaled(Duration::from_secs(2)) {
+                std::hint::spin_loop();
+            }
+            u64::from(seen.load(Ordering::SeqCst))
+        })
+    };
+    let b = {
+        let (mail, sets) = (Arc::clone(&mail_b), Arc::clone(&b_ran));
+        start_root(&runtime, DEFAULT_STACK_SIZE, move |me| {
+            assert!(reach_worker(me, 0));
+            mail.receive(me);
+            sets.store(true, Ordering::SeqCst);
+            0
+        })
+    };
+    let begun = Instant::now();
+    while !(mail_a.parked() && mail_b.parked()) && begun.elapsed() < hang() {
+        std::thread::yield_now();
+    }
+    assert!(mail_a.parked() && mail_b.parked());
+    let leave = Arc::new(AtomicBool::new(false));
+    let (placed, on_one) = mpsc::channel();
+    let holder = {
+        let leave = Arc::clone(&leave);
+        start_root(&runtime, DEFAULT_STACK_SIZE, move |me| {
+            placed.send(reach_worker(me, 1)).unwrap();
+            let begun = Instant::now();
+            while !leave.load(Ordering::SeqCst) && begun.elapsed() < hang() {
+                std::hint::spin_loop();
+            }
+            0
+        })
+    };
+    assert!(on_one.recv_timeout(hang()).unwrap(), "worker 1 not reached");
+    let worker = runtime.shared.worker(1).unwrap();
+    let gate = worker.gate().lock();
+    worker.set_looking(true);
+    leave.store(true, Ordering::SeqCst);
+    let begun = Instant::now();
+    while !worker.running().is_null() && begun.elapsed() < hang() {
+        std::thread::yield_now();
+    }
+    assert!(worker.running().is_null());
+    mail_a.send(0, false);
+    mail_b.send(0, false);
+    worker.set_looking(false);
+    drop(gate);
+    let seen = a.recv_timeout(hang()).unwrap();
+    b.recv_timeout(hang()).unwrap();
+    holder.recv_timeout(hang()).unwrap();
+    assert!(matches!(seen, EntryOutcome::Returned(1)), "{seen:?}");
+}
+
+/// D-687, D-1320: a fiber that has never run goes to the global queue, even
+/// while a worker looks idle. Worker 1 runs nothing and waits at the
+/// monitor's gate, so one round decides with no race: in its targeted queue,
+/// the new fiber would not run until the gate opens. On the global queue,
+/// worker 0 takes it.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn the_stress_mode_keeps_a_new_fiber_off_a_worker_that_looks_idle() {
+    let runtime = tuned(2, true, true);
+    let leave = Arc::new(AtomicBool::new(false));
+    let (placed, on_one) = mpsc::channel();
+    let holder = {
+        let leave = Arc::clone(&leave);
+        start_root(&runtime, DEFAULT_STACK_SIZE, move |me| {
+            placed.send(reach_worker(me, 1)).unwrap();
+            let begun = Instant::now();
+            while !leave.load(Ordering::SeqCst) && begun.elapsed() < hang() {
+                std::hint::spin_loop();
+            }
+            0
+        })
+    };
+    assert!(on_one.recv_timeout(hang()).unwrap(), "worker 1 not reached");
+    let worker = runtime.shared.worker(1).unwrap();
+    let gate = worker.gate().lock();
+    worker.set_looking(true);
+    leave.store(true, Ordering::SeqCst);
+    let begun = Instant::now();
+    while !worker.running().is_null() && begun.elapsed() < hang() {
+        std::thread::yield_now();
+    }
+    assert!(worker.running().is_null());
+    let fresh = start_root(&runtime, DEFAULT_STACK_SIZE, |_| 7);
+    let seen = fresh.recv_timeout(scaled(Duration::from_secs(2)));
+    worker.set_looking(false);
+    drop(gate);
+    holder.recv_timeout(hang()).unwrap();
+    assert!(matches!(seen, Ok(EntryOutcome::Returned(7))), "{seen:?}");
 }

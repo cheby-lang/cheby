@@ -17,8 +17,10 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use super::park::state as parker;
-use super::testing::{Mailbox, entry_check, hang, root, runtime, scaled, spawn, start_root, tuned};
-use super::worker::life;
+use super::testing::{
+    Mailbox, PassHook, entry_check, hang, root, runtime, scaled, spawn, start_root, tuned,
+};
+use super::worker::{WorkerShared, life};
 use super::{AfterSwitch, Shared, TimerTarget, leave_callback, park};
 use crate::ctx::ExecCtx;
 use crate::entry::{EntryOutcome, MIN_STACK_SIZE};
@@ -278,10 +280,11 @@ fn thread_count_a_pinned_fiber_keeps_its_retiring_worker() {
             let (ready, gate, result) =
                 (Arc::clone(&ready), Arc::clone(&gate), Arc::clone(&result));
             spawn(me, false, move |fiber| {
-                for _ in 0..100 {
-                    if fiber.sched.worker() == 1 {
-                        break;
-                    }
+                // Bounded by time, not by a count of yields: a yield moves
+                // the fiber only while worker 1 is idle, so if the root runs
+                // there and its thread stalls, any count runs out (D-1320).
+                let begun = Instant::now();
+                while fiber.sched.worker() != 1 && begun.elapsed() < cap() {
                     park(fiber, AfterSwitch::Requeue);
                 }
                 let pinned_on = fiber.sched.worker();
@@ -784,12 +787,13 @@ fn thread_count_a_stop_while_workers_retire_ends_every_fiber() {
 
 /// D-687, D-795 (fixer-w3-1 of checkpoint 3, D-821):
 /// in the migration stress mode a fiber that yields goes to the targeted
-/// queue of another live worker, so a stop must not leave a fiber in the
-/// queue of a worker that has already ended. A live worker ends at a stop
-/// only under its targeted queue's lock with that queue empty, and marks
-/// its slot `DEAD` there, so a later push goes to the global queue, which
-/// the pushing worker looks at before it ends. Three roots yield until the
-/// runtime stops, which comes at varying moments; every fiber ends.
+/// queue of the next idle worker, if there is one (D-1320), so a stop must
+/// not leave a fiber in the queue of a worker that has already ended. A live
+/// worker ends at a stop only under its targeted queue's lock with that
+/// queue empty, and marks its slot `DEAD` there, so a later push goes to the
+/// global queue, which the pushing worker looks at before it ends. Three
+/// roots yield until the runtime stops, which comes at varying moments;
+/// every fiber ends.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn thread_count_a_stop_in_the_migration_stress_mode_strands_no_fiber() {
@@ -831,12 +835,80 @@ fn thread_count_a_stop_in_the_migration_stress_mode_strands_no_fiber() {
     }
 }
 
+/// D-795, D-1324: a fiber queued on a slot whose thread the system refused
+/// still runs. In the migration stress mode a fresh `LIVE` slot looks idle,
+/// so a fiber woken between `set_live` and the refusal goes to that slot's
+/// targeted queue, which no thread will read. `start_worker` hands the queue
+/// to the global queue, and worker 0 runs the fiber. The hook wakes the
+/// fiber inside that window, so no race decides this.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn thread_count_a_fiber_queued_on_a_refused_worker_still_runs() {
+    let runtime = tuned(1, true, true);
+    let shared = Arc::clone(&runtime.shared);
+    let mail = Arc::new(Mailbox::default());
+    let outcome = {
+        let mail = Arc::clone(&mail);
+        start_root(&runtime, MIN_STACK_SIZE, move |me| mail.receive(me))
+    };
+    assert!(wait_until(|| mail.parked()));
+    let queued = Arc::new(AtomicBool::new(false));
+    {
+        let (mail, probe, queued) = (Arc::clone(&mail), Arc::clone(&shared), Arc::clone(&queued));
+        shared.probe.refuse_workers(Some(PassHook(Arc::new(move || {
+            mail.send(7, false);
+            let waiting = probe.worker(1).is_some_and(WorkerShared::has_waiting);
+            queued.store(waiting, Ordering::SeqCst);
+        }))));
+    }
+    shared.set_thread_count(2);
+    // The hook holds the runtime's `Arc`.
+    shared.probe.refuse_workers(None);
+    assert!(
+        queued.load(Ordering::SeqCst),
+        "the fiber missed the slot's queue"
+    );
+    assert_eq!(life_of(&shared, 1), Some(life::DEAD));
+    assert_eq!(shared.workers.live(), 1);
+    assert_eq!(shared.idle.workers(), 1);
+    // The count stays as set (D-795).
+    assert_eq!(shared.thread_count(), 2);
+    let seen = outcome.recv_timeout(cap()).unwrap();
+    assert!(matches!(seen, EntryOutcome::Returned(7)), "{seen:?}");
+}
+
+/// D-795, D-1324: the same refusal with the monitor's rescue off, so that
+/// only `requeue_left`'s notify can wake worker 0 for the fiber.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn thread_count_a_refused_worker_wakes_a_parked_worker_for_its_fiber() {
+    let runtime = tuned(1, true, false);
+    let shared = Arc::clone(&runtime.shared);
+    let mail = Arc::new(Mailbox::default());
+    let outcome = {
+        let mail = Arc::clone(&mail);
+        start_root(&runtime, MIN_STACK_SIZE, move |me| mail.receive(me))
+    };
+    assert!(wait_until(|| mail.parked()));
+    {
+        let mail = Arc::clone(&mail);
+        shared.probe.refuse_workers(Some(PassHook(Arc::new(move || {
+            mail.send(7, false);
+        }))));
+    }
+    shared.set_thread_count(2);
+    // The hook holds the mailbox.
+    shared.probe.refuse_workers(None);
+    let seen = outcome.recv_timeout(cap()).unwrap();
+    assert!(matches!(seen, EntryOutcome::Returned(7)), "{seen:?}");
+}
+
 /// D-687, D-795 (fixer-w3-1 of checkpoint 3, D-821),
 /// without a race: fiber F runs on worker 0 while the runtime stops, and
 /// worker 1, idle, ends at the stop; the probe holds worker 1 right after
-/// its end while F yields. In the migration stress mode F's yield goes to
-/// another live worker, and worker 1's slot is `DEAD` now, so F goes to
-/// the global queue instead, worker 0 runs it, and no fiber is left.
+/// its end while F yields. Worker 1's slot is `DEAD` now, so no other worker
+/// is live, the migration stress mode steps aside, F's yield takes the
+/// normal path to the global queue, worker 0 runs it, and no fiber is left.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 fn thread_count_a_yield_after_a_worker_ended_at_a_stop_runs_on_a_live_one() {

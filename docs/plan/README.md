@@ -381,6 +381,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1320    | The stress mode sends a fiber that has run to an idle worker, any other to the global queue         |
 | D-1321    | A fiber pinned to a blocked thread, and pool calls that wait for each other, stay limits until M6   |
 | D-1322    | Miri leaves `nightly.yml` for `miri.yml`, with a job limit of its own                               |
+| D-1323    | The stress mode's idle worker has an empty targeted queue; D-1320's race and figures are corrected  |
+| D-1324    | A refused worker thread hands its slot's queued fibers to the global queue                          |
+| D-1325    | The fix takes one `bench.yml` dispatch, and D-1255's stop line reads it; no re-gate                 |
 
 ## Open questions
 
