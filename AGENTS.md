@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What this repository is
 
-The home of the Cheby programming language and its reference implementation, in the phase before 1.0. Milestones M1, the single-fiber core, and M2, the runtime, are done (see the `Status` sections of `docs/plan/m1-core.md` and `docs/plan/m2-runtime.md`). M3, AOT output and the build cache, is next, and `tests/milestone` names it.
+The home of the Cheby programming language and its reference implementation, in the phase before 1.0. Milestones M1, the single-fiber core, M2, the runtime, and M3, AOT output and the build cache, are done (see the `Status` sections of `docs/plan/m1-core.md`, `docs/plan/m2-runtime.md` and `docs/plan/m3-aot-and-cache.md`). M4, the JavaScript backend, is next, and `tests/milestone` names it.
 
 Design documents:
 
