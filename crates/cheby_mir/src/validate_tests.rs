@@ -1211,8 +1211,8 @@ fn statics_are_checked() {
     for (statics, needle) in cases {
         rejected_module(&statics_module(statics), needle);
     }
-    // A symbol's module that the module word does not follow would merge
-    // two types in the runtime (GAP(dyn-identity)).
+    // A static's module that the module word does not follow would merge
+    // two types in the runtime (D-1313).
     let mut other_word = nominal();
     other_word.module = "pkg~geo".into();
     rejected_module(
@@ -1224,7 +1224,7 @@ fn statics_are_checked() {
             other_word,
             fn_value(),
         ]),
-        "the module word Some(\"geo\") is not the symbol's module pkg~geo",
+        "the module word Some(\"geo\") is not the static's module pkg~geo",
     );
     // The dict layout has 2 fields (descriptor + 1 closure); one field is
     // too few.

@@ -25,7 +25,7 @@ The formatter core, the LSP core and `cheby new` were placed with M2 and did not
 
 - Every example and every `std` source is a fixed point of `cheby fmt`, and the formatter passes the idempotence and meaning-preservation tests ([testing.md](testing.md#3-unit-and-property-tests)).
 - The language server answers every request of §13.11 on all examples, and its diagnostics match `cheby build`.
-- A package with git dependencies on two majors of one repository builds from its lockfile, and a checksum mismatch fails the build.
+- A package with git dependencies on two majors of one repository builds from its lockfile, and a checksum mismatch fails the build. `dyn` of an empty `List<T>`, a `List<dyn I>`, values with fields of different kinds and an external type of two packages of one `name` compare False (D-1313).
 - 030 passes, with its git dependency served from a local fixture repository and its HTTP fixture started by the harness (D-446). The fixture repository has a stable URL that is not a `file://` path, so locations in the goldens contain no absolute path (D-468).
 - `cheby doc` output for `std` matches `docs/stdlib/` module by module (D-220).
 - All doc examples in `std` pass `cheby test`.

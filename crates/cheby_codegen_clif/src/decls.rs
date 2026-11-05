@@ -255,7 +255,7 @@ impl std::fmt::Debug for Decls {
 /// Refuses a nominal descriptor whose symbol its module path does not
 /// give, outside a REPL entry: the runtime tells types apart by the module
 /// word, which the validator holds to that path, so what tells two types
-/// apart in a symbol must be in the word too (GAP(dyn-identity)).
+/// apart in a symbol must be in the word too (D-1313).
 pub(crate) fn check_nominal_symbol(
     object: &StaticObject,
     symbol: &str,

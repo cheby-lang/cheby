@@ -8,14 +8,14 @@ FILE is the JSON of `bench-compile --oqp11 --restarts` (`oqp11.json`) or of a pl
 
 - OQ-P11 (D-974): per shape the cold run's time (reported, never budgeted) and, per edit kind
   (`body_edit`, `main_edit`) from the edit rounds' `phases_median` (never the cold run: D-923's
-  gate is about changed modules), the median against D-247's 500 ms with its miss (reported, never
-  enforced), every phase's share of the median with its rank and whether it is the largest, and
+  gate is about changed modules), the median against its shape's budget (D-1315) with its miss
+  (reported, never enforced), every phase's share of the median with its rank and whether it is the largest, and
   the three fallback gates' inputs: code generation (`codegen`: lazy compilation, D-923), loading
   (`declare` alone and `declare + define + finalize`: our own loader, D-914, read on `deep`) and
   hashing (`hash`: a stat cache, D-963), and D-1301's verdict on each edit: a gate triggers on a
-  reading that misses 500 ms when its phase is the largest of the edit's breakdown and at least
-  40% of the median, with the loader's three phases one phase on `deep`. M3 builds no fallback,
-  so a gate that triggers is reported (D-1302).
+  reading that misses its shape's budget when its phase is the largest of the edit's breakdown
+  and at least 40% of the median, with the loader's three phases one phase on `deep`. M3 builds
+  no fallback, so a gate that triggers is reported (D-1302).
 - RB-3's restart causes (D-1256): per row the median, how many runs started again, the first
   attempt's time, the modules checked again and the logged run's parses. A row with no runs, or
   of a cause whose runs did not all start again, is a tool failure upstream and is never rendered
@@ -31,7 +31,9 @@ is missing, null or not a number among them).
 import json
 import sys
 
-BUDGET_NS = 500_000_000
+# D-1315: each shape's budget, which a number must hold on the slowest CPU seen on the label
+# (D-1314). The one table: `oqp11.json` holds none, and an older run's `budget_ns` is not read.
+BUDGET_NS = {"wide": 650_000_000, "deep": 6_500_000_000}
 # D-1301: the share of the median that a gate's phase must reach.
 GATE_SHARE = 0.40
 # D-1301: our own loader's phase, its three summed, read on `deep` only.
@@ -74,19 +76,20 @@ def pct(part, whole):
     return f"{100.0 * part / whole:.1f}%"
 
 
-def miss(median_ns):
-    """The median against the budget: by how much it misses, or that it is within."""
-    if median_ns > BUDGET_NS:
-        return f"misses by {secs(median_ns - BUDGET_NS)}"
-    return f"within ({secs(BUDGET_NS - median_ns)} to spare)"
+def miss(shape, median_ns):
+    """The median against its shape's budget: by how much it misses, or that it is within."""
+    budget = BUDGET_NS[shape]
+    if median_ns > budget:
+        return f"misses by {secs(median_ns - budget)}"
+    return f"within ({secs(budget - median_ns)} to spare)"
 
 
 def triggered(shape, median_ns, phases):
     """The fallbacks whose gate D-1301's rule triggers on one edit's reading: the reading
-    misses 500 ms, and the gate's phase is at least 40% of the median and no smaller than any
-    other phase. On `deep` the loader's three phases count as one phase for every gate;
+    misses its shape's budget, and the gate's phase is at least 40% of the median and no smaller
+    than any other phase. On `deep` the loader's three phases count as one phase for every gate;
     elsewhere each is a phase of its own, and the loader's gate is not read."""
-    if median_ns <= BUDGET_NS:
+    if median_ns <= BUDGET_NS[shape]:
         return []
     units = {(k,): v for k, v in phases.items()}
     if shape == "deep":
@@ -113,7 +116,8 @@ def edit_section(shape, kind, edit, out):
     restarted = edit.get("restarted")
     out.append(
         f"**`{shape}`, {kind.replace('_', ' ')}**: median {secs(median_ns)} of {len(runs)} runs, "
-        f"{miss(median_ns)} against D-247's 500 ms (reported, never enforced)"
+        f"{miss(shape, median_ns)} against D-1315's {secs(BUDGET_NS[shape])} "
+        "(reported, never enforced)"
         + (f"; {restarted} of {len(runs)} runs started again" if restarted else "")
         + "."
     )
@@ -165,7 +169,6 @@ def edit_section(shape, kind, edit, out):
 def render_oqp11(o, out):
     lines = o.get("lines")
     rounds = o.get("rounds")
-    budget = int(o.get("budget_ns", BUDGET_NS))
     out.append(f"### OQ-P11: edit to run at {lines} lines, {rounds} rounds (D-974)")
     out.append("")
     shapes = o.get("shapes") or {}
@@ -179,8 +182,8 @@ def render_oqp11(o, out):
         )
     out.append("")
     out.append(
-        f"Budget: D-247's {secs(budget)} on both shapes, reported and never enforced before M6 "
-        "(D-644, D-974). Each median is over the edit rounds' whole-command times; the phases come "
+        f"Budget (D-1315): {secs(BUDGET_NS['wide'])} on `wide` and {secs(BUDGET_NS['deep'])} on "
+        "`deep`, reported and never enforced before M6 (D-644, D-974). Each median is over the edit rounds' whole-command times; the phases come "
         "from `CHEBY_PHASES` and are exclusive, so their sum is at most the command's time."
     )
     out.append("")
@@ -190,7 +193,8 @@ def render_oqp11(o, out):
                 edit_section(name, kind, s[kind], out)
     out.append(
         "The fallback gates' rule (D-1301): a fallback's gate triggers on a reading that misses "
-        "500 ms when its phase is the largest of that edit kind's breakdown and at least "
+        "its shape's budget when its phase is the largest of that edit kind's breakdown and at "
+        "least "
         f"{GATE_SHARE:.0%} of the median; on `deep` loading is `declare + define + finalize`, "
         "one phase for every gate. M3 builds no fallback, so a gate that triggers is reported "
         "with OQ-P11's reading (D-1302, D-1304)."

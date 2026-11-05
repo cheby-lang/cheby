@@ -1127,7 +1127,7 @@ fn alone_check_accepts_only_generated_imports() {
     assert!(!decls.is_generated_import("cb$libcall$Memcpy"));
 }
 
-/// GAP(dyn-identity): a nominal descriptor's symbol follows its module path,
+/// D-1313: a nominal descriptor's symbol follows its module path,
 /// which is the word the runtime compares, but for a REPL entry's, whose
 /// symbol carries the generation.
 #[test]

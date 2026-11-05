@@ -18,7 +18,8 @@
 //! last reference goes, the kind's finalizer hands the payload to
 //! [`HandlePayload::finalize`], once, from the free worklist (D-703): it
 //! gives the Cheby words the payload owns to `release`, which feeds the
-//! worklist, and must never block, suspend, raise or run Cheby code. The
+//! worklist, and must never block, suspend, raise or run Cheby code, or
+//! depend on a current fiber (D-1311). The
 //! selector node (44) is the header and five uniform words, all visited as
 //! children, so freeing, freezing and shared marking see them; it has no
 //! finalizer (architecture.md §7.3: one arm and the previous node).
@@ -63,11 +64,14 @@ use crate::panic::fatal;
 /// of the value.
 pub(crate) trait HandlePayload: Send + Sync + 'static {
     /// Runs once, when the last reference to the handle goes away, on the
-    /// fiber that released it (D-171, D-703). Gives every Cheby word the
-    /// payload owns to `release`, which frees it through the free
+    /// fiber that released it (D-171, D-703), or, when a package's
+    /// `@blocking` call released it, at once on the thread that acts for
+    /// the call's fiber, with no fiber current (D-1311). Gives every Cheby
+    /// word the payload owns to `release`, which frees it through the free
     /// worklist when that was its last reference. Never blocks, suspends,
-    /// raises or runs Cheby code; it may take a runtime lock for O(1) work
-    /// and wake fibers. A Rust panic in it ends the process.
+    /// raises or runs Cheby code, and needs no current fiber; it may take a
+    /// runtime lock for O(1) work and wake fibers. A Rust panic in it ends
+    /// the process.
     fn finalize(self: Box<Self>, release: &mut dyn FnMut(Word));
 }
 

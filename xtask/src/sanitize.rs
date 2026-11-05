@@ -26,9 +26,9 @@
 //! The harness steps (`ui-deadlock`, `conformance`, `repl`) and the
 //! poison-off pass leave `CHEBY_MILESTONE`, `CHEBY_PENDING` and
 //! `CHEBY_PENDING_ALLOW` as the caller set them: the local evidence runs
-//! with `CHEBY_MILESTONE=M3 CHEBY_PENDING=require`, so a failing M2 trial
+//! with `CHEBY_MILESTONE=M4 CHEBY_PENDING=require`, so a failing M3 trial
 //! fails the step, and the workflow needs neither once `tests/milestone`
-//! names M3. Every other variable that selects a mode of `cheby` or of a
+//! names M4. Every other variable that selects a mode of `cheby` or of a
 //! test (`CHEBY_THREADS`, `CHEBY_RT_STRESS_MIGRATE`, `CHEBY_RC`,
 //! `CHEBY_RT_POISON`, `CHEBY_UNWIND_EDGES`, `CHEBY_BLESS`) is removed, and
 //! a step sets only what it names, so a step always runs what `--list`

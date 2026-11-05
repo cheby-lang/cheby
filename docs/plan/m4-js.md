@@ -67,6 +67,12 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 
 - A design step, in an entry of its own, for a partial second check: when a warm `cheby run` or `cheby test` finds hits whose code records miss, it checks again only those modules and what their lowering needs, instead of starting again with every module parsed after D-1256's three causes. It is designed together with the work on the warm start that M3's exit reads (D-1303, D-1304).
 
+### 4.9 From M3's exit
+
+- M4's first change removes `CHEBY_POSITIONS` and D-1193's positions byte, with a gate of its own, since it moves cache keys (D-1317). `bench-compile --restarts` then needs another setting for its `settings` cause.
+- `xtask` gets the shipped allocator, so that D-1316's path reads what ships, and 20,000 is read again when it lands.
+- A same-window A/B of M2's `xtask` against M3's reads the fall of 13% to 21% against M2's exit, which sits in the back end with no cause read. Each `xtask` is built for its own tree, since a binary bakes in its repository root. It runs in a quiet window, on AC power with the lid open, since `caffeinate -ims` does not hold off clamshell sleep.
+
 ## Exit criteria
 
 - Every example passes on Node with the native goldens, except where the JS panics of §12.4 are the expected result and the example records it.

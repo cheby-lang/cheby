@@ -342,7 +342,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1145    | The program differential compares standard error only where the reference evaluator fixes it        |
 | D-1150    | `cheby fmt` uses 100 columns, the width the user chose at CP2 (D-1252)                              |
 | D-1162    | Executables hold the toolchain's source paths until M6's distributed toolchain remaps them          |
-| D-1173    | The hidden `CHEBY_POSITIONS=off` turns source positions off until M3's exit or later (D-1251)       |
+| D-1173    | The hidden `CHEBY_POSITIONS=off` turns source positions off until M4's first change (D-1317)        |
 | D-1174    | Linux executables hold the runtime archive's debug paths, the toolchain checkout's too, until M6    |
 | D-1180    | `cheby check` compiled std without borrow masks until K6 cached std's one code (D-1264)             |
 | D-1187    | Every command but the REPL evaluates constants on `plain` code, std's one code from K6 (D-1264)     |
@@ -352,7 +352,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1217    | Every JIT host compiles each unit alone into a code record; std's records are stored from K6        |
 | D-1223    | `--reuse-report` read no code record until K4d replayed the reuse lines beside it (D-1257)          |
 | D-1250    | K4d ends the warm check from source for `run` and `test`, N9 for `build` (D-1285)                   |
-| D-1251    | Every record keeps source positions; hidden `CHEBY_POSITIONS` stays until M3's exit or later        |
+| D-1251    | Every record keeps positions; hidden `CHEBY_POSITIONS` stays until M4's first change (D-1317)       |
 | D-1252    | `cheby fmt`'s width is 100 columns; T1b reformats the examples and std at 100 in wave 9             |
 | D-1253    | N9 lands linker GC of record entries in wave 10, names as offsets, no layout version change         |
 | D-1254    | Wave 9's gate reads x86-64 through `bench.yml` with the time outside `main` split                   |
@@ -366,12 +366,21 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1281    | `bench.yml` with `-f compile=true` reads OQ-P11, the restarts and D-247 in steps that never fail it |
 | D-1283    | `check-determinism` writes `build`, `run` and `test` into both caches; every warm constant must hit |
 | D-1284    | D-960's stress test: eight `cheby check` processes start together on one cold cache, in five rounds |
-| D-1301    | A K9 gate triggers on a reading over 500 ms when its phase is the largest and at least 40%          |
+| D-1301    | A K9 gate triggers on a reading over its budget when its phase is the largest and at least 40%      |
 | D-1302    | No K9 fallback in M3; the best, our own loader, still leaves `deep` at about 2.7 s and 3.4 s        |
 | D-1303    | RB-3's warm restart stays for M3; a partial second check is designed in M4 with the warm start      |
-| D-1304    | X1 reads D-247's 500 ms and brings options to revise it, such as a budget per shape                 |
+| D-1304    | X1 reads D-247's latency budget and brings options to revise it, such as a budget per shape         |
 | D-1305    | The cache's cold cost is accepted at CP3; a cold `run`'s profile is read in X1's window             |
 | D-1310    | Wave 12's x86-64 reading is carried to the committed tree, once; D-1272 stands for later waves      |
+| D-1314    | A budget's number covers the slowest CPU seen on `ubuntu-24.04`'s label, today the EPYC 7763        |
+| D-1315    | OQ-P11 settles on a budget per shape: 0.65 s on `wide`, 6.5 s on `deep`, which M6 enforces          |
+| D-1316    | D-247's throughput is 20,000 lines/s per core on `ubuntu-24.04`, on `xtask`'s in-memory path        |
+| D-1317    | `CHEBY_POSITIONS` goes as M4's first change, with a gate of its own                                 |
+| D-1318    | Wave 13's x86-64 reading is carried to the log commit's tree, once; D-1272 stands for later         |
+| D-1319    | M3's exit stands with the nightly's failures; one change after the bump fixes them, no re-gate      |
+| D-1320    | The stress mode sends a fiber that has run to an idle worker, any other to the global queue         |
+| D-1321    | A fiber pinned to a blocked thread, and pool calls that wait for each other, stay limits until M6   |
+| D-1322    | Miri leaves `nightly.yml` for `miri.yml`, with a job limit of its own                               |
 
 ## Open questions
 
@@ -389,7 +398,7 @@ Each open question is answered through a decision-log entry before the task that
 | OQ-P8  | IO poller: `mio`, a custom poller, and whether io_uring is used in v1                                                                  | M2        | D-680                      |
 | OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | D-940                      |
 | OQ-P10 | Whether the D-247 throughput budget holds, checked against M1 measurements                                                             | M1 exit   | D-644                      |
-| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open; D-974, D-1304        |
+| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | D-1315                     |
 | OQ-P12 | Whether the release-to-debug ratio of D-267 holds                                                                                      | M6        | open                       |
 | OQ-P13 | The factor by which a Cheby collection may be slower than a Rust kernel before it moves (D-274, D-336)                                 | M2 exit   | D-854, D-855               |
 | OQ-P14 | File IO, standard input and `std::env` on JS hosts, including hosts without a process such as browsers (OQ-io-3, OQ-env-1)             | M4 start  | open                       |

@@ -1,7 +1,7 @@
 //! `cargo xtask bench-compile --oqp11` and `--restarts` (K7): OQ-P11's
 //! edit-to-run rounds (D-974) and the three causes that start a warm
 //! command again (D-1256, the review's RB-3). Reported, never enforced: the
-//! budget (D-247's 500 ms, which X1 reads, D-1304) and the three fallback
+//! budget (D-1315's number per shape, in `bench_oqp11.py`) and the three fallback
 //! gates, whose rule is D-1301's; `.github/scripts/bench_oqp11.py`
 //! renders them and evaluates the rule. On x86-64 they run in
 //! `.github/workflows/bench.yml`'s two steps that only `-f compile=true`
@@ -49,9 +49,6 @@ use std::time::{Duration, Instant};
 
 use cheby_bench_gen::{Config, Shape};
 use serde_json::{Value, json};
-
-/// D-247's edit-to-run budget, which D-974 applies to both shapes.
-pub(crate) const BUDGET: Duration = Duration::from_millis(500);
 
 /// The shapes D-974 reads.
 const SHAPES: [Shape; 2] = [Shape::Wide, Shape::Deep];
@@ -404,7 +401,6 @@ pub(crate) fn oqp11(cx: &Cx<'_>) -> Result<Value, String> {
         "lines": cx.lines,
         "rounds": cx.rounds,
         "shapes": shapes,
-        "budget_ns": nanos(BUDGET),
     }))
 }
 
@@ -1141,7 +1137,7 @@ mod tests {
             "rows": [{"lines": 10000, "shape": "wide", "cold_check_ns": 300_000_000,
                       "cold_build_ns": 900_000_000, "cold_check_std_warm_ns": 100_000_000,
                       "cold_build_std_warm_ns": 700_000_000}],
-            "oqp11": {"lines": 1_000_000, "rounds": 1, "budget_ns": 500_000_000,
+            "oqp11": {"lines": 1_000_000, "rounds": 1,
                       "shapes": {"wide": {"modules": 40, "cold_ns": 9_000_000_000_u64,
                                           "body_edit": edit(800_000_000), "main_edit": edit(200_000_000)},
                                  "deep": {"modules": 4000, "cold_ns": 9_000_000_000_u64,
@@ -1163,9 +1159,9 @@ mod tests {
         for wanted in [
             "## fixture",
             "### OQ-P11: edit to run at 1000000 lines",
-            "misses by 0.300 s",
+            "misses by 0.150 s",
             "| `codegen` | 0.400 s | 50.0% | 1 | yes |",
-            "lazy compilation (D-923)",
+            "within (5.700 s to spare)",
             "`declare` + `define` + `finalize`",
             "The fallback gates' rule (D-1301)",
             "D-1301's rule on this reading: the gate of lazy compilation (D-923) triggers.",
@@ -1188,7 +1184,7 @@ mod tests {
                                      "define": median / 4, "finalize": median / 8}})
         };
         let three_phases = json!({"oqp11": {"lines": 1_000_000, "rounds": 1, "shapes": {
-            "deep": {"modules": 4000, "cold_ns": 1, "body_edit": split(800_000_000)},
+            "deep": {"modules": 4000, "cold_ns": 1, "body_edit": split(8_000_000_000)},
             "wide": {"modules": 40, "cold_ns": 1, "body_edit": split(800_000_000)}}}});
         let gated = render(&three_phases).map(|r| r.1).unwrap_or_default();
         for fired in [

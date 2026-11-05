@@ -1869,7 +1869,7 @@ fn read_line(actor: &str, kind: HandleKind, probe: &Probe) -> String {
 
 /// What the code does with a std handle whose last reference a pool thread
 /// released for its parked fiber: its finalizer ran once, on the pool thread
-/// that ran the shim, inside the release, with no fiber of the job current,
+/// that ran the shim, inside the release, with no fiber current (D-1311),
 /// and nothing of the value is left in the fiber's domain. D-1307's deferral
 /// does not reach it.
 fn check_finalized_on_the_pool(kind: HandleKind, probe: &Probe) {
@@ -1903,6 +1903,11 @@ fn check_finalized_on_the_pool(kind: HandleKind, probe: &Probe) {
     assert!(
         !probe.drop_owner_current.load(Ordering::SeqCst),
         "{kind:?}: the finalizer ran with the owner fiber current"
+    );
+    assert_eq!(
+        probe.drop_fiber.load(Ordering::SeqCst),
+        0,
+        "{kind:?}: a fiber was current on the pool thread (D-1311)"
     );
     assert_eq!(
         probe.live_left.load(Ordering::SeqCst),

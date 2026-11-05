@@ -507,13 +507,13 @@ Every `cheby` command runs as its own process, and the build cache is the only s
 
 The reference compiler tracks these budgets in CI from its first milestone (D-247, D-267):
 
-- A clean debug build checks and generates code for at least 100,000 lines per second per core, and scales with the number of cores.
-- After an edit to one function body in a project of one million lines, `cheby run` starts running the program in under 500 ms.
+- On GitHub's `ubuntu-24.04` runner, `cargo xtask bench-compile`'s in-memory path checks and generates code for at least 20,000 lines per second per core, and scales with the number of cores (D-1316).
+- After an edit to one function body in a project of one million lines, `cheby run` starts running the program within 0.65 s when `main` reaches about ten modules, and within 6.5 s when it reaches all 4,000, read as D-974 says. It is read on GitHub's `ubuntu-24.04` runner (D-1035), and the number must cover the slowest CPU seen on that label (D-1314, D-1315).
 - A clean release build takes at most three times as long as a clean debug build of the same project.
 
 The budgets are estimates and will be revised against measurements.
 
-_Note:_ M1's measurements confirmed the throughput budget as written: the reference compiler checks and generates code for 104,000 to 107,000 lines per second per core on projects of 100,000 lines or more. The budgets are reported, not enforced, until M6 (D-644).
+_Note:_ the throughput budget is a bound on `xtask`'s path, not on `cheby`: that path does not run the allocator `cheby` ships (D-1316). On the slowest CPU seen on the label, the AMD EPYC 7763, M3's exit reads 24,200 to 25,800 lines per second per core on projects of 100,000 lines or more, and the edit reads 0.582 s when `main` reaches about ten modules and 5.691 s when it reaches all 4,000. The budgets are reported, not enforced, until M6 (D-644).
 
 Unused imports remain warnings ([§13.8](#138-diagnostics-and-warnings)) (D-253), and AOT builds use the system linker, then a bundled lld before 1.0 (D-088, D-261).
 

@@ -1127,7 +1127,7 @@ fn dyn_package(dir: &Path, main: &str) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// §8.6.1, D-530, GAP(dyn-identity): `dyn` values of one type that two
+/// §8.6.1, D-530, D-1312: `dyn` values of one type that two
 /// units converted are equal, for every shape of descriptor, on a cold run
 /// and on a warm one, which loads the copies from two records (D-918), and
 /// in a constant's initializer, whose value the program then holds.
@@ -1179,7 +1179,7 @@ fn main() {
     same_output(&first, &second);
 }
 
-/// §3.13, D-233, GAP(dyn-identity): a function value inside `dyn` panics
+/// §3.13, D-233, D-1312: a function value inside `dyn` panics
 /// when the two types are one, so the two units' descriptors must agree
 /// before the walk reaches it: an answer of False would hide the panic.
 #[test]
@@ -1214,7 +1214,7 @@ fn main() {
     same_output(&first, &second);
 }
 
-/// §8.6.1, D-530, GAP(dyn-identity): a `Set` holds one value that two
+/// §8.6.1, D-530, D-1312: a `Set` holds one value that two
 /// modules converted once, and a `Map` finds it through the other module's
 /// key: equal values hash alike and now compare alike.
 #[test]
@@ -1257,7 +1257,7 @@ fn main() {
     same_output(&first, &second);
 }
 
-/// §8.6.1, GAP(dyn-identity): types with one printed name in two modules
+/// §8.6.1, D-1312: types with one printed name in two modules
 /// stay different types, alone, as an argument, and as the interface of a
 /// `dyn` type; and two names in one module do too, so the key reads both
 /// the name and the module path. Only the empty lists read descriptors
@@ -1298,7 +1298,7 @@ fn main() {
     same_output(&first, &second);
 }
 
-/// §8.6.1, GAP(dyn-identity): a module's code unit and its tests unit
+/// §8.6.1, D-1312: a module's code unit and its tests unit
 /// each hold a copy of a `priv` type's descriptor, and a value from each
 /// compares equal.
 #[test]

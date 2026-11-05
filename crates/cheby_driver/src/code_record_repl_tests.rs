@@ -119,7 +119,7 @@ fn code_record_repl_show_of_a_redefined_type() {
     );
 }
 
-/// §8.6.1's example, GAP(dyn-identity): two entries convert one value, each
+/// §8.6.1's example, D-1312: two entries convert one value, each
 /// in its own unit with its own copy of the descriptor, and the values are
 /// equal.
 #[test]
@@ -138,7 +138,7 @@ fn code_record_repl_dyn_values_of_two_entries_are_equal() {
     assert_eq!(printed, "True : Bool\n");
 }
 
-/// §8.6.1, §13.5.2, GAP(dyn-identity): a redefined type is another type,
+/// §8.6.1, §13.5.2, D-1313: a redefined type is another type,
 /// even with the shape it had two generations ago, and within a generation
 /// values from two entries are equal. Its printed name and module path are
 /// its entry's, so this pins that each entry's module path stays its own.
@@ -182,7 +182,7 @@ fn code_record_repl_redefined_type_stays_another_type() {
     );
 }
 
-/// §8.6.1, §13.5.2, GAP(dyn-identity): a definition checked again, in the
+/// §8.6.1, §13.5.2, D-1313: a definition checked again, in the
 /// module `<repl:N:M>`, keeps naming the descriptor of the type it named,
 /// whose module path is the type's entry's, not its own.
 #[test]
@@ -214,7 +214,7 @@ fn code_record_repl_definition_checked_again_keeps_its_type() {
     );
 }
 
-/// §8.6.1, D-547, GAP(dyn-identity): a redefined interface is another
+/// §8.6.1, D-547, D-1313: a redefined interface is another
 /// interface, so `List<dyn I>` of each generation is another type.
 #[test]
 #[cfg_attr(
@@ -239,7 +239,7 @@ fn code_record_repl_redefined_interface_stays_another_dyn_type() {
     assert_eq!(printed, "True : Bool\nFalse : Bool\nTrue : Bool\n");
 }
 
-/// §8.6.1, D-625, GAP(dyn-identity): `:reload` makes a new version of an
+/// §8.6.1, D-625, D-1313: `:reload` makes a new version of an
 /// edited module, whose types are other types even when their text did not
 /// change: the new version's module path carries the reload's generation.
 /// A type of a module the reload left alone stays one type. A session type

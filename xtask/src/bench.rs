@@ -1040,9 +1040,10 @@ fn render(rows: &[Row]) -> String {
          threads (`--jobs` default, the available parallelism). The front end, MIR lowering and \
          code generation run modules and functions in parallel (G1). Edit to run \
          uses the default threads. Code KiB is the machine code the JIT defined and RC ops the \
-         `dup` and `drop` statements of the MIR, for the whole build (D-718). Budgets (D-247): \
-         check and generate code for 100k lines/s per core and scale with cores; edit to run \
-         under 500 ms at 1M lines. Reported, never enforced.\n"
+         `dup` and `drop` statements of the MIR, for the whole build (D-718). Budgets on \
+         `ubuntu-24.04` (D-1315, D-1316): check and generate code for 20,000 lines/s per core \
+         and scale with cores; edit to run within 0.65 s on `wide` and 6.5 s on `deep` at 1M \
+         lines. Reported, never enforced.\n"
     );
     out
 }

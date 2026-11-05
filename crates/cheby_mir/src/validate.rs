@@ -290,11 +290,11 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
     {
         errors.push(format!("{label}: {}${} is defined twice", s.module, s.name));
     }
-    // Half of a type's key is this word (GAP(dyn-identity)), so whatever
+    // Half of a type's key is this word (D-1313), so whatever
     // tells two types apart in the symbol must tell them apart here too.
     if s.layout == LayoutRef::DescNominal && module_word(s) != Some(&*s.module) {
         errors.push(format!(
-            "{label}: the module word {:?} is not the symbol's module {}",
+            "{label}: the module word {:?} is not the static's module {}",
             module_word(s),
             s.module
         ));

@@ -1160,7 +1160,7 @@ fn main() {
     assert_same(&build, &ran, &run);
 }
 
-/// §8.6.1, D-530, GAP(dyn-identity): `dyn` values of one type that two
+/// §8.6.1, D-530, D-1312: `dyn` values of one type that two
 /// objects converted are equal in an executable, as under `cheby run`, a
 /// `Set` holds one of them, and a same-named type of another module stays
 /// another type. Each object holds its own copy of the descriptor

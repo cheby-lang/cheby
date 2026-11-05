@@ -24,7 +24,7 @@
 //! path (D-581).
 //!
 //! Two descriptors are equal when their nominal descriptors name one type
-//! and their arguments are equal (D-530, GAP(dyn-identity)). A type
+//! and their arguments are equal (D-530, D-1312). A type
 //! has many nominal descriptors, a copy in each object or record that
 //! names it (D-918), so an address does not identify a type. Its **type
 //! key** does: the printed name and the module path, the two words every
@@ -34,7 +34,9 @@
 //! (§8.6.1, D-547), and a reloaded module's is `app::prices<r1>` (D-625).
 //! Package identity must reach this word when it reaches symbols, or two
 //! packages of one `name` would share a key (§7.1, M5): the MIR validator
-//! and `Decls::declare_statics` refuse a word that is not the symbol's.
+//! and `Decls::declare_statics` refuse a word that is not the static's
+//! module, and, outside a REPL entry, a symbol that module does not give
+//! (D-1313).
 //!
 //! Hashing writes the same two words and never an address, so equal types
 //! hash alike and hashes do not depend on where objects live (D-264).
@@ -283,7 +285,7 @@ pub(crate) unsafe fn parts(word: Word) -> Option<Parts> {
 
 /// Whether two live nominal descriptors name one type: the same object, or
 /// two copies with one type key, the printed name and the module path
-/// (D-918, GAP(dyn-identity)).
+/// (D-918, D-1312).
 ///
 /// # Safety
 ///

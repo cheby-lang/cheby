@@ -298,7 +298,9 @@ impl HandlePayload for ReceiverEnd {
     /// The last `Receiver` is gone (D-054, D-670): the channel is closed
     /// for its senders, every waiting sender wakes to get its value back
     /// (one that is being cancelled is skipped and releases its value as it
-    /// unwinds), and the buffered values are released now, on this fiber.
+    /// unwinds), and the buffered values are released now, on this thread,
+    /// which a `@blocking` call's release may leave with no fiber current
+    /// (D-1311).
     fn finalize(self: Box<Self>, release: &mut dyn FnMut(Word)) {
         let mut woken = Vec::new();
         let buffered = {

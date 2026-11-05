@@ -37,7 +37,7 @@ impl Cx {
 /// first difference; reaching a function value or a value of an external
 /// type first gives `Err(Reached::Function)`, which callers turn into an
 /// `EqualityOnFunction` panic (D-233). Identity is never compared: nominal
-/// descriptors compare by type key (D-530, GAP(dyn-identity),
+/// descriptors compare by type key (D-530, D-1312,
 /// [`crate::desc`]).
 ///
 /// A type with `@std_hooks` compares through its `equal` hook (D-342),

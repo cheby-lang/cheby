@@ -273,7 +273,7 @@ static POINT_DESC: StaticNominal = StaticNominal::new(
     std::ptr::from_ref(&GEO).cast::<u8>(),
 );
 /// A copy of `POINT_DESC`, as another object holds one (D-918): other
-/// objects, one type key, one type (GAP(dyn-identity)).
+/// objects, one type key, one type (D-1312).
 static GEO_COPY: StaticText<3> = StaticText::new(b"geo");
 static POINT_COPY: StaticText<5> = StaticText::new(b"Point");
 static POINT_COPIED: StaticNominal = StaticNominal::new(
