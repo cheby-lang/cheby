@@ -54,7 +54,7 @@ use cheby_resolve::{ImportRequest, ImportTarget, Res, ResolveInput, ResolvedModu
 use rustc_hash::FxHashMap;
 
 use crate::thir::{self, ExprId, ExprKind, Stmt};
-use crate::{Tests, TypesInput, build_interface, check_bodies_with};
+use crate::{Tests, TypesInput, build_interface, check_bodies_with, dropped_body};
 
 /// The test name of an entry's body in the wrapped source.
 pub const BODY_TEST_NAME: &str = "<repl>";
@@ -623,6 +623,15 @@ impl ReplSession {
         diags.extend(found);
         let file = input.tree.file();
         diags.retain(|d| keep_entry_diagnostic(d, file));
+        // An entry with an error is not committed, and a session import
+        // that a `:reload` left without its item reports E0042 at each use,
+        // so these diagnostics are all that can explain a body that was
+        // dropped (D-464).
+        if !diags.iter().any(Diagnostic::is_error)
+            && let Some(ice) = dropped_body(&types, &thir, Tests::All)
+        {
+            return Err(ice);
+        }
         let mut body = None;
         if let EntryShape::Body { .. } = shape
             && !diags.iter().any(Diagnostic::is_error)
@@ -1756,6 +1765,15 @@ mod tests {
         /// Checks `text` as the next entry; commits it when it checks.
         /// The entry, or its diagnostics as `CODE message at path:line:col`.
         fn entry(&mut self, text: &str) -> (Option<CheckedEntry>, Vec<String>) {
+            self.try_entry(text).unwrap()
+        }
+
+        /// [`Session::entry`], with an internal error as a value.
+        #[expect(
+            clippy::panic_in_result_fn,
+            reason = "a test's setup asserts, and only the check under test returns"
+        )]
+        fn try_entry(&mut self, text: &str) -> Result<(Option<CheckedEntry>, Vec<String>), Ice> {
             self.entries = self.entries.checked_add(1).unwrap();
             let n = self.entries;
             let name = format!("<repl:{n}>");
@@ -1821,7 +1839,7 @@ mod tests {
                 std: StdCatalog { known: &[] },
                 package_targets: Targets::ALL,
             };
-            match self.repl.check_entry(&input, shape).unwrap() {
+            Ok(match self.repl.check_entry(&input, shape)? {
                 Ok(entry) => {
                     self.repl.note_compiled(&entry);
                     self.repl.commit(&entry, &self.b.globals.names);
@@ -1848,7 +1866,7 @@ mod tests {
                     })
                     .collect(),
                 ),
-            }
+            })
         }
 
         fn fails(&mut self, text: &str) -> Vec<String> {
@@ -1954,6 +1972,36 @@ mod tests {
         // Redefining `g` itself with no use of `f` leaves nothing to check.
         s.ok("fn g() -> Int {\n  2\n}\n");
         assert_eq!(s.repl.dependents(&[r]).len(), 0);
+    }
+
+    /// A body that left THIR with no diagnostic is an internal error
+    /// (D-464). `check_bodies_with`'s test hook drops it, and nothing of the
+    /// entry is committed.
+    #[test]
+    fn a_dropped_body_stops_the_entry() {
+        let mut s = Session::new(&[("", "")]);
+        let dropped = s
+            .try_entry("fn dropped_by_test() -> Int {\n  1\n}\n")
+            .err()
+            .unwrap();
+        assert_eq!(
+            dropped.message(),
+            "the body of `dropped_by_test` in module `<repl:1>` was dropped with no diagnostic \
+             (D-464)"
+        );
+        assert_eq!(s.repl.items().len(), 0);
+        s.ok("fn kept() -> Int {\n  1\n}\n");
+        assert_eq!(s.repl.items().len(), 1);
+    }
+
+    /// An error in the entry stands, as in a package.
+    #[test]
+    fn an_error_beside_a_dropped_body_stands() {
+        let mut s = Session::new(&[("", "")]);
+        let (entry, found) =
+            s.entry("fn dropped_by_test() -> Int {\n  1\n}\n\nfn oops() -> Int {\n  \"x\"\n}\n");
+        assert!(entry.is_none());
+        assert!(found.iter().any(|d| d.starts_with("E0047")), "{found:?}");
     }
 
     #[test]

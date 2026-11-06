@@ -1,0 +1,8 @@
+error[E0058]: `T` has no fields to update
+ --> tests/ui/05-expressions/records/update_type_parameter.cheby:7:3
+  |
+7 |   T { ..value, a: 1 }
+  |   ^
+  |
+  = note: a record update copies a value of a type with named fields
+

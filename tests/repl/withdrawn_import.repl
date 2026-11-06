@@ -1,0 +1,438 @@
+// @decisions: D-609
+warning[W0007]: `Option` hides the prelude type `Option`
+ --> src/other.cheby:9:10
+  |
+9 | pub type Option {
+  |          ^^^^^^ declared here
+  |
+  = note: in this module, `Option` no longer means the prelude type, which stays reachable as `option::Option` after `import std::option`
+  = help: if this is not intended, give the type another name
+
+> import store::other::{Option, Point, Sized, limit, value, value as aliased, stays}
+warning[W0007]: `Option` hides the prelude type `Option`
+ --> <repl:1>:1:23
+  |
+1 | import store::other::{Option, Point, Sized, limit, value, value as aliased, stays}
+  |                       ^^^^^^ imported here
+  |
+  = note: in this module, `Option` no longer means the prelude type, which stays reachable as `option::Option` after `import std::option`
+  = help: if this is not intended, import it under another name: `Option as …`
+
+> import std::io
+> value() + limit
+2 : Int
+> fn doubled() -> Int {
+.   value() * 2
+. }
+> doubled()
+2 : Int
+> fn width(p: Point) -> Int {
+.   p.x
+. }
+> io::write_file("src/other.cheby", r#"//! Without its names.
+. /// A function that no reload touches.
+. pub fn stays() -> Int {
+.   2
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:4>:2:3
+  |
+2 |   value() * 2
+  |   ^^^^^ not found
+  |
+  = note: `doubled` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+error[E0042]: cannot find type `Point` in this scope
+ --> <repl:6>:1:13
+  |
+1 | fn width(p: Point) -> Int {
+  |             ^^^^^ not found
+  |
+  = note: `width` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+> doubled()
+2 : Int
+> stays()
+2 : Int
+> value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:10>:1:1
+  |
+1 | value()
+  | ^^^^^ not found
+
+> let x = value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:11>:1:9
+  |
+1 | let x = value()
+  |         ^^^^^ not found
+
+> :type value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:12>:1:1
+  |
+1 | value()
+  | ^^^^^ not found
+
+> fn f() -> Int {
+.   value()
+. }
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:13>:2:3
+  |
+2 |   value()
+  |   ^^^^^ not found
+
+> const k: Int = value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:14>:1:16
+  |
+1 | const k: Int = value()
+  |                ^^^^^ not found
+
+> test "t" {
+.   assert value() == 1
+. }
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:15>:2:10
+  |
+2 |   assert value() == 1
+  |          ^^^^^ not found
+
+> aliased()
+error[E0042]: cannot find value `aliased` in this scope
+ --> <repl:16>:1:1
+  |
+1 | aliased()
+  | ^^^^^^^ not found
+
+> limit
+error[E0042]: cannot find value `limit` in this scope
+ --> <repl:17>:1:1
+  |
+1 | limit
+  | ^^^^^ not found
+
+> fn p(_q: Point) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Point` in this scope
+ --> <repl:18>:1:10
+  |
+1 | fn p(_q: Point) -> Int {
+  |          ^^^^^ not found
+
+> Point { x: 1 }
+error[E0042]: cannot find constructor `Point` in this scope
+ --> <repl:19>:1:1
+  |
+1 | Point { x: 1 }
+  | ^^^^^ not found
+
+> fn s<T: Sized>(_t: T) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Sized` in this scope
+ --> <repl:20>:1:9
+  |
+1 | fn s<T: Sized>(_t: T) -> Int {
+  |         ^^^^^ not found
+
+> fn d(_t: dyn Sized) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Sized` in this scope
+ --> <repl:21>:1:14
+  |
+1 | fn d(_t: dyn Sized) -> Int {
+  |              ^^^^^ not found
+
+> fn c(n: Int) -> Int {
+.   case n {
+.     Point { x } => x
+.     _ => 2
+.   }
+. }
+error[E0042]: cannot find constructor `Point` in this scope
+ --> <repl:22>:3:5
+  |
+3 |     Point { x } => x
+  |     ^^^^^ not found
+
+> fn o(_x: Option) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Option` in this scope
+ --> <repl:23>:1:10
+  |
+1 | fn o(_x: Option) -> Int {
+  |          ^^^^^^ not found
+
+> x
+error[E0042]: cannot find value `x` in this scope
+ --> <repl:24>:1:1
+  |
+1 | x
+  | ^ not found
+
+> 1 + 1
+2 : Int
+> io::write_file("src/other.cheby", r#"//! With its names, but private.
+. /// A record, in both namespaces.
+. priv type Point {
+.   Point { x: Int },
+. }
+. /// A type that hides the prelude's.
+. priv type Option {
+.   Nothing,
+. }
+. /// An interface for a generic bound.
+. priv interface Sized {
+.   fn size(Self) -> Int
+. }
+. /// A constant.
+. priv const limit: Int = 1
+. /// A function.
+. priv fn value() -> Int {
+.   1
+. }
+. priv fn width(p: Point) -> Int {
+.   p.x
+. }
+. priv fn size(_o: Option) -> Int {
+.   1
+. }
+. priv fn measured<T: Sized>(t: T) -> Int {
+.   Sized::size(t)
+. }
+. /// A function that no reload touches.
+. pub fn stays() -> Int {
+.   value() + width(Point { x: limit }) + measured(Nothing)
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+warning[W0007]: `Option` hides the prelude type `Option`
+ --> src/other.cheby:7:11
+  |
+7 | priv type Option {
+  |           ^^^^^^ declared here
+  |
+  = note: in this module, `Option` no longer means the prelude type, which stays reachable as `option::Option` after `import std::option`
+  = help: if this is not intended, give the type another name
+
+reloaded `store::other`
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:4>:2:3
+  |
+2 |   value() * 2
+  |   ^^^^^ not found
+  |
+  = note: `doubled` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+error[E0042]: cannot find type `Point` in this scope
+ --> <repl:6>:1:13
+  |
+1 | fn width(p: Point) -> Int {
+  |             ^^^^^ not found
+  |
+  = note: `width` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+> value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:27>:1:1
+  |
+1 | value()
+  | ^^^^^ not found
+
+> let y = value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:28>:1:9
+  |
+1 | let y = value()
+  |         ^^^^^ not found
+
+> :type value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:29>:1:1
+  |
+1 | value()
+  | ^^^^^ not found
+
+> fn f() -> Int {
+.   value()
+. }
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:30>:2:3
+  |
+2 |   value()
+  |   ^^^^^ not found
+
+> const k: Int = value()
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:31>:1:16
+  |
+1 | const k: Int = value()
+  |                ^^^^^ not found
+
+> test "t" {
+.   assert value() == 1
+. }
+error[E0042]: cannot find value `value` in this scope
+ --> <repl:32>:2:10
+  |
+2 |   assert value() == 1
+  |          ^^^^^ not found
+
+> aliased()
+error[E0042]: cannot find value `aliased` in this scope
+ --> <repl:33>:1:1
+  |
+1 | aliased()
+  | ^^^^^^^ not found
+
+> limit
+error[E0042]: cannot find value `limit` in this scope
+ --> <repl:34>:1:1
+  |
+1 | limit
+  | ^^^^^ not found
+
+> fn p(_q: Point) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Point` in this scope
+ --> <repl:35>:1:10
+  |
+1 | fn p(_q: Point) -> Int {
+  |          ^^^^^ not found
+
+> Point { x: 1 }
+error[E0042]: cannot find constructor `Point` in this scope
+ --> <repl:36>:1:1
+  |
+1 | Point { x: 1 }
+  | ^^^^^ not found
+
+> fn s<T: Sized>(_t: T) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Sized` in this scope
+ --> <repl:37>:1:9
+  |
+1 | fn s<T: Sized>(_t: T) -> Int {
+  |         ^^^^^ not found
+
+> fn d(_t: dyn Sized) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Sized` in this scope
+ --> <repl:38>:1:14
+  |
+1 | fn d(_t: dyn Sized) -> Int {
+  |              ^^^^^ not found
+
+> fn c(n: Int) -> Int {
+.   case n {
+.     Point { x } => x
+.     _ => 2
+.   }
+. }
+error[E0042]: cannot find constructor `Point` in this scope
+ --> <repl:39>:3:5
+  |
+3 |     Point { x } => x
+  |     ^^^^^ not found
+
+> fn o(_x: Option) -> Int {
+.   1
+. }
+error[E0042]: cannot find type `Option` in this scope
+ --> <repl:40>:1:10
+  |
+1 | fn o(_x: Option) -> Int {
+  |          ^^^^^^ not found
+
+> stays()
+3 : Int
+> io::write_file("src/other.cheby", r#"//! With its names again.
+. /// A record, in both namespaces.
+. pub type Point {
+.   Point { x: Int },
+. }
+. /// A type that hides the prelude's.
+. pub type Option {
+.   Nothing,
+. }
+. /// An interface for a generic bound.
+. pub interface Sized {
+.   fn size(Self) -> Int
+. }
+. /// A constant.
+. pub const limit: Int = 4
+. /// A function.
+. pub fn value() -> Int {
+.   7
+. }
+. /// A function that no reload touches.
+. pub fn stays() -> Int {
+.   4
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+warning[W0007]: `Option` hides the prelude type `Option`
+ --> src/other.cheby:7:10
+  |
+7 | pub type Option {
+  |          ^^^^^^ declared here
+  |
+  = note: in this module, `Option` no longer means the prelude type, which stays reachable as `option::Option` after `import std::option`
+  = help: if this is not intended, give the type another name
+
+reloaded `store::other`
+> value() + limit
+11 : Int
+> aliased()
+7 : Int
+> doubled()
+14 : Int
+> width(Point { x: 3 })
+3 : Int
+> fn f() -> Int {
+.   value()
+. }
+> f()
+7 : Int
+> let z = value()
+> z
+7 : Int
+> :type value()
+value() : Int
+> const k: Int = value()
+> k
+7 : Int
+> test "t" {
+.   assert value() == 7
+. }
+> fn s<T: Sized>(_t: T) -> Int {
+.   1
+. }
+> fn d(_t: dyn Sized) -> Int {
+.   1
+. }
+> fn c(q: Point) -> Int {
+.   case q {
+.     Point { x } => x
+.   }
+. }
+> c(Point { x: 5 })
+5 : Int
+> fn o(_x: Option) -> Int {
+.   1
+. }

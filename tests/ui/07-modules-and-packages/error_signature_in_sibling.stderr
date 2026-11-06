@@ -1,0 +1,6 @@
+error[E0042]: cannot find type `Missing` in this scope
+ --> tests/ui/07-modules-and-packages/error_signature_in_sibling/src/other.cheby:3:16
+  |
+3 | pub fn bad(_x: Missing) -> Int {
+  |                ^^^^^^^ not found
+

@@ -257,6 +257,15 @@ impl Error {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The message for an [`Ice`] that carries this error on: without the
+    /// prefix of an internal error, which the `Ice` gets back when it
+    /// becomes an [`Error`] again.
+    pub(crate) fn ice_message(&self) -> &str {
+        self.message
+            .strip_prefix(ICE_PREFIX)
+            .unwrap_or(&self.message)
+    }
 }
 
 impl fmt::Display for Error {
@@ -273,10 +282,13 @@ impl From<PackageError> for Error {
     }
 }
 
+/// What an internal compiler error's message starts with (D-464).
+const ICE_PREFIX: &str = "internal compiler error: ";
+
 /// An internal compiler error is a tool error (D-464).
 impl From<Ice> for Error {
     fn from(ice: Ice) -> Self {
-        Self::new(format!("internal compiler error: {}", ice.message()))
+        Self::new(format!("{ICE_PREFIX}{}", ice.message()))
     }
 }
 
@@ -1321,6 +1333,8 @@ mod cache_tests;
 mod code_record_repl_tests;
 #[cfg(test)]
 mod code_record_tests;
+#[cfg(test)]
+mod dropped_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]

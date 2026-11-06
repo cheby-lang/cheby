@@ -547,6 +547,39 @@ mod tests {
         interface_hash(&iface, &deps, &s.modules, &s.globals).unwrap()
     }
 
+    /// A warm command adds a hit's private items after its hash was read
+    /// (D-953, D-1256): nothing of them may reach an encoding.
+    #[test]
+    fn a_hidden_item_stays_out_of_the_encoding() {
+        let s = setup();
+        let items = vec![func(&s, "print", Vis::Pub, Ty::STRING, 0)];
+        let mut iface = ModuleInterface::new(
+            s.module,
+            PackageId::LOCAL,
+            IndexVec::from_raw(items).unwrap(),
+        )
+        .unwrap();
+        let allowed = [];
+        let deps = DepView::new(&s.set, &allowed);
+        let before = encode(&iface, &deps, &s.modules, &s.globals).unwrap();
+        let hidden = IfaceItem {
+            sig: ItemSig::Error,
+            ..func(&s, "helper", Vis::Priv, Ty::INT, 5)
+        };
+        let shown = IfaceItem {
+            sig: ItemSig::Error,
+            ..func(&s, "broken", Vis::Priv, Ty::INT, 9)
+        };
+        let hidden = iface.push_hidden(hidden).unwrap();
+        let shown = iface.push(shown).unwrap();
+        assert!(iface.is_hidden(hidden));
+        assert!(!iface.is_hidden(shown));
+        assert_eq!(
+            encode(&iface, &deps, &s.modules, &s.globals).unwrap(),
+            before
+        );
+    }
+
     #[test]
     fn hash_ignores_spans_private_items_and_order() {
         let s = setup();

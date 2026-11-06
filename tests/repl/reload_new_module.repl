@@ -1,0 +1,126 @@
+// @decisions: D-625
+> import std::io
+> import store::brand
+error[E0039]: there is no module `store::brand`
+ --> <repl:2>:1:8
+  |
+1 | import store::brand
+  |        ^^^^^^^^^^^^ no such module
+  |
+  = help: a module with a similar name exists: `store::old`
+
+> io::write_file("src/brand.cheby", r#"//! New since the start.
+. pub fn name() -> String {
+.   "brand 1"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> io::write_file("src/nested/deep.cheby", r#"//! New and nested.
+. pub fn name() -> String {
+.   "deep 1"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::brand`
+reloaded `store::nested::deep`
+> import store::brand
+> brand::name()
+"brand 1" : String
+> import store::nested::deep
+> deep::name()
+"deep 1" : String
+> import store::nested::deep::{name}
+> name()
+"deep 1" : String
+> :reload
+no module changed
+> fn read() -> String {
+.   brand::name()
+. }
+> io::write_file("src/brand.cheby", r#"//! Changed.
+. pub fn name() -> String {
+.   "brand 2"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::brand`
+> brand::name()
+"brand 2" : String
+> read()
+"brand 2" : String
+> :reload
+no module changed
+> io::write_file("src/nested/deep.cheby", r#"//! Changed.
+. pub fn name() -> String {
+.   "deep 2"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::nested::deep`
+> deep::name()
+"deep 2" : String
+> name()
+"deep 2" : String
+> io::write_file("src/old.cheby", r#"//! Now it imports a new module.
+. import store::brand
+. pub fn name() -> String {
+.   brand::name()
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::old`
+> import store::old
+> old::name()
+"brand 2" : String
+> io::write_file("src/brand.cheby", r#"//! Changed again.
+. pub fn name() -> String {
+.   "brand 3"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::brand`
+reloaded `store::old`
+> old::name()
+"brand 3" : String
+> :module store::brand
+> name()
+"brand 3" : String
+> :module
+> io::write_file("src/rejected.cheby", r#"//! A new module with an error.
+. pub fn name() -> String {
+.   1
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+error[E0047]: mismatched types
+ --> src/rejected.cheby:3:3
+  |
+2 | pub fn name() -> String {
+  |                  ------ expected because of this return type
+3 |   1
+  |   ^ expected `String`, found `{integer}`
+
+> import store::rejected
+error[E0039]: there is no module `store::rejected`
+ --> <repl:25>:1:8
+  |
+1 | import store::rejected
+  |        ^^^^^^^^^^^^^^^ no such module
+
+> io::write_file("src/rejected.cheby", r#"//! Without it.
+. pub fn name() -> String {
+.   "rejected no more"
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::rejected`
+> import store::rejected
+> rejected::name()
+"rejected no more" : String

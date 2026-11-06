@@ -1,0 +1,10 @@
+error[E0041]: `value` is imported twice
+ --> tests/ui/07-modules-and-packages/qualifier_of_collision/src/main.cheby:7:22
+  |
+6 | import app::first::{value}
+  |                     ----- first imported here
+7 | import app::second::{value}
+  |                      ^^^^^ imported here
+  |
+  = help: give the import another name with `as`
+

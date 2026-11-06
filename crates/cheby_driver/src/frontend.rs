@@ -328,17 +328,25 @@ impl Frontend {
         })
     }
 
-    /// The `main` of `module`, if it has one that type-checked.
+    /// The `main` of `module`, if it has one that type-checked and that
+    /// exists on `native`, the target of every build so far: an item marked
+    /// for one target exists only there (§12.6, as D-597 has it for tests),
+    /// so a module whose `main` is `js`'s has none here (D-464).
     pub fn main_of(&self, module: ModuleId) -> Option<&thir::FnDef> {
         // A warm hit's `main` comes from its warm facts (D-1250).
-        if let Some(warm) = self.warm.get(&module) {
-            return warm.main.as_ref();
-        }
-        self.checked_quiet(module)?
-            .thir
-            .fns
-            .iter()
-            .find(|f| f.entry.is_some())
+        let main = match self.warm.get(&module) {
+            Some(warm) => warm.main.as_ref()?,
+            None => self
+                .checked_quiet(module)?
+                .thir
+                .fns
+                .iter()
+                .find(|f| f.entry.is_some())?,
+        };
+        let item = self.set.get(module)?.item(main.def.index)?;
+        item.targets
+            .contains(cheby_package::Target::Native)
+            .then_some(main)
     }
 
     /// Drops the results [`check_reloaded`] added for `modules`, the
@@ -429,7 +437,7 @@ impl DriverLookup<'_> {
             source.source.as_bytes().to_vec(),
             self.diagnostics,
         )
-        .map_err(|e| Ice::new(e.message().to_owned()))?;
+        .map_err(|e| Ice::new(e.ice_message()))?;
         if parsed.has_syntax_errors {
             self.std_error = Some(display);
         }
@@ -716,8 +724,10 @@ pub(crate) struct ReloadedModule<'a> {
 /// the build checks a package module, publishes its interface, and adds
 /// its results to `front` (`checked`, `order`, its imports and native
 /// bindings); [`Frontend::natives`] does not change. `display` is the
-/// table diagnostics name modules with. Returns its diagnostics, unsorted;
-/// when one is an error, the caller must not use the module.
+/// table diagnostics name modules with. Returns its diagnostics, unsorted,
+/// and the internal error of a body that left its THIR; when one of them
+/// is an error, the caller must not use the module, and with no error in
+/// the whole reload the internal error stands (D-464).
 ///
 /// # Errors
 ///
@@ -727,7 +737,7 @@ pub(crate) fn check_reloaded(
     front: &mut Frontend,
     display: &ModuleTable,
     module: ReloadedModule<'_>,
-) -> Result<Vec<Diagnostic>, Ice> {
+) -> Result<(Vec<Diagnostic>, Option<Ice>), Ice> {
     let id = module.id;
     // What it may read: its imports and the shipped home modules of
     // prelude types (D-447), with their transitive dependencies (D-246).
@@ -780,6 +790,9 @@ pub(crate) fn check_reloaded(
     front.set.publish(Arc::clone(&iface))?;
     let (thir, found) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
     diags.extend(found);
+    #[cfg(test)]
+    let thir = drop_for_test(&types, thir);
+    let dropped = cheby_types::dropped_body(&types, &thir, Tests::SkipStd);
     let at = index(id)?;
     while front.checked.len() <= at {
         front.checked.push(None);
@@ -812,7 +825,7 @@ pub(crate) fn check_reloaded(
         }
         front.order.push(id);
     }
-    Ok(diags)
+    Ok((diags, dropped))
 }
 
 /// The module table and the interfaces an extra module sees, and its id
@@ -1122,6 +1135,10 @@ struct ModuleOutput {
     checked: Option<Checked>,
     /// The summaries of a package module checked from source.
     summaries: Option<Summaries>,
+    /// The internal error of a module checked from source that lost a body
+    /// ([`cheby_types::dropped_body`]). It stands only if the whole package
+    /// has no error, which [`run_inner`] decides.
+    dropped: Option<Ice>,
     /// The front record found when the lookup hit.
     hit: Option<FrontRecord>,
     /// The module's entry for this command's package index: a hit's, or
@@ -1274,6 +1291,7 @@ impl BuildInputs<'_> {
             hash: Some(hash),
             checked: None,
             summaries: None,
+            dropped: None,
             hit: None,
             entry: None,
         })
@@ -1384,6 +1402,7 @@ impl BuildInputs<'_> {
             hash: Some(hash),
             checked: None,
             summaries: None,
+            dropped: None,
             hit: Some(record.clone()),
             entry: self.entry(cx, id, found.f1, found.f2, record.clone())?,
         }))
@@ -1628,6 +1647,9 @@ impl BuildInputs<'_> {
             Tests::SkipStd
         };
         let (thir, late) = check_bodies_with(&types, &iface, tests)?;
+        #[cfg(test)]
+        let thir = drop_for_test(&types, thir);
+        let dropped = cheby_types::dropped_body(&types, &thir, tests);
         let front_reads =
             hidden_reads(self.modules, id, log.modules(), get(self.targets, id)?, &[]);
         // The summaries read the interfaces again without recording: the
@@ -1658,6 +1680,7 @@ impl BuildInputs<'_> {
                 warnings: Vec::new(),
             }),
             summaries,
+            dropped,
             hit: None,
             entry: None,
         })
@@ -1965,7 +1988,8 @@ impl BuildInputs<'_> {
     /// not read again); no hint is written for empty reads unless it
     /// replaces a non-empty one (D-955, D-956, D-1137).
     /// Returns the module's entry for the package index. Nothing is written
-    /// for a module with an error (D-964). A write that fails is skipped:
+    /// for a module with an error (D-964) or one that lost a body, so a hit
+    /// always has every body. A write that fails is skipped:
     /// the entry is a miss next time, and no output depends on it (D-268,
     /// D-1129).
     #[expect(
@@ -1992,6 +2016,9 @@ impl BuildInputs<'_> {
         let (Some(checked), Some(summaries)) = (&output.checked, &output.summaries) else {
             return Ok(None);
         };
+        if !summaries.complete {
+            return Ok(None);
+        }
         let info = self.modules.try_get(id)?;
         let (Some(file), Some(hash)) = (info.file, checked.interface.hash) else {
             return Ok(None);
@@ -2815,6 +2842,7 @@ fn run_inner(
     // Per package module: its use summary and whether its bodies all
     // checked, for the whole-package pass (D-965).
     let mut uses: Vec<Option<(front::UseSummary, bool)>> = (0..len).map(|_| None).collect();
+    let mut dropped: Vec<Option<Ice>> = vec![None; len];
     let mut hits = vec![false; len];
     // Per module: whether it was checked from source with every package
     // module it reads checked from source too (its THIR and interface are
@@ -2855,9 +2883,14 @@ fn run_inner(
         if let Some(slot) = uses.get_mut(at) {
             *slot = match (&output.summaries, &output.hit) {
                 (Some(s), _) => Some((s.uses.clone(), s.complete)),
+                // `write_front` stores no module that lost a body, and the
+                // build ID keeps out records of a compiler that did (D-957).
                 (None, Some(record)) => Some((record.uses.clone(), true)),
                 (None, None) => None,
             };
+        }
+        if let Some(slot) = dropped.get_mut(at) {
+            *slot = output.dropped;
         }
         // The front identity that keys the module's warm facts (D-1250).
         if let Some(entry) = &output.entry
@@ -2999,6 +3032,9 @@ fn run_inner(
             if let (Some(slot), Some(s)) = (uses.get_mut(at), output.summaries) {
                 *slot = Some((s.uses, s.complete));
             }
+            if let Some(slot) = dropped.get_mut(at) {
+                *slot = output.dropped;
+            }
             if let Some(slot) = checked.get_mut(at) {
                 *slot = output.checked;
             }
@@ -3037,6 +3073,15 @@ fn run_inner(
                 .and_then(|at| uses.get(at))
                 .is_some_and(Option::is_some)
         });
+    // A body left THIR, so an error must exist. It may be in another
+    // module, since a call to an item whose signature is in error drops the
+    // caller and reports nothing there, so only the whole package can tell
+    // (D-464). Module order keeps the message the same on any schedule.
+    if !diagnostics.iter().any(Diagnostic::is_error)
+        && let Some(ice) = dropped.iter_mut().find_map(Option::take)
+    {
+        return Err(Stop::Ice(ice));
+    }
     if mode == Mode::Check && every_local_built {
         diagnostics.extend(unused_package_items(&modules, &built, &uses)?);
     }
@@ -3127,6 +3172,24 @@ fn run_inner(
         warm,
         wanted: std::sync::atomic::AtomicBool::new(false),
     })
+}
+
+/// Test hook: drops every body named `dropped_by_test` with no diagnostic,
+/// so the tests of the rule on dropped bodies have a silent drop when the
+/// checker has none (`dropped_tests.rs`). The name is the switch, so tests
+/// that run in parallel share no state.
+#[cfg(test)]
+fn drop_for_test(input: &TypesInput<'_>, mut thir: thir::Module) -> thir::Module {
+    let dropped = |index: cheby_iface::DefIndex| {
+        input
+            .resolved
+            .item(index)
+            .is_some_and(|item| input.globals.names.get(item.name) == "dropped_by_test")
+    };
+    thir.fns.retain(|f| !dropped(f.def.index));
+    thir.consts.retain(|c| !dropped(c.def.index));
+    thir.tests.retain(|t| !dropped(t.def.index));
+    thir
 }
 
 /// The first failure among a schedule's outputs: a [`Stop::Restart`] if

@@ -1,0 +1,6 @@
+error[E0042]: cannot find type `Missing` in this scope
+ --> tests/ui/05-expressions/records/update_alias_in_error.cheby:6:15
+  |
+6 | type Broken = Missing
+  |               ^^^^^^^ not found
+

@@ -1,0 +1,42 @@
+error[E0071]: literal out of range
+ --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:9:19
+  |
+9 | const huge: Int = 340282366920938463463374607431768211456
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is too large for any integer type
+
+error[E0071]: literal out of range
+  --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:12:3
+   |
+12 |   340282366920938463463374607431768211456
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is too large for any integer type
+
+error[E0071]: literal out of range
+  --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:16:3
+   |
+16 |   -340282366920938463463374607431768211456
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is too large for any integer type
+
+error[E0071]: literal out of range
+  --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:20:3
+   |
+20 |   0x100000000000000000000000000000000
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is too large for any integer type
+
+error[E0071]: literal out of range for `Int`
+  --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:25:5
+   |
+25 |     340282366920938463463374607431768211456 => 1
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this literal does not fit in any integer type
+
+error[E0071]: literal out of range for `Int`
+  --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:26:5
+   |
+26 |     -340282366920938463463374607431768211456 => 2
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this literal does not fit in any integer type
+
+error[E0071]: literal out of range
+  --> tests/ui/03-types/literals/beyond_any_integer_type.cheby:32:10
+   |
+32 |   assert 340282366920938463463374607431768211456 == 1
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is too large for any integer type
+

@@ -1,0 +1,6 @@
+error[E0042]: cannot find type `Missing` in this scope
+ --> tests/ui/08-interfaces/satisfaction/private_signature_in_error/src/lib.cheby:8:21
+  |
+8 | priv fn show(_oops: Missing) -> String {
+  |                     ^^^^^^^ not found
+

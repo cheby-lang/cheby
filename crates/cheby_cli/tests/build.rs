@@ -1010,6 +1010,318 @@ fn build_cache_poisoned_build_reads_runs_records() {
     }
 }
 
+/// A root module with a `priv` `main` (§4.2.1, D-163).
+const PRIVATE_MAIN: &str = "//! `main` may be `priv`.
+
+import std::io
+
+priv fn main() {
+  io::println(\"hello\")
+}
+";
+
+/// Runs the executable `cheby build -o <exe>` writes from `root` on `cache`,
+/// and asserts that it prints `expected`. `args` come after `build`.
+fn builds_and_prints(root: &Path, args: &[&str], cache: &HarnessCache, expected: &str) {
+    let exe = root.join("exe");
+    let mut all = vec!["build", "-o", exe.to_str().unwrap()];
+    all.extend(args);
+    let built = cheby(root, &all, cache, &[]);
+    assert_eq!(built.status, Some(0), "{}", built.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, expected);
+}
+
+/// `cheby run <args>` from `root` on `cache`, which must print `expected`.
+fn runs_and_prints(root: &Path, args: &[&str], cache: &HarnessCache, expected: &str) {
+    let mut all = vec!["run"];
+    all.extend(args);
+    let ran = cheby(root, &all, cache, &[]);
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, expected);
+}
+
+/// A warm interface holds no signature for a private item, and `main`'s
+/// entry is lowered against one, so a private `main`'s module is checked
+/// on every command. The third step reads the facts `cheby run` wrote.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn a_private_main_runs_and_builds_cold_and_warm() {
+    let tmp = FreshDir::create("cheby-build-private-main").unwrap();
+    let root = package(tmp.path(), "app", PRIVATE_MAIN);
+    let cache = fresh_cache();
+    runs_and_prints(&root, &[], &cache, "hello\n");
+    runs_and_prints(&root, &[], &cache, "hello\n");
+    builds_and_prints(&root, &[], &cache, "hello\n");
+    let cache = fresh_cache();
+    builds_and_prints(&root, &[], &cache, "hello\n");
+    builds_and_prints(&root, &[], &cache, "hello\n");
+}
+
+/// The same for the `main` of a module that is not the root.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn a_private_main_of_a_module_path_runs_and_builds_cold_and_warm() {
+    let tmp = FreshDir::create("cheby-build-private-module-main").unwrap();
+    let root = package(tmp.path(), "app", "fn main() {\n}\n");
+    std::fs::write(root.join("src/tool.cheby"), PRIVATE_MAIN).unwrap();
+    let cache = fresh_cache();
+    runs_and_prints(&root, &["app::tool"], &cache, "hello\n");
+    runs_and_prints(&root, &["app::tool"], &cache, "hello\n");
+    builds_and_prints(&root, &["app::tool"], &cache, "hello\n");
+}
+
+/// A type whose module has a private function named as `Show`'s, which
+/// does not fit the type, so `Show` does not hold (§8.2, D-164).
+const OOPS: &str = "//! A type and a private `show`.
+
+/// The type.
+pub type Oops {
+  Oops(Int),
+}
+
+priv fn show(n: Int) -> String {
+  \"{n}\"
+}
+
+/// Makes one.
+pub fn make() -> Oops {
+  let _ = show(1)
+  Oops(1)
+}
+
+/// A failure with one.
+pub fn fail() -> Result<Int, Oops> {
+  Err(make())
+}
+";
+
+/// A root module that fails with [`OOPS`]'s type, printed by its debug form
+/// since `Show` does not hold (D-182), with `visibility` before `main`.
+fn fails_with_oops(visibility: &str, comment: &str) -> String {
+    format!(
+        "//! Fails with another module's type.{comment}
+
+import app::lib
+import std::io
+
+{visibility}fn main() -> Result<Nil, lib::Oops> {{
+  io::println(\"hello\")
+  Err(lib::make())
+}}
+"
+    )
+}
+
+/// `cheby run` from `root` on `cache`: the fields of its output that must
+/// not change.
+fn run_output(root: &Path, cache: &HarnessCache) -> (Option<i32>, String, String) {
+    let ran = cheby(root, &["run"], cache, &[]);
+    (ran.status, ran.stdout, ran.stderr)
+}
+
+/// A warm command adds a hit's private functions without their signatures
+/// (D-1256). `Show` of a type there must not take one for an item in error,
+/// which would count as satisfied: warm equals cold (D-1136, D-164).
+#[test]
+#[cfg_attr(windows, ignore = "generated code on Windows is M6 (D-545, D-641)")]
+fn a_hidden_function_satisfies_nothing_after_an_edit() {
+    let tmp = FreshDir::create("cheby-build-hidden-show").unwrap();
+    let main = fails_with_oops("", "");
+    let root = package_files(
+        tmp.path(),
+        "",
+        &[("main.cheby", &main), ("lib.cheby", OOPS)],
+    );
+    let cache = fresh_cache();
+    let cold = run_output(&root, &cache);
+    assert_eq!(cold.0, Some(1), "{}", cold.2);
+    assert_eq!(cold.1, "hello\n");
+    assert!(cold.2.contains("Oops(1)"), "{}", cold.2);
+    assert_eq!(run_output(&root, &cache), cold);
+    let edited = fails_with_oops("", "\n\n// An edit that changes no code.");
+    std::fs::write(root.join("src/main.cheby"), edited).unwrap();
+    assert_eq!(run_output(&root, &cache), cold);
+    assert_eq!(run_output(&root, &cache), cold);
+}
+
+/// The same with a private `main`, whose module is checked on every warm
+/// command with no edit at all, and `cheby test` with a test that fails with
+/// the type.
+#[test]
+#[cfg_attr(windows, ignore = "generated code on Windows is M6 (D-545, D-641)")]
+fn a_hidden_function_satisfies_nothing_for_a_private_main() {
+    let tmp = FreshDir::create("cheby-build-hidden-show-main").unwrap();
+    let main = "//! A private `main`, and a test that fails with the type.
+
+import app::lib
+import std::io
+import std::result
+
+priv fn main() -> Result<Nil, lib::Oops> {
+  io::println(\"hello\")
+  Err(lib::make())
+}
+
+test \"fails\" {
+  use n <- result::try(lib::fail())
+  assert n == 1
+  Ok(Nil)
+}
+";
+    let root = package_files(tmp.path(), "", &[("main.cheby", main), ("lib.cheby", OOPS)]);
+    let cache = fresh_cache();
+    let cold = run_output(&root, &cache);
+    assert_eq!(cold.0, Some(1), "{}", cold.2);
+    assert_eq!(run_output(&root, &cache), cold);
+    let tested = cheby(&root, &["test"], &cache, &[]);
+    assert_eq!(tested.status, Some(1), "{}", tested.stderr);
+    assert!(tested.stdout.contains("Oops(1)"), "{}", tested.stdout);
+    for _ in 0..2 {
+        let again = cheby(&root, &["test"], &cache, &[]);
+        assert_eq!(again.status, Some(1), "{}", again.stderr);
+        assert!(again.stdout.contains("Oops(1)"), "{}", again.stdout);
+        assert!(
+            !again.stderr.contains("internal compiler error"),
+            "{}",
+            again.stderr
+        );
+    }
+}
+
+/// A module checked warm that needs `Show` of such a type reports what a
+/// cold check reports: E0063, with the reason a cold check gives (D-1136).
+#[test]
+#[cfg_attr(windows, ignore = "generated code on Windows is M6 (D-545, D-641)")]
+fn a_hidden_function_leaves_e0063_as_cold_as_it_was() {
+    let tmp = FreshDir::create("cheby-build-hidden-e0063").unwrap();
+    let main = fails_with_oops("", "");
+    let wrong = "//! Needs `Show` of a type that lacks it.
+
+import app::lib
+import std::io
+
+fn main() {
+  let oops = lib::make()
+  io::println(\"{oops}\")
+}
+";
+    let root = package_files(
+        tmp.path(),
+        "",
+        &[("main.cheby", &main), ("lib.cheby", OOPS)],
+    );
+    let cache = fresh_cache();
+    assert_eq!(run_output(&root, &cache).0, Some(1));
+    assert_eq!(run_output(&root, &cache).0, Some(1));
+    std::fs::write(root.join("src/main.cheby"), wrong).unwrap();
+    let cold = run_output(&root, &fresh_cache());
+    assert_eq!(cold.0, Some(1), "{}", cold.2);
+    assert!(cold.2.contains("error[E0063]"), "{}", cold.2);
+    assert_eq!(run_output(&root, &cache), cold);
+    assert_eq!(run_output(&root, &cache), cold);
+}
+
+/// `main` of `js` on native: the item does not exist there (§12.6), so the
+/// module has no `main` (D-464), cold and warm, in `cheby run` and in
+/// `cheby build`. `cheby test` needs no `main`.
+fn has_no_main_on_native(root: &Path, cache: &HarnessCache, path: &[&str], shown: &str) {
+    let message = format!("error: module `{shown}` has no `main` function\n");
+    let mut run = vec!["run"];
+    run.extend(path);
+    let exe = root.join("exe");
+    let mut build = vec!["build", "-o", exe.to_str().unwrap()];
+    build.extend(path);
+    for args in [&run, &run, &build, &build, &run] {
+        let out = cheby(root, args, cache, &[]);
+        assert_eq!(out.status, Some(1), "{args:?}: {}", out.stderr);
+        assert_eq!(out.stderr, message, "{args:?}");
+        assert_eq!(out.stdout, "", "{args:?}");
+    }
+    assert!(!exe.exists());
+}
+
+/// Each way of writing a `main` of `js`, and of `native` beside them.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn a_main_of_another_target_is_no_main() {
+    let body = "fn main() {\n  io::println(\"hello\")\n}\n";
+    for (n, (inner, outer)) in [
+        ("", "@target(js)\n"),
+        ("", "@target(js)\npriv "),
+        ("", "@target(js)\npub "),
+        ("@!target(js)\n", ""),
+        ("@!target(js)\n", "priv "),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tmp = FreshDir::create(&format!("cheby-build-js-main-{n}")).unwrap();
+        let text = format!("//! `main` of `js`.\n\n{inner}import std::io\n\n{outer}{body}");
+        let root = package(tmp.path(), "app", &text);
+        has_no_main_on_native(&root, &fresh_cache(), &[], "app");
+        // A module that is a hit: its facts are written by a run of another
+        // module, which stops at no tool error. Its warm facts answer, with
+        // no second attempt that would read the module.
+        let root = package(tmp.path(), "second", "fn main() {\n}\n");
+        std::fs::write(root.join("src/tool.cheby"), &text).unwrap();
+        let cache = fresh_cache();
+        runs_and_prints(&root, &[], &cache, "");
+        runs_and_prints(&root, &[], &cache, "");
+        let log = tmp.path().join("log");
+        let out = logged(&root, &["run", "second::tool"], &cache, &log);
+        assert_eq!(out.status, Some(1), "{}", out.stderr);
+        let private = outer.contains("priv");
+        assert_eq!(!log_lines(&log, "parse").is_empty(), private);
+        has_no_main_on_native(&root, &cache, &["second::tool"], "second::tool");
+    }
+}
+
+/// `cheby test` selects tests, not `main`, so a `main` of `js` stands in its
+/// way no more than one that is absent.
+#[test]
+#[cfg_attr(windows, ignore = "generated code on Windows is M6 (D-545, D-641)")]
+fn a_main_of_another_target_leaves_the_tests() {
+    let tmp = FreshDir::create("cheby-build-js-main-test").unwrap();
+    let text = "//! Tests beside a `main` of `js`.
+
+@target(js)
+fn main() {
+}
+
+test \"on native\" {
+  assert 1 + 1 == 2
+}
+";
+    let root = package(tmp.path(), "app", text);
+    let cache = fresh_cache();
+    for _ in 0..2 {
+        let out = cheby(&root, &["test"], &cache, &[]);
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert!(out.stdout.contains("1 passed"), "{}", out.stdout);
+    }
+}
+
+/// `main` of `native` runs, written either way.
+#[test]
+#[cfg_attr(windows, ignore = "executables on Windows are M6 (D-935)")]
+fn a_main_of_native_is_the_main() {
+    let body = "fn main() {\n  io::println(\"hello\")\n}\n";
+    for (n, (inner, outer)) in [("", "@target(native)\n"), ("@!target(native)\n", "")]
+        .into_iter()
+        .enumerate()
+    {
+        let tmp = FreshDir::create(&format!("cheby-build-native-main-{n}")).unwrap();
+        let text = format!("//! `main` of `native`.\n\n{inner}import std::io\n\n{outer}{body}");
+        let root = package(tmp.path(), "app", &text);
+        let cache = fresh_cache();
+        runs_and_prints(&root, &[], &cache, "hello\n");
+        runs_and_prints(&root, &[], &cache, "hello\n");
+        builds_and_prints(&root, &[], &cache, "hello\n");
+    }
+}
+
 /// A copy of 001 under `dir`.
 fn copy_of_001(dir: &Path) -> PathBuf {
     let root = dir.join("hello_world");

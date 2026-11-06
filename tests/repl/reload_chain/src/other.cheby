@@ -1,0 +1,16 @@
+//! A record a `:reload` changes under the session.
+
+/// A value.
+pub type P {
+  P { v: Int },
+}
+
+/// Makes one.
+pub fn make() -> P {
+  P { v: 1 }
+}
+
+/// A function that goes in the last version.
+pub fn extra() -> Int {
+  1
+}

@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-062
+//! Two imports of one name are one error, and using the name as a
+//! qualifier adds none.
+
+import app::first::{value}
+import app::second::{value}
+
+fn main() {
+  assert value::x() == 1
+}

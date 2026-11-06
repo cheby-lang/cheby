@@ -1,0 +1,124 @@
+// @decisions: D-547, D-607
+> import std::io
+> import store::other
+> const k: Int = 1
+> fn reader() -> Int {
+.   k
+. }
+> fn generic_reader<T>(_x: T) -> Int {
+.   k
+. }
+> fn make() -> fn() -> Int {
+.   fn() -> Int {
+.     k
+.   }
+. }
+> let closure = make()
+> fn inverse() -> Int {
+.   1 / (k - 2)
+. }
+> const k: Int = 2
+> (k, reader(), generic_reader("x"), closure())
+(2, 2, 2, 2) : (Int, Int, Int, Int)
+> const k: Int = 3
+> (k, reader(), generic_reader("x"), closure())
+(3, 3, 3, 3) : (Int, Int, Int, Int)
+> inverse()
+1 : Int
+> fn later() -> Int {
+.   k
+. }
+> const k: Int = 4
+> (k, reader(), generic_reader("x"), closure(), later())
+(4, 4, 4, 4, 4) : (Int, Int, Int, Int, Int)
+> const k: Int = 5
+> (k, reader(), generic_reader("x"), closure(), later())
+(5, 5, 5, 5, 5) : (Int, Int, Int, Int, Int)
+> const word: String = "a"
+> fn read_word() -> String {
+.   word
+. }
+> const word: String = "b"
+> read_word()
+"b" : String
+> const word: String = "c"
+> read_word()
+"c" : String
+> const word: String = "d"
+> read_word()
+"d" : String
+> type Pair {
+.   Pair { left: Int, right: String },
+. }
+> const pair: Pair = Pair { left: 1, right: "a" }
+> fn read_pair() -> Int {
+.   pair.left
+. }
+> const pair: Pair = Pair { left: 2, right: "b" }
+> read_pair()
+2 : Int
+> const pair: Pair = Pair { left: 3, right: "c" }
+> read_pair()
+3 : Int
+> const pair: Pair = Pair { left: 4, right: "d" }
+> read_pair()
+4 : Int
+> const again: Int = 1
+> fn read_again() -> Int {
+.   again
+. }
+> const again: String = "a new type"
+error[E0047]: mismatched types
+ --> <repl:37>:2:3
+  |
+1 | fn read_again() -> Int {
+  |                    --- expected because of this return type
+2 |   again
+  |   ^^^^^ expected `Int`, found `String`
+  |
+  = note: `read_again` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> read_again()
+1 : Int
+> const again: Int = 2
+> read_again()
+2 : Int
+> const again: Int = 3
+> read_again()
+3 : Int
+> const again: Int = 4
+> read_again()
+4 : Int
+> const loaded: Int = other::value()
+> fn read_loaded() -> Int {
+.   loaded
+. }
+> (loaded, read_loaded())
+(1, 1) : (Int, Int)
+> io::write_file("src/other.cheby", r#"pub fn value() -> Int {
+.   2
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+> (loaded, read_loaded())
+(2, 2) : (Int, Int)
+> io::write_file("src/other.cheby", r#"pub fn value() -> Int {
+.   3
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+> (loaded, read_loaded())
+(3, 3) : (Int, Int)
+> io::write_file("src/other.cheby", r#"pub fn value() -> Int {
+.   4
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+> (loaded, read_loaded())
+(4, 4) : (Int, Int)

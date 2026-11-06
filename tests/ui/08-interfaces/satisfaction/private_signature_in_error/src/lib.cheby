@@ -1,0 +1,15 @@
+//! A type with a private function whose signature has an error.
+
+/// The type.
+pub type Oops {
+  Oops(Int),
+}
+
+priv fn show(_oops: Missing) -> String {
+  "shown"
+}
+
+/// Makes one.
+pub fn make() -> Oops {
+  Oops(1)
+}

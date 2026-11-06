@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-156, D-464
+//! A type parameter has no fields, so a record update cannot list one
+//! (§5.11.2). Before E0058 here the body left THIR with no diagnostic.
+
+fn moved<T>(value: T) -> T {
+  T { ..value, a: 1 }
+}
+
+fn main() {
+  assert moved(1) == 1
+}

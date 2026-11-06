@@ -1,0 +1,679 @@
+// @decisions: D-464, D-624
+> import store::other::{alpha}
+> :module store::other
+> alpha::x
+error[E0042]: `alpha` is not a module
+ --> <repl:2>:1:1
+  |
+1 | alpha::x
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> alpha::x()
+error[E0042]: `alpha` is not a module
+ --> <repl:3>:1:1
+  |
+1 | alpha::x()
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> :type alpha::x
+error[E0042]: `alpha` is not a module
+ --> <repl:4>:1:1
+  |
+1 | alpha::x
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn z() -> Int {
+.   alpha::x()
+. }
+error[E0042]: `alpha` is not a module
+ --> <repl:5>:2:3
+  |
+2 |   alpha::x()
+  |   ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> const c: Int = alpha::x()
+error[E0042]: `alpha` is not a module
+ --> <repl:6>:1:16
+  |
+1 | const c: Int = alpha::x()
+  |                ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> test "t" {
+.   assert alpha::x() == 1
+. }
+error[E0042]: `alpha` is not a module
+ --> <repl:7>:2:10
+  |
+2 |   assert alpha::x() == 1
+  |          ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> let q = alpha::x()
+error[E0042]: `alpha` is not a module
+ --> <repl:8>:1:9
+  |
+1 | let q = alpha::x()
+  |         ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn y(a: alpha::T) -> Int {
+.   1
+. }
+warning[W0002]: unused parameter `a`
+ --> <repl:9>:1:6
+  |
+1 | fn y(a: alpha::T) -> Int {
+  |      ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_a`
+
+error[E0042]: `alpha` is not a module
+ --> <repl:9>:1:9
+  |
+1 | fn y(a: alpha::T) -> Int {
+  |         ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> alpha::T { a: 1 }
+error[E0042]: `alpha` is not a module
+ --> <repl:10>:1:1
+  |
+1 | alpha::T { a: 1 }
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> case 1 {
+.   alpha::A => 1
+.   _ => 2
+. }
+error[E0042]: `alpha` is not a module
+ --> <repl:11>:2:3
+  |
+2 |   alpha::A => 1
+  |   ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> alpha()
+1 : Int
+> :module
+> :module store::other
+> import store::other::{beta}
+> beta::x
+error[E0042]: `beta` is not a module
+ --> <repl:14>:1:1
+  |
+1 | beta::x
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> beta::x()
+error[E0042]: `beta` is not a module
+ --> <repl:15>:1:1
+  |
+1 | beta::x()
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> :type beta::x
+error[E0042]: `beta` is not a module
+ --> <repl:16>:1:1
+  |
+1 | beta::x
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn z() -> Int {
+.   beta::x()
+. }
+error[E0042]: `beta` is not a module
+ --> <repl:17>:2:3
+  |
+2 |   beta::x()
+  |   ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> const c: Int = beta::x()
+error[E0042]: `beta` is not a module
+ --> <repl:18>:1:16
+  |
+1 | const c: Int = beta::x()
+  |                ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> test "t" {
+.   assert beta::x() == 1
+. }
+error[E0042]: `beta` is not a module
+ --> <repl:19>:2:10
+  |
+2 |   assert beta::x() == 1
+  |          ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> let q = beta::x()
+error[E0042]: `beta` is not a module
+ --> <repl:20>:1:9
+  |
+1 | let q = beta::x()
+  |         ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn y(a: beta::T) -> Int {
+.   1
+. }
+warning[W0002]: unused parameter `a`
+ --> <repl:21>:1:6
+  |
+1 | fn y(a: beta::T) -> Int {
+  |      ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_a`
+
+error[E0042]: `beta` is not a module
+ --> <repl:21>:1:9
+  |
+1 | fn y(a: beta::T) -> Int {
+  |         ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> beta::T { a: 1 }
+error[E0042]: `beta` is not a module
+ --> <repl:22>:1:1
+  |
+1 | beta::T { a: 1 }
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> case 1 {
+.   beta::A => 1
+.   _ => 2
+. }
+error[E0042]: `beta` is not a module
+ --> <repl:23>:2:3
+  |
+2 |   beta::A => 1
+  |   ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> beta()
+1 : Int
+> :module
+> fn gamma() -> Int {
+.   2
+. }
+> :module store::other
+> gamma::x
+error[E0042]: `gamma` is not a module
+ --> <repl:26>:1:1
+  |
+1 | gamma::x
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> gamma::x()
+error[E0042]: `gamma` is not a module
+ --> <repl:27>:1:1
+  |
+1 | gamma::x()
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> :type gamma::x
+error[E0042]: `gamma` is not a module
+ --> <repl:28>:1:1
+  |
+1 | gamma::x
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn z() -> Int {
+.   gamma::x()
+. }
+error[E0042]: `gamma` is not a module
+ --> <repl:29>:2:3
+  |
+2 |   gamma::x()
+  |   ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> const c: Int = gamma::x()
+error[E0042]: `gamma` is not a module
+ --> <repl:30>:1:16
+  |
+1 | const c: Int = gamma::x()
+  |                ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> test "t" {
+.   assert gamma::x() == 1
+. }
+error[E0042]: `gamma` is not a module
+ --> <repl:31>:2:10
+  |
+2 |   assert gamma::x() == 1
+  |          ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> let q = gamma::x()
+error[E0042]: `gamma` is not a module
+ --> <repl:32>:1:9
+  |
+1 | let q = gamma::x()
+  |         ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn y(a: gamma::T) -> Int {
+.   1
+. }
+warning[W0002]: unused parameter `a`
+ --> <repl:33>:1:6
+  |
+1 | fn y(a: gamma::T) -> Int {
+  |      ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_a`
+
+error[E0042]: `gamma` is not a module
+ --> <repl:33>:1:9
+  |
+1 | fn y(a: gamma::T) -> Int {
+  |         ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> gamma::T { a: 1 }
+error[E0042]: `gamma` is not a module
+ --> <repl:34>:1:1
+  |
+1 | gamma::T { a: 1 }
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> case 1 {
+.   gamma::A => 1
+.   _ => 2
+. }
+error[E0042]: `gamma` is not a module
+ --> <repl:35>:2:3
+  |
+2 |   gamma::A => 1
+  |   ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> gamma()
+1 : Int
+> :module
+> let delta = 2
+> :module store::other
+> delta::x
+error[E0042]: `delta` is not a module
+ --> <repl:38>:1:1
+  |
+1 | delta::x
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> delta::x()
+error[E0042]: `delta` is not a module
+ --> <repl:39>:1:1
+  |
+1 | delta::x()
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> :type delta::x
+error[E0042]: `delta` is not a module
+ --> <repl:40>:1:1
+  |
+1 | delta::x
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn z() -> Int {
+.   delta::x()
+. }
+error[E0042]: `delta` is not a module
+ --> <repl:41>:2:3
+  |
+2 |   delta::x()
+  |   ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> const c: Int = delta::x()
+error[E0042]: `delta` is not a module
+ --> <repl:42>:1:16
+  |
+1 | const c: Int = delta::x()
+  |                ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> test "t" {
+.   assert delta::x() == 1
+. }
+error[E0042]: `delta` is not a module
+ --> <repl:43>:2:10
+  |
+2 |   assert delta::x() == 1
+  |          ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> let q = delta::x()
+error[E0042]: `delta` is not a module
+ --> <repl:44>:1:9
+  |
+1 | let q = delta::x()
+  |         ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn y(a: delta::T) -> Int {
+.   1
+. }
+warning[W0002]: unused parameter `a`
+ --> <repl:45>:1:6
+  |
+1 | fn y(a: delta::T) -> Int {
+  |      ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_a`
+
+error[E0042]: `delta` is not a module
+ --> <repl:45>:1:9
+  |
+1 | fn y(a: delta::T) -> Int {
+  |         ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> delta::T { a: 1 }
+error[E0042]: `delta` is not a module
+ --> <repl:46>:1:1
+  |
+1 | delta::T { a: 1 }
+  | ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> case 1 {
+.   delta::A => 1
+.   _ => 2
+. }
+error[E0042]: `delta` is not a module
+ --> <repl:47>:2:3
+  |
+2 |   delta::A => 1
+  |   ^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> delta
+<fn> : fn() -> Int
+> :module
+> :module store::other
+> fn epsilon() -> Int {
+.   2
+. }
+> epsilon::x
+error[E0042]: `epsilon` is not a module
+ --> <repl:50>:1:1
+  |
+1 | epsilon::x
+  | ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> epsilon::x()
+error[E0042]: `epsilon` is not a module
+ --> <repl:51>:1:1
+  |
+1 | epsilon::x()
+  | ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> :type epsilon::x
+error[E0042]: `epsilon` is not a module
+ --> <repl:52>:1:1
+  |
+1 | epsilon::x
+  | ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn z() -> Int {
+.   epsilon::x()
+. }
+error[E0042]: `epsilon` is not a module
+ --> <repl:53>:2:3
+  |
+2 |   epsilon::x()
+  |   ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> const c: Int = epsilon::x()
+error[E0042]: `epsilon` is not a module
+ --> <repl:54>:1:16
+  |
+1 | const c: Int = epsilon::x()
+  |                ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> test "t" {
+.   assert epsilon::x() == 1
+. }
+error[E0042]: `epsilon` is not a module
+ --> <repl:55>:2:10
+  |
+2 |   assert epsilon::x() == 1
+  |          ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> let q = epsilon::x()
+error[E0042]: `epsilon` is not a module
+ --> <repl:56>:1:9
+  |
+1 | let q = epsilon::x()
+  |         ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn y(a: epsilon::T) -> Int {
+.   1
+. }
+warning[W0002]: unused parameter `a`
+ --> <repl:57>:1:6
+  |
+1 | fn y(a: epsilon::T) -> Int {
+  |      ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_a`
+
+error[E0042]: `epsilon` is not a module
+ --> <repl:57>:1:9
+  |
+1 | fn y(a: epsilon::T) -> Int {
+  |         ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> epsilon::T { a: 1 }
+error[E0042]: `epsilon` is not a module
+ --> <repl:58>:1:1
+  |
+1 | epsilon::T { a: 1 }
+  | ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> case 1 {
+.   epsilon::A => 1
+.   _ => 2
+. }
+error[E0042]: `epsilon` is not a module
+ --> <repl:59>:2:3
+  |
+2 |   epsilon::A => 1
+  |   ^^^^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> epsilon()
+2 : Int
+> :module
+> import store::other::{zeta}
+> :module store::user
+> zeta::x
+error[E0042]: `zeta` is not a module
+ --> <repl:62>:1:1
+  |
+1 | zeta::x
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> zeta::x()
+error[E0042]: `zeta` is not a module
+ --> <repl:63>:1:1
+  |
+1 | zeta::x()
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> :type zeta::x
+error[E0042]: `zeta` is not a module
+ --> <repl:64>:1:1
+  |
+1 | zeta::x
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn z() -> Int {
+.   zeta::x()
+. }
+error[E0042]: `zeta` is not a module
+ --> <repl:65>:2:3
+  |
+2 |   zeta::x()
+  |   ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> const c: Int = zeta::x()
+error[E0042]: `zeta` is not a module
+ --> <repl:66>:1:16
+  |
+1 | const c: Int = zeta::x()
+  |                ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> test "t" {
+.   assert zeta::x() == 1
+. }
+error[E0042]: `zeta` is not a module
+ --> <repl:67>:2:10
+  |
+2 |   assert zeta::x() == 1
+  |          ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> let q = zeta::x()
+error[E0042]: `zeta` is not a module
+ --> <repl:68>:1:9
+  |
+1 | let q = zeta::x()
+  |         ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> fn y(a: zeta::T) -> Int {
+.   1
+. }
+warning[W0002]: unused parameter `a`
+ --> <repl:69>:1:6
+  |
+1 | fn y(a: zeta::T) -> Int {
+  |      ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_a`
+
+error[E0042]: `zeta` is not a module
+ --> <repl:69>:1:9
+  |
+1 | fn y(a: zeta::T) -> Int {
+  |         ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> zeta::T { a: 1 }
+error[E0042]: `zeta` is not a module
+ --> <repl:70>:1:1
+  |
+1 | zeta::T { a: 1 }
+  | ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> case 1 {
+.   zeta::A => 1
+.   _ => 2
+. }
+error[E0042]: `zeta` is not a module
+ --> <repl:71>:2:3
+  |
+2 |   zeta::A => 1
+  |   ^^^^
+  |
+  = note: a qualified path starts with an imported module: `module::name`
+
+> zeta()
+2 : Int
+> :module
+> 1 + 1
+2 : Int

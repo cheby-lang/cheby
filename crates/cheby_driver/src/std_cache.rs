@@ -311,7 +311,7 @@ pub(crate) fn whole_std() -> Result<Arc<WholeStd>, Ice> {
         .get_or_init(|| {
             compute_whole_std()
                 .map(Arc::new)
-                .map_err(|e| e.message().to_owned())
+                .map_err(|e| e.ice_message().to_owned())
         })
         .clone()
         .map_err(Ice::new)

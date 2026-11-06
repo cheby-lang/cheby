@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-464
+//! A call to a function whose signature is in error drops the caller's body
+//! with no diagnostic in the caller's module. The error is in another
+//! module, and it is what the user sees: no internal compiler error.
+
+import app::other
+
+fn call() -> Int {
+  other::bad(1)
+}
+
+fn main() {
+  assert call() == 1
+}

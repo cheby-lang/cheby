@@ -55,7 +55,8 @@ use cheby_syntax::SyntaxTree;
 pub use check::{Tests, check_bodies, check_bodies_with, check_item};
 pub use sig::build_interface;
 pub use warnings::{
-    ModuleRefs, PackageCandidate, PackageModule, module_refs, package_warnings, unused_package_item,
+    ModuleRefs, PackageCandidate, PackageModule, dropped_body, module_refs, package_warnings,
+    unused_package_item,
 };
 
 /// What checking module M needs (D-246).

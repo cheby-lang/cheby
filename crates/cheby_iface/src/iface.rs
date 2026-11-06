@@ -1,6 +1,8 @@
 //! The interface model of a module (B8): everything dependents may know
 //! about it, and nothing about its bodies (D-246).
 
+use std::collections::BTreeSet;
+
 use cheby_diag::Span;
 use cheby_package::{ModulePath, Targets};
 use rustc_hash::FxHashMap;
@@ -22,6 +24,8 @@ pub enum ItemSig {
     InterfaceFn(InterfaceFnSig),
     Test,
     /// The signature had errors (already reported); uses get `Ty::ERROR`.
+    /// A warm interface's private items carry it too, with no error behind
+    /// it ([`ModuleInterface::is_hidden`]).
     Error,
 }
 
@@ -190,6 +194,10 @@ pub struct ModuleInterface {
     pub items: IndexVec<DefIndex, IfaceItem>,
     types: FxHashMap<Name, DefIndex>,
     values: FxHashMap<Name, DefIndex>,
+    /// The items pushed without their signatures
+    /// ([`ModuleInterface::push_hidden`]). In memory only, never hashed or
+    /// serialized, like an item's span.
+    hidden: BTreeSet<DefIndex>,
     pub hash: Option<crate::InterfaceHash>,
 }
 
@@ -203,6 +211,7 @@ impl ModuleInterface {
             items: IndexVec::new(),
             types: FxHashMap::default(),
             values: FxHashMap::default(),
+            hidden: BTreeSet::new(),
             hash: None,
         }
     }
@@ -250,6 +259,27 @@ impl ModuleInterface {
             self.map_mut(ns).insert(name, index);
         }
         Ok(index)
+    }
+
+    /// [`Self::push`] for a private item whose signature no encoding holds:
+    /// a warm command adds these to a decoded interface. Its `sig` is
+    /// [`ItemSig::Error`] with no error behind it, so a reader the program
+    /// did not name it to must ask [`Self::is_hidden`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::push`].
+    pub fn push_hidden(&mut self, item: IfaceItem) -> Result<DefIndex, Ice> {
+        let index = self.push(item)?;
+        self.hidden.insert(index);
+        Ok(index)
+    }
+
+    /// Whether item `index` came from [`Self::push_hidden`]: private, with
+    /// no signature to read, and not an item in error.
+    #[must_use]
+    pub fn is_hidden(&self, index: DefIndex) -> bool {
+        self.hidden.contains(&index)
     }
 
     /// Replaces the signature of item `index`, which keeps its name, kind

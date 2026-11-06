@@ -90,17 +90,18 @@ impl BodyCx<'_> {
         let span = negative.unwrap_or_else(|| lit.significant_span());
         match lit.kind() {
             Some(LiteralKind::Int(int)) => {
-                // A malformed literal was reported by the lexer.
-                let Some(value) = int.value() else {
-                    return self.error_expr(span);
-                };
-                let value = i128::try_from(value).ok().and_then(|v| {
-                    if negative.is_some() {
-                        v.checked_neg()
-                    } else {
-                        Some(v)
-                    }
-                });
+                // A malformed literal stopped at phase A (D-452), so `None`
+                // here is a value above `u128::MAX`.
+                let value = int
+                    .value()
+                    .and_then(|v| i128::try_from(v).ok())
+                    .and_then(|v| {
+                        if negative.is_some() {
+                            v.checked_neg()
+                        } else {
+                            Some(v)
+                        }
+                    });
                 let Some(value) = value else {
                     self.report(
                         Diagnostic::new(codes::LITERAL_OUT_OF_RANGE, "literal out of range")

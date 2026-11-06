@@ -1,0 +1,6 @@
+//! Another module with a name of `other`.
+
+/// Its name.
+pub fn zeta() -> Int {
+  2
+}

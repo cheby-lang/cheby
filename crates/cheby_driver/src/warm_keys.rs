@@ -385,12 +385,13 @@ fn private_items(iface: &ModuleInterface, globals: &Globals) -> Vec<WarmItem> {
 /// Adds what no encoding holds of the hit whose front identity is `f2` and
 /// whose file is `file` to its decoded interface `iface`, from its warm
 /// facts, after its items: its private items (D-953), without signatures
-/// (`ItemSig::Error`: a warm build lowers nothing against them, and a
-/// module checked against them that names one reports E0043 and is checked
-/// again on fresh interfaces, D-1136), and its tests as the resolver gives
-/// them (private, on native, `ItemSig::Test`). Returns the facts, read
-/// once ([`warm_module`] takes them); `None`, adding nothing, when they are
-/// missing or malformed (the front end then starts again).
+/// (`ItemSig::Error`, told from an item in error by
+/// [`ModuleInterface::is_hidden`]: a warm build lowers nothing against them,
+/// and a module checked against them that names one reports E0043 and is
+/// checked again on fresh interfaces, D-1136), and its tests as the
+/// resolver gives them (private, on native, `ItemSig::Test`). Returns the
+/// facts, read once ([`warm_module`] takes them); `None`, adding nothing,
+/// when they are missing or malformed (the front end then starts again).
 ///
 /// # Errors
 ///
@@ -435,7 +436,7 @@ pub(crate) fn add_hidden(
                     .ok_or_else(|| Ice::new("a private item before its parent"))?,
             ),
         };
-        pushed.push(iface.push(IfaceItem {
+        pushed.push(iface.push_hidden(IfaceItem {
             name: globals.names.intern(&item.name),
             kind,
             vis: Vis::Priv,
@@ -561,9 +562,13 @@ pub(crate) fn store_facts(front: &Frontend) -> Result<(), Ice> {
         let main = match checked.thir.fns.iter().find(|f| f.entry.is_some()) {
             None => WarmMain::None,
             Some(f) => {
+                // The entry is lowered against `main`'s signature, and a
+                // warm interface holds none for a private item
+                // ([`add_hidden`]), so such a `main` is opaque.
                 let item = checked
                     .interface
                     .item(f.def.index)
+                    .filter(|it| it.vis != Vis::Priv)
                     .map(|it| front.globals.names.get(it.name).to_owned());
                 let entry = f.entry.as_ref().and_then(|e| naming.encode_entry(e));
                 match (item, entry) {

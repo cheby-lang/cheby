@@ -1,0 +1,37 @@
+// @mode: check-fail
+// @decisions: D-084, D-470
+//! An integer literal of 2^128 or more fits no integer type, in any base and
+//! in every kind of body (§3.3.4). With none of these reports the bodies are
+//! dropped, and `cheby check` stops with an internal compiler error (D-464).
+
+const limit: Int = 10
+
+const huge: Int = 340282366920938463463374607431768211456
+
+fn exact() -> Int {
+  340282366920938463463374607431768211456
+}
+
+fn negative() -> Int {
+  -340282366920938463463374607431768211456
+}
+
+fn hex() -> Int {
+  0x100000000000000000000000000000000
+}
+
+fn pattern(n: Int) -> Int {
+  case n {
+    340282366920938463463374607431768211456 => 1
+    -340282366920938463463374607431768211456 => 2
+    _ => 3
+  }
+}
+
+test "a test body" {
+  assert 340282366920938463463374607431768211456 == 1
+}
+
+fn main() {
+  assert exact() + negative() + hex() + pattern(limit) + huge == 1
+}

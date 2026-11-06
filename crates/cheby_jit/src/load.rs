@@ -573,8 +573,10 @@ impl Jit {
             for &(def, at) in &index.consts {
                 if let FuncOrDataId::Data(id) = id_at(ids, at)? {
                     self.loaded.consts.insert(def, id);
-                    if let Some(name) = defines(at) {
-                        self.loaded.seed.consts.insert(def, name);
+                    // Also a slot this unit imports: a constant that took one
+                    // over (D-547) hands it on to the one that replaces it.
+                    if let Some(symbol) = record.symbol_at(at) {
+                        self.loaded.seed.consts.insert(def, symbol.name.clone());
                     }
                 }
             }

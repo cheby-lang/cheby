@@ -41,8 +41,9 @@ pub struct Seed {
     /// The symbol of each slot an earlier batch defined, by slot key
     /// (D-456): a redefinition that takes one over imports it.
     pub slots: FxHashMap<SlotKey, String>,
-    /// The symbol of each constant slot an earlier batch defined, or that a
-    /// session value lives in (D-547).
+    /// The symbol of each constant slot an earlier batch defined, by the
+    /// constant it holds now: also one that took the slot over, or a session
+    /// value that lives in it (D-547).
     pub consts: FxHashMap<DefId, String>,
     /// The symbols of each user constructor layout an earlier batch
     /// declared: its `cb$layout$` word and, for a nullary constructor, its

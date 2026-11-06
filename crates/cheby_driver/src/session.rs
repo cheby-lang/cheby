@@ -61,7 +61,7 @@
 //! written before them: [`Output::stderr`] flushes standard output first
 //! (D-548).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -91,7 +91,8 @@ use cheby_runtime::{
 use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, SourceFile};
 use cheby_types::repl::{
-    CheckedEntry, EntryShape, Redefinition, ReplSession, SatisfactionPlan, forwarder_fn,
+    CheckedEntry, EntryShape, Redefinition, ReplSession, SatisfactionPlan, SessionItem,
+    forwarder_fn,
 };
 use cheby_types::thir;
 
@@ -218,6 +219,9 @@ pub struct Session {
     natives: Vec<SessionNative>,
     /// Modules `:reload` replaced, with the module that replaced each.
     replaced: BTreeMap<ModuleId, ModuleId>,
+    /// Modules a `:reload` found new, by the path imports write, with their
+    /// first version: its own path carries the generation (D-625).
+    added: BTreeMap<ModulePath, ModuleId>,
     /// How many times `:reload` changed something: the generation of its
     /// modules (D-547).
     reloads: u32,
@@ -415,6 +419,7 @@ impl Session {
             root,
             natives: Vec::new(),
             replaced: BTreeMap::new(),
+            added: BTreeMap::new(),
             reloads: 0,
             native_generation: 0,
             runtime,
@@ -645,6 +650,7 @@ impl Session {
             package: &self.front.package_name,
             front: &self.front,
             replaced: &self.replaced,
+            added: &self.added,
         };
         let module = match lookup.lookup(PackageId::LOCAL, &segments)? {
             Lookup::Found(id) => Some(id),
@@ -847,6 +853,7 @@ impl Session {
             package: &self.front.package_name,
             front: &self.front,
             replaced: &self.replaced,
+            added: &self.added,
         };
         let (targets, mut import_diags) =
             resolve_import_targets(&imports, PackageId::LOCAL, &mut lookup, names)?;
@@ -1306,43 +1313,67 @@ impl Session {
     /// old one (taking over its slot), and one that does not is reported
     /// and keeps its old code.
     fn check_again(&mut self, changed: &[Redefinition], out: &mut dyn Output) -> Result<(), Error> {
-        let dependents: Vec<Again> = self
-            .repl
+        let dependents = self.callers(changed);
+        self.recheck(dependents, SIGNATURE_CHANGED, out)
+    }
+
+    /// The definitions that used what `changed` replaced with another
+    /// signature ([`ReplSession::dependents`]).
+    fn callers(&self, changed: &[Redefinition]) -> Vec<Again> {
+        self.repl
             .dependents(changed)
             .iter()
-            .filter_map(|item| {
-                Some(Again {
-                    name: item.name,
-                    source: item.source?,
-                    inside: item.inside,
-                })
-            })
-            .collect();
-        self.recheck(
-            dependents,
-            "a definition it uses changed its signature",
-            out,
-        )
+            .filter_map(|item| Again::of(item))
+            .collect()
     }
 
     /// Checks `items` again from their own text, in order, each in the
     /// module it was entered in: one that checks is compiled again and
     /// replaces itself, and the errors of one that does not get the note
     /// "`f` was checked again because {why}; it keeps its old definition".
+    /// One that gets a new signature is a redefinition of itself (D-609), so
+    /// its callers join those waiting, in session order, and one already
+    /// waiting stays once. This ends: a signature is written out in full
+    /// (D-011), so a definition's comes from its text and the session's
+    /// types, and only a type among `items` changes those, so after them
+    /// each definition gets a new signature at most once. An internal error
+    /// in one stops only that one: what changed is already the session's, so
+    /// a definition left out would run its old code (§13.5.3, D-609). The
+    /// first such error is returned at the end.
     fn recheck(&mut self, items: Vec<Again>, why: &str, out: &mut dyn Output) -> Result<(), Error> {
         let saved = self.repl.scope().entered().cloned();
-        for item in items {
-            let inside = match item.inside {
-                Some(module) => Some(self.entered(newest(&self.replaced, module))?),
-                None => None,
-            };
-            self.repl.enter(inside);
-            let result = self.recheck_one(item.name, item.source, why, out);
+        let mut first = Ok(());
+        let mut queue: VecDeque<(Again, &str)> = items.into_iter().map(|i| (i, why)).collect();
+        while let Some((item, why)) = queue.pop_front() {
+            let mut changed = Vec::new();
+            let result = self.recheck_inside(&item, why, &mut changed, out);
             self.again_note = None;
             self.repl.enter(saved.clone());
-            result?;
+            first = first.and(result);
+            for caller in self.callers(&changed) {
+                if !queue.iter().any(|(waiting, _)| waiting.def == caller.def) {
+                    let at = queue.partition_point(|(waiting, _)| waiting.stamp <= caller.stamp);
+                    queue.insert(at, (caller, SIGNATURE_CHANGED));
+                }
+            }
         }
-        Ok(())
+        first
+    }
+
+    /// [`Self::recheck_one`] in the module `item` was entered in.
+    fn recheck_inside(
+        &mut self,
+        item: &Again,
+        why: &str,
+        changed: &mut Vec<Redefinition>,
+        out: &mut dyn Output,
+    ) -> Result<(), Error> {
+        let inside = match item.inside {
+            Some(module) => Some(self.entered(newest(&self.replaced, module))?),
+            None => None,
+        };
+        self.repl.enter(inside);
+        self.recheck_one(item.name, item.source, why, changed, out)
     }
 
     fn recheck_one(
@@ -1350,8 +1381,18 @@ impl Session {
         name: Name,
         source: Span,
         why: &str,
+        changed: &mut Vec<Redefinition>,
         out: &mut dyn Output,
     ) -> Result<(), Error> {
+        // Test hook: `cheby_types`' own is not in this crate's tests, and no
+        // program is known to stop a definition's check here.
+        #[cfg(test)]
+        {
+            let text = self.front.globals.names.get(name);
+            if text.starts_with("dropped_by_test") {
+                return Err(Ice::new(format!("the check of `{text}` stopped")).into());
+            }
+        }
         let Some(file) = self.sources.file(source.file) else {
             return Ok(());
         };
@@ -1377,6 +1418,7 @@ impl Session {
         if let Some(entry) = entry
             && self.build_and_run(&entry, out)?
         {
+            changed.extend(entry.checked.redefinitions());
             self.commit(entry)?;
         }
         Ok(())
@@ -1438,6 +1480,7 @@ impl Session {
             let old = self
                 .front
                 .local_module(&file.path)
+                .or_else(|| self.added.get(&file.path).copied())
                 .map(|id| newest(&self.replaced, id));
             let same = old
                 .and_then(|id| self.front.modules.get(id))
@@ -1613,15 +1656,16 @@ impl Session {
     ) -> Result<Option<Vec<(Reloaded, ModuleId)>>, Error> {
         let pending = self.parse_reloaded(reloaded, &mut diagnostics)?;
         let ids: Vec<ModuleId> = pending.iter().map(|p| p.id).collect();
-        let done = self.check_parsed(pending, diagnostics, out)?;
-        if done.is_none() {
+        let done = self.check_parsed(pending, diagnostics, out);
+        if !matches!(done, Ok(Some(_))) {
             // A rejected reload changes nothing: its versions leave the
             // build and stop showing the paths of the live modules, which
-            // would otherwise print as stale (review R5-ROB-1).
+            // would otherwise print as stale (review R5-ROB-1). So does one
+            // that stops with an internal error, since the session goes on.
             self.front.forget_reloaded(&ids);
             self.repl.forget_shown(&ids);
         }
-        Ok(done)
+        done
     }
 
     /// Checks the parsed modules of a `:reload`, in import order; `None`
@@ -1647,6 +1691,7 @@ impl Session {
         // A module that imports one that failed is not checked: its errors
         // would only repeat.
         let mut failed: Vec<ModuleId> = Vec::new();
+        let mut dropped = None;
         for node in order {
             let Some(pending) = slots
                 .get_mut(usize::try_from(node).map_err(|_| Ice::new("a node"))?)
@@ -1669,7 +1714,7 @@ impl Session {
                 .as_ref()
                 .ok_or_else(|| Ice::new("a reloaded module without its tree"))?;
             let display = self.repl.display_table(&self.front.modules)?;
-            let found = frontend::check_reloaded(
+            let (found, lost) = frontend::check_reloaded(
                 &mut self.front,
                 &display,
                 frontend::ReloadedModule {
@@ -1683,10 +1728,18 @@ impl Session {
                 failed.push(id);
             }
             diagnostics.extend(found);
+            dropped = dropped.or(lost);
             done.push((pending.module, id));
         }
         let olds: Vec<ModuleId> = done.iter().filter_map(|(m, _)| m.old).collect();
         let natives = self.reload_natives(&olds, &mut diagnostics);
+        // The session holds no error, so this reload's diagnostics are all
+        // that can explain a body that was dropped (D-464).
+        if !diagnostics.iter().any(Diagnostic::is_error)
+            && let Some(ice) = dropped
+        {
+            return Err(ice.into());
+        }
         // With `--deny-warnings`, a warning refuses the reload as it refuses
         // an entry (D-549).
         let rejected = !failed.is_empty()
@@ -1745,6 +1798,7 @@ impl Session {
                         package: &self.front.package_name,
                         front: &self.front,
                         replaced: &self.replaced,
+                        added: &self.added,
                     };
                     let mut lookup = ReloadLookup {
                         inner: &mut lookup,
@@ -1871,6 +1925,8 @@ impl Session {
                 self.replaced.insert(old, *new);
                 self.repl.replace_module(old, *new, shown);
                 olds.push(old);
+            } else {
+                self.added.insert(module.path.clone(), *new);
             }
             out.stdout(&format!("reloaded `{}`\n", module.path));
         }
@@ -1897,13 +1953,7 @@ impl Session {
             .repl
             .reload_dependents(&olds)
             .iter()
-            .filter_map(|item| {
-                Some(Again {
-                    name: item.name,
-                    source: item.source?,
-                    inside: item.inside,
-                })
-            })
+            .filter_map(|item| Again::of(item))
             .collect();
         self.recheck(dependents, "`:reload` changed a module it uses", out)
     }
@@ -1932,10 +1982,28 @@ struct PendingModule {
 
 /// A definition checked again.
 struct Again {
+    def: DefId,
+    stamp: u32,
     name: Name,
     source: Span,
     inside: Option<ModuleId>,
 }
+
+impl Again {
+    /// `item`, if it has a text to check.
+    fn of(item: &SessionItem) -> Option<Self> {
+        Some(Self {
+            def: item.def,
+            stamp: item.stamp,
+            name: item.name,
+            source: item.source?,
+            inside: item.inside,
+        })
+    }
+}
+
+/// Why a definition is checked again after a new signature.
+const SIGNATURE_CHANGED: &str = "a definition it uses changed its signature";
 
 /// Names every native symbol `unit`'s foreign calls make after the
 /// package's native code of `generation` (D-712, D-941,
@@ -2850,6 +2918,8 @@ struct SessionLookup<'a> {
     front: &'a Frontend,
     /// The modules `:reload` replaced: an import finds the newest version.
     replaced: &'a BTreeMap<ModuleId, ModuleId>,
+    /// The modules `:reload` found new, which no plain path finds.
+    added: &'a BTreeMap<ModulePath, ModuleId>,
 }
 
 impl ModuleLookup for SessionLookup<'_> {
@@ -2864,7 +2934,8 @@ impl ModuleLookup for SessionLookup<'_> {
             if rest == ["main"] {
                 return Ok(Lookup::RootByMainSegment);
             }
-            if let Some(id) = self.front.local_module(&module_path)
+            let found = self.front.local_module(&module_path);
+            if let Some(id) = found.or_else(|| self.added.get(&module_path).copied())
                 && rest.last() != Some(&SESSION_FILE)
             {
                 return Ok(Lookup::Found(newest(self.replaced, id)));

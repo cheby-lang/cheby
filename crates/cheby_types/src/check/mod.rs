@@ -131,10 +131,30 @@ pub fn check_bodies_with(
             None => {}
         }
     }
+    #[cfg(test)]
+    drop_for_test(input, &mut module);
     diags.extend(targets::check_module(input, own, &module)?);
     diags.extend(consts::check_module(input, own, &module)?);
     diags.extend(warnings::module_warnings(input, own, &module)?);
     Ok((module, diags))
+}
+
+/// Test hook: drops every body named `dropped_by_test` with no diagnostic,
+/// so the tests of [`crate::dropped_body`]'s sites have a silent drop when
+/// the checker has none. The name is the switch, so tests that run in
+/// parallel share no state. `cheby_driver`'s tests build this crate without
+/// `cfg(test)`, so `cheby_driver/src/frontend.rs` has the same hook.
+#[cfg(test)]
+fn drop_for_test(input: &TypesInput<'_>, module: &mut thir::Module) {
+    let dropped = |index: DefIndex| {
+        input
+            .resolved
+            .item(index)
+            .is_some_and(|item| input.globals.names.get(item.name) == "dropped_by_test")
+    };
+    module.fns.retain(|f| !dropped(f.def.index));
+    module.consts.retain(|c| !dropped(c.def.index));
+    module.tests.retain(|t| !dropped(t.def.index));
 }
 
 /// Checks one body: a function, a constant's initializer or a test.
@@ -831,6 +851,8 @@ impl<'a> BodyCx<'a> {
         if self.errored || has_error(&self.diags) {
             return Ok(None);
         }
+        // `error_expr` sets `errored`, so this cannot fire today. It guards
+        // a kept body, which `dropped_body`'s rule never sees.
         if exprs.iter().any(|e| matches!(e.kind, ExprKind::Error)) {
             return Err(Ice::new("an error expression in a body without errors"));
         }

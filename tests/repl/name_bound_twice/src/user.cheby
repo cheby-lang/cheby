@@ -1,0 +1,8 @@
+//! A module whose own import binds a name.
+
+import store::zeta::{zeta}
+
+/// A use of it.
+pub fn user() -> Int {
+  zeta()
+}

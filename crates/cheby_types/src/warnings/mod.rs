@@ -51,8 +51,8 @@ use cheby_iface::{DefId, DefIndex, Ice, ModuleId, ModuleInterface, Name, Package
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
-use crate::TypesInput;
 use crate::thir;
+use crate::{Tests, TypesInput};
 
 /// One checked module of the local package, for [`package_warnings`].
 #[derive(Clone, Copy, Debug)]
@@ -179,6 +179,27 @@ pub struct ModuleRefs {
     /// Whether every body of the module checked: W0005 is given only when
     /// every module's did.
     pub complete: bool,
+}
+
+/// The internal error for a body of `thir` that was dropped, or `None`
+/// when every body checked under `tests` is there. A dropped body must have
+/// an error behind it, in this module or, through a signature in error, in
+/// another one (D-464), so a caller asks only once it knows that the whole
+/// package has no error: one module's diagnostics are not enough.
+#[must_use]
+pub fn dropped_body(input: &TypesInput<'_>, thir: &thir::Module, tests: Tests) -> Option<Ice> {
+    let index = uses::first_dropped(input, thir, tests)?;
+    let item = input
+        .resolved
+        .item(index)
+        .map_or("?", |item| input.globals.names.get(item.name));
+    let module = input
+        .modules
+        .get(input.module)
+        .map_or_else(|| "?".to_owned(), |info| info.path.to_string());
+    Some(Ice::new(format!(
+        "the body of `{item}` in module `{module}` was dropped with no diagnostic (D-464)"
+    )))
 }
 
 /// The references of module `input.module` (a module of the local
