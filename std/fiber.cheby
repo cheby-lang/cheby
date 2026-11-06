@@ -13,6 +13,7 @@
 
 import std::channel
 import std::duration
+import std::int
 import std::string
 
 // Types
@@ -97,9 +98,7 @@ test "a scope waits for every fiber spawned into it" {
   let (tx, rx) = channel::new::<Int>(3)
   let outcome = {
     use owner <- scope()
-    spawn(owner, fn() {
-      spawn(owner, fn() { channel::send(tx, 2) })
-    })
+    spawn(owner, fn() { spawn(owner, fn() { channel::send(tx, 2) }) })
     Nil
   }
   assert outcome == Ok(Nil)
@@ -299,6 +298,150 @@ test "joining a failed fiber from outside its scope panics" {
 
 // Cancellation
 
+/// Cancels every fiber spawned into `owner` so far, and every scope nested
+/// in them, with `owner` as the target, but never `owner`'s body; does not
+/// return when the caller is one of them, and does nothing on a scope that
+/// has ended, failed or been cancelled (D-102, D-667, D-1060).
+@std_context
+@external(native, "cheby_fiber_sys_cancel")
+@external(js, "./fiber.mjs", "sys_cancel")
+fn sys_cancel(owner: Scope) -> Nil
+
+/// Cancels every fiber spawned into `owner` so far, and every scope nested
+/// in them, with `owner` as the target (D-667, D-1060, ADR-0069). It never
+/// cancels `owner`'s body and does not mark the scope as cancelled:
+/// fibers spawned into it afterwards run normally, and the scope returns
+/// `Ok` with the body's value once every fiber has ended. A panic of a
+/// fiber after `cancel` has reached it is not recorded (D-671). Any fiber
+/// that holds the `Scope` may call it; when the caller is one of the
+/// fibers it cancels, `cancel` does not return and the caller unwinds at
+/// once (D-102). On a scope that has ended, failed or been cancelled it
+/// does nothing. A joiner of a cancelled fiber follows `join`'s rule
+/// (D-668).
+pub fn cancel(owner: Scope) {
+  sys_cancel(owner)
+}
+
+test "cancel stops the fibers of a scope but not its body" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { channel::receive(never) })
+    cancel(owner)
+    "body"
+  }
+  assert outcome == Ok("body")
+  // The cancelled fiber released `never`, the only `Receiver`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "fibers spawned after cancel run normally" {
+  let outcome = {
+    use owner <- scope()
+    cancel(owner)
+    let later = spawn(owner, fn() { 6 * 7 })
+    join(later)
+  }
+  assert outcome == Ok(42)
+}
+
+test "a fiber that cancels its own scope unwinds at once" {
+  let (tx, rx) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() {
+      cancel(owner)
+      channel::send(tx, 1)
+    })
+    Nil
+  }
+  assert outcome == Ok(Nil)
+  // The fiber never reached its send, and unwinding released `tx`.
+  assert channel::receive(rx) == Err(Nil)
+}
+
+test "joining a fiber that cancel reached fails the scope" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    let waiting = spawn(owner, fn() { channel::receive(never) })
+    cancel(owner)
+    join(waiting)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "joined fiber failed"
+  assert channel::send(keep, 1) == Err(1)
+}
+
+/// Calls each function of `contenders` on a fiber of its own, in a scope
+/// of its own, and returns `Ok(Some(value))` with the value of the first
+/// one to return, once the others, which it cancels, have unwound
+/// (D-1061). An empty list gives `Ok(None)` and spawns nothing. A
+/// contender that panics before the race is decided makes it `Err` with
+/// that panic; a panic after that is not recorded (D-1060). It is written
+/// over `scope`, `spawn`, a channel and `cancel`, with no kernel.
+pub fn race<T>(contenders: List<fn() -> T>) -> Result<Option<T>, Panic> {
+  let outcome = {
+    use owner <- scope()
+    let (tx, rx) = channel::new::<Result<T, Panic>>(0)
+    fn start(rest) {
+      case rest {
+        [] => Nil
+        [contender, ..others] => {
+          // Each contender runs in a nested scope and sends how it ended,
+          // so the first message decides the race: a panic that comes
+          // later stays in its own scope and is never recorded (D-1061).
+          spawn(owner, fn() { channel::send(tx, scope(fn(_) { contender() })) })
+          start(others)
+        }
+      }
+    }
+    start(contenders)
+    // `start` is not used again, so it is released here together with the
+    // `tx` it captured (D-205). Only the contenders hold a `Sender` now, so
+    // `rx` closes at once when there are none.
+    let first = channel::receive(rx)
+    // `rx` is released after its last use, so contenders blocked in `send`
+    // get their value back and end. `cancel` stops the ones still working.
+    cancel(owner)
+    first
+  }
+  case outcome {
+    Ok(Ok(Ok(value))) => Ok(Some(value))
+    Ok(Ok(Err(failure))) => Err(failure)
+    Ok(Err(Nil)) => Ok(None)
+    Err(failure) => Err(failure)
+  }
+}
+
+test "race returns the first value and cancels the rest" {
+  let (keep, never) = channel::new::<Int>(1)
+  let slow = fn() {
+    let _ = channel::receive(never)
+    2
+  }
+  let outcome = race([fn() { 1 }, slow])
+  assert outcome == Ok(Some(1))
+  // The slow contender was cancelled and released `never`.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+test "race of no contenders is None" {
+  assert race::<Int>([]) == Ok(None)
+}
+
+test "a panic before the race is decided fails it" {
+  let (keep, never) = channel::new::<Int>(1)
+  let slow = fn() {
+    let _ = channel::receive(never)
+    2
+  }
+  let outcome = race([slow, fn() { panic as "lost" }])
+  let assert Err(failure) = outcome
+  assert message(failure) == "lost"
+  assert channel::send(keep, 1) == Err(1)
+}
+
 /// Calls `f` on the calling fiber, in a new scope, and cancels it if it
 /// has not finished within `limit` (§10.8, D-103, D-181, D-665, D-671).
 /// `Ok` holds `f`'s value when it returned first, `Err(Panicked(p))` holds
@@ -362,6 +505,48 @@ test "a timeout cancels the scopes inside it without their returning" {
   })
   assert outcome == Err(TimedOut)
   assert channel::send(keep, 1) == Err(1)
+}
+
+// Interrupts
+
+/// Makes the first SIGINT or SIGTERM that the process receives while
+/// `owner` is open cancel it, with `owner` as the target, as an expired
+/// limit cancels a timed scope (D-790, D-1073). `owner` is the scope that
+/// `interruptible` just opened, and its close stops the signal from
+/// reaching it on every path out. Under `cheby test`, in the REPL and on
+/// Windows it does nothing.
+@std_context
+@external(native, "cheby_fiber_sys_arm_interrupt")
+@external(js, "./fiber.mjs", "sys_arm_interrupt")
+priv fn sys_arm_interrupt(owner: Scope) -> Nil
+
+/// Calls `f` on the calling fiber in a new scope that the first SIGINT or
+/// SIGTERM cancels, for `process::until_interrupted` (D-675, D-1073). `Ok`
+/// holds `f`'s value when it returned first, `Err(Some(p))` holds its panic
+/// when it panicked first, and `Err(None)` comes once a signal cancelled
+/// the scope and everything in it has ended. It is package-visible:
+/// `std::process` cannot build a `Panic`.
+fn interruptible<T>(f: fn() -> T) -> Result<T, Option<Panic>> {
+  let body = fn(owner) {
+    sys_arm_interrupt(owner)
+    f()
+  }
+  case scope_run(False, 0, 0, body) {
+    Ok(value) => Ok(value)
+    Err(Nil) => case take_failure() {
+      (0, text, place) => Err(Some(Panic { message: text, location: place }))
+      _ => Err(None)
+    }
+  }
+}
+
+test "interruptible returns the value of a body that finishes" {
+  assert interruptible(fn() { 6 * 7 }) == Ok(42)
+}
+
+test "interruptible reports a panic as the panic" {
+  let assert Err(Some(failure)) = interruptible(fn() { panic as "crash" })
+  assert message(failure) == "crash"
 }
 
 // Panics
@@ -434,4 +619,51 @@ test "a capacity-0 send completes when a receiver takes the value" {
     (received, join(sender))
   }
   assert outcome == Ok((Ok("hello"), Ok(Nil)))
+}
+
+test "send_all and to_list pass a list between fibers" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { channel::send_all(tx, [1, 2, 3, 4]) })
+    channel::to_list(rx)
+  }
+  assert outcome == Ok([1, 2, 3, 4])
+}
+
+test "send_all stops when the last Receiver goes" {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- scope()
+    let sender = spawn(owner, fn() { channel::send_all(tx, [1, 2, 3]) })
+    let first = channel::receive(rx)
+    // `rx` is not used again, so the sender's next send fails.
+    (first, join(sender))
+  }
+  assert outcome == Ok((Ok(1), Err([2, 3])))
+}
+
+// Tests of `std::duration` that need this module.
+
+test "scale panics where the result does not fit" {
+  let outcome = {
+    use _scope <- scope()
+    duration::scale(duration::hours(1), 2_562_047_788_015_216)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "integer overflow"
+}
+
+@target(native)
+test "scale panics just past the largest span" {
+  // 1.5 s times this is 2⁶³ + 1 s, past the largest span.
+  let factor = int::max_value / 3 * 2 + 2
+  let fits = duration::scale(duration::milliseconds(1_500), factor - 1)
+  assert fits == duration::seconds(int::max_value) + duration::milliseconds(500)
+  let outcome = {
+    use _scope <- scope()
+    duration::scale(duration::milliseconds(1_500), factor)
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "integer overflow"
 }

@@ -1,0 +1,6 @@
+//! A module with `value`.
+
+/// A value.
+pub fn value() -> Int {
+  1
+}

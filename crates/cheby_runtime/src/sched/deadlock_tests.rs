@@ -1311,3 +1311,123 @@ fn wait_site_cleared_and_read_concurrently() {
     writer.join().unwrap();
     assert_eq!(sched.wait_site(), None);
 }
+
+// ---------------------------------------------------------------------
+// Sleeps (D-1058)
+// ---------------------------------------------------------------------
+
+/// The longest span that ends, 2⁶³ − 1 nanoseconds, as `(seconds,
+/// nanoseconds)` (D-891).
+const CAP: (i64, i64) = (9_223_372_036, 854_775_807);
+
+/// `time::sleep`'s kernel for `(seconds, nanoseconds)`: `Nil`, or 0 with
+/// the flag set when it raised (a cancellation).
+fn sleep_for(me: &ExecCtx, (seconds, nanoseconds): (i64, i64)) -> Word {
+    // SAFETY: the running fiber's context.
+    unsafe { crate::time::cheby_time_sys_sleep(ctx_ptr(me), seconds, nanoseconds) };
+    if unwinding(me) { 0 } else { values::nil() }
+}
+
+/// D-1058: a root in a sleep past the cap arms no timer, so nothing is
+/// pending: the domain is deadlocked, and the report names `time::sleep`,
+/// at every thread count; the spans just past the cap and the longest
+/// both.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn deadlock_sleep_an_endless_sleep_is_reported() {
+    for threads in THREADS {
+        for span in [(CAP.0, CAP.1 + 1), (i64::MAX, 999_999_999)] {
+            let runtime = detecting(threads);
+            let domain = Domain::new();
+            let root =
+                testing::start_root_with(&runtime, &config(&domain, EntryMode::Run), move |me| {
+                    sleep_for(me, span)
+                });
+            assert_eq!(
+                outcome_of(&root),
+                EntryOutcome::Deadlocked(report(&[line("time::sleep")])),
+                "{span:?} at {threads} threads"
+            );
+            runtime.halt();
+        }
+    }
+}
+
+/// D-1058, D-859: a test's root in an endless sleep is cancelled through
+/// its base scope: the sleep unwinds, and the root reports the deadlock.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn deadlock_sleep_an_endless_sleep_in_a_test_unwinds() {
+    root_end_case(
+        EntryMode::Test,
+        |me| sleep_for(me, (i64::MAX, 0)),
+        |outcome| *outcome == EntryOutcome::Deadlocked(report(&[line("time::sleep")])),
+    );
+}
+
+/// D-1058, D-857: a sleep up to the cap counts as pending work and never
+/// appears in a report. A root that sleeps 100 ms, then waits for good, is
+/// reported only after the sleep, in `channel::receive`; a fiber asleep for
+/// an hour (a long timer, not an endless one) beside a root parked for
+/// good holds detection off.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn deadlock_sleep_a_timed_sleep_is_pending_work() {
+    const DELAY: Duration = Duration::from_millis(100);
+    let runtime = detecting(2);
+    let domain = Domain::new();
+    let started = Instant::now();
+    let root = testing::start_root_with(&runtime, &config(&domain, EntryMode::Run), |me| {
+        sleep_for(me, (0, i64::try_from(DELAY.as_nanos()).unwrap()));
+        receive_forever(me)
+    });
+    assert_eq!(outcome_of(&root), EntryOutcome::Deadlocked(one_receive()));
+    assert!(
+        started.elapsed() >= DELAY,
+        "reported before the sleep ended"
+    );
+    runtime.halt();
+
+    let runtime = detecting(2);
+    runtime
+        .shared
+        .probe
+        .eager_detection
+        .store(true, Ordering::SeqCst);
+    let domain = Domain::new();
+    let root = testing::start_root_with(&runtime, &config(&domain, EntryMode::Run), |me| {
+        detach(me, |me| sleep_for(me, (3_600, 0)));
+        receive_forever(me)
+    });
+    assert!(
+        root.recv_timeout(testing::scaled(Duration::from_millis(300)))
+            .is_err(),
+        "reported while a sleep's timer was pending"
+    );
+    assert_eq!(runtime.shared.probe.reports_of(key(&domain)), 0);
+    runtime.halt();
+}
+
+/// D-1058, D-858: a member in an endless sleep is listed beside its
+/// scope's owner, which waits at the scope's end; the lines are sorted by
+/// operation, both at `<unknown location>` here (no JIT frames).
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn deadlock_sleep_a_sleeping_member_is_listed_beside_its_scope() {
+    for threads in THREADS {
+        let runtime = detecting(threads);
+        let domain = Domain::new();
+        let root = testing::start_root_with(&runtime, &config(&domain, EntryMode::Run), |me| {
+            let scope = open_scope(me);
+            release(spawn_into(me, scope, |me| sleep_for(me, (i64::MAX, 0))));
+            close_scope(me, scope);
+            0
+        });
+        assert_eq!(
+            outcome_of(&root),
+            EntryOutcome::Deadlocked(report(&[line("fiber::scope"), line("time::sleep")])),
+            "at {threads} threads"
+        );
+        runtime.halt();
+    }
+}

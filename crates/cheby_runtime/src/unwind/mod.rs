@@ -1048,9 +1048,19 @@ mod tests {
     const SWITCH: &str = "the context switch, in assembly";
     const FIRST_FRAME: &str = "the first frame of a fiber, in assembly";
     const NO_FIBERS: &str = "ends the process: no fibers on this target";
+    const EXE_ENTRY: &str = "an executable's entry, called by C `main` with no Cheby frame below it: \
+                             `main` runs on a root fiber whose base catches every unwinding (D-699), \
+                             and a Rust panic aborts at this `extern \"C\"` boundary (D-925)";
     const RELEASES: &str = "calls the guarded slow path, which sets the flag and returns, tests the \
                             flag, then releases words only through `rc::drop`, which never raises \
                             (D-171, D-775)";
+    const STUB: &str = "a naked stub that passes its caller's frame record to its body (D-1040), \
+                        or a plain function calling that body";
+    const SLOW_BODY: &str = "runs the slow path in its guard (`stack_slow_at`), which sets the flag \
+                             and returns (D-700)";
+    const SIGNAL_HANDLER: &str = "a signal handler (D-1073): one atomic store, one atomic load, \
+                                  `write` and `errno`, nothing that can panic, and never an entry \
+                                  from Cheby code";
 
     /// The `extern "C"` functions of the crate that never unwind, with the
     /// reason, by file (relative to `src/`) and name (`$name` inside a
@@ -1063,6 +1073,19 @@ mod tests {
         ("reuse.rs", "cheby_rt_free_unique", DROP),
         ("reuse.rs", "cheby_rt_reuse_hit", COUNTS),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
+        ("panic.rs", "panic_from", RAISES_ITSELF),
+        ("panic.rs", "cheby_rt_stack_slow", STUB),
+        ("panic.rs", "stack_slow_from", SLOW_BODY),
+        ("panic.rs", "cheby_rt_stack_slow_frame", STUB),
+        ("panic.rs", "stack_slow_frame_from", SLOW_BODY),
+        ("ffi.rs", "cheby_rt_ffi_value", STUB),
+        ("ffi.rs", "ffi_value_from", RAISES_ITSELF),
+        ("unwind/entry_slow.rs", "stack_slow_unwind_from", RELEASES),
+        (
+            "unwind/entry_slow.rs",
+            "stack_slow_frame_unwind_from",
+            RELEASES,
+        ),
         (
             "unwind/entry_slow.rs",
             "cheby_rt_stack_slow_unwind",
@@ -1114,11 +1137,13 @@ mod tests {
         ("io.rs", "cheby_io_eprint", PRINTS),
         ("io.rs", "cheby_io_eprintln", PRINTS),
         ("sched/fiber.rs", "fiber_start", FIBER_BASE),
+        ("sched/signal.rs", "on_signal", SIGNAL_HANDLER),
         ("fiber/switch/aarch64.rs", "switch", SWITCH),
         ("fiber/switch/aarch64.rs", "fiber_entry", FIRST_FRAME),
         ("fiber/switch/x86_64_sysv.rs", "switch", SWITCH),
         ("fiber/switch/x86_64_sysv.rs", "fiber_entry", FIRST_FRAME),
         ("fiber/switch/unsupported.rs", "switch", NO_FIBERS),
+        ("rt_main.rs", "cheby_rt_main", EXE_ENTRY),
     ];
 
     /// `source` with its comments, and with `strings` its string and

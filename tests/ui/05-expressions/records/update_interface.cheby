@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-156, D-1327, D-1328
+//! A record update names a type, and an interface is not one (§5.11.2).
+//! Before E0058 here the body left THIR with no diagnostic.
+
+interface Named {
+  fn name(Self) -> String
+}
+
+type Rec {
+  Rec { a: Int },
+}
+
+fn moved(r: Rec) -> Rec {
+  Named { ..r, a: 1 }
+}
+
+fn main() {
+  assert moved(Rec { a: 0 }).a == 1
+}

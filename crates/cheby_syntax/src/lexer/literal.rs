@@ -2,7 +2,8 @@
 //!
 //! These functions take the token text as the lexer produced it. They never
 //! fail loudly: a malformed literal, already reported as a diagnostic, gives
-//! `None` or a best-effort value.
+//! `None` or a best-effort value. An integer above `u128::MAX` gives `None`
+//! too, and nothing here has reported it: the type checker does (E0071).
 
 use std::borrow::Cow;
 

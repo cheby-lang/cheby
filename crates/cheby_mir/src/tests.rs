@@ -26,6 +26,8 @@ fn span() -> Span {
 /// `app::f0` is the function under test; `app::f1` takes one value.
 fn unit(unit: UnitKind, functions: Vec<Function>) -> MirModule {
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit,
         path: "app".into(),
         functions,

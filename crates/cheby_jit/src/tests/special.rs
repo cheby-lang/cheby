@@ -853,8 +853,8 @@ fn count_operations_are_inline_unless_checked() {
     let checked = clif(true);
     assert!(!checked.contains(" = band"), "{checked}");
     assert!(!checked.contains("store notrap aligned"), "{checked}");
-    assert!(checked.contains("= cheby_rt_dup"), "{checked}");
-    assert!(checked.contains("= cheby_rt_drop"), "{checked}");
+    assert!(checked.contains("= cb$imp$cheby_rt_dup"), "{checked}");
+    assert!(checked.contains("= cb$imp$cheby_rt_drop"), "{checked}");
 }
 
 /// `f(self) { drop self; return nil }`: a closure body of `owner`.
@@ -926,6 +926,8 @@ fn closures_of_a_test_and_a_function_of_the_same_name() {
     let target = p.call(spin, Vec::new());
     let [code, entries] = p.units();
     let tests = MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Tests(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![calls_closure(FnKey::Test(test), test), nil_closure(test)],

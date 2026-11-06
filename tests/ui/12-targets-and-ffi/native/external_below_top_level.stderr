@@ -1,0 +1,11 @@
+error[E0079]: the native foreign result type `Result<Db, String>` holds the external type `Db` below its top level
+  --> tests/ui/12-targets-and-ffi/native/external_below_top_level.cheby:11:1
+   |
+11 | @external(native, "db_open")
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ native foreign code cannot build this result
+12 | pub fn open(path: String) -> Result<Db, String>
+   |                              ------------------ `Db` is inside `Result`
+   |
+   = note: native foreign code returns a value of an external type only as the function's direct result
+   = help: return `Db` from the foreign function and build the `Result` in Cheby with a wrapper (§12.5)
+

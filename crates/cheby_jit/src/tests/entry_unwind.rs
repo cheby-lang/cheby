@@ -70,8 +70,9 @@ fn text_of_function<'a>(clif: &'a [String], symbol: &str) -> &'a str {
 
 /// Whether `text` names the runtime function `symbol` in its legend.
 fn imports(text: &str, symbol: &str) -> bool {
+    // D-913: a runtime function is named by its import word.
     text.lines()
-        .any(|line| line.ends_with(&format!("= {symbol}")))
+        .any(|line| line.ends_with(&format!("= cb$imp${symbol}")))
 }
 
 /// Compiles `recursion_with(k)` with its unwind edges and pads, the checked

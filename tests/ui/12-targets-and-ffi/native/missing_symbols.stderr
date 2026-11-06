@@ -1,0 +1,8 @@
+error[E0053]: the native symbol `app_missing_reached` is not defined
+  --> tests/ui/12-targets-and-ffi/native/missing_symbols/src/main.cheby:17:19
+   |
+17 | @external(native, "app_missing_reached")
+   |                   ^^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
+   |
+   = note: the symbol must be defined by the Cheby runtime, the package's native code or libraries, or the running process
+

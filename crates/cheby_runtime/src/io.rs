@@ -14,10 +14,12 @@
 //! `sys_read_file_bytes`, `sys_write_file`, `sys_write_file_bytes`) are
 //! `@std_context` kernels (D-692) that copy their arguments to Rust data,
 //! park their fiber while a pool thread makes the system call
-//! (`sched::blocking::run_blocking`), and build the Cheby result on the
+//! (`sched::blocking::run_blocking`; for `sys_read_line`, the detached
+//! refill below), and build the Cheby result on the
 //! fiber once it runs again, charged to its domain. The fiber stays marked
 //! as blocked while it waits, so a teardown and a halt skip it and count
-//! it (D-786, D-814). Without a runtime the call runs
+//! it (D-786, D-814), unless a cancellation abandons a refill (D-1065).
+//! Without a runtime the call runs
 //! inline, marked (D-692). The flush before a read stays on the fiber, and
 //! a pool thread never flushes, terminates or makes a Cheby value.
 //!
@@ -57,13 +59,33 @@
 //! blocking pool (D-823); only a read that must wait for
 //! input goes to the pool.
 //!
+//! A read that waits refills the reader on the pool as a detached job
+//! (`sched::blocking::run_blocking_claiming`, D-1065): under the reader's
+//! lock, the job reads until the reader holds a whole line or the input
+//! ends, then claims its fiber's wait and only then takes the line for
+//! its read. A cancellation that wins the wait first is delivered at once:
+//! the fiber unwinds without waiting, its read takes nothing, and the
+//! refill's bytes stay in the reader, which the next read, on any fiber,
+//! gets in order; that read waits for a refill still running, since the
+//! refill holds the reader's lock. A read error met by a refill whose read
+//! was abandoned is kept in the reader for the next read
+//! (D-1166). Every other kernel here waits for
+//! its job (D-670).
+//!
 //! The `Result` kernels of `std::io` (`sys_*`) never end the program on an
 //! IO failure: they return `Err((kind, message))` (D-484), with kind 1 not
-//! found, 2 permission denied, 3 invalid UTF-8 and 0 every other failure,
-//! and the operating system's message without Rust's ` (os error N)`
-//! suffix (D-573). A path that names a directory is kind 0 on every
-//! platform, although Windows refuses to open one with "access denied"
-//! (`docs/stdlib/io.md`).
+//! found, 2 permission denied, 3 invalid UTF-8, 13 invalid input for a
+//! path that contains U+0000 (D-981, checked before any job) and 0 every
+//! other failure, and the operating system's message without Rust's
+//! ` (os error N)` suffix (D-573). A path that names a directory is kind 0
+//! on every platform, although Windows refuses to open one with "access
+//! denied" (`docs/stdlib/io.md`).
+//!
+//! `std::file`'s kernels (`file.rs`) share this module's standard-input
+//! reader ([`read_stdin_line`], [`read_stdin_bytes`]), its line buffer
+//! ([`LineReader`], which a `File` opened for reading keeps as its
+//! read-ahead buffer, D-995) and its writes to the standard streams
+//! ([`write_std_stream`], D-1071).
 
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -76,7 +98,7 @@ use crate::capture::{self, Stream};
 use crate::ctx::ExecCtx;
 use crate::fiber_ops::cancel::{self, Cancelled};
 use crate::panic::fatal;
-use crate::sched::blocking::run_blocking;
+use crate::sched::blocking::{run_blocking, run_blocking_claiming};
 use crate::unwind::guard::guarded;
 use crate::unwind::raise::raise_cancel;
 use crate::{string, values};
@@ -156,6 +178,17 @@ const KIND_NOT_FOUND: i64 = 1;
 const KIND_PERMISSION_DENIED: i64 = 2;
 /// The kind code of `io::is_invalid_data` (D-311).
 const KIND_INVALID_DATA: i64 = 3;
+/// The kind code of `io::is_invalid_input`: a path that contains U+0000
+/// (D-981).
+const KIND_INVALID_INPUT: i64 = 13;
+
+/// The failure of a whole-file kernel whose `path` contains U+0000, which
+/// cannot name a file: kind 13, checked on the fiber before any job
+/// (D-981, refining D-573's kind 0).
+fn invalid_path(path: &str) -> Option<Word> {
+    path.contains('\0')
+        .then(|| err_pair(KIND_INVALID_INPUT, ""))
+}
 
 /// The message of an invalid-UTF-8 failure. `std::io` drops the message of
 /// a kind with a predicate (D-345), so it never reaches the program.
@@ -173,7 +206,7 @@ fn kind_code(error: &io::Error) -> i64 {
 
 /// The operating system's message of an IO error, without the
 /// ` (os error N)` that Rust appends to it (D-573).
-fn os_message(error: &io::Error) -> String {
+pub(crate) fn os_message(error: &io::Error) -> String {
     let text = error.to_string();
     match error.raw_os_error() {
         Some(code) => text
@@ -184,7 +217,7 @@ fn os_message(error: &io::Error) -> String {
 }
 
 /// `Err((kind, message))`, the failure of a `std::io` kernel (D-484).
-fn err_pair(kind: i64, message: &str) -> Word {
+pub(crate) fn err_pair(kind: i64, message: &str) -> Word {
     values::err(values::tuple(&[
         values::int_word(kind),
         values::string(message),
@@ -337,9 +370,10 @@ pub unsafe extern "C" fn cheby_io_sys_write_stderr(text: Word) -> Word {
 /// invalid-data pair for a line that is not UTF-8, which is consumed
 /// (D-311), and the error pair when standard input cannot be read. A line
 /// the reader already holds is taken on the fiber (D-823);
-/// otherwise the read runs on the blocking pool (D-683), and a
-/// cancellation that arrives meanwhile is delivered once the line has been
-/// read, and the line is released (§10.7).
+/// otherwise the reader is refilled on the blocking pool (D-683), and a
+/// cancellation that arrives meanwhile is delivered at once: the read takes
+/// nothing, and its line stays in the reader for the next read (D-1065,
+/// §10.7).
 ///
 /// # Safety
 ///
@@ -350,25 +384,18 @@ pub unsafe extern "C" fn cheby_io_sys_read_line(ctx: *mut ExecCtx) -> Word {
     guarded(guard_ctx(ctx), || {
         flush_before_read();
         // SAFETY: forwarded from the caller.
-        let buffered = unsafe { ctx.as_ref() }.and_then(buffered_line);
-        let line = buffered.map_or_else(
-            || {
-                // Counted from before the job is submitted, so that no
-                // fast path takes a line before this read (D-548).
-                let waiter = Waiter::new();
-                // SAFETY: forwarded from the caller.
-                unsafe {
-                    blocking_call(ctx, move || {
-                        read_line_waiting(waiter).map_err(|error| Failure::of(&error))
-                    })
-                }
+        let line = match unsafe { ctx.as_ref() } {
+            Some(me) => match read_line_on(me, &STDIN, &STDIN_WAITERS, io::stdin) {
+                Ok(line) => line,
+                Err(Cancelled) => raise_cancel(Some(ctx)),
             },
-            |line| Ok(Some(line)),
-        );
+            // A Rust caller with no fiber reads inline.
+            None => read_line_waiting(Waiter::new()),
+        };
         match line {
             Ok(Some(line)) => text_result(&line, values::some),
             Ok(None) => values::ok(values::none()),
-            Err(failure) => failure.word(),
+            Err(error) => Failure::of(&error).word(),
         }
     })
 }
@@ -386,6 +413,9 @@ pub unsafe extern "C" fn cheby_io_sys_read_file(ctx: *mut ExecCtx, path: Word) -
     guarded(guard_ctx(ctx), || {
         // SAFETY: forwarded from the caller.
         let path = unsafe { str_arg(path) }.to_owned();
+        if let Some(invalid) = invalid_path(&path) {
+            return invalid;
+        }
         // SAFETY: forwarded from the caller.
         match unsafe { blocking_call(ctx, move || read_file(&path)) } {
             Ok(data) => text_result(&data, |text| text),
@@ -406,6 +436,9 @@ pub unsafe extern "C" fn cheby_io_sys_read_file_bytes(ctx: *mut ExecCtx, path: W
     guarded(guard_ctx(ctx), || {
         // SAFETY: forwarded from the caller.
         let path = unsafe { str_arg(path) }.to_owned();
+        if let Some(invalid) = invalid_path(&path) {
+            return invalid;
+        }
         // SAFETY: forwarded from the caller.
         match unsafe { blocking_call(ctx, move || read_file(&path)) } {
             Ok(data) => values::ok(values::bytes(&data)),
@@ -431,6 +464,9 @@ pub unsafe extern "C" fn cheby_io_sys_write_file(
     guarded(guard_ctx(ctx), || {
         // SAFETY: forwarded from the caller.
         let (path, text) = unsafe { (str_arg(path).to_owned(), str_arg(text).to_owned()) };
+        if let Some(invalid) = invalid_path(&path) {
+            return invalid;
+        }
         // SAFETY: forwarded from the caller.
         match unsafe { blocking_call(ctx, move || write_file(&path, text.as_bytes())) } {
             Ok(()) => values::ok(values::nil()),
@@ -454,7 +490,12 @@ pub unsafe extern "C" fn cheby_io_sys_write_file_bytes(
 ) -> Word {
     guarded(guard_ctx(ctx), || {
         // SAFETY: forwarded from the caller.
-        let (path, data) = unsafe { (str_arg(path).to_owned(), values::bytes_of(data).to_vec()) };
+        let path = unsafe { str_arg(path) }.to_owned();
+        if let Some(invalid) = invalid_path(&path) {
+            return invalid;
+        }
+        // SAFETY: forwarded from the caller.
+        let data = unsafe { values::bytes_of(data) }.to_vec();
         // SAFETY: forwarded from the caller.
         match unsafe { blocking_call(ctx, move || write_file(&path, &data)) } {
             Ok(()) => values::ok(values::nil()),
@@ -694,9 +735,12 @@ fn flush_before_read() {
 static STDIN: Mutex<LineReader> = Mutex::new(LineReader::new());
 
 /// The reads of standard input that wait for [`STDIN`] to give them a
-/// line: a blocking-pool job submitted and not yet done, or the REPL's
-/// host thread in its read. While one waits, the fast path serves no
-/// line, so lines go out in the order the reads asked for them (D-548).
+/// line: a refill submitted to the blocking pool whose read has not yet
+/// had its line or gone (a read abandoned by a cancellation counts until
+/// its refill, which holds the reader's lock meanwhile, learns that it
+/// has gone, D-1065), or the REPL's host thread in its read. While one
+/// waits, the fast path serves no line, so lines go out in the order the
+/// reads asked for them (D-548).
 static STDIN_WAITERS: AtomicUsize = AtomicUsize::new(0);
 
 /// How many bytes one read of standard input asks for: more than Rust's
@@ -704,9 +748,11 @@ static STDIN_WAITERS: AtomicUsize = AtomicUsize::new(0);
 /// when that buffer is empty, and a pipe's whole buffer fits.
 const STDIN_CHUNK: usize = 64 * 1024;
 
-/// Bytes read from standard input and not yet returned as lines.
+/// Bytes read from standard input, or from a `File` opened for reading
+/// (its read-ahead buffer, D-995, `file.rs`), and not yet returned as
+/// lines or bytes. Each read of the input asks for 64 KiB.
 #[derive(Debug)]
-struct LineReader {
+pub(crate) struct LineReader {
     /// The bytes read; those before `start` were returned.
     data: Vec<u8>,
     /// Where the next line starts in `data`.
@@ -716,46 +762,186 @@ struct LineReader {
     /// with each read, so reading it takes time linear in its length, as
     /// `BufRead::read_until` did (gate 3's ROB-W3-1).
     scanned: usize,
+    /// How the last read of the input ended, kept for the next read that
+    /// takes it when no read was there to take it: the end of input, or a
+    /// failure, after a refill whose read was abandoned (D-1065,
+    /// D-1166); also, for a moment, after any
+    /// read that met the end or failed, until its own read takes it.
+    end: Option<End>,
     /// The bytes searched for `\n` so far (tests only).
     #[cfg(test)]
     searched: usize,
 }
 
+/// How a read of the input ended ([`LineReader::end`]).
+#[derive(Debug)]
+enum End {
+    /// The input ended (a read returned 0 bytes).
+    Input,
+    /// A read failed; the bytes of the unfinished line were consumed with
+    /// it.
+    Failed(io::Error),
+}
+
 impl LineReader {
     /// An empty reader.
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             data: Vec::new(),
             start: 0,
             scanned: 0,
+            end: None,
             #[cfg(test)]
             searched: 0,
         }
     }
 
-    /// The next line without its ending (D-305), if a whole line is
+    /// Where the next whole line's `\n` is, from `start`, if one is
     /// buffered; it never reads. Only the bytes after those already known
-    /// to hold no `\n` are searched.
-    fn buffered_line(&mut self) -> Option<Vec<u8>> {
+    /// to hold no `\n` are searched, and a `\n` found is remembered as the
+    /// end of the bytes known to hold none.
+    fn line_end(&mut self) -> Option<usize> {
         let rest = self.data.get(self.start..)?;
         let fresh = rest.get(self.scanned..)?;
         #[cfg(test)]
         {
             self.searched = self.searched.saturating_add(fresh.len());
         }
-        let Some(found) = fresh.iter().position(|&byte| byte == b'\n') else {
+        let Some(found) = memchr::memchr(b'\n', fresh) else {
             self.scanned = rest.len();
             return None;
         };
-        let end = self.scanned.saturating_add(found);
-        let line = strip_line_ending(rest.get(..=end)?.to_vec());
-        self.start = self.start.saturating_add(end).saturating_add(1);
-        self.scanned = 0;
+        self.scanned = self.scanned.saturating_add(found);
+        Some(self.scanned)
+    }
+
+    /// The next line without its ending (D-305), if a whole line is
+    /// buffered; it never reads.
+    pub(crate) fn buffered_line(&mut self) -> Option<Vec<u8>> {
+        let end = self.line_end()?;
+        let line = strip_line_ending(self.data.get(self.start..)?.get(..=end)?.to_vec());
+        self.consume(end.saturating_add(1));
+        Some(line)
+    }
+
+    /// Drops the first `count` buffered bytes, which were returned.
+    fn consume(&mut self, count: usize) {
+        self.start = self.start.saturating_add(count);
+        self.scanned = self.scanned.saturating_sub(count);
         if self.start >= self.data.len() {
             self.data.clear();
             self.start = 0;
+            self.scanned = 0;
         }
-        Some(line)
+    }
+
+    /// Whether a read can take its line without reading: a whole line is
+    /// buffered, or an end is kept.
+    fn line_ready(&mut self) -> bool {
+        self.end.is_some() || self.line_end().is_some()
+    }
+
+    /// The next line, if [`LineReader::line_ready`]: a whole line without
+    /// its ending (D-305), else the kept end: the unfinished line at the
+    /// end of input, or `Ok(None)` when nothing is buffered, or the kept
+    /// failure. `None` when a read must fill the reader first.
+    fn take_line(&mut self) -> Option<io::Result<Option<Vec<u8>>>> {
+        if let Some(line) = self.buffered_line() {
+            return Some(Ok(Some(line)));
+        }
+        Some(self.take_end()?.map(|()| {
+            let rest = self.data.get(self.start..).map(<[u8]>::to_vec);
+            self.consume(self.data.len());
+            rest.filter(|rest| !rest.is_empty()).map(strip_line_ending)
+        }))
+    }
+
+    /// The kept end, taken: `Ok(())` at the end of input, the failure
+    /// otherwise.
+    fn take_end(&mut self) -> Option<io::Result<()>> {
+        match self.end.take()? {
+            End::Input => Some(Ok(())),
+            End::Failed(error) => Some(Err(error)),
+        }
+    }
+
+    /// Reads `input` until a read can take its line
+    /// ([`LineReader::line_ready`]): a whole line is buffered, the input
+    /// ended, or a read failed, which consumes the bytes of the unfinished
+    /// line (as `BufRead::read_until`); the end is kept for the read that
+    /// takes it. An interrupted read is retried. Each read asks for
+    /// [`STDIN_CHUNK`] bytes.
+    pub(crate) fn fill_line(&mut self, input: &mut impl Read) {
+        while !self.line_ready() {
+            self.read_once(input);
+        }
+    }
+
+    /// Reads `input` once, unless bytes are buffered or an end is kept:
+    /// for a read of bytes, which takes whatever the reader holds.
+    pub(crate) fn fill_some(&mut self, input: &mut impl Read) {
+        while self.end.is_none() && self.start >= self.data.len() {
+            self.read_once(input);
+        }
+    }
+
+    /// One read of [`STDIN_CHUNK`] bytes at most into the buffer's end;
+    /// keeps the end of input or a failure. An interrupted read adds
+    /// nothing, and its caller reads again.
+    fn read_once(&mut self, input: &mut impl Read) {
+        self.data.drain(..self.start.min(self.data.len()));
+        self.start = 0;
+        let filled = self.data.len();
+        self.data.resize(filled.saturating_add(STDIN_CHUNK), 0);
+        let read = match self.data.get_mut(filled..) {
+            Some(free) => input.read(free),
+            None => Ok(0),
+        };
+        match read {
+            Ok(0) => {
+                self.data.truncate(filled);
+                self.end = Some(End::Input);
+            }
+            Ok(count) => self.data.truncate(filled.saturating_add(count)),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                self.data.truncate(filled);
+            }
+            Err(error) => {
+                self.data.clear();
+                self.scanned = 0;
+                self.end = Some(End::Failed(error));
+            }
+        }
+    }
+
+    /// At least one and at most `max(limit, 1)` buffered bytes (D-298),
+    /// else the kept end: `Ok(None)` at the end of input, or the failure.
+    /// `None` when a read must fill the reader first.
+    fn take_bytes(&mut self, limit: usize) -> Option<io::Result<Option<Vec<u8>>>> {
+        let rest = self.data.get(self.start..).unwrap_or_default();
+        if rest.is_empty() {
+            return Some(self.take_end()?.map(|()| None));
+        }
+        let count = limit.clamp(1, rest.len());
+        let bytes = rest.get(..count).map(<[u8]>::to_vec);
+        self.consume(count);
+        Some(Ok(bytes))
+    }
+
+    /// At least one and at most `max(limit, 1)` bytes, reading `input`
+    /// once when nothing is buffered: `Ok(None)` at the end of input, the
+    /// failure of the read otherwise.
+    pub(crate) fn read_bytes(
+        &mut self,
+        input: &mut impl Read,
+        limit: usize,
+    ) -> io::Result<Option<Vec<u8>>> {
+        loop {
+            if let Some(bytes) = self.take_bytes(limit) {
+                return bytes;
+            }
+            self.fill_some(input);
+        }
     }
 
     /// The next line without its ending (D-305), reading `input` until a
@@ -763,39 +949,22 @@ impl LineReader {
     /// line, or `Ok(None)` when nothing is buffered. As
     /// `BufRead::read_until`: an interrupted read is retried, and a failure
     /// consumes the bytes of the unfinished line.
-    fn read_line(&mut self, input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
+    pub(crate) fn read_line(&mut self, input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
         loop {
-            if let Some(line) = self.buffered_line() {
-                return Ok(Some(line));
+            if let Some(line) = self.take_line() {
+                return line;
             }
-            self.data.drain(..self.start.min(self.data.len()));
-            self.start = 0;
-            let filled = self.data.len();
-            self.data.resize(filled.saturating_add(STDIN_CHUNK), 0);
-            let read = match self.data.get_mut(filled..) {
-                Some(free) => input.read(free),
-                None => Ok(0),
-            };
-            match read {
-                Ok(0) => {
-                    self.data.truncate(filled);
-                    self.scanned = 0;
-                    if self.data.is_empty() {
-                        return Ok(None);
-                    }
-                    return Ok(Some(strip_line_ending(std::mem::take(&mut self.data))));
-                }
-                Ok(count) => self.data.truncate(filled.saturating_add(count)),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                    self.data.truncate(filled);
-                }
-                Err(error) => {
-                    self.data.clear();
-                    self.scanned = 0;
-                    return Err(error);
-                }
-            }
+            self.fill_line(input);
         }
+    }
+
+    /// At least one and at most `max(limit, 1)` bytes the reader holds,
+    /// never a kept end, which a read that may wait takes; it never reads.
+    pub(crate) fn buffered_bytes(&mut self, limit: usize) -> Option<Vec<u8>> {
+        if self.start >= self.data.len() {
+            return None;
+        }
+        self.take_bytes(limit).and_then(Result::ok).flatten()
     }
 }
 
@@ -825,7 +994,7 @@ impl Drop for Waiter {
 }
 
 /// `io::read_line`'s fast path (D-823, a D-731-kind
-/// optimization): a line [`STDIN`] already holds is taken on the fiber
+/// optimization): a line `reader` already holds is taken on the fiber
 /// `me`, without a blocking-pool round trip. `None` sends the read to the
 /// pool: a cancellation is pending, which raises there before any line is
 /// taken (D-816), or [`serve_buffered`] has no
@@ -835,11 +1004,15 @@ impl Drop for Waiter {
 /// linear in its length, since [`LineReader`] searches each byte once: a
 /// 64 MiB line read in 0.05 s (`cp4-w1` 0.03 s; 9.26 s while it was
 /// searched again with each read, gate 3's ROB-W3-1).
-fn buffered_line(me: &ExecCtx) -> Option<Vec<u8>> {
+fn buffered_line(
+    me: &ExecCtx,
+    reader: &Mutex<LineReader>,
+    waiters: &AtomicUsize,
+) -> Option<Vec<u8>> {
     if cancel::check(me).is_err() {
         return None;
     }
-    serve_buffered(&STDIN, &STDIN_WAITERS)
+    serve_buffered(reader, waiters)
 }
 
 /// A line `reader` already holds, if no read waits in `waiters` (it asked
@@ -851,6 +1024,140 @@ fn serve_buffered(reader: &Mutex<LineReader>, waiters: &AtomicUsize) -> Option<V
         return None;
     }
     reader.buffered_line()
+}
+
+/// [`serve_buffered`] for a read of at most `max(limit, 1)` bytes: the
+/// bytes `reader` already holds, never a kept end, which the pool's read
+/// takes.
+fn serve_buffered_bytes(
+    reader: &Mutex<LineReader>,
+    waiters: &AtomicUsize,
+    limit: usize,
+) -> Option<Vec<u8>> {
+    let mut reader = reader.try_lock()?;
+    if waiters.load(Ordering::SeqCst) != 0 || reader.start >= reader.data.len() {
+        return None;
+    }
+    reader.take_bytes(limit).and_then(Result::ok).flatten()
+}
+
+/// Reads one line through `reader` for the fiber `me` (D-823, D-1065): a
+/// line it holds on the fiber ([`buffered_line`]), else a refill on the
+/// blocking pool, detached (`run_blocking_claiming`): under the reader's
+/// lock, the job reads `input` until the reader holds a whole line or the
+/// input ends ([`LineReader::fill_line`]), then claims `me`'s wait, and
+/// only then takes the line for this read; when the cancellation walk won
+/// the wait, the job takes nothing, and the line, the end or the failure
+/// stays in the reader for the next read (D-1166).
+/// The read counts in `waiters` from before the submit (D-548) until its
+/// refill has decided, before it releases the reader. `Err(Cancelled)`:
+/// cancelled before the refill started (D-816) or while it ran (D-1065).
+fn read_line_on<I: Read>(
+    me: &ExecCtx,
+    reader: &'static Mutex<LineReader>,
+    waiters: &'static AtomicUsize,
+    input: impl FnOnce() -> I + Send + 'static,
+) -> Result<io::Result<Option<Vec<u8>>>, Cancelled> {
+    if let Some(line) = buffered_line(me, reader, waiters) {
+        return Ok(Ok(Some(line)));
+    }
+    // Counted from before the job is submitted, so that no fast path takes
+    // a line before this read (D-548).
+    let waiter = Waiter::on(waiters);
+    let taken = run_blocking_claiming(me, move |claim| {
+        let mut lines = reader.lock();
+        let mut input = input();
+        lines.fill_line(&mut input);
+        let line = claim.claim().then(|| lines.read_line(&mut input));
+        drop(waiter);
+        drop(lines);
+        line
+    })?;
+    match taken {
+        Some(line) => Ok(line),
+        None => fatal(format_args!(
+            "a refill of standard input claimed its read and took no line"
+        )),
+    }
+}
+
+/// Reads at least one and at most `max(limit, 1)` bytes of standard input
+/// through the process-wide reader (D-823, D-1071), after flushing
+/// standard output (D-346): bytes the reader holds first, else one refill
+/// on the blocking pool, detached as a line's is (D-1065). `Ok(None)` at
+/// the end of input. Lines and bytes come out in input order.
+/// `file::read_bytes(file::stdin(), n)` reads through it (D-1071).
+pub(crate) fn read_stdin_bytes(
+    me: &ExecCtx,
+    limit: usize,
+) -> Result<io::Result<Option<Vec<u8>>>, Cancelled> {
+    flush_before_read();
+    read_bytes_on(me, &STDIN, &STDIN_WAITERS, io::stdin, limit)
+}
+
+/// Reads the next line of standard input through the process-wide reader
+/// for the fiber `me`, after flushing standard output (D-346, D-823), as
+/// `io::read_line` does: without its ending (D-305), `Ok(None)` at the end
+/// of input; a cancelled refill leaves its line for the next read
+/// (D-1065). `file::read_line(file::stdin())` reads through it (D-1071).
+pub(crate) fn read_stdin_line(me: &ExecCtx) -> Result<io::Result<Option<Vec<u8>>>, Cancelled> {
+    flush_before_read();
+    read_line_on(me, &STDIN, &STDIN_WAITERS, io::stdin)
+}
+
+/// A write of `data` to standard output or standard error for a
+/// `File` of the standard streams (D-1071): to standard output through its
+/// buffer, then a flush, as `io::write_stdout` writes (D-365, D-574), so
+/// the result covers everything written there so far; to standard error
+/// at once (D-346). A failure is returned, never fatal (D-306).
+///
+/// # Errors
+///
+/// The write's or the flush's IO error.
+pub(crate) fn write_std_stream(stream: Stream, data: &[u8]) -> io::Result<()> {
+    write_routed(stream, &[data], stream == Stream::Stdout)
+}
+
+/// The kind code and message of an IO error of a standard stream, as
+/// `std::io`'s kernels report it (D-484, D-573).
+pub(crate) fn stream_failure(error: &io::Error) -> (i64, String) {
+    (kind_code(error), os_message(error))
+}
+
+/// [`read_stdin_bytes`] through `reader`, without the flush: the bytes it
+/// holds on the fiber ([`serve_buffered_bytes`]) unless a cancellation is
+/// pending, else one refill on the pool, detached and claimed as
+/// [`read_line_on`]'s: the job reads `input` once when the reader holds no
+/// byte and no end ([`LineReader::fill_some`]), claims `me`'s wait, and
+/// only then takes the bytes.
+fn read_bytes_on<I: Read>(
+    me: &ExecCtx,
+    reader: &'static Mutex<LineReader>,
+    waiters: &'static AtomicUsize,
+    input: impl FnOnce() -> I + Send + 'static,
+    limit: usize,
+) -> Result<io::Result<Option<Vec<u8>>>, Cancelled> {
+    if cancel::check(me).is_ok()
+        && let Some(bytes) = serve_buffered_bytes(reader, waiters, limit)
+    {
+        return Ok(Ok(Some(bytes)));
+    }
+    let waiter = Waiter::on(waiters);
+    let taken = run_blocking_claiming(me, move |claim| {
+        let mut bytes = reader.lock();
+        let mut input = input();
+        bytes.fill_some(&mut input);
+        let taken = claim.claim().then(|| bytes.read_bytes(&mut input, limit));
+        drop(waiter);
+        drop(bytes);
+        taken
+    })?;
+    match taken {
+        Some(bytes) => Ok(bytes),
+        None => fatal(format_args!(
+            "a refill of standard input claimed its read and took no bytes"
+        )),
+    }
 }
 
 /// Reads the next line of standard input through [`STDIN`] (D-474), once
@@ -960,6 +1267,10 @@ pub(crate) fn write_last_words(text: &str) -> io::Result<()> {
 fn terminate(status: i32) -> ! {
     crate::sched::terminate(status)
 }
+
+#[cfg(test)]
+#[path = "io_stdin_tests.rs"]
+mod stdin_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1200,8 +1511,21 @@ mod tests {
             write_file_bytes(dir_path, b"x").map_err(|e| e.0),
             Err(KIND_OTHER)
         );
-        // A path with U+0000 cannot name a file: another kind.
-        assert_eq!(read_file("a\0b").map_err(|e| e.0), Err(KIND_OTHER));
+        // A path with U+0000 cannot name a file: invalid input, in every
+        // whole-file kernel (D-981).
+        assert_eq!(read_file("a\0b").map_err(|e| e.0), Err(KIND_INVALID_INPUT));
+        assert_eq!(
+            read_file_bytes("a\0b").map_err(|e| e.0),
+            Err(KIND_INVALID_INPUT)
+        );
+        assert_eq!(
+            write_file("a\0b", "x").map_err(|e| e.0),
+            Err(KIND_INVALID_INPUT)
+        );
+        assert_eq!(
+            write_file_bytes("a\0b", b"x").map_err(|e| e.0),
+            Err(KIND_INVALID_INPUT)
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

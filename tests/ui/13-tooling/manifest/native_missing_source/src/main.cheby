@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-940
+// @milestone: M3
+//! Every source of `[native]` must exist: `cheby check` checks the files
+//! even though it compiles none of them (§12.5.4).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

@@ -43,7 +43,9 @@ fn parse(input: String) -> Result<(List<Int>, List<Int>), ParseError> {
       }
     }
   }
-  input |> string::split(_, "\n") |> step(_, 1, [], [])
+  input
+  |> string::split(_, "\n")
+  |> step(_, 1, [], [])
 }
 
 /// Splits a line at runs of spaces. Trimming first also drops the CR
@@ -67,8 +69,10 @@ fn total_distance(lefts: List<Int>, rights: List<Int>) -> Int {
       _, _ => total
     }
   }
-  let sorted_lefts = lefts |> list::sort
-  let sorted_rights = rights |> list::sort
+  let sorted_lefts = lefts
+    |> list::sort
+  let sorted_rights = rights
+    |> list::sort
   step(sorted_lefts, sorted_rights, 0)
 }
 
@@ -85,8 +89,10 @@ priv fn distance(a: Int, b: Int) -> Int {
 fn similarity(lefts: List<Int>, rights: List<Int>) -> Int {
   // Counting the right list once makes each lookup cheap, instead of
   // scanning the whole right list for every number on the left.
-  let counts = rights |> list::fold(_, map::new(), fn(found, n) { map::upsert(found, n, bump) })
-  lefts |> list::fold(_, 0, fn(total, n) {
+  let counts = rights
+    |> list::fold(_, map::new(), fn(found, n) { map::upsert(found, n, bump) })
+  lefts
+  |> list::fold(_, 0, fn(total, n) {
     case map::get(counts, n) {
       Some(times) => total + n * times
       None => total

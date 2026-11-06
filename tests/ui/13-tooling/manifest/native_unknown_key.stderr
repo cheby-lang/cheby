@@ -1,0 +1,8 @@
+error[E0036]: unknown key `headers` in `[native]`
+ --> tests/ui/13-tooling/manifest/native_unknown_key/cheby.toml:6:1
+  |
+6 | headers = ["src/ffi.h"]
+  | ^^^^^^^ unknown key
+  |
+  = help: the keys are `sources` and `libraries`
+

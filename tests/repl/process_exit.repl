@@ -1,0 +1,11 @@
+// @milestone: M3
+// @decisions: D-1022, D-1023, D-828, D-709
+> import std::io
+> import std::process
+> fn finish(status: Int) -> Nil {
+.   io::println("exiting with {status}")
+.   process::exit(status)
+.   io::println("never printed")
+. }
+> finish(0)
+exiting with 0

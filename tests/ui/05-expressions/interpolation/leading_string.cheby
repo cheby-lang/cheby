@@ -1,0 +1,108 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-1055, D-577, D-849
+//! An interpolation whose first part is a `String` value appends the rest
+//! to that value: in place when nothing else refers to it, and to a copy
+//! otherwise, so no text changes. A value read again in the same literal
+//! or after it keeps its text, an accumulator grows by recursion, a field
+//! path or a `let`-bound literal may lead, the parts are evaluated left to
+//! right, and a literal large enough to be split into continuations
+//! carries its buffer (§5.3.2, D-780).
+
+import std::io
+import std::string
+
+pub type Person { name: String, age: Int }
+
+pub type Point { x: Int, y: Int }
+
+pub fn show(p: Point) -> String {
+  io::println("showing a point")
+  "({p.x}, {p.y})"
+}
+
+fn twice(s: String) -> String {
+  "{s}-{s}"
+}
+
+fn named(name: String, n: Int) -> String {
+  "{name}: {n}, {name}"
+}
+
+fn build(acc: String, i: Int, n: Int) -> String {
+  case {
+    i == n => acc
+    _ => build("{acc}x{i},", i + 1, n)
+  }
+}
+
+fn greet(name: String) -> String {
+  let hello = "hello"
+  "{hello}, {name}"
+}
+
+fn big(s: String, n: Int) -> String {
+  "{s}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n},{n}
+{s}"
+}
+
+fn main() {
+  // A value read again later in the same literal.
+  let s = twice("ab")
+  io::println(s)
+  io::println(twice(s))
+  io::println(named(s, 7))
+  // A value used again after the literal keeps its text.
+  let longer = "{s}!"
+  io::println(longer)
+  io::println(s)
+  // An accumulator at its last use, appended in place.
+  let acc = build("start:", 0, 6)
+  io::println(acc)
+  let long = build("", 0, 2000)
+  let length = string::length(long)
+  io::println("{length}")
+  // A field path first; the record still holds its name.
+  let p = Person { name: twice("Ada"), age: 36 }
+  io::println("{p.name} is {p.age}")
+  io::println("{p.name}")
+  // A `let`-bound literal first.
+  io::println(greet(s))
+  // Left to right: the point's `show` runs before the line is printed.
+  let point = Point { x: 1, y: -2 }
+  io::println("{s} at {point} and {p.age}")
+  // A literal split into continuations, starting and ending with `s`.
+  let large = big(s, 7)
+  io::println(large)
+  io::println(s)
+}

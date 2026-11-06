@@ -12,8 +12,8 @@ use cheby_resolve::Res;
 use cheby_syntax::NodeId;
 use cheby_syntax::ast::{AstNode, AstToken, FieldInit, Interpolation, PathNode};
 
-use crate::TypesInput;
 use crate::thir::{self, Callee, Dict, ExprKind, InterpPart, OpImpl, PatKind};
+use crate::{Tests, TypesInput};
 
 /// A written path, or a name that is not a path (the root of an
 /// interpolation, a punned field initializer), with its resolution.
@@ -79,6 +79,17 @@ impl PathUse {
 /// that count them are not given. The tests of a std module do not count,
 /// since user builds skip them.
 pub(super) fn thir_is_complete(input: &TypesInput<'_>, thir: &thir::Module) -> bool {
+    first_dropped(input, thir, Tests::SkipStd).is_none()
+}
+
+/// The first body of the module, in item order, that is not in THIR: one
+/// that [`check_bodies_with`](crate::check_bodies_with) checks under `tests`
+/// and did not return.
+pub(super) fn first_dropped(
+    input: &TypesInput<'_>,
+    thir: &thir::Module,
+    tests: Tests,
+) -> Option<DefIndex> {
     let mut checked: Vec<DefIndex> = thir
         .fns
         .iter()
@@ -88,14 +99,21 @@ pub(super) fn thir_is_complete(input: &TypesInput<'_>, thir: &thir::Module) -> b
         .chain(thir.tests.iter().map(|t| t.def.index))
         .collect();
     checked.sort_unstable();
-    input.resolved.bodies.keys().all(|index| {
-        let is_std_test = input.package == PackageId::STD
-            && input
-                .resolved
-                .item(*index)
-                .is_some_and(|i| i.kind == DefKind::Test);
-        is_std_test || checked.binary_search(index).is_ok()
-    })
+    let skip_tests = tests == Tests::SkipStd && input.package == PackageId::STD;
+    input
+        .resolved
+        .bodies
+        .keys()
+        .copied()
+        .filter(|index| {
+            let skipped = skip_tests
+                && input
+                    .resolved
+                    .item(*index)
+                    .is_some_and(|i| i.kind == DefKind::Test);
+            !skipped && checked.binary_search(index).is_err()
+        })
+        .min()
 }
 
 /// The top-level item that holds `index`: itself, or a constructor's type

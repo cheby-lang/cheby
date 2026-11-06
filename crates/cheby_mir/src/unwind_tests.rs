@@ -64,6 +64,7 @@ fn unwound(mut f: Function) -> Function {
 fn add_block(f: &mut Function, stmts: Vec<Stmt>, term: Terminator) -> BlockId {
     f.blocks
         .push(Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,

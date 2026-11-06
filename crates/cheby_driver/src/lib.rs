@@ -32,8 +32,13 @@
 //!   `cargo xtask bench-compile` (I1).
 //!
 //! The build graph runs on rayon's global pool (D-263), which
-//! [`configure_jobs`] builds; the build cache (D-255) plugs in later
-//! behind the same API. Output is deterministic (D-264): results are
+//! [`configure_jobs`] builds. [`check_cached`], [`prepare_run_cached`] and
+//! [`prepare_test_cached`] are the commands' entry points through the build
+//! cache ([`Cache`]): each package module's front record is looked up and
+//! written (D-955), and its diagnostics replayed (D-965); the cacheless
+//! entry points stay for tests, the REPL and `xtask bench-build` (D-964,
+//! D-975). Output is deterministic (D-264) and never depends on the
+//! cache (D-268): results are
 //! merged in a fixed order whatever the number of threads, and
 //! diagnostics are sorted by [`SourceMap::sort`].
 //!
@@ -58,18 +63,181 @@ use cheby_runtime::RunConfig;
 use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
+mod aot;
 mod backend;
+mod borrowing;
+pub mod cache;
+mod code_cache;
 mod frontend;
+mod load_set;
+mod native;
+pub mod phases;
+mod reuse_replay;
 mod reuse_report;
 pub mod session;
+mod std_cache;
 pub mod std_lib;
 mod test;
+mod warm_keys;
 
+pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_package::Target;
+pub use cheby_package::{is_valid_name, suggest_name};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
-    TestResult, prepare_test, test_std,
+    TestResult, prepare_test, prepare_test_cached, test_std,
 };
+
+/// What a command reads and writes in the build cache (D-956 to D-965):
+/// the store, the lookup log of `CHEBY_CACHE_LOG` (D-973), and whether
+/// lookups read the store at all. `CHEBY_DUMP_DIR` bypasses every read and
+/// still writes (D-965), so a dump shows everything the command compiled.
+/// The REPL and `xtask bench-build` use none (D-964, D-975).
+#[derive(Debug)]
+pub struct Cache {
+    pub(crate) store: cache::Store,
+    pub(crate) log: cache::CacheLog,
+    pub(crate) reads: bool,
+    /// The driver's counts, never printed: the package modules each front
+    /// end of the command parsed and checked from source, by path, once
+    /// per parse and per check (D-1135).
+    counts: std::sync::Mutex<Counts>,
+}
+
+/// The package modules a command's front ends parsed and checked.
+#[derive(Debug, Default)]
+struct Counts {
+    parsed: Vec<String>,
+    checked: Vec<String>,
+}
+
+impl Cache {
+    /// D-959's command path: the cache `CHEBY_CACHE` or the OS default
+    /// names, or a fresh temporary cache when that one cannot be created or
+    /// written, whose reason comes back for the caller's note.
+    ///
+    /// # Errors
+    ///
+    /// [`cache::StoreError::RelativeCacheVar`] and
+    /// [`cache::StoreError::UnsafeRoot`], which never fall back, and the
+    /// temporary cache's error when it cannot be created either: tool
+    /// errors (D-959).
+    pub fn open(
+        env: &cache::CacheEnv,
+        build: cache::BuildId,
+        log: cache::CacheLog,
+    ) -> Result<(Self, Option<cache::Fallback>), cache::StoreError> {
+        let (store, fallback) = cache::Store::open_or_temporary(env, build)?;
+        Ok((Self::with_store(store, log), fallback))
+    }
+
+    /// A cache over an opened store. Reads are bypassed when
+    /// `CHEBY_DUMP_DIR` is set (D-965).
+    #[must_use]
+    pub fn with_store(store: cache::Store, log: cache::CacheLog) -> Self {
+        Self {
+            store,
+            log,
+            reads: std::env::var_os("CHEBY_DUMP_DIR").is_none(),
+            counts: std::sync::Mutex::new(Counts::default()),
+        }
+    }
+
+    /// Adds a front end's parsed and checked package modules to the
+    /// command's counts.
+    pub(crate) fn count(&self, parsed: Vec<String>, checked: Vec<String>) {
+        let mut counts = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        counts.parsed.extend(parsed);
+        counts.checked.extend(checked);
+    }
+
+    /// The package modules the command's front ends parsed, by path, once
+    /// per parse, sorted: the hook the cache-hit tests read (never
+    /// printed).
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests only"))]
+    pub(crate) fn parsed_modules(&self) -> Vec<String> {
+        let mut out = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .parsed
+            .clone();
+        out.sort();
+        out
+    }
+
+    /// The package modules the command's front ends checked from source,
+    /// by path, once per check, sorted: a module listed twice was checked
+    /// twice. A crate-visible hook for tests (`build_warm_identical`
+    /// among them); never printed.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests only"))]
+    pub(crate) fn checked_modules(&self) -> Vec<String> {
+        let mut out = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .checked
+            .clone();
+        out.sort();
+        out
+    }
+
+    /// This cache with every read bypassed, as `CHEBY_DUMP_DIR` makes it:
+    /// every lookup misses and every result is still written (D-965).
+    #[must_use]
+    pub fn without_reads(mut self) -> Self {
+        self.reads = false;
+        self
+    }
+
+    /// The store.
+    #[must_use]
+    pub const fn store(&self) -> &cache::Store {
+        &self.store
+    }
+
+    /// The lookup log.
+    #[must_use]
+    pub const fn log(&self) -> &cache::CacheLog {
+        &self.log
+    }
+
+    /// Ends the command's use of the cache: writes the lookup log, trims
+    /// the store when `trim` (at most once a day, D-961; the commands that
+    /// may trim are `cheby check` and `cheby test`), and drops the store,
+    /// which deletes a temporary one (D-959). Call it before the process
+    /// exits on every path. A trim that fails is skipped: a later command
+    /// trims instead, and no output depends on it.
+    ///
+    /// # Errors
+    ///
+    /// The log's I/O error. The store is dropped either way.
+    pub fn finish(self, trim: bool) -> Result<(), cache::StoreError> {
+        self.finish_at(trim, std::time::SystemTime::now())
+    }
+
+    /// [`Cache::finish`] with the trim's clock at `now`. Every write the
+    /// store queued is in place or skipped before the trim runs, so the
+    /// trim never misses an index or an entry still queued (D-961,
+    /// D-1138); the trim keeps the blobs a recently used
+    /// package index names.
+    pub(crate) fn finish_at(
+        self,
+        trim: bool,
+        now: std::time::SystemTime,
+    ) -> Result<(), cache::StoreError> {
+        let logged = self.log.finish();
+        self.store.flush();
+        if trim {
+            let _ = self.store.trim_keeping_indexed(now);
+        }
+        drop(self.store);
+        logged
+    }
+}
 
 /// A failure that is not a diagnostic about the program, such as an I/O
 /// error. It is printed as a plain `error:` line without a code
@@ -89,6 +257,15 @@ impl Error {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The message for an [`Ice`] that carries this error on: without the
+    /// prefix of an internal error, which the `Ice` gets back when it
+    /// becomes an [`Error`] again.
+    pub(crate) fn ice_message(&self) -> &str {
+        self.message
+            .strip_prefix(ICE_PREFIX)
+            .unwrap_or(&self.message)
+    }
 }
 
 impl fmt::Display for Error {
@@ -105,10 +282,13 @@ impl From<PackageError> for Error {
     }
 }
 
+/// What an internal compiler error's message starts with (D-464).
+const ICE_PREFIX: &str = "internal compiler error: ";
+
 /// An internal compiler error is a tool error (D-464).
 impl From<Ice> for Error {
     fn from(ice: Ice) -> Self {
-        Self::new(format!("internal compiler error: {}", ice.message()))
+        Self::new(format!("{ICE_PREFIX}{}", ice.message()))
     }
 }
 
@@ -137,6 +317,42 @@ pub struct Package {
 pub struct Module {
     pub path: ModulePath,
     pub source: ParsedFile,
+    /// The hashes of the file's bytes, computed when it was read.
+    pub hashes: SourceHashes,
+    /// Whether the file was parsed when the package was loaded: a warm
+    /// `cheby check` leaves the modules the package index vouches for
+    /// unparsed (D-962), and [`ParsedFile::syntax`] is then `None` with
+    /// no syntax error.
+    pub parsed: bool,
+    /// The phase-A diagnostics of the file, which loading reported.
+    pub syntax_diagnostics: Vec<Diagnostic>,
+}
+
+/// The two hashes of a source file's bytes, both SipHash-1-3 with zero
+/// keys, computed in one pass when the file is read (D-963): the 128-bit
+/// one in the cache's front keys (D-956) and D-538's 64-bit one in
+/// constant seeds. One value cannot serve both: D-538's hash is 64-bit,
+/// and changing a seed's input would change constant maps' orders
+/// (D-1130). Std's are computed when `cheby` is built
+/// ([`std_lib::source_hashes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceHashes {
+    /// SipHash-1-3 128, for cache keys.
+    pub sip128: cache::Hash128,
+    /// SipHash-1-3 64, `cheby_runtime::consteval::source_hash`, for
+    /// constant seeds.
+    pub sip64: u64,
+}
+
+impl SourceHashes {
+    /// Both hashes of `bytes`.
+    #[must_use]
+    pub fn of(bytes: &[u8]) -> Self {
+        Self {
+            sip128: cache::Hash128::of(bytes),
+            sip64: cheby_runtime::consteval::source_hash(bytes),
+        }
+    }
 }
 
 /// A source file after parsing.
@@ -323,11 +539,35 @@ pub fn check(root: &Path) -> Result<CheckOutput, Error> {
 /// As [`check`], and a tool error "the package does not target `js`"
 /// when the manifest's `targets` lack the selected target (D-550).
 pub fn check_with(root: &Path, options: &CheckOptions) -> Result<CheckOutput, Error> {
+    check_inner(root, *options, None)
+}
+
+/// [`check_with`] through the build cache, as `cheby check` runs it: the
+/// package's modules are looked up in `cache` and their front records
+/// written (D-955, D-965). The output is byte for byte the cacheless one
+/// (D-268).
+///
+/// # Errors
+///
+/// As [`check_with`].
+pub fn check_cached(
+    root: &Path,
+    options: &CheckOptions,
+    cache: &Cache,
+) -> Result<CheckOutput, Error> {
+    check_inner(root, *options, Some(cache))
+}
+
+fn check_inner(
+    root: &Path,
+    options: CheckOptions,
+    cache: Option<&Cache>,
+) -> Result<CheckOutput, Error> {
     let mut out = CheckOutput {
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = front_end_for(root, frontend::Mode::Check, options.target, &mut out)?;
+    let front = front_end_for(root, frontend::Mode::Check, options.target, &mut out, cache)?;
     out.sources.sort(&mut out.diagnostics);
     // Every constant of the package is evaluated (D-459, D-534), but only
     // when the front end reported no error, so constant evaluation never
@@ -362,21 +602,154 @@ fn front_end(
     mode: frontend::Mode,
     out: &mut CheckOutput,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
-    front_end_for(root, mode, None, out)
+    front_end_for(root, mode, None, out, None)
 }
 
 /// [`front_end`] for one target of the package, or for all of them
 /// (D-550): the selected target replaces the manifest's `targets`, so the
-/// cross-target check and the constants' target sets see only it.
+/// cross-target check and the constants' target sets see only it. With a
+/// cache, the package's modules are looked up and written (D-955); a
+/// front end that skipped checking its hits again
+/// ([`frontend::Frontend::complete`]) reported an error, and is returned
+/// as `None`, so nothing lowers it.
 fn front_end_for(
     root: &Path,
     mode: frontend::Mode,
     target: Option<Target>,
     out: &mut CheckOutput,
+    cache: Option<&Cache>,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
-    let package = load_package(root, &mut out.sources, &mut out.diagnostics)?;
+    let family = match mode {
+        frontend::Mode::Check => cache::index::CommandFamily::Check,
+        frontend::Mode::Build | frontend::Mode::StdTests => cache::index::CommandFamily::Build,
+    };
+    front_end_family(root, mode, family, target, out, cache, None)
+}
+
+/// [`front_end_for`] for a command `family` (D-962): with a cache, the
+/// package index of the root and the family is read first, and in
+/// `cheby check` the modules it vouches for are not parsed. A front end
+/// that must start again ([`frontend::Stop::Restart`]) is run once more
+/// from the start, every module parsed and every hit decoded at its lookup.
+/// `warm` is `Some` for `cheby run`, `cheby test` and `cheby build`
+/// (D-1250), with whether the command prints the reuse report and the
+/// `--module` path: their front end checks only what their build needs
+/// ([`crate::warm_keys`]); `None` checks every module, as a command that
+/// starts again after its build wanted a hit's body does.
+fn front_end_family(
+    root: &Path,
+    mode: frontend::Mode,
+    family: cache::index::CommandFamily,
+    target: Option<Target>,
+    out: &mut CheckOutput,
+    cache: Option<&Cache>,
+    warm: Option<(bool, Option<&str>)>,
+) -> Result<Option<(frontend::Frontend, String)>, Error> {
+    let deny_warnings = out.deny_warnings;
+    let index_key = cache.map(|cache| {
+        let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+        cache::index::PackageIndex::key(&root, family, cache.store.build_id())
+    });
+    // A bad, stale or missing index is ignored (D-962).
+    let index_span = phases::span(phases::Phase::Index);
+    let index: Option<(cache::index::PackageIndex, Vec<u8>)> = cache
+        .filter(|cache| cache.reads)
+        .zip(index_key)
+        .and_then(|(cache, key)| cache.store.get_hint(&key).ok().flatten())
+        .and_then(|bytes| cache::index::PackageIndex::decode(&bytes).map(|index| (index, bytes)));
+    drop(index_span);
+    // D-1250 (K4d, N9): `cheby run`, `cheby test` and `cheby build` check
+    // only what their build needs, under the kind and MIR options it reads.
+    // An invalid option checks every module: the build reports it, as
+    // before. `cheby build` reads `cheby run`'s code records (D-914), so
+    // its misses are decided as `cheby run`'s are, over its own package
+    // index (D-962). D-1285.
+    let build = match (mode, warm) {
+        (frontend::Mode::Build, Some((reuse, main)))
+            if matches!(
+                family,
+                cache::index::CommandFamily::Run
+                    | cache::index::CommandFamily::Test
+                    | cache::index::CommandFamily::Build
+            ) =>
+        {
+            backend::mir_options_from_env()
+                .ok()
+                .map(|mir| warm_keys::WarmBuild {
+                    mir,
+                    reuse,
+                    tests: family == cache::index::CommandFamily::Test,
+                    main,
+                })
+        }
+        _ => None,
+    };
+    for lazy in [true, false] {
+        let attempt = phases::attempt();
+        *out = CheckOutput {
+            deny_warnings,
+            ..CheckOutput::default()
+        };
+        let use_ = cache
+            .zip(index_key)
+            .map(|(cache, index_key)| frontend::CacheUse {
+                cache,
+                index: index.as_ref(),
+                index_key,
+                lazy,
+                build,
+            });
+        match front_end_once(root, mode, target, out, use_)? {
+            Attempt::Done(result) => return Ok(result),
+            Attempt::Again if lazy => attempt.restarted(),
+            Attempt::Again => break,
+        }
+    }
+    Err(Ice::new("a front end started again twice").into())
+}
+
+/// How one run of a front end ended.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one value per command, moved out at once"
+)]
+enum Attempt {
+    /// With its result: the front end, or `None` when it did not run to
+    /// the end (phase-A errors, a manifest that cannot be used).
+    Done(Option<(frontend::Frontend, String)>),
+    /// It must start again ([`frontend::Stop::Restart`]).
+    Again,
+}
+
+/// One run of [`front_end_family`].
+fn front_end_once(
+    root: &Path,
+    mode: frontend::Mode,
+    target: Option<Target>,
+    out: &mut CheckOutput,
+    cache: Option<frontend::CacheUse<'_>>,
+) -> Result<Attempt, Error> {
+    // `cheby check` leaves modules unparsed, and so do a warm `cheby run`
+    // and `cheby test` (D-1250), which check only what their build needs;
+    // `--reuse-report` and every other command check every module (D-1132).
+    let vouched = cache
+        .filter(|use_| {
+            use_.lazy
+                && (mode == frontend::Mode::Check
+                    || (mode == frontend::Mode::Build && use_.build.is_some_and(|b| !b.reuse)))
+        })
+        .and_then(|use_| use_.index)
+        .map(|(index, _)| index);
+    let skip = |path: &ModulePath, hash: cache::Hash128| {
+        vouched.is_some_and(|index| {
+            index
+                .get(&path.to_string())
+                .is_some_and(|entry| entry.source == hash)
+        })
+    };
+    let package = load_package_skipping(root, &mut out.sources, &mut out.diagnostics, &skip)?;
     let Some(mut package) = package else {
-        return Ok(None);
+        return Ok(Attempt::Done(None));
     };
     if let Some(target) = target {
         if !package.manifest.targets.contains(target) {
@@ -390,11 +763,25 @@ fn front_end_for(
     // denied by `--deny-warnings` does not, so the later phases still
     // report theirs, and the command fails after them (D-621).
     if out.diagnostics.iter().any(Diagnostic::is_error) {
-        return Ok(None);
+        // The front end, which would replay the phase-A diagnostics of the
+        // modules the index let go unparsed, does not run: start again,
+        // parsing every module, so the output is a cold check's (D-268,
+        // D-965; D-1133). Only the error path pays.
+        if vouched.is_some() && package.modules.iter().any(|module| !module.parsed) {
+            return Ok(Attempt::Again);
+        }
+        return Ok(Attempt::Done(None));
     }
     let name = package.manifest.name.clone();
-    let front = frontend::run(package, mode, &mut out.sources, &mut out.diagnostics)?;
-    Ok(Some((front, name)))
+    let Some(front) =
+        frontend::run_cached(package, mode, &mut out.sources, &mut out.diagnostics, cache)?
+    else {
+        return Ok(Attempt::Again);
+    };
+    if !front.complete {
+        return Ok(Attempt::Done(None));
+    }
+    Ok(Attempt::Done(Some((front, name))))
 }
 
 /// What `cheby run` runs (D-137, D-286).
@@ -468,6 +855,7 @@ impl Program {
     ///
     /// An [`Error`] if the runtime cannot run the entry.
     pub fn run(self) -> Result<i32, Error> {
+        let _main = phases::span(phases::Phase::Main);
         Ok(self.jit.entry(self.entry)?.run_main(self.config)?)
     }
 
@@ -495,11 +883,112 @@ pub enum RunResult {
 /// of the package, or names a module without `main`, and an [`Error`] for
 /// internal failures.
 pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> {
+    prepare_run_inner(root, options, None)
+}
+
+/// [`prepare_run`] through the build cache, as `cheby run` runs it (D-955,
+/// D-965); what it prints and runs is the cacheless build's (D-268).
+///
+/// # Errors
+///
+/// As [`prepare_run`].
+pub fn prepare_run_cached(
+    root: &Path,
+    options: RunOptions,
+    cache: &Cache,
+) -> Result<Prepared, Error> {
+    prepare_run_inner(root, options, Some(cache))
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the public entry points' options, moved in as before D-1250's second attempt"
+)]
+fn prepare_run_inner(
+    root: &Path,
+    options: RunOptions,
+    cache: Option<&Cache>,
+) -> Result<Prepared, Error> {
+    // D-1250: a warm run checks only what its build needs; a build that
+    // then wants a hit's body starts again with every module checked.
+    match prepare_run_once(root, &options, cache, Some(options.reuse_report)) {
+        Err(Restart::Again(mark)) => {
+            rollback_log(cache, mark);
+            prepare_run_once(root, &options, cache, None).map_err(Restart::into_error)
+        }
+        other => other.map_err(Restart::into_error),
+    }
+}
+
+/// How many lines `cache`'s log holds before a warm attempt (D-1250), so a
+/// restart drops the attempt's lines (D-1135: only the run that finished
+/// is logged).
+pub(crate) fn log_mark(cache: Option<&Cache>) -> Option<usize> {
+    phases::begin_attempt();
+    cache.map(|cache| cache.log.mark())
+}
+
+/// Drops the lines `cache`'s log recorded after `mark` ([`log_mark`]).
+pub(crate) fn rollback_log(cache: Option<&Cache>, mark: Option<usize>) {
+    phases::attempt_restarted();
+    if let (Some(cache), Some(mark)) = (cache, mark) {
+        cache.log.rollback(mark);
+    }
+}
+
+/// Why a warm command's attempt ended without a result (D-1250).
+pub(crate) enum Restart {
+    /// The build wanted the body of a module the front end did not check:
+    /// start again with every module checked, the log back at the mark.
+    Again(Option<usize>),
+    /// Any other failure.
+    Failed(Error),
+}
+
+impl Restart {
+    pub(crate) fn into_error(self) -> Error {
+        match self {
+            Self::Again(_) => Ice::new("a warm build wanted a body after a full check").into(),
+            Self::Failed(error) => error,
+        }
+    }
+}
+
+impl From<Error> for Restart {
+    fn from(error: Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<JitError> for Restart {
+    fn from(error: JitError) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+/// One attempt of [`prepare_run_inner`], `warm` as
+/// [`front_end_family`]'s.
+fn prepare_run_once(
+    root: &Path,
+    options: &RunOptions,
+    cache: Option<&Cache>,
+    warm: Option<bool>,
+) -> Result<Prepared, Restart> {
+    let options = options.clone();
+    let mark = log_mark(cache);
     let mut out = CheckOutput {
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = front_end(root, frontend::Mode::Build, &mut out)?;
+    let front = front_end_family(
+        root,
+        frontend::Mode::Build,
+        cache::index::CommandFamily::Run,
+        None,
+        &mut out,
+        cache,
+        warm.map(|reuse| (reuse, options.module_path.as_deref())),
+    )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(Prepared::CompileFailed(out));
@@ -518,13 +1007,16 @@ pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> 
     // E0053 for a native symbol nothing defines (D-532) and the
     // constant-evaluation errors of the constants `main` reaches (D-535)
     // stop the run.
-    let built = backend::build_reporting(
+    let built = match backend::build_reporting(
         &front,
         &out.sources,
         backend::Roots::Main(main),
         false,
         options.reuse_report,
-    )?;
+    ) {
+        Err(_) if warm.is_some() && front.wanted_body() => return Err(Restart::Again(mark)),
+        built => built?,
+    };
     let (jit, reuse_report) = match built {
         Ok(built) => (built.jit, built.reuse_report.unwrap_or_default()),
         Err(diagnostics) => {
@@ -638,7 +1130,7 @@ pub(crate) fn stack_bytes(bytes: u64) -> usize {
 }
 
 /// `a::b::c` as a module path, if every segment is non-empty.
-fn parse_module_path(text: &str) -> Option<ModulePath> {
+pub(crate) fn parse_module_path(text: &str) -> Option<ModulePath> {
     let mut segments = text.split("::");
     let first = segments.next().filter(|s| !s.is_empty())?;
     let mut path = ModulePath::root(first);
@@ -735,13 +1227,24 @@ pub fn load_package(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<Package>, Error> {
+    load_package_skipping(root, sources, diagnostics, &|_, _| false)
+}
+
+/// [`load_package`], leaving unparsed every module whose path and source
+/// hash `skip` accepts ([`Module::parsed`]).
+fn load_package_skipping(
+    root: &Path,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    skip: &(dyn Fn(&ModulePath, cache::Hash128) -> bool + Sync),
+) -> Result<Option<Package>, Error> {
     let Some(manifest) = Manifest::load(root, sources, diagnostics)? else {
         return Ok(None);
     };
     let files = cheby_package::discover(root, &manifest.name, diagnostics)?;
     // Read, parsed and validated in parallel (D-263); file ids and
     // diagnostics follow the order of `files` (D-264).
-    let modules = frontend::read_modules(root, files, sources, diagnostics)?;
+    let modules = frontend::read_modules(root, files, sources, diagnostics, skip)?;
     Ok(Some(Package {
         root: root.to_path_buf(),
         manifest,
@@ -817,6 +1320,40 @@ pub fn parse_file(
 }
 
 #[cfg(test)]
+mod alone_tests;
+#[cfg(test)]
+mod aot_tests;
+#[cfg(test)]
+mod borrowing_tests;
+#[cfg(test)]
+mod build_cache_tests;
+#[cfg(test)]
+mod cache_tests;
+#[cfg(test)]
+mod code_record_repl_tests;
+#[cfg(test)]
+mod code_record_tests;
+#[cfg(test)]
+mod dropped_tests;
+#[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
+mod load_set_tests;
+#[cfg(test)]
+mod native_tests;
+#[cfg(test)]
+mod phases_tests;
+#[cfg(test)]
+mod positions_tests;
+#[cfg(test)]
+mod reads_tests;
+#[cfg(test)]
+mod reuse_replay_tests;
+#[cfg(test)]
+mod seal_tests;
+#[cfg(test)]
+mod std_cache_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod whole_tests;

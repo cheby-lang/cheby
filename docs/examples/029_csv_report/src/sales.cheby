@@ -9,13 +9,13 @@
 //! whole number of cents by hand, because money is never a `Float`:
 //! `0.29 * 100.0` is not exactly `29.0` in binary floating point.
 
+import csv_report::csv
 import std::int
 import std::list
 import std::map
 import std::map::{Map}
 import std::result
 import std::string
-import csv_report::csv
 
 /// The header the file must start with, field by field.
 const header: List<String> = ["date", "region", "product", "quantity", "unit_price"]
@@ -60,11 +60,18 @@ type SalesError {
 }
 
 /// Which side of its column a text is aligned to.
-priv type Side { Left, Right }
+priv type Side {
+  Left,
+  Right,
+}
 
 /// One column of the table: its heading, the side its text goes to,
 /// and how to get its text from a summary.
-priv type Column { heading: String, side: Side, text: fn(Summary) -> String }
+priv type Column {
+  heading: String,
+  side: Side,
+  text: fn(Summary) -> String,
+}
 
 /// The text between two columns.
 const gap: String = "  "
@@ -226,14 +233,12 @@ fn format_table(summaries: List<Summary>) -> List<String> {
   // Every column is paired with its width once, before any line is
   // formatted, because each line needs the widths of all the columns.
   let placed = list::map(columns(), fn(column) { (column, width_of(column, rows)) })
-  let heading_line =
-    placed
+  let heading_line = placed
     |> list::map(_, fn((column, width)) { pad(column.heading, column.side, width) })
     |> string::join(_, gap)
   // Padding the empty string with `-` gives a run of dashes as wide as
   // the column.
-  let rule =
-    placed
+  let rule = placed
     |> list::map(_, fn((_, width)) { string::pad_start("", width, "-") })
     |> string::join(_, gap)
   // `format_row(_, placed)` is a function capture, a function that
@@ -248,7 +253,11 @@ priv fn columns() -> List<Column> {
     Column { heading: "Region", side: Left, text: fn(summary: Summary) { summary.region } },
     Column { heading: "Orders", side: Right, text: fn(summary: Summary) { "{summary.orders}" } },
     Column { heading: "Units", side: Right, text: fn(summary: Summary) { "{summary.units}" } },
-    Column { heading: "Revenue", side: Right, text: fn(summary: Summary) { format_cents(summary.revenue) } },
+    Column {
+      heading: "Revenue",
+      side: Right,
+      text: fn(summary: Summary) { format_cents(summary.revenue) },
+    },
   ]
 }
 
@@ -366,7 +375,13 @@ test "prices with a sign, a third digit of cents or no units are errors" {
 test "the header must come first, exactly as expected" {
   assert read_sales([]) == Err(MissingHeader)
   let wrong = csv::Record { line: 1, fields: ["date", "region", "item", "quantity", "unit_price"] }
-  assert read_sales([wrong]) == Err(BadHeader(1, ["date", "region", "item", "quantity", "unit_price"]))
+  assert read_sales([wrong]) == Err(BadHeader(1, [
+    "date",
+    "region",
+    "item",
+    "quantity",
+    "unit_price",
+  ]))
   let right = csv::Record { line: 1, fields: header }
   assert read_sales([right]) == Ok([])
 }
@@ -458,7 +473,9 @@ test "sales errors show as messages with their line" {
   let expected = "date,region,product,quantity,unit_price"
   assert show(MissingHeader) == "the file is empty, expected the header " + expected
   let found = ["day", "region"]
-  assert show(BadHeader(1, found)) == "line 1: expected the header " + expected + ", found day,region"
+  assert show(BadHeader(1, found)) == "line 1: expected the header " +
+    expected +
+    ", found day,region"
   assert show(WrongFieldCount(4, 6)) == "line 4: expected 5 fields, found 6"
   assert show(BadPrice(3, "1.5O")) == "line 3: the unit price must look like 12.50, got \"1.5O\""
 }

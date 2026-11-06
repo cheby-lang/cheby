@@ -61,7 +61,7 @@
 //! written before them: [`Output::stderr`] flushes standard output first
 //! (D-548).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -91,7 +91,8 @@ use cheby_runtime::{
 use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, SourceFile};
 use cheby_types::repl::{
-    CheckedEntry, EntryShape, Redefinition, ReplSession, SatisfactionPlan, forwarder_fn,
+    CheckedEntry, EntryShape, Redefinition, ReplSession, SatisfactionPlan, SessionItem,
+    forwarder_fn,
 };
 use cheby_types::thir;
 
@@ -157,9 +158,10 @@ impl std::fmt::Debug for Start {
 /// A REPL session.
 pub struct Session {
     options: SessionOptions,
-    /// The MIR options every entry is lowered with, read once when the
-    /// session starts (`CHEBY_RC`, plan §2.3), with borrowing off
-    /// (D-808).
+    /// The MIR options every entry and package module is lowered with,
+    /// read once when the session starts (`CHEBY_RC`, plan §2.3), with
+    /// borrowing off (D-808, D-971); std's units borrow
+    /// ([`Session::lower_std`]).
     mir: MirOptions,
     sources: SourceMap,
     front: Frontend,
@@ -217,10 +219,26 @@ pub struct Session {
     natives: Vec<SessionNative>,
     /// Modules `:reload` replaced, with the module that replaced each.
     replaced: BTreeMap<ModuleId, ModuleId>,
+    /// Modules a `:reload` found new, by the path imports write, with their
+    /// first version: its own path carries the generation (D-625).
+    added: BTreeMap<ModulePath, ModuleId>,
     /// How many times `:reload` changed something: the generation of its
     /// modules (D-547).
     reloads: u32,
+    /// The generation of the package's native code that code compiled now
+    /// calls: 0 at the start, then the JIT's number for the library each
+    /// `:reload` that changed a C source loaded (D-712, D-941,
+    /// [`cheby_jit::generation_symbol`]).
+    native_generation: u32,
+    /// The build cache std's code is loaded from (K6, D-971, D-980): std's
+    /// records, which std's first use writes; nothing of the session is
+    /// stored (D-964). `None` compiles std in the session, as before.
+    std_store: Option<crate::Cache>,
 }
+
+/// A std module's code record a session loads (K6): its module, path and
+/// record.
+type StdRecord = (ModuleId, String, cheby_codegen_clif::record::CodeRecord);
 
 /// A native symbol that an `@external(native, …)` of a session item
 /// binds: live while the item is the session's definition of its name
@@ -267,6 +285,7 @@ fn session_runtime(front: &Frontend, threads: Option<usize>) -> Result<Option<Ru
         args: Vec::new(),
         program_name: front.package_name.clone(),
         fiber_stack: crate::stack_bytes(front.fiber_stack),
+        signals: false,
     };
     match Runtime::new(&config) {
         Ok(runtime) => Ok(Some(runtime)),
@@ -307,12 +326,30 @@ impl Session {
     /// compiler's `CHEBY_RC` and `CHEBY_UNWIND_EDGES`; or if the session's
     /// runtime cannot start its threads.
     pub fn start(dir: &Path, options: SessionOptions) -> Result<Start, Error> {
+        Self::start_cached(dir, options, None)
+    }
+
+    /// [`Session::start`], loading std's code from `cache`'s records (K6,
+    /// D-971, D-980): the first batch that needs std loads every std
+    /// module's record, which std's first use writes when one is missing;
+    /// nothing of the session is stored (D-964). [`Session::end`] finishes
+    /// the cache (its `CHEBY_CACHE_LOG` and its writes).
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::start`].
+    pub fn start_cached(
+        dir: &Path,
+        options: SessionOptions,
+        cache: Option<crate::Cache>,
+    ) -> Result<Start, Error> {
         cheby_runtime::sched::threads_from_env().map_err(|e| Error::new(e.to_string()))?;
-        // No borrowing in any unit a session lowers, std and package
-        // modules included (D-715, D-808): a later batch
-        // could tail-call a function compiled with a mask its slot could
-        // not change. Each unit is counted on its own anyway, which never
-        // infers; the switch says so where the options are made.
+        // No borrowing in any package unit a session lowers (D-715, D-808):
+        // a later batch could tail-call a function compiled with a mask
+        // its slot could not change. Each such unit is counted on its own,
+        // which never infers; the switch says so where the options are
+        // made. Std runs its normal code, its masks inferred once over
+        // all of std (D-971, `Session::lower_std`).
         let mir = MirOptions {
             borrow: false,
             ..crate::backend::mir_options_from_env()?
@@ -353,7 +390,11 @@ impl Session {
         // runtime, which keeps its own (D-690), and for isolated entries
         // (constant evaluation, and every entry on the thread backend).
         cheby_runtime::entry::set_program(Vec::new(), front.package_name.clone());
-        let jit = Jit::configured(codegen, JitOptions::from_env())?;
+        let mut jit = Jit::configured(codegen, JitOptions::from_env())?;
+        // The package's native code, loaded by the front end (D-941).
+        for library in front.native_libraries() {
+            jit.add_library(library)?;
+        }
         let runtime = session_runtime(&front, options.threads)?;
         if let Some(runtime) = &runtime {
             runtime.attach(jit.code_token());
@@ -378,10 +419,13 @@ impl Session {
             root,
             natives: Vec::new(),
             replaced: BTreeMap::new(),
+            added: BTreeMap::new(),
             reloads: 0,
+            native_generation: 0,
             runtime,
             group: DetachedGroup::new(),
             stuck: Vec::new(),
+            std_store: cache,
         };
         Ok(Start::Ready(Box::new(session), warnings))
     }
@@ -458,6 +502,11 @@ impl Session {
     /// (D-797), and the host ends with that status, printing nothing more.
     /// Later calls do nothing; dropping the session calls it.
     pub fn end(&mut self) -> Option<i32> {
+        // K6: std's records are written and the lookup log with them; a
+        // failure only costs a later command a miss (D-1129).
+        if let Some(cache) = self.std_store.take() {
+            let _ = cache.finish(false);
+        }
         let runtime = self.runtime.take()?;
         for group in std::iter::once(&self.group).chain(&self.stuck) {
             if runtime.teardown(group).halted {
@@ -601,6 +650,7 @@ impl Session {
             package: &self.front.package_name,
             front: &self.front,
             replaced: &self.replaced,
+            added: &self.added,
         };
         let module = match lookup.lookup(PackageId::LOCAL, &segments)? {
             Lookup::Found(id) => Some(id),
@@ -803,6 +853,7 @@ impl Session {
             package: &self.front.package_name,
             front: &self.front,
             replaced: &self.replaced,
+            added: &self.added,
         };
         let (targets, mut import_diags) =
             resolve_import_targets(&imports, PackageId::LOCAL, &mut lookup, names)?;
@@ -896,6 +947,7 @@ impl Session {
             )
         }));
         let built = self.lower(entry)?;
+        self.load_std_records(&built.std_records)?;
         // The slots the entry's redefinitions take over keep their old code
         // until the constants the new code reads are filled
         // (`evaluate_and_publish`).
@@ -1073,7 +1125,8 @@ impl Session {
         )?))
     }
 
-    /// E0054 for each native symbol `entry` binds that a live binding binds
+    /// E0055 for each native symbol `entry` binds that the runtime exports
+    /// (D-944), and E0054 for each other one that a live binding binds
     /// with another C signature (D-475): a binding of the package or the
     /// standard library, or of a session item that is still the session's
     /// definition of its name and that the entry does not replace.
@@ -1081,9 +1134,19 @@ impl Session {
     fn native_conflicts(&self, entry: &CheckedEntry) -> Vec<Diagnostic> {
         let replaced: Vec<DefId> = entry.redefinitions().map(|r| r.old).collect();
         let mut out = Vec::new();
+        let runtime = cheby_runtime::symbols();
+        let exported = |symbol: &str| runtime.iter().any(|(name, _)| *name == symbol);
         for (_, symbol, binding) in
             entry_natives(&entry.resolved, &entry.iface, &self.front.globals)
         {
+            // D-944: E0055 for a name the runtime exports, which only std
+            // may bind; it is then no binding for E0054.
+            if let Some(reserved) =
+                cheby_resolve::runtime_export_reserved(&symbol, binding.span, &exported)
+            {
+                out.push(reserved);
+                continue;
+            }
             let live = self.front.natives.get(&symbol).or_else(|| {
                 self.natives
                     .iter()
@@ -1122,22 +1185,23 @@ impl Session {
     fn unresolved(&self, entry: &CheckedEntry, symbols: &[String]) -> Vec<Diagnostic> {
         symbols
             .iter()
-            .map(|symbol| {
+            .map(|name| {
+                // The symbol itself, not the name of its library
+                // generation (`name_native_generation`).
+                let symbol = cheby_jit::split_generation(name).0;
                 let own = entry
                     .resolved
                     .items
                     .iter()
-                    .find_map(|item| item.attrs.native_symbol().filter(|(s, _)| s == symbol));
+                    .find_map(|item| item.attrs.native_symbol().filter(|(s, _)| *s == symbol));
                 let span = own
                     .map(|(_, span)| span)
-                    .or_else(|| self.front.natives.get(symbol.as_str()).map(|b| b.span));
+                    .or_else(|| self.front.natives.get(symbol).map(|b| b.span));
                 let diag = Diagnostic::new(
                     codes::UNRESOLVED_NATIVE_SYMBOL,
                     format!("the native symbol `{symbol}` is not defined"),
                 )
-                .with_note(
-                    "the symbol must be defined by the Cheby runtime or the running process",
-                );
+                .with_note(crate::native::E0053_NOTE);
                 match span {
                     Some(span) => diag.with_primary(span, "nothing defines this symbol"),
                     None => diag,
@@ -1249,43 +1313,67 @@ impl Session {
     /// old one (taking over its slot), and one that does not is reported
     /// and keeps its old code.
     fn check_again(&mut self, changed: &[Redefinition], out: &mut dyn Output) -> Result<(), Error> {
-        let dependents: Vec<Again> = self
-            .repl
+        let dependents = self.callers(changed);
+        self.recheck(dependents, SIGNATURE_CHANGED, out)
+    }
+
+    /// The definitions that used what `changed` replaced with another
+    /// signature ([`ReplSession::dependents`]).
+    fn callers(&self, changed: &[Redefinition]) -> Vec<Again> {
+        self.repl
             .dependents(changed)
             .iter()
-            .filter_map(|item| {
-                Some(Again {
-                    name: item.name,
-                    source: item.source?,
-                    inside: item.inside,
-                })
-            })
-            .collect();
-        self.recheck(
-            dependents,
-            "a definition it uses changed its signature",
-            out,
-        )
+            .filter_map(|item| Again::of(item))
+            .collect()
     }
 
     /// Checks `items` again from their own text, in order, each in the
     /// module it was entered in: one that checks is compiled again and
     /// replaces itself, and the errors of one that does not get the note
     /// "`f` was checked again because {why}; it keeps its old definition".
+    /// One that gets a new signature is a redefinition of itself (D-609), so
+    /// its callers join those waiting, in session order, and one already
+    /// waiting stays once. This ends: a signature is written out in full
+    /// (D-011), so a definition's comes from its text and the session's
+    /// types, and only a type among `items` changes those, so after them
+    /// each definition gets a new signature at most once. An internal error
+    /// in one stops only that one: what changed is already the session's, so
+    /// a definition left out would run its old code (§13.5.3, D-609). The
+    /// first such error is returned at the end.
     fn recheck(&mut self, items: Vec<Again>, why: &str, out: &mut dyn Output) -> Result<(), Error> {
         let saved = self.repl.scope().entered().cloned();
-        for item in items {
-            let inside = match item.inside {
-                Some(module) => Some(self.entered(newest(&self.replaced, module))?),
-                None => None,
-            };
-            self.repl.enter(inside);
-            let result = self.recheck_one(item.name, item.source, why, out);
+        let mut first = Ok(());
+        let mut queue: VecDeque<(Again, &str)> = items.into_iter().map(|i| (i, why)).collect();
+        while let Some((item, why)) = queue.pop_front() {
+            let mut changed = Vec::new();
+            let result = self.recheck_inside(&item, why, &mut changed, out);
             self.again_note = None;
             self.repl.enter(saved.clone());
-            result?;
+            first = first.and(result);
+            for caller in self.callers(&changed) {
+                if !queue.iter().any(|(waiting, _)| waiting.def == caller.def) {
+                    let at = queue.partition_point(|(waiting, _)| waiting.stamp <= caller.stamp);
+                    queue.insert(at, (caller, SIGNATURE_CHANGED));
+                }
+            }
         }
-        Ok(())
+        first
+    }
+
+    /// [`Self::recheck_one`] in the module `item` was entered in.
+    fn recheck_inside(
+        &mut self,
+        item: &Again,
+        why: &str,
+        changed: &mut Vec<Redefinition>,
+        out: &mut dyn Output,
+    ) -> Result<(), Error> {
+        let inside = match item.inside {
+            Some(module) => Some(self.entered(newest(&self.replaced, module))?),
+            None => None,
+        };
+        self.repl.enter(inside);
+        self.recheck_one(item.name, item.source, why, changed, out)
     }
 
     fn recheck_one(
@@ -1293,8 +1381,18 @@ impl Session {
         name: Name,
         source: Span,
         why: &str,
+        changed: &mut Vec<Redefinition>,
         out: &mut dyn Output,
     ) -> Result<(), Error> {
+        // Test hook: `cheby_types`' own is not in this crate's tests, and no
+        // program is known to stop a definition's check here.
+        #[cfg(test)]
+        {
+            let text = self.front.globals.names.get(name);
+            if text.starts_with("dropped_by_test") {
+                return Err(Ice::new(format!("the check of `{text}` stopped")).into());
+            }
+        }
         let Some(file) = self.sources.file(source.file) else {
             return Ok(());
         };
@@ -1320,6 +1418,7 @@ impl Session {
         if let Some(entry) = entry
             && self.build_and_run(&entry, out)?
         {
+            changed.extend(entry.checked.redefinitions());
             self.commit(entry)?;
         }
         Ok(())
@@ -1381,6 +1480,7 @@ impl Session {
             let old = self
                 .front
                 .local_module(&file.path)
+                .or_else(|| self.added.get(&file.path).copied())
                 .map(|id| newest(&self.replaced, id));
             let same = old
                 .and_then(|id| self.front.modules.get(id))
@@ -1394,6 +1494,18 @@ impl Session {
                     bytes,
                     old,
                 });
+            }
+        }
+        // D-712, D-941: a changed C source loads the package's native code
+        // again beside the old, and the modules that bind native symbols
+        // get new versions that call it; old code keeps the old library
+        // (D-1197).
+        match self.reload_native() {
+            Ok(true) => self.add_native_modules(&mut reloaded)?,
+            Ok(false) => {}
+            Err(e) => {
+                out.stderr(&self.tool_error(e.message()));
+                return Ok(());
             }
         }
         self.add_importers(&mut reloaded)?;
@@ -1416,6 +1528,62 @@ impl Session {
             Some(done) => self.finish_reload(&done, out),
             None => Ok(()),
         }
+    }
+
+    /// Prepares the package's native code again (D-941): `true` when its
+    /// C code changed, after the new library joined the JIT as a new
+    /// generation that code compiled from now on calls (D-712); `false`
+    /// when nothing changed or the package has no native code.
+    ///
+    /// # Errors
+    ///
+    /// The tool error of a failed compile or link (D-942).
+    fn reload_native(&mut self) -> Result<bool, Error> {
+        let Some((root, package, table)) = self.front.native.source.clone() else {
+            return Ok(false);
+        };
+        let known = self.front.native.inputs;
+        let Some(native) = crate::native::prepare_unless(&root, &package, &table, None, known)?
+        else {
+            return Ok(false);
+        };
+        self.native_generation = self.jit.add_library_generation(native.libraries());
+        self.front.native = native;
+        Ok(true)
+    }
+
+    /// Adds to `reloaded` every module of the package that binds a native
+    /// symbol, with the text it has, so its new version calls the package's
+    /// new native code (D-712, D-941).
+    fn add_native_modules(&self, reloaded: &mut Vec<Reloaded>) -> Result<(), Error> {
+        for &id in &self.front.order {
+            let Ok(info) = self.front.modules.try_get(id) else {
+                continue;
+            };
+            let at = usize::try_from(id.as_u32()).unwrap_or(usize::MAX);
+            let binds = self
+                .front
+                .module_natives
+                .get(at)
+                .is_some_and(|natives| !natives.is_empty());
+            if info.package != PackageId::LOCAL || self.replaced.contains_key(&id) || !binds {
+                continue;
+            }
+            let path = self.original_path(id)?;
+            if reloaded.iter().any(|r| r.path == path) {
+                continue;
+            }
+            let Some(file) = info.file.and_then(|f| self.sources.file(f)) else {
+                continue;
+            };
+            reloaded.push(Reloaded {
+                path,
+                display: file.path().to_owned(),
+                bytes: file.text().as_bytes().to_vec(),
+                old: Some(id),
+            });
+        }
+        Ok(())
     }
 
     /// Adds to `reloaded` the modules of the package that import a
@@ -1488,15 +1656,16 @@ impl Session {
     ) -> Result<Option<Vec<(Reloaded, ModuleId)>>, Error> {
         let pending = self.parse_reloaded(reloaded, &mut diagnostics)?;
         let ids: Vec<ModuleId> = pending.iter().map(|p| p.id).collect();
-        let done = self.check_parsed(pending, diagnostics, out)?;
-        if done.is_none() {
+        let done = self.check_parsed(pending, diagnostics, out);
+        if !matches!(done, Ok(Some(_))) {
             // A rejected reload changes nothing: its versions leave the
             // build and stop showing the paths of the live modules, which
-            // would otherwise print as stale (review R5-ROB-1).
+            // would otherwise print as stale (review R5-ROB-1). So does one
+            // that stops with an internal error, since the session goes on.
             self.front.forget_reloaded(&ids);
             self.repl.forget_shown(&ids);
         }
-        Ok(done)
+        done
     }
 
     /// Checks the parsed modules of a `:reload`, in import order; `None`
@@ -1522,6 +1691,7 @@ impl Session {
         // A module that imports one that failed is not checked: its errors
         // would only repeat.
         let mut failed: Vec<ModuleId> = Vec::new();
+        let mut dropped = None;
         for node in order {
             let Some(pending) = slots
                 .get_mut(usize::try_from(node).map_err(|_| Ice::new("a node"))?)
@@ -1544,7 +1714,7 @@ impl Session {
                 .as_ref()
                 .ok_or_else(|| Ice::new("a reloaded module without its tree"))?;
             let display = self.repl.display_table(&self.front.modules)?;
-            let found = frontend::check_reloaded(
+            let (found, lost) = frontend::check_reloaded(
                 &mut self.front,
                 &display,
                 frontend::ReloadedModule {
@@ -1558,10 +1728,18 @@ impl Session {
                 failed.push(id);
             }
             diagnostics.extend(found);
+            dropped = dropped.or(lost);
             done.push((pending.module, id));
         }
         let olds: Vec<ModuleId> = done.iter().filter_map(|(m, _)| m.old).collect();
         let natives = self.reload_natives(&olds, &mut diagnostics);
+        // The session holds no error, so this reload's diagnostics are all
+        // that can explain a body that was dropped (D-464).
+        if !diagnostics.iter().any(Diagnostic::is_error)
+            && let Some(ice) = dropped
+        {
+            return Err(ice.into());
+        }
         // With `--deny-warnings`, a warning refuses the reload as it refuses
         // an entry (D-549).
         let rejected = !failed.is_empty()
@@ -1620,6 +1798,7 @@ impl Session {
                         package: &self.front.package_name,
                         front: &self.front,
                         replaced: &self.replaced,
+                        added: &self.added,
                     };
                     let mut lookup = ReloadLookup {
                         inner: &mut lookup,
@@ -1710,12 +1889,18 @@ impl Session {
             if self.replaced.contains_key(&id) || olds.contains(&id) {
                 continue;
             }
-            let bindings = self
+            let mut bindings = self
                 .front
                 .module_natives
                 .get(usize::try_from(id.as_u32()).unwrap_or(usize::MAX))
                 .cloned()
                 .unwrap_or_default();
+            // D-944: a reloaded version may bind a name the runtime
+            // exports; the session's other modules never do, or it would
+            // not have started.
+            if !self.is_std(id) {
+                bindings = frontend::reserve_exports(bindings, diagnostics);
+            }
             frontend::bind_natives(bindings, &mut natives, diagnostics);
         }
         natives
@@ -1740,6 +1925,8 @@ impl Session {
                 self.replaced.insert(old, *new);
                 self.repl.replace_module(old, *new, shown);
                 olds.push(old);
+            } else {
+                self.added.insert(module.path.clone(), *new);
             }
             out.stdout(&format!("reloaded `{}`\n", module.path));
         }
@@ -1766,13 +1953,7 @@ impl Session {
             .repl
             .reload_dependents(&olds)
             .iter()
-            .filter_map(|item| {
-                Some(Again {
-                    name: item.name,
-                    source: item.source?,
-                    inside: item.inside,
-                })
-            })
+            .filter_map(|item| Again::of(item))
             .collect();
         self.recheck(dependents, "`:reload` changed a module it uses", out)
     }
@@ -1801,9 +1982,54 @@ struct PendingModule {
 
 /// A definition checked again.
 struct Again {
+    def: DefId,
+    stamp: u32,
     name: Name,
     source: Span,
     inside: Option<ModuleId>,
+}
+
+impl Again {
+    /// `item`, if it has a text to check.
+    fn of(item: &SessionItem) -> Option<Self> {
+        Some(Self {
+            def: item.def,
+            stamp: item.stamp,
+            name: item.name,
+            source: item.source?,
+            inside: item.inside,
+        })
+    }
+}
+
+/// Why a definition is checked again after a new signature.
+const SIGNATURE_CHANGED: &str = "a definition it uses changed its signature";
+
+/// Names every native symbol `unit`'s foreign calls make after the
+/// package's native code of `generation` (D-712, D-941,
+/// [`cheby_jit::generation_symbol`]): the JIT resolves a name once, so
+/// code compiled after a `:reload` that changed a C source reaches the new
+/// library only under names of its own (D-1197). Front
+/// end and diagnostics keep the symbol itself; generation 0 changes
+/// nothing.
+fn name_native_generation(unit: &mut MirModule, generation: u32) {
+    if generation == 0 {
+        return;
+    }
+    for function in &mut unit.functions {
+        for block in &mut function.blocks {
+            for stmt in &mut block.stmts {
+                if let cheby_mir::Stmt::Assign {
+                    value: cheby_mir::Rvalue::CallForeign { symbol, .. },
+                    ..
+                }
+                | cheby_mir::Stmt::Eval(cheby_mir::Rvalue::CallForeign { symbol, .. }) = stmt
+                {
+                    *symbol = cheby_jit::generation_symbol(symbol, generation).into();
+                }
+            }
+        }
+    }
 }
 
 /// The path of the new version of a module that `:reload` makes:
@@ -1850,6 +2076,9 @@ impl ModuleLookup for ReloadLookup<'_, '_> {
 /// What [`Session::lower`] made.
 struct Built {
     units: Vec<MirModule>,
+    /// Std's records, loaded before `units` when this batch is the first
+    /// to need std in a session with a cache (K6).
+    std_records: Vec<StdRecord>,
     /// The items it lowered.
     items: Vec<DefId>,
     /// The modules whose code units it compiles.
@@ -1860,6 +2089,190 @@ struct Built {
 }
 
 impl Session {
+    /// D-971: the REPL runs std's normal code. The first batch that needs
+    /// a std module lowers every std module whole (D-966), infers borrowing
+    /// over std's units alone, the scope D-968 gives std, and counts them
+    /// with borrowing on; no later batch lowers a std item again, so no
+    /// entry can change a std mask. Package modules stay `plain` (D-808):
+    /// an entry calls only std's `pub` functions, which are never borrowed
+    /// (D-787). Under `CHEBY_RC=naive` nothing borrows (D-746).
+    fn lower_std(&self) -> Result<Vec<MirModule>, Error> {
+        let std_mir = MirOptions {
+            borrow: true,
+            ..self.mir
+        };
+        let mut units = Vec::new();
+        for &module in &self.front.order {
+            if self
+                .front
+                .modules
+                .get(module)
+                .is_none_or(|info| info.package != PackageId::STD)
+            {
+                continue;
+            }
+            let c = self
+                .front
+                .checked(module)
+                .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
+            let own = self
+                .front
+                .set
+                .get(module)
+                .ok_or_else(|| Ice::new(format!("module {module:?} has no interface")))?;
+            let view = DepView::new(&self.front.set, &c.deps);
+            let cx = LowerCx {
+                defs: Defs {
+                    own: Some(own),
+                    deps: &view,
+                    modules: &self.front.modules,
+                    globals: &self.front.globals,
+                },
+                sources: &self.sources,
+            };
+            let unit = lower_items(&c.thir, &|_| true, &cx)?;
+            cheby_mir::check_lowered(&unit)?;
+            units.push(unit);
+        }
+        if std_mir.borrows() {
+            crate::backend::infer_units(&self.front, &mut units)?;
+        }
+        for unit in &mut units {
+            cheby_mir::count_lowered_with(unit, &std_mir)?;
+        }
+        Ok(units)
+    }
+
+    /// Whether `module` is a std module.
+    fn is_std(&self, module: ModuleId) -> bool {
+        self.front
+            .modules
+            .get(module)
+            .is_some_and(|info| info.package == PackageId::STD)
+    }
+
+    /// When a batch first needs std (`reach` needs one of `needed`'s std
+    /// modules and no std module is compiled yet) under whole modules:
+    /// [`Session::lower_std`]'s units, with every item and module they
+    /// compile added to `items` and `lowered`. `None` otherwise.
+    fn std_batch(
+        &self,
+        reach: &Reach,
+        needed: &[ModuleId],
+        items: &mut Vec<DefId>,
+        lowered: &mut Vec<ModuleId>,
+        records: &mut Vec<StdRecord>,
+    ) -> Result<Option<Vec<MirModule>>, Error> {
+        let first = crate::backend::command_scope() == crate::backend::Scope::Whole
+            && needed
+                .iter()
+                .any(|&m| self.is_std(m) && reach.needs_module(m))
+            && !self.units.iter().any(|&m| self.is_std(m));
+        if !first {
+            return Ok(None);
+        }
+        // K6 (D-971, D-980): with a cache, std's normal code is every std
+        // module's record, which std's first use writes when one misses.
+        if let Some(cache) = self.std_store.as_ref().filter(|c| c.reads) {
+            let std_mir = crate::std_cache::std_mir(self.mir);
+            let settings = crate::std_cache::std_settings(&crate::borrowing::settings(
+                crate::cache::BuildKind::Std,
+                std_mir,
+            ));
+            let modules: Vec<ModuleId> = self
+                .front
+                .order
+                .iter()
+                .copied()
+                .filter(|&m| m != ModuleId::BUILTIN && self.is_std(m))
+                .collect();
+            let mut paths = Vec::with_capacity(modules.len());
+            for &module in &modules {
+                paths.push(self.front.modules.try_get(module)?.path.to_string());
+            }
+            let at = crate::std_cache::StdStore::of_cache(cache);
+            let mut found = crate::std_cache::std_records(&at, &paths, &settings, std_mir)?;
+            for (module, path) in modules.into_iter().zip(paths) {
+                let record = found
+                    .remove(&path)
+                    .ok_or_else(|| Ice::new(format!("no std record of `{path}`")))?;
+                self.std_compiled(module, items, lowered)?;
+                records.push((module, path, record));
+            }
+            return Ok(Some(Vec::new()));
+        }
+        let units = self.lower_std()?;
+        for unit in &units {
+            if let Some(module) = unit.module() {
+                self.std_compiled(module, items, lowered)?;
+            }
+        }
+        Ok(Some(units))
+    }
+
+    /// K6: loads std's `records` into the session's JIT, in a batch of
+    /// their own before the entry's; std redefines no slot, so nothing
+    /// waits to be published (D-971, D-1220).
+    fn load_std_records(&mut self, records: &[StdRecord]) -> Result<(), Error> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let batch: Vec<cheby_jit::BatchUnit<'_>> = records
+            .iter()
+            .map(|(module, path, record)| cheby_jit::BatchUnit::Record {
+                record,
+                unit: cheby_mir::UnitKind::Code(*module),
+                path,
+            })
+            .collect();
+        self.jit
+            .compile_units(&batch, &cheby_jit::BatchCx { test_ordinals: &[] })?;
+        // A record carries no index of its slots: std's constants are named
+        // by symbol, as `code_cache::name_consts` names a command's (K4c).
+        let mut names = Vec::new();
+        for (module, path, _) in records {
+            let (Some(c), Some(iface)) = (self.front.checked(*module), self.front.set.get(*module))
+            else {
+                continue;
+            };
+            for constant in &c.thir.consts {
+                let item = iface
+                    .item(constant.def.index)
+                    .ok_or_else(|| Ice::new("a std constant without its item"))?;
+                let name = cheby_mir::DefName {
+                    def: constant.def,
+                    module: path.as_str().into(),
+                    item: self.front.globals.names.get(item.name).into(),
+                };
+                let symbol = cheby_codegen_clif::mangle::item(
+                    cheby_codegen_clif::mangle::Kind::Const,
+                    &name,
+                );
+                names.push((constant.def, symbol));
+            }
+        }
+        self.jit.name_consts(names);
+        Ok(())
+    }
+
+    /// Adds std module `module` to what a batch compiles: the module, its
+    /// functions and its constants.
+    fn std_compiled(
+        &self,
+        module: ModuleId,
+        items: &mut Vec<DefId>,
+        lowered: &mut Vec<ModuleId>,
+    ) -> Result<(), Error> {
+        lowered.push(module);
+        let c = self
+            .front
+            .checked(module)
+            .ok_or_else(|| Ice::new(format!("module {module:?} was not checked")))?;
+        items.extend(c.thir.fns.iter().map(|f| f.def));
+        items.extend(c.thir.consts.iter().map(|c| c.def));
+        Ok(())
+    }
+
     /// Lowers what `entry` reaches that is not compiled yet. MIR lowering
     /// reports no diagnostics (D-554), so every error is an `Ice`.
     fn lower(&self, entry: &Entry) -> Result<Built, Error> {
@@ -1887,9 +2300,12 @@ impl Session {
         let mut units = Vec::new();
         let mut items = Vec::new();
         let mut lowered_modules = Vec::new();
+        let (mut std_records, lowered) = (Vec::new(), &mut lowered_modules);
+        let std_first = self.std_batch(&reach, &modules, &mut items, lowered, &mut std_records)?;
+        let std_first = std_first.map(|std| units.extend(std)).is_some();
         let wanted = |def: DefId| reach.contains(def) && !self.compiled.contains(&def);
         for module in modules {
-            if !reach.needs_module(module) {
+            if !reach.needs_module(module) || (std_first && self.is_std(module)) {
                 continue;
             }
             let new: Vec<DefId> = reach
@@ -1930,6 +2346,10 @@ impl Session {
                 sources: &self.sources,
             };
             let mut unit = lower_items(thir, &wanted, &cx)?;
+            if !self.is_std(module) {
+                name_native_generation(&mut unit, self.native_generation);
+                crate::native::attach_drops(&self.front, module, &mut unit, self.native_generation);
+            }
             count_and_check_with(&mut unit, &self.mir)?;
             units.push(unit);
             items.extend(new);
@@ -1948,6 +2368,7 @@ impl Session {
         units.extend(self.lower_entry_units(entry, &thunks, &all)?);
         Ok(Built {
             units,
+            std_records,
             items,
             modules: lowered_modules,
             constants,
@@ -2188,12 +2609,17 @@ impl Session {
             let mut deps: Vec<(String, u64)> = Vec::new();
             for &module in const_modules.get(&def).map_or(&[][..], Vec::as_slice) {
                 let module_info = self.front.modules.try_get(module)?;
-                let hash = module_info
-                    .file
-                    .and_then(|file| self.sources.file(file))
-                    .map_or(0, |f| {
-                        cheby_runtime::consteval::source_hash(f.text().as_bytes())
-                    });
+                // The hash computed when the file was read (D-963); a
+                // module the session added is hashed here.
+                let hash = match self.front.source_hashes(module) {
+                    Some(hashes) => hashes.sip64,
+                    None => module_info
+                        .file
+                        .and_then(|file| self.sources.file(file))
+                        .map_or(0, |f| {
+                            cheby_runtime::consteval::source_hash(f.text().as_bytes())
+                        }),
+                };
                 deps.push((module_info.path.to_string(), hash));
             }
             deps.sort();
@@ -2207,6 +2633,7 @@ impl Session {
             infos.push(ConstInfo {
                 def,
                 name: name.into(),
+                path: format!("{module_path}::{name}").into(),
                 name_span: span,
                 seed,
                 on_js: item.targets.contains(Target::Js),
@@ -2220,7 +2647,18 @@ impl Session {
             memory_limit: self.front.const_eval_memory_limit,
             targets: self.front.package_targets,
         };
-        Ok(cheby_consteval::evaluate(&mut self.jit, &infos, &config)?)
+        // K5a, D-1190: the entry's constants evaluate in
+        // the session JIT (its package code is `plain`, D-971; std keeps
+        // its masks, D-1180), then reach their slots from images, as in
+        // every other host (D-979): a new generation gets a new image.
+        // The images stay in the process, so an earlier entry's installed
+        // constant is shared by address, never copied (D-539, the wave-6
+        // review's R-2), and the evaluated results are freed (R-1).
+        let diagnostics = cheby_consteval::evaluate(&mut self.jit, &infos, &config)?;
+        if diagnostics.is_empty() {
+            cheby_consteval::replace_with_images(&self.jit, &infos)?;
+        }
+        Ok(diagnostics)
     }
 }
 
@@ -2443,12 +2881,17 @@ fn std_module(
         text.push_str(module.path);
         text.push('\n');
     }
+    let hashes = crate::SourceHashes::of(text.as_bytes());
     let source = parse_file(sources, SESSION_FILE, text.into_bytes(), diagnostics)?;
     let file = source.file;
     Ok((
         crate::Module {
             path: ModulePath::root(&package.manifest.name).child(SESSION_FILE),
             source,
+            hashes,
+            parsed: true,
+            // The REPL uses no cache (D-964), the only reader of these.
+            syntax_diagnostics: Vec::new(),
         },
         file,
     ))
@@ -2475,6 +2918,8 @@ struct SessionLookup<'a> {
     front: &'a Frontend,
     /// The modules `:reload` replaced: an import finds the newest version.
     replaced: &'a BTreeMap<ModuleId, ModuleId>,
+    /// The modules `:reload` found new, which no plain path finds.
+    added: &'a BTreeMap<ModulePath, ModuleId>,
 }
 
 impl ModuleLookup for SessionLookup<'_> {
@@ -2489,7 +2934,8 @@ impl ModuleLookup for SessionLookup<'_> {
             if rest == ["main"] {
                 return Ok(Lookup::RootByMainSegment);
             }
-            if let Some(id) = self.front.local_module(&module_path)
+            let found = self.front.local_module(&module_path);
+            if let Some(id) = found.or_else(|| self.added.get(&module_path).copied())
                 && rest.last() != Some(&SESSION_FILE)
             {
                 return Ok(Lookup::Found(newest(self.replaced, id)));
@@ -2565,8 +3011,10 @@ mod tests {
     /// Starts a session outside any package with `options`.
     fn start(options: SessionOptions) -> Box<Session> {
         let dir = std::env::temp_dir();
-        let Start::Ready(session, warnings) = Session::start(&dir, options).unwrap() else {
-            panic!("the session did not start");
+        let session = Session::start(&dir, options).unwrap();
+        let (session, warnings) = match session {
+            Start::Ready(session, warnings) => (session, warnings),
+            Start::Failed(why) => panic!("the session did not start:\n{why}"),
         };
         assert_eq!(warnings, "");
         session
@@ -2627,7 +3075,81 @@ mod tests {
         assert!(printed[8].contains("<repl:9>:1:1"), "{}", printed[8]);
     }
 
-    /// No unit a session lowers borrows (D-715, D-808):
+    /// D-1190, the wave-6 review's R-2: a constant that
+    /// holds an earlier entry's constant shares its installed value, as
+    /// D-539 asks, instead of installing a copy of it, so entries that
+    /// name a large constant cost a word each. Every installed value is
+    /// static, and nothing of the evaluations stays in the session's
+    /// domain (R-1).
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn repl_constants_share_earlier_installed_constants() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut session = start(options());
+                let live = session.jit.domain().live_objects();
+                for entry in [
+                    "import std::list",
+                    "const big: List<Int> = list::range(0, 1000)",
+                    "const c1: (List<Int>, Int) = (big, 1)",
+                    "const c2: (List<Int>, List<Int>) = (big, big)",
+                    "const c3: (List<Int>, Int) = c1",
+                ] {
+                    let mut out = Buffer::default();
+                    session.eval(entry, &mut out).unwrap();
+                    assert_eq!(out.text, "", "{entry}");
+                }
+                assert_eq!(session.jit.domain().live_objects(), live);
+                let slot = |name: &str| -> u64 {
+                    let def = session
+                        .evaluated
+                        .iter()
+                        .copied()
+                        .find(|def| {
+                            session
+                                .front
+                                .set
+                                .get(def.module)
+                                .and_then(|iface| iface.item(def.index))
+                                .is_some_and(|item| {
+                                    session.front.globals.names.get(item.name) == name
+                                })
+                        })
+                        .unwrap_or_else(|| panic!("no constant `{name}`"));
+                    // SAFETY: an installed constant's slot.
+                    unsafe { *session.jit.const_slot(def).unwrap() }
+                };
+                let big = slot("big");
+                let c1 = slot("c1");
+                // SAFETY: installed values, static for the session.
+                unsafe {
+                    for word in [big, c1, slot("c2"), slot("c3")] {
+                        assert!(cheby_runtime::consteval::image::is_static(word));
+                    }
+                    assert_eq!(cheby_runtime::values::read_tuple(c1)[0], big);
+                    assert_eq!(cheby_runtime::values::read_tuple(slot("c2")), [big, big]);
+                }
+                // A constant that is an earlier one is that value.
+                assert_eq!(slot("c3"), c1);
+                for (entry, printed) in [
+                    ("let (l, m) = c3", ""),
+                    ("(list::length(l), m)", "(1000, 1) : (Int, Int)\n"),
+                ] {
+                    let mut out = Buffer::default();
+                    session.eval(entry, &mut out).unwrap();
+                    assert_eq!(out.text, printed, "{entry}");
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// No package unit a session lowers borrows (D-715, D-808, D-971):
     /// the session's options turn borrowing off whatever `CHEBY_RC` says,
     /// and a function that a build would borrow in (a package-visible
     /// function that only reads its `String`) runs, then is redefined with
@@ -2657,6 +3179,54 @@ mod tests {
                 }
                 assert_eq!(printed[1], "True : Bool\n");
                 assert_eq!(printed[3], "False : Bool\n");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// D-971: the REPL runs std's normal code. Std's units are every std
+    /// module, whole, with masks inferred over std (some of its functions
+    /// borrow); the first entry that needs std compiles all of them, and
+    /// the session's package code stays `plain`.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn kinds_repl_runs_std_borrowed_and_package_plain() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let mut session = start(options());
+                let units = session.lower_std().unwrap();
+                let std: BTreeSet<ModuleId> = session
+                    .front
+                    .order
+                    .iter()
+                    .copied()
+                    .filter(|&m| {
+                        session.front.modules.get(m).map(|i| i.package) == Some(PackageId::STD)
+                    })
+                    .collect();
+                let lowered: BTreeSet<ModuleId> =
+                    units.iter().filter_map(MirModule::module).collect();
+                assert_eq!(lowered, std);
+                assert!(
+                    units
+                        .iter()
+                        .flat_map(|u| &u.functions)
+                        .any(|f| !f.borrow.is_owned()),
+                    "std borrows somewhere"
+                );
+                assert!(!session.mir.borrows());
+                let mut out = Buffer::default();
+                session.eval("import std::list", &mut out).unwrap();
+                session.eval("list::length([1, 2, 3])", &mut out).unwrap();
+                assert_eq!(out.text, "3 : Int\n");
+                if crate::backend::command_scope() == crate::backend::Scope::Whole {
+                    assert!(std.iter().all(|m| session.units.contains(m)));
+                }
             })
             .unwrap()
             .join()

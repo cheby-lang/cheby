@@ -535,6 +535,8 @@ fn builder(key: FnKey) -> FunctionBuilder {
 
 fn unit(functions: Vec<Function>) -> MirModule {
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(MODULE),
         path: "app".into(),
         functions,

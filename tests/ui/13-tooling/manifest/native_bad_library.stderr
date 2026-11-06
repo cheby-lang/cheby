@@ -1,0 +1,8 @@
+error[E0036]: `sqlite3 m` is not a valid library name
+ --> tests/ui/13-tooling/manifest/native_bad_library/cheby.toml:5:14
+  |
+5 | libraries = ["sqlite3 m"]
+  |              ^^^^^^^^^^^
+  |
+  = help: write the name the linker takes after `-l`, such as `"sqlite3"`, in letters, digits, `_`, `-`, `.` and `+`; give each library its own string
+

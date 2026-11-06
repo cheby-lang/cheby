@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @command: build
+// @exit: 103
+// @milestone: M3
+// @decisions: D-919, D-856, D-858
+//! An executable registers its module records' call sites and layouts
+//! through the same routine as `cheby run` (D-919): `main` calls a helper
+//! whose receive waits on a channel nobody sends to, and the deadlock
+//! report names that call, the innermost one outside `std`, as under
+//! `cheby run`.
+
+import std::channel
+
+/// What the helper waits for.
+type Job { Job(Int) }
+
+fn wait_for(rx: channel::Receiver<Job>) -> Int {
+  let got = channel::receive(rx)
+  case got {
+    Ok(Job(n)) => n
+    Err(_) => 0
+  }
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Job>(0)
+  let n = wait_for(rx)
+  let _ = channel::send(tx, Job(n))
+}

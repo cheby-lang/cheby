@@ -1,0 +1,2 @@
+fatal error: all fibers are blocked
+  blocked in time::sleep at tests/ui/10-concurrency/deadlock/endless_sleep.cheby:17:3

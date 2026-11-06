@@ -21,6 +21,12 @@ pub struct ImportRequest {
     pub items_span: Option<Span>,
     /// The whole import.
     pub span: Span,
+    /// Whether a REPL session adds it to an entry, with the items of an
+    /// `import` written earlier ([`SessionScope`](crate::repl::SessionScope)).
+    /// An item it can no longer bind is withdrawn: its uses are unknown names
+    /// (§13.5.3). The session's own definitions are not imports anyone
+    /// wrote, so they are not this, and neither is an import of a module.
+    pub session: bool,
 }
 
 impl ImportRequest {
@@ -98,6 +104,7 @@ pub fn collect_imports(tree: &SyntaxTree, names: &Interner) -> Vec<ImportRequest
                 items,
                 items_span: list.map(AstNode::significant_span),
                 span: import.significant_span(),
+                session: false,
             })
         })
         .collect()

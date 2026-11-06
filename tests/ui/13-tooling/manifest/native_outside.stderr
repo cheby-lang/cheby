@@ -1,0 +1,8 @@
+error[E0036]: the C source `../shared/ffi.c` is outside the package
+ --> tests/ui/13-tooling/manifest/native_outside/cheby.toml:5:12
+  |
+5 | sources = ["../shared/ffi.c"]
+  |            ^^^^^^^^^^^^^^^^^
+  |
+  = note: a C source must stay inside the package once `..` and symbolic links are resolved
+

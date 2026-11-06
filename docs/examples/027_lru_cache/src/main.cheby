@@ -22,27 +22,20 @@
 //! the counts and the lines so far, and each request hands the next one
 //! the cache that `cache::get` or `cache::put_with_eviction` returned.
 
+import lru_cache::cache
 import std::io
 import std::list
 import std::string
-import lru_cache::cache
 
 /// How many prices the cache holds.
 const cache_capacity: Int = 3
 
 /// The products asked for today, in order.
-const requests: List<String> = [
-  "apple",
-  "bread",
-  "cheese",
-  "apple",
-  "dates",
-  "apple",
-  "cheese",
-]
+const requests: List<String> = ["apple", "bread", "cheese", "apple", "dates", "apple", "cheese"]
 
 fn main() {
-  serve(requests, cache_capacity) |> list::each(_, io::println)
+  serve(requests, cache_capacity)
+  |> list::each(_, io::println)
 }
 
 /// What `serve` carries from one request to the next.
@@ -62,24 +55,16 @@ type Session {
 fn serve(products: List<String>, capacity: Int) -> List<String> {
   // The type of `prices` fixes the cache's key and value types, so
   // `cache::new` needs no turbofish.
-  let start = Session {
-    prices: cache::new(capacity),
-    hits: 0,
-    misses: 0,
-    evictions: 0,
-    lines: [],
-  }
+  let start = Session { prices: cache::new(capacity), hits: 0, misses: 0, evictions: 0, lines: [] }
   let done = list::fold(products, start, handle)
   let served = counted(list::length(products), "request", "requests")
   let hits = counted(done.hits, "hit", "hits")
   let misses = counted(done.misses, "miss", "misses")
   let evictions = counted(done.evictions, "eviction", "evictions")
-  let recent = done.prices |> cache::keys_by_recency |> string::join(_, ", ")
-  [
-    ..done.lines,
-    "{served}: {hits}, {misses}, {evictions}",
-    "cached, most recent first: {recent}",
-  ]
+  let recent = done.prices
+    |> cache::keys_by_recency
+    |> string::join(_, ", ")
+  [..done.lines, "{served}: {hits}, {misses}, {evictions}", "cached, most recent first: {recent}"]
 }
 
 /// Serves one request for the price of `product`.

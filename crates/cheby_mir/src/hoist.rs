@@ -35,8 +35,11 @@
 use cheby_iface::{Ice, Idx, Ty};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::{BlockId, Callee, Function, Local, Operand, RuntimeFn, Rvalue, Stmt, UseKind};
+use crate::ir::{
+    Block, BlockId, Callee, Function, Local, Operand, RuntimeFn, Rvalue, Stmt, UseKind,
+};
 use crate::liveness::{Liveness, counted};
+use crate::positions::{PosRef, StmtsOut};
 use crate::unwind::stmt_may_unwind;
 
 /// The most statements that may unwind which the moved reads of one base
@@ -144,7 +147,7 @@ pub fn run(f: &mut Function, handle_free: &dyn Fn(Ty) -> bool) -> Result<(), Ice
             .blocks
             .get_mut(id)
             .ok_or_else(|| Ice::new("hoist: block missing"))?;
-        apply(&mut block.stmts, &moves)?;
+        apply(block, &moves)?;
     }
     Ok(())
 }
@@ -247,25 +250,35 @@ impl Cx<'_> {
     }
 }
 
-/// Moves the statements of `stmts` as `plan` says.
-fn apply(stmts: &mut Vec<Stmt>, plan: &FxHashMap<usize, Vec<usize>>) -> Result<(), Ice> {
+/// Moves the statements of `block` as `plan` says; a moved field read
+/// keeps its own position (D-938).
+fn apply(block: &mut Block, plan: &FxHashMap<usize, Vec<usize>>) -> Result<(), Ice> {
     let moved: FxHashSet<usize> = plan.values().flatten().copied().collect();
-    let len = stmts.len();
-    let mut old: Vec<Option<Stmt>> = std::mem::take(stmts).into_iter().map(Some).collect();
+    let len = block.stmts.len();
+    let term = block.term_pos();
+    let pos: Vec<PosRef> = (0..len).map(|i| block.pos_at(i)).collect();
+    let mut old: Vec<Option<Stmt>> = std::mem::take(&mut block.stmts)
+        .into_iter()
+        .map(Some)
+        .collect();
     let mut take = |k: usize| {
-        old.get_mut(k)
+        let stmt = old
+            .get_mut(k)
             .and_then(Option::take)
-            .ok_or_else(|| Ice::new("hoist: a statement moved twice"))
+            .ok_or_else(|| Ice::new("hoist: a statement moved twice"))?;
+        Ok::<_, Ice>((stmt, pos.get(k).copied().unwrap_or(PosRef::NONE)))
     };
-    let mut out = Vec::with_capacity(len);
+    let mut out = StmtsOut::new(block.has_positions(), len);
     for k in 0..len {
         for &j in plan.get(&k).map_or(&[][..], Vec::as_slice) {
-            out.push(take(j)?);
+            let (stmt, at) = take(j)?;
+            out.push(stmt, at);
         }
         if !moved.contains(&k) {
-            out.push(take(k)?);
+            let (stmt, at) = take(k)?;
+            out.push(stmt, at);
         }
     }
-    *stmts = out;
+    block.set_stmts(out.finish(term));
     Ok(())
 }

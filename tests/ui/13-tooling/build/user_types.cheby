@@ -1,0 +1,44 @@
+// @mode: run-pass
+// @command: build
+// @milestone: M3
+// @decisions: D-919, D-920
+//! An executable's start registers the program's user types from the
+//! module records (D-919, D-920): constructors with named fields, with
+//! positional fields and without fields match, print and compare as
+//! under `cheby run`.
+
+import std::io
+
+/// A shape.
+type Shape {
+  /// A circle of the given radius.
+  Circle { radius: Int, label: String },
+  /// A rectangle, width then height.
+  Rect(Int, Int),
+  /// No shape at all.
+  Empty,
+}
+
+/// The area of `shape`, with pi taken as 3.
+fn area(shape: Shape) -> Int {
+  case shape {
+    Circle { radius, .. } => 3 * radius * radius
+    Rect(width, height) => width * height
+    Empty => 0
+  }
+}
+
+fn main() {
+  let circle = Circle { radius: 2, label: "wheel" }
+  let rect = Rect(3, 4)
+  let empty = Empty
+  io::println("{circle:?}")
+  io::println("{rect:?}")
+  io::println("{empty:?}")
+  let total = area(circle) + area(rect) + area(empty)
+  io::println("{total}")
+  let same = circle == Circle { radius: 2, label: "wheel" }
+  let other = rect == Rect(4, 3)
+  let none = empty == Empty
+  io::println("{same} {other} {none}")
+}

@@ -1,0 +1,2 @@
+panicked at tests/ui/10-concurrency/http_serve/handler_panic.cheby:21:40:
+the handler failed

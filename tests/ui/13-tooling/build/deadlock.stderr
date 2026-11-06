@@ -1,0 +1,2 @@
+fatal error: all fibers are blocked
+  blocked in channel::receive at tests/ui/13-tooling/build/deadlock.cheby:18:13

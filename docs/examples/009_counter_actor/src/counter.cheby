@@ -29,11 +29,15 @@ import std::selector
 /// Other modules of this package could read the field, because a type
 /// is opaque only to other packages. They use the functions below
 /// instead.
-type Counter { requests: channel::Sender<Request> }
+type Counter {
+  requests: channel::Sender<Request>,
+}
 
 /// A handle for stopping the counter. Dropping it without calling
 /// `stop` leaves the counter running until every `Counter` is gone.
-type Stopper { signal: channel::Sender<Nil> }
+type Stopper {
+  signal: channel::Sender<Nil>,
+}
 
 /// The messages a `Counter` sends to the actor. `Get` carries the
 /// channel the actor sends the count back on.
@@ -149,8 +153,7 @@ priv fn serve(
   // The selector takes one value from whichever channel is ready. A
   // stop and a request sent at the same moment may be served in
   // either order.
-  let event =
-    selector::new()
+  let event = selector::new()
     |> selector::receive(_, requests, FromCounter)
     |> selector::receive(_, signals, FromStopper)
     |> selector::select

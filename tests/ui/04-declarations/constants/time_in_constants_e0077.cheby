@@ -1,0 +1,31 @@
+// @mode: check-fail
+// @milestone: M3
+// @decisions: D-991, D-537, D-1057
+//! The functions of `std::time` that read a clock or wait reach a kernel:
+//! `now` and `monotonic` directly, `elapsed` and `until` through
+//! `monotonic`, and the sleeps through `sys_sleep`, even for a span of
+//! zero. So a constant that calls one is E0077, while the pure functions
+//! beside them run at compile time (§4.5).
+
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+const origin: instant::Instant = instant::from_origin(duration::zero)
+
+const started: time::Timestamp = time::now()
+
+const reading: instant::Instant = time::monotonic()
+
+const so_far: duration::Duration = time::elapsed(origin)
+
+const left: duration::Duration = time::until(origin)
+
+const slept: Nil = time::sleep(duration::zero)
+
+const slept_until: Nil = time::sleep_until(origin)
+
+fn main() {
+  io::println("{started} {reading:?} {so_far} {left} {slept:?} {slept_until:?}")
+}

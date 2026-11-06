@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-940, D-444
+// @milestone: M3
+//! `[native]` has only `sources` and `libraries`: any other key, such as a
+//! list of headers, is E0036, whose help names the two keys (§12.5.4).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

@@ -14,6 +14,10 @@
 //!   where it is used (D-469).
 //! - [`repl::SessionScope`] resolves a REPL entry, a module of its own,
 //!   with the names of its session (§13.5, D-547).
+//! - E0055 reserves the `cheby_rt_` and `cb$` prefixes here; for the other
+//!   names the runtime exports, the driver calls
+//!   [`runtime_export_reserved`] with the runtime's names after resolution
+//!   (D-944), so this crate never depends on the runtime.
 //! - The only part of the support gate (D-451) left in the front end is
 //!   E0038 for an import of a standard-library module that the spec plans
 //!   but the toolchain does not ship yet (tiers 2 and 3). Paths through such an import
@@ -43,6 +47,7 @@ pub use imports::{
     ImportItemRequest, ImportRequest, ImportTarget, Lookup, ModuleLookup, closest_name,
     collect_imports, cycle_diagnostic, resolve_import_targets,
 };
+pub use items::runtime_export_reserved;
 pub use scope::{ModuleScope, ScopeEntry, ScopeSource};
 
 cheby_iface::newtype_index! {
@@ -114,6 +119,26 @@ impl ResolvedModule {
     #[must_use]
     pub const fn def_id(&self, index: DefIndex) -> DefId {
         DefId::new(self.module, index)
+    }
+
+    /// The native drop function of each external type this module
+    /// declares with an `@external(native, "f")` (§12.5.3, D-949), in
+    /// `DefIndex` order: what the module's record lists in its external
+    /// entries' `drop` (D-1168), so the runtime calls `f(handle)` once
+    /// when the last reference to a value of the type goes away. Only an
+    /// external type may carry `@external` among the types (E0045 rejects
+    /// it on any other type), so every type item with one is listed.
+    #[must_use]
+    pub fn external_drops(&self) -> Vec<(DefIndex, Box<str>)> {
+        self.items
+            .iter_enumerated()
+            .filter(|(_, item)| item.kind == DefKind::Type)
+            .filter_map(|(index, item)| {
+                item.attrs
+                    .native_symbol()
+                    .map(|(symbol, _)| (index, Box::from(symbol)))
+            })
+            .collect()
     }
 }
 

@@ -20,7 +20,10 @@
 //! - `@exit`: the expected exit code of `run-fail`, 101 by default.
 //! - `@command`: `test` makes a `run-pass` or `run-fail` test run
 //!   `cheby test` instead of `cheby run`, and its goldens hold that
-//!   command's output (D-543). `run` is the default.
+//!   command's output (D-543). `build` makes it build the package with
+//!   `cheby build` and run the executable, with the goldens of a run test,
+//!   standard error as the build's followed by the executable's (D-1026,
+//!   [`crate::aot`]). `run` is the default.
 //! - `@flags`: command-line words added after the subcommand, split at
 //!   whitespace, such as `--module app::util` (D-543).
 //!
@@ -39,8 +42,10 @@
 //! A run test may also have input beside it (D-543, [`RunInput`]):
 //! `<name>.stdin` is fed to `cheby run` as standard input, byte for byte
 //! (without it standard input is null), and `<name>.args` holds the
-//! program's arguments, one per line, passed after `--`. Other modes may
-//! not have them.
+//! program's arguments, one per line, passed after `--`. `<name>.env`
+//! holds variables for the child's environment, `KEY=VALUE` lines in the
+//! format of an example's `env` file ([`UiTest::env`], D-1043). Other modes
+//! may not have them.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -92,7 +97,7 @@ impl Mode {
     }
 }
 
-/// The command a run test runs (D-543).
+/// The command a run test runs (D-543, D-1026).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RunCommand {
     /// `cheby run`.
@@ -100,6 +105,8 @@ pub enum RunCommand {
     Run,
     /// `cheby test`.
     Test,
+    /// `cheby build`, then the executable it wrote (D-1026).
+    Build,
 }
 
 impl RunCommand {
@@ -107,7 +114,10 @@ impl RunCommand {
         match s {
             "run" => Ok(Self::Run),
             "test" => Ok(Self::Test),
-            other => Err(format!("unknown command `{other}`, expected run or test")),
+            "build" => Ok(Self::Build),
+            other => Err(format!(
+                "unknown command `{other}`, expected run, test or build"
+            )),
         }
     }
 
@@ -117,6 +127,7 @@ impl RunCommand {
         match self {
             Self::Run => "run",
             Self::Test => "test",
+            Self::Build => "build",
         }
     }
 }
@@ -279,6 +290,34 @@ impl UiTest {
         Ok(RunInput { stdin, args })
     }
 
+    /// `<name>.env` beside the test (D-1043): `KEY=VALUE` lines in an
+    /// example's `env` format, empty lines skipped; empty without the file.
+    /// The harness applies it to the child after its own settings (`NO_COLOR`,
+    /// `CHEBY_RT_POISON`, the cache), so it may override them but
+    /// `CHEBY_CACHE` ([`ENV_RESERVED`]); D-1237.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the file if it cannot be read, a line is not
+    /// `KEY=VALUE` with a non-empty key, or a line sets a reserved variable.
+    pub fn env(&self) -> Result<Vec<(String, String)>, String> {
+        let path = self.golden("env");
+        let Some(text) = crate::golden::read(&path)? else {
+            return Ok(Vec::new());
+        };
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| match line.split_once('=') {
+                Some((key, _)) if ENV_RESERVED.contains(&key) => Err(format!(
+                    "{}: `{key}` is the harness's own and cannot be set by a test",
+                    path.display()
+                )),
+                Some((key, value)) if !key.is_empty() => Ok((key.to_owned(), value.to_owned())),
+                _ => Err(format!("{}: `{line}` is not KEY=VALUE", path.display())),
+            })
+            .collect()
+    }
+
     /// Whether the test runs JIT-compiled code (D-545), so that it is
     /// ignored where programs do not run ([`crate::platform`]). A run test
     /// does. A check test does unless its `.stderr` golden holds an error
@@ -302,14 +341,30 @@ impl UiTest {
     }
 }
 
+impl UiTest {
+    /// Whether the test builds an executable with `cheby build`
+    /// (`// @command: build`, D-1026), so that it is ignored where
+    /// executables are not built ([`crate::platform::executables_skipped`],
+    /// D-935) and never blessed.
+    #[must_use]
+    pub fn builds_an_executable(&self) -> bool {
+        self.header.command == RunCommand::Build
+    }
+}
+
 /// The codes that only the back end reports: an unresolved native symbol
 /// and the constant-evaluation errors. `cheby check` reports them after it
 /// has built a JIT for the package's constants. E0069 is also a front-end
 /// code; counting it here only ignores a few more tests on Windows.
 const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
 
-/// The extensions of the input files of a run test (D-543).
-pub const INPUT_EXTENSIONS: [&str; 2] = ["stdin", "args"];
+/// The extensions of the input files of a run test (D-543), and its
+/// environment file (D-1043).
+pub const INPUT_EXTENSIONS: [&str; 3] = ["stdin", "args", "env"];
+
+/// The variable a test's `.env` may not set: the harness's own cache
+/// (D-959; D-1237).
+pub const ENV_RESERVED: &[&str] = &["CHEBY_CACHE"];
 
 /// The root module of a package test, which holds the header.
 pub const ROOT_MODULE: &str = "src/main.cheby";
@@ -468,6 +523,19 @@ mod tests {
         assert_eq!(test.command, RunCommand::Test);
         assert_eq!(test.command.name(), "test");
         assert_eq!(test.flags, Vec::<String>::new());
+        // D-1026: only with a run mode.
+        let build = Header::parse("// @mode: run-pass\n// @command: build\n").unwrap();
+        assert_eq!(build.command, RunCommand::Build);
+        assert_eq!(build.command.name(), "build");
+        let fail = Header::parse("// @mode: run-fail\n// @command: build\n// @exit: 1\n").unwrap();
+        assert_eq!(fail.command, RunCommand::Build);
+        for mode in ["check-pass", "check-fail", "parse-fail"] {
+            let err =
+                Header::parse(&format!("// @mode: {mode}\n// @command: build\n")).unwrap_err();
+            assert!(err.contains("only allowed with `@mode: run-pass`"), "{err}");
+        }
+        let err = Header::parse("// @mode: run-pass\n// @command: link\n").unwrap_err();
+        assert_eq!(err, "unknown command `link`, expected run, test or build");
     }
 
     #[test]
@@ -561,6 +629,64 @@ mod tests {
         let root = scratch(
             "input-on-check",
             &[("c/t.cheby", "// @mode: check-pass\n"), ("c/t.stdin", "x")],
+        );
+        assert!(all(&root).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// D-1043: a test's `.env`, `KEY=VALUE` lines, read for a file test
+    /// and a package test alike; none without the file; a bad line, a
+    /// reserved key and a `.env` beside a check test are errors.
+    #[test]
+    fn ui_env_reads_key_value_lines() {
+        let root = scratch(
+            "env",
+            &[
+                ("c/on.cheby", "// @mode: run-fail\n"),
+                ("c/on.env", "CHEBY_BACKTRACE=1\n\nA=b=c\nEMPTY=\n"),
+                ("c/off.cheby", "// @mode: run-fail\n"),
+                ("c/pkg/cheby.toml", ""),
+                ("c/pkg/src/main.cheby", "// @mode: run-pass\n"),
+                ("c/pkg.env", "CHEBY_BACKTRACE=yes\r\n"),
+                ("c/bad.cheby", "// @mode: run-pass\n"),
+                ("c/bad.env", "CHEBY_BACKTRACE\n"),
+                ("c/cache.cheby", "// @mode: run-pass\n"),
+                ("c/cache.env", "CHEBY_CACHE=/tmp/x\n"),
+                ("c/nokey.cheby", "// @mode: run-pass\n"),
+                ("c/nokey.env", "=1\n"),
+            ],
+        );
+        let tests = all(&root).unwrap();
+        let env = |name: &str| tests.iter().find(|t| t.name == name).unwrap().env();
+        let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+        assert_eq!(
+            env("c/on").unwrap(),
+            [
+                pair("CHEBY_BACKTRACE", "1"),
+                pair("A", "b=c"),
+                pair("EMPTY", "")
+            ]
+        );
+        assert_eq!(env("c/off").unwrap(), []);
+        assert_eq!(env("c/pkg").unwrap(), [pair("CHEBY_BACKTRACE", "yes")]);
+        let bad = env("c/bad").unwrap_err();
+        assert!(
+            bad.ends_with("bad.env: `CHEBY_BACKTRACE` is not KEY=VALUE"),
+            "{bad}"
+        );
+        let cache = env("c/cache").unwrap_err();
+        assert!(
+            cache.contains("`CHEBY_CACHE` is the harness's own"),
+            "{cache}"
+        );
+        assert!(env("c/nokey").is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+        let root = scratch(
+            "env-on-check",
+            &[
+                ("c/t.cheby", "// @mode: check-pass\n"),
+                ("c/t.env", "A=1\n"),
+            ],
         );
         assert!(all(&root).is_err());
         std::fs::remove_dir_all(&root).unwrap();

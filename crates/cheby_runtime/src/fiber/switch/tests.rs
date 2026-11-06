@@ -2,8 +2,8 @@
 //! round trips, a million switches, the first frame of a fresh stack, any
 //! pair of contexts, migration between threads, and backtraces.
 //!
-//! `CHEBY_RT_TEST_EMULATED=1` (set by the container and Rosetta runs)
-//! keeps every check but the time bound.
+//! `CHEBY_RT_TEST_EMULATED=1` (set by the linux/amd64 container runs; macOS
+//! x86-64 is dropped, D-892) keeps every check but the time bound.
 
 #![expect(
     clippy::arithmetic_side_effects,

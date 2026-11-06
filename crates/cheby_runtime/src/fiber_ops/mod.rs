@@ -30,7 +30,9 @@
 //! `scope` would catch a panic and mislead.
 //!
 //! - [`cancel`]: cancellation (D-667, D-706): the subtree walk, the check a
-//!   fiber makes before it parks, and the publication of its wait node.
+//!   fiber makes before it parks, and the publication of its wait node;
+//!   and the kernel `sys_cancel` of `fiber::cancel` (D-1060), which walks
+//!   a scope's members but not its body.
 //! - [`select`]: the kernels of `std::selector` (D-673, D-695): building
 //!   selectors, and the select wait over several channels and a timer.
 //!
@@ -98,7 +100,8 @@
 //! root's catch point takes the report ([`cancel::take_deadlock_report`]).
 //!
 //! **Wait sites** (D-856, D-858): the five waiting kernels (`send`,
-//! `receive`, `join`, `select` and a scope's close) record the operation
+//! `receive`, `join`, `select` and a scope's close), and `std::time`'s
+//! `sys_sleep` (`crate::time`, D-1058), record the operation
 //! and the published wait frame (`ExecCtx::wait_frame`) in the fiber's
 //! scheduler block before they park (`FiberSched::note_wait`), copied at
 //! the park, and clear them when they resume; the blocking pool's park
@@ -120,6 +123,7 @@ pub(crate) mod base;
 pub(crate) mod cancel;
 pub(crate) mod channel;
 pub(crate) mod detached;
+pub(crate) mod interrupt;
 pub(crate) mod join;
 pub(crate) mod scope;
 pub(crate) mod select;
@@ -288,7 +292,7 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 13] {
+fn all() -> [Entry; 15] {
     [
         (
             "cheby_selector_sys_new",
@@ -365,6 +369,18 @@ fn all() -> [Entry; 13] {
         (
             "cheby_fiber_sys_spawn_detached",
             detached::cheby_fiber_sys_spawn_detached as *const u8,
+            &["Word"],
+            "()",
+        ),
+        (
+            "cheby_fiber_sys_cancel",
+            cancel::cheby_fiber_sys_cancel as *const u8,
+            &["Word"],
+            "()",
+        ),
+        (
+            "cheby_fiber_sys_arm_interrupt",
+            interrupt::cheby_fiber_sys_arm_interrupt as *const u8,
             &["Word"],
             "()",
         ),
@@ -460,11 +476,15 @@ impl Drop for Owned {
 }
 
 #[cfg(test)]
+mod cancel_models;
+#[cfg(test)]
 mod cancel_races;
 #[cfg(test)]
 mod cancel_tests;
 #[cfg(test)]
 pub(crate) mod detached_tests;
+#[cfg(test)]
+mod interrupt_tests;
 #[cfg(test)]
 mod models;
 #[cfg(test)]
@@ -473,6 +493,8 @@ mod root_scope_tests;
 mod select_models;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod sleep_models;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

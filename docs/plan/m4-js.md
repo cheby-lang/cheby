@@ -32,10 +32,48 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 - Callbacks from foreign code as new detached fibers (D-191).
 - IO through host asynchronous APIs, on Node first, then Deno, Bun and browsers (D-074). A standard stream that is closed or missing at start is a null device, and only failures of streams that were open at start end the program with status 1 (D-306, D-474).
 
+- The `.mjs` files of tier 3, whose bindings M3 declares, with `@async` where the host API returns a `Promise`. Every std `@async` kernel resolves with the `(kind, message)` error pair instead of rejecting (D-986). `std::http` binds `fetch` and the host's server API (D-1003).
+
 ### 4.4 Cross-target conformance
 
 - The harness runs every example on native and on Node and compares both against the same goldens.
 - The differential fuzzer compares native and JS output (testing.md §8), with the documented JS-only panics of §12.4 as the only allowed difference.
+
+### 4.5 The LSP core (M5 lane)
+
+- The LSP core lands with M4, starting no earlier than M3's third checkpoint, because it sits on the driver's front-end APIs that M3's cache rewrites. Its protocol questions are settled in its own design step ([m5-tooling.md](m5-tooling.md), D-1029).
+
+### 4.6 Context values (tier 4)
+
+- `std::context` on both targets: a context per fiber, held as a persistent map so that a spawn copies it in O(1), restored when `provide`'s body returns or unwinds, and empty at `main`, each test and each REPL entry (D-1044, ADR-0068).
+- The compile error for a call of `context::key` or `context::key_without_default` that is not a constant's whole initializer, with its code, its explanation and its UI test (D-1045).
+- `std::time`'s clocks in context, with timers left on the runtime's monotonic clock (D-1047).
+- `std::random`'s seeded stream per fiber, advanced by each host draw, and derived for a spawned fiber from its parent's state and spawn number without advancing the parent (D-1048).
+- The tests of these parts in `context.md`, `time.md` and `random.md` leave `PENDING_SPEC_TESTS` (D-741, D-1049).
+
+### 4.7 Standard-library additions after M3
+
+- The native kernels first, which need no JS work: `sys_raise` of `std::fiber`, a panic from a stored message and location in `crates/cheby_runtime/src/panic.rs` (D-1097), and `sys_send_now` and `sys_receive_now` of `std::channel` and `sys_select_now` of `std::selector`, over the runtime's existing checks of ready arms and claims of waiting fibers in `crates/cheby_runtime/src/fiber_ops/channel.rs` and the select code (D-1099). Then, in Cheby, `fiber::raise`, `fiber::map` and `fiber::try_map` over `scope`, `spawn`, a channel, S5's `fiber::cancel` and `raise` (D-1098), and `channel::send_now`, `channel::receive_now`, the type `channel::Refused` and `selector::select_now` over their kernels. A raised panic's backtrace starts with `  in fiber::raise`, with no location, and its report keeps the original location (D-1097, §11.6).
+- `fiber::yield_now` with the JS scheduler: the private `@std_context` kernel `sys_yield_now` on both targets, a real suspension point on JS that the suspension analysis counts (4.2, D-014), and `("std::fiber", "yield_now")` in `crates/cheby_mir/src/waits.rs` (D-1102, D-1059).
+- The `.mjs` side of these five kernels, bound as D-484 binds every kernel: `./fiber.mjs` `sys_raise` and `sys_yield_now`, `./channel.mjs` `sys_send_now` and `sys_receive_now`, `./selector.mjs` `sys_select_now`.
+- `./float.mjs` `to_fixed(x, digits)` (D-1085): clamp `digits` to 0 to 100; NaN gives `NaN` and the infinities `inf` and `-inf`; below 1e21 in size, `Math.abs(x).toFixed(digits)`, which is exact and rounds ties away from zero, with a `-` whenever the sign bit is set (`x < 0 || Object.is(x, -0)`); from 1e21 up, `BigInt(Math.abs(x)).toString()` with the sign, then `.` and `digits` zeros when `digits > 0`. The native kernel's tests, `to_fixed_*` in `crates/cheby_runtime/src/num/float/tests.rs`, are the table to check against.
+- `./string.mjs` `words` (D-1092): split at runs of `White_Space` with the explicit table of 25 code points that `trim`'s JS kernels share (U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000), never `\s`. The std tests "words splits at runs of White_Space" and "words keeps text that is not White_Space together" pin U+0085 and U+FEFF, and the runtime test `white_space_is_the_table_of_25_code_points` pins the table.
+- `./bytes.mjs` `index_of(data, part, from)` (D-1094): `from` clamped to 0 to the length, an empty `part` found at the clamped `from`, and O(n + m), so a linear search such as two-way or KMP, never a nested loop.
+- `duration::scale` on JS (D-1101): where the seconds of the result leave ±(2⁵³−1), it panics with `integer overflow`, as native does beyond 64 bits, so the JS side checks the safe range of its `Int` steps and reports that message, and the std test "scale panics where the result does not fit" passes on Node.
+- `random`'s `split`, `next_bool`, `choose` and `shuffle`, `channel`'s `fold`, `try_fold`, `to_list` and `send_all`, `std::base64`, `std::hex`, `to_base`, the wrapping conversions, `string::lines` and `from_bytes_lossy`, and `result`'s and `decode`'s additions are Cheby and owe M4 nothing beyond passing their tests on Node. `random`'s private `derived(generator, n)` is D-1048's derivation, for 4.6's seeded streams to reuse.
+- The tests of these functions in `fiber.md`, `channel.md` and `selector.md` leave `PENDING_SPEC_TESTS` (D-741).
+
+### 4.8 The warm restart, from M3
+
+- A design step, in an entry of its own, for a partial second check: when a warm `cheby run` or `cheby test` finds hits whose code records miss, it checks again only those modules and what their lowering needs, instead of starting again with every module parsed after D-1256's three causes. It is designed together with the work on the warm start that M3's exit reads (D-1303, D-1304).
+
+### 4.9 From M3's exit
+
+- M4's first change removes `CHEBY_POSITIONS` and D-1193's positions byte, with a gate of its own, since it moves cache keys (D-1317). `bench-compile --restarts` then needs another setting for its `settings` cause.
+- `xtask` gets the shipped allocator, so that D-1316's path reads what ships, and 20,000 is read again when it lands.
+- A same-window A/B of M2's `xtask` against M3's reads the fall of 13% to 21% against M2's exit, which sits in the back end with no cause read. Each `xtask` is built for its own tree, since a binary bakes in its repository root. It runs in a quiet window, on AC power with the lid open, since `caffeinate -ims` does not hold off clamshell sleep.
+- What a plain `fn main` does on native in a package with `targets = ["js"]`: nothing says yet, and it runs. `main_of` reads `native` only (D-1333), so it takes a target when `--target js` lands, and the rule is settled with it.
+- Doc examples as tests, from `docs/plan/m5-tooling.md`, are generated bodies, so that slice looks at D-1328's rule.
 
 ## Exit criteria
 
@@ -43,3 +81,5 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 - Channel closing and handle drops happen at the same points on both targets, checked by dedicated UI run tests.
 - An edit to one function body regenerates only the JS of functions whose suspension status or IR changed.
 - Deno and Bun run the conformance suite in CI. Browser support is checked with a smoke test.
+- `std::context`, clocks in context and seeded random streams pass their spec tests on native and on Node (D-1049).
+- `fiber::raise`, `map`, `try_map` and `yield_now`, `channel::send_now` and `receive_now`, and `selector::select_now` pass their spec tests on native and on Node, and the JS kernels of `float::to_fixed`, `string::words` and `bytes::index_of`, and `duration::scale`'s safe-range check, pass the std tests on Node (D-1085, D-1092, D-1094, D-1097 to D-1099, D-1101, D-1102).

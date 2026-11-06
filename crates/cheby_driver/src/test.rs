@@ -73,9 +73,7 @@ use cheby_types::thir;
 
 use crate::backend::{self, Roots, TestRoot};
 use crate::frontend::{self, Frontend};
-use crate::{
-    CheckOutput, Error, Module, Package, front_end, parse_file, parse_module_path, std_lib,
-};
+use crate::{CheckOutput, Error, Module, Package, parse_file, parse_module_path, std_lib};
 
 /// Which tests `cheby test` runs (D-541).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -374,11 +372,62 @@ pub(crate) fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 /// the package (D-597), and an [`Error`] for internal
 /// failures.
 pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests, Error> {
+    prepare_test_inner(root, options, None)
+}
+
+/// [`prepare_test`] through the build cache, as `cheby test` runs it
+/// (D-955, D-965); what it prints and runs is the cacheless build's
+/// (D-268).
+///
+/// # Errors
+///
+/// As [`prepare_test`].
+pub fn prepare_test_cached(
+    root: &Path,
+    options: &TestOptions,
+    cache: &crate::Cache,
+) -> Result<PreparedTests, Error> {
+    prepare_test_inner(root, options, Some(cache))
+}
+
+fn prepare_test_inner(
+    root: &Path,
+    options: &TestOptions,
+    cache: Option<&crate::Cache>,
+) -> Result<PreparedTests, Error> {
+    // D-1250: a warm `cheby test` checks only what its build needs; a build
+    // that then wants a hit's body starts again with every module checked.
+    match prepare_test_once(root, options, cache, Some(options.reuse_report)) {
+        Err(crate::Restart::Again(mark)) => {
+            crate::rollback_log(cache, mark);
+            prepare_test_once(root, options, cache, None).map_err(crate::Restart::into_error)
+        }
+        other => other.map_err(crate::Restart::into_error),
+    }
+}
+
+/// One attempt of [`prepare_test_inner`], `warm` as
+/// `crate::front_end_family`'s.
+fn prepare_test_once(
+    root: &Path,
+    options: &TestOptions,
+    cache: Option<&crate::Cache>,
+    warm: Option<bool>,
+) -> Result<PreparedTests, crate::Restart> {
+    let mark = crate::log_mark(cache);
     let mut out = CheckOutput {
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = front_end(root, frontend::Mode::Build, &mut out)?;
+    let front = crate::front_end_family(
+        root,
+        frontend::Mode::Build,
+        crate::cache::index::CommandFamily::Test,
+        None,
+        &mut out,
+        cache,
+        warm.map(|reuse| (reuse, None)),
+    )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
         return Ok(PreparedTests::CompileFailed(out));
@@ -393,9 +442,9 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
                 .iter()
                 .any(|(module_path, _)| within(module_path, &path));
             if !exists {
-                return Err(Error::new(format!(
-                    "there is no module `{path}` in this package"
-                )));
+                return Err(
+                    Error::new(format!("there is no module `{path}` in this package")).into(),
+                );
             }
             Some(path)
         }
@@ -405,11 +454,12 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
     let mut tests = Vec::new();
     let mut filtered_out: usize = 0;
     for (path, module) in local_modules(&front) {
-        let Some(checked) = front.checked(module) else {
+        // A warm hit's tests come from its warm facts (D-1250).
+        let Some(module_tests) = front.tests_of(module) else {
             continue;
         };
         let shown = path.to_string();
-        for test in checked.thir.tests.iter().filter(|t| on_native(&front, t)) {
+        for test in module_tests.iter().filter(|t| on_native(&front, t)) {
             let in_scope = scope.as_ref().is_none_or(|scope| within(&path, scope));
             if in_scope && matches_filter(&shown, &test.name, options.filter.as_deref()) {
                 roots.push(TestRoot { module, test });
@@ -427,13 +477,18 @@ pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests,
     let jit = if roots.is_empty() {
         None
     } else {
-        let built = backend::build_reporting(
+        let built = match backend::build_reporting(
             &front,
             &out.sources,
             Roots::Tests(roots),
             false,
             options.reuse_report,
-        )?;
+        ) {
+            Err(_) if warm.is_some() && front.wanted_body() => {
+                return Err(crate::Restart::Again(mark));
+            }
+            built => built?,
+        };
         match built {
             Ok(built) => {
                 reuse_report = built.reuse_report.unwrap_or_default();
@@ -514,6 +569,11 @@ impl TestProgram {
         err: &mut dyn Write,
         hooks: &mut Hooks,
     ) -> Result<TestReport, Error> {
+        // D-1067 (S3, D-1206): the run's temporary
+        // root, given to the runtime before any test runs and removed with
+        // what the tests left when it drops, after the runtime, on every
+        // path; without it, scratch directories use the host's directory.
+        let _temp_root = cheby_runtime::file::TestRoot::create().ok();
         // `env::program_name()` is the package name, as under `cheby run`
         // (D-369, D-578).
         let runtime = test_runtime(&self.package, self.stacks, self.threads)?;
@@ -852,12 +912,18 @@ impl Runner<'_, '_> {
             let base = Base::of(&domain);
             let entry = self.jit.entry(EntryKind::Test(def_of(test)))?;
             let outcome = match entry.run(&self.config(&domain))? {
-                // A write failed (D-306, D-709): the entry thread is parked
-                // for good, so the JIT's code it may run is kept (leaked)
-                // for the rest of the process.
+                // A write failed (D-306, D-709), or the test called
+                // `process::exit` (D-1023): the entry thread is parked for
+                // good, so the JIT's code it may run is kept (leaked) for
+                // the rest of the process. An exit fails only this test.
                 EntryOutcome::Exited(status) => {
                     std::mem::forget(self.jit.code_token());
-                    return Ok(RunEnd::Exited { index, status });
+                    match cheby_runtime::process::take_test_exit() {
+                        Some(exited) => {
+                            TestOutcome::Failed(cheby_runtime::process::test_exit_report(exited))
+                        }
+                        None => return Ok(RunEnd::Exited { index, status }),
+                    }
                 }
                 outcome => judge(outcome, &domain, base, false)?,
             };
@@ -1396,7 +1462,7 @@ fn codes_in(front: &Frontend, module: ModuleId, diagnostics: &[Diagnostic]) -> O
 
 /// An in-memory package whose root module imports every shipped std
 /// module, so that one front-end run checks them all.
-fn std_test_package(
+pub(crate) fn std_test_package(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Package, Error> {
@@ -1410,6 +1476,7 @@ fn std_test_package(
     for module in std_lib::STD_MODULES {
         let _ = writeln!(text, "import std::{}", module.path);
     }
+    let hashes = crate::SourceHashes::of(text.as_bytes());
     let source = parse_file(sources, "src/main.cheby", text.into_bytes(), diagnostics)?;
     if source.has_syntax_errors {
         return Err(Ice::new("the std self-test's root module does not parse").into());
@@ -1420,6 +1487,10 @@ fn std_test_package(
         modules: vec![Module {
             path: ModulePath::root(STD_TEST_PACKAGE),
             source,
+            hashes,
+            parsed: true,
+            // `test_std` uses no cache, the only reader of these.
+            syntax_diagnostics: Vec::new(),
         }],
     })
 }
@@ -1664,13 +1735,22 @@ mod runner_tests {
 
     use super::{Hooks, PreparedTests, TestOptions, TestOutcome, TestProgram, prepare_test};
 
-    /// `pause(ms)`, which waits on a timer, and a kernel bound so that its
-    /// new `String` leaks (as `tests/ui/13-tooling/test/leak.cheby` does).
+    /// `pause(ms)`, which waits on a timer. A test that must leak sends a
+    /// channel's own receiver into it (`MAIL` and `LEAK`, as
+    /// `tests/ui/13-tooling/test/leak.cheby` does): binding a kernel to drop
+    /// its result is E0055 since D-944.
     const HELPERS: &str = "import std::duration\nimport std::selector\n\n\
-         @external(native, \"cheby_env_program_name\")\nfn program_name_dropped() -> Nil\n\n\
          fn pause(ms: Int) -> Nil {\n  selector::new()\n  \
          |> selector::after(_, duration::milliseconds(ms), fn() { Nil })\n  \
          |> selector::select\n}\n\n";
+
+    /// A type whose value holds a channel's receiver: sent into its own
+    /// channel, it keeps the channel alive forever, a leak the spec
+    /// documents (§9.6, D-029). Needs `import std::channel`.
+    const MAIL: &str = "type Mail {\n  Mail(channel::Receiver<Mail>)\n}\n\n";
+
+    /// The statements of a test that leaks a receiver ([`MAIL`]).
+    const LEAK: &str = "  let (tx, rx) = channel::new(1)\n  let _ = channel::send(tx, Mail(rx))\n";
 
     /// A package `app` in a fresh temporary directory whose root module
     /// holds [`HELPERS`], then `body`, compiled with every test selected,
@@ -1856,11 +1936,14 @@ mod runner_tests {
         ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
     )]
     fn runner_checks_each_test_on_its_own_domain() {
-        let body = "fn churn(n: Int, total: Int) -> Int {\n  case n {\n    0 => total\n    \
-             _ => churn(n - 1, total + string::length(\"item {n}\"))\n  }\n}\n\n\
-             test \"churns a million strings\" {\n  assert churn(1000000, 0) > 0\n}\n\n\
-             @target(native)\ntest \"leaks a string\" {\n  program_name_dropped()\n  pause(50)\n}\n";
-        let (dir, program) = program("domains", "import std::string\n", body, 2);
+        let body = format!(
+            "{MAIL}fn churn(n: Int, total: Int) -> Int {{\n  case n {{\n    0 => total\n    \
+             _ => churn(n - 1, total + string::length(\"item {{n}}\"))\n  }}\n}}\n\n\
+             test \"churns a million strings\" {{\n  assert churn(1000000, 0) > 0\n}}\n\n\
+             test \"leaks a receiver\" {{\n{LEAK}  pause(50)\n}}\n"
+        );
+        let imports = "import std::channel\nimport std::string\n";
+        let (dir, program) = program("domains", imports, &body, 2);
         let mut hooks = Hooks {
             domains: Some(Vec::new()),
             ..Hooks::default()
@@ -1868,8 +1951,11 @@ mod runner_tests {
         let (text, outcomes) = run(program, &mut hooks);
         let leak_check = cheby_runtime::LEAK_CHECK_ENABLED;
         let leaked = if leak_check {
+            // The receiver and the `Mail` that holds it (D-784's line).
             TestOutcome::Failed(
-                "error: leak check failed: 1 object is still live at exit\n".to_owned(),
+                "error: leak check failed: 2 objects are still live at exit\n\
+                 note: leaked 1 <Receiver>, and 1 object of other kinds\n"
+                    .to_owned(),
             )
         } else {
             TestOutcome::Passed
@@ -1878,7 +1964,7 @@ mod runner_tests {
             outcomes,
             [
                 ("churns a million strings".to_owned(), TestOutcome::Passed),
-                ("leaks a string".to_owned(), leaked),
+                ("leaks a receiver".to_owned(), leaked),
             ],
             "{text}"
         );
@@ -1896,15 +1982,17 @@ mod runner_tests {
         ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
     )]
     fn runner_skips_only_the_check_of_the_test_refused_memory() {
-        let body = "@target(native)\nfn ask(done: channel::Sender<Nil>) -> Int {\n  let _ = done\n  \
-             string::length(string::repeat(\"x\", 1152921504606846976))\n}\n\n\
-             @target(native)\ntest \"a is refused memory\" {\n  let (done_tx, done_rx) = channel::new::<Nil>(1)\n  \
-             fiber::spawn_detached(fn() { ask(done_tx) })\n  \
-             assert channel::receive(done_rx) == Err(Nil)\n}\n\n\
-             @target(native)\ntest \"b leaks a string\" {\n  program_name_dropped()\n  pause(50)\n}\n\n\
-             test \"c is clean\" {\n  assert True\n}\n";
+        let body = format!(
+            "{MAIL}@target(native)\nfn ask(done: channel::Sender<Nil>) -> Int {{\n  let _ = done\n  \
+             string::length(string::repeat(\"x\", 1152921504606846976))\n}}\n\n\
+             @target(native)\ntest \"a is refused memory\" {{\n  let (done_tx, done_rx) = channel::new::<Nil>(1)\n  \
+             fiber::spawn_detached(fn() {{ ask(done_tx) }})\n  \
+             assert channel::receive(done_rx) == Err(Nil)\n}}\n\n\
+             test \"b leaks a receiver\" {{\n{LEAK}  pause(50)\n}}\n\n\
+             test \"c is clean\" {{\n  assert True\n}}\n"
+        );
         let imports = "import std::channel\nimport std::fiber\nimport std::string\n";
-        let (dir, program) = program("refused", imports, body, 3);
+        let (dir, program) = program("refused", imports, &body, 3);
         let mut hooks = Hooks {
             domains: Some(Vec::new()),
             ..Hooks::default()
@@ -1919,7 +2007,7 @@ mod runner_tests {
             passed,
             [
                 ("a is refused memory", true),
-                ("b leaks a string", !leak_check),
+                ("b leaks a receiver", !leak_check),
                 ("c is clean", true),
             ],
             "{text}"

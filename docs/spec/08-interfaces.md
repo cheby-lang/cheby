@@ -58,9 +58,11 @@ _Example:_ a `pub` type whose `show` is only package-visible does not satisfy `S
 
 ```cheby
 // geometry/angle.cheby
-pub type Angle { radians: Float }
+pub type Angle {
+  radians: Float,
+}
 
-fn show(a: Angle) -> String {   // package-visible, less visible than Angle
+fn show(a: Angle) -> String { // package-visible, less visible than Angle
   "{a.radians} rad"
 }
 ```
@@ -73,7 +75,10 @@ Function names in a module are unique and never overloaded, so a module can sati
 
 ```cheby
 // geometry/point.cheby
-pub type Point { x: Float, y: Float }
+pub type Point {
+  x: Float,
+  y: Float,
+}
 
 pub fn show(p: Point) -> String {
   "({p.x}, {p.y})"
@@ -186,8 +191,8 @@ A value becomes a `dyn I` implicitly: a value of a type satisfying `I` is packag
 Every `dyn` value carries, next to its packaged functions, a runtime **type descriptor** of its underlying value's full type, including all type arguments (D-236). Descriptors identify nominal types exactly: two declarations with the same shape, or types with the same name in different modules or packages, including different major versions of the same package ([§7.1](07-modules-and-packages.md#71-packages)), have different descriptors ([§3.11](03-types.md#311-user-defined-types-and-aliases)). An alias has the descriptor of the aliased type, and a type redefined in the REPL gets a new descriptor ([§13.5.2](13-tooling.md#1352-redefinition)) (D-043).
 
 - Two `dyn I` values are equal under `==` when their descriptors are equal and their underlying values are structurally equal. Values of different types are never equal, even when they print the same.
-- Descriptors are equal when they name the same nominal type with equal argument descriptors. They are compared by structure, never by address, so a descriptor built at run time equals a static one for the same type (D-530). A nominal type is identified by its declaration, not by its name and module path, so a type redefined in the REPL or a type of another major version of a package is a different type even under the same name (D-582).
-- Hashing a `dyn` value combines the hash of its descriptor with the hash of its value (D-530), so equal `dyn` values hash equally, and `dyn` values can be `Map` keys and `Set` elements. A descriptor hashes the names and module paths of its nominal types and never an address, so two different types with one name merely collide (D-582).
+- Descriptors are equal when they name the same nominal type with equal argument descriptors. They are compared by structure, never by address, so a descriptor built at run time equals a static one for the same type (D-530). A nominal type is identified by its declaration, not by its name and module path as written, so a type redefined in the REPL or a type of another major version of a package is a different type even under the same name (D-1312).
+- Hashing a `dyn` value combines the hash of its descriptor with the hash of its value (D-530), so equal `dyn` values hash equally, and `dyn` values can be `Map` keys and `Set` elements. A descriptor hashes the names and module paths of its nominal types and never an address (D-1312).
 - If the comparison or the hash reaches a function value or a handle inside the value, it panics, as for any other value ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)) (D-233).
 
 ```cheby
@@ -204,9 +209,20 @@ For a type known at the conversion, the compiler supplies the descriptor statica
 ```cheby
 interface Any
 
-fn wrap<T: Any>(xs: List<T>) -> dyn Any { xs }      // OK: `T`'s descriptor comes from its bound
-fn label<T: Show>(xs: List<T>) -> dyn Show { xs }   // OK: the `Show` bound carries it
-fn wrap_bad<T>(xs: List<T>) -> dyn Any { xs }       // error: `T` has no bound, add one such as `T: Any`
+// OK: `T`'s descriptor comes from its bound
+fn wrap<T: Any>(xs: List<T>) -> dyn Any {
+  xs
+}
+
+// OK: the `Show` bound carries it
+fn label<T: Show>(xs: List<T>) -> dyn Show {
+  xs
+}
+
+// error: `T` has no bound, add one such as `T: Any`
+fn wrap_bad<T>(xs: List<T>) -> dyn Any {
+  xs
+}
 ```
 
 The check that a converted value's type satisfies `I`, and the choice of its function package and descriptor, are constraints resolved at the end of the enclosing top-level body, after numeric literals are defaulted, like operators and interface calls ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234, D-237). After `let x = 1` and `let d: dyn Show = x`, a later use of `x` as a `U8` gives `d` the descriptor of `U8` and `U8`'s `show`. If the converted value's type is still not fully known at the end, as in `let a: dyn Any = []` or `let b: dyn Any = None` with nothing fixing the element type, it is a compile error that asks for a type annotation. Only numeric literals are defaulted.

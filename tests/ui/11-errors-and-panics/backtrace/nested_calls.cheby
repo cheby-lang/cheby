@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! With `CHEBY_BACKTRACE=1`, a panic's report is followed by its
+//! backtrace: the panicking function at the report's location, a closure
+//! under its owner's name, a std function without a position, no line for
+//! the frame that `list::map`'s tail call replaced, and each caller at its
+//! call (§11.6).
+
+import std::io
+import std::list
+
+fn check(n: Int) -> Int {
+  case {
+    n > 2 => panic as "too big: {n}"
+    _ => n * 2
+  }
+}
+
+fn double_all(xs: List<Int>) -> List<Int> {
+  let doubled = list::map(xs, fn(n) { 1 + check(n) })
+  doubled
+}
+
+fn main() {
+  let doubled = double_all([1, 2, 3])
+  let count = list::length(doubled)
+  io::println("{count}")
+}

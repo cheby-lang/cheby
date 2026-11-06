@@ -679,6 +679,8 @@ error[E0036]: `1` is not a semantic version
     );
 }
 
+/// The unknown key's help lists every key (D-444), `[native]` last since
+/// D-940 added it.
 #[test]
 fn missing_keys_and_wrong_types() {
     let (manifest, rendered) = parse("targets = \"native\"\ncolour = 1\n");
@@ -704,7 +706,7 @@ error[E0036]: unknown key `colour` in `cheby.toml`
 2 | colour = 1
   | ^^^^^^ unknown key
   |
-  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]`, `[const-eval]` and `[runtime]`
+  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]`, `[const-eval]`, `[runtime]` and `[native]`
 
 "
     );
@@ -785,4 +787,201 @@ fn dependencies_are_read_then_rejected() {
             "missing {expected:?} in\n{rendered}"
         );
     }
+}
+
+/// Writes `cheby.toml` with `text` and the files `files` (empty) into a
+/// fresh package directory, loads the manifest and renders its
+/// diagnostics.
+fn load_native(name: &str, text: &str, files: &[&str]) -> (PathBuf, Option<Manifest>, String) {
+    let root = temp_dir(name);
+    write(&root, files);
+    std::fs::write(root.join(MANIFEST_FILE), text).unwrap();
+    let mut sources = SourceMap::new();
+    let mut diags = Vec::new();
+    let manifest = Manifest::load(&root, &mut sources, &mut diags).unwrap();
+    sources.sort(&mut diags);
+    let rendered = render_all(&diags, &sources);
+    (root, manifest, rendered)
+}
+
+const NATIVE_HEAD: &str = "name = \"app\"\nversion = \"0.1.0\"\n";
+
+#[test]
+fn manifest_native_table_is_read_in_order() {
+    let text = format!(
+        "{NATIVE_HEAD}\n[native]\nsources = [\"src/b.c\", \"src/ffi/a.c\"]\n\
+         libraries = [\"sqlite3\", \"m\", \"stdc++\", \"gtk-3.0\", \"a_b\"]\n"
+    );
+    let (root, manifest, rendered) = load_native("native_ok", &text, &["src/b.c", "src/ffi/a.c"]);
+    assert_eq!(rendered, "");
+    let native = manifest.unwrap().native.unwrap();
+    assert_eq!(native.sources, ["src/b.c", "src/ffi/a.c"]);
+    assert_eq!(
+        native.libraries,
+        ["sqlite3", "m", "stdc++", "gtk-3.0", "a_b"]
+    );
+    assert!(!native.is_empty());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn manifest_native_absent_or_empty() {
+    let (manifest, rendered) = parse(NATIVE_HEAD);
+    assert_eq!(rendered, "");
+    assert_eq!(manifest.unwrap().native, None);
+    let (manifest, rendered) = parse(&format!("{NATIVE_HEAD}[native]\n"));
+    assert_eq!(rendered, "");
+    assert!(manifest.unwrap().native.unwrap().is_empty());
+}
+
+#[test]
+fn manifest_native_unknown_key_and_wrong_types() {
+    let (manifest, rendered) = parse(&format!(
+        "{NATIVE_HEAD}\n[native]\nsources = \"src/a.c\"\nlibraries = [\"m\", 3]\nheaders = []\n"
+    ));
+    assert_eq!(manifest.unwrap().native, None);
+    assert_eq!(
+        rendered,
+        "\
+error[E0036]: `sources` must be a list of strings
+ --> cheby.toml:5:11
+  |
+5 | sources = \"src/a.c\"
+  |           ^^^^^^^^^ this is a string
+
+error[E0036]: a library must be a string
+ --> cheby.toml:6:19
+  |
+6 | libraries = [\"m\", 3]
+  |                   ^ this is an integer
+
+error[E0036]: unknown key `headers` in `[native]`
+ --> cheby.toml:7:1
+  |
+7 | headers = []
+  | ^^^^^^^ unknown key
+  |
+  = help: the keys are `sources` and `libraries`
+
+"
+    );
+    let (_, rendered) = parse(&format!("{NATIVE_HEAD}native = [\"a.c\"]\n"));
+    assert!(
+        rendered.contains("error[E0036]: `native` must be a table"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn manifest_native_sources_must_be_c_files_inside() {
+    let text = format!(
+        "{NATIVE_HEAD}\n[native]\nsources = [\"src/a.h\", \"../x.c\", \"src/../../y.c\", \
+         \"/abs/z.c\", \"src/missing.c\", \"src/dir.c\", \"./src/ok.c\"]\n"
+    );
+    let (root, manifest, rendered) =
+        load_native("native_sources", &text, &["src/ok.c", "src/dir.c/keep"]);
+    assert_eq!(manifest.unwrap().native, None);
+    for expected in [
+        "error[E0036]: `src/a.h` is not a C source",
+        "= help: list only the `.c` files to compile; the compiler finds headers through `#include`",
+        "error[E0036]: the C source `../x.c` is outside the package",
+        "error[E0036]: the C source `src/../../y.c` is outside the package",
+        "= note: a C source must stay inside the package once `..` and symbolic links are resolved",
+        "error[E0036]: the C source `/abs/z.c` must be a path relative to the package root",
+        "error[E0036]: the C source `src/missing.c` does not exist",
+        "error[E0036]: the C source `src/dir.c` is not a file",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected:?} in\n{rendered}"
+        );
+    }
+    assert!(!rendered.contains("`./src/ok.c`"), "{rendered}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// D-940: a source that a symbolic link takes outside the package is
+/// E0036. The UI harness copies a link as the file it points to, so this
+/// rule is pinned here.
+#[cfg(unix)]
+#[test]
+fn manifest_native_symlink_outside_the_package() {
+    let outside = temp_dir("native_link_target");
+    std::fs::write(outside.join("real.c"), "int x;\n").unwrap();
+    let text = format!("{NATIVE_HEAD}\n[native]\nsources = [\"src/link.c\", \"src/in.c\"]\n");
+    let root = temp_dir("native_link");
+    write(&root, &["src/real_in.c"]);
+    std::os::unix::fs::symlink(outside.join("real.c"), root.join("src/link.c")).unwrap();
+    // A link that stays inside is fine.
+    std::os::unix::fs::symlink(root.join("src/real_in.c"), root.join("src/in.c")).unwrap();
+    std::fs::write(root.join(MANIFEST_FILE), &text).unwrap();
+    let mut sources = SourceMap::new();
+    let mut diags = Vec::new();
+    let manifest = Manifest::load(&root, &mut sources, &mut diags).unwrap();
+    sources.sort(&mut diags);
+    assert_eq!(manifest.unwrap().native, None);
+    assert_eq!(
+        render_all(&diags, &sources),
+        "\
+error[E0036]: the C source `src/link.c` is outside the package
+ --> cheby.toml:5:12
+  |
+5 | sources = [\"src/link.c\", \"src/in.c\"]
+  |            ^^^^^^^^^^^^
+  |
+  = note: a C source must stay inside the package once `..` and symbolic links are resolved
+
+"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
+}
+
+#[test]
+fn manifest_native_library_names() {
+    let (manifest, rendered) = parse(&format!(
+        "{NATIVE_HEAD}\n[native]\nlibraries = [\"sqlite3 m\", \"\", \"-lm\", \"a/b\", \"ok.1+x\"]\n"
+    ));
+    assert_eq!(manifest.unwrap().native, None);
+    for expected in [
+        "error[E0036]: `sqlite3 m` is not a valid library name",
+        "error[E0036]: a library name must not be empty",
+        "error[E0036]: `a/b` is not a valid library name",
+        "= help: write the name the linker takes after `-l`, such as `\"sqlite3\"`, in letters, digits, `_`, `-`, `.` and `+`; give each library its own string",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected:?} in\n{rendered}"
+        );
+    }
+    // `-lm` is made of allowed characters, so it is a name (the linker
+    // then looks for `--lm`); `ok.1+x` is fine.
+    assert!(!rendered.contains("`-lm`"), "{rendered}");
+    assert!(!rendered.contains("`ok.1+x`"), "{rendered}");
+}
+
+#[test]
+fn manifest_native_needs_the_native_target() {
+    let (manifest, rendered) = parse(&format!(
+        "{NATIVE_HEAD}targets = [\"js\"]\n\n[native]\nlibraries = [\"m\"]\n"
+    ));
+    assert_eq!(manifest.unwrap().native, None);
+    assert_eq!(
+        rendered,
+        "\
+error[E0036]: `[native]` is not allowed in a package that does not target `native`
+ --> cheby.toml:5:2
+  |
+5 | [native]
+  |  ^^^^^^
+  |
+  = help: add `\"native\"` to `targets`, or remove `[native]`
+
+"
+    );
+    let (manifest, rendered) = parse(&format!(
+        "{NATIVE_HEAD}targets = [\"native\"]\n\n[native]\nlibraries = [\"m\"]\n"
+    ));
+    assert_eq!(rendered, "");
+    assert_eq!(manifest.unwrap().native.unwrap().libraries, ["m"]);
 }

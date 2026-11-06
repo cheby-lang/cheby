@@ -22,6 +22,12 @@ pub enum ScopeSource {
     Prelude,
     /// A prelude type re-exported by its home module (D-447).
     HomeReexport,
+    /// An item a REPL session's import can no longer bind, because a
+    /// `:reload` removed it or made it private (§13.5.3). The name stays
+    /// taken, so it hides the prelude as the import did, and
+    /// [`ModuleScope::get`] does not find it, so each use is an unknown
+    /// name.
+    Withdrawn,
 }
 
 /// One name of the module scope.
@@ -48,7 +54,9 @@ pub struct ModuleScope {
 impl ModuleScope {
     #[must_use]
     pub fn get(&self, ns: Namespace, name: Name) -> Option<&ScopeEntry> {
-        self.map(ns).get(&name)
+        self.map(ns)
+            .get(&name)
+            .filter(|entry| entry.source != ScopeSource::Withdrawn)
     }
 
     /// Whether an import of `name` collided with another name (E0041).
@@ -121,7 +129,12 @@ pub(crate) fn build(
                     {
                         diags.push(prelude.hiding(input, hidden, name, span, true));
                     }
-                    insert_import(&mut scope, input, binding, n, diags);
+                    let source = if request.session && res == Res::Err {
+                        ScopeSource::Withdrawn
+                    } else {
+                        ScopeSource::Import(n)
+                    };
+                    insert_import(&mut scope, input, binding, source, diags);
                 }
             }
             continue;
@@ -134,7 +147,7 @@ pub(crate) fn build(
             &mut scope,
             input,
             (Namespace::Value, name, span, res),
-            n,
+            ScopeSource::Import(n),
             diags,
         );
     }
@@ -312,12 +325,12 @@ fn insert_import(
     scope: &mut ModuleScope,
     input: &ResolveInput<'_>,
     (ns, name, span, res): (Namespace, Name, Span, Res),
-    n: usize,
+    source: ScopeSource,
     diags: &mut Vec<Diagnostic>,
 ) {
     let entry = ScopeEntry {
         res,
-        source: ScopeSource::Import(n),
+        source,
         span: Some(span),
     };
     match scope.map(ns).get(&name) {
@@ -348,8 +361,16 @@ fn insert_import(
                     diag
                 }
             };
+            // The imports a REPL session adds to an entry may collide: the
+            // newest stands and this report is not the entry's (`repl.rs`),
+            // so nothing explains a later use but what the use reports.
+            if diag
+                .primary_span()
+                .is_some_and(|at| at.file == input.tree.file())
+            {
+                scope.conflicts.insert(name);
+            }
             diags.push(diag.with_help("give the import another name with `as`"));
-            scope.conflicts.insert(name);
         }
         None => {
             scope.map_mut(ns).insert(name, entry);

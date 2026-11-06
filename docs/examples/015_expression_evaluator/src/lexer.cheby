@@ -9,13 +9,16 @@
 //! The parser therefore always has a token to look at, and an error at
 //! the end of a line still has a position.
 
+import expression_evaluator::expr
 import std::int
 import std::list
 import std::string
-import expression_evaluator::expr
 
 /// A token and the position where it starts.
-type Token { kind: Kind, position: Int }
+type Token {
+  kind: Kind,
+  position: Int,
+}
 
 /// What kind of token it is.
 type Kind {
@@ -38,7 +41,10 @@ type Kind {
 }
 
 /// Why a line cannot be split into tokens, and where.
-type LexError { position: Int, problem: Problem }
+type LexError {
+  position: Int,
+  problem: Problem,
+}
 
 /// What is wrong with the line.
 type Problem {
@@ -185,7 +191,13 @@ test "every operator, parenthesis and = is a token of its own" {
 
 test "let is a keyword only as a whole word" {
   let assert Ok(tokens) = tokenize("letter let_1 let _x2")
-  assert list::map(tokens, fn(token) { token.kind }) == [Name("letter"), Name("let_1"), Let, Name("_x2"), End]
+  assert list::map(tokens, fn(token) { token.kind }) == [
+    Name("letter"),
+    Name("let_1"),
+    Let,
+    Name("_x2"),
+    End,
+  ]
 }
 
 test "a blank line is just its end" {
@@ -207,7 +219,8 @@ test "names are ASCII only" {
 }
 
 test "lex errors show as messages for the user" {
-  assert show(LexError { position: 2, problem: UnexpectedChar("#") }) == "unexpected character \"#\" at column 3"
+  assert show(LexError { position: 2, problem: UnexpectedChar("#") }) ==
+    "unexpected character \"#\" at column 3"
   let too_large = LexError { position: 4, problem: NumberTooLarge("99999999999999999999") }
   assert show(too_large) == "the number 99999999999999999999 is too large at column 5"
 }

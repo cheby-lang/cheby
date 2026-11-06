@@ -1,0 +1,2 @@
+panicked at tests/ui/13-tooling/build/native_null_result/src/main.cheby:13:4:
+foreign function `app_name` returned null

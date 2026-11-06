@@ -410,9 +410,10 @@ static BAG: CustomKind = CustomKind {
     shape: layout::KindShape::Opaque,
 };
 
-/// An id unused by every runtime module (45 to 63 are free; 40 to 44 are
-/// the handle kinds).
-const BAG_ID: abi::LayoutId = 46;
+/// An id unused by every runtime module (40 to 44, 46 and 47 are the
+/// handle kinds, 45 is reserved for `File`, D-982; 60 to 63 stay free of
+/// them).
+const BAG_ID: abi::LayoutId = 60;
 
 fn bag(items: &[Word]) -> Word {
     layout::register_builtin(BAG_ID, LayoutInfo::custom(&BAG)).unwrap();

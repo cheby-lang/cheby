@@ -31,7 +31,7 @@
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
@@ -99,6 +99,10 @@ pub(crate) struct Pool {
     /// A test hook: the system refuses every new thread.
     #[cfg(test)]
     refuse: AtomicBool,
+    /// A test hook: a refusal waits until the queue holds this many jobs
+    /// (0: it does not wait).
+    #[cfg(test)]
+    refuse_until_queued: AtomicUsize,
 }
 
 impl std::fmt::Debug for Pool {
@@ -130,6 +134,8 @@ impl Pool {
             idle_exit,
             #[cfg(test)]
             refuse: AtomicBool::new(false),
+            #[cfg(test)]
+            refuse_until_queued: AtomicUsize::new(0),
         }
     }
 
@@ -150,6 +156,15 @@ impl Pool {
     #[cfg(test)]
     pub(crate) fn refuse_threads(&self, refuse: bool) {
         self.refuse.store(refuse, Ordering::SeqCst);
+    }
+
+    /// A test hook: while threads are refused, each refusal waits until
+    /// the queue holds `jobs` jobs, at most `testing::hang`, so that a job
+    /// submitted meanwhile is queued behind the refused one and handed
+    /// back with it (D-817). 0 turns the wait off.
+    #[cfg(test)]
+    pub(crate) fn refuse_until_queued(&self, jobs: usize) {
+        self.refuse_until_queued.store(jobs, Ordering::SeqCst);
     }
 
     /// The threads started and not ended.
@@ -197,6 +212,14 @@ impl Pool {
     fn start_thread(&'static self) -> std::io::Result<()> {
         #[cfg(test)]
         if self.refuse.load(Ordering::SeqCst) {
+            let jobs = self.refuse_until_queued.load(Ordering::SeqCst);
+            let started = std::time::Instant::now();
+            // The queue's lock is not held here (`submit` released it).
+            while self.state.lock().queue.len() < jobs
+                && started.elapsed() < crate::sched::testing::hang()
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
             return Err(std::io::Error::other("a refused thread (test hook)"));
         }
         std::thread::Builder::new()

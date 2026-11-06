@@ -44,8 +44,11 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::scope::ScopeState;
+use crate::abi::Word;
 use crate::ctx::{self, ExecCtx, reason};
 use crate::sched::{FiberRef, WaitHeader, wake};
+use crate::unwind::guard::guarded;
+use crate::unwind::raise::raise_cancel;
 
 /// A fiber must unwind for a cancellation ([`check`], [`publish`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +125,16 @@ pub(super) fn reach(fiber: &ExecCtx, target: &Arc<ScopeState>) -> bool {
     locked.wait.as_ref().is_some_and(|node| {
         // SAFETY: a published node is live while its fiber's lock is held
         // (module documentation).
-        unsafe { node.0.as_ref() }.try_cancel()
+        let header = unsafe { node.0.as_ref() };
+        let won = header.try_cancel();
+        if won && header.is_on_pool() {
+            // A fiber waiting on a detached pool job (D-1065): its mark is
+            // cleared before the wake, as the job's completion clears it
+            // (D-814), so a teardown never counts the woken fiber as
+            // blocked while it waits in a run queue.
+            fiber.sched.set_blocking(false);
+        }
+        won
     })
 }
 
@@ -140,18 +152,101 @@ pub(super) fn reach(fiber: &ExecCtx, target: &Arc<ScopeState>) -> bool {
 /// teardown's walk of that base reaches it (D-669,
 /// D-798). Entered with no runtime lock held.
 pub(crate) fn cancel(target: &Arc<ScopeState>) {
-    let mut scopes = vec![Arc::clone(target)];
-    let mut won: Vec<FiberRef> = Vec::new();
+    walk(target, vec![Arc::clone(target)], Vec::new());
+}
+
+/// The walk's loop over the worklist `scopes` for a cancellation that
+/// targets `target`, after waking `won`, the fibers whose node a first step
+/// won ([`cancel`], [`cancel_spawned`]).
+fn walk(target: &Arc<ScopeState>, mut scopes: Vec<Arc<ScopeState>>, mut won: Vec<FiberRef>) {
+    wake_won(&mut won);
     while let Some(scope) = scopes.pop() {
         scope.cancel_step(target, &mut won, &mut scopes);
-        // The scope's lock is released: wake outside every lock.
-        for fiber in won.drain(..) {
-            // SAFETY: the walk won the fiber's node, so the fiber is parked
-            // or parking on it and nothing else wakes it: it cannot run, so
-            // cannot retire, before this wake.
-            unsafe { wake(fiber, false) };
-        }
+        wake_won(&mut won);
     }
+}
+
+/// Wakes the fibers whose wait node a step of the walk won, once that
+/// step's scope lock is released: outside every lock.
+fn wake_won(won: &mut Vec<FiberRef>) {
+    #[cfg(test)]
+    hooks::before_wakes(won);
+    for fiber in won.drain(..) {
+        // SAFETY: the walk won the fiber's node, so the fiber is parked or
+        // parking on it and nothing else wakes it: it cannot run, so cannot
+        // retire, before this wake.
+        unsafe { wake(fiber, false) };
+    }
+}
+
+/// `fiber::cancel(owner)` (D-1060, ADR-0069): cancels every fiber spawned
+/// into `owner` so far, and every scope nested in them, with `owner` as
+/// the target (D-667), and never `owner`'s body. The first step
+/// ([`ScopeState::cancel_spawned_step`]) reaches the members under
+/// `owner`'s lock and marks the scopes they opened, but not `owner`
+/// itself, so fibers spawned into it afterwards run normally and its body
+/// goes on; then the walk visits those scopes as [`cancel`] visits a
+/// subtree, each one parent first. On a scope that has ended, failed or
+/// been cancelled it does nothing, and the result is false.
+///
+/// A spawn into `owner` that runs at the same time is ordered by `owner`'s
+/// lock: a fiber whose slot was filled before the first step is reached
+/// there, and one filled after it is a fiber spawned afterwards
+/// (`ScopeState::fill` finds `owner` unmarked), which runs normally
+/// (`cancel_models.rs` model 6). Entered with no runtime lock held.
+/// D-1238.
+pub(crate) fn cancel_spawned(owner: &Arc<ScopeState>) -> bool {
+    let mut won = Vec::new();
+    let mut scopes = Vec::new();
+    if !owner.cancel_spawned_step(&mut won, &mut scopes) {
+        return false;
+    }
+    walk(owner, scopes, won);
+    true
+}
+
+/// Whether `fiber` has a cancellation target at depth `depth` or outside
+/// it: a scope on its chain no deeper than `depth`. Taken under the fiber
+/// lock, which the caller may take inside a scope lock (a scope lock, then
+/// a fiber lock).
+pub(super) fn targeted_within(fiber: &ExecCtx, depth: u32) -> bool {
+    fiber
+        .conc
+        .lock
+        .0
+        .lock()
+        .target
+        .as_ref()
+        .is_some_and(|target| target.depth() <= depth)
+}
+
+/// `fiber::sys_cancel`, private, which `fiber::cancel` calls (D-1060,
+/// ADR-0069): [`cancel_spawned`] of the borrowed `Scope` handle `owner`.
+/// When the caller is one of the fibers it reached, it has a target now,
+/// and the kernel does not return: the caller unwinds at once, as a
+/// cancelled blocking operation does (D-102). A caller that is not among
+/// them, such as the scope's body, gets `Nil`. Without a runtime a scope
+/// has no members, so the walk reaches nobody and the kernel returns
+/// (D-692). The result is `Nil`, which is `CType::Void`: the kernel
+/// returns nothing, as `sys_spawn_detached` does. D-1238.
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's control block and `owner` a live `Scope`
+/// handle, borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_fiber_sys_cancel(ctx: *mut ExecCtx, owner: Word) {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let me = unsafe { super::running(ctx) };
+        // SAFETY: a live `Scope` handle, borrowed for the call.
+        let scope = unsafe { super::scope::state_of(owner) };
+        let reached = cancel_spawned(&scope);
+        drop(scope);
+        if reached && check(me).is_err() {
+            raise_cancel(Some(ctx));
+        }
+    });
 }
 
 /// Stores `report` on the root `root` and cancels its base scope `base`
@@ -325,9 +420,41 @@ pub(crate) mod hooks {
     //! What the crate's tests read of the fiber lock.
 
     use std::sync::Arc;
+    use std::thread::{self, ThreadId};
+    use std::time::Duration;
+
+    use parking_lot::Mutex;
 
     use super::super::scope::ScopeState;
     use crate::ctx::ExecCtx;
+    use crate::sched::FiberRef;
+
+    /// The one thread whose walks wait, once a scope's lock is released,
+    /// before they wake the fibers whose nodes they won, and how long
+    /// ([`delay_wakes`]). A static keyed by the thread, not a thread-local,
+    /// which only `tls.rs` may declare (D-686).
+    static DELAY_WAKES: Mutex<Option<(ThreadId, Duration)>> = Mutex::new(None);
+
+    /// Delays the wakes of every walk the calling thread runs from now on
+    /// by `delay`: a legal interleaving made wide, for a test that checks
+    /// that a fiber whose node the walk won waits for that wake (review
+    /// finding SOUND-W4B-1). Only the calling thread's walks wait; a
+    /// thread's id is never reused, so no other test's walk is delayed.
+    pub(crate) fn delay_wakes(delay: Duration) {
+        *DELAY_WAKES.lock() = Some((thread::current().id(), delay));
+    }
+
+    /// [`super::cancel`]'s hook before it wakes `won`.
+    pub(super) fn before_wakes(won: &[FiberRef]) {
+        if won.is_empty() {
+            return;
+        }
+        let delay = match *DELAY_WAKES.lock() {
+            Some((walker, delay)) if walker == thread::current().id() => delay,
+            _ => return,
+        };
+        thread::sleep(delay);
+    }
 
     /// The fiber's target.
     pub(crate) fn target(fiber: &ExecCtx) -> Option<Arc<ScopeState>> {

@@ -59,6 +59,7 @@ fn sum_item(p: &mut Prog) -> DefId {
                 },
             ),
             Block {
+                pos: Vec::new(),
                 params: vec![local(1), local(2)],
                 stmts: vec![assign(
                     3,
@@ -152,6 +153,7 @@ fn name_item(p: &mut Prog) -> DefId {
                 },
             ),
             Block {
+                pos: Vec::new(),
                 params: vec![local(1)],
                 stmts: Vec::new(),
                 term: ret(1),

@@ -15,6 +15,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use cheby_diag::strip_colors;
+use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::process::{self, RunOutput};
 use cheby_test_support::ui::{self, Layout};
 use cheby_test_support::{platform, repo_root};
@@ -33,12 +34,15 @@ const COLOR_VARS: [&str; 4] = ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "TERM"]
     reason = "a test helper: failing to spawn `cheby` fails the test"
 )]
 fn cheby(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> RunOutput {
+    // A fresh build cache of this command (D-1128).
+    let cache = HarnessCache::create("cli-color").unwrap();
     let mut cmd = Command::new(CHEBY);
     cmd.args(args).current_dir(dir);
     for var in COLOR_VARS {
         cmd.env_remove(var);
     }
     cmd.envs(env.iter().copied());
+    cache.apply(&mut cmd);
     process::run(cmd, None, TIMEOUT).unwrap()
 }
 
@@ -235,11 +239,13 @@ fn repl_follows_the_flag() {
     let dir = Path::new(TMP);
     let input: &[u8] = b"let x: Int = \"a\"\n:bogus\n:quit\n";
     let session = |flag: &str| {
+        let cache = HarnessCache::create("cli-color").unwrap();
         let mut cmd = Command::new(CHEBY);
         cmd.args([flag, "repl"]).current_dir(dir);
         for var in COLOR_VARS {
             cmd.env_remove(var);
         }
+        cache.apply(&mut cmd);
         process::run(cmd, Some(input), TIMEOUT).unwrap()
     };
     let plain = session("--color=never");
@@ -257,15 +263,15 @@ fn repl_follows_the_flag() {
 #[test]
 fn tool_and_usage_errors_follow_the_flag() {
     let dir = Path::new(TMP);
-    let build = cheby(dir, &["--color=always", "build"], &[]);
+    let build = cheby(dir, &["--color=always", "build", "--target", "js"], &[]);
     assert_eq!(build.status, Some(1));
     assert_eq!(
         build.stderr,
-        "\x1b[1;91merror\x1b[0m\x1b[1m: `cheby build --target native` is not available yet \
-         (planned for M3)\x1b[0m\n\x1b[1;96mhelp\x1b[0m: use `cheby check` to type-check the \
+        "\x1b[1;91merror\x1b[0m\x1b[1m: `cheby build --target js` is not available yet \
+         (planned for M4)\x1b[0m\n\x1b[1;96mhelp\x1b[0m: use `cheby check` to type-check the \
          package, or `cheby run` to run it\n"
     );
-    let plain = cheby(dir, &["build"], &[]);
+    let plain = cheby(dir, &["build", "--target", "js"], &[]);
     assert_eq!(strip_colors(&build.stderr), plain.stderr);
 
     let usage = cheby(dir, &["--color=always", "bogus"], &[]);

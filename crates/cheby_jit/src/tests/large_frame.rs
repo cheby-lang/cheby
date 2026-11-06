@@ -220,7 +220,10 @@ fn assert_split(clif: &str) -> u64 {
     let outer_symbol = "cb$fn$app$deep";
     let inner_symbol = "cb$big$fn$app$deep";
     let outer = clif_of(clif, outer_symbol);
-    assert!(outer.contains("= cheby_rt_stack_slow_frame"), "{outer}");
+    assert!(
+        outer.contains("= cb$imp$cheby_rt_stack_slow_frame"),
+        "{outer}"
+    );
     assert!(outer.contains(&format!("= {inner_symbol}")), "{outer}");
     assert!(outer.contains("get_stack_pointer"), "{outer}");
     assert!(outer.contains("isub"), "{outer}");

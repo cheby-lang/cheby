@@ -1,10 +1,10 @@
 // @mode: check-fail
-// @decisions: D-455, D-692
+// @decisions: D-455, D-692, D-944
 // @milestone: M2
 //! A kernel that receives the running fiber's context takes it as its
-//! first C argument. Binding the symbol of `channel::send` from a user
-//! module, with exactly the Cheby types of `channel::send`, therefore
-//! gives the symbol another C signature (§12.5.1).
+//! first C argument, a signature only the compiler knows. Every name the
+//! runtime exports is reserved for the standard library, so binding the
+//! symbol of `channel::send` from a user module is E0055 (§12.5.1).
 
 @!target(native)
 

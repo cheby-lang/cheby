@@ -43,7 +43,9 @@ fn report(title: String, outcome: Result<List<(Int, Int)>, fiber::Panic>) {
   case outcome {
     Ok(times) => {
       io::println("{title}:")
-      list::each(times, fn((start, steps)) { io::println("  {start} reaches 1 after {steps} steps") })
+      list::each(times, fn((start, steps)) {
+        io::println("  {start} reaches 1 after {steps} steps")
+      })
       io::println("")
     }
     // `fiber::Panic` holds the message and source location of the

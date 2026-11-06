@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @exit: 103
+// @decisions: D-1059, D-1058, D-861
+// @milestone: M3
+//! Tail calls to the sleeps keep their caller's frame, so a report names
+//! the call and not `<unknown location>`. A spawned fiber's function is a
+//! tail call to `time::sleep`, and `main`'s scope body tail-calls a helper
+//! whose tail call to `time::sleep_until` waits for a deadline past the
+//! cap. Both sleeps are endless, so every fiber waits.
+
+import std::duration
+import std::fiber
+import std::io
+import std::time
+import std::time::instant
+
+fn sleep_for_good() {
+  let far = instant::add(time::monotonic(), duration::hours(3_000_000))
+  time::sleep_until(far)
+}
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::spawn(owner, fn() { time::sleep(duration::hours(3_000_000)) })
+    sleep_for_good()
+  }
+  io::println("{outcome:?}")
+}

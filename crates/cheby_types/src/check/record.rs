@@ -492,6 +492,11 @@ impl BodyCx<'_> {
         let path_span = path.significant_span();
         let ty_def = match self.path_res(path.syntax().id())? {
             Res::Def(def) => self.update_type(def, path_span)?,
+            Res::TyParam(_) | Res::SelfTy => {
+                self.no_fields_to_update(path, path_span);
+                None
+            }
+            // The resolver reported a path that names no type.
             _ => None,
         };
         // `base` is evaluated and checked first.
@@ -500,7 +505,7 @@ impl BodyCx<'_> {
             return self.update_fields_in_error(rec, span);
         };
         let Some(ctors) = self.adt_ctors(ty_def)? else {
-            self.not_an_update_type(ty_def, path_span)?;
+            self.not_an_update_type(ty_def, path, path_span)?;
             return self.update_fields_in_error(rec, span);
         };
         if !self.check_structure(ty_def, Structure::Fields, path_span)? {
@@ -637,25 +642,36 @@ impl BodyCx<'_> {
         Ok(None)
     }
 
-    /// The path of a record update names something without named fields:
-    /// a type without constructors, or a type in error.
-    fn not_an_update_type(&mut self, def: DefId, span: Span) -> Result<(), Ice> {
-        let name = self.input.name_of(self.own, def);
+    /// The path of a record update names an item without named fields: a
+    /// type without constructors, an interface, or an item in error.
+    fn not_an_update_type(
+        &mut self,
+        def: DefId,
+        path: ast::PathNode<'_>,
+        span: Span,
+    ) -> Result<(), Ice> {
         match &self.input.item(self.own, def)?.sig {
-            ItemSig::Type(_) => {
-                self.report(
-                    Diagnostic::new(
-                        codes::UNKNOWN_FIELD,
-                        format!("`{name}` has no fields to update"),
-                    )
-                    .with_primary(span, "")
-                    .with_note("a record update copies a value of a type with named fields"),
-                );
-            }
-            // Reported with the declaration.
-            _ => self.errored = true,
+            // Its declaration has the error (`sig.rs`), so one here would
+            // only repeat it.
+            ItemSig::Error => self.errored = true,
+            _ => self.no_fields_to_update(path, span),
         }
         Ok(())
+    }
+
+    /// E0058 for the path of a record update, as written, which names
+    /// something without named fields (§5.11.2).
+    fn no_fields_to_update(&mut self, path: ast::PathNode<'_>, span: Span) {
+        let name: Vec<&str> = path.segments().map(AstToken::text).collect();
+        let name = name.join("::");
+        self.report(
+            Diagnostic::new(
+                codes::UNKNOWN_FIELD,
+                format!("`{name}` has no fields to update"),
+            )
+            .with_primary(span, "")
+            .with_note("a record update copies a value of a type with named fields"),
+        );
     }
 
     /// The field `name` of every constructor of `ty_def`, with one type

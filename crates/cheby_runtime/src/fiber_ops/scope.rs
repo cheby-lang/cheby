@@ -81,6 +81,11 @@ pub(crate) struct ScopeState {
     /// is linked and cancelled by the close (step 2); only the fiber that
     /// opened the scope touches it.
     timer: Mutex<Option<TimerHandle>>,
+    /// The signal registry's slot of a scope of `fiber::interruptible`
+    /// (D-1073, `sched::signal`), set by `sys_arm_interrupt` in the body
+    /// and taken by the close (step 2); only the fiber that opened the
+    /// scope touches it.
+    interrupt: Mutex<Option<usize>>,
     /// Whether the scope was opened timed, by `fiber::timeout` (D-671),
     /// whatever its deadline: its close's wait is named `fiber::timeout` in
     /// a deadlock report, any other's `fiber::scope` (D-858).
@@ -274,6 +279,7 @@ impl ScopeState {
             depth,
             nested_slot: Mutex::new(None),
             timer: Mutex::new(None),
+            interrupt: Mutex::new(None),
             of_timeout: false,
             base: false,
             root: false,
@@ -435,6 +441,61 @@ impl ScopeState {
         );
     }
 
+    /// The first step of `fiber::cancel`'s walk (D-1060,
+    /// `cancel::cancel_spawned`), under this scope's lock: does nothing,
+    /// and returns false, if the scope has ended, has failed or is being
+    /// cancelled. Otherwise it reaches every member, never the owner,
+    /// whose body `cancel` never cancels, with this scope as the target
+    /// (`cancel::reach`), adds to `won` the fibers whose wait node it won,
+    /// marks as cancelled every nested scope that a member opened, still
+    /// under this lock (a parent's lock before a child's), and adds those
+    /// to `nested`, for the walk to visit as `cancel` visits a subtree.
+    /// The scope itself is not marked, so a spawn into it afterwards runs
+    /// normally and a panic of its body is still its first cause. A nested
+    /// scope that the body opened, whose owner is this scope's owner, is
+    /// left alone: the fibers spawned into it were not spawned into this
+    /// scope.
+    ///
+    /// The members are reached and their nested scopes marked in one hold
+    /// of this lock, so a fiber anywhere below a member that learns of the
+    /// cancellation's effects finds a marked scope on its chain
+    /// (`cancel::check_chain`, D-769), whatever the walk's progress.
+    /// D-1238.
+    pub(crate) fn cancel_spawned_step(
+        self: &Arc<Self>,
+        won: &mut Vec<FiberRef>,
+        nested: &mut Vec<Arc<Self>>,
+    ) -> bool {
+        let inner = self.inner.lock();
+        if inner.ended || inner.cancelled || inner.first_cause.is_some() {
+            return false;
+        }
+        for slot in &inner.members.slots {
+            if let Slot::Member(fiber) = slot {
+                // SAFETY: a member that has not left is not retired, since
+                // it leaves under this lock before it ends; it is not used
+                // after the lock is released.
+                if cancel::reach(unsafe { fiber.ctx() }, self) {
+                    won.push(*fiber);
+                }
+            }
+        }
+        for scope in inner
+            .nested
+            .slots
+            .iter()
+            .flatten()
+            .filter_map(Weak::upgrade)
+        {
+            if scope.owner == self.owner {
+                continue;
+            }
+            scope.inner.lock().cancelled = true;
+            nested.push(scope);
+        }
+        true
+    }
+
     /// The teardown's survey at this scope (D-786, `sched::lifecycle`),
     /// under its lock, with no other lock held: returns false, doing
     /// nothing, if the scope has ended; otherwise calls `look` on the owner
@@ -502,8 +563,10 @@ impl ScopeState {
         Membership::Member(inner.members.reserve())
     }
 
-    /// Records `report` as the scope's first cause if it has none and is
-    /// not cancelled from outside (D-666, architecture §6.6), under the
+    /// Records `report` as the scope's first cause if it has none, is not
+    /// cancelled from outside, and no `fiber::cancel` of it or of an
+    /// enclosing scope has reached the panicking fiber
+    /// ([`panicker_is_cancelled_here`], D-1060) (D-666, architecture §6.6), under the
     /// scope's lock, then, after releasing that lock, cancels the scope
     /// (`cancel::cancel`, D-667) at that moment, before the panicking fiber
     /// unwinds: so a member that joins the panicking fiber is always being
@@ -523,7 +586,7 @@ impl ScopeState {
         }
         {
             let mut inner = self.inner.lock();
-            if inner.first_cause.is_some() || inner.cancelled {
+            if inner.first_cause.is_some() || inner.cancelled || panicker_is_cancelled_here(self) {
                 return false;
             }
             inner.first_cause = Some(Failure::panic(
@@ -572,6 +635,33 @@ impl ScopeState {
         self.inner.lock().ended
     }
 
+    /// Arms the scope for SIGINT and SIGTERM (D-1073, `sched::signal`):
+    /// `fiber::sys_arm_interrupt`, called by `owner`, the fiber that opened
+    /// it, in its body. Does nothing when `owner` runs no runtime (an
+    /// isolated entry), when its runtime gives no signal to scopes (`cheby
+    /// test`, the REPL), or when the scope is armed already. A scope that another fiber opened
+    /// is a broken invariant: `fiber::interruptible` arms its own.
+    pub(crate) fn arm_interrupt(self: &Arc<Self>, owner: &ExecCtx) {
+        if self.owner != FiberRef::from_ctx(owner) {
+            fatal(format_args!(
+                "a fiber armed for signals a scope it did not open"
+            ));
+        }
+        let Some(runtime) = owner.sched.runtime() else {
+            return;
+        };
+        let mut slot = self.interrupt.lock();
+        if slot.is_none() {
+            *slot = crate::sched::signal::arm(runtime, self);
+        }
+    }
+
+    /// Whether the scope is armed for signals (D-1073).
+    #[cfg(all(test, unix))]
+    pub(crate) fn interrupt_armed(&self) -> bool {
+        self.interrupt.lock().is_some()
+    }
+
     /// Whether the scope holds a timer its close has not cancelled yet.
     #[cfg(test)]
     pub(crate) fn timed(&self) -> bool {
@@ -583,6 +673,28 @@ impl ScopeState {
     #[cfg(test)]
     pub(crate) fn fire_timer_target(scope: &Arc<Self>) {
         ScopeTimer(Arc::downgrade(scope)).fire();
+    }
+}
+
+/// Whether the fiber running on this thread, which is starting a panic
+/// that `scope` would record (`unwind::record::start_panic` calls
+/// [`ScopeState::record_panic`] on the panicking fiber), has a cancellation
+/// target at `scope` or outside it: a cancellation reached it before its
+/// panic started, so the panic is caused by the cancellation and is not
+/// `scope`'s first cause (D-178, D-671). Every other cancellation marks the
+/// scopes it reaches, which the caller reads first; `fiber::cancel` marks
+/// none of the target's own, so a member it reached, whose responsible
+/// scope is the target, is known by its target alone (D-1060). Called
+/// under `scope`'s lock: the fiber lock is taken inside it (a scope lock,
+/// then a fiber lock). A thread that runs no fiber (a unit test that calls
+/// `record_panic` itself) has nothing to read. D-1238.
+fn panicker_is_cancelled_here(scope: &ScopeState) -> bool {
+    // SAFETY: `current_fiber` is null or the control block of the fiber
+    // running on this thread, which lives while it runs; only a shared
+    // reference is made, and it is not kept.
+    match unsafe { crate::tls::current_fiber().as_ref() } {
+        Some(panicker) => cancel::targeted_within(panicker, scope.depth),
+        None => false,
     }
 }
 
@@ -825,6 +937,12 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
         if let Some(timer) = timer {
             timer.cancel();
         }
+        // D-1073: a signal no longer reaches the scope; a walk that
+        // upgraded it already finds it ended (step 1) and skips it. When
+        // the first signal's walk cancelled it (`reached`), the close
+        // settles that signal once it has decided (`signal::settle`).
+        let interrupt = state.interrupt.lock().take();
+        let reached = interrupt.is_some_and(crate::sched::signal::disarm);
         // 3. Decide, after the target (D-769): a
         // cancellation of an enclosing scope reached this fiber when that
         // scope was marked, even if the walk has not set its target yet
@@ -847,10 +965,14 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
         };
         if target == AtClose::Outer {
             // The cancellation passes through (D-667): nothing of the body's
-            // unwinding is reported, and no lock is held.
+            // unwinding is reported, and no lock is held. The scope does
+            // not return `Ok`, so a signal that reached it is spent.
             drop(record);
             drop(state);
             drop(handle);
+            if reached {
+                crate::sched::signal::settle(false);
+            }
             raise_cancel(Some(ctx));
         }
         let unwound_cause = match record {
@@ -868,13 +990,17 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
             None => None,
         };
         drop(handle);
-        match own_cause.or(unwound_cause) {
+        let succeeded = match own_cause.or(unwound_cause) {
             Some(failure) => {
                 me.conc.set_last_failure(failure);
                 false
             }
             None => true,
+        };
+        if reached {
+            crate::sched::signal::settle(succeeded);
         }
+        succeeded
     })
 }
 

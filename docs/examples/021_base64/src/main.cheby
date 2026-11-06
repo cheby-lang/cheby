@@ -17,13 +17,13 @@
 //! not decode, `main` returns an error, which the runtime prints to
 //! standard error with `show` before exiting with status 1.
 
+import base64::base64
+import base64::crc32
 import std::bytes
 import std::env
 import std::io
 import std::list
 import std::result
-import base64::base64
-import base64::crc32
 
 fn main() -> Result<Nil, AppError> {
   use text <- result::try(parse_args(env::args()))
@@ -95,5 +95,6 @@ test "errors show as messages for the user" {
   assert show(MissingText) == "usage: base64 TEXT"
   assert show(TooManyArguments(3)) == "expected one text, got 3 arguments"
   let reason = base64::InvalidLength(3)
-  assert show(DecodeFailed(reason)) == "cannot decode: the length must be a multiple of 4, got 3 characters"
+  assert show(DecodeFailed(reason)) ==
+    "cannot decode: the length must be a multiple of 4, got 3 characters"
 }

@@ -1,0 +1,73 @@
+# Miri on a pinned, dated nightly toolchain (D-721, D-1322).
+#
+# Miri left nightly.yml for this workflow so that it has a limit of its own,
+# and so that nightly.yml's conclusion can be read again. The limit is 350
+# minutes, below GitHub's 360 for a hosted job. The schedule and the dated
+# nightly are nightly.yml's (D-721, D-781): its header says why a nightly,
+# and why that date. xtask/src/sanitize.rs (`NIGHTLY`) names the same
+# toolchain. A scheduled run never blocks a pull request.
+#
+# - `miri`: `cargo xtask sanitize miri`, the runtime's pure modules under
+#   Miri (D-721; D-884): the ABI, values, strings, reference
+#   counting, the collections, text, bytes, numbers, the generic walks,
+#   layouts, allocation, the frame walk's tests, the backtrace tests and the
+#   timer tests written for Miri, 15 groups (D-1322), with
+#   `-Zmiri-permissive-provenance -Zmiri-disable-isolation
+#   -Zmiri-ignore-leaks` and `PROPTEST_CASES=4`. Miri's leak check is off
+#   because Cheby objects hold each other as integer words, which it cannot
+#   follow, so objects made immortal on purpose (D-765) would be reported;
+#   the runtime's own accounting checks every test's leaks. Tests skipped
+#   for their size are listed with their reasons in xtask/src/sanitize.rs
+#   (`MIRI_GROUPS`); others take a smaller size under `cfg(miri)`. Fibers,
+#   the scheduler, the pool, io, entries and the `loom` models stay out.
+#   This job builds no mimalloc, so it does not run
+#   `.github/actions/c-compiler`.
+# - `--log-dir` keeps each group's output in a file as it comes. A job cut
+#   off at its limit ends `cancelled`, where `failure()` is false, so the
+#   logs upload on `failure() || cancelled()`.
+
+name: Miri
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  miri:
+    name: miri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+          components: rust-src, miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitize-miri
+      - name: cargo xtask sanitize miri
+        run: >-
+          cargo xtask sanitize miri --jobs 4
+          --log-dir "$RUNNER_TEMP/sanitize-logs"
+      - name: Upload the logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sanitize-miri-logs
+          path: ${{ runner.temp }}/sanitize-logs
+          if-no-files-found: ignore

@@ -1,0 +1,231 @@
+//! Percent-encoding for the parts of a URL that a program builds from its
+//! own text: query strings and form bodies, and path segments (D-1069).
+//!
+//! A query is written as `application/x-www-form-urlencoded`, exactly as
+//! WHATWG's form serializer and `URLSearchParams` write it, so a space
+//! becomes `+`. A path segment keeps only RFC 3986's unreserved
+//! characters, so a space becomes `%20` and a `/` becomes `%2F`. Every
+//! other byte of the text's UTF-8 encoding becomes `%XX` with upper-case
+//! hex digits. Each encoder writes text that its decoder reads back
+//! exactly. The decoders read `%XX` in either case, keep a `%` that starts
+//! no escape, and return `Err(Nil)` when the decoded bytes are not valid
+//! UTF-8, since std never repairs text silently (D-311).
+//!
+//! The module is written in Cheby over `std::bytes`, `std::list` and
+//! `std::string`, with no kernels, so constants can run it and every
+//! target gives the same text (D-232, D-991, D-1054). `std::http` imports
+//! it as `urls`, since its functions take a parameter named `url`
+//! (D-062, D-1053), and encodes the URLs it sends with
+//! `percent_encode` (D-1070).
+
+import std::bytes
+import std::list
+import std::string
+
+// Queries
+
+/// Returns `pairs` as an `application/x-www-form-urlencoded` query. In
+/// each name and value, ASCII letters, digits, `*`, `-`, `.` and `_` stay
+/// as they are, a space becomes `+`, and every other byte becomes `%XX`.
+/// Each pair is written `name=value`, also when the value is empty, and
+/// the pairs are joined with `&` in order. There is no leading `?`.
+pub fn encode_query(pairs: List<(String, String)>) -> String {
+  pairs
+  |> list::map(_, fn((name, value)) { encode_form(name) + "=" + encode_form(value) })
+  |> string::join(_, "&")
+}
+
+test "encode_query escapes what would split a pair" {
+  assert encode_query([("q", "a&b=c"), ("page", "2")]) == "q=a%26b%3Dc&page=2"
+  assert encode_query([("q", "two words"), ("lang", "é")]) == "q=two+words&lang=%C3%A9"
+}
+
+test "encode_query keeps letters, digits and four marks" {
+  assert encode_query([("k", "Az09*-._")]) == "k=Az09*-._"
+  assert encode_query([("k", "~!'()/?+")]) == "k=%7E%21%27%28%29%2F%3F%2B"
+}
+
+test "encode_query writes every pair, also an empty one" {
+  assert encode_query([]) == ""
+  assert encode_query([("flag", ""), ("", "x")]) == "flag=&=x"
+}
+
+/// Reads `text` as an `application/x-www-form-urlencoded` query and
+/// returns its name and value pairs in order, repeated names kept. It
+/// splits `text` at `&`, skips empty pieces, and splits each piece at its
+/// first `=`; a piece without one has the value `""`. In each name and
+/// value, `+` is a space and `%XX` is the byte with that value. `Err(Nil)`
+/// when the decoded bytes of a name or a value are not valid UTF-8.
+pub fn decode_query(text: String) -> Result<List<(String, String)>, Nil> {
+  text
+  |> string::split(_, "&")
+  |> list::filter(_, fn(piece) { piece != "" })
+  |> list::try_map(_, fn(piece) {
+    let (name, value) = case string::split_once(piece, "=") {
+      Some(parts) => parts
+      None => (piece, "")
+    }
+    case percent_decode(name, True), percent_decode(value, True) {
+      Ok(decoded_name), Ok(decoded_value) => Ok((decoded_name, decoded_value))
+      _, _ => Err(Nil)
+    }
+  })
+}
+
+test "decode_query reads what encode_query writes" {
+  let pairs = [("q", "a&b=c"), ("note", "50% off"), ("flag", "")]
+  assert decode_query(encode_query(pairs)) == Ok(pairs)
+  assert decode_query("x=1&&y=two+words&flag") == Ok([("x", "1"), ("y", "two words"), ("flag", "")])
+  assert decode_query("q=%FF") == Err(Nil)
+}
+
+test "decode_query keeps a percent sign that starts no escape" {
+  assert decode_query("a=100%&b=%zz&c=%4") == Ok([("a", "100%"), ("b", "%zz"), ("c", "%4")])
+  assert decode_query("e=%c3%a9&sum=1%2B1&eq=a=b") == Ok([
+    ("e", "é"),
+    ("sum", "1+1"),
+    ("eq", "a=b"),
+  ])
+  assert decode_query("") == Ok([])
+}
+
+// Path segments
+
+/// Returns `segment` percent-encoded for one segment of a URL's path:
+/// ASCII letters, digits, `-`, `.`, `_` and `~` stay as they are, and every
+/// other byte becomes `%XX`, so a `/` becomes `%2F`.
+pub fn encode_segment(segment: String) -> String {
+  percent_encode(segment, is_unreserved, False)
+}
+
+test "encode_segment keeps a slash inside one segment" {
+  assert encode_segment("a/b c") == "a%2Fb%20c"
+  assert decode_segment("a%2Fb%20c") == Ok("a/b c")
+}
+
+test "encode_segment keeps only unreserved characters" {
+  assert encode_segment("Az09-._~") == "Az09-._~"
+  assert encode_segment("a+b?c#d é") == "a%2Bb%3Fc%23d%20%C3%A9"
+}
+
+/// Decodes one percent-encoded segment of a URL's path: `%XX` is the byte
+/// with that value, and every other character stays as it is, `+` and a
+/// `%` that starts no escape included. `Err(Nil)` when the decoded bytes
+/// are not valid UTF-8.
+pub fn decode_segment(segment: String) -> Result<String, Nil> {
+  percent_decode(segment, False)
+}
+
+test "decode_segment keeps a plus sign" {
+  assert decode_segment("a+b") == Ok("a+b")
+  assert decode_segment("100%") == Ok("100%")
+  assert decode_segment("%FF") == Err(Nil)
+}
+
+// Encoding and decoding
+
+/// Returns `text` with every byte of its UTF-8 encoding that `keep` does
+/// not keep written as `%XX` with upper-case hex digits, except that with
+/// `plus` a space is written `+`. `std::http` encodes the paths and queries
+/// it sends with it (D-1070).
+fn percent_encode(text: String, keep: fn(U8) -> Bool, plus: Bool) -> String {
+  let data = bytes::from_string(text)
+  fn step(index, out) {
+    case bytes::get(data, index) {
+      None => out
+      Some(byte) => {
+        let more = case keep(byte), plus && byte == 0x20 {
+          True, _ => bytes::push(out, byte)
+          False, True => bytes::push(out, 0x2B)
+          False, False => {
+            let escaped = bytes::push(out, 0x25)
+            escaped
+            |> bytes::push(_, hex_digit(byte >> 4))
+            |> bytes::push(_, hex_digit(byte & 0x0F))
+          }
+        }
+        step(index + 1, more)
+      }
+    }
+  }
+  string::from_bytes_lossy(step(0, bytes::new()))
+}
+
+/// Returns the bytes of `text` with each `%XX` read as the byte of that
+/// value, with hex digits in either case, and with `plus` each `+` read as
+/// a space, as text; `Err(Nil)` when they are not valid UTF-8. A `%` that
+/// two hex digits do not follow stays as it is.
+fn percent_decode(text: String, plus: Bool) -> Result<String, Nil> {
+  case string::contains(text, "%") || plus && string::contains(text, "+") {
+    False => Ok(text)
+    True => {
+      let data = bytes::from_string(text)
+      fn step(index, out) {
+        case bytes::get(data, index) {
+          None => out
+          Some(0x25) => case escape_at(data, index + 1) {
+            Some(byte) => step(index + 3, bytes::push(out, byte))
+            None => step(index + 1, bytes::push(out, 0x25))
+          }
+          Some(0x2B) => case plus {
+            True => step(index + 1, bytes::push(out, 0x20))
+            False => step(index + 1, bytes::push(out, 0x2B))
+          }
+          Some(byte) => step(index + 1, bytes::push(out, byte))
+        }
+      }
+      string::from_bytes(step(0, bytes::new()))
+    }
+  }
+}
+
+/// The byte that the two hex digits at `index` of `data` give, or `None`.
+priv fn escape_at(data: bytes::Bytes, index: Int) -> Option<U8> {
+  case bytes::get(data, index), bytes::get(data, index + 1) {
+    Some(high), Some(low) => case hex_value(high), hex_value(low) {
+      Some(a), Some(b) => Some((a << 4) | b)
+      _, _ => None
+    }
+    _, _ => None
+  }
+}
+
+/// The value of the hex digit with the ASCII code `code`, in either case.
+/// `std::http` reads chunk sizes with it.
+fn hex_value(code: U8) -> Option<U8> {
+  case {
+    code >= 0x30 && code <= 0x39 => Some(code - 0x30)
+    code >= 0x41 && code <= 0x46 => Some(code - 55)
+    code >= 0x61 && code <= 0x66 => Some(code - 87)
+    _ => None
+  }
+}
+
+/// The ASCII code of the upper-case hex digit for the 4-bit `value`.
+priv fn hex_digit(value: U8) -> U8 {
+  case value < 10 {
+    True => value + 0x30
+    False => value + 55
+  }
+}
+
+/// Whether `byte` is an ASCII letter or digit.
+fn is_alphanumeric(byte: U8) -> Bool {
+  byte >= 0x30 && byte <= 0x39 || byte >= 0x41 && byte <= 0x5A || byte >= 0x61 && byte <= 0x7A
+}
+
+/// RFC 3986's unreserved characters: letters, digits, `-`, `.`, `_`, `~`.
+priv fn is_unreserved(byte: U8) -> Bool {
+  is_alphanumeric(byte) || byte == 0x2D || byte == 0x2E || byte == 0x5F || byte == 0x7E
+}
+
+/// The form's set: letters, digits, `*`, `-`, `.` and `_` stay.
+priv fn encode_form(text: String) -> String {
+  percent_encode(
+    text,
+    fn(byte) {
+      is_alphanumeric(byte) || byte == 0x2A || byte == 0x2D || byte == 0x2E || byte == 0x5F
+    },
+    True,
+  )
+}

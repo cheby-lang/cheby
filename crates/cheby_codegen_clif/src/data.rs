@@ -6,7 +6,7 @@ use cranelift_module::{DataDescription, Module, ModuleRelocTarget};
 use cheby_mir::LayoutRef;
 use cheby_runtime::abi;
 
-use crate::decls::{StaticWord, ctor_header, header};
+use crate::decls::{ImportRef, StaticWord, ctor_header, header};
 use crate::{CodegenCx, CodegenError, Decls};
 
 /// The alignment of every object, so a pointer's bit 0 is clear (D-278).
@@ -17,15 +17,23 @@ const WORD_BYTES: u32 = 8;
 
 /// Defines the data objects declared since the last call.
 ///
+/// - An import word `cb$imp$<symbol>` (D-913) is a read-only 8-byte word
+///   with one `Abs8` data relocation to the runtime or foreign symbol;
+///   code loads it and calls or uses the address.
 /// - A string is a read-only static `String` object (D-454): count 0,
 ///   so count operations never write it, `cap == len`, little-endian.
 /// - A slot is a writable 8-byte word holding its function's address
 ///   (D-043); the REPL repoints it later.
 /// - A layout word `cb$layout$…` holds the header allocation copies:
 ///   count 1, the scan count (escaped above 254 value fields, D-279), and
-///   the runtime layout id registered for the constructor (D-454). A nullary constructor's static `cb$ctor$…` is a
-///   header with count 0. Only these objects hold user layout ids; code
-///   loads them.
+///   the runtime layout id of the constructor (D-454). A nullary
+///   constructor's static `cb$ctor$…` is a header with count 0. Only
+///   these objects hold user layout ids; code loads them. Both are
+///   defined with 0 where the id goes, in a unit alone
+///   ([`crate::compile_unit`]) and in the JIT alike, and both are
+///   writable: the one registration routine writes their headers when it
+///   registers the unit's module record, before any code that uses them
+///   runs (D-919, D-920, D-1169).
 /// - A constant slot `cb$const$…` is a writable word, 0 until the
 ///   constant is evaluated (E6).
 /// - A static object (D-523) is a header with count 0, then its fields:
@@ -34,9 +42,27 @@ const WORD_BYTES: u32 = 8;
 pub(crate) fn define_pending<M: Module>(
     module: &mut M,
     decls: &mut Decls,
-    cx: &CodegenCx<'_>,
+    _cx: &CodegenCx<'_>,
 ) -> Result<(), CodegenError> {
     check_pending(decls)?;
+    for (id, target) in std::mem::take(&mut decls.pending_imports) {
+        let mut desc = DataDescription::new();
+        desc.define_zeroinit(8);
+        desc.set_align(OBJECT_ALIGN);
+        match target {
+            ImportRef::Func(func) => {
+                let func_ref = module.declare_func_in_data(func, &mut desc);
+                desc.write_function_addr(0, func_ref);
+            }
+            ImportRef::Data(data) => {
+                let gv = module.declare_data_in_data(data, &mut desc);
+                desc.write_data_addr(0, gv, 0);
+            }
+        }
+        module
+            .define_data(id, &desc)
+            .map_err(|e| CodegenError::module(&e))?;
+    }
     for (id, image) in std::mem::take(&mut decls.pending_strings) {
         let mut desc = DataDescription::new();
         desc.define(image.into_boxed_slice());
@@ -55,8 +81,11 @@ pub(crate) fn define_pending<M: Module>(
             .define_data(id, &desc)
             .map_err(|e| CodegenError::module(&e))?;
     }
-    for (layout, decl, value_fields) in std::mem::take(&mut decls.pending_layouts) {
-        let id = cx.layouts.id(&layout)?;
+    for (_, decl, value_fields) in std::mem::take(&mut decls.pending_layouts) {
+        // D-920: the layout id is 0, and no id is looked up: registration
+        // assigns it and writes the whole header (D-919), so the bytes
+        // depend on no layout id.
+        let id = 0;
         let word = ctor_header(abi::RC_UNIQUE, u64::from(value_fields), id);
         define_words(module, decl.word, &[word])?;
         if let Some(ctor) = decl.ctor {
@@ -114,9 +143,10 @@ pub(crate) fn define_pending<M: Module>(
 /// were never defined. Records the pending objects as defined.
 fn check_pending(decls: &mut Decls) -> Result<(), CodegenError> {
     let ids = decls
-        .pending_strings
+        .pending_imports
         .iter()
         .map(|&(id, _)| id)
+        .chain(decls.pending_strings.iter().map(|&(id, _)| id))
         .chain(decls.pending_slots.iter().map(|&(id, _)| id))
         .chain(
             decls

@@ -15,7 +15,11 @@
 //!   when it was entered, so a name the session defines later wins.
 //!
 //! `:reload` points earlier imports of a replaced module at its new
-//! version ([`SessionScope::retarget`]).
+//! version ([`SessionScope::retarget`]). An import stays even when the new
+//! version no longer has one of its items, or made it private: the
+//! resolver marks that name withdrawn, so each use is an ordinary unknown
+//! name in the entry, and the name works again once a later `:reload`
+//! brings it back (§13.5.3).
 //!
 //! The entry's own imports come first, and names the entry declares or
 //! imports itself are left out, so a redefinition never collides with the
@@ -396,6 +400,7 @@ impl SessionScope {
             ),
             items_span: Some(self.synthetic),
             span: self.synthetic,
+            session: false,
         })
     }
 
@@ -497,7 +502,9 @@ fn import_bindings(request: &ImportRequest, names: &Interner) -> Vec<(Namespace,
     }
 }
 
-/// `request` keeping only the bindings in `keep`; `None` if it keeps none.
+/// An `import` someone wrote as the session adds it to an entry, keeping
+/// only the bindings in `keep`; `None` if it keeps none. Its items may be
+/// gone after a `:reload`, which is what [`ImportRequest::session`] says.
 fn narrowed(request: &ImportRequest, keep: &[Name]) -> Option<ImportRequest> {
     match &request.items {
         None => {
@@ -512,6 +519,7 @@ fn narrowed(request: &ImportRequest, keep: &[Name]) -> Option<ImportRequest> {
                 .collect();
             (!kept.is_empty()).then(|| ImportRequest {
                 items: Some(kept),
+                session: true,
                 ..request.clone()
             })
         }
@@ -635,6 +643,10 @@ mod tests {
         assert_eq!(listed(&out[0], &globals), vec!["map"]);
         assert_eq!(listed(&out[1], &globals), vec!["filter"]);
         assert_eq!(targets[1], ImportTarget::Module(ModuleId::from_u32(5)));
+        // Only what someone wrote can lose an item to a `:reload`: a session
+        // definition missing from its entry is a compiler's fault (D-464).
+        assert!(!out[0].session);
+        assert!(out[1].session);
         // A failed import binds nothing.
         s.add_import(&requests[0], ImportTarget::Failed, 3, names);
         assert_eq!(

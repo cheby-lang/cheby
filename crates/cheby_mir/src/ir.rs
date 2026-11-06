@@ -73,6 +73,12 @@ pub struct MirModule {
     /// `DefIndex` order (D-252, D-263). Registered before any of the
     /// unit's code is defined (D-454).
     pub layouts: Vec<LayoutDesc>,
+    /// The external types this module declares (§12.5.3), in `DefIndex`
+    /// order, without std's handle types (runtime kinds 40 to 47, D-647,
+    /// D-982): what its module record lists (D-919). Filled for code units;
+    /// empty for tests and entries units. MIR dumps do not print it, so no
+    /// golden moves.
+    pub externals: Vec<crate::layout::ExternalDesc>,
     /// Layouts of constructors that other modules declare, builtin ones
     /// included, which this unit's code allocates, reads fields of, uses
     /// as static objects or reads tags of: for a [`TagType::Adt`], every
@@ -88,6 +94,12 @@ pub struct MirModule {
     /// The path of every def this unit mentions (function keys, callees,
     /// constructors, constants, layouts, tag types), sorted by `DefId`.
     pub names: Vec<DefName>,
+    /// The unit's source file, D-421's diagnostic path (`src/main.cheby`,
+    /// `std/io.cheby`), which its functions' positions are in (D-938):
+    /// what its code record and line table name. `None` for the entries
+    /// unit and with positions off ([`crate::positions`]). Dumps do not
+    /// print it.
+    pub source: Option<Box<str>>,
 }
 
 impl MirModule {
@@ -406,6 +418,11 @@ pub struct Function {
     /// generation defines, their ids and the dumps are the same with and
     /// without it.
     pub call_loc_strings: IndexVec<StrId, Box<str>>,
+    /// The source positions the function's blocks name ([`Block::pos`])
+    /// and its entry's (D-938, [`crate::positions`]). Code generation sets
+    /// source locations from them, which change no code; the dumps never
+    /// print them. Empty with positions off.
+    pub positions: crate::positions::Positions,
 }
 
 impl Function {
@@ -475,6 +492,13 @@ pub struct Block {
     /// (D-698). Sorted by `i`, at most one entry per `i`. Empty until the
     /// unwind pass.
     pub unwind: Vec<(u32, BlockId)>,
+    /// The source position of each statement, then the terminator's
+    /// ([`crate::positions`], D-938): `stmts.len() + 1` references into
+    /// [`Function::positions`], or empty when the block keeps none
+    /// (positions off). Passes that add, remove or move statements keep it
+    /// in step ([`Block::retain_stmts`], [`Block::insert_stmts`]); the
+    /// dumps never print it.
+    pub pos: Vec<crate::positions::PosRef>,
 }
 
 impl Block {

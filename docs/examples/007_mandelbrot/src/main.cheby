@@ -11,10 +11,10 @@
 //! The whole picture is a compile-time constant, so the program only
 //! prints it.
 
+import mandelbrot::complex
 import std::io
 import std::list
 import std::ops
-import mandelbrot::complex
 
 /// The number of characters in each row.
 const width: Int = 60

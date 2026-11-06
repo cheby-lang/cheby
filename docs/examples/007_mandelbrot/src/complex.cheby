@@ -7,7 +7,10 @@
 //! by the functions of the module that declares the type.
 
 /// The complex number `re + im i`.
-type Complex { re: Float, im: Float }
+type Complex {
+  re: Float,
+  im: Float,
+}
 
 /// Returns the complex number `re + im i`.
 fn new(re: Float, im: Float) -> Complex {

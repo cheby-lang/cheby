@@ -69,6 +69,17 @@ fn t_layouts() -> Vec<LayoutDesc> {
     ]
 }
 
+/// The layout ids registration gave `A`, `B` and `C`, read from their
+/// layout words through the batch's module record (D-919, D-920).
+fn t_ids(jit: &Jit) -> [u32; 3] {
+    let records = jit.module_records();
+    let words = super::records::ctor_words(&records[0]);
+    let [a, b, c] = words[0].as_slice() else {
+        panic!("{words:?}");
+    };
+    [a, b, c].map(|&(word, _)| super::records::id_at(word))
+}
+
 /// A `Prog` that declares `T`.
 fn with_t() -> Prog {
     let mut p = Prog {
@@ -196,15 +207,9 @@ fn user_constructors_allocate_through_their_layout_words() {
     );
     let whole = p.call(whole, Vec::new());
     let jit = p.compile();
-    let a_id = jit.layouts.id(&LayoutRef::Ctor(at(A))).unwrap();
-    assert_eq!(
-        jit.layouts.id(&LayoutRef::Ctor(at(B))),
-        Ok(a_id.checked_add(1).unwrap())
-    );
-    assert_eq!(
-        jit.layouts.id(&LayoutRef::Ctor(at(C))),
-        Ok(a_id.checked_add(2).unwrap())
-    );
+    let [a_id, b_id, c_id] = t_ids(&jit);
+    assert_eq!(b_id, a_id.checked_add(1).unwrap());
+    assert_eq!(c_id, a_id.checked_add(2).unwrap());
     let object = returned(run_const(&jit, whole));
     let header = read_word(object, 0);
     assert_eq!(abi::header_layout(header), a_id);
@@ -344,7 +349,7 @@ fn tags_come_from_layout_ids() {
     }
     let word = returned(run_const(&jit, b));
     assert_eq!(rc_of(word), abi::RC_STATIC);
-    assert_eq!(Ok(layout_of(word)), jit.layouts.id(&LayoutRef::Ctor(at(B))));
+    assert_eq!(layout_of(word), t_ids(&jit)[1]);
     if cheby_runtime::LEAK_CHECK_ENABLED {
         assert_eq!(jit.domain().live_objects(), 0);
     }
@@ -554,7 +559,7 @@ fn load_const_reads_the_slot() {
     let (mut jit, target) = build();
     let clif = jit.take_clif().join("\n");
     assert!(clif.contains("= cb$const$app$LIMIT"), "{clif}");
-    assert!(clif.contains("= cheby_rt_const_missing"), "{clif}");
+    assert!(clif.contains("= cb$imp$cheby_rt_const_missing"), "{clif}");
     let slot = jit.const_slot(constant).unwrap();
     // SAFETY: the slot is a live, aligned word of the JIT.
     assert_eq!(unsafe { slot.read() }, 0);
@@ -817,10 +822,12 @@ fn static_objects_and_function_values() {
     }
 }
 
-/// A static is defined once per JIT: a later batch whose unit names the
-/// same symbol, `cb$desc$geo$Point`, uses the first batch's object; the
-/// second batch repeats `g`'s shim, which is not defined again either, and
-/// its function value still calls `g` (D-523).
+/// A static of the same symbol in two batches, `cb$desc$geo$Point`: since
+/// K4c every unit is compiled alone into a code record, and a record's
+/// statics and shims are local copies, declared anonymously when it is
+/// loaded (D-914, D-918), so the second batch has its own copy with the
+/// first's contents, and its copy of `g`'s shim still calls `g` through
+/// `g`'s slot (D-523's rule holds within one record).
 #[test]
 fn a_static_is_defined_once_across_batches() {
     let batch = |index: u32| {
@@ -862,8 +869,13 @@ fn a_static_is_defined_once_across_batches() {
     jit.compile(&second).unwrap();
     let a = returned(run_const(&jit, one));
     let b = returned(run_const(&jit, two));
-    assert_eq!(a, b);
-    assert_eq!(layout_of(a), abi::layout::DESC_NOMINAL);
+    assert_ne!(a, b, "each record has its own copy (D-918)");
+    for copy in [a, b] {
+        assert_eq!(layout_of(copy), abi::layout::DESC_NOMINAL);
+        assert_eq!(rc_of(copy), abi::RC_STATIC);
+        assert_eq!(text_of(read_word(copy, 8)), "Point");
+        assert_eq!(text_of(read_word(copy, 16)), "geo");
+    }
     assert_eq!(
         returned(run_const(&jit, via_fnval.unwrap())),
         abi::tag_int(42).unwrap()

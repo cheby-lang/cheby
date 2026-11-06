@@ -1,6 +1,9 @@
 //! The interfaces of a build and what each module may read of them.
 
-use std::sync::{Arc, OnceLock};
+use std::collections::BTreeSet;
+use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::{
     DefId, DefKind, Ice, IfaceItem, IndexVec, Interner, ModuleId, ModuleInterface, ModuleTable,
@@ -80,15 +83,110 @@ impl InterfaceSet {
     }
 }
 
+/// The modules a recording [`DepView`] handed out (D-955): every module
+/// whose interface a phase read through the view, the builtin module
+/// never. Thread-safe, since a module's bodies check in parallel through
+/// one view (D-263). Noting a module already noted is one relaxed load.
+pub struct ReadLog {
+    /// One bit per module id below `DENSE_WORDS * 64`.
+    dense: [AtomicU64; DENSE_WORDS],
+    /// The module ids past them.
+    rest: Mutex<BTreeSet<ModuleId>>,
+}
+
+/// The words of [`ReadLog::dense`]: room for 4096 module ids.
+const DENSE_WORDS: usize = 64;
+
+impl ReadLog {
+    /// An empty log.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            dense: std::array::from_fn(|_| AtomicU64::new(0)),
+            rest: Mutex::new(BTreeSet::new()),
+        }
+    }
+
+    /// Notes that `module`'s interface was handed out. The builtin module
+    /// is never noted.
+    pub fn note(&self, module: ModuleId) {
+        if module == ModuleId::BUILTIN {
+            return;
+        }
+        let n = module.as_u32();
+        let word = n
+            .checked_shr(6)
+            .and_then(|w| usize::try_from(w).ok())
+            .and_then(|w| self.dense.get(w));
+        match word {
+            Some(word) => {
+                let bit = 1u64.checked_shl(n & 63).unwrap_or(0);
+                if word.load(Ordering::Relaxed) & bit == 0 {
+                    word.fetch_or(bit, Ordering::Relaxed);
+                }
+            }
+            None => {
+                self.rest
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(module);
+            }
+        }
+    }
+
+    /// The modules noted so far, sorted by id. Call it after the phases
+    /// that share the log have finished.
+    #[must_use]
+    pub fn modules(&self) -> Vec<ModuleId> {
+        let mut out = Vec::new();
+        for (w, word) in (0u32..).zip(&self.dense) {
+            let mut bits = word.load(Ordering::Relaxed);
+            while bits != 0 {
+                let bit = bits.trailing_zeros();
+                bits &= bits.wrapping_sub(1);
+                if let Some(n) = w.checked_mul(64).and_then(|base| base.checked_add(bit)) {
+                    out.push(ModuleId::from_u32(n));
+                }
+            }
+        }
+        out.extend(
+            self.rest
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .copied(),
+        );
+        out
+    }
+}
+
+impl Default for ReadLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for ReadLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ReadLog").field(&self.modules()).finish()
+    }
+}
+
 /// What the phases of module M may read: the builtin module and the
 /// interfaces of M's transitive dependencies (D-246, D-260). Lookups
 /// outside the set return `None`, so results never depend on which
 /// unrelated modules a parallel schedule happened to finish first.
+///
+/// A recording view ([`DepView::recording`]) also notes, in its
+/// [`ReadLog`], every module whose interface it hands out (D-955); a view
+/// made with [`DepView::new`] records nothing, at the cost of one branch.
 #[derive(Clone, Copy, Debug)]
 pub struct DepView<'a> {
     set: &'a InterfaceSet,
     /// Sorted, without duplicates.
     allowed: &'a [ModuleId],
+    /// Where a recording view notes its reads.
+    log: Option<&'a ReadLog>,
 }
 
 impl<'a> DepView<'a> {
@@ -96,7 +194,33 @@ impl<'a> DepView<'a> {
     /// builtin module is always readable.
     #[must_use]
     pub const fn new(set: &'a InterfaceSet, allowed: &'a [ModuleId]) -> Self {
-        Self { set, allowed }
+        Self {
+            set,
+            allowed,
+            log: None,
+        }
+    }
+
+    /// A view like [`DepView::new`] that notes in `log` every module whose
+    /// interface it hands out, through [`DepView::get`] and
+    /// [`DepView::item`], the builtin module never (D-955).
+    #[must_use]
+    pub const fn recording(
+        set: &'a InterfaceSet,
+        allowed: &'a [ModuleId],
+        log: &'a ReadLog,
+    ) -> Self {
+        Self {
+            set,
+            allowed,
+            log: Some(log),
+        }
+    }
+
+    /// This view without its recording: reads through it are not noted.
+    #[must_use]
+    pub const fn unrecorded(self) -> Self {
+        Self { log: None, ..self }
     }
 
     /// Whether this view may read `module`.
@@ -105,11 +229,18 @@ impl<'a> DepView<'a> {
         module == ModuleId::BUILTIN || self.allowed.binary_search(&module).is_ok()
     }
 
-    /// The interface of `module`, if it is readable and published.
+    /// The interface of `module`, if it is readable and published. A
+    /// recording view notes the module when it hands the interface out.
     #[must_use]
     pub fn get(&self, module: ModuleId) -> Option<&'a ModuleInterface> {
         if self.allows(module) {
-            self.set.get(module)
+            let iface = self.set.get(module);
+            if let Some(log) = self.log
+                && iface.is_some()
+            {
+                log.note(module);
+            }
+            iface
         } else {
             None
         }

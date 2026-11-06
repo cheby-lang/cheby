@@ -27,7 +27,10 @@ const max_lines: Int = 10
 const max_quantity: Int = 20
 
 /// One line of an order: a product and how many of it.
-type Line { product_id: Int, quantity: Int }
+type Line {
+  product_id: Int,
+  quantity: Int,
+}
 
 /// An order as the client sent it. After `validate`, the same type
 /// holds an order whose values are all acceptable.
@@ -40,7 +43,10 @@ type NewOrder {
 
 /// A value that is not acceptable, with the path of its field in the
 /// body, such as `items[2].quantity`.
-type FieldError { field: String, problem: String }
+type FieldError {
+  field: String,
+  problem: String,
+}
 
 /// Decodes the body of `POST /orders`. `discount` may be left out.
 fn decoder() -> decode::Decoder<NewOrder> {
@@ -62,14 +68,14 @@ priv fn line_decoder() -> decode::Decoder<Line> {
 fn validate(order: NewOrder) -> Result<NewOrder, List<FieldError>> {
   let email = string::trim(order.email)
   let discount = case order.discount {
-    Some(code) => Some(code |> string::trim |> string::uppercase)
+    Some(code) => Some(
+      code
+      |> string::trim
+      |> string::uppercase,
+    )
     None => None
   }
-  let errors = [
-    ..check_email(email),
-    ..check_items(order.items),
-    ..check_discount(discount),
-  ]
+  let errors = [..check_email(email), ..check_items(order.items), ..check_discount(discount)]
   case errors {
     [] => Ok(NewOrder { ..order, email, discount })
     _ => Err(errors)
@@ -92,7 +98,9 @@ priv fn check_items(items: List<Line>) -> List<FieldError> {
   let count = list::length(items)
   let size_errors = case {
     count == 0 => [FieldError { field: "items", problem: "must not be empty" }]
-    count > max_lines => [FieldError { field: "items", problem: "must have at most {max_lines} lines" }]
+    count > max_lines => [
+      FieldError { field: "items", problem: "must have at most {max_lines} lines" },
+    ]
     _ => []
   }
   // `index` is the position of `rest`'s first line in `items`, and
@@ -128,7 +136,9 @@ priv fn check_quantity(quantity: Int, index: Int) -> List<FieldError> {
 /// twice.
 priv fn check_repeat(product_id: Int, seen: set::Set<Int>, index: Int) -> List<FieldError> {
   case set::contains(seen, product_id) {
-    True => [FieldError { field: "items[{index}].product_id", problem: "is already on an earlier line" }]
+    True => [
+      FieldError { field: "items[{index}].product_id", problem: "is already on an earlier line" },
+    ]
     False => []
   }
 }
@@ -184,7 +194,9 @@ test "every problem is reported, in field order" {
 
 test "an order needs between 1 and 10 lines" {
   assert bad_fields(NewOrder { ..sample, items: [] }) == ["items"]
-  let eleven = list::map([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], fn(id) { Line { product_id: id, quantity: 1 } })
+  let eleven = list::map([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], fn(id) {
+    Line { product_id: id, quantity: 1 }
+  })
   assert bad_fields(NewOrder { ..sample, items: eleven }) == ["items"]
 }
 
@@ -200,6 +212,7 @@ test "an empty discount code is an error, a missing one is not" {
 }
 
 test "the decoder reads the body, with the discount optional" {
-  let text = r#"{"email":"ada@example.com","items":[{"product_id":1,"quantity":2},{"product_id":3,"quantity":1}]}"#
+  let text =
+    r#"{"email":"ada@example.com","items":[{"product_id":1,"quantity":2},{"product_id":3,"quantity":1}]}"#
   assert json::parse(text, decoder()) == Ok(sample)
 }

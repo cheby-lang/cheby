@@ -1838,3 +1838,404 @@ fn cancel_stress_pool_200_rounds() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// `fiber::cancel`'s kernel (D-1060, ADR-0069).
+
+/// `fiber::cancel(scope)`, as `std::fiber` calls `sys_cancel`: the flag
+/// after the kernel, which is set only when the caller was one of the
+/// fibers it cancelled.
+fn sys_cancel_step(me: &ExecCtx, scope: Word) -> u32 {
+    // SAFETY: the running fiber's context and a live `Scope` handle,
+    // borrowed.
+    unsafe { super::cancel::cheby_fiber_sys_cancel(ctx_of(me), scope) };
+    flag_of(me)
+}
+
+/// D-1060, D-667: `cancel` cancels every member of the scope, wherever it
+/// waits, and not the body: the kernel returns to the root, which is the
+/// body, with no flag and no pending cancellation, the scope is not marked
+/// as cancelled, and its close succeeds.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_cancels_the_members_but_not_the_body() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let (never_tx, never_rx) = channel(me, 0);
+            let s = open(me);
+            let s_state = state_of(s);
+            for name in ["m1", "m2"] {
+                let m_notes = seen.clone();
+                start_job(me, s, &[dup(never_rx)], move |me, words| {
+                    m_notes.set(name, step_shape(receive_step(me, words[0])));
+                    0
+                });
+            }
+            wait_for_waiters(me, never_tx, 0, 2);
+            seen.set("cancel flag", sys_cancel_step(me, s));
+            seen.set("scope marked", s_state.failing());
+            seen.set("entry check after", entry_check(me));
+            seen.set("close", close(me, s));
+            drop_word(never_rx);
+            drop_word(never_tx);
+            7
+        });
+        let raised = format!("raised {CANCEL}");
+        notes.require(
+            threads,
+            &[
+                ("m1", raised.clone()),
+                ("m2", raised),
+                ("cancel flag", shown(NONE)),
+                ("scope marked", shown(false)),
+                ("entry check after", shown(NONE)),
+                ("close", shown(true)),
+            ],
+        );
+    }
+}
+
+/// D-1060: a fiber spawned into the scope after `cancel` runs normally,
+/// and its value is joined.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_leaves_the_scope_open_to_spawns() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let s = open(me);
+            seen.set("cancel flag", sys_cancel_step(me, s));
+            let (later, _) = spawn_job(me, s, &[], |_, _| values::int_word(42));
+            seen.set(
+                "later",
+                join_step(me, later).map(|word| {
+                    let value = int(word);
+                    drop_word(word);
+                    value
+                }),
+            );
+            drop_word(later);
+            seen.set("close", close(me, s));
+            7
+        });
+        notes.require(
+            threads,
+            &[
+                ("cancel flag", shown(NONE)),
+                ("later", shown(Ok::<i64, u32>(42))),
+                ("close", shown(true)),
+            ],
+        );
+    }
+}
+
+/// D-1060, D-102: a member that cancels its own scope is one of the fibers
+/// it cancels, so the kernel does not return normally: the caller unwinds
+/// at once and never reaches its send, and the scope succeeds.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_a_member_that_cancels_its_scope_unwinds_at_once() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let (tx, rx) = channel(me, 1);
+            let s = open(me);
+            let m_notes = seen.clone();
+            start_job(me, s, &[dup(s), tx], move |me, words| {
+                let flag = sys_cancel_step(me, words[0]);
+                m_notes.set("member's cancel flag", flag);
+                if flag == NONE {
+                    drop_shape(send_step(me, words[1], values::int_word(1)));
+                }
+                0
+            });
+            seen.set("close", close(me, s));
+            seen.set("receive", step_shape(receive_step(me, rx)));
+            drop_word(rx);
+            7
+        });
+        notes.require(
+            threads,
+            &[
+                ("member's cancel flag", shown(CANCEL)),
+                ("close", shown(true)),
+                ("receive", "Err(Nil)".to_owned()),
+            ],
+        );
+    }
+}
+
+/// D-1060, D-671: a member that `cancel` reached while it worked, before
+/// the cancellation was delivered, panics: the panic is caused by the
+/// cancellation and is not recorded, so the scope still succeeds.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_records_no_panic_of_a_fiber_it_reached() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let s = open(me);
+            let (started, go) = (Gate::default(), Gate::default());
+            let (m_started, m_go, m_notes) = (started.clone(), go.clone(), seen.clone());
+            start_job(me, s, &[], move |me, _| {
+                m_started.open();
+                m_go.wait(me);
+                m_notes.set(
+                    "member panic",
+                    panic_with(me, "after the cancel", "src/m.cheby:1:1"),
+                );
+                0
+            });
+            started.wait(me);
+            seen.set("cancel flag", sys_cancel_step(me, s));
+            go.open();
+            seen.set("close", close(me, s));
+            7
+        });
+        notes.require(
+            threads,
+            &[
+                ("member panic", shown(PANIC)),
+                ("cancel flag", shown(NONE)),
+                ("close", shown(true)),
+            ],
+        );
+    }
+}
+
+/// D-1060, D-667: `cancel` reaches the scopes nested in its fibers, with
+/// the scope as the target: a member's own scope is cancelled, its member
+/// unwinds, and the member's close of it passes the cancellation through.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_reaches_the_scopes_nested_in_its_fibers() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let (never_tx, never_rx) = channel(me, 0);
+            let s = open(me);
+            let m_notes = seen.clone();
+            start_job(me, s, &[dup(never_rx)], move |me, words| {
+                let inner = open(me);
+                let k_notes = m_notes.clone();
+                start_job(me, inner, &[dup(words[0])], move |me, words| {
+                    k_notes.set("k", step_shape(receive_step(me, words[0])));
+                    0
+                });
+                m_notes.set("m", step_shape(receive_step(me, words[0])));
+                close_unwound(me, inner);
+                m_notes.set("m inner close flag", flag_of(me));
+                0
+            });
+            wait_for_waiters(me, never_tx, 0, 2);
+            seen.set("cancel flag", sys_cancel_step(me, s));
+            seen.set("close", close(me, s));
+            drop_word(never_rx);
+            drop_word(never_tx);
+            7
+        });
+        let raised = format!("raised {CANCEL}");
+        notes.require(
+            threads,
+            &[
+                ("k", raised.clone()),
+                ("m", raised),
+                ("m inner close flag", shown(CANCEL)),
+                ("cancel flag", shown(NONE)),
+                ("close", shown(true)),
+            ],
+        );
+    }
+}
+
+/// D-1060: `cancel` never cancels the body, so a scope the body opened
+/// inside the cancelled scope is left alone: its member was not spawned
+/// into the cancelled scope and goes on to receive its value.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_leaves_the_bodys_own_scopes_alone() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let (go_tx, go_rx) = channel(me, 0);
+            let s = open(me);
+            let b = open(me);
+            let b_state = state_of(b);
+            let k_notes = seen.clone();
+            start_job(me, b, &[go_rx], move |me, words| {
+                k_notes.set("k", step_shape(receive_step(me, words[0])));
+                0
+            });
+            wait_for_waiters(me, go_tx, 0, 1);
+            seen.set("cancel flag", sys_cancel_step(me, s));
+            seen.set("inner marked", b_state.failing());
+            drop_shape(send_step(me, go_tx, values::int_word(5)));
+            seen.set("inner close", close(me, b));
+            seen.set("close", close(me, s));
+            drop_word(go_tx);
+            7
+        });
+        notes.require(
+            threads,
+            &[
+                ("k", "Ok(5)".to_owned()),
+                ("cancel flag", shown(NONE)),
+                ("inner marked", shown(false)),
+                ("inner close", shown(true)),
+                ("close", shown(true)),
+            ],
+        );
+    }
+}
+
+/// D-1060: on a scope that has ended or failed `cancel` does nothing: the
+/// kernel returns to its caller with no flag, also to the body of the
+/// failed scope, which the failure is cancelling anyway and which unwinds
+/// at its next entry check.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_does_nothing_on_an_ended_or_failed_scope() {
+    for threads in THREADS {
+        let notes = Notes::default();
+        let seen = notes.clone();
+        run_jobs(threads, move |me| {
+            let ended = open(me);
+            let kept = dup(ended);
+            seen.set("ended close", close(me, ended));
+            seen.set("cancel of an ended scope", sys_cancel_step(me, kept));
+            drop_word(kept);
+            let failed = open(me);
+            let (m, _) = spawn_job(me, failed, &[], |me, _| {
+                panic_with(me, "the cause", "src/m.cheby:2:2");
+                0
+            });
+            wait_until_failed(me, &cell_of(m));
+            drop_word(m);
+            seen.set("cancel of a failed scope", sys_cancel_step(me, failed));
+            seen.set("entry check after", entry_check(me));
+            seen.set("failed close", close_unwound(me, failed));
+            seen.set("failure", failure_of(me));
+            7
+        });
+        notes.require(
+            threads,
+            &[
+                ("ended close", shown(true)),
+                ("cancel of an ended scope", shown(NONE)),
+                ("cancel of a failed scope", shown(NONE)),
+                ("entry check after", shown(CANCEL)),
+                ("failed close", shown(false)),
+                ("failure", panic_failure("the cause", "src/m.cheby:2:2")),
+            ],
+        );
+    }
+}
+
+/// D-1060: the walk of `cancel` on scope states that no fiber runs: on a
+/// scope that is being cancelled or has failed it does nothing; on an open
+/// one it marks neither the scope nor its owner, so the owner gets no
+/// target, and a panic recorded afterwards is still the scope's first
+/// cause.
+#[test]
+fn cancel_kernel_walk_marks_nothing_of_the_scope_or_its_owner() {
+    use crate::ctx::FiberInit;
+    use crate::sched::FiberRef;
+    let owner = Box::new(ExecCtx::new(FiberInit::placeholder()));
+    let open_scope = Arc::new(ScopeState::new(None, FiberRef::from_ctx(&owner)));
+    assert!(super::cancel::cancel_spawned(&open_scope));
+    assert!(!open_scope.failing());
+    assert!(super::cancel::hooks::target(&owner).is_none());
+    let report = PanicReport::new(PanicKind::Explicit, Some("later"), "a.cheby:1:2");
+    assert!(open_scope.record_panic(&report));
+    super::cancel::hooks::clear_target(&owner);
+    assert!(!super::cancel::cancel_spawned(&open_scope));
+    let cancelled = Arc::new(ScopeState::new(None, FiberRef::from_ctx(&owner)));
+    super::cancel::cancel(&cancelled);
+    super::cancel::hooks::clear_target(&owner);
+    assert!(!super::cancel::cancel_spawned(&cancelled));
+    assert!(super::cancel::hooks::target(&owner).is_none());
+}
+
+/// D-1060, D-666: `cancel` against a member that keeps spawning into the
+/// scope, checking for a cancellation before each spawn as `fiber::spawn`'s
+/// entry check does: every child is reached by the walk (it unwinds out of
+/// its wait, or never starts) or was spawned after it and runs normally,
+/// which the root ends by letting `stop` go; nothing hangs or leaks, the
+/// spawner unwinds, and the scope succeeds. 50 rounds at each thread count
+/// (the walk against a concurrent spawn is model 6 of `cancel_models.rs`).
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn cancel_kernel_against_a_spawning_member() {
+    for threads in THREADS {
+        for round in 0..50_i64 {
+            let notes = Notes::default();
+            let seen = notes.clone();
+            // Children that unwound out of their wait, that received the
+            // close of `stop`, and the keys of every child spawned.
+            let counts = Arc::new([AtomicI64::new(0), AtomicI64::new(0)]);
+            let keys = Arc::new(Mutex::new(Vec::new()));
+            let (tally, spawned_keys) = (Arc::clone(&counts), Arc::clone(&keys));
+            run_jobs(threads, move |me| {
+                let (stop_tx, stop_rx) = channel(me, 0);
+                let s = open(me);
+                let started = Gate::default();
+                let a_started = started.clone();
+                let a_seen = seen.clone();
+                start_job(me, s, &[dup(s), dup(stop_rx)], move |me, words| {
+                    a_started.open();
+                    let mut spawned = 0_usize;
+                    while spawned < 200 && entry_check(me) == NONE {
+                        let c_counts = Arc::clone(&tally);
+                        let (child, key) =
+                            spawn_job(me, words[0], &[dup(words[1])], move |me, words| {
+                                let step = receive_step(me, words[0]);
+                                let index = usize::from(step.is_ok());
+                                drop_shape(step);
+                                c_counts[index].fetch_add(1, Ordering::SeqCst);
+                                0
+                            });
+                        drop_word(child);
+                        spawned_keys.lock().unwrap().push(key);
+                        spawned = spawned.wrapping_add(1);
+                    }
+                    a_seen.set(
+                        "spawner unwound",
+                        flag_of(me) != NONE || until_cancelled(me),
+                    );
+                    0
+                });
+                started.wait(me);
+                yield_now(me, round % 5);
+                seen.set("cancel flag", sys_cancel_step(me, s));
+                drop_word(stop_rx);
+                drop_word(stop_tx);
+                seen.set("close", close(me, s));
+                7
+            });
+            notes.require(
+                threads,
+                &[
+                    ("spawner unwound", shown(true)),
+                    ("cancel flag", shown(NONE)),
+                    ("close", shown(true)),
+                ],
+            );
+            let keys = keys.lock().unwrap();
+            let never_started = keys.iter().filter(|&&key| discard(key)).count();
+            let [unwound, ran] = &*counts;
+            let finished = unwound.load(Ordering::SeqCst) + ran.load(Ordering::SeqCst);
+            assert_eq!(
+                usize::try_from(finished).unwrap() + never_started,
+                keys.len(),
+                "round {round} at {threads} threads: a child neither started, unwound nor ran"
+            );
+        }
+    }
+}

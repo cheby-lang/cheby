@@ -1,0 +1,5 @@
+panicked at <unknown location>:
+joined fiber failed
+backtrace:
+  in ui_test::join_it at tests/ui/11-errors-and-panics/backtrace/joined_fiber_failed.cheby:19:15
+  in ui_test::main at tests/ui/11-errors-and-panics/backtrace/joined_fiber_failed.cheby:42:15

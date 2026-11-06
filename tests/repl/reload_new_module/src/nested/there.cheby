@@ -1,0 +1,6 @@
+//! A module beside which a nested new module appears.
+
+/// Its name.
+pub fn name() -> String {
+  "there"
+}

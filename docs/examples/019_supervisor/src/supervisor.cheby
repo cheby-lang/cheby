@@ -115,7 +115,11 @@ fn decide(policy: Policy, restarts: Int) -> Decision {
 
 /// Runs attempt `number` of `work` as a worker fiber, and returns its
 /// value, or why it failed.
-priv fn run_once<T>(work: fn(Int) -> T, number: Int, deadline: duration::Duration) -> Result<T, Failure> {
+priv fn run_once<T>(
+  work: fn(Int) -> T,
+  number: Int,
+  deadline: duration::Duration,
+) -> Result<T, Failure> {
   // Two scopes nest here. The inner one belongs to the worker: if the
   // worker panics, that scope cancels whatever else is in it and
   // returns `Err`, and the panic goes no further (D-176). The outer
@@ -154,7 +158,10 @@ priv fn quick_policy(max_restarts: Int) -> Policy {
 
 /// Supervises `work` under `policy` and returns its result together
 /// with every restart it reported, in order.
-priv fn supervise_and_log<T>(policy: Policy, work: fn(Int) -> T) -> (Result<T, GaveUp>, List<Restart>) {
+priv fn supervise_and_log<T>(
+  policy: Policy,
+  work: fn(Int) -> T,
+) -> (Result<T, GaveUp>, List<Restart>) {
   // Room for every restart, so reporting one never blocks.
   let (log_tx, log_rx) = channel::new::<Restart>(policy.max_restarts)
   let outcome = supervise(policy, work, fn(restart) {
@@ -204,7 +211,10 @@ test "crashes and overruns are restarted until an attempt succeeds" {
   }
   let (outcome, restarts) = supervise_and_log(quick_policy(3), flaky)
   assert outcome == Ok("done on attempt 3")
-  assert restarts == [Restart { number: 1, cause: Crashed("boom") }, Restart { number: 2, cause: Overran }]
+  assert restarts == [
+    Restart { number: 1, cause: Crashed("boom") },
+    Restart { number: 2, cause: Overran },
+  ]
 }
 
 test "the supervisor gives up when the restarts run out" {

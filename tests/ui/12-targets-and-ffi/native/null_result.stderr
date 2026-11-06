@@ -1,0 +1,2 @@
+panicked at tests/ui/12-targets-and-ffi/native/null_result/src/main.cheby:13:4:
+foreign function `app_name` returned null

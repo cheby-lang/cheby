@@ -1,0 +1,16 @@
+error[E0055]: the native symbol `cheby_list_length` is reserved for the toolchain
+  --> tests/ui/12-targets-and-ffi/native/runtime_export_reserved.cheby:11:19
+   |
+11 | @external(native, "cheby_list_length")
+   |                   ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the Cheby runtime exports this symbol, so only the standard library may bind it
+
+error[E0055]: the native symbol `cheby_float_sin` is reserved for the toolchain
+  --> tests/ui/12-targets-and-ffi/native/runtime_export_reserved.cheby:14:19
+   |
+14 | @external(native, "cheby_float_sin")
+   |                   ^^^^^^^^^^^^^^^^^
+   |
+   = note: the Cheby runtime exports this symbol, so only the standard library may bind it
+

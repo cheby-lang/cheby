@@ -4,7 +4,10 @@
 ///
 /// The type is package-visible, so every module of this package can
 /// build it and match on its fields (D-151). `main` does both.
-type Tree { name: String, children: List<Tree> }
+type Tree {
+  name: String,
+  children: List<Tree>,
+}
 
 /// Returns a node named `name` with the given children.
 fn node(name: String, children: List<Tree>) -> Tree {

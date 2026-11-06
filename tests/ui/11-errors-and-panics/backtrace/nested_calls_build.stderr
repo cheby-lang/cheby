@@ -1,0 +1,9 @@
+panicked at tests/ui/11-errors-and-panics/backtrace/nested_calls_build.cheby:15:14:
+too big: 3
+backtrace:
+  in ui_test::check at tests/ui/11-errors-and-panics/backtrace/nested_calls_build.cheby:15:14
+  in ui_test::double_all::{fn#0} at tests/ui/11-errors-and-panics/backtrace/nested_calls_build.cheby:21:43
+  in std::list::map::{fn#0}
+  in std::list::fold
+  in ui_test::double_all at tests/ui/11-errors-and-panics/backtrace/nested_calls_build.cheby:21:17
+  in ui_test::main at tests/ui/11-errors-and-panics/backtrace/nested_calls_build.cheby:26:17

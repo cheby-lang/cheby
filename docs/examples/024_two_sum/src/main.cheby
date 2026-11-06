@@ -15,12 +15,7 @@ import std::string
 
 fn main() {
   // Each example is a list of numbers and a target.
-  let examples = [
-    ([2, 7, 11, 15], 9),
-    ([3, 2, 4], 6),
-    ([3, 3], 6),
-    ([1, 2, 3], 7),
-  ]
+  let examples = [([2, 7, 11, 15], 9), ([3, 2, 4], 6), ([3, 3], 6), ([1, 2, 3], 7)]
   list::each(examples, fn(example) {
     let (numbers, target) = example
     io::println(describe(numbers, target))
@@ -51,7 +46,9 @@ fn two_sum(numbers: List<Int>, target: Int) -> Option<(Int, Int)> {
 /// Returns a line that shows `numbers`, `target` and the answer of
 /// `two_sum` for them.
 fn describe(numbers: List<Int>, target: Int) -> String {
-  let shown = numbers |> list::map(_, fn(n) { "{n}" }) |> string::join(_, ", ")
+  let shown = numbers
+    |> list::map(_, fn(n) { "{n}" })
+    |> string::join(_, ", ")
   case two_sum(numbers, target) {
     Some((first, second)) => "[{shown}] and {target}: indices {first} and {second}"
     None => "[{shown}] and {target}: no two numbers add up"

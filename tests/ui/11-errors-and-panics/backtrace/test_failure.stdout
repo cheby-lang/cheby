@@ -1,0 +1,11 @@
+test ui_test "small numbers pass" ... ok
+test ui_test "large numbers fail" ... FAILED
+
+---- ui_test "large numbers fail" ----
+panicked at tests/ui/11-errors-and-panics/backtrace/test_failure.cheby:12:14:
+too big: 3
+backtrace:
+  in ui_test::check at tests/ui/11-errors-and-panics/backtrace/test_failure.cheby:12:14
+  in ui_test "large numbers fail" at tests/ui/11-errors-and-panics/backtrace/test_failure.cheby:22:10
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

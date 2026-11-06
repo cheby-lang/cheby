@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-164, D-1332
+//! A function of the type's module with a signature in error has its one
+//! report, at the signature: a use of the type adds none.
+
+import app::lib
+
+fn main() {
+  let oops = lib::make()
+  assert "{oops}" == "Oops(1)"
+}

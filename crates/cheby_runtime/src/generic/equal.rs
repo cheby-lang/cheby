@@ -4,6 +4,7 @@ use super::raw::{Raw, View, f32_eq, float_eq, view};
 use super::{Reached, hooks};
 use crate::abi::Word;
 use crate::alloc::scratch::ScratchVec;
+use crate::desc;
 use crate::layout::FieldKind;
 use crate::object::{read_field, to_usize, word_to_ptr};
 use crate::panic::fatal;
@@ -35,9 +36,9 @@ impl Cx {
 /// equal (§3.13). Compares left to right, depth first, and stops at the
 /// first difference; reaching a function value or a value of an external
 /// type first gives `Err(Reached::Function)`, which callers turn into an
-/// `EqualityOnFunction` panic (D-233). Identity is never compared, except
-/// that of nominal descriptors, which is the identity of nominal types
-/// (D-530, [`crate::desc`]).
+/// `EqualityOnFunction` panic (D-233). Identity is never compared: nominal
+/// descriptors compare by type key (D-530, D-1312,
+/// [`crate::desc`]).
 ///
 /// A type with `@std_hooks` compares through its `equal` hook (D-342),
 /// called on the running entry ([`crate::callback::call`]).
@@ -171,7 +172,9 @@ unsafe fn step(
         // Descriptors are equal when they name the same nominal type with
         // equal arguments (D-530).
         (View::Desc(x), View::Desc(y)) => {
-            if x.nominal != y.nominal || x.args.len() != y.args.len() {
+            // SAFETY: the nominal descriptors of live descriptors.
+            if x.args.len() != y.args.len() || !unsafe { desc::same_nominal(x.nominal, y.nominal) }
+            {
                 return Ok(false);
             }
             later.extend(

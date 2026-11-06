@@ -43,21 +43,22 @@
 //!   `"Array"` or `"Null"`, D-323) and the `path` to it, with keys and list
 //!   indexes as strings, such as `["books", "1", "format"]`.
 
-import std::env
-import std::io
-import std::list
-import std::result
-import std::json
-import std::json::decode
 import json_codec::book
 import json_codec::format
+import std::env
+import std::io
+import std::json
+import std::json::decode
+import std::list
+import std::result
 
 fn main() -> Result<Nil, AppError> {
   // Each `use` stops at the first `Err` and returns it from `main`, after
   // `result::map_error` has wrapped it in an `AppError`.
   use path <- result::try(parse_args(env::args()))
   use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
-  use books <- result::try(result::map_error(json::parse(text, library_decoder()), InvalidLibrary(path, _)))
+  use books <-
+    result::try(result::map_error(json::parse(text, library_decoder()), InvalidLibrary(path, _)))
   books
   |> list::map(_, summary)
   |> list::each(_, io::println)
@@ -139,7 +140,8 @@ test "a whole document decodes into books" {
     "\"Dune\" by Frank Herbert (1965, paperback)",
     "\"Beloved\" by Toni Morrison (1987, hardcover)",
   ]
-  let expected = r#"[{"title":"Dune","author":{"name":"Frank Herbert","born":1920},"year":1965,"format":"paperback","tags":["classic"]}]"#
+  let expected =
+    r#"[{"title":"Dune","author":{"name":"Frank Herbert","born":1920},"year":1965,"format":"paperback","tags":["classic"]}]"#
   assert paperbacks_json(books) == expected
 }
 
@@ -148,7 +150,11 @@ test "a problem in one book is reported with its path" {
     {"title": "Dune", "author": {"name": "Frank Herbert"}, "year": 1965, "format": "paperback"},
     {"title": "Beloved", "author": {"name": "Toni Morrison"}, "year": 1987, "format": "audiobook"}
   ]}"#
-  let problem = decode::Error { expected: "Format", found: "String", path: ["books", "1", "format"] }
+  let problem = decode::Error {
+    expected: "Format",
+    found: "String",
+    path: ["books", "1", "format"],
+  }
   assert json::parse(text, library_decoder()) == Err(json::Decode([problem]))
 }
 

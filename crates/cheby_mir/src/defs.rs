@@ -110,7 +110,7 @@ impl<'a> Defs<'a> {
     }
 
     /// The interface of `module` as this unit sees it.
-    fn interface(&self, module: ModuleId) -> Option<&'a ModuleInterface> {
+    pub(crate) fn interface(&self, module: ModuleId) -> Option<&'a ModuleInterface> {
         match self.own {
             Some(own) if own.module == module => Some(own),
             _ => self.deps.get(module),

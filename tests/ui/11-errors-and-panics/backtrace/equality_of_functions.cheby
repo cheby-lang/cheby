@@ -1,0 +1,24 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! With `CHEBY_BACKTRACE=1`, a panic raised inside the runtime's own code,
+//! here hashing a function value as a `Map` key, has no frame to start
+//! from: its backtrace is the no-frames line alone (§3.13, §11.6).
+
+import std::io
+import std::map
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn look_up(handlers: map::Map<fn(Int) -> Int, Int>) -> Option<Int> {
+  map::get(handlers, double)
+}
+
+fn main() {
+  let handlers: map::Map<fn(Int) -> Int, Int> = map::new()
+  io::println("looking up a function")
+  let found = look_up(handlers)
+  io::println("never printed: {found:?}")
+}

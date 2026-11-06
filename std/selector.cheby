@@ -113,8 +113,7 @@ pub fn receive<T, E>(
 test "select takes a value from a ready arm" {
   let (tx, rx) = channel::new::<Int>(1)
   let assert Ok(Nil) = channel::send(tx, 7)
-  let got =
-    new()
+  let got = new()
     |> receive(_, rx, fn(r) { r })
     |> select
   assert got == Ok(7)
@@ -122,8 +121,7 @@ test "select takes a value from a ready arm" {
 
 test "a closed channel's arm is ready with Err(Nil)" {
   let (_, rx) = channel::new::<Int>(0)
-  let got =
-    new()
+  let got = new()
     |> receive(_, rx, fn(r) { r })
     |> select
   assert got == Err(Nil)
@@ -144,8 +142,7 @@ pub fn after<E>(selector: Selector<E>, wait: duration::Duration, map: fn() -> E)
 
 test "a timer arm is ready once its time has passed" {
   let (keep, never) = channel::new::<Int>(0)
-  let got =
-    new()
+  let got = new()
     |> receive(_, never, fn(_) { "message" })
     |> after(_, duration::milliseconds(10), fn() { "timer" })
     |> select
@@ -155,8 +152,7 @@ test "a timer arm is ready once its time has passed" {
 }
 
 test "a timer of zero is ready at once" {
-  let got =
-    new()
+  let got = new()
     |> after(_, duration::milliseconds(0), fn() { 1 })
     |> select
   assert got == 1
@@ -192,8 +188,7 @@ test "a waiting selector takes a handoff on a capacity-0 channel" {
 test "select chooses among ready arms without favoring one" {
   let (_, left) = channel::new::<Nil>(0)
   let (_, right) = channel::new::<Nil>(0)
-  let choose =
-    new()
+  let choose = new()
     |> receive(_, left, fn(_) { True })
     |> receive(_, right, fn(_) { False })
   fn count(remaining, lefts) {

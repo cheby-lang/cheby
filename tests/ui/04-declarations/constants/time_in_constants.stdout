@@ -1,0 +1,11 @@
+2023-11-14T22:13:20Z
+1700000000s
+2023-11-15T22:13:20Z
+Less
+2023-11-14T22:13:20Z
+Ok(Timestamp { since_epoch: Duration { seconds: 1792585800, nanoseconds: 250000000 } })
+1969-12-31T23:59:59.999Z
+Instant { since_origin: Duration { seconds: 90, nanoseconds: 0 } }
+Greater
+90s
+the same at run time: True

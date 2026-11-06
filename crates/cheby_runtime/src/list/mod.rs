@@ -54,6 +54,13 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     out.extend(kernels::all());
 }
 
+/// Registers the list layouts (26-28) once per process, as [`kernels`]
+/// does: an executable's start calls it through `image::install`, since
+/// it never builds the symbol table (D-919).
+pub(crate) fn register_kinds() {
+    node::register();
+}
+
 /// The std module paths whose kernels this module registers completely.
 pub(crate) const COMPLETE: &[&str] = &["list"];
 
@@ -76,16 +83,20 @@ pub(crate) unsafe fn iter(list: Word) -> Iter {
 /// # Safety
 ///
 /// `list` is a live list value.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "for other runtime modules from W3-B on; tests use it now"
-    )
-)]
 pub(crate) unsafe fn length(list: Word) -> usize {
     // SAFETY: forwarded from the caller.
     ops::len(unsafe { node::Root::from_word(list) })
+}
+
+/// Element `index` of a borrowed list, borrowed, or `None` outside it
+/// (`cheby_ffi_list_get`, D-945).
+///
+/// # Safety
+///
+/// `list` is a live list value; the element is valid while it is.
+pub(crate) unsafe fn get(list: Word, index: usize) -> Option<Word> {
+    // SAFETY: forwarded from the caller.
+    ops::get(unsafe { node::Root::from_word(list) }, index)
 }
 
 /// A list of the given owned elements, in order; the result is owned.

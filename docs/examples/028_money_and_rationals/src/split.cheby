@@ -20,11 +20,11 @@
 //! 1.15` in floating point is `84.06499999999998`, which rounds down to
 //! 84.06, while the exact `84.065` rounds up to 84.07.
 
+import money_and_rationals::rational
+import money_and_rationals::rational::{Rational}
 import std::fiber
 import std::int
 import std::list
-import money_and_rationals::rational
-import money_and_rationals::rational::{Rational}
 
 /// One person's part of an amount.
 type Part {
@@ -55,7 +55,9 @@ fn by_weight(total: Int, weights: List<Int>) -> List<Part> {
   let rounded_down = list::fold(exact_parts, 0, fn(sum, part) { sum + rational::floor(part) })
   let missing = total - rounded_down
   // Step 3. The positions of the people who get one more cent.
-  let lucky = exact_parts |> by_largest_remainder |> list::take(_, missing)
+  let lucky = exact_parts
+    |> by_largest_remainder
+    |> list::take(_, missing)
   // `list::contains` looks through `lucky` for every person. That is
   // fine for a table of diners, and a `Set` would do for a crowd.
   fn build(rest, index, found) {

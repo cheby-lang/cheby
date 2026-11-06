@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; refined by D-1315, D-1316
 date: 2026-10-02
 log: D-246, D-247
 ---

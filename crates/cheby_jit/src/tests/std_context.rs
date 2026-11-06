@@ -156,6 +156,7 @@ fn scope_run() -> Function {
         Repr::Value,
         vec![
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     Stmt::Eval(Rvalue::CallRuntime {
@@ -193,6 +194,7 @@ fn scope_run() -> Function {
                 unwind: vec![(0, bb(5)), (1, bb(5)), (3, bb(3)), (4, bb(4))],
             },
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![assign(
                     7,
@@ -206,6 +208,7 @@ fn scope_run() -> Function {
             },
             block(vec![Stmt::Drop(local(5))], err_nil()),
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     Stmt::ClearUnwind,

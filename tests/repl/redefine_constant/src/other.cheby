@@ -1,0 +1,6 @@
+//! A value that a `:reload` changes under the session.
+
+/// The value.
+pub fn value() -> Int {
+  1
+}

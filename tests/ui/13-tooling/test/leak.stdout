@@ -1,7 +1,8 @@
-test ui_test "leaks a string" ... FAILED
+test ui_test "leaks a receiver" ... FAILED
 test ui_test "leaks nothing" ... ok
 
----- ui_test "leaks a string" ----
-error: leak check failed: 1 object is still live at exit
+---- ui_test "leaks a receiver" ----
+error: leak check failed: 2 objects are still live at exit
+note: leaked 1 <Receiver>, and 1 object of other kinds
 
 test result: FAILED. 1 passed; 1 failed; 0 filtered out

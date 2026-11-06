@@ -20,7 +20,9 @@ mod names;
 use std::fmt;
 
 pub use discover::{EXTENSION, ModuleFile, ModulePath, ROOT_FILE, SOURCE_DIR, discover};
-pub use manifest::{Dependency, GitReference, MANIFEST_FILE, Manifest, Target, Targets, Version};
+pub use manifest::{
+    Dependency, GitReference, MANIFEST_FILE, Manifest, NativeTable, Target, Targets, Version,
+};
 pub use names::{is_keyword_or_reserved, is_valid_name, suggest_name};
 
 /// A failure to read the package that is not a diagnostic: an I/O error

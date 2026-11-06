@@ -1,7 +1,7 @@
-//! `cargo xtask sanitize <address|thread|miri>`: the sanitizer and Miri
-//! jobs of the nightly workflow (D-721), one driver for the workflow and for
-//! the local runs that stand as its evidence before the push (D-862;
-//! D-882).
+//! `cargo xtask sanitize <address|thread|miri>`: the sanitizer jobs of
+//! `nightly.yml` and the job of `miri.yml` (D-721, D-1322), one driver for
+//! the workflows and for the local runs that stand as their evidence before
+//! the push (D-862; D-882).
 //!
 //! Every step is a `cargo` command on the pinned nightly [`NIGHTLY`] (D-781).
 //! The driver edits no file, and it builds into its own target directory:
@@ -26,9 +26,9 @@
 //! The harness steps (`ui-deadlock`, `conformance`, `repl`) and the
 //! poison-off pass leave `CHEBY_MILESTONE`, `CHEBY_PENDING` and
 //! `CHEBY_PENDING_ALLOW` as the caller set them: the local evidence runs
-//! with `CHEBY_MILESTONE=M3 CHEBY_PENDING=require`, so a failing M2 trial
+//! with `CHEBY_MILESTONE=M4 CHEBY_PENDING=require`, so a failing M3 trial
 //! fails the step, and the workflow needs neither once `tests/milestone`
-//! names M3. Every other variable that selects a mode of `cheby` or of a
+//! names M4. Every other variable that selects a mode of `cheby` or of a
 //! test (`CHEBY_THREADS`, `CHEBY_RT_STRESS_MIGRATE`, `CHEBY_RC`,
 //! `CHEBY_RT_POISON`, `CHEBY_UNWIND_EDGES`, `CHEBY_BLESS`) is removed, and
 //! a step sets only what it names, so a step always runs what `--list`
@@ -79,7 +79,7 @@ use std::time::{Duration, Instant};
 use cheby_test_support::milestone::{Expectation, Setting, Verdicts};
 use cheby_test_support::{example, golden, process, threads};
 
-/// The dated nightly of the workflow (D-781, D-721).
+/// The dated nightly of `nightly.yml` and `miri.yml` (D-781, D-721).
 pub const NIGHTLY: &str = "nightly-2026-10-01";
 
 /// `CHEBY_HARNESS_SCALE` of every sanitizer step (D-748, D-725).
@@ -187,12 +187,14 @@ pub struct MiriGroup {
 }
 
 /// The Miri subset (D-884): the runtime's pure modules, the
-/// frame-walk tests (`locate_tests`) and the timer tests written for Miri. The scheduler,
-/// the pool, io, entries and the `loom` models stay out: they switch
-/// stacks, start threads that park or call the poller, which Miri cannot
-/// run. A test is skipped only for its size; a test too slow under Miri at
-/// its normal size gets a `cfg!(miri)` size in its own file where it can.
-/// Ordered longest first, so `--jobs` finishes early.
+/// frame-walk tests (`locate_tests`), the backtrace tests and the timer
+/// tests written for Miri (D-1322). The scheduler, the pool, io, entries
+/// and the `loom` models stay out: they switch stacks, start threads that
+/// park or call the poller, which Miri cannot run. A test is skipped only
+/// for its size; a test too slow under Miri at its normal size gets a
+/// `cfg!(miri)` size in its own file where it can. The four slowest groups
+/// come first, in no order among them, so `--jobs 4`, the job's setting,
+/// starts them at once and the job ends early.
 pub const MIRI_GROUPS: &[MiriGroup] = &[
     MiriGroup {
         name: "hamt",
@@ -273,6 +275,12 @@ pub const MIRI_GROUPS: &[MiriGroup] = &[
     MiriGroup {
         name: "locate",
         filter: "locate_tests::",
+        skips: &[],
+    },
+    // D-1039, D-1042: the backtrace's walks on synthetic stacks (N7b).
+    MiriGroup {
+        name: "backtrace",
+        filter: "backtrace_tests::",
         skips: &[],
     },
     MiriGroup {
@@ -1108,6 +1116,19 @@ struct PassResult {
     summary: String,
 }
 
+/// The words that follow `cheby run` for `ex`, with `--` before them, and
+/// the environment of its run, both with `{http_fixture}` expanded (D-1027).
+fn poison_off_args(
+    ex: &example::Example,
+    goldens: &example::Goldens,
+) -> Result<example::RunArgs, String> {
+    let mut run = ex.run_args(goldens)?;
+    if !run.args.is_empty() {
+        run.args.insert(0, "--".to_owned());
+    }
+    Ok(run)
+}
+
 /// Runs every example's run trial with the sanitized `cheby` and
 /// `CHEBY_RT_POISON=0`, as the conformance harness runs the base trial
 /// (the example's `env` file, `NO_COLOR=1`, no `CHEBY_THREADS` or
@@ -1131,15 +1152,15 @@ fn examples_poison_off(cx: &Context, cheby: &Path, leaks: Leaks) -> Result<PassR
         let goldens = ex.goldens()?;
         let mut cmd = Command::new(cheby);
         cmd.arg("--color=never").arg("run").current_dir(&ex.dir);
-        if !goldens.args.is_empty() {
-            cmd.arg("--").args(&goldens.args);
-        }
+        crate::cache::apply(&mut cmd)?;
+        let run = poison_off_args(&ex, &goldens)?;
+        cmd.args(&run.args);
         for var in MODE_VARIABLES {
             cmd.env_remove(var);
         }
         threads::apply(
             &mut cmd,
-            &threads::child_env(&goldens.env, threads::Variant::Unset),
+            &threads::child_env(&run.env, threads::Variant::Unset),
         );
         cmd.env("CHEBY_RT_POISON", "0");
         if let Some((var, value)) = &options {
@@ -1441,6 +1462,24 @@ mod tests {
         assert_eq!(with_caller("-Za", None, ' '), "-Za");
     }
 
+    /// Both workflows name [`NIGHTLY`] and no other dated nightly, so a bump
+    /// that misses a line fails here and not in a scheduled run on `main`.
+    #[test]
+    fn the_workflows_hold_the_dated_nightly() {
+        for name in ["nightly.yml", "miri.yml"] {
+            let workflow = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../.github/workflows")
+                .join(name);
+            let text = std::fs::read_to_string(&workflow).unwrap();
+            let dated: Vec<&str> = text
+                .match_indices("nightly-20")
+                .filter_map(|(at, _)| text.get(at..at.saturating_add(NIGHTLY.len())))
+                .collect();
+            assert!(!dated.is_empty(), "{name} names no dated nightly");
+            assert!(dated.iter().all(|d| *d == NIGHTLY), "{name}: {dated:?}");
+        }
+    }
+
     /// D-863: a per-step option is named, with its cause, in the workflow's
     /// header. Review finding MEM2-1 of gate 2: the header gave unscanned
     /// fiber stacks as the cause for the program steps, which are root
@@ -1492,6 +1531,7 @@ mod tests {
             "layout::",
             "alloc::",
             "locate_tests::",
+            "backtrace_tests::",
             "sched::timer::tests::miri_timer_",
         ];
         let mut sorted = filters.clone();
@@ -1527,6 +1567,37 @@ mod tests {
         assert_eq!(select(all.clone(), &[]).unwrap().len(), all.len());
         let err = select(plan(Sanitizer::Thread), &["examples-poison-off".to_owned()]).unwrap_err();
         assert!(err.contains("no step `examples-poison-off`"), "{err}");
+    }
+
+    /// D-1027: the poison-off pass gives 031 the fixture's URL, never the
+    /// placeholder, and an example without one its goldens as they are.
+    #[test]
+    fn poison_off_args_expand_the_http_fixture() {
+        let examples = example::all(&cheby_test_support::repo_root()).unwrap();
+        let find = |name: &str| examples.iter().find(|ex| ex.name == name).unwrap();
+        let scraper = find("031_web_scraper");
+        let goldens = scraper.goldens().unwrap();
+        assert_eq!(goldens.args, [example::HTTP_FIXTURE]);
+        let run = poison_off_args(scraper, &goldens).unwrap();
+        assert!(
+            !run.args
+                .iter()
+                .any(|arg| arg.contains(example::HTTP_FIXTURE)),
+            "{:?}",
+            run.args
+        );
+        assert_eq!(run.args.len(), 2, "{:?}", run.args);
+        assert_eq!(run.args[0], "--");
+        assert!(run.args[1].starts_with("http://"), "{:?}", run.args);
+        let hello = find("001_hello_world");
+        let goldens = hello.goldens().unwrap();
+        let run = poison_off_args(hello, &goldens).unwrap();
+        assert_eq!((run.args, run.env), (goldens.args, goldens.env));
+        let greet = find("002_greet");
+        let goldens = greet.goldens().unwrap();
+        let run = poison_off_args(greet, &goldens).unwrap();
+        assert_eq!(run.args[0], "--");
+        assert_eq!(run.args[1..], goldens.args);
     }
 
     #[test]

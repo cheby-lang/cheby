@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-156, D-1327
+//! An alias in error has its error at its declaration, so a record update
+//! that names it reports nothing more (§5.11.2).
+
+type Broken = Missing
+
+type Rec {
+  Rec { a: Int },
+}
+
+fn moved(r: Rec) -> Rec {
+  Broken { ..r, a: 1 }
+}
+
+fn main() {
+  assert moved(Rec { a: 0 }).a == 1
+}

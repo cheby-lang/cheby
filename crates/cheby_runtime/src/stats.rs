@@ -224,7 +224,9 @@ const COUNTING_ON: u8 = 2;
 
 /// Whether events are counted, process-wide (D-768): unknown until the
 /// first [`counting`] reads [`enabled`], then on or off; [`count_events`]
-/// turns it on for good.
+/// turns it on for good. Exported as `cheby_rt_stats_counting`, the name
+/// [`counting_flag`] is registered under, so a linker finds it (D-932).
+#[unsafe(export_name = "cheby_rt_stats_counting")]
 static COUNTING: AtomicU8 = AtomicU8::new(COUNTING_UNKNOWN);
 
 /// Whether the runtime counts events now (D-768): when `CHEBY_RT_STATS=1`

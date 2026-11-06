@@ -1,0 +1,29 @@
+//! What the session imports: every name of it is withdrawn in turn.
+
+/// A record, in both namespaces.
+pub type Point {
+  Point { x: Int },
+}
+
+/// A type that hides the prelude's.
+pub type Option {
+  Nothing,
+}
+
+/// An interface for a generic bound.
+pub interface Sized {
+  fn size(Self) -> Int
+}
+
+/// A constant.
+pub const limit: Int = 1
+
+/// A function.
+pub fn value() -> Int {
+  1
+}
+
+/// A function that no reload touches.
+pub fn stays() -> Int {
+  1
+}

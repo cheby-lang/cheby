@@ -139,6 +139,8 @@ noise, show in the group (release `cheby`, macOS arm64, quiet machine, checkpoin
 | `--gate G/NAME`          | A benchmark whose own ratio `--fail-above` checks too (repeatable)                          |
 | `--accepted-by D`        | A live decision that accepts what `--fail-above` rejects, which is then a note (repeatable) |
 | `--accepted-new-since L` | Each `--accepted-by` decision must be absent from the decision log `L`, the base's          |
+| `--split`                | Also splits each benchmark's time outside `main` by subtraction (D-1254, D-1271)            |
+| `--split-runs N`         | Timed runs per command of `--split` (default 5)                                             |
 
 For each benchmark the command runs `cheby run` in its directory `--runs` times and times each run
 from spawn to exit, compilation included. It reports the median, the minimum and the maximum. Then it
@@ -186,7 +188,11 @@ keeps the trailer only if its message keeps it.
 `cargo xtask bench-compile` reports compile speed on generated projects (D-247). Since D-718 its
 build rows also show `code KiB`, the machine code the JIT defined, and `RC ops`, the `dup` and `drop`
 statements of every MIR unit. It takes `--shapes 10k,100k,1m`, `--cheby PATH`, `--env K=V` and
-`--json OUT` as well.
+`--json OUT` as well. Every row also has a cold `cheby check` and a cold `cheby build`, on an empty
+cache and on one that std's records fill first (D-1280). Instead of the rows, `--oqp11` reads
+OQ-P11's rounds on `wide` and `deep` at `--lines` lines (1M by default), with `--rounds` rounds of
+each edit (5 by default), and `--restarts` times RB-3's three causes of a warm restart (D-1278,
+D-1279). `--from DIR` takes pre-generated projects for them.
 
 ## The Rust baselines
 

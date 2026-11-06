@@ -1,0 +1,20 @@
+// @mode: run-fail
+// @command: build
+// @exit: 1
+// @milestone: M3
+// @decisions: D-943, D-1026
+//! `cheby build` reports E0053 for a native symbol that a reached
+//! `@external` names and nothing defines, before anything is linked, just
+//! as `cheby run` does (§12.5.1).
+
+@!target(native)
+
+import std::io
+
+@external(native, "app_build_missing_symbol")
+fn missing() -> Int
+
+fn main() {
+  io::println("never printed")
+  let _ = missing()
+}

@@ -1,0 +1,18 @@
+error[E0071]: literal out of range
+ --> tests/ui/03-types/literals/just_below_any_integer_type.cheby:8:3
+  |
+8 |   340282366920938463463374607431768211455
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is too large for any integer type
+
+error[E0071]: literal out of range for `Int`
+  --> tests/ui/03-types/literals/just_below_any_integer_type.cheby:13:5
+   |
+13 |     170141183460469231731687303715884105728 => 1
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this literal does not fit in any integer type
+
+error[E0071]: literal out of range for `Int`
+  --> tests/ui/03-types/literals/just_below_any_integer_type.cheby:14:5
+   |
+14 |     340282366920938463463374607431768211455 => 2
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this literal does not fit in any integer type
+

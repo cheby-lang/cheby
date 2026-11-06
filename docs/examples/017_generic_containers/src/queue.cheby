@@ -140,8 +140,7 @@ pub fn show<T: Show>(queue: Queue<T>) -> String {
   // `T` is a type parameter, so its module cannot be named. Its `show`
   // is called through the interface, and the bound supplies it
   // (D-173).
-  let items =
-    to_list(queue)
+  let items = to_list(queue)
     |> list::map(_, fn(item) { Show::show(item) })
     |> string::join(_, ", ")
   "queue [{items}]"
@@ -159,7 +158,10 @@ priv fn balance<T>(front: List<T>, back: List<T>) -> Queue<T> {
 }
 
 test "items leave in the order they arrived" {
-  let filled = new() |> push(_, 1) |> push(_, 2) |> push(_, 3)
+  let filled = new()
+    |> push(_, 1)
+    |> push(_, 2)
+    |> push(_, 3)
   let assert Some((first, after_first)) = pop(filled)
   let assert Some((second, after_second)) = pop(push(after_first, 4))
   assert (first, second) == (1, 2)
@@ -176,9 +178,7 @@ test "the front is empty only when the whole queue is empty" {
   let assert Some((_, popped_once)) = pop(two)
   let assert Some((_, popped_twice)) = pop(popped_once)
   let refilled = push(popped_twice, 3)
-  list::each([one, two, popped_once, popped_twice, refilled], fn(checked) {
-    assert holds(checked)
-  })
+  list::each([one, two, popped_once, popped_twice, refilled], fn(checked) { assert holds(checked) })
   // Popping 1 left only `back`, and `balance` moved it to the front.
   assert popped_once == Queue { front: [2], back: [] }
 }
@@ -209,7 +209,10 @@ test "pushing and popping leave the original queue unchanged" {
 }
 
 test "== compares the halves and same_items compares the items" {
-  let pushed = new() |> push(_, 1) |> push(_, 2) |> push(_, 3)
+  let pushed = new()
+    |> push(_, 1)
+    |> push(_, 2)
+    |> push(_, 3)
   let listed = from_list([1, 2, 3])
   assert pushed == Queue { front: [1], back: [3, 2] }
   assert pushed != listed

@@ -19,16 +19,16 @@
 //! module, used as `heap::push`, and once for the type, so signatures
 //! can say `Graph`.
 
+import route_planner::graph
+import route_planner::graph::{Graph}
+import route_planner::heap
+import route_planner::heap::{Heap}
 import std::io
 import std::list
 import std::map
 import std::map::{Map}
 import std::set
 import std::string
-import route_planner::graph
-import route_planner::graph::{Graph}
-import route_planner::heap
-import route_planner::heap::{Heap}
 
 /// The roads of the map, with their lengths in km.
 ///
@@ -65,7 +65,10 @@ const trips: List<(String, String)> = [
 
 /// A route: the cities on it, from the start to the end, and its total
 /// length in km.
-type Route { cities: List<String>, km: Int }
+type Route {
+  cities: List<String>,
+  km: Int,
+}
 
 /// A route still to try, as the heap holds it: the length so far in
 /// km, the city it reaches and the city just before that one.
@@ -79,9 +82,7 @@ type Route { cities: List<String>, km: Int }
 type Entry = (Int, String, String)
 
 fn main() {
-  list::each(trips, fn((from, to)) {
-    io::println(describe(netherlands, from, to))
-  })
+  list::each(trips, fn((from, to)) { io::println(describe(netherlands, from, to)) })
 }
 
 /// Returns a line that shows the shortest route from `from` to `to`, or
@@ -141,8 +142,7 @@ priv fn search(network: Graph, from: String, to: String) -> Option<Route> {
           Some(Route { cities, km })
         }
         _ => {
-          let next =
-            graph::legs(network, city)
+          let next = graph::legs(network, city)
             |> list::fold(_, rest, fn(found, (neighbour, length)) {
               case set::contains(visited, neighbour) {
                 True => found
@@ -260,10 +260,7 @@ test "ties go to the city first in alphabetical order" {
     ("Leiden", "Zoetermeer", 20),
     ("Zoetermeer", "Gouda", 15),
   ]
-  let through_alphen = Some(Route {
-    cities: ["Leiden", "Alphen aan den Rijn", "Gouda"],
-    km: 35,
-  })
+  let through_alphen = Some(Route { cities: ["Leiden", "Alphen aan den Rijn", "Gouda"], km: 35 })
   assert shortest_route(graph::from_roads(west), "Leiden", "Gouda") == through_alphen
   assert shortest_route(graph::from_roads(list::reverse(west)), "Leiden", "Gouda") == through_alphen
 }

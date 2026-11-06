@@ -1,0 +1,251 @@
+// @decisions: D-043, D-609, D-625, D-1330
+> import std::io
+> import store::other
+> fn one() -> other::P {
+.   other::make()
+. }
+> fn three() -> Int {
+.   one().v
+. }
+> three()
+1 : Int
+> type Q = other::P
+> fn first() -> Q {
+.   other::make()
+. }
+> fn second() -> Q {
+.   first()
+. }
+> fn third() -> Q {
+.   second()
+. }
+> fn fourth() -> Int {
+.   third().v
+. }
+> fn fifth() -> Int {
+.   fourth()
+. }
+> fifth()
+1 : Int
+> fn later() -> other::P {
+.   third()
+. }
+> later().v
+1 : Int
+> const made: other::P = other::make()
+> fn read_made() -> Int {
+.   made.v
+. }
+> read_made()
+1 : Int
+> fn seed() -> other::P {
+.   other::make()
+. }
+> fn pong(_n: Int) -> Q {
+.   seed()
+. }
+> fn ping(n: Int) -> Q {
+.   let _ = pong(n)
+.   seed()
+. }
+> fn pong(n: Int) -> Q {
+.   case {
+.     n > 0 => ping(n - 1)
+.     _ => seed()
+.   }
+. }
+> fn tick() -> Int {
+.   ping(2).v
+. }
+> tick()
+1 : Int
+> fn both() -> Int {
+.   one().v + other::extra()
+. }
+> both()
+2 : Int
+> io::write_file("src/other.cheby", r#"pub type P {
+.   P { v: Int },
+. }
+. pub fn make() -> P {
+.   P { v: 2 }
+. }
+. pub fn extra() -> Int {
+.   1
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+> three()
+2 : Int
+> fifth()
+2 : Int
+> later().v
+2 : Int
+> read_made()
+2 : Int
+> tick()
+2 : Int
+> both()
+3 : Int
+> io::write_file("src/other.cheby", r#"pub type P {
+.   P { v: Int },
+. }
+. pub fn make() -> P {
+.   P { v: 3 }
+. }
+. pub fn extra() -> Int {
+.   1
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+error[E0047]: mismatched types
+ --> <repl:21>:3:14
+  |
+1 | fn pong(n: Int) -> Q {
+  |                    - expected because of this return type
+2 |   case {
+3 |     n > 0 => ping(n - 1)
+  |              ^^^^^^^^^^^ expected `other::P`, found `other::P (stale)`
+  |
+  = note: `pong` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> (three(), fifth(), read_made(), tick(), both())
+(3, 3, 3, 3, 4) : (Int, Int, Int, Int, Int)
+> io::write_file("src/other.cheby", r#"pub type P {
+.   P { v: Int },
+. }
+. pub fn make() -> P {
+.   P { v: 4 }
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+error[E0042]: there is no value `extra` in module `store::other`
+ --> <repl:24>:2:20
+  |
+2 |   one().v + other::extra()
+  |             -----  ^^^^^ not found
+  |             |
+  |             `store::other`
+  |
+  = note: `both` was checked again because `:reload` changed a module it uses; it keeps its old definition
+
+error[E0047]: mismatched types
+ --> <repl:21>:3:14
+  |
+1 | fn pong(n: Int) -> Q {
+  |                    - expected because of this return type
+2 |   case {
+3 |     n > 0 => ping(n - 1)
+  |              ^^^^^^^^^^^ expected `other::P`, found `other::P (stale)`
+  |
+  = note: `pong` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> (three(), fifth(), read_made(), tick(), both())
+(4, 4, 4, 4, 4) : (Int, Int, Int, Int, Int)
+> io::write_file("src/other.cheby", r#"pub type P {
+.   P { v: String },
+. }
+. pub fn make() -> P {
+.   P { v: "text" }
+. }
+. pub fn extra() -> Int {
+.   1
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::other`
+error[E0047]: mismatched types
+ --> <repl:4>:2:3
+  |
+1 | fn three() -> Int {
+  |               --- expected because of this return type
+2 |   one().v
+  |   ^^^^^^^ expected `Int`, found `String`
+  |
+  = note: `three` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+error[E0047]: mismatched types
+ --> <repl:10>:2:3
+  |
+1 | fn fourth() -> Int {
+  |                --- expected because of this return type
+2 |   third().v
+  |   ^^^^^^^^^ expected `Int`, found `String`
+  |
+  = note: `fourth` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+error[E0047]: mismatched types
+ --> <repl:16>:2:3
+  |
+1 | fn read_made() -> Int {
+  |                   --- expected because of this return type
+2 |   made.v
+  |   ^^^^^^ expected `Int`, found `String`
+  |
+  = note: `read_made` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+error[E0047]: mismatched types
+ --> <repl:21>:3:14
+  |
+1 | fn pong(n: Int) -> Q {
+  |                    - expected because of this return type
+2 |   case {
+3 |     n > 0 => ping(n - 1)
+  |              ^^^^^^^^^^^ expected `other::P`, found `other::P (stale)`
+  |
+  = note: `pong` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+error[E0047]: mismatched types
+ --> <repl:22>:2:3
+  |
+1 | fn tick() -> Int {
+  |              --- expected because of this return type
+2 |   ping(2).v
+  |   ^^^^^^^^^ expected `Int`, found `String`
+  |
+  = note: `tick` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+error[E0047]: mismatched types
+ --> <repl:24>:2:13
+  |
+2 |   one().v + other::extra()
+  |   -------   ^^^^^^^^^^^^^^ expected `String`, found `Int`
+  |   |
+  |   the left operand of `+` has type `String`
+  |
+  = note: `both` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> three()
+4 : Int
+> type T {
+.   T(Int),
+. }
+> fn base() -> Int {
+.   1
+. }
+> fn mid(_t: T) -> String {
+.   let x = base()
+.   "{x}"
+. }
+> fn top() -> String {
+.   mid(T(1))
+. }
+> top()
+"1" : String
+> type T {
+.   T(Int),
+. }
+> top()
+"1" : String
+> fn base() -> String {
+.   "new"
+. }
+> top()
+"new" : String

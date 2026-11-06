@@ -25,7 +25,9 @@ import std::string
 
 /// An amount of money in cents. It may be negative, as the difference
 /// of two amounts can be.
-pub type Money { Money(Int) }
+pub type Money {
+  Money(Int),
+}
 
 /// No money at all.
 pub const zero: Money = Money(0)

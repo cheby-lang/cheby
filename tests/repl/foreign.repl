@@ -1,28 +1,27 @@
-// @decisions: D-475
-> @external(native, "cheby_io_println")
-. fn say(text: String)
-> fn greet() {
-.   say("hello")
+// @decisions: D-475, D-944
+> @external(native, "labs")
+. fn magnitude(n: Int) -> Int
+> fn report() -> Int {
+.   magnitude(-5)
 . }
-> greet()
-hello
-> import std::io
-> fn say(text: String) {
-.   io::println("<{text}>")
+> report()
+5 : Int
+> fn magnitude(n: Int) -> Int {
+.   n * 10
 . }
-> greet()
-<hello>
-> @external(native, "cheby_io_println")
-. fn say(text: String)
-> greet()
-hello
+> report()
+-50 : Int
+> @external(native, "labs")
+. fn magnitude(n: Int) -> Int
+> report()
+5 : Int
 > @external(native, "no_such_symbol_anywhere")
 . fn missing() -> Int
 error[E0053]: the native symbol `no_such_symbol_anywhere` is not defined
- --> <repl:9>:1:19
+ --> <repl:8>:1:19
   |
 1 | @external(native, "no_such_symbol_anywhere")
   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
   |
-  = note: the symbol must be defined by the Cheby runtime or the running process
+  = note: the symbol must be defined by the Cheby runtime, the package's native code or libraries, or the running process
 

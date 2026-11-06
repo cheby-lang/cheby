@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! With `CHEBY_BACKTRACE=1`, a detached fiber's report is followed by its
+//! backtrace, which ends at the trampoline the runtime entered the
+//! fiber's function through: its last line is
+//! `<called from outside Cheby code>` (§10.4, §11.6).
+
+import std::channel
+import std::fiber
+import std::io
+
+fn fail(start: channel::Receiver<Nil>, done: channel::Sender<Nil>) -> Nil {
+  let _ = done
+  let assert Ok(Nil) = channel::receive(start)
+  panic as "the detached fiber failed"
+}
+
+fn main() {
+  let (go_tx, go_rx) = channel::new::<Nil>(0)
+  let (done_tx, done_rx) = channel::new::<Nil>(1)
+  fiber::spawn_detached(fn() { fail(go_rx, done_tx) })
+  io::println("main lets the detached fiber go")
+  let assert Ok(Nil) = channel::send(go_tx, Nil)
+  let ended = channel::receive(done_rx)
+  io::println("the detached fiber has ended: {ended:?}")
+}

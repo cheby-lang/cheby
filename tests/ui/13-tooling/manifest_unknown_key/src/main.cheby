@@ -1,7 +1,8 @@
 // @mode: check-fail
-// @decisions: D-444
+// @decisions: D-444, D-940
 //! A manifest key that §13.3 does not define is an error. The message
 //! quotes the manifest's file name, which stays as it is in the golden.
+//! The help lists every key, `[native]` included (D-940).
 
 import std::io
 

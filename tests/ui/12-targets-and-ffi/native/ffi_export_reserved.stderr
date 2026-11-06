@@ -1,0 +1,8 @@
+error[E0055]: the native symbol `cheby_ffi_dup` is reserved for the toolchain
+  --> tests/ui/12-targets-and-ffi/native/ffi_export_reserved.cheby:10:19
+   |
+10 | @external(native, "cheby_ffi_dup")
+   |                   ^^^^^^^^^^^^^^^
+   |
+   = note: the Cheby runtime exports this symbol, so only the standard library may bind it
+

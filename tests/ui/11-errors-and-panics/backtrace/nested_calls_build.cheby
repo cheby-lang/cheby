@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @command: build
+// @milestone: M3
+// @decisions: D-1038, D-1039, D-1040, D-1041, D-1042, D-1043
+//! An executable honors `CHEBY_BACKTRACE` as `cheby run` does: the
+//! program of `nested_calls`, built with `cheby build`, prints the same
+//! backtrace lines, from the names and call sites of its module records
+//! (§11.6).
+
+import std::io
+import std::list
+
+fn check(n: Int) -> Int {
+  case {
+    n > 2 => panic as "too big: {n}"
+    _ => n * 2
+  }
+}
+
+fn double_all(xs: List<Int>) -> List<Int> {
+  let doubled = list::map(xs, fn(n) { 1 + check(n) })
+  doubled
+}
+
+fn main() {
+  let doubled = double_all([1, 2, 3])
+  let count = list::length(doubled)
+  io::println("{count}")
+}

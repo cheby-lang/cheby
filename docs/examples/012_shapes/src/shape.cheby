@@ -77,8 +77,17 @@ test "translate moves every kind of shape and keeps its kind" {
   let circle = Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 1.0 }
   let rect = Rect { label: "box", origin: point::new(0.0, 0.0), width: 2.0, height: 3.0 }
   let dot = Dot { label: "star", origin: point::new(5.0, 5.0) }
-  assert translate(circle, 2.0, 3.0) == Circle { label: "sun", origin: point::new(3.0, 5.0), radius: 1.0 }
-  assert translate(rect, 2.0, 3.0) == Rect { label: "box", origin: point::new(2.0, 3.0), width: 2.0, height: 3.0 }
+  assert translate(circle, 2.0, 3.0) == Circle {
+    label: "sun",
+    origin: point::new(3.0, 5.0),
+    radius: 1.0,
+  }
+  assert translate(rect, 2.0, 3.0) == Rect {
+    label: "box",
+    origin: point::new(2.0, 3.0),
+    width: 2.0,
+    height: 3.0,
+  }
   assert translate(dot, 2.0, 3.0) == Dot { label: "star", origin: point::new(7.0, 8.0) }
 }
 
@@ -93,7 +102,12 @@ test "an update leaves the original shape unchanged" {
 
 test "rename changes only the label" {
   let rect = Rect { label: "box", origin: point::new(1.0, 1.0), width: 2.0, height: 3.0 }
-  assert rename(rect, "shed") == Rect { label: "shed", origin: point::new(1.0, 1.0), width: 2.0, height: 3.0 }
+  assert rename(rect, "shed") == Rect {
+    label: "shed",
+    origin: point::new(1.0, 1.0),
+    width: 2.0,
+    height: 3.0,
+  }
 }
 
 test "drop_to changes only the height of the origin" {
@@ -106,7 +120,12 @@ test "scale resizes circles and rectangles and leaves dots alone" {
   let rect = Rect { label: "box", origin: point::new(0.0, 0.0), width: 2.0, height: 3.0 }
   let dot = Dot { label: "star", origin: point::new(5.0, 5.0) }
   assert scale(circle, 2.0) == Circle { label: "sun", origin: point::new(1.0, 2.0), radius: 3.0 }
-  assert scale(rect, 0.5) == Rect { label: "box", origin: point::new(0.0, 0.0), width: 1.0, height: 1.5 }
+  assert scale(rect, 0.5) == Rect {
+    label: "box",
+    origin: point::new(0.0, 0.0),
+    width: 1.0,
+    height: 1.5,
+  }
   assert scale(dot, 2.0) == dot
 }
 

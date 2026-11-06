@@ -1,0 +1,6 @@
+name = "app"
+version = "0.1.0"
+
+[native]
+sources = ["src/ffi.c"]
+headers = ["src/ffi.h"]

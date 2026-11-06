@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-084, D-1327
+//! 2^128 - 1, the last value the lexer holds, fits no integer type either
+//! (§3.3.4), in an expression or in a pattern, and nor does any value from
+//! 2^127 on in a pattern. These reports do not depend on the one for 2^128.
+
+fn below() -> Int {
+  340282366920938463463374607431768211455
+}
+
+fn pattern(n: Int) -> Int {
+  case n {
+    170141183460469231731687303715884105728 => 1
+    340282366920938463463374607431768211455 => 2
+    _ => 0
+  }
+}
+
+fn main() {
+  assert below() == pattern(1)
+}

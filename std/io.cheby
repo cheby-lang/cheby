@@ -22,23 +22,47 @@ pub type Error {
   message: String,
 }
 
-/// The kinds of failure: one per predicate, and every other kind (D-367).
+/// The kinds of failure: one per predicate, and every other kind (D-367,
+/// D-981).
 type Kind {
   NotFound,
   PermissionDenied,
   InvalidData,
+  ConnectionRefused,
+  ConnectionReset,
+  AddressInUse,
+  HostNotFound,
+  Closed,
+  InvalidInput,
+  AlreadyExists,
+  IsADirectory,
+  NotADirectory,
+  DirectoryNotEmpty,
   Other,
 }
 
 /// The `Error` for the kernels' pair: `1` not found, `2` permission
-/// denied, `3` invalid UTF-8, anything else another kind with the
+/// denied, `3` invalid UTF-8, `4` already exists, `5` is a directory, `6`
+/// not a directory, `7` directory not empty, `8` connection refused, `9`
+/// connection reset, `10` address in use, `11` host not found, `12`
+/// closed, `13` invalid input, anything else another kind with the
 /// operating system's message. A kind with a predicate drops the message,
-/// so its text is the same on every platform (D-345).
+/// so its text is the same on every platform (D-345, D-981).
 fn from_os(code: Int, message: String) -> Error {
   case code {
     1 => Error { kind: NotFound, message: "" }
     2 => Error { kind: PermissionDenied, message: "" }
     3 => Error { kind: InvalidData, message: "" }
+    4 => Error { kind: AlreadyExists, message: "" }
+    5 => Error { kind: IsADirectory, message: "" }
+    6 => Error { kind: NotADirectory, message: "" }
+    7 => Error { kind: DirectoryNotEmpty, message: "" }
+    8 => Error { kind: ConnectionRefused, message: "" }
+    9 => Error { kind: ConnectionReset, message: "" }
+    10 => Error { kind: AddressInUse, message: "" }
+    11 => Error { kind: HostNotFound, message: "" }
+    12 => Error { kind: Closed, message: "" }
+    13 => Error { kind: InvalidInput, message: "" }
     _ => Error { kind: Other, message }
   }
 }
@@ -58,6 +82,16 @@ fn hash(error: Error) -> (Int, String) {
     NotFound => (1, "")
     PermissionDenied => (2, "")
     InvalidData => (3, "")
+    AlreadyExists => (4, "")
+    IsADirectory => (5, "")
+    NotADirectory => (6, "")
+    DirectoryNotEmpty => (7, "")
+    ConnectionRefused => (8, "")
+    ConnectionReset => (9, "")
+    AddressInUse => (10, "")
+    HostNotFound => (11, "")
+    Closed => (12, "")
+    InvalidInput => (13, "")
     Other => (0, error.message)
   }
 }
@@ -112,7 +146,13 @@ pub fn write_stderr(text: String) -> Result<Nil, Error> {
 /// Reads the next line from standard input, without its line ending, or
 /// `None` at the end of input (D-305).
 pub fn read_line() -> Result<Option<String>, Error> {
-  lift(sys_read_line())
+  // No call may follow the kernel on success: a call's entry check would
+  // deliver a pending cancellation and drop the line just taken from
+  // standard input's reader (D-1065).
+  case sys_read_line() {
+    Ok(line) => Ok(line)
+    Err(failure) => lift(Err(failure))
+  }
 }
 
 // Files
@@ -195,14 +235,178 @@ pub fn is_invalid_data(error: Error) -> Bool {
   }
 }
 
+/// Tells whether `error` means that something already exists at a path
+/// where a directory, or a file opened with `file::create_new`, was to be
+/// created (D-981, D-1066).
+pub fn is_already_exists(error: Error) -> Bool {
+  case error.kind {
+    AlreadyExists => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a path names a directory where a file
+/// was expected (D-981).
+pub fn is_a_directory(error: Error) -> Bool {
+  case error.kind {
+    IsADirectory => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a path names something other than a
+/// directory where a directory was expected, including a path that goes
+/// through a file (D-981).
+pub fn is_not_a_directory(error: Error) -> Bool {
+  case error.kind {
+    NotADirectory => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a directory could not be removed
+/// because it has entries (D-981).
+pub fn is_directory_not_empty(error: Error) -> Bool {
+  case error.kind {
+    DirectoryNotEmpty => True
+    _ => False
+  }
+}
+
+test "the file kinds have their predicates and fixed texts" {
+  let kinds = [
+    (4, "already exists"),
+    (5, "is a directory"),
+    (6, "not a directory"),
+    (7, "directory not empty"),
+  ]
+  fn check(rest: List<(Int, String)>) {
+    case rest {
+      [] => Nil
+      [(code, text), ..tail] => {
+        let error = from_os(code, "the system's own words")
+        assert show(error) == text
+        assert "{error:?}" == text
+        assert error == from_os(code, "other words")
+        assert error != from_os(0, "the system's own words")
+        assert is_already_exists(error) == (code == 4)
+        assert is_a_directory(error) == (code == 5)
+        assert is_not_a_directory(error) == (code == 6)
+        assert is_directory_not_empty(error) == (code == 7)
+        assert !is_not_found(error)
+        assert !is_invalid_input(error)
+        check(tail)
+      }
+    }
+  }
+  check(kinds)
+}
+
+/// Tells whether `error` means that nothing listens at the address a
+/// connection was made to (D-981).
+pub fn is_connection_refused(error: Error) -> Bool {
+  case error.kind {
+    ConnectionRefused => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that the peer of a connection reset it,
+/// aborted it or went away while it was written to (D-981).
+pub fn is_connection_reset(error: Error) -> Bool {
+  case error.kind {
+    ConnectionReset => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that another socket already listens on an
+/// address and port (D-981).
+pub fn is_address_in_use(error: Error) -> Bool {
+  case error.kind {
+    AddressInUse => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a host name could not be resolved.
+/// Every failure of name lookup is this one kind (D-981).
+pub fn is_host_not_found(error: Error) -> Bool {
+  case error.kind {
+    HostNotFound => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that a handle was used after it was
+/// closed, or was closed while a fiber waited on it (D-981, D-1063).
+pub fn is_closed(error: Error) -> Bool {
+  case error.kind {
+    Closed => True
+    _ => False
+  }
+}
+
+/// Tells whether `error` means that an argument could not be used: a path
+/// that contains U+0000, a port outside 0 to 65535, or a file handle used
+/// in a mode it was not opened for (D-981).
+pub fn is_invalid_input(error: Error) -> Bool {
+  case error.kind {
+    InvalidInput => True
+    _ => False
+  }
+}
+
+test "the network kinds have their predicates and fixed texts" {
+  let kinds = [
+    (8, "connection refused"),
+    (9, "connection reset"),
+    (10, "address in use"),
+    (11, "host not found"),
+    (12, "closed"),
+    (13, "invalid input"),
+  ]
+  fn check(rest: List<(Int, String)>) {
+    case rest {
+      [] => Nil
+      [(code, text), ..tail] => {
+        let error = from_os(code, "the system's own words")
+        assert show(error) == text
+        assert "{error:?}" == text
+        assert error == from_os(code, "other words")
+        assert error != from_os(0, "the system's own words")
+        assert is_connection_refused(error) == (code == 8)
+        assert is_connection_reset(error) == (code == 9)
+        assert is_address_in_use(error) == (code == 10)
+        assert is_host_not_found(error) == (code == 11)
+        assert is_closed(error) == (code == 12)
+        assert is_invalid_input(error) == (code == 13)
+        assert !is_not_found(error)
+        check(tail)
+      }
+    }
+  }
+  check(kinds)
+}
+
 /// Returns the text of `error`: a fixed message for each kind with a
-/// predicate, and the operating system's message otherwise (D-345). It
-/// makes `Error` satisfy `Show`.
+/// predicate, and the operating system's message otherwise (D-345,
+/// D-981). It makes `Error` satisfy `Show`.
 pub fn show(error: Error) -> String {
   case error.kind {
     NotFound => "not found"
     PermissionDenied => "permission denied"
     InvalidData => "invalid UTF-8"
+    AlreadyExists => "already exists"
+    IsADirectory => "is a directory"
+    NotADirectory => "not a directory"
+    DirectoryNotEmpty => "directory not empty"
+    ConnectionRefused => "connection refused"
+    ConnectionReset => "connection reset"
+    AddressInUse => "address in use"
+    HostNotFound => "host not found"
+    Closed => "closed"
+    InvalidInput => "invalid input"
     Other => error.message
   }
 }
@@ -212,6 +416,56 @@ test "an io error shows a fixed message" {
   assert show(reason) == "not found"
   assert "{reason}" == "not found"
   assert "{reason:?}" == "not found"
+}
+
+// Streams (D-1072, ADR-0070). D-1297: they sit after `show` so that no std location before
+// it moves.
+
+/// A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the
+/// stream, at most `limit` of them, or `Ok(None)` at its end. `file::File`, `net::Connection` and
+/// the standard-stream handles satisfy it through their modules' `read_bytes` (D-1062, D-1071).
+pub interface Source {
+  fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, Error>
+}
+
+/// A stream that bytes are written to. `write_bytes(sink, data)` writes all of `data`.
+/// `file::File`, `net::Connection` and the standard-stream handles satisfy it through their
+/// modules' `write_bytes` (D-1062, D-1071).
+pub interface Sink {
+  fn write_bytes(Self, bytes::Bytes) -> Result<Nil, Error>
+}
+
+/// Reads blocks of at most 64 KiB from `source` until its end, writes each one to `sink`, and
+/// returns the number of bytes copied (D-1072). It stops at the first `Err` of either side and
+/// returns it; what was written before stays written.
+pub fn copy<S: Source, K: Sink>(source: S, sink: K) -> Result<Int, Error> {
+  copy_from(source, sink, 0)
+}
+
+/// `copy`'s loop, with the bytes copied so far. It reads at most 64 KiB at once (D-1072); the size
+/// is a literal, so that `std::io` declares no constant.
+fn copy_from<S: Source, K: Sink>(source: S, sink: K, copied: Int) -> Result<Int, Error> {
+  case Source::read_bytes(source, 65_536) {
+    Err(reason) => Err(reason)
+    Ok(None) => Ok(copied)
+    Ok(Some(block)) => case Sink::write_bytes(sink, block) {
+      Err(reason) => Err(reason)
+      Ok(_) => copy_from(source, sink, copied + bytes_length(block))
+    }
+  }
+}
+
+/// Returns an `Error` whose text is `message`, of the kind that the operating system's other
+/// failures have, so no predicate holds for it (D-342, D-981, D-1072).
+pub fn other(message: String) -> Error {
+  Error { kind: Other, message }
+}
+
+test "other builds an error with its own text" {
+  let reason = other("upstream closed")
+  assert "{reason}" == "upstream closed"
+  assert !is_not_found(reason)
+  assert reason == other("upstream closed")
 }
 
 // Kernels: each reports a failure as a kind code and the operating
@@ -256,3 +510,9 @@ fn sys_write_file(path: String, text: String) -> Result<Nil, (Int, String)>
 @external(native, "cheby_io_sys_write_file_bytes")
 @external(js, "./io.mjs", "sys_write_file_bytes")
 fn sys_write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, (Int, String)>
+
+/// `bytes::length`'s own kernel, for `copy`'s count. A call of `bytes::length` would make every
+/// program that uses `std::io` compile all of `std::bytes` with it. D-1297.
+@external(native, "cheby_bytes_length")
+@external(js, "./bytes.mjs", "length")
+priv fn bytes_length(data: bytes::Bytes) -> Int

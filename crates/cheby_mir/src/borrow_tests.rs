@@ -315,11 +315,25 @@ priv fn describe(error: Oops) -> String {
         })
         .expect("the entries unit holds `show`'s value shim");
     assert!(facts.used_as_value(show));
+    // D-1194: only the entries unit makes `show` a
+    // value, through `main`'s error dictionary, which holds `fn app::show`
+    // itself; without its facts `show` would borrow and the counting would
+    // stop on that dictionary's call ("a borrowed use in a moving
+    // terminator"). So the entries unit's facts stay in the scope.
+    let scope: Vec<_> = units
+        .iter()
+        .filter(|u| u.unit != crate::UnitKind::Entries)
+        .collect();
+    assert!(!collect_facts(&scope).used_as_value(show));
     let m = lower_package_inferred("app", &[("", source)], false)
         .unwrap()
         .masks;
     assert_eq!(of(&m, "app::show"), BorrowMask::OWNED, "{m:?}");
     assert_eq!(of(&m, "app::describe"), mask(&[0]), "{m:?}");
+    // Counted and validated with the ownership simulation, as a build.
+    let built = lower_source(&[("", source)]);
+    let shim = built.any_function("shim app::show");
+    assert!(!shim.contains("borrow"), "{shim}");
 }
 
 #[test]
@@ -408,13 +422,15 @@ priv fn run(op: Op) -> Bool {
 }
 
 priv fn text(s: String, n: Int) -> String {
-  \"{s}{n}\"
+  \"{n}{s}\"
 }
 ",
     );
     assert_eq!(of(&m, "app::apply"), BorrowMask::OWNED, "{m:?}");
     assert_eq!(of(&m, "app::run"), BorrowMask::OWNED, "{m:?}");
-    // A raw `Int` is never counted, so never in a mask.
+    // A raw `Int` is never counted, so never in a mask. `s` follows `n`
+    // in the literal: a leading `String` would be the buffer and consumed
+    // (D-1055, D-806).
     assert_eq!(of(&m, "app::text"), mask(&[0]), "{m:?}");
 }
 
@@ -438,12 +454,14 @@ priv fn count<T>(xs: List<T>) -> Int {
 }
 
 priv fn label<T: Show>(x: T, name: String) -> String {
-  \"{name}: {x}\"
+  \"{x}: {name}\"
 }
 ",
     );
     assert_eq!(of(&m, "app::count"), BorrowMask::OWNED, "{m:?}");
-    // The dictionary is parameter 0, `x` is 1 and `name` is 2.
+    // The dictionary is parameter 0, `x` is 1 and `name` is 2. `name`
+    // follows `x` in the literal: a leading `String` would be the buffer
+    // and consumed (D-1055, D-806).
     assert_eq!(of(&m, "app::label"), mask(&[2]), "{m:?}");
 }
 

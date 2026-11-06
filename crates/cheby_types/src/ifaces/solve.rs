@@ -236,7 +236,11 @@ impl<'a> IfaceCx<'a> {
         let item = module
             .item(index)
             .ok_or_else(|| Ice::new("a looked-up item is missing"))?;
-        if item.kind != DefKind::Fn {
+        // A private function a warm interface holds without its signature
+        // is invisible here: a type that reaches another module is not
+        // private, so that function cannot satisfy it, and whatever a module
+        // reports for its lack is checked again on fresh interfaces (D-1136).
+        if item.kind != DefKind::Fn || module.is_hidden(index) {
             return Ok(Err(missing));
         }
         let found = DefId::new(module.module, index);

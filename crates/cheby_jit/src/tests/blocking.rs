@@ -172,6 +172,32 @@ fn compile(p: Prog, symbols: &[(&str, *const u8)]) -> Jit {
     jit
 }
 
+/// A missing symbol that only an `@blocking` call names, which only its
+/// shim's import word reaches (D-913), is reported before finalizing,
+/// never as a panic in Cranelift (D-532), and the failed batch leaves no
+/// import word behind.
+#[test]
+fn a_missing_blocking_symbol_is_reported_before_finalizing() {
+    let mut p = Prog::default();
+    blocking_item(
+        &mut p,
+        0,
+        "wait",
+        "cheby_test_missing_blocking",
+        &[CType::I64],
+        CType::I64,
+        None,
+    );
+    let mut jit = Jit::configured(CodegenOptions::default(), JitOptions::from_env()).unwrap();
+    let err = jit.compile(&p.unwound_units()).unwrap_err();
+    let JitError::UnresolvedSymbols(symbols) = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(symbols, &["cheby_test_missing_blocking"]);
+    // Nothing of the failed batch is declared (K4c, D-1219).
+    assert_eq!(jit.declared(), 0);
+}
+
 /// A runtime with one worker: a fiber that blocked its worker would stop
 /// every other fiber.
 fn one_worker() -> Runtime {
@@ -664,6 +690,7 @@ extern "C" fn blocking_t6_after() -> i64 {
 ///   bb2:
 ///     resume
 /// ```
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR function")]
 fn timed_call() -> Function {
     let runtime = |func, args| Rvalue::CallRuntime { func, args };
     let mut f = function(
@@ -682,6 +709,7 @@ fn timed_call() -> Function {
         Repr::Value,
         vec![
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     plain_call("blocking_t6_note"),
@@ -724,6 +752,7 @@ fn timed_call() -> Function {
                 unwind: vec![(0, bb(2)), (1, bb(2)), (2, bb(1)), (3, bb(2)), (4, bb(2))],
             },
             Block {
+                pos: Vec::new(),
                 params: Vec::new(),
                 stmts: vec![
                     Stmt::ClearUnwind,

@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-033, D-236, D-502, D-530, D-582
+// @decisions: D-033, D-236, D-502, D-530, D-1312
 //! Two `dyn` values are equal when their values have the same type and
 //! are equal, decided with type descriptors; hashing agrees, so `dyn`
 //! values work as set elements (§8.6.1). A `dyn` value converted to

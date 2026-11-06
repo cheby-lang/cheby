@@ -1,0 +1,34 @@
+// @mode: run-pass
+// @command: build
+// @milestone: M3
+// @decisions: D-979, D-1025
+//! `cheby build` carries the constants that `main` reaches into the
+//! executable as images, which its start installs before `main` runs: a
+//! map that two constants share, a user type and a sorted map print as
+//! they do under `cheby run`.
+
+import std::io
+import std::list
+import std::map
+import std::sorted_map
+
+/// A colour, maybe with a name.
+type Colour { Named { name: String, code: Int }, Unknown }
+
+const colours: map::Map<String, Colour> = map::from_list([
+  ("red", Named { name: "red", code: 1 }),
+  ("none", Unknown),
+])
+
+const palette: (map::Map<String, Colour>, List<Int>) = (colours, [1, 2, 3])
+
+const order: sorted_map::SortedMap<Int, String> = sorted_map::from_list([(2, "b"), (1, "a")])
+
+fn main() {
+  let (table, codes) = palette
+  let red = map::get(table, "red")
+  let none = map::get(colours, "none")
+  let size = map::size(table) + list::length(codes)
+  io::println("{red:?} {none:?} {size}")
+  io::println("{order:?}")
+}

@@ -6,20 +6,38 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+# Only to pass the runtime ID to the build scripts of direct dependents as
+# `DEP_CHEBY_RUNTIME_RUNTIME_ID` (D-930); `build.rs` links nothing.
+links = "cheby_runtime"
 
+# An rlib only: the runtime archive of executables is `cheby_rt_exe`
+# (D-928).
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 crossbeam-deque.workspace = true
 crossbeam-utils.workspace = true
 getrandom.workspace = true
+httparse.workspace = true
 libc.workspace = true
-mio.workspace = true
+memchr.workspace = true
+mio = { workspace = true, features = ["net"] }
 parking_lot.workspace = true
 ryu.workspace = true
 siphasher.workspace = true
+socket2.workspace = true
 unicode-segmentation.workspace = true
+
+# TLS for `std::http`'s client (D-1011): not on Windows until M6, where
+# `ring` needs `clang` for arm64 and sockets are fatal anyway (D-983).
+[target.'cfg(not(windows))'.dependencies]
+ring.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+
+[build-dependencies]
+siphasher.workspace = true
 
 [dev-dependencies]
 astro-float.workspace = true

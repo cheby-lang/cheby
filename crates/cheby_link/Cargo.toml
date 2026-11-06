@@ -9,6 +9,35 @@ publish = false
 
 [dependencies]
 cheby_codegen_clif.workspace = true
+# The image's layout, the runtime ID's symbol and `cheby_rt_main` (D-925,
+# D-930).
+cheby_runtime.workspace = true
+# Default features only: `x86`, `arm64` or `all-arch` would reach `cheby`
+# through `cheby_driver`, against D-936 (host architecture only).
+cranelift-codegen.workspace = true
+# The program object's C `main` (D-925).
+cranelift-frontend.workspace = true
+cranelift-module.workspace = true
+cranelift-object.workspace = true
+# `.debug_line` and a minimal `.debug_info` in every object replayed from a
+# record with positions (D-938, D-1036).
+gimli.workspace = true
+# The runtime archive's symbol index (D-930, D-1036); `write` for the DWARF
+# sections and their relocations in a replayed object (D-938), the feature
+# cranelift-object already turns on.
+object = { workspace = true, features = ["write"] }
+
+# The build resolver of E0053 opens the archive's system libraries (D-943).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+cheby_diag.workspace = true
+cheby_iface.workspace = true
+cheby_mir.workspace = true
+# The `dwarf_*` tests read the line tables back (D-938).
+gimli = { workspace = true, features = ["read"] }
+object.workspace = true
 
 [lints]
 workspace = true

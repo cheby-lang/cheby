@@ -4,7 +4,7 @@ error[E0053]: the native symbol `app_missing_second` is not defined
 12 | @external(native, "app_missing_second")
    |                   ^^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
    |
-   = note: the symbol must be defined by the Cheby runtime or the running process
+   = note: the symbol must be defined by the Cheby runtime, the package's native code or libraries, or the running process
 
 error[E0053]: the native symbol `app_missing_first` is not defined
   --> tests/ui/12-targets-and-ffi/unresolved_native_symbol.cheby:15:19
@@ -12,5 +12,5 @@ error[E0053]: the native symbol `app_missing_first` is not defined
 15 | @external(native, "app_missing_first")
    |                   ^^^^^^^^^^^^^^^^^^^ nothing defines this symbol
    |
-   = note: the symbol must be defined by the Cheby runtime or the running process
+   = note: the symbol must be defined by the Cheby runtime, the package's native code or libraries, or the running process
 

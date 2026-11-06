@@ -6,10 +6,10 @@
 //! updates, `shape::Shape { ..item, label: "new" }`, which copy a shape
 //! with some of its fields replaced.
 
-import std::io
-import std::list
 import shapes::point
 import shapes::shape
+import std::io
+import std::list
 
 /// The height of the ground. The sun sets onto it and the bird lands
 /// on it.

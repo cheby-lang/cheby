@@ -8,6 +8,7 @@ use crate::ir::{
     Abi, Block, BlockId, FnKey, Function, Local, LocalDecl, Operand, RuntimeFn, Rvalue, Stmt,
     StrId, Terminator,
 };
+use crate::positions::{Pos, PosRef, PosTable};
 use crate::repr::Repr;
 
 /// A block whose terminator may still be missing.
@@ -18,6 +19,11 @@ struct OpenBlock {
     term: Option<Terminator>,
     /// Sorted by statement index, at most one per index ([`Block::unwind`]).
     unwind: Vec<(u32, BlockId)>,
+    /// The position of each statement, when the builder records them
+    /// ([`FunctionBuilder::set_record_positions`]).
+    pos: Vec<PosRef>,
+    /// The terminator's position.
+    term_pos: PosRef,
 }
 
 impl OpenBlock {
@@ -73,6 +79,13 @@ pub struct FunctionBuilder {
     call_loc_strings: IndexVec<StrId, Box<str>>,
     /// Lookup only; numbering is first-use order.
     call_loc_ids: FxHashMap<Box<str>, StrId>,
+    /// The positions recorded so far ([`Function::positions`], D-938), or
+    /// `None` when the builder records none.
+    positions: Option<PosTable>,
+    /// The position the next statement or terminator takes.
+    current_pos: PosRef,
+    /// The position of the function's entry.
+    entry_pos: PosRef,
 }
 
 impl FunctionBuilder {
@@ -105,7 +118,86 @@ impl FunctionBuilder {
             call_locs: Vec::new(),
             call_loc_strings: IndexVec::new(),
             call_loc_ids: FxHashMap::default(),
+            positions: None,
+            current_pos: PosRef::NONE,
+            entry_pos: PosRef::NONE,
         })
+    }
+
+    /// Makes the builder record source positions (D-938): from now on
+    /// every statement and terminator takes the current position
+    /// ([`FunctionBuilder::set_position`]). Off by default; lowering turns
+    /// it on for the bodies of a unit that records positions
+    /// ([`crate::MirOptions::positions`]). Call it before the first
+    /// statement.
+    pub fn set_record_positions(&mut self) {
+        if self.positions.is_none() {
+            self.positions = Some(PosTable::default());
+        }
+    }
+
+    /// Whether the builder records positions.
+    #[must_use]
+    pub const fn records_positions(&self) -> bool {
+        self.positions.is_some()
+    }
+
+    /// Sets the position of the function's entry (its name's), which is
+    /// also the current position until another is set. A no-op unless
+    /// the builder records positions.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the function's table of positions is full.
+    pub fn set_entry_position(&mut self, pos: Pos) -> Result<(), Ice> {
+        if let Some(table) = &mut self.positions {
+            self.entry_pos = table.intern(pos)?;
+            self.current_pos = self.entry_pos;
+        }
+        Ok(())
+    }
+
+    /// Makes `pos` the position of the statements and terminators that
+    /// follow, and returns the one it replaces, for
+    /// [`FunctionBuilder::restore_position`]: a position, not a reference
+    /// into this function's table, since lowering may continue in another
+    /// function (D-780) before it restores. A no-op returning `None`
+    /// unless the builder records positions.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the function's table of positions is full.
+    pub fn set_position(&mut self, pos: Pos) -> Result<Option<Pos>, Ice> {
+        let Some(table) = &mut self.positions else {
+            return Ok(None);
+        };
+        let previous = table.get(self.current_pos);
+        self.current_pos = table.intern(pos)?;
+        Ok(previous)
+    }
+
+    /// Makes `previous`, which [`FunctionBuilder::set_position`] returned,
+    /// the current position again (none for `None`).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if the function's table of positions is full.
+    pub fn restore_position(&mut self, previous: Option<Pos>) -> Result<(), Ice> {
+        let Some(table) = &mut self.positions else {
+            return Ok(());
+        };
+        self.current_pos = match previous {
+            Some(pos) => table.intern(pos)?,
+            None => PosRef::NONE,
+        };
+        Ok(())
+    }
+
+    /// The current position, if the builder records positions and has
+    /// one.
+    #[must_use]
+    pub fn position(&self) -> Option<Pos> {
+        self.positions.as_ref()?.get(self.current_pos)
     }
 
     /// Makes [`FunctionBuilder::record_call_loc`] record (`on`) or ignore
@@ -315,11 +407,15 @@ impl FunctionBuilder {
     /// An [`Ice`] if the current block is terminated.
     pub fn push(&mut self, stmt: Stmt) -> Result<(), Ice> {
         let current = self.current;
+        let (records, pos) = (self.positions.is_some(), self.current_pos);
         let block = self.open(current)?;
         if block.term.is_some() {
             return Err(Ice::new(format!("statement after the end of {current:?}")));
         }
         block.stmts.push(stmt);
+        if records {
+            block.pos.push(pos);
+        }
         self.stmts = self.stmts.saturating_add(1);
         Ok(())
     }
@@ -361,11 +457,13 @@ impl FunctionBuilder {
     /// An [`Ice`] if the current block is already terminated.
     pub fn terminate(&mut self, term: Terminator) -> Result<(), Ice> {
         let current = self.current;
+        let pos = self.current_pos;
         let block = self.open(current)?;
         if block.term.is_some() {
             return Err(Ice::new(format!("{current:?} terminated twice")));
         }
         block.term = Some(term);
+        block.term_pos = pos;
         Ok(())
     }
 
@@ -461,18 +559,28 @@ impl FunctionBuilder {
     ///
     /// An [`Ice`] if a block has no terminator.
     pub fn finish(self) -> Result<Function, Ice> {
+        let records = self.positions.is_some();
         let mut blocks = IndexVec::new();
         for (id, open) in self.blocks.into_raw().into_iter().enumerate() {
             let term = open
                 .term
                 .ok_or_else(|| Ice::new(format!("MIR block bb{id} has no terminator")))?;
+            let mut pos = open.pos;
+            if records {
+                pos.push(open.term_pos);
+            }
             blocks.push(Block {
                 params: open.params,
                 stmts: open.stmts,
                 term,
                 unwind: open.unwind,
+                pos,
             })?;
         }
+        let positions = self
+            .positions
+            .map(|table| table.finish(self.entry_pos))
+            .unwrap_or_default();
         Ok(Function {
             key: self.key,
             abi: self.abi,
@@ -489,6 +597,7 @@ impl FunctionBuilder {
             sites: self.sites,
             call_locs: self.call_locs,
             call_loc_strings: self.call_loc_strings,
+            positions,
         })
     }
 }

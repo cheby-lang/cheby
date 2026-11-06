@@ -4,7 +4,9 @@ Status: **draft**, pre-1.0. Breaking changes are allowed until 1.0 (D-075).
 
 This directory specifies the standard library, one file per module (D-204, D-220). The language specification in [`../spec/`](../spec/) fixes the language and the semantics the runtime provides. This specification fixes the names, signatures and behavior of the modules under `std`. Where a rule comes from a logged decision, the decision is cited as `(D-NNN)`.
 
-The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). Tier 3 (files, networking, HTTP, time, processes) is specified in a later session.
+The library is written in tiers, each before the milestone that needs it (D-276). **Tier 1** holds the modules M1 needs (D-294), and **tier 2** the modules of the runtime milestone M2: fibers, channels, selectors, durations, randomness and the scheduler's settings (D-645). **Tier 3** holds files, networking, HTTP, URLs, time and processes, whose native side comes with M3 and whose JS side comes with M4 (D-985, D-986, D-987). **Tier 4** holds the modules that M4 implements on both targets, starting with `std::context` (D-1049).
+
+An addition to an existing module keeps that module's tier. A new module joins the tier of the milestone that ships it, so `std::url`, `std::base64` and `std::hex`, which ship in M3, are in tier 3, although they are Cheby with no kernels (D-1054).
 
 ## Modules
 
@@ -12,7 +14,7 @@ The library is written in tiers, each before the milestone that needs it (D-276)
 
 | Module                                                                 | Contents                                                                |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| [`std::io`](io.md)                                                     | standard input and output, reading and writing whole files              |
+| [`std::io`](io.md)                                                     | standard input and output, whole files and byte streams                 |
 | [`std::env`](env.md)                                                   | command-line arguments and environment variables                        |
 | [`std::list`](list.md)                                                 | the built-in `List<T>`                                                  |
 | [`std::map`](map.md)                                                   | `Map<K, V>`, the hashed map                                             |
@@ -40,18 +42,42 @@ A submodule's file sits in a directory named after its parent, following the imp
 
 ### Tier 2
 
-| Module                         | Contents                                                  |
-| ------------------------------ | --------------------------------------------------------- |
-| [`std::fiber`](fiber.md)       | scopes, spawning, joining, timeouts and panics of fibers  |
-| [`std::channel`](channel.md)   | bounded channels, with their `Sender` and `Receiver` ends |
-| [`std::selector`](selector.md) | waiting on several channels and timers at once            |
-| [`std::duration`](duration.md) | `Duration`, spans of time with nanosecond resolution      |
-| [`std::random`](random.md)     | random numbers from the host and from seeded generators   |
-| [`std::runtime`](runtime.md)   | the scheduler's thread count and the machine's CPU count  |
+| Module                         | Contents                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| [`std::fiber`](fiber.md)       | scopes, spawning, joining, cancellation, timeouts, parallel work and panics of fibers |
+| [`std::channel`](channel.md)   | bounded channels, with their `Sender` and `Receiver` ends                             |
+| [`std::selector`](selector.md) | waiting on several channels and timers at once                                        |
+| [`std::duration`](duration.md) | `Duration`, spans of time with nanosecond resolution                                  |
+| [`std::random`](random.md)     | random numbers from the host and from seeded generators                               |
+| [`std::runtime`](runtime.md)   | the scheduler's thread count and the machine's CPU count                              |
 
 These files fix the names that chapter 10 of the language specification left provisional (D-174, D-199, D-646).
 
-Tier 2 is implemented on native in M2. Its JS side comes with M4: until then every kernel and intrinsic of a tier-2 module declares its `@external(js, …)` binding to a `.mjs` file that does not exist yet, as tier 1 does, so every function exists on both targets for the cross-target check (D-450, D-661). `std::duration` and the seeded half of `std::random` are written in Cheby with no kernels, so they run in constants (D-650, D-656).
+Tier 2 is implemented on native in M2. Its JS side comes with M4: until then every kernel and intrinsic of a tier-2 module declares its `@external(js, …)` binding to a `.mjs` file that does not exist yet, as tier 1 does, so every function exists on both targets for the cross-target check (D-450, D-661). `std::duration` and the seeded half of `std::random` are written in Cheby with no kernels, so they run in constants (D-650, D-656). The tier-2 additions that need runtime work, `fiber::raise`, `map`, `try_map` and `yield_now`, `channel::send_now` and `receive_now`, and `selector::select_now`, are specified now and implemented after M3, `yield_now` with M4's JS scheduler. Their tests are pending until then (D-741, D-1097 to D-1099, D-1102).
+
+### Tier 3
+
+| Module                                  | Contents                                                                                      |
+| --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`std::file`](file.md)                  | file handles, reading and writing in pieces, scoped opening, directories, scratch directories |
+| [`std::net`](net.md)                    | TCP listeners and connections                                                                 |
+| [`std::http`](http.md)                  | an HTTP/1.1 client with HTTPS, a server, and response builders                                |
+| [`std::url`](url.md)                    | encoding and decoding URL queries and path segments                                           |
+| [`std::base64`](base64.md)              | Base64 text for `Bytes`, standard and URL-safe, with strict decoding                          |
+| [`std::hex`](hex.md)                    | hex text for `Bytes`, lowercase out and either case in, with strict decoding                  |
+| [`std::time`](time.md)                  | `Timestamp` on the wall clock, readings of the monotonic clock, RFC 3339 text, `sleep`        |
+| [`std::time::instant`](time/instant.md) | `Instant`, a point on the monotonic clock, with its comparison and arithmetic                 |
+| [`std::process`](process.md)            | `exit`, and `until_interrupted` for stopping on SIGINT and SIGTERM                            |
+
+Tier 3 is implemented on native in M3, in the order `std::time` with `std::time::instant`, `std::net`, `std::file`, `std::http` with `std::url`, and `std::process` (D-987, D-1057, D-1069). Every public function is written in Cheby over private kernels, and `std::http` is written over `std::net` and `std::url` (D-985, D-1003, D-1069). `std::time::instant`, `std::url`, `std::base64` and `std::hex` have no kernels at all (D-1057, D-1069, D-1089). Kernels never call a Cheby closure. File operations run on the blocking pool, and socket waits and `time::sleep` on the runtime's poller and timers, where a cancellation interrupts them (D-983). The failures of tier 3 are `io::Error`s, with a predicate in `std::io` for each kind its functions cause, and `http::Error` for HTTP's own kinds (D-981, D-1016). As in tier 2, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986). What a host without files, sockets or processes does, such as a browser, is OQ-P14. No tier-3 kernel runs in constants, but the parts of `std::time` and `std::http` that are Cheby without kernels do, and so do the whole of `std::time::instant`, `std::url`, `std::base64` and `std::hex` (D-991, D-1057, D-1069, D-1089).
+
+### Tier 4
+
+| Module                       | Contents                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| [`std::context`](context.md) | values provided for the duration of a callback, which every fiber spawned meanwhile inherits |
+
+Tier 4 is implemented in M4, natively and on JS together (D-1049). It also changes three earlier modules: `std::time` reads its clock from context (D-1047), `std::random`'s host functions draw from a seeded stream when one is provided (D-1048), and every spawn of `std::fiber` copies the spawning fiber's context (D-1044). Until M4, these parts are drafts with no code, and their tests in the pages of shipped modules are pending for M4 (D-741).
 
 ## Entry format
 
@@ -84,7 +110,8 @@ test "get reads by position" {
 - **Panics.** Present only where a language rule makes the function panic, such as overflow (D-025). Never because of a bad argument (D-297).
 - **Cost.** In terms of `n`, the size of the first argument, unless the entry says otherwise. A cost marked **required** is an upper bound every implementation must meet. One marked **informative** is not binding (D-300).
 - **Example.** At least one `test` block. The examples are written as if the module that contains them imports every module they name, as in `import std::list`. Test names are unique within a file, so a whole file's examples can run as one test module. A test that holds on only one target carries `@target(…)` ([§12.6](../spec/12-targets-and-ffi.md#126-target-specific-code)).
-- **Environment-dependent examples.** A function whose result depends on the environment, such as standard input and output, files or the operating system, cannot have a deterministic test. Its example is a top-level function introduced by `_Example_, not a \`test\` because …:`. Where the function can fail, a `test` that checks only the failure, which is the same everywhere, is added when one exists.
+- **Environment-dependent examples.** A function whose result depends on the environment, such as standard input and output, files it did not create or the operating system, cannot have a deterministic test. Its example is a top-level function introduced by `_Example_, not a \`test\` because …:`. Where the function can fail, a `test` that checks only the failure, which is the same everywhere, is added when one exists.
+- **Examples that need files.** A function that needs files has a `test` that works in a temporary directory, inside `file::with_temp_dir`, instead of an _Example_. It keeps an _Example_ only where the environment still decides the result, such as permissions (D-1068).
 
 Fields that do not apply are left out. Every `cheby` block in this directory must parse as module items with the compiler's parser and with the tree-sitter grammar, as the examples do, and `cargo xtask cross-check` checks this. Validation errors, such as a signature without a body (E0046), are not consulted (D-424, D-662).
 
@@ -103,11 +130,12 @@ These rules apply to every module. Entries do not repeat them.
 
 - **Subject first.** Every function takes the value it works on, such as the list, map, string or number, as its first argument (D-296), so `xs |> list::map(_, f)` and `list::map(xs, f)` read the same way.
 - **Callbacks last.** A function that takes a callback takes it as its last argument, so it works with `use` (§5.10).
+- **Early exit is `try_fold`.** Every module that has `fold` also has `try_fold(c, initial, f)`, with `fold`'s parameters in `fold`'s order and a callback that returns `Result<A, E>`, taking the accumulator first and then the module's element shape: `T` in `list`, the sets and `channel`, `K, V` in the maps, `K, List<V>` in the multimaps, and `U8` in `bytes`. It calls `f` in the module's order, stops at the first `Err` and returns it, and otherwise returns `Ok` of the last accumulator, `Ok(initial)` for an empty collection. A search stops with its answer as `Err(answer)`, and `find`, `any`, `all` and `list::find_map` cover the common searches. Code that is generic over collections takes a walk function, such as `fn(initial, step) { set::try_fold(s, initial, step) }` (D-1080, ADR-0072). The twelve modules are `list`, `map`, `set`, `multimap`, `sorted_map`, `sorted_set`, `sorted_multimap`, `ordered_map`, `ordered_set`, `ordered_multimap`, `bytes` and `channel`.
 
 ### Failure
 
 - A function returns `Option` when the answer may simply be absent, `Result<T, Nil>` when there is only one way to fail, and `Result<T, E>` with the module's own error type when callers need the reason (D-297).
-- A function never panics because of a bad argument. It panics only where a language rule already does, such as overflow (D-025) or `==` reaching a function value (D-233) (D-297). Any function that compares or hashes values, such as `list::contains` or `map::insert`, panics where `==` or hashing would ([§3.13](../spec/03-types.md#313-equality-hashing-and-debug-printing)).
+- A function never panics because of a bad argument. It panics only where a language rule already does, such as overflow (D-025) or `==` reaching a function value (D-233) (D-297). A function that does an operator's arithmetic panics where that operator would, as `int::floor_div` does for a zero divisor, like `/` (D-1056). Any function that compares or hashes values, such as `list::contains` or `map::insert`, panics where `==` or hashing would ([§3.13](../spec/03-types.md#313-equality-hashing-and-debug-printing)).
 - On native targets, any function that allocates panics with `out of memory` when its result cannot be allocated, as `string::repeat`, `pad_start` and `pad_end` can with a large count or width ([§11.8.2](../spec/11-errors-and-panics.md#1182-out-of-memory), D-642). Entries do not list this panic.
 - **Counts are clamped.** A count, width or length outside its useful range is clamped, so `list::take(xs, -1)` is `[]` and `list::take(xs, 100)` on a shorter list is the whole list (D-298).
 - **Indexes are not counts.** An index outside `0` to `length - 1`, including a negative one, makes the function return `None` or leave its input unchanged, as the entry says. Indexes never count from the end (D-318).
@@ -119,6 +147,9 @@ These rules apply to every module. Entries do not repeat them.
 - Sequences (`List`, `String`, `Bytes`) have `length`. Maps and sets have `size` (D-301).
 - A type's text comes only from its `show` function. There are no `to_string` functions for this (D-307). `json::to_string` encodes a JSON value, which is a different operation.
 - Numeric conversions are named `target::from_source` (D-308).
+- Three affixes have one meaning each (D-1050). `try_x` is the form of `x` whose callback returns a `Result`, and which stops at the first `Err` and returns it, as `result::try` does. `checked_x` is the form of `x` that returns `Err` where `x` panics, as `int::checked_add` does (D-309, D-356). A form of a waiting operation that never waits takes the suffix `_now`, as `channel::send_now`, `channel::receive_now`, `selector::select_now` and `fiber::yield_now` do (D-1099, D-1102). A join that does not panic, if one is ever added, is not named `try_join`.
+- `with_` has two meanings, told apart by the last parameter (D-1051). A `with_` function whose last parameter is a callback scopes a resource for the duration of that callback, as `file::with_open` and `random::with_generator` do (D-993, D-1048). Any other `with_` function returns a copy of its first argument with one part replaced, as `http::with_header` does (D-1006). Every new `with_` name follows one of the two.
+- Modules keep their natural names, even where the name is a common local name, such as `url` (D-1053). A module may not bind a local or a parameter with the name of a module it imports (D-062), so std's own sources import such a module under a plural alias, as `std/http.cheby` writes `import std::json as jsons` and `import std::url as urls`, and the module's page says so in its introduction.
 
 ### Text
 
@@ -131,14 +162,14 @@ These rules apply to every module. Entries do not repeat them.
 - No function grows the stack with the size of its input (D-094).
 - Sorting is stable (D-299).
 
-A function that visits elements calls its callback exactly once per element, front to back in the collection's order, unless its entry says it stops early, as `any`, `all` and `find` do. A function that calls a comparison function, such as `list::sort_with`, uses one algorithm fixed by the toolchain on every target, so even a comparison function that is not a consistent order gives the same result everywhere, and the number of its calls is not specified. Functions on `Map`, `Set` and `multimap` visit entries in their per-process order (D-093, D-354).
+A function that visits elements calls its callback exactly once per element, front to back in the collection's order, unless its entry says it stops early, as `try_fold`, `any`, `all` and `find` do (D-1080, D-1082). A function that calls a comparison function, such as `list::sort_with`, uses one algorithm fixed by the toolchain on every target, so even a comparison function that is not a consistent order gives the same result everywhere, and the number of its calls is not specified. Functions on `Map`, `Set` and `multimap` visit entries in their per-process order (D-093, D-354).
 
 ### Equality, printing and `Show`
 
 - `List`, `Map`, `Set` and every collection in this library compare with `==` by contents. Insertion-ordered collections also compare their order (D-343).
 - The sorted, insertion-ordered and multimap collections are written in Cheby (D-336), and supply their own equality, hashing and debug printing through the standard-library-only attribute `@std_hooks` (D-342, D-482, §3.13, §4.8).
 - Debug printing of `Map` and `Set` lists entries sorted by their printed text, compared as UTF-8 bytes (D-344, D-587). A `multimap` sorts its keys by their printed text and keeps each key's pairs in insertion order. Keys with the same printed text are ordered by the text of their pairs (D-847). These three types do not satisfy `Show`. The sorted and insertion-ordered collections satisfy `Show` when their elements do (D-344).
-- The handles of tier 2, `channel::Sender`, `channel::Receiver`, `fiber::Scope`, `fiber::Fiber` and `selector::Selector`, are external types of their modules. They print as `<Sender>`, `<Receiver>`, `<Scope>`, `<Fiber>` and `<Selector>`, `==` and hashing panic when they reach one, and no constant may hold one (§3.13, D-233, D-647).
+- The handles of tier 2, `channel::Sender`, `channel::Receiver`, `fiber::Scope`, `fiber::Fiber` and `selector::Selector`, and those of tier 3, `file::File`, `net::Listener` and `net::Connection`, are external types of their modules. They print as `<Sender>`, `<Receiver>`, `<Scope>`, `<Fiber>`, `<Selector>`, `<File>`, `<Listener>` and `<Connection>`, `==` and hashing panic when they reach one, and no constant may hold one (§3.13, D-233, D-647, D-982).
 
 `show` of `List`, `Option`, `Result`, tuples and the sorted and insertion-ordered collections uses the punctuation of debug printing (D-134), with each element written by its own `show`, so strings inside appear without quotes: `[1, 2]`, `[a, b]` for `["a", "b"]`, `Some(3)`, `Err(not found)`, `(1, a)`, and `sorted_map::from_list([(a, 1), (b, 2)])` (D-355).
 
@@ -172,6 +203,7 @@ Every numeric type has a conversion from each of the other numeric types, named 
 
 - A **widening** conversion, where every source value fits `T` exactly, returns `T`, for example `pub fn from_u8(n: U8) -> U32`.
 - A **narrowing** conversion returns `Result<T, Nil>`, with `Err(Nil)` when the value does not fit, for example `pub fn from_int(n: Int) -> Result<U8, Nil>` (D-132).
+- Each narrowing conversion between integer types has a wrapping twin, `t::wrapping_from_source`, which never fails. It keeps the low bits of the source's two's-complement value that fit `T` and reads them as `T`, so `u8::wrapping_from_u32(0x1234)` is `0x34`, `i8::wrapping_from_int(200)` is `-56` and `u64::wrapping_from_int(-1)` is `u64::max_value` (D-1091). There are 47, one for each narrowing pair with `Int` counted as a 64-bit type, so `std::int` has `wrapping_from_i64` and `wrapping_from_u64`. Those two return `Int`, so on JS they panic where the result is outside ±(2⁵³−1), like every `Int` result (D-037).
 - `Int` from `I64` or `U64` is narrowing on every target, because it can fail on JS (ADR-0030).
 - A conversion from an integer type to a float type, and `f32::from_float`, never fails. It returns the target type, rounded to the nearest value with ties to even, and `f32::from_float` gives an infinity for a value beyond `F32`'s range (D-359).
 - Integer types have no `from_float` or `from_f32`. A float becomes an integer through `truncate`, `round`, `floor` or `ceil`, which return `Result<Int, Nil>`, followed by a narrowing conversion if needed (D-132, D-359).
@@ -184,6 +216,7 @@ pub fn show(n: T) -> String
 ```
 
 - `parse` for an integer type accepts an optional `-` followed by one or more ASCII decimal digits, and nothing else. A value out of range is `Err(Nil)` (D-312). Integer types also have `parse_base(text: String, base: Int) -> Result<T, Nil>`. Unsigned types accept the `-` too in `parse` and `parse_base`, because only the value's range is checked: `u8::parse("-0")` is `Ok(0)`, and `u8::parse("-1")` is `Err(Nil)` (D-558).
+- Integer types also have `to_base(n: T, base: Int) -> Result<String, Nil>`, the inverse of `parse_base`. It writes the digits `0` to `9` and then lowercase `a` to `z`, `-` for a negative value, no prefix and no leading zeros, and gives `Err(Nil)` for a base outside 2 to 36 (D-390, D-1090). So `u64::to_base(18446744073709551615, 16)` is `Ok("ffffffffffffffff")` and `i8::to_base(-128, 2)` is `Ok("-10000000")`. The two's-complement hex of a negative `I64` is `u64::to_base(u64::wrapping_from_i64(n), 16)` (D-1091).
 - `parse` for a float type accepts an optional `-`, decimal digits, an optional fraction of `.` followed by digits, and an optional exponent, as well as `NaN`, `inf` and `-inf`. `_`, `.5`, `1.`, a leading `+` and whitespace are rejected. Every text that `show` gives parses back to the same value (D-313).
 - `show` for an integer type gives the decimal digits, with `-` for negative values. `show` for a float type follows §3.3.6 (D-203, D-219, D-228).
 
@@ -235,6 +268,8 @@ A function that returns `Result<Int, Nil>`, such as `checked_add`, `parse`, `int
 - the constants `infinity`, `neg_infinity`, `nan` and the others listed in `float.md`,
 - `truncate`, `round`, `floor` and `ceil`, which return `Result<Int, Nil>`, with `Err(Nil)` for NaN, infinities and values outside `Int`'s range (D-132). `round` breaks ties away from zero (D-314),
 - `is_nan`, `is_infinite` and `is_finite`.
+
+`float::to_fixed`, which writes fixed decimals, is in `std::float` only (D-1085, D-397).
 
 ### Wrapping arithmetic (integer types)
 

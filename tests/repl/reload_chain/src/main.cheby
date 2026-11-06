@@ -1,0 +1,3 @@
+//! The root of the package whose types the session's signatures name.
+
+fn main() {}

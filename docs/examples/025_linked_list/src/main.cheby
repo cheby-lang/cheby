@@ -22,10 +22,10 @@
 //! `LinkedList` for signatures, and the constructors `Empty` and `Node`
 //! for patterns.
 
-import std::io
-import std::list
 import linked_list::linked_list
 import linked_list::linked_list::{Empty, LinkedList, Node}
+import std::io
+import std::list
 
 fn main() {
   linked_list::from_list([1, 2, 3, 4])

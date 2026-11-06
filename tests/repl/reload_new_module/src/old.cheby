@@ -1,0 +1,6 @@
+//! A module of the package from the start.
+
+/// Its name.
+pub fn name() -> String {
+  "old"
+}

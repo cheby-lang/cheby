@@ -287,7 +287,7 @@ impl Translator<'_, '_> {
         let header = match shape.header {
             HeaderSource::Fixed(word) => self.b.ins().iconst(types::I64, word.cast_signed()),
             HeaderSource::Word(data) => {
-                let address = self.data_address(data, true);
+                let address = self.data_address(data);
                 self.b
                     .ins()
                     .load(types::I64, MemFlagsData::trusted(), address, 0)
@@ -335,7 +335,7 @@ impl Translator<'_, '_> {
         match shape.header {
             HeaderSource::Fixed(word) => self.b.ins().iconst(types::I64, word.cast_signed()),
             HeaderSource::Word(data) => {
-                let address = self.data_address(data, true);
+                let address = self.data_address(data);
                 self.b
                     .ins()
                     .load(types::I64, MemFlagsData::trusted(), address, 0)
@@ -752,7 +752,7 @@ impl Translator<'_, '_> {
             TagType::Adt(type_def) => {
                 let first = self.first_ctor(type_def)?;
                 let word = self.decls.layout(first)?.word;
-                let address = self.data_address(word, true);
+                let address = self.data_address(word);
                 let header = self
                     .b
                     .ins()
@@ -784,7 +784,7 @@ impl Translator<'_, '_> {
     /// that cold path (D-698).
     pub(crate) fn load_const(&mut self, def: DefId) -> Result<Value, CodegenError> {
         let slot = self.decls.const_data(def)?;
-        let address = self.data_address(slot, true);
+        let address = self.data_address(slot);
         let value = self
             .b
             .ins()

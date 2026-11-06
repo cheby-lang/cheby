@@ -10,23 +10,34 @@
 //!   with its canonical encoding and hash in [`hash`].
 //! - [`builtin`]: the prelude's declarations (H1).
 //! - [`InterfaceSet`] and [`DepView`]: the interfaces a module may read,
-//!   which are only those of its dependencies (D-246).
+//!   which are only those of its dependencies (D-246); a recording view
+//!   notes the modules it hands out in a [`ReadLog`] (D-955).
+//! - [`decode`] and [`artifact`]: the encoding decoded, and the interface
+//!   artifact with its hashed section H and its span section S (D-953);
+//!   [`check_roundtrip`], the debug round trip (D-954).
 
 use std::fmt;
 
+pub mod artifact;
 pub mod builtin;
+pub mod decode;
 mod def;
 pub mod hash;
 mod ids;
 mod iface;
+#[cfg(test)]
+mod iface_tests;
 mod index;
 mod leak;
 mod name;
+mod roundtrip;
 mod set;
 mod ty;
 
+pub use artifact::{Artifact, read_artifact, write_artifact};
+pub use decode::{DecodeError, apply_spans, decode_interface};
 pub use def::{DefKind, Namespace, Vis};
-pub use hash::{InterfaceHash, encode, interface_hash};
+pub use hash::{InterfaceHash, encode, encoded_order, hash_encoding, interface_hash};
 pub use ids::{
     BUILTIN_MODULE_NAME, DefId, DefIndex, ModuleId, ModuleInfo, ModuleTable, PackageId, ParamIdx,
 };
@@ -37,7 +48,8 @@ pub use iface::{
 };
 pub use index::{Idx, IndexVec};
 pub use name::{Interner, Name, sym};
-pub use set::{DepView, InterfaceSet, def_path};
+pub use roundtrip::check_roundtrip;
+pub use set::{DepView, InterfaceSet, ReadLog, def_path};
 pub use ty::{DisplayCx, GenericParam, Generics, Ty, TyInterner, TyKind, display};
 
 /// The process-wide tables every phase shares, as `Arc<Globals>`.

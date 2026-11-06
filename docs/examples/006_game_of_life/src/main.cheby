@@ -45,12 +45,19 @@ const positions: List<Int> = list::range(0, size)
 
 /// The offsets from a cell to its eight neighbours.
 const offsets: List<(Int, Int)> = [
-  (-1, -1), (0, -1), (1, -1),
-  (-1, 0), (1, 0),
-  (-1, 1), (0, 1), (1, 1),
+  (-1, -1),
+  (0, -1),
+  (1, -1),
+  (-1, 0),
+  (1, 0),
+  (-1, 1),
+  (0, 1),
+  (1, 1),
 ]
 
-type Grid { cells: set::Set<(Int, Int)> }
+type Grid {
+  cells: set::Set<(Int, Int)>,
+}
 
 fn main() {
   // There are no loops, so a local function counts the generations by
@@ -72,7 +79,9 @@ fn main() {
 /// Returns a grid whose live cells are `cells`. Coordinates off the
 /// board wrap around onto it.
 fn from_cells(cells: List<(Int, Int)>) -> Grid {
-  let live = cells |> list::map(_, wrap_cell) |> set::from_list
+  let live = cells
+    |> list::map(_, wrap_cell)
+    |> set::from_list
   Grid { cells: live }
 }
 
@@ -183,7 +192,9 @@ test "a blinker oscillates with period 2" {
   // Sets are equal when they have the same cells, in any order.
   assert step(horizontal) == vertical
   assert step(vertical) == horizontal
-  assert horizontal |> step |> step == horizontal
+  assert horizontal
+    |> step
+    |> step == horizontal
 }
 
 test "a block is a still life" {
@@ -198,8 +209,14 @@ test "lonely cells die and nothing comes from nothing" {
 
 test "a glider moves one cell diagonally every four generations" {
   let moved = from_cells(list::map(glider, fn((x, y)) { (x + 1, y + 1) }))
-  assert start |> step |> step |> step |> step == moved
-  assert start |> step |> step != moved
+  assert start
+    |> step
+    |> step
+    |> step
+    |> step == moved
+  assert start
+    |> step
+    |> step != moved
 }
 
 test "a glider crosses the edges and comes back to where it started" {
@@ -217,16 +234,19 @@ test "positions count up to the size" {
 }
 
 test "a grid shows as rows of # and ." {
-  let expected = string::join([
-    ".#......",
-    "..#.....",
-    "###.....",
-    "........",
-    "........",
-    "........",
-    "........",
-    "........",
-  ], "\n")
+  let expected = string::join(
+    [
+      ".#......",
+      "..#.....",
+      "###.....",
+      "........",
+      "........",
+      "........",
+      "........",
+      "........",
+    ],
+    "\n",
+  )
   assert show(start) == expected
   assert "{start}" == expected
 }

@@ -41,15 +41,17 @@
 //! its cleanup pads, and every scope it has open passes the cancellation
 //! through (D-667), so none returns `Err` to user code. A detached spawn
 //! into a closing group starts cancelled and never calls its function
-//! (D-800). A fiber blocked in a system call (standard input, file IO,
-//! `@blocking`), waiting on the blocking pool with D-786's mark set or
-//! running the call inline, cannot be stopped: the teardown skips it and
-//! counts it (D-786, D-814), and with it the
+//! (D-800). A fiber blocked in a system call (file IO, `@blocking`, or
+//! standard input read inline, D-817), waiting on the blocking pool with D-786's
+//! mark set or running the call inline, cannot be stopped: the teardown
+//! skips it and counts it (D-786, D-814), and with it the
 //! fibers of the same member's subtree that wait for it, such as a
 //! detached fiber waiting in a scope's close for a scoped child blocked in
-//! `io::read_line`. It looks for that state by surveying each member's
-//! subtree, scope by scope, as cancellation walks it. A teardown that
-//! meets a started halt stops waiting, because a frozen fiber never leaves
+//! an `@blocking` call. A fiber waiting on a refill of standard input's
+//! reader is not blocked in this sense: the cancellation abandons the
+//! refill, and the fiber unwinds (D-1065). It looks for the blocked state
+//! by surveying each member's subtree, scope by scope, as cancellation
+//! walks it. A teardown that meets a started halt stops waiting, because a frozen fiber never leaves
 //! its group, and reports `halted`; its host completes the halt.
 //!
 //! # Locks
@@ -113,6 +115,10 @@ pub struct DetachedGroup {
     /// their domain (`deadlock::PoolPending`): a stuck mark releases them
     /// once. A leaf lock.
     jobs: Mutex<TrackedJobs>,
+    /// Set while [`Runtime::teardown`] tears the group's fibers down: the
+    /// values they release meanwhile call no user drop function (D-949,
+    /// D-710; `ffi::finalize_external`, `ffi::run_deferred_drops`).
+    tearing_down: AtomicBool,
 }
 
 /// The tracked pool jobs of a group ([`DetachedGroup::track_job`]): weak
@@ -216,7 +222,20 @@ impl DetachedGroup {
             domains: Mutex::new(Vec::new()),
             stuck: AtomicBool::new(false),
             jobs: Mutex::new(TrackedJobs::default()),
+            tearing_down: AtomicBool::new(false),
         })
+    }
+
+    /// Whether a teardown is tearing the group's fibers down (D-710): a
+    /// user drop function is then not called (D-949).
+    pub(crate) fn tearing_down(&self) -> bool {
+        self.tearing_down.load(Ordering::SeqCst)
+    }
+
+    /// Sets the teardown mark by hand, for the tests of drop functions.
+    #[cfg(test)]
+    pub(crate) fn set_tearing_down(&self, on: bool) {
+        self.tearing_down.store(on, Ordering::SeqCst);
     }
 
     /// Records `domain` as the domain of a root that starts in the group,
@@ -828,6 +847,9 @@ impl Runtime {
     /// counted once by the marked fibers). From the host only, with no runtime
     /// lock held. Runs no user code (ADR-0029).
     pub fn teardown(&self, group: &DetachedGroup) -> TeardownReport {
+        // D-949: teardown calls no user drop function (D-710); set before
+        // the first cancellation, cleared once the teardown ends.
+        group.tearing_down.store(true, Ordering::SeqCst);
         let (bases, left_before) = group.close();
         for base in &bases {
             cancel::cancel(base);
@@ -881,6 +903,7 @@ impl Runtime {
             group.emptied.wait_for(&mut inner, TEARDOWN_POLL);
         }
         report.waited = inner.left.saturating_sub(left_before);
+        group.tearing_down.store(false, Ordering::SeqCst);
         report
     }
 

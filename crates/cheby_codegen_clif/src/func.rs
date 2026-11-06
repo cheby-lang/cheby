@@ -17,11 +17,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use cheby_mir::{
     Abi, AbiSig, BlockId, Callee, Const, FnKey, ForeignSig, Function, Local, MirModule, Operand,
-    PanicKind, Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
+    PanicKind, PosRef, Repr, Rvalue, Stmt, StrId, Terminator, uniform_sig,
 };
 use cheby_runtime::abi;
 
-use crate::decls::{Decls, ForeignDecl};
+use crate::decls::Decls;
 use crate::mangle::{self, Kind};
 use crate::runtime::RuntimeFunc;
 use crate::sig::{self, WORD, repr_type};
@@ -122,6 +122,7 @@ fn build(
         func_refs: FxHashMap::default(),
         data: FxHashMap::default(),
         sigs: FxHashMap::default(),
+        import_sigs: FxHashMap::default(),
         panics: Vec::new(),
         panic_blocks: FxHashMap::default(),
         pad: None,
@@ -167,10 +168,21 @@ pub(crate) struct Translator<'a, 'f> {
     pub(crate) func_refs: FxHashMap<FuncId, FuncRef>,
     pub(crate) data: FxHashMap<DataId, GlobalValue>,
     pub(crate) sigs: FxHashMap<AbiSig, SigRef>,
+    /// The C signature of each runtime function called so far, by its
+    /// import word (D-913).
+    pub(crate) import_sigs: FxHashMap<DataId, SigRef>,
     /// The cold blocks that panic with a kind at a location, created by
     /// checked operations and filled after the function's blocks, one per
-    /// kind, location and unwind pad (`None` for a check without an edge).
-    panics: Vec<(PanicKind, StrId, Option<ir::Block>, ir::Block)>,
+    /// kind, location and unwind pad (`None` for a check without an edge),
+    /// each with the source location of the statement that made it
+    /// (D-938).
+    panics: Vec<(
+        PanicKind,
+        StrId,
+        Option<ir::Block>,
+        ir::Block,
+        ir::SourceLoc,
+    )>,
     /// The block of each entry of `panics`, by kind, location and pad, so
     /// a function with many checked operations finds them in constant
     /// time.
@@ -383,6 +395,110 @@ fn unwind_only_blocks(func: &Function) -> Result<Vec<bool>, CodegenError> {
         .collect())
 }
 
+/// Writes into the module record `desc` the drop function of each external
+/// type of `externals` that has one (D-949, D-1168,
+/// D-1228): the `drop` word of its entry, at
+/// `entries + n * entry_size + drop_offset`, becomes a data relocation to
+/// the C function, declared with `Linkage::Import` as foreign symbols are
+/// under `ForeignImport::Address` (a function the module already declares
+/// keeps its declaration). The JIT resolves it as it resolves the package
+/// library's symbols (D-941); a link resolves it in the package's C
+/// objects. A type without one keeps its 0 (`modrec.rs`).
+///
+/// # Errors
+///
+/// The module's error if the declaration conflicts with an earlier one;
+/// an internal error if an offset overflows.
+pub(crate) fn write_external_drops<M: cranelift_module::Module>(
+    module: &mut M,
+    desc: &mut cranelift_module::DataDescription,
+    entries: u32,
+    entry_size: u32,
+    drop_offset: u32,
+    externals: &[cheby_mir::layout::ExternalDesc],
+) -> Result<(), CodegenError> {
+    use cranelift_module::{FuncOrDataId, Linkage};
+    let overflow = || CodegenError::ice("an external entry's offset overflows");
+    for (n, external) in externals.iter().enumerate() {
+        let Some(symbol) = external.drop.as_deref() else {
+            continue;
+        };
+        let n = u32::try_from(n).map_err(|_| overflow())?;
+        let offset = n
+            .checked_mul(entry_size)
+            .and_then(|at| at.checked_add(entries))
+            .and_then(|at| at.checked_add(drop_offset))
+            .ok_or_else(overflow)?;
+        match module.get_name(symbol) {
+            Some(FuncOrDataId::Func(id)) => {
+                let func = module.declare_func_in_data(id, desc);
+                desc.write_function_addr(offset, func);
+            }
+            Some(FuncOrDataId::Data(id)) => {
+                let data = module.declare_data_in_data(id, desc);
+                desc.write_data_addr(offset, data, 0);
+            }
+            None => {
+                let id = module
+                    .declare_data(symbol, Linkage::Import, false, false)
+                    .map_err(|e| CodegenError::module(&e))?;
+                let data = module.declare_data_in_data(id, desc);
+                desc.write_data_addr(offset, data, 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether statement `i` of `stmts` is a foreign call whose
+/// result a later statement of the block, after nothing but `dup`s and
+/// `drop`s, hands to `cheby_rt_ffi_value` or `cheby_rt_ffi_external` (as
+/// the wrapper of a package's `@external(native, …)` does, `cheby_mir`'s
+/// `lower/external.rs`). Such a call gets no flag test of its own: the
+/// helper tests the flag, so after a failed `cheby_ffi_` allocation it
+/// releases the foreign result before the wrapper unwinds (D-946), which
+/// the call's own edge could not, since a pad never uses the result of the
+/// instruction that unwinds to it. The `drop`s in between release
+/// arguments, which an unwinding releases too. A REPL generation's name
+/// of a helper (`<helper>$cheby$gen<n>`, D-1197) counts as the helper.
+/// D-1268: an `@blocking` call counts too (N8c, D-950): a
+/// cancellation or a failed allocation during its job comes back with its
+/// result word and the flag set (`cheby_rt_blocking_call`), and the helper
+/// releases the result on the fiber, an external one through its drop
+/// function (D-171). Only packages' wrappers call the helpers.
+fn ffi_checked_later(stmts: &[Stmt], i: usize) -> bool {
+    let Some(Stmt::Assign {
+        dst,
+        value: Rvalue::CallForeign { .. },
+    }) = stmts.get(i)
+    else {
+        return false;
+    };
+    let helper = |symbol: &str| {
+        [abi::sym::FFI_VALUE, abi::sym::FFI_EXTERNAL]
+            .iter()
+            .any(|name| {
+                symbol
+                    .strip_prefix(name)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("$cheby$gen"))
+            })
+    };
+    for stmt in stmts.iter().skip(i.saturating_add(1)) {
+        match stmt {
+            Stmt::Dup(_) | Stmt::Drop(_) => {}
+            Stmt::Assign {
+                value: Rvalue::CallForeign { symbol, args, .. },
+                ..
+            }
+            | Stmt::Eval(Rvalue::CallForeign { symbol, args, .. }) => {
+                return helper(symbol) && args.get(1) == Some(&Operand::Local(*dst));
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// `bits` truncated to the width of `ty`, as Cranelift wants an `iconst`
 /// immediate of a narrow type.
 pub(crate) fn truncate(bits: u64, ty: ir::Type) -> i64 {
@@ -426,6 +542,8 @@ impl Translator<'_, '_> {
         } else {
             (None, None)
         };
+        // D-938: the prologue and the entry check at the function's name.
+        self.set_pos(self.func.positions.entry);
         self.entry(check, entry_pad, release.as_ref())?;
         // Reverse postorder translates a definition before its uses, as a
         // block's dominators come before it. Unreachable blocks are never
@@ -458,15 +576,28 @@ impl Translator<'_, '_> {
             };
             for (i, stmt) in block.stmts.iter().enumerate() {
                 self.pad = pad_of(i, self).transpose()?;
+                if self.pad.is_some() && ffi_checked_later(&block.stmts, i) {
+                    // D-946, D-1231: the helper that
+                    // takes this foreign call's result tests the flag after it
+                    // (`ffi_checked_later`).
+                    self.pad = None;
+                }
+                // D-938: every instruction a statement emits at its
+                // position.
+                self.set_pos(block.pos_at(i));
                 self.stmt(stmt)?;
             }
             self.pad = pad_of(block.stmts.len(), self).transpose()?;
+            self.set_pos(block.term_pos());
             self.terminator(&block.term)?;
             self.pad = None;
             self.in_pad = false;
         }
-        for (kind, loc, pad, block) in std::mem::take(&mut self.panics) {
+        for (kind, loc, pad, block, srcloc) in std::mem::take(&mut self.panics) {
             self.b.switch_to_block(block);
+            if !self.func.positions.is_empty() {
+                self.b.set_srcloc(srcloc);
+            }
             self.panic(kind, None, loc, pad)?;
         }
         Ok(())
@@ -581,6 +712,8 @@ impl Translator<'_, '_> {
         if self.func.abi != Abi::Cheby {
             return Err(CodegenError::ice("a large frame outside a Cheby function"));
         }
+        // D-938: the outer function at the function's name.
+        self.set_pos(self.func.positions.entry);
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
         self.b.switch_to_block(entry);
@@ -629,7 +762,7 @@ impl Translator<'_, '_> {
             )?;
             self.b.switch_to_block(call);
             let signature = self.decls.func(self.func.key)?.sig.clone();
-            let f = self.func_ref(inner, &signature, true);
+            let f = self.func_ref(inner, &signature);
             self.b.ins().return_call(f, &params);
             self.b.switch_to_block(resume);
             return self.unwind_resume();
@@ -652,7 +785,7 @@ impl Translator<'_, '_> {
         self.b.ins().jump(call, &[]);
         self.b.switch_to_block(call);
         let signature = self.decls.func(self.func.key)?.sig.clone();
-        let f = self.func_ref(inner, &signature, true);
+        let f = self.func_ref(inner, &signature);
         self.b.ins().return_call(f, &params);
         if let Some((pad, outer_pad)) = outer_pad {
             self.outer_pad(pad, outer_pad, &params)?;
@@ -761,9 +894,28 @@ impl Translator<'_, '_> {
         }
         let block = self.b.create_block();
         self.b.set_cold_block(block);
-        self.panics.push((kind, loc, self.pad, block));
+        let srcloc = self.b.srcloc();
+        self.panics.push((kind, loc, self.pad, block, srcloc));
         self.panic_blocks.insert(key, block);
         block
+    }
+
+    /// Makes `pos`, a position of the function's table (D-938), the source
+    /// location of the instructions that follow ([`FunctionBuilder::set_srcloc`]),
+    /// its bits as the location, so the rows need no other table. A
+    /// function without positions (positions off, generated code) never
+    /// gets a source location, so its CLIF is what it is without them;
+    /// [`Decls::describe`] prints none anyway (D-1171).
+    fn set_pos(&mut self, pos: PosRef) {
+        if self.func.positions.is_empty() {
+            return;
+        }
+        let loc = if pos.is_none() {
+            ir::SourceLoc::default()
+        } else {
+            ir::SourceLoc::new(pos.bits())
+        };
+        self.b.set_srcloc(loc);
     }
 
     /// Branches to the panic block of `kind` at `loc` when `cond` is
@@ -975,18 +1127,28 @@ impl Translator<'_, '_> {
             Const::Nil => self.static_object(abi::sym::STATIC_NIL)?,
             Const::EmptyList => self.static_object(abi::sym::STATIC_EMPTY_LIST)?,
             Const::BuiltinDesc(desc) => {
-                let data = self.decls.builtin_desc(*desc)?;
-                self.data_address(data, false)
+                self.static_object(&crate::decls::builtin_desc_symbol(*desc))?
             }
             Const::StaticCtor(def) => {
-                let data = self.decls.ctor_object(*def)?;
-                let local = crate::layout::builtin_ctor_layout(*def).is_none();
-                self.data_address(data, local)
+                // A builtin constructor's static is the runtime's, reached
+                // through its import word (D-913); a user one's is
+                // generated, and colocated.
+                if let Some(id) =
+                    crate::layout::builtin_layout_id(&cheby_mir::LayoutRef::Ctor(*def))
+                {
+                    let symbol = abi::sym::static_ctor(id).ok_or_else(|| {
+                        CodegenError::ice(format!("the builtin constructor {def:?} is not nullary"))
+                    })?;
+                    self.static_object(symbol)?
+                } else {
+                    let data = self.decls.ctor_object(*def)?;
+                    self.data_address(data)
+                }
             }
             Const::FnValue(def) => {
                 let symbol = mangle::item(Kind::FnVal, &self.decls.def_name(self.unit, *def)?);
                 let data = self.decls.static_object(&symbol)?;
-                self.data_address(data, true)
+                self.data_address(data)
             }
             Const::Static(id) => {
                 let object = self
@@ -996,14 +1158,14 @@ impl Translator<'_, '_> {
                 let data = self
                     .decls
                     .static_object(&self.decls.static_symbol(object))?;
-                self.data_address(data, true)
+                self.data_address(data)
             }
             Const::Code(key) => {
                 // D-453: a code word is `address | 1`, so freeing skips it
                 // like a tagged integer; functions are aligned to 16.
                 let decl = self.decls.func(*key)?;
                 let (id, signature) = (decl.id, decl.sig.clone());
-                let f = self.func_ref(id, &signature, true);
+                let f = self.func_ref(id, &signature);
                 let address = self.b.ins().func_addr(WORD, f);
                 self.b.ins().bor_imm_u(address, 1)
             }
@@ -1017,15 +1179,30 @@ impl Translator<'_, '_> {
     /// The address of string `id` of this function: a static `String`.
     pub(crate) fn string(&mut self, id: StrId) -> Result<Value, CodegenError> {
         let data = self.decls.string(self.func.key, id)?;
-        Ok(self.data_address(data, true))
+        Ok(self.data_address(data))
     }
 
+    /// The address of the runtime's static object `symbol`, loaded from its
+    /// import word (D-913).
     pub(crate) fn static_object(&mut self, symbol: &str) -> Result<Value, CodegenError> {
-        let data = self.decls.static_data(symbol)?;
-        Ok(self.data_address(data, false))
+        let word = self.decls.import(symbol)?;
+        Ok(self.import_address(word))
     }
 
-    pub(crate) fn data_address(&mut self, data: DataId, colocated: bool) -> Value {
+    /// The address the import word `word` holds (D-913): the word's own
+    /// address, PC-relative since it is generated and colocated, then a
+    /// read-only load of the address its data relocation wrote.
+    pub(crate) fn import_address(&mut self, word: DataId) -> Value {
+        let at = self.data_address(word);
+        self.b
+            .ins()
+            .load(WORD, MemFlagsData::trusted().with_readonly(), at, 0)
+    }
+
+    /// The address of the generated data object `data`: colocated, so
+    /// text reaches it PC-relative (D-913). Runtime and foreign data are
+    /// reached through their import words ([`Self::import_address`]).
+    pub(crate) fn data_address(&mut self, data: DataId) -> Value {
         let gv = if let Some(&gv) = self.data.get(&data) {
             gv
         } else {
@@ -1036,7 +1213,7 @@ impl Translator<'_, '_> {
             let gv = self.b.create_global_value(GlobalValueData::Symbol {
                 name: ExternalName::user(name),
                 offset: Imm64::new(0),
-                colocated,
+                colocated: true,
                 tls: false,
             });
             self.data.insert(data, gv);
@@ -1045,12 +1222,10 @@ impl Translator<'_, '_> {
         self.b.ins().symbol_value(WORD, gv)
     }
 
-    pub(crate) fn func_ref(
-        &mut self,
-        id: FuncId,
-        signature: &Signature,
-        colocated: bool,
-    ) -> FuncRef {
+    /// A reference to the generated function `id`: colocated, so a direct
+    /// call is PC-relative (D-913). Runtime and foreign functions are
+    /// called through their import words ([`Self::import_address`]).
+    pub(crate) fn func_ref(&mut self, id: FuncId, signature: &Signature) -> FuncRef {
         if let Some(&f) = self.func_refs.get(&id) {
             return f;
         }
@@ -1062,7 +1237,7 @@ impl Translator<'_, '_> {
         let f = self.b.import_function(ExtFuncData {
             name: ExternalName::user(name),
             signature: sig_ref,
-            colocated,
+            colocated: true,
             patchable: false,
         });
         self.func_refs.insert(id, f);
@@ -1085,10 +1260,19 @@ impl Translator<'_, '_> {
         f: RuntimeFunc,
         args: &[Value],
     ) -> Result<Option<Value>, CodegenError> {
-        let (id, signature) = self.decls.runtime(f)?;
+        // D-913: through the function's import word, with its C signature,
+        // imported once per function like the function reference was.
+        let (word, signature) = self.decls.runtime(f)?;
         let signature = signature.clone();
-        let f = self.func_ref(id, &signature, false);
-        let inst = self.b.ins().call(f, args);
+        let callee = self.import_address(word);
+        let s = if let Some(&s) = self.import_sigs.get(&word) {
+            s
+        } else {
+            let s = self.b.import_signature(signature);
+            self.import_sigs.insert(word, s);
+            s
+        };
+        let inst = self.b.ins().call_indirect(s, callee, args);
         Ok(self.b.inst_results(inst).first().copied())
     }
 
@@ -1134,29 +1318,15 @@ impl Translator<'_, '_> {
         sig: &ForeignSig,
         vals: &[Value],
     ) -> Result<Option<Value>, CodegenError> {
-        let inst = match self.decls.foreign(symbol)?.clone() {
-            ForeignDecl::Function(id, signature) => {
-                let f = self.func_ref(id, &signature, false);
-                self.b.ins().call(f, vals)
-            }
-            // Signature-free imports: the call site's own C signature
-            // (`ForeignImport::Address`).
-            ForeignDecl::Data(id) => {
-                let address = self.data_address(id, false);
-                let s = self
-                    .b
-                    .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
-                self.b.ins().call_indirect(s, address, vals)
-            }
-            ForeignDecl::FunctionAddress(id, declared) => {
-                let f = self.func_ref(id, &declared, false);
-                let address = self.b.ins().func_addr(WORD, f);
-                let s = self
-                    .b
-                    .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
-                self.b.ins().call_indirect(s, address, vals)
-            }
-        };
+        // D-913, D-475: the address from the symbol's import word, called
+        // with the call site's own C signature (under
+        // `ForeignImport::Function` the symbol's one signature).
+        let word = self.decls.foreign(symbol)?.word;
+        let address = self.import_address(word);
+        let s = self
+            .b
+            .import_signature(sig::foreign_signature(sig, self.decls.c_call_conv()));
+        let inst = self.b.ins().call_indirect(s, address, vals);
         Ok(self.b.inst_results(inst).first().copied())
     }
 
@@ -1280,15 +1450,15 @@ impl Translator<'_, '_> {
                         // D-043: every call of a top-level function loads
                         // its slot, which is writable (no `readonly`).
                         let path = self.decls.slot_path(self.unit, *def)?;
-                        let slot = self.decls.slot(&path, &abi_sig)?.id;
-                        let address = self.data_address(slot, true);
+                        let slot = self.decls.slot_data(&path, &abi_sig)?;
+                        let address = self.data_address(slot);
                         let code = self.b.ins().load(WORD, MemFlagsData::trusted(), address, 0);
                         CallTarget::Indirect(self.sig_ref(&abi_sig), code)
                     }
                     CallMode::Direct => {
                         let decl = self.decls.func(FnKey::Item(*def))?;
                         let (id, signature) = (decl.id, decl.sig.clone());
-                        CallTarget::Direct(self.func_ref(id, &signature, true))
+                        CallTarget::Direct(self.func_ref(id, &signature))
                     }
                 }
             }
@@ -1296,7 +1466,7 @@ impl Translator<'_, '_> {
                 let decl = self.decls.func(*key)?;
                 let (id, signature) = (decl.id, decl.sig.clone());
                 ret = decl.abi.ret;
-                CallTarget::Direct(self.func_ref(id, &signature, true))
+                CallTarget::Direct(self.func_ref(id, &signature))
             }
             Callee::Indirect(closure) => {
                 ret = Repr::Value;

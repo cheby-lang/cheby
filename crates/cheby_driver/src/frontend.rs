@@ -15,7 +15,11 @@
 //!    parallel, and a module's bodies check in parallel too
 //!    (`cheby_types::check_bodies_with`). Each task stores its results by
 //!    module id; they are merged afterwards in the topological order, so
-//!    nothing depends on the schedule.
+//!    nothing depends on the schedule. A module outside std reads through
+//!    a recording view, and the modules it read beyond its imports are its
+//!    front end's hidden reads ([`Checked::front_reads`], D-955). A debug
+//!    toolchain decodes each interface right after building it and
+//!    compares it with the original (D-954).
 //! 5. Across the whole program, like a linker: every native symbol bound
 //!    by an `@external` has one C signature (E0054). The first binding of
 //!    each symbol in the topological order is kept for E0053 when
@@ -43,7 +47,7 @@ use cheby_diag::codes;
 use cheby_diag::{Diagnostic, FileId, SourceMap, Span};
 use cheby_iface::{
     DepView, Globals, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo, ModuleInterface,
-    ModuleTable, PackageId, builtin, encode,
+    ModuleTable, PackageId, ReadLog, builtin, encode,
 };
 use cheby_mir::ForeignSig;
 use cheby_mir::repr::foreign_sig_with_context;
@@ -55,10 +59,11 @@ use cheby_resolve::{
     collect_imports, cycle_diagnostic, resolve_import_targets, resolve_module,
 };
 use cheby_syntax::SyntaxTree;
-use cheby_types::{
-    PackageModule, Tests, TypesInput, build_interface, check_bodies_with, package_warnings, thir,
-};
+use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
 
+use crate::cache::front::{self, External, FrontKey, FrontRecord, ImportKey};
+use crate::cache::replay::{self, SpanCx, StoredSpan};
+use crate::cache::{Hash128, Key};
 use crate::{Error, Package, parse_file, std_lib};
 
 /// The result of the front end over a package without phase-A errors.
@@ -95,6 +100,38 @@ pub(crate) struct Frontend {
     /// Per module id: the native symbols its functions bind, in item order,
     /// so the REPL's `:reload` can recompute [`Frontend::natives`].
     pub module_natives: Vec<Vec<(Box<str>, NativeBinding)>>,
+    /// Per module id: the hashes of its source file's bytes, computed once
+    /// per command when the file was read, or when `cheby` was built for
+    /// std (D-963); `None` for the builtin module and for modules a REPL
+    /// added.
+    pub source_hashes: Vec<Option<crate::SourceHashes>>,
+    /// Whether every checked module has its bodies: false only when a
+    /// warm `cheby run` or `cheby test` found an error and skipped checking
+    /// its cache hits again, so nothing may lower it ([`run_inner`]).
+    pub complete: bool,
+    /// The local package's native code (D-940, D-941): its C objects and
+    /// its loaded shared library, prepared by [`run_cached`] in `Build`
+    /// mode once the package checks; empty in `Check` mode, which compiles
+    /// no C (D-532), and for a package without `[native]`.
+    pub native: crate::native::PackageNative,
+    /// Where borrowing inference writes its records and logs its code
+    /// keys (K4b, D-969): the cache's store and lookup log and each
+    /// package module's front identity; `None` without a cache.
+    pub records: Option<crate::borrowing::RecordSink>,
+    /// The command's store and whether it reads it, for what K4d caches
+    /// beside code records (the reuse lines, D-965); `None` without a
+    /// cache.
+    pub cache_store: Option<(crate::cache::StoreShare, bool)>,
+    /// Per package module with a front record: its front identity `F2`,
+    /// which keys its warm facts (D-1250, [`crate::warm_keys`]).
+    pub warm_f2: BTreeMap<ModuleId, Hash128>,
+    /// The package hits a warm `cheby run` or `cheby test` did not check
+    /// (D-1250): what is read of them instead of their THIR.
+    pub warm: BTreeMap<ModuleId, crate::warm_keys::WarmModule>,
+    /// Whether something asked for the checked body of a module in
+    /// [`Frontend::warm`]: a warm build that then fails starts again with
+    /// every module checked ([`Frontend::wanted_body`]).
+    pub wanted: std::sync::atomic::AtomicBool,
 }
 
 /// An `@external(native, "symbol")` binding of a symbol.
@@ -105,7 +142,8 @@ pub(crate) struct NativeBinding {
     pub span: Span,
 }
 
-/// The native symbols bound by `resolved`'s functions, in item order.
+/// The native symbols bound by `resolved`'s functions and external types' drop functions
+/// (D-949), in item order.
 pub(crate) fn native_bindings(
     resolved: &ResolvedModule,
     iface: &ModuleInterface,
@@ -116,13 +154,47 @@ pub(crate) fn native_bindings(
         let Some((symbol, span)) = item.attrs.native_symbol() else {
             continue;
         };
-        let Some(ItemSig::Fn(sig)) = iface.item(index).map(|i| &i.sig) else {
-            continue;
+        let sig = match iface.item(index).map(|i| &i.sig) {
+            Some(ItemSig::Fn(sig)) => {
+                foreign_sig_with_context(sig, globals, item.attrs.std_context)
+            }
+            // D-949: an external type's drop function is
+            // `void f(void *handle)`, checked by E0054 like any binding.
+            Some(ItemSig::Type(_)) => ForeignSig {
+                params: vec![cheby_mir::repr::CType::Ptr],
+                ret: cheby_mir::repr::CType::Void,
+            },
+            _ => continue,
         };
-        let sig = foreign_sig_with_context(sig, globals, item.attrs.std_context);
         out.push((symbol.into(), NativeBinding { sig, span }));
     }
     out
+}
+
+/// D-944: E0055 for each of `bindings`, a module's outside std, that names
+/// a symbol the runtime exports (`cheby_runtime::symbols()`), which only
+/// the standard library may bind; returns the other bindings, so a
+/// reserved one never meets std's binding in E0054. Resolution reports
+/// the reserved prefixes itself; the driver passes the runtime's names, so
+/// `cheby_resolve` does not depend on the runtime.
+pub(crate) fn reserve_exports(
+    bindings: Vec<(Box<str>, NativeBinding)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<(Box<str>, NativeBinding)> {
+    let runtime = cheby_runtime::symbols();
+    let exported = |symbol: &str| runtime.iter().any(|(name, _)| *name == symbol);
+    bindings
+        .into_iter()
+        .filter(|(symbol, binding)| {
+            match cheby_resolve::runtime_export_reserved(symbol, binding.span, &exported) {
+                Some(diagnostic) => {
+                    diagnostics.push(diagnostic);
+                    false
+                }
+                None => true,
+            }
+        })
+        .collect()
 }
 
 /// Records one module's native bindings (from [`native_bindings`]),
@@ -160,7 +232,20 @@ pub(crate) struct Checked {
     /// The module's transitive dependencies, sorted: what its phases may
     /// read (D-246, D-260).
     pub deps: Vec<ModuleId>,
+    /// The front end's hidden reads (D-955, `cache.md` §3.3's `R`): the
+    /// modules whose interfaces resolution, the interface and the bodies
+    /// read through the module's view that are neither the module's
+    /// direct imports, nor std modules (the build ID fixes std), nor the
+    /// builtin module; sorted by id. Empty for std modules, which record
+    /// nothing, and for REPL entries and reloads, which are never cached
+    /// (D-1124, D-964).
+    pub front_reads: Vec<ModuleId>,
     pub thir: thir::Module,
+    /// The native drop function of each external type the module declares
+    /// (D-949), from its resolved items
+    /// (`cheby_resolve::ResolvedModule::external_drops`): what lowering's
+    /// `ExternalDesc::drop` gets (`crate::native::attach_drops`).
+    pub drops: Vec<(cheby_iface::DefIndex, Box<str>)>,
     /// The module's interface (also in [`Frontend::set`] for the package's
     /// modules).
     pub interface: Arc<ModuleInterface>,
@@ -178,10 +263,60 @@ pub(crate) struct Checked {
 
 impl Frontend {
     pub fn checked(&self, module: ModuleId) -> Option<&Checked> {
+        let found = self.checked_quiet(module);
+        if found.is_none() && self.warm.contains_key(&module) {
+            self.wanted.store(true, Ordering::Relaxed);
+        }
+        found
+    }
+
+    /// [`Frontend::checked`], without noting a warm hit's body as wanted:
+    /// for callers that skip a module without one.
+    pub fn checked_quiet(&self, module: ModuleId) -> Option<&Checked> {
         usize::try_from(module.as_u32())
             .ok()
             .and_then(|n| self.checked.get(n))
             .and_then(Option::as_ref)
+    }
+
+    /// Whether the build asked for the checked body of a warm hit (D-1250):
+    /// the command starts again with every module checked.
+    pub fn wanted_body(&self) -> bool {
+        self.wanted.load(Ordering::Relaxed)
+    }
+
+    /// The tests of `module`: its checked ones, or a warm hit's from its
+    /// warm facts (D-1250), whose bodies are empty and never lowered.
+    pub fn tests_of(&self, module: ModuleId) -> Option<&[thir::TestDef]> {
+        match self.warm.get(&module) {
+            Some(warm) => Some(&warm.tests),
+            None => self.checked_quiet(module).map(|c| c.thir.tests.as_slice()),
+        }
+    }
+
+    /// The summaries of warm hit `module` in the walk's form
+    /// (`load_set.rs`), `None` for a module that was checked.
+    pub fn warm_summaries(
+        &self,
+        module: ModuleId,
+    ) -> Option<&[crate::cache::front::ReferenceSummary]> {
+        self.warm.get(&module).map(|w| w.summaries.as_slice())
+    }
+
+    /// The hashes of `module`'s source computed when it was read (D-963).
+    pub fn source_hashes(&self, module: ModuleId) -> Option<crate::SourceHashes> {
+        usize::try_from(module.as_u32())
+            .ok()
+            .and_then(|n| self.source_hashes.get(n))
+            .copied()
+            .flatten()
+    }
+
+    /// The package libraries a JIT of this build resolves native symbols
+    /// in, in build order (D-941): the local package's, if it has native
+    /// code.
+    pub fn native_libraries(&self) -> Vec<Arc<cheby_jit::NativeLibrary>> {
+        self.native.libraries()
     }
 
     /// The local module at `path`, if the package has it.
@@ -193,13 +328,25 @@ impl Frontend {
         })
     }
 
-    /// The `main` of `module`, if it has one that type-checked.
+    /// The `main` of `module`, if it has one that type-checked and that
+    /// exists on `native`, the target of every build so far: an item marked
+    /// for one target exists only there (§12.6, as D-597 has it for tests),
+    /// so a module whose `main` is `js`'s has none here (D-464).
     pub fn main_of(&self, module: ModuleId) -> Option<&thir::FnDef> {
-        self.checked(module)?
-            .thir
-            .fns
-            .iter()
-            .find(|f| f.entry.is_some())
+        // A warm hit's `main` comes from its warm facts (D-1250).
+        let main = match self.warm.get(&module) {
+            Some(warm) => warm.main.as_ref()?,
+            None => self
+                .checked_quiet(module)?
+                .thir
+                .fns
+                .iter()
+                .find(|f| f.entry.is_some())?,
+        };
+        let item = self.set.get(module)?.item(main.def.index)?;
+        item.targets
+            .contains(cheby_package::Target::Native)
+            .then_some(main)
     }
 
     /// Drops the results [`check_reloaded`] added for `modules`, the
@@ -237,6 +384,12 @@ struct DriverLookup<'a> {
     diagnostics: &'a mut Vec<Diagnostic>,
     /// A std module that failed to parse: a bug in std, never the user's.
     std_error: Option<String>,
+    /// K6: the command's cache, where std's front records are looked up
+    /// first when `std_hits_ok` (D-980), and std's parses logged.
+    std_cache: Option<&'a crate::Cache>,
+    std_hits_ok: bool,
+    /// K6: the std modules whose front record hit, which are not parsed.
+    std_hits: &'a mut BTreeMap<ModuleId, FrontRecord>,
 }
 
 impl DriverLookup<'_> {
@@ -249,16 +402,42 @@ impl DriverLookup<'_> {
     }
 
     fn load_std(&mut self, path: &str, module_path: ModulePath) -> Result<ModuleId, Ice> {
+        let _std = crate::phases::span(crate::phases::Phase::Std);
         let source =
             std_lib::find(path).ok_or_else(|| Ice::new("loading an unknown std module"))?;
         let display = std_lib::display_path(path);
+        // K6: std's front record first (D-980); its file joins the source
+        // map unparsed, for spans and D-538's seeds.
+        if let Some(cache) = self.std_cache {
+            let full = module_path.to_string();
+            if self.std_hits_ok
+                && let Some(record) = crate::std_cache::lookup_std_front(cache, &full)?
+            {
+                let file = self
+                    .sources
+                    .add_file(display, source.source)
+                    .map_err(|_| Ice::new("a std file is too large"))?;
+                let id = self.modules.add(ModuleInfo {
+                    path: module_path,
+                    package: PackageId::STD,
+                    file: Some(file),
+                })?;
+                if self.trees.len() != index(id)? {
+                    return Err(Ice::new("module ids and trees are out of step"));
+                }
+                self.trees.push(None);
+                self.std_hits.insert(id, record);
+                return Ok(id);
+            }
+            cache.log.parsed_std(&full);
+        }
         let parsed = parse_file(
             self.sources,
             &display,
             source.source.as_bytes().to_vec(),
             self.diagnostics,
         )
-        .map_err(|e| Ice::new(e.message().to_owned()))?;
+        .map_err(|e| Ice::new(e.ice_message()))?;
         if parsed.has_syntax_errors {
             self.std_error = Some(display);
         }
@@ -319,6 +498,56 @@ impl ModuleLookup for DriverLookup<'_> {
             closest,
         })
     }
+}
+
+/// The hidden reads among `read`, the modules a recording view of
+/// `module` handed out (D-955): those that are not `module` itself, a
+/// direct import (`imports`), a std module, the builtin module or one of
+/// `known` (an earlier phase's hidden reads). Sorted by id, as `read` is.
+pub(crate) fn hidden_reads(
+    modules: &ModuleTable,
+    module: ModuleId,
+    read: Vec<ModuleId>,
+    imports: &[ImportTarget],
+    known: &[ModuleId],
+) -> Vec<ModuleId> {
+    let mut hidden = read;
+    hidden.retain(|&m| {
+        m != module
+            && m != ModuleId::BUILTIN
+            && !imports.iter().any(|t| t.module() == Some(m))
+            && !known.contains(&m)
+            && modules
+                .get(m)
+                .is_some_and(|info| info.package != PackageId::STD)
+    });
+    hidden
+}
+
+/// A module's native bindings as its record stores them, or `None` when
+/// one's symbol literal is not in the module's own `file`.
+fn externals(natives: &[(Box<str>, NativeBinding)], file: FileId) -> Option<Vec<External>> {
+    natives
+        .iter()
+        .map(|(symbol, binding)| {
+            (binding.span.file == file).then(|| External {
+                symbol: symbol.to_string(),
+                sig: binding.sig.clone(),
+                span: (binding.span.range.start(), binding.span.range.len()),
+            })
+        })
+        .collect()
+}
+
+/// The build-time source hashes of the std module at `path` (D-963).
+fn std_source_hashes(path: &ModulePath) -> Option<crate::SourceHashes> {
+    let segments = path.segments();
+    let (first, rest) = segments.split_first()?;
+    if first.as_str() != "std" {
+        return None;
+    }
+    let under: Vec<&str> = rest.iter().map(String::as_str).collect();
+    std_lib::source_hashes(&under.join("::"))
 }
 
 fn index(module: ModuleId) -> Result<usize, Ice> {
@@ -457,11 +686,11 @@ pub(crate) fn check_extra_module(
     let (iface, iface_diags) = build_interface(&types)?;
     diags.extend(iface_diags);
     let mut natives = front.natives.clone();
-    bind_natives(
+    let bindings = reserve_exports(
         native_bindings(&resolved, &iface, &front.globals),
-        &mut natives,
         &mut diags,
     );
+    bind_natives(bindings, &mut natives, &mut diags);
     let (thir, body_diags) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
     diags.extend(body_diags);
     if diags.iter().any(Diagnostic::is_error) {
@@ -469,7 +698,11 @@ pub(crate) fn check_extra_module(
     }
     Ok(Ok(Checked {
         deps,
+        // D-1124: REPL entries are never cached
+        // (D-964), so their views record nothing.
+        front_reads: Vec::new(),
         thir,
+        drops: resolved.external_drops(),
         interface: Arc::new(iface),
         warnings: diags,
     }))
@@ -491,8 +724,10 @@ pub(crate) struct ReloadedModule<'a> {
 /// the build checks a package module, publishes its interface, and adds
 /// its results to `front` (`checked`, `order`, its imports and native
 /// bindings); [`Frontend::natives`] does not change. `display` is the
-/// table diagnostics name modules with. Returns its diagnostics, unsorted;
-/// when one is an error, the caller must not use the module.
+/// table diagnostics name modules with. Returns its diagnostics, unsorted,
+/// and the internal error of a body that left its THIR; when one of them
+/// is an error, the caller must not use the module, and with no error in
+/// the whole reload the internal error stands (D-464).
 ///
 /// # Errors
 ///
@@ -502,7 +737,7 @@ pub(crate) fn check_reloaded(
     front: &mut Frontend,
     display: &ModuleTable,
     module: ReloadedModule<'_>,
-) -> Result<Vec<Diagnostic>, Ice> {
+) -> Result<(Vec<Diagnostic>, Option<Ice>), Ice> {
     let id = module.id;
     // What it may read: its imports and the shipped home modules of
     // prelude types (D-447), with their transitive dependencies (D-246).
@@ -555,6 +790,9 @@ pub(crate) fn check_reloaded(
     front.set.publish(Arc::clone(&iface))?;
     let (thir, found) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
     diags.extend(found);
+    #[cfg(test)]
+    let thir = drop_for_test(&types, thir);
+    let dropped = cheby_types::dropped_body(&types, &thir, Tests::SkipStd);
     let at = index(id)?;
     while front.checked.len() <= at {
         front.checked.push(None);
@@ -567,7 +805,11 @@ pub(crate) fn check_reloaded(
         if let Some(slot) = front.checked.get_mut(at) {
             *slot = Some(Checked {
                 deps,
+                // D-1124: a reload is never cached
+                // (D-964), so its views record nothing.
+                front_reads: Vec::new(),
                 thir,
+                drops: resolved.external_drops(),
                 interface: iface,
                 warnings: Vec::new(),
             });
@@ -583,7 +825,7 @@ pub(crate) fn check_reloaded(
         }
         front.order.push(id);
     }
-    Ok(diags)
+    Ok((diags, dropped))
 }
 
 /// The module table and the interfaces an extra module sees, and its id
@@ -713,52 +955,657 @@ impl ModuleLookup for ExtraLookup<'_> {
     }
 }
 
+/// Why a front end with the cache stopped without a result.
+pub(crate) enum Stop {
+    /// An internal compiler error.
+    Ice(Ice),
+    /// Something the package index or a hit vouched for turned out wrong
+    /// (a module the index let go unparsed lies on an import cycle, has a
+    /// grammar error or an import that no longer resolves; a hit's
+    /// interface that a checked module needs cannot be decoded): the
+    /// command starts its front end again, parsing every module and
+    /// decoding each hit's interface at its lookup (D-1133).
+    Restart,
+}
+
+impl From<Ice> for Stop {
+    fn from(ice: Ice) -> Self {
+        Self::Ice(ice)
+    }
+}
+
+/// The lines of the three lists a front record's diagnostics blob holds:
+/// phase A's, then the front end's early and late ones.
+const DIAGNOSTIC_LISTS: usize = 3;
+
+/// The syntax tree of a module parsed after loading, with its phase-A
+/// diagnostics, once; `None` for one with a grammar error.
+type LateTree = OnceLock<Option<(SyntaxTree, Vec<Diagnostic>)>>;
+
+/// A file read by [`read_modules`]: its id, and its text to parse, `None`
+/// when it is not parsed, or the E0001 of a file that is not UTF-8.
+type ToParse = (FileId, Result<Option<Arc<str>>, Diagnostic>);
+
+/// How a front end uses the cache (D-955, D-962).
+#[derive(Clone, Copy)]
+pub(crate) struct CacheUse<'a> {
+    pub cache: &'a crate::Cache,
+    /// The package index this command read, if any, and its bytes.
+    pub index: Option<&'a (crate::cache::index::PackageIndex, Vec<u8>)>,
+    /// Where this command's index goes (the root's absolute path and the
+    /// family), unless the cache is bypassed for reads and writes.
+    pub index_key: Key,
+    /// Whether modules the index vouches for may stay unparsed and hits'
+    /// interfaces be decoded only when a checked module needs them; false
+    /// after a [`Stop::Restart`].
+    pub lazy: bool,
+    /// The build a `Mode::Build` front end feeds, for `cheby run` and
+    /// `cheby test` (D-1250): it checks only what its warm build needs
+    /// ([`crate::warm_keys`]); `None` for every other command.
+    pub build: Option<crate::warm_keys::WarmBuild<'a>>,
+}
+
 /// The inputs every module's pipeline step reads, shared by the tasks.
 struct BuildInputs<'a> {
     mode: Mode,
     globals: &'a Globals,
     modules: &'a ModuleTable,
+    sources: &'a SourceMap,
     trees: &'a [Option<SyntaxTree>],
+    /// Per module id: the phase-A diagnostics of a package module parsed
+    /// when the package was loaded (already reported then).
+    syntax: &'a [Option<Vec<Diagnostic>>],
     imports: &'a [Vec<ImportRequest>],
     targets: &'a [Vec<ImportTarget>],
     graph: &'a Graph,
     set: &'a InterfaceSet,
     known: &'a [&'a str],
     local_targets: Targets,
+    /// Per module id: whether it is checked from source even when its
+    /// lookup hits: in `Build` mode every module, in `Check` mode those
+    /// constant evaluation needs (D-1134).
+    must_check: &'a [bool],
+    /// What the tasks of one pass share, filled as they run.
+    shared: &'a Shared,
+    /// Per module id: the syntax tree of a module parsed after loading,
+    /// with its phase-A diagnostics; `None` for one with a grammar error.
+    late_trees: &'a [LateTree],
+    /// The package modules checked from source, by path, once per check
+    /// (the driver's count, never printed).
+    counted: &'a std::sync::Mutex<Vec<String>>,
+    /// The cache, which the package's modules are looked up in and written
+    /// to (D-955); `None` checks every module from source and writes
+    /// nothing.
+    cache: Option<FrontCx<'a>>,
+}
+
+/// What the tasks of a front end fill as they run, by module id.
+struct Shared {
+    /// The interface hash each module published: a hit's from its record,
+    /// so that dependents' keys need no decoded interface.
+    hashes: Vec<OnceLock<Option<cheby_iface::InterfaceHash>>>,
+    /// The front record of each hit.
+    records: Vec<OnceLock<FrontRecord>>,
+    /// Whether a hit's interface was decoded and published (D-954): done
+    /// once, when a checked module first needs it.
+    decoded: Vec<OnceLock<bool>>,
+    /// The front identity of each package hit, which keys its warm facts
+    /// (D-1250, [`crate::warm_keys`]).
+    f2: Vec<OnceLock<Hash128>>,
+    /// The warm facts of each package hit, read once when its interface is
+    /// decoded (D-1250).
+    facts: Vec<OnceLock<front::WarmFacts>>,
+}
+
+impl Shared {
+    fn new(len: usize) -> Self {
+        Self {
+            hashes: (0..len).map(|_| OnceLock::new()).collect(),
+            records: (0..len).map(|_| OnceLock::new()).collect(),
+            decoded: (0..len).map(|_| OnceLock::new()).collect(),
+            f2: (0..len).map(|_| OnceLock::new()).collect(),
+            facts: (0..len).map(|_| OnceLock::new()).collect(),
+        }
+    }
+
+    fn hash(&self, module: ModuleId) -> Option<cheby_iface::InterfaceHash> {
+        self.hashes
+            .get(index(module).ok()?)
+            .and_then(OnceLock::get)
+            .copied()
+            .flatten()
+    }
+}
+
+/// What the front end needs to read and write front records.
+#[derive(Clone, Copy)]
+struct FrontCx<'a> {
+    cache: &'a crate::Cache,
+    use_: CacheUse<'a>,
+    /// The package's name.
+    package: &'a str,
+    /// Per module id: its source hashes (D-963).
+    hashes: &'a [Option<crate::SourceHashes>],
+    /// Per module id: its source file's length in bytes, for replayed
+    /// spans.
+    text_lens: &'a [u32],
+    /// Per module id: whether it was left unparsed because the index
+    /// vouched for its source.
+    unparsed: &'a [bool],
+    /// Which pass of [`run_inner`] this is.
+    pass: Pass,
+}
+
+/// The two passes of a build with a cache ([`run_inner`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass {
+    /// Looks every package module up, logs the lookup, and writes the
+    /// record of a miss.
+    Warm,
+    /// `cheby check`'s error path: checks again from source, on fresh
+    /// interfaces, a module whose check against decoded interfaces
+    /// reported an error, with the modules it read that were not checked
+    /// on fresh interfaces (D-1136); looks nothing up
+    /// and writes nothing.
+    Recheck,
+}
+
+/// A module's summaries, computed from its check (D-965, D-967).
+#[derive(Clone, Debug, Default)]
+struct Summaries {
+    references: Vec<front::ReferenceSummary>,
+    uses: front::UseSummary,
+    /// Whether every body checked (`cheby_types::ModuleRefs::complete`).
+    complete: bool,
 }
 
 /// What one module's pipeline step produced.
 struct ModuleOutput {
+    /// The phase-A diagnostics of a module that was not parsed when the
+    /// package was loaded: replayed for a hit, or from parsing it later.
+    syntax: Vec<Diagnostic>,
     /// The diagnostics of resolution and of the interface.
     early: Vec<Diagnostic>,
     natives: Vec<(Box<str>, NativeBinding)>,
     /// The diagnostics of the bodies.
     late: Vec<Diagnostic>,
-    checked: Checked,
-    /// Kept for the whole-package warnings (`cheby check`, local modules).
-    resolved: Option<ResolvedModule>,
+    /// The interface hash the module published.
+    hash: Option<cheby_iface::InterfaceHash>,
+    /// The checked bodies; `None` on a cache hit that was not checked.
+    checked: Option<Checked>,
+    /// The summaries of a package module checked from source.
+    summaries: Option<Summaries>,
+    /// The internal error of a module checked from source that lost a body
+    /// ([`cheby_types::dropped_body`]). It stands only if the whole package
+    /// has no error, which [`run_inner`] decides.
+    dropped: Option<Ice>,
+    /// The front record found when the lookup hit.
+    hit: Option<FrontRecord>,
+    /// The module's entry for this command's package index: a hit's, or
+    /// that of the record just written.
+    entry: Option<crate::cache::index::IndexEntry>,
+}
+
+/// A front record found by a lookup, with the keys it lies under.
+struct Found {
+    f1: Key,
+    f2: Key,
+    record: FrontRecord,
+}
+
+/// What a lookup saw of a module's read-set hint, so that writing the
+/// module's record need not read the hint again.
+enum HintSeen {
+    /// The hint was not looked at.
+    Unknown,
+    /// The hint's paths; `None` when there is no hint, which reads as the
+    /// empty set (D-1137).
+    Seen(Option<Vec<String>>),
+    /// The hint is malformed: it is written again.
+    Bad,
 }
 
 impl BuildInputs<'_> {
-    /// Resolves module `id`, builds and publishes its interface, calls
-    /// `published` (which lets its dependents start), then checks its
-    /// bodies.
-    fn check_module(&self, id: ModuleId, published: impl FnOnce()) -> Result<ModuleOutput, Ice> {
+    /// Runs package or std module `id`'s step: a package module is looked
+    /// up in the cache first (D-955). A hit that need not be checked
+    /// publishes its interface hash from its record, and its interface only
+    /// when a checked module needs it (D-954); its diagnostics and externals
+    /// are replayed (D-965). Any other module is checked from source
+    /// ([`BuildInputs::check_source`]); a hit that is checked anyway prints
+    /// its replayed diagnostics and is not written again, a miss is
+    /// written. `published` lets the module's dependents start.
+    fn check_module(&self, id: ModuleId, published: impl FnOnce()) -> Result<ModuleOutput, Stop> {
         let deps: Vec<ModuleId> = reachable(self.graph, self.graph.successors(id.as_u32()))
             .into_iter()
             .map(ModuleId::from_u32)
             .collect();
         let info = self.modules.try_get(id)?;
-        let tree = get(self.trees, id)?
-            .as_ref()
-            .ok_or_else(|| Ice::new(format!("module `{}` has no syntax tree", info.path)))?;
+        // K6: a std module whose front record hit (D-980).
+        if info.package == PackageId::STD
+            && let Some(cx) = self.cache
+            && cx.pass == Pass::Warm
+            && let Some(record) = self.shared.records.get(index(id)?).and_then(OnceLock::get)
+        {
+            return self.std_hit(cx, id, record, published);
+        }
+        // Other std modules are checked from source, as D-450 says.
+        let cx = match self.cache {
+            Some(cx) if info.package == PackageId::LOCAL && cx.pass == Pass::Warm => cx,
+            _ => return self.check_source(id, deps, published),
+        };
+        let key = self.front_key(cx, id)?;
+        let (found, hint) = match &key {
+            Some((f1, _)) if cx.cache.reads => self.find(cx, id, &deps, *f1)?,
+            _ => (None, HintSeen::Unknown),
+        };
+        let must_check = self.must_check.get(index(id)?).copied().unwrap_or(true);
+        let mut found = found;
+        if !must_check && let Some(hit) = &found {
+            if let Some(output) = self.hit(cx, id, hit)? {
+                published();
+                return Ok(output);
+            }
+            // Its replay or its interface failed: a miss, written again.
+            found = None;
+        }
+        let mut output = self.check_source(id, deps, published)?;
+        if let Some(found) = found
+            && let Some(lists) = self.replay(cx, id, &found.record)?
+        {
+            // A hit checked anyway prints what the cache replays, which
+            // must be what the check found (D-1131).
+            let [syntax, early, late] = lists;
+            if cfg!(debug_assertions)
+                && (early != output.early
+                    || late != output.late
+                    || output.hash.map(|h| Hash128(h.0)) != Some(found.record.interface))
+            {
+                return Err(Stop::Ice(Ice::new(format!(
+                    "module `{}` checked from source gives other diagnostics or another interface hash than the cache's (D-954)",
+                    info.path
+                ))));
+            }
+            output.early = early;
+            output.late = late;
+            if get(cx.unparsed, id).copied().unwrap_or(false) {
+                output.syntax = syntax;
+            }
+            output.entry = self.entry(cx, id, found.f1, found.f2, found.record.clone())?;
+            output.hit = Some(found.record);
+            return Ok(output);
+        }
+        if let Some((f1, imports)) = key {
+            output.entry = self.write_front(cx, id, f1, imports, &output, hint)?;
+        }
+        Ok(output)
+    }
+
+    /// K6: std module `id`, whose front record `record` hit (D-980): neither
+    /// parsed nor checked. Its natives come from the record, its interface
+    /// is decoded now (D-954) and its hash published; std reports no
+    /// diagnostics.
+    fn std_hit(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+        record: &FrontRecord,
+        published: impl FnOnce(),
+    ) -> Result<ModuleOutput, Stop> {
+        let info = self.modules.try_get(id)?;
+        let file = info
+            .file
+            .ok_or_else(|| Ice::new(format!("std module `{}` has no file", info.path)))?;
+        let span_cx = self.span_cx(cx, id, file)?;
+        let mut natives = Vec::with_capacity(record.externals.len());
+        for external in &record.externals {
+            let span = span_cx
+                .resolve(&StoredSpan::Own {
+                    start: external.span.0,
+                    len: external.span.1,
+                })
+                .ok_or_else(|| Ice::new(format!("a native span of std's `{}`", info.path)))?;
+            natives.push((
+                external.symbol.clone().into_boxed_str(),
+                NativeBinding {
+                    sig: external.sig.clone(),
+                    span,
+                },
+            ));
+        }
+        if !self.ensure_interface(id)? {
+            // A damaged or missing artifact (D-960): written again, and
+            // the front end starts again, parsing std.
+            crate::std_cache::repair(cx.cache)?;
+            return Err(Stop::Restart);
+        }
+        let hash = cheby_iface::InterfaceHash(record.interface.0);
+        if let Some(slot) = self.shared.hashes.get(index(id)?) {
+            let _ = slot.set(Some(hash));
+        }
+        published();
+        Ok(ModuleOutput {
+            syntax: Vec::new(),
+            early: Vec::new(),
+            natives,
+            late: Vec::new(),
+            hash: Some(hash),
+            checked: None,
+            summaries: None,
+            dropped: None,
+            hit: None,
+            entry: None,
+        })
+    }
+
+    /// The syntax tree of module `id`: parsed when the package was loaded,
+    /// or now, once, for a module the package index let go unparsed. A
+    /// grammar error in a module the index vouched for is a
+    /// [`Stop::Restart`].
+    fn tree(&self, id: ModuleId) -> Result<(&SyntaxTree, Option<&[Diagnostic]>), Stop> {
+        let info = self.modules.try_get(id)?;
+        if let Some(tree) = get(self.trees, id)?.as_ref() {
+            return Ok((tree, None));
+        }
+        let file = info
+            .file
+            .ok_or_else(|| Ice::new(format!("module `{}` has no file", info.path)))?;
+        let slot = self
+            .late_trees
+            .get(index(id)?)
+            .ok_or_else(|| Ice::new("no late tree slot"))?;
+        let parsed = slot.get_or_init(|| {
+            let text = self.sources.file(file)?.text_arc();
+            let (tree, mut diags) = cheby_syntax::parse(file, text).into_parts();
+            if diags.iter().any(Diagnostic::is_error) {
+                return None;
+            }
+            diags.extend(cheby_syntax::validate(&tree));
+            (!diags.iter().any(Diagnostic::is_error)).then_some((tree, diags))
+        });
+        match parsed {
+            Some((tree, diags)) => Ok((tree, Some(diags))),
+            None => Err(Stop::Restart),
+        }
+    }
+
+    /// A hit that is not checked (D-954, D-965): its record's interface
+    /// hash is published for its dependents' keys, its diagnostics and
+    /// externals are replayed, and its interface is decoded only when a
+    /// checked module needs it ([`BuildInputs::ensure_interface`]), or now
+    /// when the front end is not lazy. `None` when the replay or the
+    /// decoding fails: the module is a miss.
+    fn hit(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+        found: &Found,
+    ) -> Result<Option<ModuleOutput>, Stop> {
+        let at = index(id)?;
+        let record = &found.record;
+        let slot = self
+            .shared
+            .records
+            .get(at)
+            .ok_or_else(|| Ice::new("no record slot"))?;
+        let _ = slot.set(record.clone());
+        if let Some(slot) = self.shared.f2.get(at) {
+            let _ = slot.set(found.f2.hash());
+        }
+        // A hit that turns into a miss is checked from source, which
+        // publishes its interface: so nothing of it is published until its
+        // replay and its externals have succeeded (D-960: a missing blob
+        // reads as a miss). Its replay never decodes its own interface,
+        // since a span into its own file is stored as such.
+        let Some([syntax, early, late]) = self.replay(cx, id, record)? else {
+            return Ok(None);
+        };
+        let info = self.modules.try_get(id)?;
+        let Some(file) = info.file else {
+            return Ok(None);
+        };
+        let span_cx = self.span_cx(cx, id, file)?;
+        let mut natives = Vec::with_capacity(record.externals.len());
+        for external in &record.externals {
+            let Some(span) = span_cx.resolve(&StoredSpan::Own {
+                start: external.span.0,
+                len: external.span.1,
+            }) else {
+                return Ok(None);
+            };
+            natives.push((
+                external.symbol.clone().into_boxed_str(),
+                NativeBinding {
+                    sig: external.sig.clone(),
+                    span,
+                },
+            ));
+        }
+        // Not lazy (after a restart), or a warm `cheby run` or `cheby
+        // test`, whose back end names every hit's items (D-1250): its
+        // interface is decoded now, last.
+        if (!cx.use_.lazy || self.mode == Mode::Build) && !self.ensure_interface(id)? {
+            return Ok(None);
+        }
+        let hash = cheby_iface::InterfaceHash(record.interface.0);
+        if let Some(slot) = self.shared.hashes.get(at) {
+            let _ = slot.set(Some(hash));
+        }
+        Ok(Some(ModuleOutput {
+            syntax: if get(cx.unparsed, id).copied().unwrap_or(false) {
+                syntax
+            } else {
+                Vec::new()
+            },
+            early,
+            natives,
+            late,
+            hash: Some(hash),
+            checked: None,
+            summaries: None,
+            dropped: None,
+            hit: Some(record.clone()),
+            entry: self.entry(cx, id, found.f1, found.f2, record.clone())?,
+        }))
+    }
+
+    /// The replayed diagnostics of `record` (D-965), as phase A's, the
+    /// early and the late lists; the interfaces their spans into other
+    /// modules name are decoded first. `None` when the blob is missing or
+    /// malformed or a span no longer resolves.
+    fn replay(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+        record: &FrontRecord,
+    ) -> Result<Option<[Vec<Diagnostic>; 3]>, Stop> {
+        if record.diagnostics == Hash128::of(&replay::empty_blob(DIAGNOSTIC_LISTS)) {
+            return Ok(Some([Vec::new(), Vec::new(), Vec::new()]));
+        }
+        let Some(bytes) = cx.cache.store.get_blob(record.diagnostics).ok().flatten() else {
+            return Ok(None);
+        };
+        let Some(named) = replay::item_modules(&bytes, DIAGNOSTIC_LISTS) else {
+            return Ok(None);
+        };
+        for path in named {
+            let Some(m) = crate::parse_module_path(&path).and_then(|p| self.modules.find(&p))
+            else {
+                return Ok(None);
+            };
+            if !self.ensure_interface(m)? {
+                return Ok(None);
+            }
+        }
+        let Some(file) = self.modules.try_get(id)?.file else {
+            return Ok(None);
+        };
+        let span_cx = self.span_cx(cx, id, file)?;
+        let Some(lists) = replay::decode_diagnostics(&bytes, DIAGNOSTIC_LISTS, &span_cx) else {
+            return Ok(None);
+        };
+        Ok(<[Vec<Diagnostic>; 3]>::try_from(lists).ok())
+    }
+
+    /// The span context of package module `id`, whose file is `file`.
+    fn span_cx(&self, cx: FrontCx<'_>, id: ModuleId, file: FileId) -> Result<SpanCx<'_>, Ice> {
+        Ok(SpanCx {
+            own: file,
+            own_len: cx.text_lens.get(index(id)?).copied().unwrap_or(0),
+            modules: self.modules,
+            set: self.set,
+            globals: self.globals,
+        })
+    }
+
+    /// Whether module `module` has an interface in the set, after decoding
+    /// it from its artifact if it is a hit that has none yet (D-954): once,
+    /// with the interfaces of its dependencies decoded first. False when it
+    /// cannot be decoded.
+    fn ensure_interface(&self, module: ModuleId) -> Result<bool, Ice> {
+        if self.set.get(module).is_some() {
+            return Ok(true);
+        }
+        let Some(slot) = self.shared.decoded.get(index(module)?) else {
+            return Ok(false);
+        };
+        Ok(*slot.get_or_init(|| self.decode_hit(module).unwrap_or(false)))
+    }
+
+    /// Decodes hit `module`'s interface from its artifact against its
+    /// dependencies' interfaces, applies its spans and publishes it.
+    fn decode_hit(&self, module: ModuleId) -> Result<bool, Ice> {
+        let Some(cx) = self.cache else {
+            return Ok(false);
+        };
+        let Some(record) = self
+            .shared
+            .records
+            .get(index(module)?)
+            .and_then(OnceLock::get)
+        else {
+            return Ok(false);
+        };
+        let deps: Vec<ModuleId> = reachable(self.graph, self.graph.successors(module.as_u32()))
+            .into_iter()
+            .map(ModuleId::from_u32)
+            .collect();
+        for &dep in &deps {
+            if !self.ensure_interface(dep)? {
+                return Ok(false);
+            }
+        }
+        let info = self.modules.try_get(module)?;
+        let Some(file) = info.file else {
+            return Ok(false);
+        };
+        let store = &cx.cache.store;
+        let Some(blob) = store.get_blob(record.artifact).ok().flatten() else {
+            return Ok(false);
+        };
+        let Ok(artifact) = cheby_iface::read_artifact(&blob) else {
+            return Ok(false);
+        };
+        if artifact.build_id != store.build_id().0 || Hash128(artifact.hash.0) != record.interface {
+            return Ok(false);
+        }
+        let view = DepView::new(self.set, &deps);
+        let Ok(mut iface) = cheby_iface::decode_interface(
+            module,
+            info.package,
+            artifact.h,
+            &view,
+            self.modules,
+            self.globals,
+        ) else {
+            return Ok(false);
+        };
+        if cheby_iface::apply_spans(&mut iface, file, &artifact.spans).is_err() {
+            return Ok(false);
+        }
+        // D-1250: a warm `cheby run` or `cheby test` adds the hit's private
+        // items and tests, which no encoding holds (D-953, D-1121), from its
+        // warm facts, after its items, so its own summaries and its tests
+        // name defs as a cold build's do; the facts are kept for its warm
+        // module.
+        if self.mode == Mode::Build
+            && let Some(&f2) = self.shared.f2.get(index(module)?).and_then(OnceLock::get)
+            && let Some(facts) =
+                crate::warm_keys::add_hidden(&cx.cache.store, f2, file, self.globals, &mut iface)?
+            && let Some(slot) = self.shared.facts.get(index(module)?)
+        {
+            let _ = slot.set(facts);
+        }
+        Ok(self.set.publish(Arc::new(iface)).is_ok() || self.set.get(module).is_some())
+    }
+
+    /// Module `id` checked from source: resolution, its interface (then
+    /// `published`), its bodies, and for a package module its hidden reads
+    /// and its summaries. Every package module it reads must have an
+    /// interface: a hit's is decoded first (D-954), and one that cannot be
+    /// is a [`Stop::Restart`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the module's phases in order, each a few lines"
+    )]
+    fn check_source(
+        &self,
+        id: ModuleId,
+        deps: Vec<ModuleId>,
+        published: impl FnOnce(),
+    ) -> Result<ModuleOutput, Stop> {
+        let info = self.modules.try_get(id)?;
+        for &dep in &deps {
+            if !self.ensure_interface(dep)? {
+                return Err(Stop::Restart);
+            }
+        }
+        let (tree, late_syntax) = self.tree(id)?;
+        // A module parsed after loading takes its imports from its tree
+        // now; they must be the ones the package index gave (D-962).
+        let late_requests;
+        let requests: &[ImportRequest] = if late_syntax.is_some() {
+            late_requests = collect_imports(tree, &self.globals.names);
+            let targets = get(self.targets, id)?;
+            let same = late_requests.len() == targets.len()
+                && late_requests.iter().zip(targets).all(|(request, target)| {
+                    let written: Vec<&str> = request
+                        .path
+                        .iter()
+                        .map(|&(name, _)| self.globals.names.get(name))
+                        .collect();
+                    target
+                        .module()
+                        .and_then(|m| self.modules.get(m))
+                        .is_some_and(|m| m.path.to_string() == written.join("::"))
+                });
+            if !same {
+                return Err(Stop::Restart);
+            }
+            &late_requests
+        } else {
+            get(self.imports, id)?
+        };
+        if info.package == PackageId::LOCAL
+            && let Ok(mut checked) = self.counted.lock()
+        {
+            checked.push(info.path.to_string());
+        }
+        // Every phase reads other modules through one view, which records
+        // what it hands out (D-955); std records nothing, since the build
+        // ID fixes it.
+        let log = ReadLog::new();
+        let view = if info.package == PackageId::STD {
+            DepView::new(self.set, &deps)
+        } else {
+            DepView::recording(self.set, &deps, &log)
+        };
         let input = ResolveInput {
             module: id,
             package: info.package,
             tree,
-            imports: get(self.imports, id)?,
+            imports: requests,
             targets: get(self.targets, id)?,
-            deps: DepView::new(self.set, &deps),
+            deps: view,
             modules: self.modules,
             globals: self.globals,
             std: StdCatalog { known: self.known },
@@ -774,15 +1621,25 @@ impl BuildInputs<'_> {
             package: info.package,
             tree,
             resolved: &resolved,
-            deps: DepView::new(self.set, &deps),
+            deps: view,
             modules: self.modules,
             globals: self.globals,
         };
         let (iface, diags) = build_interface(&types)?;
         early.extend(diags);
+        // D-954: a debug toolchain decodes every interface it encodes and
+        // compares it with the original. A module with an error in its
+        // declarations is never cached (D-964), so it is not checked
+        // (D-1125).
+        if cfg!(debug_assertions) && !early.iter().any(Diagnostic::is_error) {
+            cheby_iface::check_roundtrip(&iface, &view.unrecorded(), self.modules, self.globals)?;
+        }
         let natives = native_bindings(&resolved, &iface, self.globals);
         let iface = Arc::new(iface);
         self.set.publish(Arc::clone(&iface))?;
+        if let Some(slot) = self.shared.hashes.get(index(id)?) {
+            let _ = slot.set(iface.hash);
+        }
         published();
         let tests = if self.mode == Mode::StdTests {
             Tests::All
@@ -790,20 +1647,477 @@ impl BuildInputs<'_> {
             Tests::SkipStd
         };
         let (thir, late) = check_bodies_with(&types, &iface, tests)?;
-        let resolved =
-            (self.mode == Mode::Check && info.package == PackageId::LOCAL).then_some(resolved);
+        #[cfg(test)]
+        let thir = drop_for_test(&types, thir);
+        let dropped = cheby_types::dropped_body(&types, &thir, tests);
+        let front_reads =
+            hidden_reads(self.modules, id, log.modules(), get(self.targets, id)?, &[]);
+        // The summaries read the interfaces again without recording: the
+        // reads are taken above.
+        let summaries = if info.package == PackageId::LOCAL
+            && (self.mode == Mode::Check || self.cache.is_some())
+        {
+            let quiet = TypesInput {
+                deps: DepView::new(self.set, &deps),
+                ..types
+            };
+            Some(self.summaries(&quiet, &iface, &thir)?)
+        } else {
+            None
+        };
         Ok(ModuleOutput {
+            syntax: late_syntax.map(<[Diagnostic]>::to_vec).unwrap_or_default(),
             early,
             natives,
             late,
-            checked: Checked {
+            hash: iface.hash,
+            checked: Some(Checked {
                 deps,
+                front_reads,
                 thir,
+                drops: resolved.external_drops(),
                 interface: iface,
                 warnings: Vec::new(),
-            },
-            resolved,
+            }),
+            summaries,
+            dropped,
+            hit: None,
+            entry: None,
         })
+    }
+
+    /// The reference and use summaries of a package module checked from
+    /// source (D-965, D-967): every item by its module's path and its
+    /// name, sorted, so they hold no process-local id (D-264).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the two summaries' items named one by one"
+    )]
+    fn summaries(
+        &self,
+        input: &TypesInput<'_>,
+        own: &ModuleInterface,
+        thir: &thir::Module,
+    ) -> Result<Summaries, Ice> {
+        let refs = cheby_types::module_refs(input, own, thir)?;
+        let name_of = |def: cheby_iface::DefId| -> Option<front::ItemRef> {
+            let module = self.modules.get(def.module)?;
+            let iface = if def.module == input.module {
+                own
+            } else {
+                self.set.get(def.module)?
+            };
+            let item = iface.item(def.index)?;
+            let name = self.globals.names.get(item.name);
+            let item = match item.parent.and_then(|p| iface.item(p)) {
+                Some(parent) => format!("{}::{name}", self.globals.names.get(parent.name)),
+                None => name.to_owned(),
+            };
+            Some(front::ItemRef {
+                module: module.path.to_string(),
+                item,
+            })
+        };
+        let own_name = |index: cheby_iface::DefIndex| -> String {
+            input
+                .resolved
+                .item(index)
+                .map(|item| self.globals.names.get(item.name).to_owned())
+                .unwrap_or_default()
+        };
+        let mentioned = |def: cheby_iface::DefId| {
+            let kind = if def.module == input.module {
+                input.resolved.item(def.index).map(|i| i.kind)
+            } else {
+                self.set
+                    .get(def.module)
+                    .and_then(|iface| iface.item(def.index))
+                    .map(|i| i.kind)
+            };
+            matches!(
+                kind,
+                Some(
+                    cheby_iface::DefKind::Fn
+                        | cheby_iface::DefKind::Const
+                        | cheby_iface::DefKind::Ctor
+                )
+            )
+        };
+        let mut by_item: BTreeMap<(String, front::MentionerKind), Vec<front::ItemRef>> =
+            BTreeMap::new();
+        for (owner, kind) in thir
+            .fns
+            .iter()
+            .map(|f| (f.def.index, front::MentionerKind::Function))
+            .chain(
+                thir.consts
+                    .iter()
+                    .map(|c| (c.def.index, front::MentionerKind::Constant)),
+            )
+            .chain(
+                thir.tests
+                    .iter()
+                    .map(|t| (t.def.index, front::MentionerKind::Test)),
+            )
+        {
+            by_item.entry((own_name(owner), kind)).or_default();
+        }
+        let owner_kind =
+            |owner: cheby_iface::DefIndex| match input.resolved.item(owner).map(|i| i.kind) {
+                Some(cheby_iface::DefKind::Const) => front::MentionerKind::Constant,
+                Some(cheby_iface::DefKind::Test) => front::MentionerKind::Test,
+                _ => front::MentionerKind::Function,
+            };
+        for &(owner, def) in &refs.mentions {
+            if mentioned(def)
+                && let Some(item) = name_of(def)
+            {
+                by_item
+                    .entry((own_name(owner), owner_kind(owner)))
+                    .or_default()
+                    .push(item);
+            }
+        }
+        for &(owner, def) in &refs.hooks {
+            if let Some(item) = name_of(def) {
+                by_item
+                    .entry((own_name(owner), front::MentionerKind::Hook))
+                    .or_default()
+                    .push(item);
+            }
+        }
+        let references = by_item
+            .into_iter()
+            .map(|((item, kind), mut mentions)| {
+                mentions.sort();
+                mentions.dedup();
+                front::ReferenceSummary {
+                    item,
+                    kind,
+                    mentions,
+                }
+            })
+            .collect();
+        let mut uses: Vec<front::ItemRef> = refs.uses.iter().filter_map(|&d| name_of(d)).collect();
+        uses.sort();
+        uses.dedup();
+        let candidates = refs
+            .candidates
+            .iter()
+            .map(|c| front::UnusedCandidate {
+                item: self.globals.names.get(c.name).to_owned(),
+                kind: c.kind.to_owned(),
+                span: (c.span.range.start(), c.span.range.len()),
+            })
+            .collect();
+        Ok(Summaries {
+            references,
+            uses: front::UseSummary { uses, candidates },
+            complete: refs.complete,
+        })
+    }
+
+    /// The front key `F1` of package module `id` and its imports (D-955),
+    /// or `None` when an import's interface has no hash, so the module is
+    /// neither looked up nor written.
+    fn front_key(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+    ) -> Result<Option<(Key, Vec<ImportKey>)>, Ice> {
+        let Some(source) = cx.hashes.get(index(id)?).copied().flatten() else {
+            return Ok(None);
+        };
+        let mut imports = Vec::new();
+        for target in get(self.targets, id)? {
+            match target.module() {
+                Some(m) => {
+                    let Some(hash) = self.shared.hash(m) else {
+                        return Ok(None);
+                    };
+                    imports.push(ImportKey::Module {
+                        path: self.modules.try_get(m)?.path.to_string(),
+                        hash: Hash128(hash.0),
+                    });
+                }
+                None => imports.push(ImportKey::Unresolved),
+            }
+        }
+        let key = FrontKey {
+            package: cx.package.to_owned(),
+            targets: self.local_targets,
+            module: self.modules.try_get(id)?.path.to_string(),
+            source: source.sip128,
+            imports,
+        };
+        Ok(Some((key.key(cx.cache.store.build_id()), key.imports)))
+    }
+
+    /// The two-step lookup of package module `id` under its front key
+    /// `f1` (D-955): its hidden reads, whose interface hashes extend `f1`
+    /// to `F2`, the key of its front record. The package index answers
+    /// first (D-962): when its entry for the module has this `F1`, its
+    /// reads are the hint's and, when `F2` matches too, its record is the
+    /// record, so no file is opened. Otherwise the hint under `F1` names
+    /// the reads (a missing hint is the empty set,
+    /// D-1137) and the record is read under `F2`. Also
+    /// returns what was seen of the hint. A miss is `None`.
+    fn find(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+        deps: &[ModuleId],
+        f1: Key,
+    ) -> Result<(Option<Found>, HintSeen), Ice> {
+        let store = &cx.cache.store;
+        let build = store.build_id();
+        let path = self.modules.try_get(id)?.path.to_string();
+        let entry = cx
+            .use_
+            .index
+            .and_then(|(index, _)| index.get(&path))
+            .filter(|entry| entry.f1 == f1.hash());
+        let (paths, hint) = if let Some(entry) = entry {
+            let paths = entry.record.reads.clone();
+            let seen = HintSeen::Seen((!paths.is_empty()).then(|| paths.clone()));
+            (paths, seen)
+        } else {
+            match store.get_hint(&front::reads_key(f1, build)).ok().flatten() {
+                None => (Vec::new(), HintSeen::Seen(None)),
+                Some(bytes) => match front::decode_hint(&bytes) {
+                    Some(paths) => (paths.clone(), HintSeen::Seen(Some(paths))),
+                    None => return Ok((None, HintSeen::Bad)),
+                },
+            }
+        };
+        let Some(reads) = self.read_hashes(deps, &paths) else {
+            return Ok((None, hint));
+        };
+        let f2 = front::front_identity(f1, build, &reads);
+        if let Some(entry) = entry.filter(|entry| entry.f2 == f2.hash()) {
+            return Ok((
+                Some(Found {
+                    f1,
+                    f2,
+                    record: entry.record.clone(),
+                }),
+                hint,
+            ));
+        }
+        let record = store
+            .get_record(&f2)
+            .ok()
+            .flatten()
+            .and_then(|bytes| FrontRecord::decode(&bytes))
+            .filter(|record| record.reads == paths);
+        Ok((record.map(|record| Found { f1, f2, record }), hint))
+    }
+
+    /// The paths of hidden reads with the interface hashes their modules
+    /// published, or `None` when one is not among `deps` or has no hash.
+    fn read_hashes(&self, deps: &[ModuleId], paths: &[String]) -> Option<Vec<(String, Hash128)>> {
+        let mut reads = Vec::with_capacity(paths.len());
+        for path in paths {
+            let read = crate::parse_module_path(path).and_then(|p| self.modules.find(&p))?;
+            if !deps.contains(&read) {
+                return None;
+            }
+            let hash = self.shared.hash(read)?;
+            reads.push((path.clone(), Hash128(hash.0)));
+        }
+        Some(reads)
+    }
+
+    /// The imports of package module `id` as written, each as its segments
+    /// joined by `::`: from its syntax tree's requests, or from the
+    /// package index for a module that was not parsed when loaded.
+    fn written_imports(&self, cx: FrontCx<'_>, id: ModuleId) -> Result<Option<Vec<String>>, Ice> {
+        if get(cx.unparsed, id).copied().unwrap_or(false) {
+            let path = self.modules.try_get(id)?.path.to_string();
+            return Ok(cx
+                .use_
+                .index
+                .and_then(|(index, _)| index.get(&path))
+                .map(|entry| entry.written.clone()));
+        }
+        Ok(Some(
+            get(self.imports, id)?
+                .iter()
+                .map(|request| {
+                    request
+                        .path
+                        .iter()
+                        .map(|&(name, _)| self.globals.names.get(name))
+                        .collect::<Vec<_>>()
+                        .join("::")
+                })
+                .collect(),
+        ))
+    }
+
+    /// The package index's entry of package module `id`, whose record
+    /// `record` lies under `f2` (D-1133).
+    fn entry(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+        f1: Key,
+        f2: Key,
+        record: FrontRecord,
+    ) -> Result<Option<crate::cache::index::IndexEntry>, Ice> {
+        let Some(source) = cx.hashes.get(index(id)?).copied().flatten() else {
+            return Ok(None);
+        };
+        let Some(written) = self.written_imports(cx, id)? else {
+            return Ok(None);
+        };
+        Ok(Some(crate::cache::index::IndexEntry {
+            path: self.modules.try_get(id)?.path.to_string(),
+            source: source.sip128,
+            written,
+            f1: f1.hash(),
+            f2: f2.hash(),
+            record,
+        }))
+    }
+
+    /// Writes the front record of package module `id`, checked from source
+    /// as `output`, with its interface artifact, its diagnostics and its
+    /// summaries, under the key its reads give, and writes its hint when
+    /// its reads differ from what the lookup saw (`hint`, so the hint is
+    /// not read again); no hint is written for empty reads unless it
+    /// replaces a non-empty one (D-955, D-956, D-1137).
+    /// Returns the module's entry for the package index. Nothing is written
+    /// for a module with an error (D-964) or one that lost a body, so a hit
+    /// always has every body. A write that fails is skipped:
+    /// the entry is a miss next time, and no output depends on it (D-268,
+    /// D-1129).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the record's parts, then its hint, in order"
+    )]
+    fn write_front(
+        &self,
+        cx: FrontCx<'_>,
+        id: ModuleId,
+        f1: Key,
+        imports: Vec<ImportKey>,
+        output: &ModuleOutput,
+        hint: HintSeen,
+    ) -> Result<Option<crate::cache::index::IndexEntry>, Ice> {
+        if output
+            .early
+            .iter()
+            .chain(&output.late)
+            .any(Diagnostic::is_error)
+        {
+            return Ok(None);
+        }
+        let (Some(checked), Some(summaries)) = (&output.checked, &output.summaries) else {
+            return Ok(None);
+        };
+        if !summaries.complete {
+            return Ok(None);
+        }
+        let info = self.modules.try_get(id)?;
+        let (Some(file), Some(hash)) = (info.file, checked.interface.hash) else {
+            return Ok(None);
+        };
+        // Phase A's diagnostics: those of the parse when the package was
+        // loaded, or of the parse after it.
+        let syntax: &[Diagnostic] = match get(self.syntax, id)?.as_deref() {
+            Some(found) => found,
+            None => &output.syntax,
+        };
+        let store = &cx.cache.store;
+        let build = store.build_id();
+        let view = DepView::new(self.set, &checked.deps);
+        let h = encode(&checked.interface, &view, self.modules, self.globals)?;
+        let spans: Vec<Option<(u32, u32)>> =
+            cheby_iface::encoded_order(&checked.interface, self.globals)?
+                .into_iter()
+                .map(|index| {
+                    checked
+                        .interface
+                        .item(index)
+                        .and_then(|item| item.span)
+                        .filter(|span| span.file == file)
+                        .map(|span| (span.range.start(), span.range.len()))
+                })
+                .collect();
+        let artifact = cheby_iface::write_artifact(build.0, &h, &spans);
+        let span_cx = SpanCx {
+            own: file,
+            own_len: cx.text_lens.get(index(id)?).copied().unwrap_or(0),
+            modules: self.modules,
+            set: self.set,
+            globals: self.globals,
+        };
+        let Some(diagnostics) =
+            replay::encode_diagnostics(&[syntax, &output.early, &output.late], &span_cx)
+        else {
+            // D-965: a span into another module is stored only as an item.
+            if cfg!(debug_assertions) {
+                return Err(Ice::new(format!(
+                    "a diagnostic of `{}` points into another module, but not at one of its items, so it cannot be cached (D-965)",
+                    info.path
+                )));
+            }
+            return Ok(None);
+        };
+        let Some(externals) = externals(&output.natives, file) else {
+            return Ok(None);
+        };
+        let mut reads = Vec::with_capacity(checked.front_reads.len());
+        for &read in &checked.front_reads {
+            let Some(read_hash) = self.shared.hash(read) else {
+                return Ok(None);
+            };
+            reads.push((
+                self.modules.try_get(read)?.path.to_string(),
+                Hash128(read_hash.0),
+            ));
+        }
+        reads.sort();
+        let (Ok(artifact), Ok(diagnostics)) =
+            (store.put_blob(&artifact), store.put_blob(&diagnostics))
+        else {
+            return Ok(None);
+        };
+        let record = FrontRecord {
+            interface: Hash128(hash.0),
+            artifact,
+            diagnostics,
+            imports,
+            externals,
+            reads: reads.iter().map(|(path, _)| path.clone()).collect(),
+            references: summaries.references.clone(),
+            uses: summaries.uses.clone(),
+        };
+        let f2 = front::front_identity(f1, build, &reads);
+        if store.put_record(&f2, &record.encode()).is_err() {
+            return Ok(None);
+        }
+        let hint_key = front::reads_key(f1, build);
+        // What the hint holds: `Some(None)` when there is none, `None` when
+        // it is malformed and must be written whatever the reads are.
+        let current: Option<Option<Vec<String>>> = match hint {
+            HintSeen::Seen(paths) => Some(paths),
+            HintSeen::Bad => None,
+            HintSeen::Unknown => match store.get_hint(&hint_key).ok().flatten() {
+                None => Some(None),
+                Some(bytes) => front::decode_hint(&bytes).map(Some),
+            },
+        };
+        let write = match current {
+            None => true,
+            Some(None) => !record.reads.is_empty(),
+            Some(Some(paths)) => paths != record.reads,
+        };
+        if write {
+            let _ = store.put_hint(&hint_key, &front::encode_hint(&record.reads));
+        }
+        self.entry(cx, id, f1, f2, record)
     }
 }
 
@@ -816,7 +2130,7 @@ struct Schedule<'a> {
     /// Per module id: the scheduled modules that import it.
     dependents: Vec<Vec<ModuleId>>,
     /// Per module id: what its task produced.
-    outputs: Vec<OnceLock<Result<ModuleOutput, Ice>>>,
+    outputs: Vec<OnceLock<Result<ModuleOutput, Stop>>>,
 }
 
 impl Schedule<'_> {
@@ -824,7 +2138,7 @@ impl Schedule<'_> {
     /// modules left out by a cycle) on rayon's global pool and returns the
     /// outputs by module id. A module whose dependency failed with an
     /// [`Ice`] never runs; its slot stays empty.
-    fn run(inputs: BuildInputs<'_>, order: &[u32]) -> Vec<Option<Result<ModuleOutput, Ice>>> {
+    fn run(inputs: BuildInputs<'_>, order: &[u32]) -> Vec<Option<Result<ModuleOutput, Stop>>> {
         let len = inputs.modules.len();
         let mut scheduled = vec![false; len];
         for &node in order {
@@ -957,6 +2271,11 @@ fn dump_interfaces(front: &Frontend) -> Result<(), Error> {
 /// `files`, and each file's diagnostics are pushed in that order, so file
 /// ids and output never depend on the schedule. For `load_package`.
 ///
+/// A file whose module path and source hash `skip` accepts (the package
+/// index vouches for it, D-962) is read, hashed and added to `sources`,
+/// but not parsed ([`crate::Module::parsed`]): the front end parses it
+/// only if something needs its tree.
+///
 /// # Errors
 ///
 /// An [`Error`] if a file cannot be read or is too large for the source
@@ -966,19 +2285,32 @@ pub(crate) fn read_modules(
     files: Vec<cheby_package::ModuleFile>,
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
+    skip: &(dyn Fn(&ModulePath, Hash128) -> bool + Sync),
 ) -> Result<Vec<crate::Module>, Error> {
     use cheby_diag::{TextRange, TextSize};
     use rayon::prelude::*;
 
-    let bytes: Vec<std::io::Result<Vec<u8>>> = files
+    // Each file is read once and hashed in the same pass, on the worker
+    // pool (D-963, D-1130).
+    let hash_span = crate::phases::span(crate::phases::Phase::Hash);
+    let bytes: Vec<std::io::Result<(Vec<u8>, crate::SourceHashes)>> = files
         .par_iter()
-        .map(|file| std::fs::read(root.join(&file.file)))
+        .map(|file| {
+            std::fs::read(root.join(&file.file)).map(|bytes| {
+                let hashes = crate::SourceHashes::of(&bytes);
+                (bytes, hashes)
+            })
+        })
         .collect();
-    // Into the source map in order: (file, text to parse or the E0001
-    // diagnostic of a file that is not UTF-8).
-    let mut added: Vec<(FileId, Result<Arc<str>, Diagnostic>)> = Vec::with_capacity(files.len());
+    drop(hash_span);
+    // Into the source map in order: (file, text to parse, `None` for a file
+    // that is not parsed, or the E0001 diagnostic of a file that is not
+    // UTF-8).
+    let mut added: Vec<ToParse> = Vec::with_capacity(files.len());
+    let mut hashes = Vec::with_capacity(files.len());
     for (file, bytes) in files.iter().zip(bytes) {
-        let bytes = bytes.map_err(|e| Error::new(format!("{}: {e}", file.display)))?;
+        let (bytes, hash) = bytes.map_err(|e| Error::new(format!("{}: {e}", file.display)))?;
+        hashes.push(hash);
         let too_large = |_| Error::from(cheby_package::PackageError::too_large(&file.display));
         match String::from_utf8(bytes) {
             Ok(text) => {
@@ -986,6 +2318,7 @@ pub(crate) fn read_modules(
                 let id = sources
                     .add_file(file.display.as_str(), Arc::clone(&text))
                     .map_err(too_large)?;
+                let text = (!skip(&file.path, hash.sip128)).then_some(text);
                 added.push((id, Ok(text)));
             }
             Err(e) => {
@@ -1008,6 +2341,7 @@ pub(crate) fn read_modules(
             }
         }
     }
+    let _parse = crate::phases::span(crate::phases::Phase::Parse);
     let parsed: Vec<(crate::ParsedFile, Vec<Diagnostic>)> = added
         .into_par_iter()
         .map(|(file, text)| match text {
@@ -1019,7 +2353,15 @@ pub(crate) fn read_modules(
                 },
                 vec![diag],
             ),
-            Ok(text) => {
+            Ok(None) => (
+                crate::ParsedFile {
+                    file,
+                    syntax: None,
+                    has_syntax_errors: false,
+                },
+                Vec::new(),
+            ),
+            Ok(Some(text)) => {
                 let (tree, mut diags) = cheby_syntax::parse(file, text).into_parts();
                 let has_syntax_errors = diags.iter().any(Diagnostic::is_error);
                 // As in `parse_file`: on a tree with grammar errors only the
@@ -1041,11 +2383,15 @@ pub(crate) fn read_modules(
         })
         .collect();
     let mut modules = Vec::with_capacity(files.len());
-    for (file, (source, diags)) in files.into_iter().zip(parsed) {
-        diagnostics.extend(diags);
+    for ((file, (source, diags)), hashes) in files.into_iter().zip(parsed).zip(hashes) {
+        let parsed = source.syntax.is_some() || source.has_syntax_errors;
+        diagnostics.extend(diags.iter().cloned());
         modules.push(crate::Module {
             path: file.path,
             source,
+            hashes,
+            parsed,
+            syntax_diagnostics: diags,
         });
     }
     Ok(modules)
@@ -1059,11 +2405,101 @@ pub(crate) fn run(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Frontend, Error> {
-    let front = run_inner(package, mode, sources, diagnostics)?;
-    dump_interfaces(&front)?;
-    Ok(front)
+    match run_cached(package, mode, sources, diagnostics, None)? {
+        Some(front) => Ok(front),
+        None => Err(Ice::new("a front end without the cache asked to start again").into()),
+    }
 }
 
+/// [`run`] with the cache (D-955, D-962, D-965): each package module is
+/// looked up by its front key and read set, through the package index
+/// first; see [`run_inner`] for which modules are checked. `None` when
+/// the front end must start again ([`Stop::Restart`]): the caller loads
+/// the package again, parsing every module, and runs it with
+/// [`CacheUse::lazy`] false.
+pub(crate) fn run_cached(
+    package: Package,
+    mode: Mode,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    cache: Option<CacheUse<'_>>,
+) -> Result<Option<Frontend>, Error> {
+    let native = package
+        .manifest
+        .native
+        .clone()
+        .map(|table| (package.root.clone(), package.manifest.name.clone(), table));
+    let mut front = match run_inner(package, mode, sources, diagnostics, cache) {
+        Ok(front) => front,
+        Err(Stop::Restart) => return Ok(None),
+        Err(Stop::Ice(ice)) => return Err(ice.into()),
+    };
+    dump_interfaces(&front)?;
+    // D-1250: what a later warm `cheby run` or `cheby test` reads of each
+    // module checked here instead of checking it again; only once the
+    // package checks, as the native step below (D-964): a front end with
+    // an error may lack the interfaces the facts name, and the command
+    // must print its diagnostics, not an internal error (D-268).
+    if mode == Mode::Build
+        && cache.is_some_and(|use_| use_.build.is_some())
+        && front.complete
+        && !diagnostics.iter().any(Diagnostic::is_error)
+    {
+        let _records = crate::phases::span(crate::phases::Phase::Records);
+        crate::warm_keys::store_facts(&front)?;
+    }
+    // D-941: the commands that run or build code compile the package's C
+    // and load its library once the package checks; `cheby check` does
+    // neither (D-532).
+    if mode != Mode::Check
+        && front.complete
+        && !diagnostics.iter().any(Diagnostic::is_error)
+        && let Some((root, name, table)) = native
+    {
+        front.native = crate::native::prepare(&root, &name, &table, cache.map(|use_| use_.cache))?;
+    }
+    Ok(Some(front))
+}
+
+/// The front end's phases. With a cache, every package module is looked
+/// up (the warm pass), through the package index first (D-962), and
+/// output never depends on what the cache held (D-268).
+///
+/// - `Build` for a warm `cheby run` or `cheby test` (D-1250, K4d,
+///   [`crate::warm_keys`]): a module is parsed and checked only when it
+///   misses ([`CacheUse::build`]'s misses: edited, its body read, or its
+///   constants' module set); every other hit is neither parsed nor
+///   checked, its interface is decoded at its lookup with its private
+///   items and tests added from its warm facts, its diagnostics and
+///   externals are replayed, and the back end loads its records; misses are
+///   checked against decoded interfaces and lowered, and every module built
+///   is in [`Frontend::order`].
+/// - `Build` otherwise (`cheby build`, `--reuse-report`, a command started
+///   again): every module is checked once, from source, on fresh
+///   interfaces, hit or miss; a hit prints its replayed diagnostics, its
+///   artifact is not decoded and nothing is rewritten for it, and a miss is
+///   written (D-1132).
+/// - `Check`: a hit is neither parsed nor checked. Its interface hash comes
+///   from its record, its interface is decoded only when a checked module
+///   needs it (D-954), and its diagnostics, externals and use summary are
+///   replayed (D-965). A miss is checked against the interfaces at hand,
+///   decoded or fresh. Constant evaluation reads bodies, so the package
+///   modules holding constants, and every package module they import,
+///   transitively, are checked from source on fresh interfaces whether
+///   they hit or not (D-1134): decoded
+///   interfaces number items in encoded order
+///   (D-1121) and are never lowered with bodies
+///   checked from source. A module whose check against a decoded
+///   interface reports an error is checked again on fresh interfaces,
+///   with the modules it reads that were not checked on fresh interfaces,
+///   and prints that check (D-1136): a decoded
+///   interface holds no `priv` item, which E0043 names (D-953).
+///
+/// The whole-package pass of `cheby check` (W0005) runs over every
+/// module's use summary, and E0054 over every module's natives in build
+/// order, a hit's from its record (D-965). Debug toolchains compare a hit
+/// that is checked with its replayed diagnostics and interface hash
+/// (D-1131).
 #[expect(
     clippy::too_many_lines,
     reason = "the front-end phases in order, each a few lines"
@@ -1073,16 +2509,20 @@ fn run_inner(
     mode: Mode,
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<Frontend, Ice> {
+    cache: Option<CacheUse<'_>>,
+) -> Result<Frontend, Stop> {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
     let mut trees: Vec<Option<SyntaxTree>> = vec![None];
+    let mut syntax: Vec<Option<Vec<Diagnostic>>> = vec![None];
+    let mut unparsed: Vec<bool> = vec![false];
     let package_name = package.manifest.name.clone();
     let local_targets = package.manifest.targets;
     let const_eval_time_limit = package.manifest.const_eval_time_limit;
     let const_eval_memory_limit = package.manifest.const_eval_memory_limit;
     let fiber_stack = package.manifest.fiber_stack;
     let main_stack = package.manifest.main_stack;
+    let mut source_hashes: Vec<Option<crate::SourceHashes>> = vec![None];
     for module in package.modules {
         modules.add(ModuleInfo {
             path: module.path,
@@ -1090,7 +2530,11 @@ fn run_inner(
             file: Some(module.source.file),
         })?;
         trees.push(module.source.syntax);
+        unparsed.push(!module.parsed);
+        syntax.push(module.parsed.then_some(module.syntax_diagnostics));
+        source_hashes.push(Some(module.hashes));
     }
+    let package_index = cache.and_then(|c| c.index).map(|(found, _)| found);
 
     // Imports, module by module in id order; std modules join the table
     // and the worklist as they are reached (B3).
@@ -1099,14 +2543,30 @@ fn run_inner(
     let mut implicit: Vec<Vec<ModuleId>> = vec![Vec::new()];
     let mut next = 1_usize;
     let mut std_error = None;
+    // K6: std's front records are read instead of parsing std (D-980), in
+    // the first attempt of a command that does not lower std itself
+    // (`cheby build` reads them too since N9, D-1262).
+    let std_cache = cache.map(|use_| use_.cache);
+    let std_hits_ok = crate::std_cache::FRONT_HITS
+        && cache.is_some_and(|use_| {
+            use_.lazy && use_.cache.reads && (mode == Mode::Check || use_.build.is_some())
+        });
+    let mut std_hits: BTreeMap<ModuleId, FrontRecord> = BTreeMap::new();
     while next < modules.len() {
         let id = ModuleId::from_u32(u32::try_from(next).map_err(|_| Ice::new("too many modules"))?);
         let info = modules.try_get(id)?.clone();
-        let tree = trees
-            .get(next)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| Ice::new(format!("module `{}` has no syntax tree", info.path)))?;
-        let requests = collect_imports(tree, &globals.names);
+        let is_unparsed = unparsed.get(next).copied().unwrap_or(false);
+        // K6: a std hit's imports, from its record.
+        let std_imports = std_hits.get(&id).map(crate::std_cache::import_paths);
+        let requests = if is_unparsed || std_imports.is_some() {
+            Vec::new()
+        } else {
+            let tree = trees
+                .get(next)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| Ice::new(format!("module `{}` has no syntax tree", info.path)))?;
+            collect_imports(tree, &globals.names)
+        };
         let mut lookup = DriverLookup {
             package: &package_name,
             modules: &mut modules,
@@ -1114,9 +2574,43 @@ fn run_inner(
             trees: &mut trees,
             diagnostics,
             std_error: None,
+            std_cache,
+            std_hits_ok,
+            std_hits: &mut std_hits,
         };
-        let (found, diags) =
-            resolve_import_targets(&requests, info.package, &mut lookup, &globals.names)?;
+        let (found, diags) = if let Some(paths) = std_imports {
+            let mut found = Vec::new();
+            for path in paths? {
+                let segments: Vec<&str> = path.split("::").collect();
+                let Lookup::Found(module) = lookup.lookup(info.package, &segments)? else {
+                    return Err(Ice::new(format!("std's `{}` imports `{path}`", info.path)).into());
+                };
+                found.push(ImportTarget::Module(module));
+            }
+            (found, Vec::new())
+        } else if is_unparsed {
+            // The imports as written come from the package index, and each
+            // must resolve again, against the package's current files, to
+            // the module of the same path (D-962).
+            let written = package_index
+                .and_then(|found| found.get(&info.path.to_string()))
+                .map(|entry| entry.written.clone())
+                .ok_or(Stop::Restart)?;
+            let mut found = Vec::with_capacity(written.len());
+            for path in &written {
+                let segments: Vec<&str> = path.split("::").collect();
+                let Lookup::Found(module) = lookup.lookup(info.package, &segments)? else {
+                    return Err(Stop::Restart);
+                };
+                if lookup.modules.try_get(module)?.path.to_string() != *path {
+                    return Err(Stop::Restart);
+                }
+                found.push(ImportTarget::Module(module));
+            }
+            (found, Vec::new())
+        } else {
+            resolve_import_targets(&requests, info.package, &mut lookup, &globals.names)?
+        };
         // A package module depends on every shipped home module of a
         // prelude type (D-447).
         let mut homes = Vec::new();
@@ -1143,7 +2637,15 @@ fn run_inner(
     if let Some(path) = std_error {
         return Err(Ice::new(format!(
             "the standard library file `{path}` has syntax errors"
-        )));
+        ))
+        .into());
+    }
+    // Std modules' hashes were computed when `cheby` was built (D-963).
+    for (id, info) in modules.iter().skip(source_hashes.len()) {
+        if index(id)? != source_hashes.len() {
+            return Err(Ice::new("module ids and source hashes are out of step").into());
+        }
+        source_hashes.push(std_source_hashes(&info.path));
     }
 
     // The graph and the order (G1).
@@ -1163,6 +2665,13 @@ fn run_inner(
     let order = match topological_order(&graph) {
         Ok(order) => order,
         Err(cycles) => {
+            // E0040 points at imports as written, which a module the index
+            // let go unparsed does not have, and a module on or above a
+            // cycle is never checked, so its phase-A diagnostics would not
+            // be replayed: an import cycle parses every module.
+            if unparsed.iter().any(|&u| u) {
+                return Err(Stop::Restart);
+            }
             let mut on_cycle: Vec<u32> = Vec::new();
             for cycle in &cycles {
                 let mut with_spans = Vec::with_capacity(cycle.nodes.len());
@@ -1225,95 +2734,425 @@ fn run_inner(
     let known = std_lib::known();
     let mut set = InterfaceSet::new(builtin::interface(&globals));
     set.reserve_modules(modules.len())?;
+    let len = modules.len();
+    let text_lens: Vec<u32> = modules
+        .iter()
+        .map(|(_, info)| {
+            info.file
+                .and_then(|f| sources.file(f))
+                .map_or(0, |f| u32::try_from(f.text().len()).unwrap_or(u32::MAX))
+        })
+        .collect();
+    unparsed.resize(len, false);
+    syntax.resize(len, None);
+    let check_span = crate::phases::span(crate::phases::Phase::Check);
+    // D-1250: a warm `cheby run` or `cheby test` knows before its check
+    // which modules miss (K4d).
+    let misses = match cache {
+        Some(use_) if mode == Mode::Build => crate::warm_keys::misses_before_check(
+            use_,
+            &crate::warm_keys::FrontState {
+                modules: &modules,
+                graph: &graph,
+                source_hashes: &source_hashes,
+                globals: &globals,
+                set: &set,
+                limits: crate::cache::consts::ConstLimits {
+                    time_limit: const_eval_time_limit,
+                    memory_limit: const_eval_memory_limit,
+                    targets: local_targets,
+                },
+                package: &package_name,
+            },
+        )?,
+        _ => None,
+    };
+    let must_check = must_check(
+        mode,
+        cache,
+        &modules,
+        &trees,
+        &unparsed,
+        &graph,
+        misses.as_ref(),
+    )?;
+    let late_trees: Vec<LateTree> = (0..len).map(|_| OnceLock::new()).collect();
+    let counted = std::sync::Mutex::new(Vec::new());
+    let shared = Shared::new(len);
+    // K6: each std hit's record, which `check_module` takes (D-980).
+    for (&id, record) in &std_hits {
+        if let Some(slot) = shared.records.get(index(id)?) {
+            let _ = slot.set(record.clone());
+        }
+    }
+    let sources: &SourceMap = sources;
+    let front_cx = |pass| {
+        cache.map(|use_| FrontCx {
+            cache: use_.cache,
+            use_,
+            package: &package_name,
+            hashes: &source_hashes,
+            text_lens: &text_lens,
+            unparsed: &unparsed,
+            pass,
+        })
+    };
     let mut outputs = Schedule::run(
         BuildInputs {
             mode,
             globals: &globals,
             modules: &modules,
+            sources,
             trees: &trees,
+            syntax: &syntax,
+            late_trees: &late_trees,
             imports: &imports,
             targets: &targets,
             graph: &graph,
             set: &set,
             known: &known,
             local_targets,
+            must_check: &must_check,
+            shared: &shared,
+            counted: &counted,
+            cache: front_cx(Pass::Warm),
         },
         &order,
     );
+    if let Some(stop) = first_failure(&mut outputs) {
+        return Err(stop);
+    }
 
-    // The results, merged in the topological order (D-264).
-    let mut checked: Vec<Option<Checked>> = (0..modules.len()).map(|_| None).collect();
+    // The results, in the topological order (D-264).
+    let is_local = |id: ModuleId| {
+        modules
+            .get(id)
+            .is_some_and(|info| info.package == PackageId::LOCAL)
+    };
+    let mut checked: Vec<Option<Checked>> = (0..len).map(|_| None).collect();
     let mut module_natives: Vec<Vec<(Box<str>, NativeBinding)>> =
-        (0..modules.len()).map(|_| Vec::new()).collect();
+        (0..len).map(|_| Vec::new()).collect();
     let mut built = Vec::new();
-    let mut natives = BTreeMap::new();
-    // The resolutions of the package's modules, for the whole-package
-    // warnings of `cheby check`.
-    let mut local_resolved: Vec<(ModuleId, ResolvedModule)> = Vec::new();
-    for node in order {
+    // Per module: what it prints, its early and late diagnostics.
+    let mut printed: Vec<(Vec<Diagnostic>, Vec<Diagnostic>)> =
+        (0..len).map(|_| (Vec::new(), Vec::new())).collect();
+    // Phase A's diagnostics of the modules not parsed when the package was
+    // loaded.
+    let mut late_syntax: Vec<Diagnostic> = Vec::new();
+    // Per package module: its use summary and whether its bodies all
+    // checked, for the whole-package pass (D-965).
+    let mut uses: Vec<Option<(front::UseSummary, bool)>> = (0..len).map(|_| None).collect();
+    let mut dropped: Vec<Option<Ice>> = vec![None; len];
+    let mut hits = vec![false; len];
+    // Per module: whether it was checked from source with every package
+    // module it reads checked from source too (its THIR and interface are
+    // fresh, so constant evaluation may lower them).
+    let mut fresh = vec![false; len];
+    let mut entries = Vec::new();
+    let mut warm_f2: BTreeMap<ModuleId, Hash128> = BTreeMap::new();
+    for &node in &order {
         let id = ModuleId::from_u32(node);
         if id == ModuleId::BUILTIN {
             continue;
         }
+        let at = index(id)?;
         let output = outputs
-            .get_mut(index(id)?)
+            .get_mut(at)
             .and_then(Option::take)
-            .ok_or_else(|| Ice::new(format!("module {id:?} was never checked")))??;
-        diagnostics.extend(output.early);
-        if let Some(slot) = module_natives.get_mut(index(id)?) {
-            slot.clone_from(&output.natives);
+            .ok_or_else(|| Ice::new(format!("module {id:?} was never checked")))?
+            .map_err(|_| Ice::new(format!("module {id:?} failed")))?;
+        late_syntax.extend(output.syntax);
+        let is_fresh = output.checked.as_ref().is_some_and(|c| {
+            c.deps.iter().all(|&d| {
+                !is_local(d)
+                    || fresh
+                        .get(index(d).unwrap_or(usize::MAX))
+                        .copied()
+                        .unwrap_or(false)
+            })
+        });
+        // K6: a std hit is never lowered (its code comes from its record),
+        // so it stays in the order later phases walk (D-980).
+        let is_fresh = is_fresh || std_hits.contains_key(&id);
+        if let Some(slot) = fresh.get_mut(at) {
+            *slot = is_fresh;
         }
-        bind_natives(output.natives, &mut natives, diagnostics);
-        diagnostics.extend(output.late);
-        if let Some(slot) = checked.get_mut(index(id)?) {
-            *slot = Some(output.checked);
+        if let Some(slot) = hits.get_mut(at) {
+            *slot = output.hit.is_some();
+        }
+        if let Some(slot) = uses.get_mut(at) {
+            *slot = match (&output.summaries, &output.hit) {
+                (Some(s), _) => Some((s.uses.clone(), s.complete)),
+                // `write_front` stores no module that lost a body, and the
+                // build ID keeps out records of a compiler that did (D-957).
+                (None, Some(record)) => Some((record.uses.clone(), true)),
+                (None, None) => None,
+            };
+        }
+        if let Some(slot) = dropped.get_mut(at) {
+            *slot = output.dropped;
+        }
+        // The front identity that keys the module's warm facts (D-1250).
+        if let Some(entry) = &output.entry
+            && is_local(id)
+        {
+            warm_f2.insert(id, entry.f2);
+        }
+        entries.extend(output.entry);
+        if let Some(slot) = printed.get_mut(at) {
+            *slot = (output.early, output.late);
+        }
+        if let Some(slot) = module_natives.get_mut(at) {
+            *slot = output.natives;
+        }
+        if let Some(slot) = checked.get_mut(at) {
+            *slot = output.checked;
         }
         built.push(id);
-        if let Some(resolved) = output.resolved {
-            local_resolved.push((id, resolved));
+    }
+    // `cheby check`'s error path (D-1136): a module
+    // whose check against a decoded interface reported an error, and the
+    // package modules it reads that were not checked on fresh interfaces,
+    // are checked again from source on fresh interfaces. A hit among them
+    // prints its replayed diagnostics, the others their new check.
+    let has_error =
+        |p: &(Vec<Diagnostic>, Vec<Diagnostic>)| p.0.iter().chain(&p.1).any(Diagnostic::is_error);
+    let mut again = vec![false; len];
+    for &id in &built {
+        let at = index(id)?;
+        if !printed.get(at).is_some_and(has_error) {
+            continue;
+        }
+        let Some(c) = get(&checked, id)?.as_ref() else {
+            continue;
+        };
+        // K6: a decoded std interface holds no `priv` item either (D-953),
+        // so a module with an error that read a std hit is checked again,
+        // with those std modules checked from source (D-980's miss path).
+        let read_std_hit = c.deps.iter().any(|d| std_hits.contains_key(d));
+        if fresh.get(at).copied().unwrap_or(true) && !read_std_hit {
+            continue;
+        }
+        if let Some(slot) = again.get_mut(at) {
+            *slot = true;
+        }
+        for &dep in &c.deps {
+            let d = index(dep)?;
+            let std_hit = std_hits.contains_key(&dep);
+            if (std_hit || (is_local(dep) && !fresh.get(d).copied().unwrap_or(false)))
+                && let Some(slot) = again.get_mut(d)
+            {
+                if std_hit
+                    && !*slot
+                    && let Some(cache) = std_cache
+                {
+                    cache
+                        .log
+                        .parsed_std(&modules.try_get(dep)?.path.to_string());
+                }
+                *slot = true;
+            }
         }
     }
-    // The whole-package pass needs every module of the package: a module
-    // on or above an import cycle was not checked, and its uses are
-    // unknown (E0040 is reported).
-    let every_local_checked = modules
+    if again.iter().any(|&a| a) {
+        let mut fresh_set = InterfaceSet::new(builtin::interface(&globals));
+        fresh_set.reserve_modules(len)?;
+        for &id in &built {
+            let at = index(id)?;
+            if !again.get(at).copied().unwrap_or(false)
+                && fresh.get(at).copied().unwrap_or(false)
+                && let Some(c) = get(&checked, id)?
+            {
+                fresh_set.publish(Arc::clone(&c.interface))?;
+            }
+        }
+        let again_order: Vec<u32> = order
+            .iter()
+            .copied()
+            .filter(|&n| {
+                usize::try_from(n)
+                    .ok()
+                    .and_then(|n| again.get(n))
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .collect();
+        let recheck_shared = Shared::new(len);
+        let mut outputs = Schedule::run(
+            BuildInputs {
+                mode,
+                globals: &globals,
+                modules: &modules,
+                sources,
+                trees: &trees,
+                syntax: &syntax,
+                late_trees: &late_trees,
+                imports: &imports,
+                targets: &targets,
+                graph: &graph,
+                set: &fresh_set,
+                known: &known,
+                local_targets,
+                must_check: &must_check,
+                shared: &recheck_shared,
+                counted: &counted,
+                cache: front_cx(Pass::Recheck),
+            },
+            &again_order,
+        );
+        if let Some(stop) = first_failure(&mut outputs) {
+            return Err(stop);
+        }
+        for &node in &again_order {
+            let id = ModuleId::from_u32(node);
+            let at = index(id)?;
+            let output = outputs
+                .get_mut(at)
+                .and_then(Option::take)
+                .ok_or_else(|| Ice::new(format!("module {id:?} was never checked again")))?
+                .map_err(|_| Ice::new(format!("module {id:?} failed")))?;
+            let slot = printed
+                .get_mut(at)
+                .ok_or_else(|| Ice::new("no warm result"))?;
+            if hits.get(at).copied().unwrap_or(false) {
+                // A hit prints its replayed diagnostics, which must be the
+                // fresh ones (D-1131).
+                if cfg!(debug_assertions) && (slot.0 != output.early || slot.1 != output.late) {
+                    return Err(Stop::Ice(Ice::new(format!(
+                        "module `{}` checked from source gives other diagnostics than the cache's (D-954)",
+                        modules.try_get(id)?.path
+                    ))));
+                }
+            } else {
+                *slot = (output.early, output.late);
+                if let Some(natives) = module_natives.get_mut(at) {
+                    *natives = output.natives;
+                }
+            }
+            if let (Some(slot), Some(s)) = (uses.get_mut(at), output.summaries) {
+                *slot = Some((s.uses, s.complete));
+            }
+            if let Some(slot) = dropped.get_mut(at) {
+                *slot = output.dropped;
+            }
+            if let Some(slot) = checked.get_mut(at) {
+                *slot = output.checked;
+            }
+            if let Some(slot) = fresh.get_mut(at) {
+                *slot = true;
+            }
+        }
+        set = fresh_set;
+    }
+
+    // The diagnostics in build order, with E0055 for the runtime's names
+    // bound outside std (D-944) and E0054 over every module's native
+    // bindings, a hit's from its record (D-965).
+    diagnostics.extend(late_syntax);
+    let mut natives = BTreeMap::new();
+    for &id in &built {
+        let at = index(id)?;
+        let (early, late) = printed.get_mut(at).map(std::mem::take).unwrap_or_default();
+        diagnostics.extend(early);
+        let mut bindings = get(&module_natives, id)?.clone();
+        if modules.try_get(id)?.package != PackageId::STD {
+            bindings = reserve_exports(bindings, diagnostics);
+        }
+        bind_natives(bindings, &mut natives, diagnostics);
+        diagnostics.extend(late);
+    }
+    // The whole-package pass (W0005, D-516) over every module's use
+    // summary (D-965): it needs every module of the package, and a module
+    // on or above an import cycle was not checked (E0040 is reported).
+    let every_local_built = modules
         .iter()
         .filter(|(_, info)| info.package == PackageId::LOCAL)
-        .all(|(id, _)| local_resolved.iter().any(|(checked, _)| *checked == id));
-    if mode == Mode::Check && every_local_checked {
-        let mut package_modules = Vec::with_capacity(local_resolved.len());
-        for (id, resolved) in &local_resolved {
-            let module = get(&checked, *id)?
-                .as_ref()
-                .ok_or_else(|| Ice::new("a checked module without its bodies"))?;
-            let tree = get(&trees, *id)?
-                .as_ref()
-                .ok_or_else(|| Ice::new("a checked module without its syntax tree"))?;
-            let own = set
-                .get(*id)
-                .ok_or_else(|| Ice::new("a checked module without its interface"))?;
-            package_modules.push(PackageModule {
-                input: TypesInput {
-                    module: *id,
-                    package: PackageId::LOCAL,
-                    tree,
-                    resolved,
-                    deps: DepView::new(&set, &module.deps),
-                    modules: &modules,
-                    globals: &globals,
-                },
-                own,
-                thir: &module.thir,
-            });
+        .all(|(id, _)| {
+            index(id)
+                .ok()
+                .and_then(|at| uses.get(at))
+                .is_some_and(Option::is_some)
+        });
+    // A body left THIR, so an error must exist. It may be in another
+    // module, since a call to an item whose signature is in error drops the
+    // caller and reports nothing there, so only the whole package can tell
+    // (D-464). Module order keeps the message the same on any schedule.
+    if !diagnostics.iter().any(Diagnostic::is_error)
+        && let Some(ice) = dropped.iter_mut().find_map(Option::take)
+    {
+        return Err(Stop::Ice(ice));
+    }
+    if mode == Mode::Check && every_local_built {
+        diagnostics.extend(unused_package_items(&modules, &built, &uses)?);
+    }
+    // The modules later phases may lower: std's and the package's checked
+    // on fresh interfaces (D-1134).
+    let lowerable: Vec<ModuleId> = built
+        .iter()
+        .copied()
+        .filter(|&id| {
+            index(id)
+                .ok()
+                .and_then(|at| fresh.get(at))
+                .copied()
+                .unwrap_or(false)
+        })
+        .collect();
+    // D-1250: a warm `cheby run` or `cheby test` lowers what it checked (a
+    // miss checked against decoded hits included) and loads the rest from
+    // records, so every module it built is in the order; a hit's warm facts
+    // stand in for its THIR. Facts that are missing or do not decode start
+    // the front end again, checking every module.
+    let mut warm = BTreeMap::new();
+    let lowerable = match (&misses, cache) {
+        (Some(_), Some(_)) => {
+            let naming = crate::warm_keys::Naming {
+                modules: &modules,
+                set: &set,
+                globals: &globals,
+            };
+            for &id in &built {
+                if !is_local(id) || get(&checked, id)?.is_some() {
+                    continue;
+                }
+                let file = modules.try_get(id)?.file;
+                let facts = shared
+                    .facts
+                    .get(index(id)?)
+                    .and_then(OnceLock::get)
+                    .cloned();
+                let (Some(facts), Some(file)) = (facts, file) else {
+                    return Err(Stop::Restart);
+                };
+                let module =
+                    crate::warm_keys::warm_module(facts, id, file, &naming).ok_or(Stop::Restart)?;
+                warm.insert(id, module);
+            }
+            built.clone()
         }
-        diagnostics.extend(package_warnings(&package_modules)?);
+        _ => lowerable,
+    };
+    drop(check_span);
+    let _index = crate::phases::span(crate::phases::Phase::Index);
+    let records = cache.map(|use_| crate::borrowing::RecordSink::new(use_.cache, &entries));
+    if let Some(use_) = cache {
+        finish_cache(
+            use_,
+            &modules,
+            &built,
+            &hits,
+            &unparsed,
+            &late_trees,
+            entries,
+            counted,
+        )?;
     }
     Ok(Frontend {
         globals,
         modules,
         set,
         checked,
-        order: built,
+        order: lowerable,
         natives,
         package_targets: local_targets,
         package_name,
@@ -1324,7 +3163,225 @@ fn run_inner(
         imports,
         import_targets: targets,
         module_natives,
+        source_hashes,
+        complete: true,
+        native: crate::native::PackageNative::default(),
+        records,
+        cache_store: cache.map(|use_| (use_.cache.store.share(), use_.cache.reads)),
+        warm_f2,
+        warm,
+        wanted: std::sync::atomic::AtomicBool::new(false),
     })
+}
+
+/// Test hook: drops every body named `dropped_by_test` with no diagnostic,
+/// so the tests of the rule on dropped bodies have a silent drop when the
+/// checker has none (`dropped_tests.rs`). The name is the switch, so tests
+/// that run in parallel share no state.
+#[cfg(test)]
+fn drop_for_test(input: &TypesInput<'_>, mut thir: thir::Module) -> thir::Module {
+    let dropped = |index: cheby_iface::DefIndex| {
+        input
+            .resolved
+            .item(index)
+            .is_some_and(|item| input.globals.names.get(item.name) == "dropped_by_test")
+    };
+    thir.fns.retain(|f| !dropped(f.def.index));
+    thir.consts.retain(|c| !dropped(c.def.index));
+    thir.tests.retain(|t| !dropped(t.def.index));
+    thir
+}
+
+/// The first failure among a schedule's outputs: a [`Stop::Restart`] if
+/// any, else the first internal error.
+fn first_failure(outputs: &mut [Option<Result<ModuleOutput, Stop>>]) -> Option<Stop> {
+    let mut ice = None;
+    for slot in outputs.iter_mut() {
+        if matches!(slot, Some(Err(_)))
+            && let Some(Err(stop)) = slot.take()
+        {
+            match stop {
+                Stop::Restart => return Some(Stop::Restart),
+                Stop::Ice(found) => {
+                    ice.get_or_insert(found);
+                }
+            }
+        }
+    }
+    ice.map(Stop::Ice)
+}
+
+/// Which modules are checked from source even when their lookup hits:
+/// every one in `StdTests` mode and without a cache; in `Build` mode with
+/// a cache and `misses` (D-1250, K4d), the package modules of `misses`
+/// (code, tests, body reads, constant modules) and every std module, and
+/// without `misses` every module; in
+/// `Check` mode the package modules constant evaluation needs, those that
+/// hold a constant (D-459, D-534) and every package module they import,
+/// transitively, which holds every module their reference summaries reach
+/// (D-967; D-1134). Whether a module holds a
+/// constant is a fact of its source: its tree's, or for a module the index
+/// let go unparsed, its record's summary.
+fn must_check(
+    mode: Mode,
+    cache: Option<CacheUse<'_>>,
+    modules: &ModuleTable,
+    trees: &[Option<SyntaxTree>],
+    unparsed: &[bool],
+    graph: &Graph,
+    misses: Option<&crate::warm_keys::BuildMisses>,
+) -> Result<Vec<bool>, Stop> {
+    let len = modules.len();
+    if let (Mode::Build, Some(_), Some(misses)) = (mode, cache, misses) {
+        return Ok(modules
+            .iter()
+            .map(|(id, info)| info.package != PackageId::LOCAL || misses.checks(id))
+            .collect());
+    }
+    let Some(use_) = cache.filter(|_| mode == Mode::Check) else {
+        return Ok(vec![true; len]);
+    };
+    let mut holders = Vec::new();
+    for (id, info) in modules.iter() {
+        if info.package != PackageId::LOCAL {
+            continue;
+        }
+        let at = index(id)?;
+        let holds = if unparsed.get(at).copied().unwrap_or(false) {
+            use_.index
+                .and_then(|(index, _)| index.get(&info.path.to_string()))
+                .map(|entry| entry.record.holds_constant())
+                .ok_or(Stop::Restart)?
+        } else {
+            trees
+                .get(at)
+                .and_then(Option::as_ref)
+                .and_then(|tree| {
+                    <cheby_syntax::ast::SourceFile<'_> as cheby_syntax::ast::AstNode<'_>>::cast(
+                        tree.root(),
+                    )
+                })
+                .is_some_and(|file| {
+                    file.items()
+                        .any(|item| matches!(item, cheby_syntax::ast::Item::Const(_)))
+                })
+        };
+        if holds {
+            holders.push(id.as_u32());
+        }
+    }
+    let mut out = vec![false; len];
+    for node in reachable(graph, &holders) {
+        let id = ModuleId::from_u32(node);
+        if modules
+            .get(id)
+            .is_some_and(|info| info.package == PackageId::LOCAL)
+            && let Some(slot) = out.get_mut(index(id)?)
+        {
+            *slot = true;
+        }
+    }
+    Ok(out)
+}
+
+/// W0005 over every package module's use summary (D-516, D-965): each
+/// package-visible candidate that no module of the package uses. Nothing
+/// is reported when a module's bodies did not all check, since they could
+/// hold the only uses.
+fn unused_package_items(
+    modules: &ModuleTable,
+    built: &[ModuleId],
+    uses: &[Option<(front::UseSummary, bool)>],
+) -> Result<Vec<Diagnostic>, Ice> {
+    let local: Vec<ModuleId> = built
+        .iter()
+        .copied()
+        .filter(|&id| {
+            modules
+                .get(id)
+                .is_some_and(|info| info.package == PackageId::LOCAL)
+        })
+        .collect();
+    let mut summaries = Vec::with_capacity(local.len());
+    for &id in &local {
+        match get(uses, id)? {
+            Some((summary, true)) => summaries.push((id, summary)),
+            _ => return Ok(Vec::new()),
+        }
+    }
+    let used_anywhere: std::collections::BTreeSet<&front::ItemRef> =
+        summaries.iter().flat_map(|(_, s)| &s.uses).collect();
+    let mut out = Vec::new();
+    for (id, summary) in summaries {
+        let info = modules.try_get(id)?;
+        let Some(file) = info.file else {
+            continue;
+        };
+        let module = info.path.to_string();
+        for c in &summary.candidates {
+            let item = front::ItemRef {
+                module: module.clone(),
+                item: c.item.clone(),
+            };
+            if !used_anywhere.contains(&item) {
+                let span = Span::new(file, cheby_diag::TextRange::at(c.span.0, c.span.1));
+                out.push(cheby_types::unused_package_item(&c.kind, &c.item, span));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The end of a front end's use of the cache: the package index, written
+/// when its bytes differ from the one read (D-1133); the
+/// log's lines, one hit or miss per package module and one `parse` per
+/// package module parsed (D-973, D-1135); and the driver's
+/// counts of parses and checks.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the front end's state at its end"
+)]
+fn finish_cache(
+    use_: CacheUse<'_>,
+    modules: &ModuleTable,
+    built: &[ModuleId],
+    hits: &[bool],
+    unparsed: &[bool],
+    late_trees: &[LateTree],
+    mut entries: Vec<crate::cache::index::IndexEntry>,
+    counted: std::sync::Mutex<Vec<String>>,
+) -> Result<(), Ice> {
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries.dedup_by(|a, b| a.path == b.path);
+    let bytes = crate::cache::index::PackageIndex { modules: entries }.encode();
+    if use_.index.map(|(_, read)| read.as_slice()) != Some(bytes.as_slice()) {
+        let _ = use_.cache.store.put_hint(&use_.index_key, &bytes);
+    }
+    for &id in built {
+        let info = modules.try_get(id)?;
+        if info.package == PackageId::LOCAL {
+            let hit = hits.get(index(id)?).copied().unwrap_or(false);
+            use_.cache.log.record("front", &info.path.to_string(), hit);
+        }
+    }
+    let mut parsed = Vec::new();
+    for (id, info) in modules.iter() {
+        if info.package != PackageId::LOCAL {
+            continue;
+        }
+        let at = index(id)?;
+        let late = late_trees.get(at).is_some_and(|slot| slot.get().is_some());
+        if !unparsed.get(at).copied().unwrap_or(false) || late {
+            let path = info.path.to_string();
+            use_.cache.log.parsed(&path);
+            parsed.push(path);
+        }
+    }
+    let checked = counted
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    use_.cache.count(parsed, checked);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1612,8 +3669,14 @@ mod tests {
         // In parallel.
         let mut par_sources = cheby_diag::SourceMap::new();
         let mut par_diags = Vec::new();
-        let modules =
-            super::read_modules(&dir, discovered, &mut par_sources, &mut par_diags).unwrap();
+        let modules = super::read_modules(
+            &dir,
+            discovered,
+            &mut par_sources,
+            &mut par_diags,
+            &|_, _| false,
+        )
+        .unwrap();
         let par: Vec<_> = modules
             .iter()
             .map(|m| {

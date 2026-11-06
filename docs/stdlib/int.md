@@ -8,9 +8,9 @@ pub type Int
 
 All arithmetic on `Int` is checked: a result that does not fit panics (D-025). On JS, an `Int` result outside ±(2⁵³−1) also panics (D-037), so a program panics at the same points or earlier on JS, but never computes a different value (§12.4, D-232).
 
-This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow` and `to_base`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
+This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div` and `checked_modulo`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
-`clamp`, `pow`, `checked_pow` and `to_base` exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389).
+`clamp`, `pow`, `checked_pow` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-1090).
 
 The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign`, `is_even` or `gcd`: `int::compare(n, 0)` and `n % 2 == 0` say the same, and Euclid's algorithm is a three-line function (example 028).
 
@@ -84,7 +84,7 @@ test "max_safe is the largest portable Int" {
 
 ## Conversions
 
-Conversions follow D-308: from each sized integer type there is a function `from_source`, which returns `Int` when every value of the source fits and `Result<Int, Nil>` otherwise. There is no `from_float` or `from_f32`. A float becomes an `Int` through `float::truncate`, `round`, `floor` and `ceil`, and the same functions of `std::f32` (D-359).
+Conversions follow D-308: from each sized integer type there is a function `from_source`, which returns `Int` when every value of the source fits and `Result<Int, Nil>` otherwise. The two narrowing ones, from `I64` and `U64`, have wrapping twins, `wrapping_from_i64` and `wrapping_from_u64`, which keep the 64 bits of the source (D-1091). There is no `from_float` or `from_f32`. A float becomes an `Int` through `float::truncate`, `round`, `floor` and `ceil`, and the same functions of `std::f32` (D-359).
 
 ### `from_i8`
 
@@ -226,6 +226,58 @@ test "from_u64 fails above Int's range" {
 }
 ```
 
+### `wrapping_from_i64`
+
+```cheby
+pub fn wrapping_from_i64(n: I64) -> Int
+```
+
+Returns `n` as an `Int`. Every `I64` has the same 64 bits as an `Int`, so this is `from_i64` without the `Result` (D-1091).
+
+- **Panics:** on JS, when `n` is outside ±(2⁵³−1), like any other `Int` result (D-037).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "wrapping_from_i64 keeps the value" {
+  assert int::wrapping_from_i64(-42) == -42
+  assert int::wrapping_from_i64(0) == 0
+}
+
+@target(native)
+test "wrapping_from_i64 keeps every I64 on native" {
+  assert int::wrapping_from_i64(9_223_372_036_854_775_807) == int::max_value
+  assert int::wrapping_from_i64(-9_223_372_036_854_775_808) == int::min_value
+}
+```
+
+### `wrapping_from_u64`
+
+```cheby
+pub fn wrapping_from_u64(n: U64) -> Int
+```
+
+Returns the `Int` whose two's-complement bits are those of `n`: `n` itself up to 2⁶³−1, and `n` − 2⁶⁴ above it (D-1091). `u64::wrapping_from_int` is the inverse.
+
+- **Panics:** on JS, when the result is outside ±(2⁵³−1), like any other `Int` result (D-037).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "wrapping_from_u64 reads the bits as two's complement" {
+  assert int::wrapping_from_u64(42) == 42
+  assert int::wrapping_from_u64(18_446_744_073_709_551_615) == -1
+  assert int::wrapping_from_u64(18_446_744_073_709_551_574) == -42
+}
+
+@target(native)
+test "wrapping_from_u64 covers every Int on native" {
+  assert int::wrapping_from_u64(9_223_372_036_854_775_807) == int::max_value
+  assert int::wrapping_from_u64(9_223_372_036_854_775_808) == int::min_value
+  assert int::wrapping_from_u64(9_223_372_036_854_775_809) == int::min_value + 1
+}
+```
+
+Hashes and binary formats compute in `U64` and read the result as an `Int` this way, and `u64::wrapping_from_int` goes back.
+
 ## Parsing and text
 
 ### `parse`
@@ -320,7 +372,7 @@ test "to_base writes other bases" {
 }
 ```
 
-`to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390).
+`to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390). Every sized integer module has a `to_base` with the same digits (D-1090).
 
 ## Comparison
 
@@ -485,6 +537,65 @@ test "rem keeps the sign of the dividend" {
   assert int::rem(7, 2) == 1
   assert int::rem(-7, 2) == -1
   assert int::rem(7, -2) == 1
+}
+```
+
+### `floor_div`
+
+```cheby
+pub fn floor_div(a: Int, b: Int) -> Int
+```
+
+Returns `a / b` rounded toward negative infinity (D-1056). It differs from `div` only when the division is not exact and `a` and `b` have different signs, where it is one less. With `modulo`, `a == int::floor_div(a, b) * b + int::modulo(a, b)` for every `a` and every `b` other than 0.
+
+- **Panics:** when `b` is 0, as `/` does (D-069), and for `min_value` divided by -1, whose result does not fit, as `div` does (§3.3.1).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "floor_div and modulo round toward negative infinity" {
+  assert int::floor_div(-7, 2) == -4
+  assert int::floor_div(7, -2) == -4
+  assert int::modulo(-1, 10) == 9
+  assert int::modulo(7, -2) == -1
+  assert int::checked_modulo(1, 0) == Err(Nil)
+}
+
+test "floor_div equals div when the signs agree or the division is exact" {
+  assert int::floor_div(7, 2) == 3
+  assert int::floor_div(-7, -2) == 3
+  assert int::floor_div(-6, 2) == -3
+  assert int::floor_div(0, -5) == 0
+}
+```
+
+### `modulo`
+
+```cheby
+pub fn modulo(a: Int, b: Int) -> Int
+```
+
+Returns the remainder of `floor_div`, which is 0 or has the sign of `b` (D-1056). For a positive `b` it is from 0 to `b - 1`, so `int::modulo(index, length)` wraps an index around a sequence in both directions. It differs from `rem` only when the remainder is not 0 and `a` and `b` have different signs, where it is `rem(a, b) + b`.
+
+- **Panics:** when `b` is 0, as `%` does (D-069).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "modulo takes the sign of the divisor" {
+  assert int::modulo(12, 5) == 2
+  assert int::modulo(-12, 5) == 3
+  assert int::modulo(12, -5) == -3
+  assert int::modulo(-12, -5) == -2
+  assert int::modulo(-10, 5) == 0
+}
+
+test "floor_div and modulo rebuild the dividend" {
+  fn rebuilds(pairs) {
+    case pairs {
+      [] => True
+      [(a, b), ..rest] => a == int::floor_div(a, b) * b + int::modulo(a, b) && rebuilds(rest)
+    }
+  }
+  assert rebuilds([(7, 3), (-7, 3), (7, -3), (-7, -3), (0, 4), (9, 1), (-9, -1)])
 }
 ```
 
@@ -660,6 +771,48 @@ Returns `Ok(a % b)`, with the sign of `a`, when `b` is not 0 (D-309).
 test "checked_rem reports a zero divisor" {
   assert int::checked_rem(-7, 2) == Ok(-1)
   assert int::checked_rem(7, 0) == Err(Nil)
+}
+```
+
+### `checked_floor_div`
+
+```cheby
+pub fn checked_floor_div(a: Int, b: Int) -> Result<Int, Nil>
+```
+
+Returns `Ok(int::floor_div(a, b))` when the division is defined and its result fits (D-356, D-1056).
+
+- **Fails:** `Err(Nil)` when `b` is 0, and for `min_value` divided by -1.
+- **Cost:** O(1). Informative.
+
+```cheby
+test "checked_floor_div reports a zero divisor" {
+  assert int::checked_floor_div(-7, 2) == Ok(-4)
+  assert int::checked_floor_div(7, -1) == Ok(-7)
+  assert int::checked_floor_div(7, 0) == Err(Nil)
+}
+
+@target(native)
+test "checked_floor_div reports overflow" {
+  assert int::checked_floor_div(int::min_value, -1) == Err(Nil)
+}
+```
+
+### `checked_modulo`
+
+```cheby
+pub fn checked_modulo(a: Int, b: Int) -> Result<Int, Nil>
+```
+
+Returns `Ok(int::modulo(a, b))`, with the sign of `b`, when `b` is not 0 (D-356, D-1056).
+
+- **Fails:** `Err(Nil)` when `b` is 0.
+- **Cost:** O(1). Informative.
+
+```cheby
+test "checked_modulo reports a zero divisor" {
+  assert int::checked_modulo(-1, 10) == Ok(9)
+  assert int::checked_modulo(-1, 0) == Err(Nil)
 }
 ```
 

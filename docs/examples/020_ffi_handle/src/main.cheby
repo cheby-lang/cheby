@@ -36,10 +36,10 @@
 //! never escapes it, so each `closing` line is tied to one statement of
 //! that function.
 
-import std::io
-import std::list
 import ffi_handle::journal
 import ffi_handle::store
+import std::io
+import std::list
 
 fn main() {
   io::println("1. Stores close at their last use")
@@ -134,7 +134,8 @@ fn draft(title: String, text: String, publish: Bool) -> Option<String> {
 /// Shows that several journals can share one store, which closes once,
 /// when the last of them goes away.
 fn journal_sharing() {
-  let morning = journal::new("diary") |> journal::add(_, "woke up")
+  let morning = journal::new("diary")
+    |> journal::add(_, "woke up")
   let evening = journal::add(morning, "went to bed")
   // `morning` is an immutable Cheby value, so it still counts one
   // entry. Its store belongs to the host, and `evening` refers to the

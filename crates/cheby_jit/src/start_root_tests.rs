@@ -45,12 +45,14 @@ fn function(key: FnKey, abi: Abi, locals: usize, stmts: Vec<Stmt>, result: u32) 
         Vec::new()
     };
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi,
         params: Vec::new(),
         ret: Repr::Value,
         locals: IndexVec::from_raw(decls).unwrap(),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term: Terminator::Return(Operand::Local(cheby_mir::Local::from_u32(result))),
@@ -76,6 +78,8 @@ fn module(
     names: Vec<DefName>,
 ) -> MirModule {
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit,
         path: if unit == UnitKind::Entries { "" } else { "app" }.into(),
         functions,

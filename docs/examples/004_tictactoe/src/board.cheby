@@ -14,7 +14,9 @@ import std::list
 import std::string
 import tictactoe::player
 
-type Board { cells: List<Cell> }
+type Board {
+  cells: List<Cell>,
+}
 
 type Cell = Option<player::Player>
 
@@ -78,7 +80,9 @@ fn status(board: Board) -> Status {
 priv fn line_winner(lines: List<(Cell, Cell, Cell)>) -> Option<player::Player> {
   case lines {
     [] => None
-    [(Some(first), Some(second), Some(third)), ..] when first == second && second == third => Some(first)
+    [(Some(first), Some(second), Some(third)), ..] when first == second && second == third => Some(
+      first,
+    )
     [_, ..rest] => line_winner(rest)
   }
 }
@@ -115,7 +119,9 @@ test "free cells are listed in increasing order" {
 
 test "place fills only a free cell that exists" {
   let assert Some(position) = place(empty(), 5, player::X)
-  assert position == Board { cells: [None, None, None, None, Some(player::X), None, None, None, None] }
+  assert position == Board {
+    cells: [None, None, None, None, Some(player::X), None, None, None, None],
+  }
   assert place(position, 5, player::O) == None
   assert place(empty(), 0, player::X) == None
   assert place(empty(), 10, player::X) == None

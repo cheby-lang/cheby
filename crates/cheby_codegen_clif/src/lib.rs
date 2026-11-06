@@ -24,6 +24,25 @@
 //! signature, and `cheby_runtime::abi` for object headers, string images,
 //! context offsets and symbol names. This crate never calls the runtime.
 //!
+//! The code model is D-913's, one for the JIT, the cache and executables
+//! (ADR-0064): non-PIC code ([`isa::flags`]) for D-921's fixed ISA
+//! ([`isa::host_isa`]). Every generated symbol is referenced colocated, so
+//! text reaches it PC-relative. Runtime functions, runtime statics and
+//! foreign symbols are reached only through import words
+//! `cb$imp$<symbol>` (`Decls::import_word`'s read-only words with an
+//! `Abs8` data relocation), which code loads and then calls with
+//! `call_indirect` and the C signature, or uses as the static's address.
+//! No Cranelift libcall appears ([`isa::libcall_names`]). [`define`] checks
+//! every compiled function's relocations: text has only PC-relative ones,
+//! to generated symbols.
+//!
+//! [`compile_unit`] compiles one unit alone, for code records and objects
+//! (D-914, D-917, D-918, D-920): what another unit may name is global
+//! hidden, what other units define is imported, code and statics fixed by
+//! their key are local copies, and layout words hold no layout id. In the
+//! JIT every symbol stays local. A slot whose signature borrows a
+//! parameter carries the mask in its name ([`mangle::slot`]) in both.
+//!
 //! Lowering rules (D-453): every Cheby-ABI function uses Cranelift's
 //! `tail` convention with the hidden `ctx` parameter first, and a tail call
 //! is `return_call` (D-015). Every call of a top-level function loads the
@@ -81,23 +100,37 @@
 //! call the runtime only on the slow paths, unless
 //! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
+#[cfg(test)]
+mod alone_tests;
 mod arith;
 mod blocking;
+#[cfg(test)]
+mod code_model_tests;
 mod data;
 mod decls;
 mod error;
 mod func;
 pub mod isa;
+pub mod jit_unit;
 mod layout;
 #[cfg(test)]
 mod locs_tests;
 pub mod mangle;
+mod modrec;
+pub mod record;
 pub mod runtime;
 mod session;
 pub mod sig;
+mod unit;
 mod unwind;
 mod values;
 
+#[cfg(test)]
+mod modrec_names_tests;
+#[cfg(test)]
+mod positions_tests;
+#[cfg(test)]
+mod record_tests;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]
@@ -115,7 +148,9 @@ pub use decls::{Decls, FuncDecl, SlotDecl, SlotKey};
 pub use error::CodegenError;
 pub use func::translate;
 pub use layout::{BuiltinLayouts, LayoutIds, builtin_ctor_layout, builtin_layout_id};
+pub use modrec::{BatchNew, BatchRecord, define_batch_records};
 pub use session::{SESSION_MODULE, SessionName};
+pub use unit::{UnitCode, UnitCx, compile_unit};
 
 /// The alignment every function is defined with. Bit 0 of a code address
 /// must be clear so a closure's code word `addr | 1` reads as a tagged
@@ -127,26 +162,31 @@ pub const FUNCTION_ALIGN: u64 = 16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum CallMode {
     /// Load the callee's slot and call the address in it, so the REPL and
-    /// hot reloading can repoint the slot (D-043). The JIT's mode.
+    /// hot reloading can repoint the slot (D-043). The only mode used
+    /// between Cheby functions, in the JIT and in executables alike
+    /// (D-916).
     #[default]
     Indirect,
-    /// Call the callee's symbol directly (AOT, M3).
+    /// Call the callee's symbol directly. No build uses it (D-916: direct
+    /// calls are reconsidered with M6's release profile).
     Direct,
 }
 
-/// How generated code imports and calls an `@external(native, …)` symbol.
+/// How generated code declares an `@external(native, …)` symbol. In both
+/// modes code reaches the symbol only through its import word
+/// `cb$imp$<symbol>` and calls the loaded address with `call_indirect`
+/// and the call site's C signature (D-913, D-475).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum ForeignImport {
-    /// Import the symbol's address, with no signature, and call it with
-    /// `call_indirect` and the C signature of each call site. One module
-    /// can then hold several C signatures for one symbol, which the REPL
-    /// needs: a redefinition may change a binding's C signature, and a
-    /// failed batch leaves its declarations behind. The JIT's mode.
+    /// Declare the symbol with no signature. One module can then hold
+    /// several C signatures for one symbol, which the REPL needs: a
+    /// redefinition may change a binding's C signature, and a failed batch
+    /// leaves its declarations behind. The JIT's mode.
     #[default]
     Address,
-    /// Import the symbol as a function with its C signature. A module
+    /// Declare the symbol as a function with its C signature. A module
     /// holds one signature per symbol, which D-455 guarantees within a
-    /// program (AOT, M3).
+    /// program.
     Function,
 }
 
@@ -274,6 +314,24 @@ pub struct DefinedCode {
     /// Its calls with a location, by return offset, sorted
     /// ([`CompiledFunction::call_sites`]).
     pub sites: Vec<CallSiteDesc>,
+    /// The function's source rows (D-938): each a code offset and the line
+    /// and column (D-421) of the statement whose code starts there, sorted
+    /// by offset, a row only where the line or column changes; empty with
+    /// positions off and for code without MIR positions (shims).
+    pub positions: Vec<SourceRow>,
+    /// D-1041: its display name in the module record, `None` for code
+    /// without one (N7b's `modrec::name_functions`).
+    pub name: Option<modrec::DisplayName>,
+}
+
+/// One row of a function's line table (D-938): the code from `offset` on,
+/// up to the next row, comes from `line` and `column` (D-421: from 1,
+/// code points) of the unit's source file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceRow {
+    pub offset: u32,
+    pub line: u32,
+    pub column: u32,
 }
 
 /// Defines the data objects declared by [`declare`] and every function of
@@ -319,6 +377,10 @@ pub fn define<M: Module>(
 /// # Errors
 ///
 /// A [`CodegenError`] if translation or compilation fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "N7b's one call that names the functions (D-1041) brings it to 101 lines"
+)]
 pub fn define_with_stats<M: Module>(
     module: &mut M,
     mirs: &[MirModule],
@@ -413,11 +475,13 @@ pub fn define_with_stats<M: Module>(
         compiled.push((None, None, id, code));
     }
     // What the JIT's code map needs (D-856), built before anything is
-    // defined, so a missing location string fails the batch whole.
+    // defined, so a missing location string or D-913's code model, checked
+    // on every compile, fails the batch whole.
     let mut defined = Vec::with_capacity(compiled.len());
     for &(_, function, id, ref code) in &compiled {
-        defined.push(defined_code(function, id, code)?);
+        defined.push(defined_code(&*module, decls, function, id, code)?);
     }
+    modrec::name_functions(decls, mirs, &mut defined)?;
     // A function defined twice would fail after the data are defined,
     // which the module keeps: check first, so a failed batch defines
     // nothing.
@@ -449,18 +513,118 @@ pub fn define_with_stats<M: Module>(
     Ok((clif, stats, defined))
 }
 
-/// The code map's entry of `code`, the function `id` compiled from
-/// `function` (`None` for a shim, which has no calls with a location).
+/// Whether a relocation of kind `kind` in text is PC-relative, the only
+/// kinds D-913's code model leaves there: on x86-64 `X86CallPCRel4`, for
+/// calls and for `lea` of colocated data alike (X0's caveat 3), and
+/// `X86PCRel4`; on aarch64 `Arm64Call` (`bl`) and the
+/// `adrp`+`add` pair `Aarch64AdrPrelPgHi21` and `Aarch64AddAbsLo12Nc`
+/// (a page offset, despite its name). Absolute kinds (`Abs4`, `Abs8`),
+/// GOT, PLT and TLS kinds are never PC-relative text in this model.
+const fn pc_relative(kind: cranelift_codegen::binemit::Reloc) -> bool {
+    use cranelift_codegen::binemit::Reloc;
+    matches!(
+        kind,
+        Reloc::X86PCRel4
+            | Reloc::X86CallPCRel4
+            | Reloc::Arm64Call
+            | Reloc::Aarch64AdrPrelPgHi21
+            | Reloc::Aarch64AddAbsLo12Nc
+    )
+}
+
+/// D-913's check of one compiled function's text, before anything is
+/// defined: every relocation is PC-relative ([`pc_relative`]) and names a
+/// generated symbol of `module`, never a libcall, a symbol the linker
+/// knows, or a runtime or foreign symbol (`Linkage::Import`), which only
+/// import words' data relocations name. A generated `cb$` symbol another
+/// unit defines, which a unit alone imports (D-917), is allowed. One
+/// record then serves the JIT, the cache and executables (ADR-0064): text
+/// needs no absolute relocation, which PIE executables and arm64 Mach-O
+/// refuse.
 ///
 /// # Errors
 ///
-/// An ICE if the code is too long or a call's location is not in
-/// `function`'s table.
-fn defined_code(
+/// An ICE naming the function and the relocation.
+fn check_text_relocs<M: Module>(
+    module: &M,
+    decls: &Decls,
+    id: cranelift_module::FuncId,
+    code: &CompiledFunction,
+) -> Result<(), CodegenError> {
+    use cranelift_module::{Linkage, ModuleRelocTarget};
+    for reloc in &code.relocs {
+        let fail = |what: &str| {
+            CodegenError::ice(format!(
+                "the function `{}` has {what} at offset {} of its text (D-913)",
+                decls.func_name(id),
+                reloc.offset
+            ))
+        };
+        let target = match reloc.name {
+            ModuleRelocTarget::User {
+                namespace: 0,
+                index,
+            } => {
+                let target = cranelift_module::FuncId::from_u32(index);
+                let linkage = module.declarations().get_function_decl(target).linkage;
+                (decls.func_name(target).to_owned(), linkage)
+            }
+            ModuleRelocTarget::User {
+                namespace: 1,
+                index,
+            } => {
+                let target = cranelift_module::DataId::from_u32(index);
+                let linkage = module.declarations().get_data_decl(target).linkage;
+                (decls.data_name(target).to_owned(), linkage)
+            }
+            ModuleRelocTarget::LibCall(libcall) => {
+                return Err(fail(&format!("a relocation to the libcall `{libcall}`")));
+            }
+            ModuleRelocTarget::User { namespace, .. } => {
+                return Err(fail(&format!(
+                    "a relocation to a name of namespace {namespace}"
+                )));
+            }
+            ModuleRelocTarget::KnownSymbol(_) | ModuleRelocTarget::FunctionOffset(..) => {
+                return Err(fail(&format!("a relocation to `{}`", reloc.name)));
+            }
+        };
+        let (name, linkage) = target;
+        if !pc_relative(reloc.kind) {
+            return Err(fail(&format!(
+                "an absolute or unexpected `{:?}` relocation to `{name}`",
+                reloc.kind
+            )));
+        }
+        // D-917: in a unit alone, text reaches another unit's generated
+        // symbols (slots, layout words, `cb$ctor$` statics, constant slots,
+        // test bodies and constant initializers) as imports, PC-relative;
+        // runtime and foreign symbols stay behind import words.
+        if linkage == Linkage::Import && !decls.is_generated_import(&name) {
+            return Err(fail(&format!(
+                "a relocation to `{name}`, which only an import word may name"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The code map's entry of `code`, the function `id` compiled from
+/// `function` (`None` for a shim, which has no calls with a location),
+/// once its text passed D-913's check ([`check_text_relocs`]).
+///
+/// # Errors
+///
+/// An ICE if the text has a relocation the code model forbids, the code
+/// is too long or a call's location is not in `function`'s table.
+fn defined_code<M: Module>(
+    module: &M,
+    decls: &Decls,
     function: Option<&cheby_mir::Function>,
     id: cranelift_module::FuncId,
     code: &CompiledFunction,
 ) -> Result<DefinedCode, CodegenError> {
+    check_text_relocs(module, decls, id, code)?;
     let len = u32::try_from(code.bytes.len())
         .map_err(|_| CodegenError::ice("a function's code is longer than 4 GiB"))?;
     let mut sites = Vec::with_capacity(code.call_sites.len());
@@ -475,12 +639,58 @@ fn defined_code(
             location: location.to_string(),
         });
     }
+    let positions = function.map_or_else(Vec::new, |f| {
+        source_rows(
+            |bits| {
+                f.positions
+                    .get(cheby_mir::PosRef::from_bits(bits))
+                    .map(|p| (p.line, p.column))
+            },
+            &code.srclocs,
+        )
+    });
     Ok(DefinedCode {
         id,
         len,
         cheby_abi: code.cheby_abi,
         sites,
+        positions,
+        name: None,
     })
+}
+
+/// The rows of a function's line table (D-938) from its compiled code's
+/// source locations `srclocs` (`(start offset, location)`, sorted by
+/// offset, as Cranelift gives them): `lookup` gives the line and column of
+/// a location's bits, a [`cheby_mir::PosRef`] into the function's table
+/// ([`cheby_mir::Function::positions`]). A row starts only where the line
+/// or column changes; a location the table does not hold is skipped.
+fn source_rows(
+    lookup: impl Fn(u32) -> Option<(u32, u32)>,
+    srclocs: &[(u32, u32)],
+) -> Vec<SourceRow> {
+    let mut rows: Vec<SourceRow> = Vec::new();
+    for &(offset, bits) in srclocs {
+        let Some((line, column)) = lookup(bits) else {
+            continue;
+        };
+        // An empty range at the same offset gives way to the next one.
+        if rows.last().is_some_and(|r| r.offset == offset) {
+            rows.pop();
+        }
+        if rows
+            .last()
+            .is_some_and(|r| r.line == line && r.column == column)
+        {
+            continue;
+        }
+        rows.push(SourceRow {
+            offset,
+            line,
+            column,
+        });
+    }
+    rows
 }
 
 /// Defines the data objects declared since the last [`define`] outside any
@@ -569,6 +779,11 @@ pub struct CompiledFunction {
     /// and stops at a C-ABI one (entry thunks, trampolines, `@blocking`
     /// shims).
     pub cheby_abi: bool,
+    /// The start offset of each range of code with a source location, and
+    /// the location's bits, a [`cheby_mir::PosRef`] (D-938), sorted by
+    /// offset, as Cranelift records them; empty when translation set none
+    /// (positions off, shims).
+    pub srclocs: Vec<(u32, u32)>,
 }
 
 impl std::fmt::Debug for CompiledFunction {
@@ -580,6 +795,7 @@ impl std::fmt::Debug for CompiledFunction {
             .field("frame_size", &self.frame_size)
             .field("call_sites", &self.call_sites.len())
             .field("cheby_abi", &self.cheby_abi)
+            .field("srclocs", &self.srclocs.len())
             .finish()
     }
 }
@@ -668,6 +884,13 @@ pub fn compile_function(
         });
         pair_call_sites(&returns, tags)?
     };
+    let srclocs = compiled
+        .buffer
+        .get_srclocs_sorted()
+        .iter()
+        .filter(|s| !s.loc.is_default())
+        .map(|s| (s.start, s.loc.bits()))
+        .collect();
     Ok(CompiledFunction {
         bytes,
         align,
@@ -675,5 +898,6 @@ pub fn compile_function(
         frame_size,
         call_sites,
         cheby_abi,
+        srclocs,
     })
 }

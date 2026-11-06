@@ -1,0 +1,60 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-991, D-1057, D-1019
+//! The pure functions of `std::time` and `std::time::instant` are written
+//! in Cheby over no kernel, so constants are computed with them at compile
+//! time, and each prints as the same call does when the program runs
+//! (§4.5).
+
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+const launch: time::Timestamp = time::from_unix(duration::seconds(1_700_000_000))
+
+const launch_span: duration::Duration = time::to_unix(launch)
+
+const a_day_later: time::Timestamp = time::add(launch, duration::hours(24))
+
+const launch_order: Order = time::compare(launch, a_day_later)
+
+const launch_text: String = time::show(launch)
+
+const parsed: Result<time::Timestamp, Nil> = time::parse("2026-10-21T14:30:00.25+02:00")
+
+const before_1970: String = time::show(time::from_unix(duration::milliseconds(-1)))
+
+const origin: instant::Instant = instant::from_origin(duration::zero)
+
+const deadline: instant::Instant = instant::add(origin, duration::seconds(90))
+
+const instant_order: Order = instant::compare(deadline, origin)
+
+const waited: duration::Duration = instant::between(origin, deadline)
+
+fn main() {
+  io::println("{launch}")
+  io::println("{launch_span}")
+  io::println("{a_day_later}")
+  io::println("{launch_order:?}")
+  io::println(launch_text)
+  io::println("{parsed:?}")
+  io::println(before_1970)
+  io::println("{deadline:?}")
+  io::println("{instant_order:?}")
+  io::println("{waited}")
+  let stamp = time::from_unix(duration::seconds(1_700_000_000))
+  let later = time::add(stamp, duration::hours(24))
+  let start = instant::from_origin(duration::zero)
+  let end = instant::add(start, duration::seconds(90))
+  let stamps_agree = launch == stamp && a_day_later == later && launch_span == time::to_unix(stamp)
+  let texts_agree = launch_text == time::show(stamp)
+    && parsed == time::parse("2026-10-21T14:30:00.25+02:00")
+    && before_1970 == time::show(time::from_unix(duration::milliseconds(-1)))
+  let orders_agree = launch_order == time::compare(stamp, later)
+    && instant_order == instant::compare(end, start)
+  let instants_agree = origin == start && deadline == end && waited == instant::between(start, end)
+  let same = stamps_agree && texts_agree && orders_agree && instants_agree
+  io::println("the same at run time: {same}")
+}

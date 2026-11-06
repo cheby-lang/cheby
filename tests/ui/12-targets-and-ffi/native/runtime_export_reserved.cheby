@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @milestone: M3
+// @decisions: D-944, D-455
+//! Every name the runtime exports is reserved for the standard library,
+//! not only the `cheby_rt_` and `cb$` prefixes: a std kernel such as
+//! `cheby_list_length` and a math kernel such as `cheby_float_sin` are
+//! E0055 outside std (§12.5.1). Other `cheby_` names stay free.
+
+@!target(native)
+
+@external(native, "cheby_list_length")
+pub fn length(items: List<Int>) -> Int
+
+@external(native, "cheby_float_sin")
+pub fn sine(x: Float) -> Float
+
+@external(native, "cheby_app_free")
+pub fn free_name() -> Int

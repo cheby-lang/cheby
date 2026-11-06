@@ -1,0 +1,5 @@
+Circle { radius: 2, label: "wheel" }
+Rect(3, 4)
+Empty
+24
+True False True

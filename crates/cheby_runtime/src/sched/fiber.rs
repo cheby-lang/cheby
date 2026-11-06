@@ -96,11 +96,16 @@ pub(crate) enum WaitOp {
     Scope = 5,
     /// The end of a `fiber::timeout`'s timed scope.
     Timeout = 6,
+    /// `time::sleep` and `time::sleep_until` (D-1058). Only an endless
+    /// sleep, past D-891's cap, can appear in a report: a shorter one arms
+    /// a timer, which counts as pending work (D-857).
+    Sleep = 7,
 }
 
 impl WaitOp {
     /// D-858's name: `channel::send`, `channel::receive`, `fiber::join`,
-    /// `selector::select`, `fiber::scope` or `fiber::timeout`.
+    /// `selector::select`, `fiber::scope`, `fiber::timeout`, or
+    /// `time::sleep` (D-1058).
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Send => "channel::send",
@@ -109,6 +114,7 @@ impl WaitOp {
             Self::Select => "selector::select",
             Self::Scope => "fiber::scope",
             Self::Timeout => "fiber::timeout",
+            Self::Sleep => "time::sleep",
         }
     }
 
@@ -121,6 +127,7 @@ impl WaitOp {
             Self::Select => 4,
             Self::Scope => 5,
             Self::Timeout => 6,
+            Self::Sleep => 7,
         }
     }
 
@@ -134,6 +141,7 @@ impl WaitOp {
             4 => Some(Self::Select),
             5 => Some(Self::Scope),
             6 => Some(Self::Timeout),
+            7 => Some(Self::Sleep),
             _ => None,
         }
     }

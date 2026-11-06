@@ -17,13 +17,9 @@ use cheby_mir::{
 use crate::*;
 
 fn module() -> JITModule {
-    let isa = cranelift_native::builder()
-        .unwrap()
-        .finish(isa::flags().unwrap())
-        .unwrap();
     JITModule::new(JITBuilder::with_isa(
-        isa,
-        cranelift_module::default_libcall_names(),
+        isa::host_isa().unwrap(),
+        isa::libcall_names(),
     ))
 }
 
@@ -44,6 +40,7 @@ fn function(
     call_loc_strings: Vec<Box<str>>,
 ) -> Function {
     Function {
+        positions: cheby_mir::Positions::default(),
         key: FnKey::Item(key),
         abi: Abi::Cheby,
         params: vec![local(0)],
@@ -60,6 +57,7 @@ fn function(
         )
         .unwrap(),
         blocks: IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts,
             term,
@@ -157,6 +155,8 @@ fn unit() -> MirModule {
     );
     let sig = AbiSig::owned(Abi::Cheby, vec![Repr::Value], Repr::Value);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![f0, f1],

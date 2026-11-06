@@ -14,7 +14,7 @@ The plan is a living document. When a milestone starts, its file is refined into
 | [m0-foundation.md](m0-foundation.md)       | M0: workspace, CI, harnesses, goldens, first stdlib specs        |
 | [m1-core.md](m1-core.md)                   | M1: single-fiber core, JIT and REPL (task-level detail)          |
 | [m2-runtime.md](m2-runtime.md)             | M2: Perceus, fibers, M:N scheduler, channels, unwinding          |
-| [m3-aot-and-cache.md](m3-aot-and-cache.md) | M3: AOT output, linking, build cache, cached-code loader         |
+| [m3-aot-and-cache.md](m3-aot-and-cache.md) | M3: AOT output, linking, build cache, cached code, tier 3        |
 | [m4-js.md](m4-js.md)                       | M4: JavaScript backend                                           |
 | [m5-tooling.md](m5-tooling.md)             | M5: formatter, language server, docs, package manager            |
 | [m6-v1.md](m6-v1.md)                       | M6: release profile, bundled linker, platforms, v1 readiness     |
@@ -36,17 +36,17 @@ M0 foundation ─► M1 single-fiber core ─► M2 runtime ─► M3 AOT + cach
 stdlib workstream: tier 1 before M1 ─► tier 2 before M2 ─► tier 3 before M3 / M4
 ```
 
-| Milestone            | Delivers                                                                                                                   | Examples that must pass at exit                                                           |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| M0 Foundation        | Workspace, CI, test and bench harnesses, golden files for all examples, tier-1 stdlib specs                                | none (harnesses run, examples are marked expected-fail)                                   |
-| M1 Single-fiber core | Parser, resolver, type checker, MIR with naive RC, Cranelift JIT, runtime kernels, `cheby check`, `run`, `test`, `repl`    | 001-004, 006-008, 010, 012, 014-017, 021, 023-027, 029, 032 (011 if `std::json` is ready) |
-| M2 Runtime           | Perceus (borrowing, reuse), shared marking, fiber stacks, M:N scheduler, scopes, channels, selectors, unwinding, IO poller | adds 005, 009, 013, 018, 019, 022, 028                                                    |
-| M3 AOT and cache     | Object output, linking, DWARF line tables, interface artifacts on disk, global cache, cached-code loader, precompiled std  | all of the above through `cheby build --target native`, plus 020 and 031                  |
-| M4 JS                | JS emitter, link-time suspension analysis, JS runtime, handle RC on JS, source maps                                        | every example on Node with the same goldens as native                                     |
-| M5 Tooling           | `cheby fmt`, `cheby lsp`, `cheby doc`, `cheby new/add/update/fetch`                                                        | every example is a `cheby fmt` fixed point, doc examples run as tests, 030 passes (D-446) |
-| M6 v1                | Release profile, bundled lld, Windows, full platform matrix, budgets met                                                   | every example on every platform of D-074 and D-892, in both profiles                      |
+| Milestone            | Delivers                                                                                                                                                                                            | Examples that must pass at exit                                                           |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| M0 Foundation        | Workspace, CI, test and bench harnesses, golden files for all examples, tier-1 stdlib specs                                                                                                         | none (harnesses run, examples are marked expected-fail)                                   |
+| M1 Single-fiber core | Parser, resolver, type checker, MIR with naive RC, Cranelift JIT, runtime kernels, `cheby check`, `run`, `test`, `repl`                                                                             | 001-004, 006-008, 010, 012, 014-017, 021, 023-027, 029, 032 (011 if `std::json` is ready) |
+| M2 Runtime           | Perceus (borrowing, reuse), shared marking, fiber stacks, M:N scheduler, scopes, channels, selectors, unwinding, IO poller                                                                          | adds 005, 009, 013, 018, 019, 022, 028                                                    |
+| M3 AOT and cache     | Object output, linking, DWARF line tables, foreign code from packages, interface artifacts on disk, global cache, cached code for `cheby run`, std compiled into the cache, tier-3 stdlib on native | all of the above through `cheby build --target native`, plus 020 and 031                  |
+| M4 JS                | JS emitter, link-time suspension analysis, JS runtime, handle RC on JS, source maps                                                                                                                 | every example on Node with the same goldens as native                                     |
+| M5 Tooling           | `cheby fmt`, `cheby lsp`, `cheby doc`, `cheby new/add/update/fetch`                                                                                                                                 | every example is a `cheby fmt` fixed point, doc examples run as tests, 030 passes (D-446) |
+| M6 v1                | Release profile, bundled lld, Windows, full platform matrix, budgets met                                                                                                                            | every example on every platform of D-074 and D-892, in both profiles                      |
 
-M5 is listed as a milestone so it has exit criteria, but its work starts as soon as M1's parser exists and runs in parallel with M2-M4 (D-099). [m5-tooling.md](m5-tooling.md) says which slice of it lands next to which milestone.
+M5 is listed as a milestone so it has exit criteria, but its work starts as soon as M1's parser exists and runs in parallel with M2-M4 (D-099). [m5-tooling.md](m5-tooling.md) says which slice of it lands next to which milestone. The formatter core and `cheby new`, planned with M2, run beside M3, and the LSP core lands with M4 (D-1029).
 
 ## Workstreams across milestones
 
@@ -57,7 +57,7 @@ M5 is listed as a milestone so it has exit criteria, but its work starts as soon
 
 ## Plan decisions
 
-Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design), [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1), [M2 checkpoint 2 plan](../decisions/LOG.md#2026-10-12-m2-checkpoint-2-plan), [M2 checkpoint 2](../decisions/LOG.md#2026-10-14-m2-checkpoint-2), [M2 checkpoint 3 plan](../decisions/LOG.md#2026-10-14-m2-checkpoint-3-plan), [M2 checkpoint 3](../decisions/LOG.md#2026-10-14-m2-checkpoint-3), [M2 checkpoint 4a](../decisions/LOG.md#2026-10-16-m2-checkpoint-4a), [M2 checkpoint 4b](../decisions/LOG.md#2026-10-16-m2-checkpoint-4b), [M2 H1 checkpoint](../decisions/LOG.md#2026-10-17-m2-h1-checkpoint) [M2 H1 checkpoint report](../decisions/LOG.md#2026-10-18-m2-h1-checkpoint-report) and [Global allocator](../decisions/LOG.md#2026-10-18-global-allocator):
+Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-plan), D-284 onward in [M0 foundation](../decisions/LOG.md#2026-10-04-m0-foundation), D-418 onward in [Diagnostics](../decisions/LOG.md#2026-10-06-diagnostics), and the plan-level ones of [M1 syntax layer](../decisions/LOG.md#2026-10-07-m1-syntax-layer), [M1 vertical slice](../decisions/LOG.md#2026-10-07-m1-vertical-slice), [Open items](../decisions/LOG.md#2026-10-07-open-items), [M1 front end](../decisions/LOG.md#2026-10-10-m1-front-end), [M1 back-end plan](../decisions/LOG.md#2026-10-10-m1-back-end-plan), [M1 back end, wave 1](../decisions/LOG.md#2026-10-10-m1-back-end-wave-1), [M1 back end, wave 2](../decisions/LOG.md#2026-10-10-m1-back-end-wave-2), [M1 back end, wave 3](../decisions/LOG.md#2026-10-10-m1-back-end-wave-3), [M1 back end, wave 4](../decisions/LOG.md#2026-10-11-m1-back-end-wave-4), [M1 back end, wave 5](../decisions/LOG.md#2026-10-11-m1-back-end-wave-5), [M1 back end, wave 6](../decisions/LOG.md#2026-10-11-m1-back-end-wave-6), [M1 exit](../decisions/LOG.md#2026-10-11-m1-exit), [M2 design](../decisions/LOG.md#2026-10-11-m2-design), [M2 checkpoint 1](../decisions/LOG.md#2026-10-12-m2-checkpoint-1), [M2 checkpoint 2 plan](../decisions/LOG.md#2026-10-12-m2-checkpoint-2-plan), [M2 checkpoint 2](../decisions/LOG.md#2026-10-14-m2-checkpoint-2), [M2 checkpoint 3 plan](../decisions/LOG.md#2026-10-14-m2-checkpoint-3-plan), [M2 checkpoint 3](../decisions/LOG.md#2026-10-14-m2-checkpoint-3), [M2 checkpoint 4a](../decisions/LOG.md#2026-10-16-m2-checkpoint-4a), [M2 checkpoint 4b](../decisions/LOG.md#2026-10-16-m2-checkpoint-4b), [M2 H1 checkpoint](../decisions/LOG.md#2026-10-17-m2-h1-checkpoint) [M2 H1 checkpoint report](../decisions/LOG.md#2026-10-18-m2-h1-checkpoint-report), [Global allocator](../decisions/LOG.md#2026-10-18-global-allocator), [M3 design](../decisions/LOG.md#2026-10-21-m3-design), [Scoped context values](../decisions/LOG.md#2026-10-23-scoped-context-values), [Standard-library additions, part 1](../decisions/LOG.md#2026-10-23-standard-library-additions-part-1), [M3 CP1 review](../decisions/LOG.md#2026-10-24-m3-cp1-review), [M3 CP2 review](../decisions/LOG.md#2026-10-29-m3-cp2-review), [M3 wave 9](../decisions/LOG.md#2026-10-30-m3-wave-9) and [M3 wave 10](../decisions/LOG.md#2026-10-31-m3-wave-10):
 
 | Decision  | Summary                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------- |
@@ -261,7 +261,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-881     | LeakSanitizer on for `jit` and `ui-deadlock`, off where programs keep objects; the header says why  |
 | D-882     | `cargo xtask sanitize` is the one driver of the sanitizer and Miri jobs, nightly and local          |
 | D-883     | A stable `ci.yml` step runs clippy on the runtime with each `cheby_sanitize` value                  |
-| D-884     | Miri runs the runtime's pure modules in 14 groups, leaks ignored, with `PROPTEST_CASES=4`           |
+| D-884     | Miri runs the runtime's pure modules in 15 groups, leaks ignored, with `PROPTEST_CASES=4`           |
 | D-886     | `test.toml`'s `timing` is an optional boolean; a wrong type, or `timing` with `skip-run`, exits 2   |
 | D-887     | The serial group is a second libtest run on one thread, after the parallel batch; one summary line  |
 | D-888     | Every variant of a `timing` example runs in the serial group: 24 trials, 30 under 4 threads         |
@@ -286,6 +286,115 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-910     | Generated code reads a list's length from its root (offset 24 of D-563), now part of the ABI        |
 | D-911     | Field reads move before a sibling projection is consumed, so a dying record's list updates in place |
 | D-912     | `cheby run` keeps Cranelift's optimizer off; a one-field type keeps its own object                  |
+| D-913     | Non-PIC code; runtime and foreign symbols through per-module import words (ADR-0064)                |
+| D-914     | One format-neutral code record per module is cached and loaded by cranelift-jit (ADR-0064)          |
+| D-915     | `cheby_link` replays each record into one object per link; objects are never cached                 |
+| D-916     | Calls between Cheby functions go through slots in executables too                                   |
+| D-917     | Hidden global linkage; symbol kinds `mod`, `image` and `imp`; masks in slot names                   |
+| D-918     | Code and statics fixed by their key are local copies in each object                                 |
+| D-919     | Module records `cb$mod$<path>`, registered by one runtime routine in every host                     |
+| D-921     | One fixed CPU feature set per target: x86-64-v2, and each OS's base aarch64                         |
+| D-923     | Changed modules compile eagerly and whole; lazy compilation only if OQ-P11 needs it                 |
+| D-924     | The first slice builds 001 from in-memory records; `cheby build` reads the cache (N9)               |
+| D-928     | New staticlib crate `cheby_rt_exe` with mimalloc; the workspace has 21 crates                       |
+| D-929     | `cheby build` finds the runtime archive next to `cheby`; CI builds it and no test skips             |
+| D-930     | `cheby build` checks the archive's runtime ID before every link                                     |
+| D-933     | `cheby build` links with `cc` from `PATH`, fixed flags, under the final basename                    |
+| D-934     | Executables are bit-identical, and `check-determinism` compares them                                |
+| D-935     | Executables on macOS arm64 and Linux x86-64 and arm64; Windows waits for M6                         |
+| D-936     | M3 builds for the host only; other platforms come with M6's bundled linker                          |
+| D-938     | Line tables in every object; macOS executables carry no debug map until M6                          |
+| D-940     | OQ-P9: a `[native]` table with C sources and system libraries (ADR-0063)                            |
+| D-956     | The cache is a content-addressed store of blobs and records, with no locks                          |
+| D-957     | The build ID hashes the compiler's and std's sources and the runtime ID                             |
+| D-959     | `CHEBY_CACHE` or the OS cache directory; a temporary cache if it cannot be written                  |
+| D-966     | A module that holds a reached item is compiled whole                                                |
+| D-968     | Local masks over the load set's units; other packages over all their modules                        |
+| D-972     | `check-determinism` compares two fresh caches, and cold against warm builds                         |
+| D-973     | Cache-hit tests through `CHEBY_CACHE_LOG`; the exit criterion names D-812's callers                 |
+| D-974     | OQ-P11 is read on `wide` and `deep` at 1M lines, five edits each, on `ubuntu-24.04`                 |
+| D-975     | D-247's throughput is still read in memory; cold columns with a cache are reported                  |
+| D-976     | No deferred performance item in M3; direct std kernel calls come first after it                     |
+| D-980     | Std is compiled into the global cache on first use; a pre-filled cache is M6 packaging              |
+| D-987     | Tier 3 lands as `time`, `net`, `file`, the HTTP client, the HTTP server, `process`                  |
+| D-1025    | Every runnable example also runs as `<name>@aot`, an executable at every thread variant             |
+| D-1026    | UI tests may use `// @command: build`                                                               |
+| D-1027    | `{http_fixture}` in `args` and `env` goldens names a local HTTP server, for 031                     |
+| D-1028    | The reference evaluator lives in `cheby_test_support`, and `rc_differential` uses it                |
+| D-1029    | Formatter core and `cheby new` beside M3; the LSP core lands with M4 after CP3                      |
+| D-1033    | M3 runs as five checkpoints, each with a verification package and a stop for the user               |
+| D-1034    | Agents draft, the user answers, and drafts are logged before the package that needs them            |
+| D-1035    | M3's exit readings run on `ubuntu-24.04` through `bench.yml`, which the user triggers               |
+| D-1036    | M3's dependencies: `cranelift-object`, `object`, `socket2`, `httparse`, the TLS crates              |
+| D-1037    | No release profile and no full debug info in M3                                                     |
+| D-1043    | UI tests may set environment variables with a `<name>.env` file; trials remove `CHEBY_BACKTRACE`    |
+| D-1049    | `std::context`, clocks in context and seeded random streams are tier 4, implemented in M4           |
+| D-1054    | Stdlib additions land in two batches; a new module joins the tier of the milestone that ships it    |
+| D-1104    | Windows targets use x86-64-v2 and Armv8.0, the flags of Linux, until M6 settles them                |
+| D-1118    | The cache root's owner and permission checks run on Unix only; M6 adds the Windows check            |
+| D-1128    | Tests and `xtask` never use the developer's cache, only fresh owner-only temporary ones             |
+| D-1132    | No module is checked twice; a warm `run`, `test` and `build` check only misses (D-1256, D-1285)     |
+| D-1140    | The `@aot` trial and UI build tests compare the build's output followed by the executable's         |
+| D-1141    | UI build tests are never blessed; their goldens are written by hand                                 |
+| D-1142    | A UI build test whose build fails compares the build's status and output, and runs nothing          |
+| D-1143    | A UI build test builds into a fresh temporary directory, as the `@aot` trial does                   |
+| D-1144    | `CHEBY_TEST_KEEP_CACHE` names a cache directory that the harnesses and `xtask` never delete         |
+| D-1145    | The program differential compares standard error only where the reference evaluator fixes it        |
+| D-1150    | `cheby fmt` uses 100 columns, the width the user chose at CP2 (D-1252)                              |
+| D-1162    | Executables hold the toolchain's source paths until M6's distributed toolchain remaps them          |
+| D-1173    | The hidden `CHEBY_POSITIONS=off` turns source positions off until M4's first change (D-1317)        |
+| D-1174    | Linux executables hold the runtime archive's debug paths, the toolchain checkout's too, until M6    |
+| D-1180    | `cheby check` compiled std without borrow masks until K6 cached std's one code (D-1264)             |
+| D-1187    | Every command but the REPL evaluates constants on `plain` code, std's one code from K6 (D-1264)     |
+| D-1190    | The REPL evaluates constants in its session JIT, with std's one code from K6 (D-1264)               |
+| D-1202    | `[native]` with sources or libraries is a tool error on Windows until M6                            |
+| D-1213    | E0038's probes import `std::context`; a unit test uses a made-up module                             |
+| D-1217    | Every JIT host compiles each unit alone into a code record; std's records are stored from K6        |
+| D-1223    | `--reuse-report` read no code record until K4d replayed the reuse lines beside it (D-1257)          |
+| D-1250    | K4d ends the warm check from source for `run` and `test`, N9 for `build` (D-1285)                   |
+| D-1251    | Every record keeps positions; hidden `CHEBY_POSITIONS` stays until M4's first change (D-1317)       |
+| D-1252    | `cheby fmt`'s width is 100 columns; T1b reformats the examples and std at 100 in wave 9             |
+| D-1253    | N9 lands linker GC of record entries in wave 10, names as offsets, no layout version change         |
+| D-1254    | Wave 9's gate reads x86-64 through `bench.yml` with the time outside `main` split                   |
+| D-1255    | A wave's commit pauses when rc or `rc/list_pipeline` reaches 1.05 on the Apple M3 or x86-64         |
+| D-1271    | `bench-run --split` splits the time outside `main` by subtraction, on x86-64 and the Apple M3       |
+| D-1272    | A wave's x86-64 reading runs on a candidate commit on a side branch; `aot` moves only after it      |
+| D-1277    | The hidden `CHEBY_PHASES` writes a command's exclusive phases once, at its end, for OQ-P11 readings |
+| D-1278    | OQ-P11's `main` edit is an unused `let` first in `main`, so the program prints what it printed cold |
+| D-1279    | `bench-compile --restarts` times RB-3's three causes of a warm restart on a fixture of its own copy |
+| D-1280    | `bench-compile`'s cold `check` and `build` columns, on an empty cache and with std's records cached |
+| D-1281    | `bench.yml` with `-f compile=true` reads OQ-P11, the restarts and D-247 in steps that never fail it |
+| D-1283    | `check-determinism` writes `build`, `run` and `test` into both caches; every warm constant must hit |
+| D-1284    | D-960's stress test: eight `cheby check` processes start together on one cold cache, in five rounds |
+| D-1301    | A K9 gate triggers on a reading over its budget when its phase is the largest and at least 40%      |
+| D-1302    | No K9 fallback in M3; the best, our own loader, still leaves `deep` at about 2.7 s and 3.4 s        |
+| D-1303    | RB-3's warm restart stays for M3; a partial second check is designed in M4 with the warm start      |
+| D-1304    | X1 reads D-247's latency budget and brings options to revise it, such as a budget per shape         |
+| D-1305    | The cache's cold cost is accepted at CP3; a cold `run`'s profile is read in X1's window             |
+| D-1310    | Wave 12's x86-64 reading is carried to the committed tree, once; D-1272 stands for later waves      |
+| D-1314    | A budget's number covers the slowest CPU seen on `ubuntu-24.04`'s label, today the EPYC 7763        |
+| D-1315    | OQ-P11 settles on a budget per shape: 0.65 s on `wide`, 6.5 s on `deep`, which M6 enforces          |
+| D-1316    | D-247's throughput is 20,000 lines/s per core on `ubuntu-24.04`, on `xtask`'s in-memory path        |
+| D-1317    | `CHEBY_POSITIONS` goes as M4's first change, with a gate of its own                                 |
+| D-1318    | Wave 13's x86-64 reading is carried to the log commit's tree, once; D-1272 stands for later         |
+| D-1319    | M3's exit stands with the nightly's failures; one change after the bump fixes them, no re-gate      |
+| D-1320    | The stress mode sends a fiber that has run to an idle worker, any other to the global queue         |
+| D-1321    | A fiber pinned to a blocked thread, and pool calls that wait for each other, stay limits until M6   |
+| D-1322    | Miri leaves `nightly.yml` for `miri.yml`, with a job limit of its own                               |
+| D-1323    | The stress mode's idle worker has an empty targeted queue; D-1320's race and figures are corrected  |
+| D-1324    | A refused worker thread hands its slot's queued fibers to the global queue                          |
+| D-1325    | The fix takes one `bench.yml` dispatch, and D-1255's stop line reads it; no re-gate                 |
+| D-1326    | The second nightly and the fix's bench reading read clean, but for `fuzz (check)`                   |
+| D-1327    | A literal of 2^128 or more is E0071, and an update on an interface or type parameter E0058          |
+| D-1328    | A body dropped with no error anywhere is an internal compiler error                                 |
+| D-1329    | A session import that lost its item stays, and each use is E0042                                    |
+| D-1330    | A recheck finishes, and a new signature from it reaches the callers                                 |
+| D-1331    | A module new at a `:reload` can be imported                                                         |
+| D-1332    | A warm command tells a private item from an item in error                                           |
+| D-1333    | A `main` of another target is no `main`                                                             |
+| D-1334    | A reader of a constant follows every redefinition                                                   |
+| D-1335    | What the split brought: the uploads on a cut, `upload-artifact@v7`, the dated nightly's test        |
+| D-1336    | This change takes one nightly and one `bench.yml` dispatch, with no candidate and no re-gate        |
 
 ## Open questions
 
@@ -301,9 +410,9 @@ Each open question is answered through a decision-log entry before the task that
 | OQ-P6  | How panics end a REPL entry in M1, before unwinding exists                                                                             | M1        | D-283, superseded by D-712 |
 | OQ-P7  | Fiber context switch: own assembly per platform or a crate such as `corosensei`                                                        | M2        | D-676                      |
 | OQ-P8  | IO poller: `mio`, a custom poller, and whether io_uring is used in v1                                                                  | M2        | D-680                      |
-| OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | open                       |
+| OQ-P9  | How a package supplies native foreign code (C sources, static libraries, build scripts) to be linked, needed by example 020. Spec gap. | M3        | D-940                      |
 | OQ-P10 | Whether the D-247 throughput budget holds, checked against M1 measurements                                                             | M1 exit   | D-644                      |
-| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | open                       |
+| OQ-P11 | Whether the D-247 latency budget, from a one-function edit to `main` running, holds with the M3 cache                                  | M3 exit   | D-1315                     |
 | OQ-P12 | Whether the release-to-debug ratio of D-267 holds                                                                                      | M6        | open                       |
 | OQ-P13 | The factor by which a Cheby collection may be slower than a Rust kernel before it moves (D-274, D-336)                                 | M2 exit   | D-854, D-855               |
 | OQ-P14 | File IO, standard input and `std::env` on JS hosts, including hosts without a process such as browsers (OQ-io-3, OQ-env-1)             | M4 start  | open                       |

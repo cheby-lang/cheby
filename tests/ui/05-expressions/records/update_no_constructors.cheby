@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-156, D-1327
+//! A record update names a type with named fields, and a type without
+//! constructors has none (§5.11.2).
+
+type Opaque
+
+type Rec {
+  Rec { a: Int },
+}
+
+fn moved(r: Rec) -> Rec {
+  Opaque { ..r, a: 1 }
+}
+
+fn main() {
+  assert moved(Rec { a: 0 }).a == 1
+}

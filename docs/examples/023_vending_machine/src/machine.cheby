@@ -88,8 +88,10 @@ type Output {
 /// make it up.
 fn new(slots: List<Slot>) -> Machine {
   list::each(slots, fn(slot) {
-    assert slot.price > 0 && slot.price % 10 == 0 as "the price of {slot.code} is not a positive multiple of 10"
-    assert slot.count >= 0 && slot.count <= capacity as "the count of {slot.code} is not from 0 to {capacity}"
+    assert slot.price > 0
+      && slot.price % 10 == 0 as "the price of {slot.code} is not a positive multiple of 10"
+    assert slot.count >= 0
+      && slot.count <= capacity as "the count of {slot.code} is not from 0 to {capacity}"
   })
   Machine {
     slots: list::fold(slots, map::new(), fn(found, slot) { map::insert(found, slot.code, slot) }),
@@ -100,7 +102,9 @@ fn new(slots: List<Slot>) -> Machine {
 /// Returns the state of `machine` with no credit in it: idle, or sold
 /// out if every slot is empty.
 fn ready(machine: Machine) -> State {
-  let stocked = machine.slots |> map::values |> list::any(_, fn(slot) { slot.count > 0 })
+  let stocked = machine.slots
+    |> map::values
+    |> list::any(_, fn(slot) { slot.count > 0 })
   case stocked {
     True => Idle(machine)
     False => SoldOut(machine)
@@ -125,7 +129,10 @@ fn step(state: State, action: command::Command) -> (State, List<Output>) {
     Idle(_) | SoldOut(_), command::Cancel => (state, [NoCredit])
     Collecting(_, _), command::Restock(_, _) => (state, [Busy])
     Idle(machine) | SoldOut(machine), command::Restock(code, count) => restock(machine, code, count)
-    Idle(machine) | SoldOut(machine) | Collecting(machine, _), command::ShowMenu => (state, menu(machine))
+    Idle(machine) | SoldOut(machine) | Collecting(machine, _), command::ShowMenu => (
+      state,
+      menu(machine),
+    )
   }
 }
 
@@ -280,18 +287,20 @@ test "too much money buys an item and pays back the change" {
 
 test "a failed selection keeps the credit" {
   let machine = sample()
-  assert step(Collecting(machine, 100), command::Select("A1")) == (
-    Collecting(machine, 100),
-    [NeedMore { name: "Cola", missing: 50 }],
-  )
-  assert step(Collecting(machine, 200), command::Select("B1")) == (Collecting(machine, 200), [SlotEmpty("Crisps")])
-  assert step(Collecting(machine, 200), command::Select("Z9")) == (Collecting(machine, 200), [UnknownSlot("Z9")])
-  assert step(Idle(machine), command::Select("A1")) == (Idle(machine), [NeedMore { name: "Cola", missing: 150 }])
+  assert step(Collecting(machine, 100), command::Select("A1")) ==
+    (Collecting(machine, 100), [NeedMore { name: "Cola", missing: 50 }])
+  assert step(Collecting(machine, 200), command::Select("B1")) ==
+    (Collecting(machine, 200), [SlotEmpty("Crisps")])
+  assert step(Collecting(machine, 200), command::Select("Z9")) ==
+    (Collecting(machine, 200), [UnknownSlot("Z9")])
+  assert step(Idle(machine), command::Select("A1")) ==
+    (Idle(machine), [NeedMore { name: "Cola", missing: 150 }])
 }
 
 test "cancel pays back the credit in the fewest coins" {
   let machine = sample()
-  assert step(Collecting(machine, 370), command::Cancel) == (Idle(machine), [Returned([200, 100, 50, 20])])
+  assert step(Collecting(machine, 370), command::Cancel) ==
+    (Idle(machine), [Returned([200, 100, 50, 20])])
   assert step(Idle(machine), command::Cancel) == (Idle(machine), [NoCredit])
 }
 
@@ -308,8 +317,10 @@ test "selling the last item leaves the machine sold out until it is restocked" {
 
 test "restocking waits for the purchase and never overfills a slot" {
   let machine = sample()
-  assert step(Collecting(machine, 100), command::Restock("A1", 3)) == (Collecting(machine, 100), [Busy])
-  assert step(Idle(machine), command::Restock("A1", 9)) == (Idle(machine), [Overfull { name: "Cola", room: 8 }])
+  assert step(Collecting(machine, 100), command::Restock("A1", 3)) ==
+    (Collecting(machine, 100), [Busy])
+  assert step(Idle(machine), command::Restock("A1", 9)) ==
+    (Idle(machine), [Overfull { name: "Cola", room: 8 }])
   assert step(Idle(machine), command::Restock("Z9", 1)) == (Idle(machine), [UnknownSlot("Z9")])
 }
 
@@ -331,5 +342,6 @@ test "outputs show as messages for the user" {
   assert show(Credit(150)) == "credit 1.50"
   assert show(Returned([200, 50])) == "returned 2.00 + 0.50"
   assert show(NeedMore { name: "Cola", missing: 50 }) == "Cola needs 0.50 more"
-  assert show(Listing(Slot { code: "A1", name: "Cola", price: 150, count: 2 })) == "A1  Cola  1.50  (2 left)"
+  assert show(Listing(Slot { code: "A1", name: "Cola", price: 150, count: 2 })) ==
+    "A1  Cola  1.50  (2 left)"
 }

@@ -44,7 +44,8 @@ use crate::reuse::{
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
 use crate::{
-    bytes, consteval, desc, env, fiber_ops, hamt, io, list, num, random, runtime_info, text,
+    bytes, consteval, desc, env, fiber_ops, file, hamt, io, list, net, num, random, runtime_info,
+    text, time,
 };
 
 /// The address of a static object.
@@ -142,6 +143,7 @@ fn runtime_symbols() -> [(&'static str, *const u8); 49] {
 pub fn symbols() -> Vec<(&'static str, *const u8)> {
     let mut out = runtime_symbols().to_vec();
     out.extend(desc::symbols());
+    out.extend(crate::ffi::result_helpers());
     io::kernels(&mut out);
     num::kernels(&mut out);
     list::kernels(&mut out);
@@ -153,6 +155,14 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     fiber_ops::kernels(&mut out);
     random::kernels(&mut out);
     runtime_info::kernels(&mut out);
+    time::kernels(&mut out);
+    net::kernels(&mut out);
+    file::kernels(&mut out);
+    crate::http::kernels(&mut out);
+    crate::process::kernels(&mut out);
+    // `cheby.h`'s functions, which C code calls (D-945): runtime exports,
+    // so E0055 and the C-object check reserve them (D-944, D-1204).
+    crate::ffi::kernels(&mut out);
     out
 }
 
@@ -172,6 +182,11 @@ pub fn complete_modules() -> Vec<&'static str> {
         fiber_ops::COMPLETE,
         random::COMPLETE,
         runtime_info::COMPLETE,
+        time::COMPLETE,
+        net::COMPLETE,
+        file::COMPLETE,
+        crate::http::COMPLETE,
+        crate::process::COMPLETE,
     ]
     .concat()
 }
@@ -336,7 +351,12 @@ mod tests {
         let all_declared: BTreeSet<&str> =
             declared.values().flatten().map(String::as_str).collect();
         for name in &registered {
-            if !name.starts_with("cheby_rt_") && !all_declared.contains(name) {
+            // `cheby.h`'s functions are called by C code, never declared
+            // in std (D-945).
+            if !name.starts_with("cheby_rt_")
+                && !name.starts_with(crate::ffi::PREFIX)
+                && !all_declared.contains(name)
+            {
                 errors.push(format!("`{name}` is registered but not declared in std"));
             }
         }
@@ -369,6 +389,7 @@ mod tests {
         let line = line.trim();
         let rest = line
             .strip_prefix("pub fn ")
+            .or_else(|| line.strip_prefix("priv fn "))
             .or_else(|| line.strip_prefix("fn "))?;
         let (_, rest) = rest.split_once('(')?;
         let mut depth = 0_u32;
@@ -421,6 +442,13 @@ mod tests {
                 if context {
                     declared_context.insert(symbol.clone());
                 }
+                // `std::io` binds `bytes::length`'s kernel again for
+                // `copy` (D-1072): one symbol may be bound twice, with one
+                // C signature (E0054, D-455).
+                if module == "io" && symbol == "cheby_bytes_length" {
+                    assert_eq!(declared.get(&symbol), Some(&signature), "{symbol}");
+                    continue;
+                }
                 assert!(
                     declared.insert(symbol.clone(), signature).is_none(),
                     "{symbol} is declared twice"
@@ -454,7 +482,7 @@ mod tests {
             );
         }
         assert_eq!(registered, declared);
-        assert_eq!(registered.len(), 29 + 37 + 11 + 3);
+        assert_eq!(registered.len(), 30 + 38 + 11 + 3);
     }
 
     /// A kernel declaration: its native symbol, whether it is
@@ -482,7 +510,10 @@ mod tests {
                     pending = Some(symbol);
                     continue;
                 }
-                if !trimmed.starts_with("fn ") && !trimmed.starts_with("pub fn ") {
+                if !["fn ", "pub fn ", "priv fn "]
+                    .iter()
+                    .any(|start| trimmed.starts_with(start))
+                {
                     continue;
                 }
             }
@@ -579,9 +610,97 @@ mod tests {
             registered_context, declared_context,
             "the kernels that take the context pointer and the `@std_context` declarations differ"
         );
-        // channel and fiber 8, selector 5, random 1, runtime 3.
-        assert_eq!(registered.len(), 8 + 5 + 1 + 3);
-        assert_eq!(registered_context.len(), 8 + 5 + 2);
+        // channel and fiber 10 (`fiber::cancel`'s `sys_cancel`, D-1060, and
+        // `fiber::interruptible`'s `sys_arm_interrupt`, D-1073), selector 5,
+        // random 1, runtime 3.
+        assert_eq!(registered.len(), 10 + 5 + 1 + 3);
+        assert_eq!(registered_context.len(), 10 + 5 + 2);
+    }
+
+    /// Every kernel of `std::net` has the C signature of its `@external`
+    /// declaration in `std/net.cheby`, after the context pointer, and every
+    /// one is `@std_context` (D-985, D-692): ten, the package-visible
+    /// `sys_connect_tls` among them.
+    #[test]
+    fn net_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("net.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            assert!(context, "{symbol} is not `@std_context`");
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> = net::signatures()
+            .into_iter()
+            .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+            .collect();
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 10);
+    }
+
+    /// Every kernel of `std::file` has the C signature of its `@external`
+    /// declaration in `std/file.cheby`, after the context pointer for a
+    /// `@std_context` kernel, and carries `@std_context` exactly when its
+    /// native function takes that pointer (D-985, D-692): the fifteen that
+    /// suspend do, and `sys_std_stream`, which neither waits nor fails
+    /// (D-1071), does not.
+    #[test]
+    fn file_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("file.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            assert!(
+                declared
+                    .insert(symbol.clone(), (signature, context))
+                    .is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, ((Vec<&'static str>, &'static str), bool)> =
+            file::signatures()
+                .into_iter()
+                .map(|(name, params, result, context)| {
+                    (name.to_owned(), ((params.to_vec(), result), context))
+                })
+                .collect();
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 16);
+        assert_eq!(
+            registered.values().filter(|(_, context)| *context).count(),
+            15
+        );
+    }
+
+    /// `std::process`'s kernels have the C signatures of their `@external`
+    /// declarations in `std/process.cheby`, after the context pointer, and
+    /// every one is `@std_context` (D-985, D-692, `process.md`): `sys_exit`,
+    /// whose `Never` result is the uniform word.
+    #[test]
+    fn process_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("process.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            if !symbol.starts_with("cheby_process_") {
+                continue;
+            }
+            assert!(context, "{symbol} is not `@std_context`");
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> =
+            crate::process::signatures()
+                .into_iter()
+                .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+                .collect();
+        assert_eq!(registered, declared);
+        assert!(registered.contains_key("cheby_process_sys_exit"));
     }
 
     #[test]
@@ -597,6 +716,10 @@ mod tests {
         assert_eq!(
             c_signature("pub fn print(text: String)"),
             Some((vec!["Word"], "()"))
+        );
+        assert_eq!(
+            c_signature("priv fn sys_local_port(listener: Listener) -> Int"),
+            Some((vec!["Word"], "i64"))
         );
         assert_eq!(c_signature("pub type Error {"), None);
     }

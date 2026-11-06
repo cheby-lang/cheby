@@ -88,7 +88,7 @@ pub fn run(f: &mut Function) -> Result<(), Ice> {
     // The constants something still reads keep their definition.
     let read = reads(f);
     for block in &mut f.blocks {
-        block.stmts.retain(|s| match s {
+        block.retain_stmts(|s| match s {
             Stmt::Assign { dst, .. } => !constants.contains_key(dst) || read.contains(dst),
             _ => true,
         });

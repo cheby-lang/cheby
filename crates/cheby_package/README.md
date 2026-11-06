@@ -13,7 +13,7 @@ The package model: reading `cheby.toml` (spec §13.3), mapping the files under `
 
 | Module        | What it holds                                                                          |
 | ------------- | -------------------------------------------------------------------------------------- |
-| `manifest.rs` | `Manifest::load`: `name`, `version`, targets, dependencies and the `[runtime]` table   |
+| `manifest.rs` | `Manifest::load`: `name`, `version`, targets, dependencies, `[runtime]`, `[native]`    |
 | `names.rs`    | Names of packages, modules and dependency keys, with `suggest_name` for diagnostics    |
 | `discover.rs` | `discover`: `src/` files to `ModulePath`s, with the root file and the source directory |
 | `graph.rs`    | Import-graph algorithms over dense node indices: build order and cycle detection       |

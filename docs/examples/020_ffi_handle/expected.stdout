@@ -1,0 +1,23 @@
+1. Stores close at their last use
+closing outer
+outer held: opened first
+closing inner
+inner held: opened second
+2. Stores passed to functions
+shared has 2 entries
+closing shared
+shared held: alpha; beta
+closing scratch
+scratch held: gamma; delta
+3. Stores in branches
+closing draft one
+published: Some("keep me")
+closing draft two
+draft two is thrown away
+published: None
+4. A store inside a journal
+diary, 1 entry
+read through morning: 1. woke up; 2. went to bed
+diary, 2 entries
+closing diary
+read through evening: 1. woke up; 2. went to bed

@@ -16,13 +16,9 @@ use cheby_mir::{
 use crate::*;
 
 fn module() -> JITModule {
-    let isa = cranelift_native::builder()
-        .unwrap()
-        .finish(isa::flags().unwrap())
-        .unwrap();
     JITModule::new(JITBuilder::with_isa(
-        isa,
-        cranelift_module::default_libcall_names(),
+        isa::host_isa().unwrap(),
+        isa::libcall_names(),
     ))
 }
 
@@ -49,6 +45,7 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
     let mut all_strings: Vec<Box<str>> = vec!["a.cheby:1:4".into()];
     all_strings.extend(strings.into_iter().map(String::into_boxed_str));
     let function = Function {
+        positions: cheby_mir::Positions::default(),
         key: FnKey::Item(f),
         abi: Abi::Cheby,
         params: (0..params.len()).map(local).collect(),
@@ -66,6 +63,8 @@ fn unit(params: &[Repr], locals: Vec<Repr>, blocks: Vec<Block>, strings: Vec<Str
         call_loc_strings: IndexVec::new(),
     };
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(1)),
         path: "app".into(),
         functions: vec![function],
@@ -138,6 +137,7 @@ fn literal(n: usize, computed: bool) -> MirModule {
         stmts,
         term: Terminator::Return(acc),
         unwind: Vec::new(),
+        pos: Vec::new(),
     };
     unit(&[Repr::Int], locals, vec![block], strings)
 }
@@ -227,12 +227,14 @@ fn blocks_translate_in_dominance_order() {
                 args: Vec::new(),
             },
             unwind: Vec::new(),
+            pos: Vec::new(),
         },
         Block {
             params: vec![local(1)],
             stmts: Vec::new(),
             term: Terminator::Return(Operand::Local(local(1))),
             unwind: Vec::new(),
+            pos: Vec::new(),
         },
         Block {
             params: Vec::new(),
@@ -248,6 +250,7 @@ fn blocks_translate_in_dominance_order() {
                 args: vec![Operand::Local(local(2))],
             },
             unwind: Vec::new(),
+            pos: Vec::new(),
         },
         Block {
             params: Vec::new(),
@@ -257,6 +260,7 @@ fn blocks_translate_in_dominance_order() {
             }],
             term: Terminator::Return(Operand::Local(local(3))),
             unwind: Vec::new(),
+            pos: Vec::new(),
         },
     ];
     let unit = unit(

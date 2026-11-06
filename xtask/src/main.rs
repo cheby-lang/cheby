@@ -6,7 +6,15 @@
 //!   trial has no goldens, so blessing only runs it.
 //! - `gen-bench`: generates a synthetic benchmark project.
 //! - `check-determinism`: checks that outputs are the same byte for byte
-//!   from different paths (D-264).
+//!   from different paths (D-264), executables of `cheby build` included
+//!   (D-934).
+//! - `check-native-libs`: checks the runtime archive's system-library list
+//!   in `cheby_link` against `rustc --print native-static-libs` and opens
+//!   each recorded file (D-933, D-943).
+//!
+//! The commands that build `cheby` ([`build_cheby`]) build the runtime
+//! archive `libcheby_rt_exe.a` in the same cargo invocation, since
+//! `cheby build` links it (D-929).
 //! - `coverage`: lists decisions cited in the spec that no UI test or REPL
 //!   transcript names, reading `@decisions` from each test's header
 //!   (`src/main.cheby` of a package test) and from each transcript's
@@ -23,20 +31,27 @@
 //!   against a baseline (D-718, D-702).
 //! - `check-examples`: runs `cheby check` in every example directory and
 //!   compares the outcome with the expected one (G6).
-//! - `sanitize`: the nightly workflow's thread-sanitizer, address-sanitizer
-//!   and Miri jobs, step by step, for the workflow and for local runs
-//!   (D-721, D-862).
+//! - `sanitize`: the thread-sanitizer and address-sanitizer jobs of
+//!   `nightly.yml` and the job of `miri.yml`, step by step, for the workflows
+//!   and for local runs (D-721, D-862, D-1322).
 //! - `bench-build` (hidden): checks and compiles every function of a
 //!   package on `--jobs` threads and prints the times, the bytes of code
 //!   and the RC operations; `bench-compile` and `check-determinism` run it
 //!   as a child process, since the size of rayon's global pool is fixed
-//!   once per process.
+//!   once per process. It uses no build cache (D-975).
+//!
+//! Every `cheby` a command starts gets one fresh `CHEBY_CACHE` of the
+//! `xtask` process ([`cache`]), so no command reads or fills the
+//! developer's cache (D-1128).
 
 mod bench;
+mod bench_oqp11;
 mod bench_run;
+mod cache;
 mod cross_check;
 mod determinism;
 mod examples;
+mod native_libs;
 mod sanitize;
 
 use std::num::NonZeroUsize;
@@ -94,6 +109,10 @@ enum Cmd {
     /// Run `cheby check` in every example and compare with the expected
     /// outcome
     CheckExamples,
+    /// Check the runtime archive's system-library list against
+    /// `rustc --print native-static-libs` and open each recorded file
+    /// (D-933, D-943)
+    CheckNativeLibs,
     /// List decisions cited in the spec that no UI test names
     Coverage,
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
@@ -108,8 +127,8 @@ enum Cmd {
     BenchCompile(bench::Args),
     /// Measure the run time of the programs under `bench/runtime` (D-718)
     BenchRun(Box<bench_run::Args>),
-    /// Run the nightly workflow's sanitizer or Miri job, or some of its
-    /// steps, on the pinned nightly (D-721, D-862)
+    /// Run a sanitizer job of nightly.yml or the job of miri.yml, or some of
+    /// its steps, on the pinned nightly (D-721, D-862, D-1322)
     Sanitize(sanitize::Args),
     /// Check and compile every function of a package and print the front
     /// end's and the back end's times in nanoseconds, the bytes of machine
@@ -140,6 +159,7 @@ fn main() -> ExitCode {
             determinism::run(&root, lines, filter.as_deref())
         }
         Cmd::CheckExamples => examples::run(&root),
+        Cmd::CheckNativeLibs => native_libs::run(&root),
         Cmd::Coverage => coverage(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
         Cmd::TestStd { filter } => test_std(filter.as_deref()),
@@ -148,6 +168,7 @@ fn main() -> ExitCode {
         Cmd::Sanitize(args) => sanitize::run(&root, &args),
         Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
+    cache::finish();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -255,12 +276,21 @@ fn build_cheby(root: &Path) -> Result<PathBuf, String> {
     build_cheby_profile(root, !cfg!(debug_assertions))
 }
 
-/// Builds `cheby`, optimized if `release`, and returns its path.
+/// Builds `cheby`, optimized if `release`, and returns its path. The same
+/// cargo invocation builds the runtime archive `libcheby_rt_exe.a` next to
+/// it, which `cheby build` links (D-929), so the archive never lags behind
+/// the binary.
 fn build_cheby_profile(root: &Path, release: bool) -> Result<PathBuf, String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let mut cmd = Command::new(cargo);
-    cmd.current_dir(root)
-        .args(["build", "--quiet", "--package", "cheby_cli"]);
+    cmd.current_dir(root).args([
+        "build",
+        "--quiet",
+        "--package",
+        "cheby_cli",
+        "--package",
+        "cheby_rt_exe",
+    ]);
     if release {
         cmd.arg("--release");
     }

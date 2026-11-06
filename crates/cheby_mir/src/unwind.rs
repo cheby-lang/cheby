@@ -65,6 +65,7 @@ use crate::ir::{
     Abi, Block, BlockId, Const, Function, Local, MirModule, Operand, Rvalue, Stmt, Terminator,
 };
 use crate::ownership::{self, Counts, Observer};
+use crate::positions::PosRef;
 use crate::repr::Repr;
 
 /// Whether `stmt` may start or pass on an unwinding (D-698): a Cheby
@@ -281,7 +282,46 @@ pub(crate) fn insert_recording(f: &mut Function) -> Result<Result<Recorded, Vec<
             return Err(Ice::new("the unwind pass numbered a pad wrongly"));
         }
     }
+    give_pads_positions(f, &new_edges)?;
     Ok(Ok(recorded))
+}
+
+/// Gives each new pad chain the position of the first site that unwinds
+/// into it (D-938): the entry pad the function's entry position, then each
+/// edge's pad, in block and statement order, its site's. A pad shared by
+/// several sites keeps the first one's. Nothing for a function without
+/// positions.
+fn give_pads_positions(f: &mut Function, edges: &[(BlockId, u32, BlockId)]) -> Result<(), Ice> {
+    if f.positions.is_empty() {
+        return Ok(());
+    }
+    let mut starts: Vec<(BlockId, PosRef)> = Vec::with_capacity(edges.len().saturating_add(1));
+    if let Some(pad) = f.entry_unwind {
+        starts.push((pad, f.positions.entry));
+    }
+    for &(block, at, pad) in edges {
+        let at = usize::try_from(at).map_err(|_| Ice::new("an unwind site out of range"))?;
+        starts.push((pad, f.block(block)?.pos_at(at)));
+    }
+    for (pad, at) in starts {
+        let mut id = pad;
+        // A chain visits each block at most once.
+        for _ in 0..=f.blocks.len() {
+            let block = f
+                .blocks
+                .get_mut(id)
+                .ok_or_else(|| Ice::new("an unwind pad out of range"))?;
+            if block.has_positions() {
+                break;
+            }
+            block.pos = vec![at; block.stmts.len().saturating_add(1)];
+            match &block.term {
+                Terminator::Goto { target, .. } => id = *target,
+                _ => break,
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One unwind site the simulation reported: an instruction (the
@@ -663,11 +703,13 @@ impl Pads {
                         },
                     ),
                 };
+                // Positions follow from the sites (`give_pads_positions`).
                 Block {
                     params: Vec::new(),
                     stmts,
                     term,
                     unwind: Vec::new(),
+                    pos: Vec::new(),
                 }
             })
             .collect()

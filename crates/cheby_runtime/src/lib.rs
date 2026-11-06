@@ -25,7 +25,8 @@
 //!   pool, D-683, whose fiber side is `sched::blocking`).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env`, `random` (D-656), `runtime_info` (`std::runtime`,
-//!   D-657) and [`hamt`], each registering its symbols in [`symbols`] (plan
+//!   D-657), `net` (`std::net`'s sockets on the poller, D-984) and
+//!   [`hamt`], each registering its symbols in [`symbols`] (plan
 //!   §4.3.3).
 //!
 //! Every C-ABI entry point is `extern "C"`, so an internal Rust panic
@@ -33,6 +34,9 @@
 
 pub mod abi;
 pub mod alloc;
+mod backtrace;
+#[cfg(test)]
+mod backtrace_tests;
 mod bytes;
 pub mod callback;
 pub mod capture;
@@ -42,13 +46,20 @@ pub mod ctx;
 pub mod desc;
 pub mod entry;
 mod env;
+pub mod ffi;
+mod ffi_pool;
 pub mod fiber;
 pub(crate) mod fiber_ops;
+pub mod file;
 pub mod generic;
 #[doc(hidden)]
 pub mod hamt;
 pub(crate) mod handles;
 mod helpers;
+mod http;
+pub mod image;
+#[cfg(test)]
+mod image_tests;
 pub mod io;
 pub mod layout;
 #[doc(hidden)]
@@ -56,19 +67,36 @@ pub mod list;
 pub mod locate;
 #[cfg(test)]
 mod locate_tests;
+mod net;
+#[cfg(not(windows))]
+mod net_tls;
 mod num;
 pub mod object;
 pub mod panic;
 mod pool;
+pub mod process;
+#[cfg(test)]
+mod process_tests;
 mod random;
 pub mod rc;
 pub mod reuse;
+#[cfg(unix)]
+pub mod rt_main;
+#[cfg(test)]
+#[cfg(unix)]
+mod rt_main_tests;
+mod runtime_id;
+#[cfg(test)]
+mod runtime_id_tests;
 mod runtime_info;
 pub mod sched;
 pub mod stats;
 pub mod string;
 mod symbols;
 mod text;
+mod time;
+#[cfg(test)]
+mod time_tests;
 mod tls;
 #[doc(hidden)]
 pub mod unwind;

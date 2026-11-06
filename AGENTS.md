@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What this repository is
 
-The home of the Cheby programming language and its reference implementation, in the phase before 1.0. Milestones M1, the single-fiber core, and M2, the runtime, are done (see the `Status` sections of `docs/plan/m1-core.md` and `docs/plan/m2-runtime.md`). M3, AOT output and the build cache, is next, and `tests/milestone` names it.
+The home of the Cheby programming language and its reference implementation, in the phase before 1.0. Milestones M1, the single-fiber core, M2, the runtime, and M3, AOT output and the build cache, are done (see the `Status` sections of `docs/plan/m1-core.md`, `docs/plan/m2-runtime.md` and `docs/plan/m3-aot-and-cache.md`). M4, the JavaScript backend, is next, and `tests/milestone` names it.
 
 Design documents:
 
@@ -18,7 +18,7 @@ Design documents:
 
 Implementation:
 
-- `crates/`: the Cargo workspace, 20 `cheby_*` crates (D-270, D-284). [`docs/plan/architecture.md`](docs/plan/architecture.md) describes each crate and the compiler pipeline.
+- `crates/`: the Cargo workspace, 21 `cheby_*` crates (D-270, D-284). [`docs/plan/architecture.md`](docs/plan/architecture.md) describes each crate and the compiler pipeline.
 - `std/`: the standard library's Cheby sources, with their `test` blocks next to the code (D-479).
 - `tests/`: the conformance, UI and REPL harnesses and their inputs, `tests/support` (shared harness code), `tests/milestone` and `tests/tree-sitter-cheby.rev`.
 - `xtask/`: developer commands, run as `cargo xtask <command>`.
@@ -65,7 +65,7 @@ Never change language behavior in the spec, the examples or the compiler without
 
 ## Writing Cheby code
 
-Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists. Agents often get these rules wrong:
+Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, and an arm's body on the arm's line with one space before `=>`. Agents often get these rules wrong:
 
 - No `for`, `while`, `loop`, `if` or `else` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Guards use `when`.
 - No mutation and no shadowing (D-017, D-051). Every `let` introduces a new name.
@@ -112,7 +112,7 @@ Follow `docs/plan/`, especially `architecture.md`, `testing.md` and the file of 
 - The locality rule (D-246): type-checking a module may use only the interfaces of its dependencies, never their bodies.
 - The parser is hand-written over a lossless CST (D-272, D-280).
 - Gaps found while implementing go into the decision log and the spec before the code relies on an answer. Never resolve them with ad-hoc compiler behavior.
-- Plan-level open questions in `docs/plan/README.md` (OQ-P9, OQ-P11, OQ-P12 and OQ-P14) need a decision before the tasks that depend on them start.
+- Plan-level open questions in `docs/plan/README.md` (OQ-P12 and OQ-P14) need a decision before the tasks that depend on them start.
 
 ### Building and testing
 
@@ -127,6 +127,8 @@ cargo xtask coverage              # decisions cited in the spec that no test nam
 cargo xtask cross-check           # compiler parser against tree-sitter
 cargo xtask test-std              # std's own test blocks, one module at a time
 cargo xtask check-examples        # cheby check in every example
+# cheby fmt's form in std and the examples
+cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')
 cargo xtask check-determinism     # same outputs across thread counts and paths
 ```
 

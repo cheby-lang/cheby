@@ -167,6 +167,11 @@ fn validate_with(
         if let Err(ice) = cx.check(stage) {
             cx.errors.push(format!("internal: {ice}"));
         }
+        // D-938: every pass keeps the positions in step with the
+        // statements.
+        if let Err(e) = crate::positions::check(f) {
+            cx.errors.push(format!("positions: {e}"));
+        }
         if !cx.errors.is_empty() {
             let name = key_label(f.key);
             errors.extend(cx.errors.into_iter().map(|e| format!("{name}: {e}")));
@@ -285,6 +290,15 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
     {
         errors.push(format!("{label}: {}${} is defined twice", s.module, s.name));
     }
+    // Half of a type's key is this word (D-1313), so whatever
+    // tells two types apart in the symbol must tell them apart here too.
+    if s.layout == LayoutRef::DescNominal && module_word(s) != Some(&*s.module) {
+        errors.push(format!(
+            "{label}: the module word {:?} is not the static's module {}",
+            module_word(s),
+            s.module
+        ));
+    }
     let fits = matches!(
         (s.kind, s.layout),
         (StaticKind::Dict, LayoutRef::Dict { .. })
@@ -327,6 +341,14 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
             }
             _ => {}
         }
+    }
+}
+
+/// The module path a nominal descriptor holds, its second field.
+fn module_word(s: &StaticObject) -> Option<&str> {
+    match s.fields.get(1) {
+        Some(Const::Str(id)) => s.strings.get(*id).map(|word| &**word),
+        _ => None,
     }
 }
 

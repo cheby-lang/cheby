@@ -103,6 +103,8 @@ fn module(functions: Vec<Function>, statics: Vec<StaticObject>) -> MirModule {
         item: format!("f{n}").into(),
     }));
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(MODULE),
         path: "app".into(),
         functions,
@@ -1209,6 +1211,21 @@ fn statics_are_checked() {
     for (statics, needle) in cases {
         rejected_module(&statics_module(statics), needle);
     }
+    // A static's module that the module word does not follow would merge
+    // two types in the runtime (D-1313).
+    let mut other_word = nominal();
+    other_word.module = "pkg~geo".into();
+    rejected_module(
+        &statics_module(vec![
+            dict_static(vec![
+                Const::Static(StaticId::from_u32(1)),
+                Const::Static(StaticId::from_u32(2)),
+            ]),
+            other_word,
+            fn_value(),
+        ]),
+        "the module word Some(\"geo\") is not the static's module pkg~geo",
+    );
     // The dict layout has 2 fields (descriptor + 1 closure); one field is
     // too few.
     let mut short = dict_static(vec![Const::Nil]);
@@ -1574,6 +1591,7 @@ fn borrow_validate_entry_pad_drops_a_borrowed_parameter() {
     let pad = f
         .blocks
         .push(crate::ir::Block {
+            pos: Vec::new(),
             params: Vec::new(),
             stmts: vec![Stmt::Drop(Local::from_u32(0))],
             term: Terminator::Goto {

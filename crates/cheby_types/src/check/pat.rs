@@ -299,17 +299,16 @@ impl BodyCx<'_> {
         if !self.pat_unify(expected, &var, span, cx)? {
             return Ok(PatKind::Wild);
         }
-        // A malformed literal was reported by the lexer.
-        let Some(magnitude) = int.value() else {
-            self.errored = true;
-            return Ok(PatKind::Wild);
-        };
-        let value = if p.is_negative() {
-            // `-m` for every `m` up to 2^127, which is `i128::MIN`.
-            0i128.checked_sub_unsigned(magnitude)
-        } else {
-            i128::try_from(magnitude).ok()
-        };
+        // A malformed literal stopped at phase A (D-452), so `None` here is
+        // a value above `u128::MAX`.
+        let value = int.value().and_then(|magnitude| {
+            if p.is_negative() {
+                // `-m` for every `m` up to 2^127, which is `i128::MIN`.
+                0i128.checked_sub_unsigned(magnitude)
+            } else {
+                i128::try_from(magnitude).ok()
+            }
+        });
         if let Some(value) = value {
             // Whether it fits its type is checked with the other literals
             // at the end of the body, when the type is final (E0071).

@@ -245,6 +245,11 @@ pub enum RuntimeError {
     /// least 1 (D-658): the value as written. Its message is D-658's line
     /// without `error: `; the host prints it and exits with 1.
     InvalidThreads(String),
+    /// `CHEBY_BACKTRACE` holds something other than unset, empty, `0` or
+    /// `1` (D-1038): the value as written. Its message is D-1038's line
+    /// without `error: `, as [`RuntimeError::InvalidThreads`]'s is D-658's;
+    /// the host prints it and exits with 1.
+    InvalidBacktrace(String),
     /// This platform has no fiber switch (Windows until M6, D-714): the
     /// host runs its entries on the thread backend instead.
     Unsupported,
@@ -271,6 +276,11 @@ impl fmt::Display for RuntimeError {
                 "{} must be a whole number of at least 1, not \"{value}\"",
                 crate::sched::THREADS_ENV
             ),
+            Self::InvalidBacktrace(value) => write!(
+                f,
+                "{} must be 0 or 1, not \"{value}\"",
+                crate::backtrace::BACKTRACE_ENV
+            ),
             Self::Unsupported => f.write_str("fibers are not supported on this platform (D-714)"),
             Self::Stack(error) => write!(f, "cannot take a stack for the entry: {error}"),
         }
@@ -286,6 +296,7 @@ impl std::error::Error for RuntimeError {
             | Self::EntryLost
             | Self::InvalidStatus(_)
             | Self::InvalidThreads(_)
+            | Self::InvalidBacktrace(_)
             | Self::Unsupported => None,
         }
     }
@@ -774,6 +785,9 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         args: config.args.clone(),
         program_name: config.program_name.clone(),
         fiber_stack: config.fiber_stack,
+        // `cheby run` and executables: SIGINT and SIGTERM reach the scopes
+        // of `process::until_interrupted` (D-1073); no other host's do.
+        signals: true,
     }) {
         Ok(runtime) => Some(runtime),
         Err(RuntimeError::Unsupported) => {

@@ -1,19 +1,20 @@
 // @mode: run-fail
 // @exit: 1
 // @command: test
-// @decisions: D-458, D-541, D-543
+// @decisions: D-458, D-541, D-543, D-784, D-944
 //! In a toolchain with debug assertions, a passing test that leaves objects
-//! alive fails with the leak check's message. This one leaks on purpose: it
-//! binds a kernel that returns a new `String` as if it returned `Nil`, so
-//! nothing ever releases the string (§12.5 makes the binding the program's
-//! responsibility).
+//! alive fails with the leak check's message, which names the leaked kinds.
+//! This one leaks on purpose: it sends a channel's receiver into the channel
+//! itself, so the channel keeps itself alive, a leak §9.6 documents.
 
-@external(native, "cheby_env_program_name")
-fn program_name_dropped() -> Nil
+import std::channel
 
-@target(native)
-test "leaks a string" {
-  program_name_dropped()
+type Mail { Mail(channel::Receiver<Mail>) }
+
+test "leaks a receiver" {
+  let (tx, rx) = channel::new(1)
+  let _ = channel::send(tx, Mail(rx))
+  assert True
 }
 
 test "leaks nothing" {

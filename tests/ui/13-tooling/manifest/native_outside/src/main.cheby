@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-940
+// @milestone: M3
+//! A C source of `[native]` must stay inside the package once `..` is
+//! resolved: a path that leaves it is E0036, whether or not the file
+//! exists (§12.5.4). A symbolic link that leaves the package is E0036 too;
+//! the harness copies links as files, so `cheby_package`'s
+//! `manifest_native_symlink_outside_the_package` pins that case.
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}

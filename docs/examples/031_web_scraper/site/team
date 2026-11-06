@@ -1,0 +1,11 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Team</title>
+  </head>
+  <body>
+    <h1>Team</h1>
+    <p>Three people write the site. Read <a href="/about#history">its history</a>.</p>
+    <p><a href="/">Home</a></p>
+  </body>
+</html>

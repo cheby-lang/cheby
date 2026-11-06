@@ -7,7 +7,9 @@
 import plugins::message
 
 /// Sends urgent messages to one phone number.
-type Sms { number: String }
+type Sms {
+  number: String,
+}
 
 /// Returns a notifier that texts `number`.
 fn new(number: String) -> Sms {

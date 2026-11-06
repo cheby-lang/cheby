@@ -32,9 +32,10 @@
 //! (D-545, `cheby_test_support::platform`): M1 is judged on Linux and
 //! macOS. So is every `skip-run` example's trial, which only runs `cheby
 //! check`: `cheby check` evaluates the package's constants with the JIT
-//! once the front end reports no error, and 020 passes the front end. 030
-//! and 031 stop in the front end and build no JIT, but are ignored with
-//! it: their result is report-only before their milestone anyway.
+//! once the front end reports no error. 030, the one `skip-run` example
+//! left since 031 runs against the HTTP fixture (D-1027), stops in the
+//! front end and builds no JIT, but is ignored with it: its result is
+//! report-only before its milestone anyway.
 //!
 //! Thread variants (D-722, `cheby_test_support::threads`): the run trial
 //! and the `::test` trial of every example that is run also run as
@@ -79,26 +80,76 @@
 //! neither the example's `env` file nor the developer's shell changes
 //! how it counts. Blessing ignores the variant, as it ignores the thread
 //! variants.
+//!
+//! The executable (D-1025, `cheby_test_support::aot`): every example that
+//! is run, not `skip-run`, gets one more trial, `<name>@aot`, listed after
+//! its other trials. In the example's directory it runs `cheby
+//! --color=never build -o <tmp>/<name>` with the base trial's child
+//! environment, into a fresh temporary directory of its own that is
+//! removed at the end, so no trial writes into `docs/examples/`. A failed
+//! build fails the trial with the build's status and standard error, and
+//! nothing runs: that is the result of a program `cheby build` cannot
+//! build yet (constants: a "not available yet" tool error,
+//! D-924). `cheby build` links the runtime archive next to `cheby`, which
+//! `cargo build -p cheby_rt_exe` builds and `cargo test` does not: build
+//! it first. No trial skips because the archive is missing or stale; the
+//! build's tool error is then the result (D-929, D-930). Then the trial runs `<tmp>/<name>` with the example's `args`,
+//! `stdin` and `env`, the example's directory as working directory
+//! (D-415), once per thread variant of the run trials (`CHEBY_THREADS`
+//! unset, 1, 2 and the harness's extra count), with `CHEBY_RT_POISON=1`
+//! and `CHEBY_RC` removed; `@rc=naive` and the `::test` trials stay on the
+//! JIT. Each run is compared with the example's goldens, standard error as
+//! the build's followed by the executable's (022's warning comes from the
+//! build), and the first mismatch is reported with its variant. The build
+//! and each run get the scaled timeout of their own. The trial's milestone
+//! is M3 for an example of M3 or earlier and the example's own otherwise,
+//! so `CHEBY_MILESTONE=M4 CHEBY_PENDING=require` checks M3's exit
+//! criterion. It runs in the serial group of a `timing` example (D-725,
+//! D-888), is never blessed, and is ignored under `CHEBY_BLESS=1` (D-853)
+//! and on Windows until M6 (D-935).
+//!
+//! The HTTP fixture (D-1027, `cheby_test_support::http_fixture`): every
+//! trial that passes the example's `args` or `env`, a run trial at every
+//! variant and the `@aot` trial's build and runs, takes them from
+//! `Example::run_args`, which replaces `{http_fixture}` with the URL of the
+//! one server this process runs for the example's `site/`, started on first
+//! use on a port the operating system chooses, so a harness run's trials
+//! share it. Any other `{…}` word there fails the trial. An example
+//! without the placeholder starts no server.
+//!
+//! The cache (D-959, `cheby_test_support::cache`): the harness creates one
+//! fresh owner-only directory in the system's temporary directory when it
+//! starts and gives it to every child, `cheby` or an executable, as
+//! `CHEBY_CACHE`, overriding the developer's own value, after the example's
+//! `env`. It deletes the directory when the run ends, also after failing
+//! trials, and prints its path next to the thread counts. With
+//! `CHEBY_TEST_KEEP_CACHE=<absolute directory>` it uses that directory
+//! instead, creating it owner-only if needed, and never deletes it, so two
+//! runs share one cache (D-1144).
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
+use std::sync::Arc;
 use std::time::Duration;
 
+use cheby_test_support::cache::{FreshDir, HarnessCache};
 use cheby_test_support::example::{self, Example};
 use cheby_test_support::milestone::{Expectation, Setting, Verdicts};
 use cheby_test_support::threads::{self, Variant};
-use cheby_test_support::{bless_enabled, golden, platform, process, repo_root};
+use cheby_test_support::{aot, bless_enabled, golden, platform, process, repo_root};
 use libtest_mimic::{Arguments, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 /// Before `CHEBY_HARNESS_SCALE` (D-722).
 const TIMEOUT: Duration = Duration::from_secs(60);
 
-/// How one trial starts `cheby`: the thread variant and the timeout.
-#[derive(Debug, Clone, Copy)]
+/// How one trial starts its processes: the thread variant, the timeout of
+/// each process, and the harness's cache (D-959).
+#[derive(Debug, Clone)]
 struct Run {
     variant: Variant,
     timeout: Duration,
+    cache: Arc<HarnessCache>,
 }
 
 fn main() -> ExitCode {
@@ -111,9 +162,13 @@ fn main() -> ExitCode {
             Verdicts::from_env()?,
             process::scaled_timeout(TIMEOUT)?,
             threads::with_rc_naive(threads::variants()?),
+            // D-959: one fresh cache for every child of this process,
+            // deleted when `main` and the last trial that holds it are
+            // done, whatever the trials' results.
+            Arc::new(HarnessCache::create("conformance")?),
         ))
     });
-    let (current, examples, verdicts, timeout, variants) = match setup {
+    let (current, examples, verdicts, timeout, variants, cache) = match setup {
         Ok(setup) => setup,
         Err(message) => {
             eprintln!("conformance harness: {message}");
@@ -133,8 +188,12 @@ fn main() -> ExitCode {
             "conformance harness: run serially after the parallel batch (D-725): {serial_names}"
         );
     }
+    eprintln!("conformance harness: {}", cache.describe());
     if let Some(reason) = platform::run_skip_reason() {
         eprintln!("conformance harness: runs and checks are ignored: {reason}");
+    }
+    if let Some(reason) = platform::executable_skip_reason() {
+        eprintln!("conformance harness: the `@aot` trials are ignored: {reason}");
     }
     // D-722: the trials' scheduler threads compete for the machine.
     args.test_threads = Some(threads::capped_test_threads(
@@ -153,7 +212,7 @@ fn main() -> ExitCode {
             &mut parallel
         };
         batch.extend(example_trials(
-            &ex, current, &verdicts, bless, timeout, &variants,
+            &ex, current, &verdicts, bless, timeout, &variants, &cache,
         ));
     }
 
@@ -193,9 +252,10 @@ fn main() -> ExitCode {
     conclusion.exit_code()
 }
 
-/// The run and `::test` trials of `ex`, at every variant. A `skip-run`
-/// example is only checked, and its `::test` trial stays pending, so it
-/// runs once, as the base trial.
+/// The run and `::test` trials of `ex`, at every variant, then its `@aot`
+/// trial. A `skip-run` example is only checked, and its `::test` trial
+/// stays pending, so it runs once, as the base trial, and has no `@aot`
+/// trial.
 fn example_trials(
     ex: &Example,
     current: Setting,
@@ -203,21 +263,26 @@ fn example_trials(
     bless: bool,
     timeout: Duration,
     variants: &[Variant],
+    cache: &Arc<HarnessCache>,
 ) -> Vec<Trial> {
-    let variants: &[Variant] = if ex.config.skip_run {
+    let run_variants: &[Variant] = if ex.config.skip_run {
         &[Variant::Unset]
     } else {
         variants
     };
-    variants
+    let mut trials: Vec<Trial> = run_variants
         .iter()
         .flat_map(|&variant| {
-            let run = Run { variant, timeout };
+            let run = Run {
+                variant,
+                timeout,
+                cache: Arc::clone(cache),
+            };
             // Variants share the base trial's goldens, which only the base
             // trial blesses.
             let ignored = bless && !variant.is_base();
             [
-                run_trial(ex.clone(), current, verdicts.clone(), bless, run),
+                run_trial(ex.clone(), current, verdicts.clone(), bless, run.clone()),
                 test_trial(ex.clone(), current, verdicts.clone(), run),
             ]
             .map(|trial| {
@@ -228,7 +293,92 @@ fn example_trials(
                 }
             })
         })
-        .collect()
+        .collect();
+    if !ex.config.skip_run {
+        let base = Run {
+            variant: Variant::Unset,
+            timeout,
+            cache: Arc::clone(cache),
+        };
+        trials.push(aot_trial(
+            ex.clone(),
+            current,
+            verdicts.clone(),
+            bless,
+            aot::variants(variants),
+            base,
+        ));
+    }
+    trials
+}
+
+/// The trial `<name>@aot` (D-1025, `cheby_test_support::aot`): build the
+/// example once into a fresh temporary directory, then run the executable
+/// at every thread variant in `variants`, each compared with the goldens.
+/// It is never blessed, so it is ignored under `CHEBY_BLESS=1` (D-853),
+/// and it is ignored on Windows until M6 (D-935).
+fn aot_trial(
+    ex: Example,
+    current: Setting,
+    verdicts: Verdicts,
+    bless: bool,
+    variants: Vec<Variant>,
+    base: Run,
+) -> Trial {
+    let milestone = aot::milestone(ex.config.milestone);
+    let expectation = current.expectation(milestone);
+    let name = aot::trial_name(&ex.name);
+    Trial::test(name.clone(), move || {
+        let result = check_executable(&ex, &variants, &base);
+        verdicts.judge(&name, milestone, expectation, result)?;
+        Ok(())
+    })
+    .with_kind(expectation.kind())
+    .with_ignored_flag(bless || platform::executables_skipped())
+}
+
+/// Builds the example with `cheby build -o` into a temporary directory
+/// that is removed at the end, and runs the executable at each of
+/// `variants` (`aot::check`).
+fn check_executable(ex: &Example, variants: &[Variant], base: &Run) -> Result<(), String> {
+    let goldens = ex.goldens()?;
+    let expected_stdout = goldens
+        .stdout
+        .as_deref()
+        .ok_or("missing expected.stdout; record it with `cargo xtask bless`")?;
+    let expected = aot::Expected {
+        stdout: expected_stdout,
+        stderr: goldens.stderr.as_deref().unwrap_or(""),
+        exit: goldens.exit.unwrap_or(0),
+    };
+    // Per trial, so no trial writes into `docs/examples/` and two trials
+    // never share an output; dropped, with the executable, at the end.
+    let out_dir = FreshDir::create(&format!("cheby-aot-{}", ex.name))?;
+    let executable = out_dir.path().join(&ex.name);
+    let output = executable.to_string_lossy().into_owned();
+    let stdin = goldens.stdin.as_deref().map(str::as_bytes);
+    // D-1027: `{http_fixture}` expanded, for the build's environment too.
+    let run_args = ex.run_args(&goldens)?;
+    aot::check(
+        &expected,
+        variants,
+        // The base trial's child environment, with the example's `env`.
+        || {
+            cheby(
+                &ex.dir,
+                &["build", "-o", &output],
+                &run_args.env,
+                None,
+                base,
+            )
+        },
+        |variant| {
+            let mut cmd = Command::new(&executable);
+            cmd.args(&run_args.args).current_dir(&ex.dir);
+            child_env(&mut cmd, &run_args.env, variant, base);
+            process::run(cmd, stdin, base.timeout)
+        },
+    )
 }
 
 /// The trial that runs the example and compares its output with the
@@ -238,9 +388,9 @@ fn run_trial(ex: Example, current: Setting, verdicts: Verdicts, bless: bool, run
     let name = run.variant.trial_name(&ex.name);
     Trial::test(name.clone(), move || {
         let result = if bless && expectation != Expectation::Fail {
-            bless_example(&ex, run)
+            bless_example(&ex, &run)
         } else {
-            check_example(&ex, run)
+            check_example(&ex, &run)
         };
         verdicts.judge(&name, ex.config.milestone, expectation, result)?;
         Ok(())
@@ -296,7 +446,7 @@ fn test_trial(ex: Example, current: Setting, verdicts: Verdicts, run: Run) -> Tr
     let expectation = test_expectation(&ex, current);
     let name = run.variant.trial_name(&format!("{}::test", ex.name));
     Trial::test(name.clone(), move || {
-        let result = cheby(&ex.dir, &["test"], &[], None, run).and_then(|out| match out.status {
+        let result = cheby(&ex.dir, &["test"], &[], None, &run).and_then(|out| match out.status {
             Some(0) => Ok(()),
             _ => Err(format!(
                 "`cheby test` failed ({})\nstdout:\n{}\nstderr:\n{}",
@@ -313,7 +463,7 @@ fn test_trial(ex: Example, current: Setting, verdicts: Verdicts, run: Run) -> Tr
 }
 
 /// Runs the example and compares the result with its goldens.
-fn check_example(ex: &Example, run: Run) -> Result<(), String> {
+fn check_example(ex: &Example, run: &Run) -> Result<(), String> {
     if ex.config.skip_run {
         let out = cheby(&ex.dir, &["check"], &[], None, run)?;
         return match out.status {
@@ -348,7 +498,7 @@ fn check_example(ex: &Example, run: Run) -> Result<(), String> {
 }
 
 /// Runs the example and records its output as the new goldens.
-fn bless_example(ex: &Example, run: Run) -> Result<(), String> {
+fn bless_example(ex: &Example, run: &Run) -> Result<(), String> {
     if ex.config.skip_run {
         return check_example(ex, run);
     }
@@ -381,19 +531,22 @@ fn bless_example(ex: &Example, run: Run) -> Result<(), String> {
 fn run_example(
     ex: &Example,
     goldens: &example::Goldens,
-    run: Run,
+    run: &Run,
 ) -> Result<process::RunOutput, String> {
+    // D-1027: `{http_fixture}` expanded; every trial of this process shares
+    // the one server of the example's `site/`.
+    let run_args = ex.run_args(goldens)?;
     // Program arguments follow `--`, so they are never taken for a module
     // path or a flag of `cheby run`.
     let mut args = vec!["run"];
-    if !goldens.args.is_empty() {
+    if !run_args.args.is_empty() {
         args.push("--");
-        args.extend(goldens.args.iter().map(String::as_str));
+        args.extend(run_args.args.iter().map(String::as_str));
     }
     cheby(
         &ex.dir,
         &args,
-        &goldens.env,
+        &run_args.env,
         goldens.stdin.as_deref().map(str::as_bytes),
         run,
     )
@@ -404,16 +557,24 @@ fn cheby(
     args: &[&str],
     env: &[(String, String)],
     stdin: Option<&[u8]>,
-    run: Run,
+    run: &Run,
 ) -> Result<process::RunOutput, String> {
     let mut cmd = Command::new(CHEBY);
     // `--color=never` keeps goldens plain even if the environment forces
     // color (`CLICOLOR_FORCE`), and the example's own `env` cannot undo it.
-    // After the example's `env`, freed objects are poisoned, so a
-    // reference-count mistake stops the program where it happens (D-544),
-    // and the variant sets or removes `CHEBY_THREADS` (D-722); the
-    // example's `env` cannot undo either.
     cmd.arg("--color=never").args(args).current_dir(dir);
-    threads::apply(&mut cmd, &threads::child_env(env, run.variant));
+    child_env(&mut cmd, env, run.variant, run);
     process::run(cmd, stdin, run.timeout)
+}
+
+/// The environment of every child, `cheby` or an example's executable:
+/// after the example's `env`, freed objects are poisoned, so a
+/// reference-count mistake stops the program where it happens (D-544),
+/// and `variant` sets or removes `CHEBY_THREADS` (D-722) and `CHEBY_RC`
+/// (D-853); the example's `env` cannot undo either. Last, `CHEBY_CACHE`
+/// names the harness's own cache (D-959), whatever the developer's
+/// environment or the example's `env` says.
+fn child_env(cmd: &mut Command, env: &[(String, String)], variant: Variant, run: &Run) {
+    threads::apply(cmd, &threads::child_env(env, variant));
+    run.cache.apply(cmd);
 }

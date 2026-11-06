@@ -1,0 +1,27 @@
+// @mode: run-fail
+// @command: build
+// @exit: 1
+// @milestone: M3
+// @decisions: D-943, D-1113, D-1142
+//! `12-targets-and-ffi/native/missing_symbols` built with `cheby build`:
+//! the build resolver finds `app_present` in the package's shared library
+//! and reports E0053 for the reached `missing` only, before anything links,
+//! with the same diagnostic as `cheby run`; the unreached `unused` gets a
+//! stub in the program object (§12.5).
+
+import std::io
+
+@external(native, "app_present")
+fn present() -> Int
+
+@external(native, "app_missing_reached")
+fn missing() -> Int
+
+@external(native, "app_missing_unreached")
+pub fn unused() -> Int
+
+fn main() {
+  let a = present()
+  let b = missing()
+  io::println("{a} {b}")
+}

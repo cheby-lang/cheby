@@ -683,6 +683,8 @@ fn trampolines_for_arities_zero_to_four() {
     }
     assert_eq!(trampolines(&BTreeSet::new()).unwrap(), Vec::new());
     let mut unit = MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Entries,
         path: "".into(),
         functions,

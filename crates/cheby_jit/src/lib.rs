@@ -2,13 +2,18 @@
 //! batches of MIR units, the runtime's symbol registry, the indirection
 //! table of top-level functions (D-043), and the way into generated code.
 //!
-//! - [`Jit::compile`] is incremental: each batch registers its layouts,
-//!   declares its functions (extending the persistent declaration table),
-//!   defines them and finalizes. Later batches call earlier code through
-//!   the existing slots, and use the static objects, layout words and
-//!   constant slots earlier batches defined (D-523). `cheby run` compiles
-//!   one batch; constant evaluation (E6) and the REPL (G5) compile one per
-//!   step.
+//! - Every batch goes through code records (D-914, K4c; `load.rs`):
+//!   [`Jit::compile_units`] compiles each unit given as MIR alone into its
+//!   record, in parallel (`cheby_codegen_clif::jit_unit`), and loads those
+//!   and the records a host took from the store in one batch: global
+//!   symbols by name, each record's local symbols anonymously (its import
+//!   words and its module record among them), then `finalize_definitions`
+//!   and `cheby_runtime::image::register_records`, the one routine an
+//!   executable's start calls too (D-919, D-1169): layouts, external
+//!   types, hooks and call-site ranges. The JIT registers nothing itself.
+//!   Later batches call earlier code through the existing slots, and
+//!   import the layout words and constant slots earlier batches defined,
+//!   by symbol. `cheby run` loads one batch; the REPL (G5) one per entry.
 //! - Every call of a top-level function loads the callee's slot, a
 //!   writable data object holding its address (D-043). The REPL (E4)
 //!   registers its items' session names first ([`Jit::set_session_names`]):
@@ -44,11 +49,23 @@
 //!   its fibers have stopped.
 //! - Runtime symbols resolve through `cheby_runtime::symbols()`; other
 //!   native symbols of `@external(native, …)` through the symbols defined
-//!   with [`Jit::define_symbol`] and then the process's dynamic symbol
-//!   table, checked before finalizing so a missing symbol is an error,
-//!   never a panic (D-532). Foreign symbols are imported by address, with
-//!   no signature, and called indirectly with each call site's C
-//!   signature, so batches may bind one symbol with different signatures.
+//!   with [`Jit::define_symbol`], then the package libraries added with
+//!   [`Jit::add_library`] in order, then the process's dynamic symbol
+//!   table (D-455, D-941, [`resolve_native`]), checked before finalizing
+//!   so a missing symbol is an error, never a panic (D-532). Foreign
+//!   symbols are imported by address, with no signature, and called
+//!   indirectly with each call site's C signature, so batches may bind one
+//!   symbol with different signatures. A name is resolved once per `Jit`
+//!   (Cranelift keeps what it found), so a library added later serves only
+//!   names no earlier batch resolved.
+//! - The code model is the one the cache and executables use (D-913,
+//!   D-921, ADR-0064): the target's fixed ISA
+//!   ([`cheby_codegen_clif::isa::host_isa`]), never the host's detected
+//!   features, non-PIC, with every generated symbol colocated. Runtime and
+//!   foreign symbols are resolved into each record's own import words
+//!   `cb$imp$<symbol>` (local, D-917, D-918), data the code loads, so no
+//!   text holds a process address. No libcall resolves
+//!   ([`cheby_codegen_clif::isa::libcall_names`]).
 
 use std::fmt;
 use std::mem::ManuallyDrop;
@@ -59,24 +76,26 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
-use cheby_codegen_clif::{
-    CodegenCx, CodegenError, CodegenOptions, Decls, DefineStats, LayoutIds, SessionName,
-    builtin_layout_id,
-};
+use cheby_codegen_clif::record::CodeRecord;
+use cheby_codegen_clif::{CodegenError, CodegenOptions, Decls, DefineStats, SessionName};
 use cheby_iface::{DefId, Ice};
-use cheby_mir::{AbiSig, EntryKind, FnKey, LayoutDesc, LayoutRef, MirModule, Repr};
-use cheby_runtime::abi::sym;
+use cheby_mir::{AbiSig, EntryKind, FnKey, MirModule, UnitKind};
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{Tramp0, Tramp1, Tramp2, Tramp3, Tramp4};
-use cheby_runtime::layout::{self as rt_layout, FieldKind, LayoutInfo};
 use cheby_runtime::{
     Callbacks, CodeToken, DetachedGroup, EntryConfig, EntryFn, EntryOutcome, RootDone, RootHandle,
     RunConfig, Runtime, RuntimeError,
 };
 
+mod load;
 mod memory;
+mod native;
 #[cfg(test)]
 mod start_root_tests;
+mod timing;
+
+pub use native::{NativeLibrary, generation_symbol, resolve as resolve_native, split_generation};
+pub use timing::LoadTimes;
 // The tests compile and run machine code. Windows support is M6 (D-545),
 // so they are not built there. Two attributes, not `all(test, …)`, so
 // Clippy still sees a test module (`allow-unwrap-in-tests`).
@@ -165,75 +184,6 @@ impl JitOptions {
     }
 }
 
-/// Runtime layout ids of the layouts registered so far: the fixed builtin
-/// ids, plus user constructors registered per batch before any of its
-/// code is defined (D-454).
-#[derive(Debug, Default)]
-pub struct JitLayouts {
-    ids: FxHashMap<LayoutRef, u32>,
-}
-
-impl LayoutIds for JitLayouts {
-    fn id(&self, layout: &LayoutRef) -> Result<u32, Ice> {
-        builtin_layout_id(layout)
-            .or_else(|| self.ids.get(layout).copied())
-            .ok_or_else(|| Ice::new(format!("layout {layout:?} was not registered")))
-    }
-}
-
-/// How a constructor field of `repr` is stored in the runtime's layout
-/// table.
-const fn field_kind(repr: Repr) -> FieldKind {
-    match repr {
-        Repr::Value => FieldKind::Value,
-        Repr::Int => FieldKind::Int,
-        Repr::Float => FieldKind::Float,
-        Repr::Bool => FieldKind::Bool,
-        Repr::I8 => FieldKind::I8,
-        Repr::I16 => FieldKind::I16,
-        Repr::I32 => FieldKind::I32,
-        Repr::I64 => FieldKind::I64,
-        Repr::U8 => FieldKind::U8,
-        Repr::U16 => FieldKind::U16,
-        Repr::U32 => FieldKind::U32,
-        Repr::U64 => FieldKind::U64,
-        Repr::F32 => FieldKind::F32,
-    }
-}
-
-/// The runtime's entry for a MIR layout. MIR computes offsets from
-/// interfaces and the runtime from field kinds; they must agree, or
-/// generated code and freeing would disagree on where fields are.
-fn layout_info(desc: &LayoutDesc) -> Result<LayoutInfo, Ice> {
-    let fields: Vec<(FieldKind, Option<&str>)> = desc
-        .fields
-        .iter()
-        .map(|f| (field_kind(f.repr), f.name.as_deref()))
-        .collect();
-    let info = LayoutInfo::ctor(&desc.name, desc.tag, &fields).named(
-        &desc.type_name,
-        &desc.ctor_name,
-        desc.record,
-        desc.type_key,
-    );
-    let agree = info.value_fields == desc.value_fields
-        && info.raw_fields == desc.raw_fields
-        && info.fields.len() == desc.fields.len()
-        && info
-            .fields
-            .iter()
-            .zip(&desc.fields)
-            .all(|(rt, mir)| i64::from(rt.offset) == i64::from(mir.offset));
-    if agree {
-        Ok(info)
-    } else {
-        Err(Ice::new(format!(
-            "MIR and the runtime disagree on the layout of `{}`",
-            desc.name
-        )))
-    }
-}
-
 /// The memory a [`Jit`] holds for code and data, in bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodeMemory {
@@ -248,6 +198,36 @@ pub struct CodeMemory {
 /// the stubbed ones. Addresses are kept as integers so the table is
 /// `Send` for Cranelift's lookup function.
 type SymbolTable = Arc<Mutex<FxHashMap<Box<str>, usize>>>;
+
+/// The package libraries of a [`Jit`] by generation, each in the order
+/// they were added (D-941), shared with Cranelift's lookup function:
+/// generation 0 is [`Jit::add_library`]'s, each later one a REPL
+/// `:reload`'s ([`Jit::add_library_generation`]).
+type Libraries = Arc<Mutex<Vec<Vec<Arc<NativeLibrary>>>>>;
+
+/// Where the name `name` a batch imports resolves among the runtime's
+/// symbols, the package libraries of its generation
+/// ([`split_generation`]) and the process; `None` when nothing defines it
+/// or its generation is unknown.
+fn resolve_generation(name: &str, libraries: &Libraries) -> Option<*const u8> {
+    let (symbol, generation) = split_generation(name);
+    let generations = libraries.lock().unwrap_or_else(PoisonError::into_inner);
+    let libraries = generations.get(usize::try_from(generation).ok()?)?;
+    resolve_native(symbol, libraries)
+}
+
+/// The machine code a record from the store defines (D-718): its bytes and
+/// its functions.
+fn record_stats(record: &CodeRecord) -> DefineStats {
+    let mut stats = DefineStats::default();
+    for function in &record.functions {
+        stats = stats.add(DefineStats {
+            code_bytes: u64::try_from(function.bytes.len()).unwrap_or(u64::MAX),
+            functions: 1,
+        });
+    }
+    stats
+}
 
 /// The code and data memory of a [`Jit`] after the `Jit` is dropped
 /// (D-708): [`Jit`]'s `Drop` moves its module here, and the last
@@ -297,22 +277,23 @@ impl Drop for CodeKeepAlive {
 }
 
 /// A JIT session: the module, the declarations of every batch so far, and
-/// the registered layouts. Dropping it frees its code and data, or hands
-/// them to its outstanding [`CodeToken`]s (D-708).
+/// the module records it registered. Dropping it frees its code and data,
+/// or hands them to its outstanding [`CodeToken`]s (D-708).
 pub struct Jit {
     /// Taken only by `Drop`, which moves it into `keep_alive`.
     module: ManuallyDrop<JITModule>,
     /// What frees the module's memory once the `Jit` and every token are
     /// gone.
     keep_alive: Arc<CodeKeepAlive>,
-    decls: Decls,
-    layouts: JitLayouts,
     codegen: CodegenOptions,
     options: JitOptions,
     clif: Vec<String>,
     /// How much of the code arena is reserved and committed.
     memory: Arc<memory::Usage>,
     symbols: SymbolTable,
+    /// The package libraries, searched after [`Jit::symbols`] and before
+    /// the process (D-941).
+    libraries: Libraries,
     /// The accounting domain every entry of this JIT charges (plan
     /// §4.3.4): one build, one domain.
     domain: Arc<Domain>,
@@ -327,10 +308,59 @@ pub struct Jit {
     pending: Vec<(cranelift_module::DataId, u64, DefId)>,
     /// The code every batch that compiled defined ([`Jit::code_stats`]).
     code_stats: DefineStats,
-    /// Every range this JIT registered in the code map, in order, for the
-    /// tests of the map (`code_map_*`).
-    #[cfg(test)]
-    registered: Vec<cheby_runtime::locate::CodeRangeDesc>,
+    /// The module records of every batch that compiled, in order
+    /// ([`Jit::module_records`]).
+    records: Vec<JitRecord>,
+    /// The target the JIT compiles for, which each unit compiled alone
+    /// into a code record uses too (D-921).
+    isa: cranelift_codegen::isa::OwnedTargetIsa,
+    /// What the record loader keeps across batches (`load.rs`).
+    loaded: load::Loaded,
+    /// What the last batch spent loading ([`Jit::load_times`], D-974).
+    load_times: LoadTimes,
+}
+
+/// One unit of a batch ([`Jit::compile_units`]), in build order.
+#[derive(Clone, Copy, Debug)]
+pub enum BatchUnit<'a> {
+    /// A unit to compile alone into a code record, then load (D-914).
+    Mir(&'a MirModule),
+    /// A code or tests unit's record from the store, with the unit's kind
+    /// and module path.
+    Record {
+        /// The record, decoded with `CodeRecord::decode`'s checks.
+        record: &'a CodeRecord,
+        /// The unit's kind.
+        unit: UnitKind,
+        /// The unit's module path.
+        path: &'a str,
+    },
+}
+
+/// What a batch's units are told besides their MIR ([`Jit::compile_units`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BatchCx<'a> {
+    /// The ordinal of each test among all of its module's tests on native,
+    /// in source order (D-1179), for the tests whose tests unit is a record
+    /// from the store: the entries unit names them by ordinal. A tests unit
+    /// of the batch's MIR numbers its own.
+    pub test_ordinals: &'a [(DefId, u32)],
+}
+
+/// A module record one batch of a [`Jit`] defined in its memory (D-919):
+/// the record of a code or tests unit, in the layout of
+/// [`cheby_runtime::image::ModuleRecord`], listing that unit's functions,
+/// the user types and external types the batch registered, their hooks
+/// and free-shape words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JitRecord {
+    /// The unit's kind.
+    pub unit: UnitKind,
+    /// The unit's module path.
+    pub path: Box<str>,
+    /// The record's address in the JIT's memory, valid while the [`Jit`]
+    /// (or a [`CodeToken`] of it) lives.
+    pub address: usize,
 }
 
 /// An indirection slot of a [`Jit`] (D-043): a writable word holding the
@@ -343,8 +373,7 @@ pub struct SlotHandle {
 impl fmt::Debug for Jit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Jit")
-            .field("decls", &self.decls)
-            .field("layouts", &self.layouts)
+            .field("records", &self.records)
             .field("codegen", &self.codegen)
             .field("options", &self.options)
             .finish_non_exhaustive()
@@ -387,50 +416,273 @@ impl Jit {
             checked_rc: jit.checked_rc,
             ..options
         };
-        let flags = cheby_codegen_clif::isa::flags()?;
-        let isa = cranelift_native::builder()
-            .map_err(|message| JitError::Host(message.to_owned()))?
-            .finish(flags)
-            .map_err(|e| JitError::Host(e.to_string()))?;
-        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        // D-921: the target's fixed feature set, never the host's detected
+        // features, so the JIT runs the code the cache and executables
+        // hold. D-913: no libcall resolves.
+        let isa = cheby_codegen_clif::isa::host_isa().map_err(|e| match e {
+            CodegenError::UnsupportedHost(message) => JitError::Host(message),
+            other => JitError::Codegen(other),
+        })?;
+        let mut builder =
+            JITBuilder::with_isa(isa.clone(), cheby_codegen_clif::isa::libcall_names());
         builder.symbols(cheby_runtime::symbols());
         let symbols: SymbolTable = Arc::default();
+        let libraries: Libraries = Arc::new(Mutex::new(vec![Vec::new()]));
         let table = Arc::clone(&symbols);
+        let libs = Arc::clone(&libraries);
         // Tried before the process's symbols (Cranelift asks the last
         // lookup function first); the runtime's registry comes before both.
+        // Within it, the defined and stubbed symbols, then the package
+        // libraries in order (D-941). A name of a later library generation
+        // is resolved here whole: runtime, that generation's libraries,
+        // process ([`generation_symbol`]).
         builder.symbol_lookup_fn(Box::new(move |name| {
-            let table = table.lock().unwrap_or_else(PoisonError::into_inner);
-            table
-                .get(name)
-                .map(|&address| std::ptr::with_exposed_provenance::<u8>(address))
+            let defined = {
+                let table = table.lock().unwrap_or_else(PoisonError::into_inner);
+                table
+                    .get(name)
+                    .map(|&address| std::ptr::with_exposed_provenance::<u8>(address))
+            };
+            defined.or_else(|| {
+                if split_generation(name).1 > 0 {
+                    return resolve_generation(name, &libs);
+                }
+                let generations = libs.lock().unwrap_or_else(PoisonError::into_inner);
+                generations
+                    .first()?
+                    .iter()
+                    .find_map(|library| library.lookup(name))
+            })
         }));
         let arena = memory::ReservedArena::new(memory::ARENA_SIZE)
             .map_err(|e| JitError::Host(format!("cannot reserve memory for code: {e}")))?;
         let usage = arena.usage();
         builder.memory_provider(Box::new(arena));
         let module = ManuallyDrop::new(JITModule::new(builder));
-        let decls = Decls::new(module.isa())?;
+        // Code generation's check of the host: 64-bit and little-endian.
+        Decls::new(module.isa())?;
         Ok(Self {
             module,
             keep_alive: Arc::new(CodeKeepAlive {
                 module: Mutex::new(None),
                 code_owner: cheby_runtime::locate::new_code_owner(),
             }),
-            decls,
-            layouts: JitLayouts::default(),
             codegen: options,
             options: jit,
             clif: Vec::new(),
             memory: usage,
             symbols,
+            libraries,
             domain: Domain::new(),
             callbacks: Callbacks::default(),
             repointed: Vec::new(),
             pending: Vec::new(),
             code_stats: DefineStats::default(),
-            #[cfg(test)]
-            registered: Vec::new(),
+            records: Vec::new(),
+            isa,
+            loaded: load::Loaded::default(),
+            load_times: LoadTimes::default(),
         })
+    }
+
+    /// What the last [`Jit::compile_units`] (or [`Jit::load_records`])
+    /// spent generating code for its fresh units and declaring, defining,
+    /// finalizing and registering its records (D-974): all zero unless
+    /// `CHEBY_PHASES` names a file, and for a JIT that loaded nothing.
+    #[must_use]
+    pub fn load_times(&self) -> LoadTimes {
+        self.load_times
+    }
+
+    /// Loads `records`, in build order, as one batch (D-914, D-922,
+    /// D-1169; `load.rs`): declares every global symbol by name and each
+    /// record's local symbols anonymously (D-918), defines their functions
+    /// with `define_function_bytes` and their data with `define_data`,
+    /// resolves unresolved names in the JIT's symbols, the runtime's, the
+    /// package libraries, then the process (D-941), finalizes, and
+    /// registers their module records with `image::register_records` under
+    /// this JIT's code owner before any of the batch's code runs. A record
+    /// with a `cb$mod$test$` module record is listed as a tests unit, one
+    /// with another as a code unit, under the builtin module's id and an
+    /// empty path; [`Jit::compile_units`] gives both.
+    ///
+    /// # Errors
+    ///
+    /// `JitError::UnresolvedSymbols` for a foreign symbol no resolver
+    /// defines (E0053, D-943), unless the JIT stubs them; an internal error
+    /// for a missing generated symbol or a record that does not check.
+    pub fn load_records(&mut self, records: &[&CodeRecord]) -> Result<(), JitError> {
+        let units: Vec<BatchUnit<'_>> = records
+            .iter()
+            .map(|&record| {
+                let tests = record
+                    .symbols
+                    .iter()
+                    .any(|s| s.name.starts_with("cb$mod$test$"));
+                let module = cheby_iface::ModuleId::BUILTIN;
+                BatchUnit::Record {
+                    record,
+                    unit: if tests {
+                        UnitKind::Tests(module)
+                    } else {
+                        UnitKind::Code(module)
+                    },
+                    path: "",
+                }
+            })
+            .collect();
+        self.compile_units(&units, &BatchCx::default()).map(|_| ())
+    }
+
+    /// Compiles and loads one batch (D-914, D-923): each unit of `units`
+    /// given as MIR is compiled alone into a code record, in parallel
+    /// (`cheby_codegen_clif::jit_unit`), and every record, fresh or from
+    /// the store, is loaded in the order given ([`Jit::load_records`]), the
+    /// entries unit's included, which is never stored (D-964,
+    /// D-1218). Returns, for each unit, the
+    /// record compiled fresh for a code or tests unit given as MIR, which a
+    /// host may store (D-1193), and `None` otherwise. Every slot a REPL
+    /// redefinition takes over is repointed ([`Jit::publish_all_repoints`]).
+    ///
+    /// A batch is all or nothing: nothing of a batch that fails is
+    /// declared in the JIT.
+    ///
+    /// # Errors
+    ///
+    /// As [`Jit::load_records`], and a [`JitError::Codegen`] if code
+    /// generation fails.
+    pub fn compile_units(
+        &mut self,
+        units: &[BatchUnit<'_>],
+        cx: &BatchCx<'_>,
+    ) -> Result<Vec<Option<CodeRecord>>, JitError> {
+        let records = self.compile_units_unpublished(units, cx)?;
+        self.publish_all_repoints()?;
+        Ok(records)
+    }
+
+    /// [`Jit::compile_units`], leaving the repoints of REPL redefinitions
+    /// pending ([`Jit::compile_unpublished`]).
+    fn compile_units_unpublished(
+        &mut self,
+        units: &[BatchUnit<'_>],
+        cx: &BatchCx<'_>,
+    ) -> Result<Vec<Option<CodeRecord>>, JitError> {
+        self.load_times = LoadTimes::default();
+        let mirs: Vec<&MirModule> = units
+            .iter()
+            .filter_map(|unit| match unit {
+                BatchUnit::Mir(mir) => Some(*mir),
+                BatchUnit::Record { .. } => None,
+            })
+            .collect();
+        // A native symbol nothing defines fails the batch before anything
+        // is compiled (D-532); `load_items` checks the records' imports
+        // again, those of records from the store among them.
+        self.resolve_foreign(load::foreign_symbols(&mirs))?;
+        // D-1179: the entries unit names each test by its ordinal among all
+        // of its module's tests, which the batch's tests units give or the
+        // host does for a tests unit from the store.
+        let mut entries_seed = self.loaded.seed.clone();
+        entries_seed
+            .test_ordinals
+            .extend(cx.test_ordinals.iter().copied());
+        entries_seed
+            .test_ordinals
+            .extend(load::test_ordinals(&mirs));
+        let jobs: Vec<(&MirModule, Option<&cheby_codegen_clif::jit_unit::Seed>)> = mirs
+            .iter()
+            .map(|&unit| {
+                let seed = if unit.unit == UnitKind::Entries {
+                    &entries_seed
+                } else {
+                    &self.loaded.seed
+                };
+                (unit, Some(seed))
+            })
+            .collect();
+        // K4c: every item of a unit a JIT loads is global hidden, so a
+        // record never depends on the program that stored it (its `main`,
+        // its reached constants, its selected tests), and any later batch
+        // can name it (D-1220).
+        let ucx = cheby_codegen_clif::UnitCx {
+            named_outside: &|_| true,
+        };
+        let codegen = timing::Stopwatch::start();
+        let compiled =
+            cheby_codegen_clif::jit_unit::records_for_jit(&self.isa, &jobs, &ucx, &self.codegen);
+        self.load_times.codegen = codegen.elapsed();
+        let mut fresh = Vec::with_capacity(compiled.len());
+        for result in compiled {
+            fresh.push(result.map_err(|e| match e {
+                cheby_codegen_clif::record::RecordError::Codegen(e) => JitError::Codegen(e),
+                other => JitError::ice(other.to_string()),
+            })?);
+        }
+        let mut items = Vec::with_capacity(units.len());
+        let mut next = fresh.iter();
+        for unit in units {
+            match *unit {
+                BatchUnit::Mir(mir) => {
+                    let compiled = next
+                        .next()
+                        .ok_or_else(|| JitError::ice("a batch unit was not compiled"))?;
+                    items.push(load::Item {
+                        record: &compiled.record,
+                        index: Some(&compiled.index),
+                        unit: mir.unit,
+                        path: &mir.path,
+                    });
+                }
+                BatchUnit::Record { record, unit, path } => items.push(load::Item {
+                    record,
+                    index: None,
+                    unit,
+                    path,
+                }),
+            }
+        }
+        self.load_items(&items)?;
+        for unit in &fresh {
+            self.clif.extend(unit.clif.iter().cloned());
+            self.code_stats = self.code_stats.add(unit.stats);
+        }
+        for unit in units {
+            if let BatchUnit::Record { record, .. } = unit {
+                self.code_stats = self.code_stats.add(record_stats(record));
+            }
+        }
+        self.callbacks = self.find_callbacks();
+        let mut fresh = fresh.into_iter();
+        let mut out = Vec::with_capacity(units.len());
+        for unit in units {
+            out.push(match unit {
+                BatchUnit::Mir(mir) => {
+                    let compiled = fresh.next();
+                    compiled
+                        .filter(|_| mir.unit != UnitKind::Entries)
+                        .map(|compiled| compiled.record)
+                }
+                BatchUnit::Record { .. } => None,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Names the slots of constants by symbol (`cb$const$…`, D-456), for a
+    /// host whose constants live in records from the store, which carry no
+    /// index: [`Jit::const_slot`] finds them by these names (K4c).
+    pub fn name_consts(&mut self, consts: impl IntoIterator<Item = (DefId, String)>) {
+        self.loaded.const_names.extend(consts);
+    }
+
+    /// The module records of every batch compiled so far, in order: one
+    /// per code and tests unit, none for an entries unit (D-919, D-1107,
+    /// D-1111). Each lists what its batch registered (tests and tools read
+    /// them; they live as long as the `Jit`'s memory).
+    #[must_use]
+    pub fn module_records(&self) -> &[JitRecord] {
+        &self.records
     }
 
     /// The machine code defined so far: its bytes and its functions, summed
@@ -476,9 +728,64 @@ impl Jit {
         table.insert(name.into(), address.expose_provenance());
     }
 
-    /// Compiles a batch of units, in order: registers their layouts,
-    /// declares and defines their functions and data, and finalizes. Units
-    /// may call functions of earlier batches.
+    /// Adds a package's shared library (D-941): later batches resolve a
+    /// native symbol in the runtime's symbols, then in the libraries in
+    /// the order they were added (build order), then in the process
+    /// (D-455). A command adds its libraries before its first
+    /// [`Jit::compile`]; a name an earlier batch resolved keeps its
+    /// address.
+    ///
+    /// # Errors
+    ///
+    /// None today: the library is open already. The `Result` leaves room
+    /// for N8b's filling of the forwarder's table.
+    pub fn add_library(&mut self, library: Arc<NativeLibrary>) -> Result<(), JitError> {
+        let mut generations = self
+            .libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(libraries) = generations.first_mut()
+            && !libraries.iter().any(|known| Arc::ptr_eq(known, &library))
+        {
+            libraries.push(library);
+        }
+        Ok(())
+    }
+
+    /// Adds a generation of package libraries, in build order, and returns
+    /// its number: a REPL `:reload` that changed the package's native code
+    /// (D-712, D-941). Code compiled from then on names its native symbols
+    /// with [`generation_symbol`] and that number, so it calls the new
+    /// libraries, while code compiled before keeps the plain names and the
+    /// libraries they resolved to; no library is ever unloaded.
+    pub fn add_library_generation(&mut self, libraries: Vec<Arc<NativeLibrary>>) -> u32 {
+        let mut generations = self
+            .libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        generations.push(libraries);
+        u32::try_from(generations.len().saturating_sub(1)).unwrap_or(u32::MAX)
+    }
+
+    /// The package libraries of generation 0, in order (D-941): those
+    /// [`Jit::add_library`] added.
+    #[must_use]
+    pub fn libraries(&self) -> Vec<Arc<NativeLibrary>> {
+        self.libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Compiles a batch of units, in order: each unit alone into a code
+    /// record, in parallel, then every record loaded
+    /// ([`Jit::compile_units`], D-914): declared, defined and finalized,
+    /// and their module records registered with the runtime's one routine,
+    /// `cheby_runtime::image::register_records` (D-919): the layouts,
+    /// external types, hooks and call-site ranges, before any code of the
+    /// batch runs. Units may call functions of earlier batches.
     ///
     /// A batch is all or nothing: if it fails, the JIT is as it was before
     /// it, so a corrected batch with the same items can be compiled next
@@ -506,92 +813,14 @@ impl Jit {
     ///
     /// As [`Jit::compile`]; a failed batch leaves nothing pending.
     pub fn compile_unpublished(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
-        let decls = self.decls.clone();
-        let layouts = self.layouts.ids.clone();
-        let result = self.compile_batch(mirs);
+        let units: Vec<BatchUnit<'_>> = mirs.iter().map(BatchUnit::Mir).collect();
+        let result = self.compile_units_unpublished(&units, &BatchCx::default());
         if result.is_err() {
-            // Nothing of the batch was defined in the module (`define`
-            // compiles everything first), so restoring the tables undoes
-            // it; its declarations stay in the module, unused.
-            self.decls = decls;
-            self.layouts.ids = layouts;
+            // Nothing of a failed batch was declared (`load.rs` checks
+            // before it declares), so nothing of it is pending either.
             self.pending.clear();
         }
-        result
-    }
-
-    fn compile_batch(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
-        self.register_layouts(mirs)?;
-        let cx = CodegenCx {
-            layouts: &self.layouts,
-        };
-        cheby_codegen_clif::declare(&mut *self.module, &mut self.decls, mirs, &cx, &self.codegen)?;
-        self.check_symbols()?;
-        let (clif, stats, defined) = cheby_codegen_clif::define_with_stats(
-            &mut *self.module,
-            mirs,
-            &mut self.decls,
-            &cx,
-            &self.codegen,
-        )?;
-        self.clif.extend(clif);
-        self.module
-            .finalize_definitions()
-            .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
-        self.take_repoints()?;
-        self.callbacks = self.find_callbacks();
-        self.register_hooks(mirs)?;
-        // Last: a batch that failed registers nothing.
-        self.register_code(defined)?;
-        self.code_stats = self.code_stats.add(stats);
-        Ok(())
-    }
-
-    /// Adds the batch's functions, finalized, to the process-wide code map
-    /// under this JIT's owner (D-856, D-867): each one's
-    /// address, length, ABI and call locations, so a deadlock report can
-    /// map a return address to its call. Ranges of earlier batches stay,
-    /// REPL redefinitions included, since their code stays while the JIT's
-    /// memory lives (D-712).
-    fn register_code(
-        &mut self,
-        defined: Vec<cheby_codegen_clif::DefinedCode>,
-    ) -> Result<(), JitError> {
-        let mut ranges = Vec::with_capacity(defined.len());
-        for code in defined {
-            let start = self
-                .module
-                .get_finalized_function(code.id)
-                .expose_provenance();
-            if start == 0 {
-                return Err(JitError::ice("a defined function without its code"));
-            }
-            ranges.push(cheby_runtime::locate::CodeRangeDesc {
-                start,
-                len: code.len,
-                cheby_abi: code.cheby_abi,
-                sites: code.sites,
-            });
-        }
-        #[cfg(test)]
-        self.registered.extend(ranges.iter().cloned());
-        cheby_runtime::locate::register_code(self.keep_alive.code_owner, ranges);
-        Ok(())
-    }
-
-    /// Records the slots that the batch's REPL redefinitions take over,
-    /// with the words of their new code, as pending (D-043); the last
-    /// batch's repoints can no longer be reverted.
-    fn take_repoints(&mut self) -> Result<(), JitError> {
-        self.repointed.clear();
-        self.pending.clear();
-        for (slot, func, def) in self.decls.take_repoints() {
-            let code = self.module.get_finalized_function(func);
-            let word = u64::try_from(code.expose_provenance())
-                .map_err(|_| JitError::ice("an address does not fit in a word"))?;
-            self.pending.push((slot, word, def));
-        }
-        Ok(())
+        result.map(|_| ())
     }
 
     /// The REPL redefinitions of the last batch whose slots still hold the
@@ -641,9 +870,7 @@ impl Jit {
     /// its signature: the slot its callers load (D-043, D-456).
     #[must_use]
     pub fn slot_of(&self, def: DefId) -> Option<SlotHandle> {
-        self.decls
-            .slot_of(def)
-            .map(|decl| SlotHandle { data: decl.id })
+        self.loaded.slots.get(&def).map(|&data| SlotHandle { data })
     }
 
     /// Writes `word` into the slot `slot` with a release store and returns
@@ -692,15 +919,19 @@ impl Jit {
     /// [`SessionName::reuse`] is set takes over that definition's slot when
     /// its batch compiles. A new generation of an item that is already
     /// compiled forgets the old declarations of its functions, constructor
-    /// layouts and constant slot, which the next batch declares anew
-    /// ([`Decls::set_session_name`]).
+    /// layouts and constant slot, which the next batch declares anew, as
+    /// `Decls::set_session_name` does; every later batch's units get the
+    /// names (`jit_unit::Seed`, D-1225).
     pub fn set_session_names(&mut self, names: impl IntoIterator<Item = (DefId, SessionName)>) {
         for (def, name) in names {
-            self.decls.set_session_name(def, name);
-            let layout = LayoutRef::Ctor(def);
-            if !self.decls.has_layout(layout) {
-                self.layouts.ids.remove(&layout);
+            // A new generation of an external type is registered anew,
+            // as a constructor's layout is declared anew (D-1169).
+            let previous = self.loaded.seed.session.get(&def).map(|old| old.generation);
+            let changed = previous.map_or(name.generation > 0, |old| old != name.generation);
+            if changed {
+                self.loaded.forget(def, name.reuse == Some(def));
             }
+            self.loaded.seed.session.insert(def, name);
         }
     }
 
@@ -724,8 +955,8 @@ impl Jit {
     /// that slot has the ABI signature `sig` (D-456).
     #[must_use]
     pub fn slot(&self, def: DefId, sig: &AbiSig) -> Option<SlotHandle> {
-        let decl = self.decls.slot_of(def)?;
-        (self.decls.slot_sig(decl.id) == Some(sig)).then_some(SlotHandle { data: decl.id })
+        let &data = self.loaded.slots.get(&def)?;
+        (self.loaded.slot_sigs.get(&data) == Some(sig)).then_some(SlotHandle { data })
     }
 
     /// The address a slot holds now.
@@ -758,16 +989,22 @@ impl Jit {
     /// An ICE if `code` was not compiled or its ABI signature is not the
     /// slot's.
     pub fn repoint(&mut self, slot: SlotHandle, code: DefId) -> Result<(), JitError> {
-        let decl = self.decls.func(FnKey::Item(code))?;
-        if !decl.defined {
-            return Err(JitError::ice(format!("{code:?} was not compiled")));
-        }
-        if self.decls.slot_sig(slot.data) != Some(&decl.abi) {
+        let &func = self
+            .loaded
+            .funcs
+            .get(&FnKey::Item(code))
+            .ok_or_else(|| JitError::ice(format!("{code:?} was not compiled")))?;
+        let sig = self
+            .loaded
+            .slots
+            .get(&code)
+            .and_then(|own| self.loaded.slot_sigs.get(own));
+        if sig.is_none() || self.loaded.slot_sigs.get(&slot.data) != sig {
             return Err(JitError::ice(
                 "a slot cannot point at code of another signature",
             ));
         }
-        let address = self.module.get_finalized_function(decl.id);
+        let address = self.module.get_finalized_function(func);
         let word = u64::try_from(address.expose_provenance())
             .map_err(|_| JitError::ice("an address does not fit in a word"))?;
         self.write_slot(slot.data, word)?;
@@ -785,53 +1022,58 @@ impl Jit {
     ///
     /// An ICE if a value has no session name.
     pub fn bind_values(&mut self, values: &[(DefId, u64)]) -> Result<(), JitError> {
+        let mut defined_any = false;
         for &(def, _) in values {
-            self.decls.declare_session_const(&mut *self.module, def)?;
+            if self.loaded.consts.contains_key(&def) {
+                continue;
+            }
+            let name = self
+                .loaded
+                .seed
+                .session
+                .get(&def)
+                .ok_or_else(|| JitError::ice(format!("the session value {def:?} has no name")))?
+                .clone();
+            if let Some(old) = name.reuse
+                && let Some(&id) = self.loaded.consts.get(&old)
+            {
+                self.loaded.consts.insert(def, id);
+                if let Some(symbol) = self.loaded.seed.consts.get(&old).cloned() {
+                    self.loaded.seed.consts.insert(def, symbol);
+                }
+                continue;
+            }
+            let symbol = cheby_codegen_clif::mangle::item(
+                cheby_codegen_clif::mangle::Kind::Const,
+                &name.def_name(def),
+            );
+            if self.loaded.defined.contains(&symbol) {
+                return Err(JitError::ice(format!(
+                    "the session value `{symbol}` is defined twice"
+                )));
+            }
+            let id = self
+                .module
+                .declare_data(&symbol, load::SESSION_DATA, true, false)
+                .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+            let mut desc = cranelift_module::DataDescription::new();
+            desc.define_zeroinit(8);
+            desc.set_align(8);
+            self.module
+                .define_data(id, &desc)
+                .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+            defined_any = true;
+            self.loaded.defined.insert(symbol.clone());
+            self.loaded.seed.consts.insert(def, symbol);
+            self.loaded.consts.insert(def, id);
         }
-        let cx = CodegenCx {
-            layouts: &self.layouts,
-        };
-        cheby_codegen_clif::define_data(&mut *self.module, &mut self.decls, &cx)?;
-        self.module
-            .finalize_definitions()
-            .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        if defined_any {
+            self.module
+                .finalize_definitions()
+                .map_err(|e| JitError::Codegen(CodegenError::Module(e.to_string())))?;
+        }
         for &(def, word) in values {
             self.set_const(def, word)?;
-        }
-        Ok(())
-    }
-
-    /// Registers the `@std_hooks(equal, hash, debug)` functions of the
-    /// batch's types with the runtime's layout table, for every
-    /// constructor of each such type (D-482): the words are the hooks'
-    /// static function values `cb$fnval$…`, which the runtime calls through
-    /// the trampolines. A type whose hooks have no function value (no value
-    /// shim was lowered) keeps structural equality and printing.
-    fn register_hooks(&self, mirs: &[MirModule]) -> Result<(), JitError> {
-        for unit in mirs {
-            for desc in &unit.layouts {
-                let Some(hooks) = desc.hooks else {
-                    continue;
-                };
-                let mut words = [0_u64; 3];
-                let mut complete = true;
-                for (word, def) in words.iter_mut().zip(hooks) {
-                    let Some(id) = self.decls.fn_value(unit, def)? else {
-                        complete = false;
-                        break;
-                    };
-                    let (address, _) = self.module.get_finalized_data(id);
-                    *word = u64::try_from(address.expose_provenance())
-                        .map_err(|_| JitError::ice("an address does not fit in a word"))?;
-                }
-                if !complete {
-                    continue;
-                }
-                let id = self.layouts.id(&desc.layout)?;
-                rt_layout::set_hooks(id, words).map_err(|e| {
-                    JitError::ice(format!("cannot register the hooks of `{}`: {e}", desc.name))
-                })?;
-            }
         }
         Ok(())
     }
@@ -868,11 +1110,8 @@ impl Jit {
     }
 
     fn trampoline(&self, arity: u32) -> Option<*const u8> {
-        let decl = self.decls.func(FnKey::Trampoline(arity)).ok()?;
-        if !decl.defined {
-            return None;
-        }
-        let address = self.module.get_finalized_function(decl.id);
+        let id = (*self.loaded.trampolines.get(usize::try_from(arity).ok()?)?)?;
+        let address = self.module.get_finalized_function(id);
         (!address.is_null()).then_some(address)
     }
 
@@ -896,10 +1135,23 @@ impl Jit {
     }
 
     /// The address of the slot `cb$const$…` of the constant `def` (E6), if
-    /// a compiled batch declared it: 0 until the constant is evaluated.
+    /// a loaded batch defined it: 0 until the constant is evaluated. A fresh
+    /// unit's index gives the slot; a record from the store has none, so a
+    /// host names its constants first ([`Jit::name_consts`]).
     #[must_use]
     pub fn const_slot(&self, def: DefId) -> Option<*mut u64> {
-        let id = self.decls.const_slot(def)?;
+        let named = || {
+            // Only a name a loaded record defined has data.
+            let name = self.loaded.const_names.get(&def)?;
+            if !self.loaded.defined.contains(name) {
+                return None;
+            }
+            match self.module.get_name(name)? {
+                cranelift_module::FuncOrDataId::Data(id) => Some(id),
+                cranelift_module::FuncOrDataId::Func(_) => None,
+            }
+        };
+        let id = self.loaded.consts.get(&def).copied().or_else(named)?;
         let (address, size) = self.module.get_finalized_data(id);
         #[expect(
             clippy::cast_ptr_alignment,
@@ -945,11 +1197,12 @@ impl Jit {
     ///
     /// An ICE if no compiled batch defined it.
     pub fn entry(&self, kind: EntryKind) -> Result<Entry<'_>, JitError> {
-        let decl = self.decls.func(FnKey::Entry(kind))?;
-        if !decl.defined {
-            return Err(JitError::ice(format!("entry {kind:?} was not compiled")));
-        }
-        let address = self.module.get_finalized_function(decl.id);
+        let &id = self
+            .loaded
+            .funcs
+            .get(&FnKey::Entry(kind))
+            .ok_or_else(|| JitError::ice(format!("entry {kind:?} was not compiled")))?;
+        let address = self.module.get_finalized_function(id);
         if address.is_null() {
             return Err(JitError::ice("a compiled entry has no address"));
         }
@@ -963,128 +1216,55 @@ impl Jit {
         Ok(Entry { thunk, jit: self })
     }
 
-    /// Registers the constructor layouts of `mirs`, units in order and
-    /// types in `DefIndex` order of their first constructor, so ids do not
-    /// depend on scheduling. The constructors of one type get consecutive
-    /// ids in tag order (D-522), so a tag is a layout id minus the first
-    /// constructor's.
-    ///
-    /// The ids come from the runtime's process-wide table, so they also
-    /// depend on what earlier `Jit`s in the process registered. Generated
-    /// code therefore never embeds one (D-264): it loads the header from
-    /// the layout's `cb$layout$…` data symbol, which code generation fills
-    /// from these ids (D-454).
-    fn register_layouts(&mut self, mirs: &[MirModule]) -> Result<(), JitError> {
-        for unit in mirs {
-            let mut types: Vec<DefId> = Vec::new();
-            for desc in &unit.layouts {
-                if !types.contains(&desc.type_def) {
-                    types.push(desc.type_def);
-                }
-            }
-            for ty in types {
-                let mut ctors: Vec<&LayoutDesc> =
-                    unit.layouts.iter().filter(|d| d.type_def == ty).collect();
-                ctors.sort_by_key(|d| d.tag);
-                let known = ctors
-                    .iter()
-                    .filter(|d| self.layouts.ids.contains_key(&d.layout))
-                    .count();
-                if known == ctors.len() {
-                    continue;
-                }
-                if known != 0 {
-                    return Err(JitError::ice(format!(
-                        "some constructors of the type {ty:?} are registered and some are not"
-                    )));
-                }
-                let in_order = ctors
-                    .iter()
-                    .enumerate()
-                    .all(|(n, d)| usize::try_from(d.tag).is_ok_and(|tag| tag == n));
-                if !in_order {
-                    return Err(JitError::ice(format!(
-                        "the constructors of the type {ty:?} do not have the tags 0, 1, …"
-                    )));
-                }
-                let infos = ctors
-                    .iter()
-                    .map(|d| layout_info(d))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let first = rt_layout::register_consecutive(infos)
-                    .map_err(|e| JitError::ice(format!("cannot register a layout: {e}")))?;
-                for (desc, id) in ctors.iter().zip(first..) {
-                    self.layouts.ids.insert(desc.layout, id);
-                }
-            }
-        }
-        Ok(())
+    /// Whether the module declares `name` (tests, which do not build on
+    /// Windows until M6).
+    #[cfg(all(test, not(windows)))]
+    fn declares(&self, name: &str) -> bool {
+        self.module.get_name(name).is_some()
     }
 
-    /// Checks that every native symbol resolves, because Cranelift's JIT
-    /// panics on a missing one when finalizing. `cheby check` cannot know
-    /// which symbols the process will have, so the driver reports these
-    /// only when running, as E0053 at the `@external` that names each
-    /// symbol (D-455, D-532); with [`JitOptions::stub_unresolved`] they
-    /// are bound to `cheby_rt_unresolved` instead.
-    fn check_symbols(&self) -> Result<(), JitError> {
-        let runtime = cheby_runtime::symbols();
-        // Runtime objects later packages define (the builtin nominal
-        // descriptors, W3-B): a missing one is a bug, not a program error.
-        for symbol in self.decls.runtime_data_symbols() {
-            if !runtime.iter().any(|(name, _)| *name == symbol) {
-                return Err(JitError::ice(format!(
-                    "the runtime does not define `{symbol}`"
-                )));
-            }
-        }
-        let mut table = self.symbols.lock().unwrap_or_else(PoisonError::into_inner);
-        let missing: Vec<String> = self
-            .decls
-            .foreign_symbols()
-            .into_iter()
-            .filter(|symbol| {
-                !runtime.iter().any(|(name, _)| name == symbol)
-                    && !table.contains_key(*symbol)
-                    && !process_defines(symbol)
-            })
-            .map(str::to_owned)
-            .collect();
-        if missing.is_empty() {
-            return Ok(());
-        }
-        if !self.options.stub_unresolved {
-            return Err(JitError::UnresolvedSymbols(missing));
-        }
-        let stub = runtime
-            .iter()
-            .find(|(name, _)| *name == sym::UNRESOLVED)
-            .map(|&(_, address)| address)
-            .ok_or_else(|| JitError::ice("the runtime does not define `cheby_rt_unresolved`"))?;
-        for symbol in missing {
-            table.insert(symbol.into(), stub.expose_provenance());
-        }
-        Ok(())
+    /// Whether a loaded record defined the global `name` (tests).
+    #[cfg(all(test, not(windows)))]
+    fn defines(&self, name: &str) -> bool {
+        self.loaded.defined.contains(name)
     }
-}
 
-/// Whether the process defines `symbol`, the JIT's fallback lookup.
-#[cfg(unix)]
-fn process_defines(symbol: &str) -> bool {
-    let Ok(name) = std::ffi::CString::new(symbol) else {
-        return false;
-    };
-    // SAFETY: `name` is a valid NUL-terminated string that outlives the
-    // call, and `RTLD_DEFAULT` is a valid handle; `dlsym` only reads.
-    let address = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-    !address.is_null()
-}
+    /// How many functions and data objects the module declares (tests).
+    #[cfg(all(test, not(windows)))]
+    fn declared(&self) -> usize {
+        let declarations = self.module.declarations();
+        declarations
+            .get_functions()
+            .count()
+            .saturating_add(declarations.get_data_objects().count())
+    }
 
-/// Whether the process defines `symbol`. Only the runtime's symbols are
-/// known off Unix.
-#[cfg(not(unix))]
-fn process_defines(_symbol: &str) -> bool {
-    false
+    /// The function of a fresh unit's `key` (tests).
+    #[cfg(all(test, not(windows)))]
+    fn func_id(&self, key: FnKey) -> Option<cranelift_module::FuncId> {
+        self.loaded.funcs.get(&key).copied()
+    }
+
+    /// The name `id` was declared with, `None` for an anonymous one
+    /// (tests).
+    #[cfg(all(test, not(windows)))]
+    fn func_name(&self, id: cranelift_module::FuncId) -> Option<String> {
+        self.module
+            .declarations()
+            .get_function_decl(id)
+            .name
+            .clone()
+    }
+
+    /// The name the slot `slot` was declared with (tests).
+    #[cfg(all(test, not(windows)))]
+    fn slot_name(&self, slot: SlotHandle) -> Option<String> {
+        self.module
+            .declarations()
+            .get_data_decl(slot.data)
+            .name
+            .clone()
+    }
 }
 
 impl Drop for Jit {

@@ -44,29 +44,41 @@ cranelift-codegen = "0.135"
 cranelift-frontend = "0.135"
 cranelift-jit = "0.135"
 cranelift-module = "0.135"
-cranelift-native = "0.135"
+cranelift-object = "0.135"
 crossbeam-deque = "0.8"
 crossbeam-utils = "0.8"
 getrandom = "0.3"
+# DWARF line tables in replayed objects (D-938); the version Cranelift
+# already locks (D-1036).
+gimli = { version = "0.33", default-features = false, features = ["std", "write"] }
+httparse = "1.10"
 libc = "0.2"
 libtest-mimic = "0.8"
 loom = "0.7"
+memchr = "2.8.3"
 mimalloc = "0.1.52"
 mio = { version = "1", features = ["os-poll"] }
+object = { version = "0.39", default-features = false, features = ["read", "std"] }
 parking_lot = "0.12"
 proptest = "1.11"
 rayon = "1.12"
+# HTTPS for `std::http`'s client (D-1011, D-1036): only on targets other
+# than Windows until M6.
+ring = "0.17.14"
 rustc-hash = "2.1"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustyline = { version = "18.0", default-features = false }
 ryu = "1"
 serde_json = "1"
 siphasher = "1"
+socket2 = "0.6"
 toml = { version = "1.1", features = ["preserve_order"] }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2"
 # The instruction-cache maintenance cranelift-jit itself uses; the version
 # follows cranelift (0.135 is Wasmtime 48).
 wasmtime-internal-jit-icache-coherence = "48"
+webpki-roots = "1.0.10"
 windows-sys = "0.61"
 
 [workspace.lints.rust]
@@ -131,6 +143,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.cranelift-native]
+opt-level = 3
+
+[profile.dev.package.cranelift-object]
 opt-level = 3
 
 [profile.dev.package.regalloc2]

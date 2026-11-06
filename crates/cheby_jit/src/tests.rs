@@ -7,13 +7,14 @@
 
 use std::sync::Mutex;
 
+use cheby_codegen_clif::builtin_layout_id;
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId, builtin};
 use cheby_mir::{
     Abi, AbiSig, ArithOp, BitOp, Block, BlockId, Callee, CalleeDecl, CmpOp, Const, DefName,
-    EntryKind, FieldDesc, FnKey, Function, LayoutDesc, LocalDecl, MirModule, Operand, PanicKind,
-    Repr, RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType, Terminator,
-    UnitKind,
+    EntryKind, FieldDesc, FnKey, Function, LayoutDesc, LayoutRef, LocalDecl, MirModule, Operand,
+    PanicKind, Repr, RuntimeFn, Rvalue, StaticId, StaticKind, StaticObject, Stmt, StrId, TagType,
+    Terminator, UnitKind,
 };
 use cheby_runtime::abi::{self, sym};
 use cheby_runtime::{EntryConfig, EntryMode, EntryOutcome};
@@ -67,6 +68,7 @@ fn function(
     }
     table.extend(strings.iter().map(|s| Box::<str>::from(*s)));
     Function {
+        positions: cheby_mir::Positions::default(),
         key,
         abi,
         params: (0..params.len())
@@ -101,6 +103,7 @@ fn bb(n: u32) -> BlockId {
 
 fn block(stmts: Vec<Stmt>, term: Terminator) -> Block {
     Block {
+        pos: Vec::new(),
         params: Vec::new(),
         stmts,
         term,
@@ -133,6 +136,8 @@ fn code_unit(
     names.sort_by_key(|n| n.def);
     names.dedup_by_key(|n| n.def);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Code(ModuleId::from_u32(module)),
         path: path.into(),
         functions,
@@ -152,6 +157,8 @@ fn entries_unit(
     names.sort_by_key(|n| n.def);
     names.dedup_by_key(|n| n.def);
     MirModule {
+        externals: Vec::new(),
+        source: None,
         unit: UnitKind::Entries,
         path: "".into(),
         functions,
@@ -388,6 +395,14 @@ impl Prog {
 fn straight(stmts: Vec<Stmt>, result: u32) -> Vec<Block> {
     vec![block(stmts, ret(result))]
 }
+
+// K4c's loader, with this file's builders.
+#[path = "load_tests.rs"]
+mod load_tests;
+
+// K4d's placement of a record's functions, with this file's builders.
+#[path = "record_placement_tests.rs"]
+mod record_placement_tests;
 
 #[test]
 fn panic_kinds_match_the_runtime() {
@@ -696,7 +711,7 @@ fn missing_native_symbols_are_all_reported() {
     let mut fixed = calls_natives(&[]);
     let target = fixed.call(def(1, 0), Vec::new());
     jit.compile(&fixed.units()).unwrap();
-    assert_eq!(jit.decls.foreign_symbols(), Vec::<&str>::new());
+    assert!(!jit.declares("cheby_test_missing_a") && !jit.declares("cheby_test_missing_b"));
     assert_eq!(
         run_const(&jit, target),
         EntryOutcome::Returned(static_nil())
@@ -1067,6 +1082,63 @@ fn batches_may_call_a_foreign_symbol_with_new_signatures() {
     assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
 }
 
+/// A batch that fails declares nothing, so it leaves no import word
+/// declared and undefined (D-913). Since K4c every unit is compiled alone
+/// into a code record whose import words are local copies, declared
+/// anonymously when it is loaded, so each record has its own words and
+/// no word is declared by name; the symbols the words hold are declared
+/// by name once (D-1219, which refines D-1105).
+#[cfg(unix)]
+#[test]
+fn failed_batches_leave_no_import_word_undefined() {
+    use cheby_mir::CType;
+    let mut jit = Jit::new().unwrap();
+    // The first batch fails: nothing of it is declared, the runtime's
+    // symbols included.
+    let failed = labs_batch(0, labs_wrapper(0, &[CType::I64], &[-3], true));
+    let err = jit.compile(&failed).unwrap_err();
+    assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
+    assert_eq!(jit.declared(), 0);
+    jit.compile(&labs_batch(1, labs_wrapper(1, &[CType::I64], &[-5], false)))
+        .unwrap();
+    assert!(jit.declares("labs") && jit.declares(sym::ALLOC));
+    assert!(!jit.declares("cb$imp$labs") && !jit.declares(&format!("cb$imp${}", sym::ALLOC)));
+    assert!(!jit.declares("cheby_no_such_symbol_anywhere"));
+    assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
+    // A failure after a batch compiled declares nothing more.
+    let declared = jit.declared();
+    let err = jit
+        .compile(&labs_batch(2, labs_wrapper(2, &[CType::I64], &[-7], true)))
+        .unwrap_err();
+    assert!(matches!(err, JitError::UnresolvedSymbols(_)), "{err}");
+    assert_eq!(jit.declared(), declared);
+    assert!(!jit.declares("cheby_no_such_symbol_anywhere"));
+    // A later batch has words of its own for `labs`.
+    jit.compile(&labs_batch(3, labs_wrapper(3, &[CType::I64], &[-9], false)))
+        .unwrap();
+    assert!(!jit.declares("cb$imp$labs"));
+    assert_eq!(run_const(&jit, def(1, 103)), EntryOutcome::Returned(9));
+    assert_eq!(run_const(&jit, def(1, 101)), EntryOutcome::Returned(5));
+}
+
+/// The JIT compiles for [`cheby_codegen_clif::isa::host_isa`], the
+/// target's fixed feature set (D-921), not the host's detected features.
+#[test]
+fn isa_fixed_the_jit_uses_the_fixed_isa() {
+    let jit = Jit::new().unwrap();
+    let fixed = cheby_codegen_clif::isa::host_isa().unwrap();
+    let flags = |isa: &dyn cranelift_codegen::isa::TargetIsa| -> Vec<String> {
+        isa.isa_flags().iter().map(ToString::to_string).collect()
+    };
+    assert_eq!(flags(jit.module.isa()), flags(&*fixed));
+    assert_eq!(
+        jit.module.isa().flags().to_string(),
+        fixed.flags().to_string()
+    );
+    assert_eq!(jit.module.isa().triple(), fixed.triple());
+    assert!(!jit.module.isa().flags().is_pic());
+}
+
 /// Compile speed of the debug toolchain (plan §4.4): translates and
 /// compiles 400 functions of 40 blocks each and prints the time. Run with
 /// `cargo test -p cheby_jit -- --ignored compile_speed_probe --nocapture`.
@@ -1124,7 +1196,9 @@ mod control;
 mod entry_unwind;
 mod large_frame;
 mod literals;
+mod native;
 mod objects;
+mod records;
 mod repl;
 mod reuse;
 mod scalars;

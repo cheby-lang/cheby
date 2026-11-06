@@ -1,6 +1,6 @@
 # cheby_consteval
 
-Compile-time evaluation of constants (spec §4.5 and §13.9). A build compiles its code, its constant initializers and its entries into one JIT (D-535), and `evaluate` then runs the reachable constants in dependency order, each on an entry of its own with a deadline and a memory limit (D-536), and stores the results in their slots.
+Compile-time evaluation of constants (spec §4.5 and §13.9). Every command evaluates the constants it reaches in a JIT of their own on `plain` code (D-978): the driver compiles their initializers and entry thunks there, and `evaluate` runs them in dependency order, each on an entry of its own with a deadline and a memory limit (D-536), and stores the results in their slots. `images` then writes each result as an image that describes values (D-979, `cheby_runtime::consteval::image`), `release` frees the results, the evaluation JIT is dropped, and `install` puts the images into the slots of the JIT that runs code before any entry runs, with maps and sets built with the process seed (D-196); `cheby build` puts them into the program object, whose start installs them with the same routine, and `cheby check` installs nothing (`freeze` keeps its results in place). The REPL evaluates in its session JIT and `replace_with_images` installs in-process images, which share earlier entries' installed constants by address instead of copying them.
 
 ## Place in the pipeline
 

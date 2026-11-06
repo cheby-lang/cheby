@@ -77,6 +77,7 @@ use crate::ir::{
 };
 use crate::layout::object_size;
 use crate::liveness::is_borrowed_local;
+use crate::positions::StmtsOut;
 use crate::repr::Repr;
 use crate::validate::dom::Dominance;
 
@@ -184,23 +185,35 @@ pub fn insert(module: &MirModule, f: &mut Function) -> Result<(), Ice> {
             }
         }
     }
-    // Statement positions are no longer needed: insert the drops.
+    // Statement positions are no longer needed: insert the drops. A
+    // block's leading drops take its first source position, an edge's the
+    // branch's (D-938).
     for (block, tokens) in starts {
-        f.blocks
+        let block = f
+            .blocks
             .get_mut(block)
-            .ok_or_else(|| Ice::new("reuse: no such block"))?
-            .stmts
-            .splice(0..0, tokens.into_iter().map(Stmt::Drop));
+            .ok_or_else(|| Ice::new("reuse: no such block"))?;
+        let at = block.first_pos();
+        block.insert_stmts(0, tokens.into_iter().map(Stmt::Drop), at);
     }
     for ((from, to), tokens) in edges {
+        let source = f
+            .blocks
+            .get(from)
+            .ok_or_else(|| Ice::new("reuse: no such block"))?;
+        let mut drops = StmtsOut::new(source.has_positions(), tokens.len());
+        let branch = source.term_pos();
+        drops.extend(tokens.into_iter().map(Stmt::Drop), branch);
+        let (stmts, pos) = drops.finish(branch);
         let split = f.blocks.push(Block {
             params: Vec::new(),
-            stmts: tokens.into_iter().map(Stmt::Drop).collect(),
+            stmts,
             term: Terminator::Goto {
                 target: to,
                 args: Vec::new(),
             },
             unwind: Vec::new(),
+            pos,
         })?;
         let term = &mut f
             .blocks

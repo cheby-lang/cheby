@@ -1,0 +1,31 @@
+//! A module entered with `:module` whose names the session binds too.
+
+/// One of its names.
+pub fn alpha() -> Int {
+  1
+}
+
+/// One of its names.
+pub fn beta() -> Int {
+  1
+}
+
+/// One of its names.
+pub fn gamma() -> Int {
+  1
+}
+
+/// One of its names.
+pub fn delta() -> Int {
+  1
+}
+
+/// One of its names.
+pub fn epsilon() -> Int {
+  1
+}
+
+/// One of its names.
+pub fn zeta() -> Int {
+  1
+}

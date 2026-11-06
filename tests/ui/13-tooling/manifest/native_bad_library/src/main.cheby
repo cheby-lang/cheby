@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-940
+// @milestone: M3
+//! A library of `[native]` is one name the linker takes after `-l`, of
+//! letters, digits, `_`, `-`, `.` and `+`: two names in one string are
+//! E0036 (§12.5.4).
+
+import std::io
+
+fn main() {
+  io::println("hello")
+}
