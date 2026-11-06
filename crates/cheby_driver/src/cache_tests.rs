@@ -1937,6 +1937,7 @@ fn warm_run_entries_round_trip_on_every_example() {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.join("cheby.toml").is_file())
+        .filter(|p| !crate::native::not_yet_here(p))
         .collect();
     examples.sort();
     let (mut mains, mut results, mut tests) = (0_usize, 0_usize, 0_usize);

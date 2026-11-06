@@ -453,7 +453,8 @@ fn file_kernel_works_without_a_scheduler() {
 }
 
 /// D-1021's form: a time before 1970 has negative seconds and nanoseconds
-/// from 0 to `999_999_999`.
+/// from 0 to `999_999_999`. `SystemTime` counts in steps of 100 ns on
+/// Windows, so the offsets here are multiples of that.
 #[test]
 fn file_kernel_times_before_1970_count_down() {
     use std::time::UNIX_EPOCH;
@@ -464,10 +465,10 @@ fn file_kernel_times_before_1970_count_down() {
             UNIX_EPOCH + offset
         })
     };
-    assert_eq!(at(Duration::new(5, 250), false), (5, 250));
+    assert_eq!(at(Duration::new(5, 200), false), (5, 200));
     assert_eq!(at(Duration::new(1, 0), true), (-1, 0));
     assert_eq!(at(Duration::new(0, 500_000_000), true), (-1, 500_000_000));
-    assert_eq!(at(Duration::new(2, 1), true), (-3, 999_999_999));
+    assert_eq!(at(Duration::new(2, 100), true), (-3, 999_999_900));
     let info = |(seconds, nanoseconds)| Info {
         size: 0,
         kind: 0,

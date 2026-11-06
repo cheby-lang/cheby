@@ -114,10 +114,13 @@ fn every_command_stops_without_a_cache() {
     assert_eq!(error(check(&dir)), ICE);
     assert_eq!(error(prepare_run(&dir, RunOptions::default())), ICE);
     assert_eq!(error(prepare_test(&dir, &TestOptions::default())), ICE);
-    assert_eq!(
-        error(build_objects(&dir, &fixture.build_options(), None)),
-        ICE
-    );
+    // Windows builds no executable until M6 (D-935), and says so first.
+    if cfg!(not(windows)) {
+        assert_eq!(
+            error(build_objects(&dir, &fixture.build_options(), None)),
+            ICE
+        );
+    }
 }
 
 /// A warm command must not pass after a cold internal error: no front
@@ -136,9 +139,12 @@ fn every_command_stops_again_on_a_warm_cache() {
         let cache = fixture.cache(&format!("test-{run}"));
         let prepared = prepare_test_cached(&dir, &TestOptions::default(), &cache);
         assert_eq!(error(prepared), ICE, "{run}");
-        let cache = fixture.cache(&format!("build-{run}"));
-        let built = build_objects(&dir, &fixture.build_options(), Some(&cache));
-        assert_eq!(error(built), ICE, "{run}");
+        // Windows builds no executable until M6 (D-935), and says so first.
+        if cfg!(not(windows)) {
+            let cache = fixture.cache(&format!("build-{run}"));
+            let built = build_objects(&dir, &fixture.build_options(), Some(&cache));
+            assert_eq!(error(built), ICE, "{run}");
+        }
     }
     // Nothing of the failure stays: the fixed source checks.
     fixture.write("main.cheby", KEPT);

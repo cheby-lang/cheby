@@ -71,6 +71,16 @@ pub(crate) const E0053_NOTE: &str = "the symbol must be defined by the Cheby run
 pub(crate) const WINDOWS_NOT_YET: &str =
     "`[native]` is not available yet on Windows (planned for M6)";
 
+/// Whether this platform stops the package at `dir` with
+/// [`WINDOWS_NOT_YET`]: the tests that take every package through
+/// `Mode::Build` leave such a package out.
+#[cfg(test)]
+pub(crate) fn not_yet_here(dir: &Path) -> bool {
+    cfg!(windows)
+        && std::fs::read_to_string(dir.join("cheby.toml"))
+            .is_ok_and(|manifest| manifest.lines().any(|line| line.trim() == "[native]"))
+}
+
 /// A package's native code, ready for the commands that run or build code.
 #[derive(Debug, Default)]
 pub(crate) struct PackageNative {

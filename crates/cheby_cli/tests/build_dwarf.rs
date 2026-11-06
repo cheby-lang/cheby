@@ -87,6 +87,16 @@ struct Unit {
 }
 
 #[cfg(target_os = "linux")]
+impl Unit {
+    /// Whether this unit is a Cheby source's.
+    fn is_cheby(&self) -> bool {
+        Path::new(&self.name)
+            .extension()
+            .is_some_and(|extension| extension == "cheby")
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl Dwarf {
     fn read(bytes: &[u8]) -> Self {
         use object::{Object as _, ObjectSection as _};
@@ -116,15 +126,15 @@ impl Dwarf {
             let mut read = Unit {
                 name: root
                     .attr_value(gimli::DW_AT_name)
-                    .map(&text)
+                    .map(text)
                     .unwrap_or_default(),
-                comp_dir: root.attr_value(gimli::DW_AT_comp_dir).map(&text),
+                comp_dir: root.attr_value(gimli::DW_AT_comp_dir).map(text),
                 ..Unit::default()
             };
             if let Some(program) = unit.line_program.clone() {
                 let header = program.header().clone();
                 for dir in header.include_directories() {
-                    read.dirs.push(text(dir.clone()));
+                    read.dirs.push(text(*dir));
                 }
                 for file in header.file_names() {
                     read.files.push(text(file.path_name()));
@@ -138,7 +148,8 @@ impl Dwarf {
                         .file(header)
                         .map(|f| text(f.path_name()))
                         .unwrap_or_default();
-                    read.rows.push((name, row.line().map_or(0, |l| l.get())));
+                    read.rows
+                        .push((name, row.line().map_or(0, std::num::NonZero::get)));
                 }
             }
             out.units.push(read);
@@ -189,11 +200,7 @@ fn build_dwarf_linux_line_tables() {
     let bytes = std::fs::read(&exe_a).unwrap();
     assert!(bytes == std::fs::read(&exe_b).unwrap(), "two builds differ");
     let dwarf = Dwarf::read(&bytes);
-    let cheby: Vec<&Unit> = dwarf
-        .units
-        .iter()
-        .filter(|u| u.name.ends_with(".cheby"))
-        .collect();
+    let cheby: Vec<&Unit> = dwarf.units.iter().filter(|u| u.is_cheby()).collect();
     let main = cheby
         .iter()
         .find(|u| u.name == "src/main.cheby")
@@ -234,7 +241,7 @@ fn build_dwarf_linux_line_tables() {
     build(&a, &exe_off, &cache_off, &[("CHEBY_POSITIONS", "off")]);
     let off = Dwarf::read(&std::fs::read(&exe_off).unwrap());
     assert!(
-        off.units.iter().all(|u| !u.name.ends_with(".cheby")),
+        off.units.iter().all(|u| !u.is_cheby()),
         "{:?}",
         off.units.iter().map(|u| &u.name).collect::<Vec<_>>()
     );

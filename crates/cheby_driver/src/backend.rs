@@ -3133,6 +3133,7 @@ fn main() {
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .filter(|dir| dir.join("cheby.toml").is_file())
+            .filter(|dir| !crate::native::not_yet_here(dir))
             .collect();
         dirs.sort();
         dirs

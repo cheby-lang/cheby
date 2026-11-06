@@ -4,8 +4,9 @@
 //!
 //! An unwritable cache is a path under a regular file, which no user can
 //! create, root included, so the Linux containers run these tests too.
-//! Every `cheby` gets its own `CHEBY_CACHE` and `TMPDIR` on its
-//! `Command`; nothing here sets a variable of the test process.
+//! Every `cheby` gets its own `CHEBY_CACHE` and temporary directory on its
+//! `Command`: `TMPDIR`, and `TMP` and `TEMP`, which are what Windows reads.
+//! Nothing here sets a variable of the test process.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -95,8 +96,8 @@ fn package(scratch: &Scratch) -> PathBuf {
     dir
 }
 
-/// `cheby <args>` in `dir` with `CHEBY_CACHE` set to `cache`, `TMPDIR` to
-/// `tmp`, and `env` added.
+/// `cheby <args>` in `dir` with `CHEBY_CACHE` set to `cache`, the
+/// temporary directory to `tmp`, and `env` added.
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: failing to spawn `cheby` fails the test"
@@ -109,6 +110,8 @@ fn cheby(dir: &Path, args: &[&str], cache: &Path, tmp: &Path, env: &[(&str, &Pat
         .env("NO_COLOR", "1")
         .env(CACHE_ENV, cache)
         .env("TMPDIR", tmp)
+        .env("TMP", tmp)
+        .env("TEMP", tmp)
         .env_remove("CHEBY_CACHE_LOG")
         .env_remove("CHEBY_DUMP_DIR");
     for (name, value) in env {

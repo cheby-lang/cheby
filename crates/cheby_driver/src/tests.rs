@@ -292,8 +292,13 @@ fn lower_package_roots(dir: &Path) -> Result<Option<usize>, String> {
 fn lowering_reports_no_e0038() {
     let mut failures = Vec::new();
     let mut lowered = 0_usize;
+    let mut not_yet = 0_usize;
     for dir in examples() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        if crate::native::not_yet_here(&dir) {
+            not_yet += 1;
+            continue;
+        }
         match lower_package_roots(&dir) {
             Ok(Some(units)) => {
                 assert!(units > 0, "{name}");
@@ -307,7 +312,7 @@ fn lowering_reports_no_e0038() {
         }
     }
     // 31 since 031 checks with `std::http` shipped (D-1003, D-729).
-    assert_eq!(lowered, 31, "{}", failures.join("\n"));
+    assert_eq!(lowered + not_yet, 31, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);
@@ -331,6 +336,9 @@ fn lowering_reports_no_e0038() {
             Some("run-fail") => true,
             _ => continue,
         };
+        if crate::native::not_yet_here(case) {
+            continue;
+        }
         let dir = if case.is_dir() {
             case.clone()
         } else {
@@ -1594,7 +1602,10 @@ fn iface_roundtrip_every_example_and_std() {
     let mut example_modules = 0_usize;
     for dir in examples() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-        if name == "030_shop_service" || LATER_EXAMPLES.contains(&name.as_str()) {
+        if name == "030_shop_service"
+            || LATER_EXAMPLES.contains(&name.as_str())
+            || crate::native::not_yet_here(&dir)
+        {
             continue;
         }
         let mut out = CheckOutput::default();

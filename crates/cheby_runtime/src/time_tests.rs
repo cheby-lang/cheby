@@ -137,7 +137,9 @@ fn time_kernel_wall_clock_is_the_system_clock() {
 }
 
 /// A point before 1970 has negative seconds and nanoseconds from 0 to
-/// 999 999 999, `Duration`'s one representation (D-650).
+/// 999 999 999, `Duration`'s one representation (D-650). `SystemTime`
+/// counts in steps of 100 ns on Windows, so the offsets here are multiples
+/// of that.
 #[test]
 fn time_kernel_wall_clock_before_1970_is_normalized() {
     let at = |offset: Duration, before: bool| {
@@ -151,7 +153,7 @@ fn time_kernel_wall_clock_before_1970_is_normalized() {
     assert_eq!(at(Duration::from_millis(1_250), false), (1, 250_000_000));
     assert_eq!(at(Duration::from_millis(1_500), true), (-2, 500_000_000));
     assert_eq!(at(Duration::from_secs(2), true), (-2, 0));
-    assert_eq!(at(Duration::from_nanos(1), true), (-1, 999_999_999));
+    assert_eq!(at(Duration::from_nanos(100), true), (-1, 999_999_900));
 }
 
 /// The monotonic clock counts from one origin per process, read through

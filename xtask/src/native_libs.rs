@@ -76,6 +76,9 @@ fn printed_libs(root: &Path) -> Result<Vec<String>, String> {
         .current_dir(root)
         .args([
             "rustc",
+            // The note is parsed, so a color code must not end its last word.
+            "--color",
+            "never",
             "--package",
             "cheby_rt_exe",
             "--lib",
