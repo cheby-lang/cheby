@@ -187,9 +187,12 @@ jobs:
           python3 -I .github/scripts/bench_oqp11.py \
             --title "Cold check and build (D-975, D-1266)" \
             bench-results/compile.json >> "$GITHUB_STEP_SUMMARY"
+      # A job cut off at its limit ends `cancelled`, where `!cancelled()` is
+      # false, so what it wrote uploads on `always()`. So does a cancelled
+      # run's.
       - name: Upload the rounds, the split and the base
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
         with:
           name: bench-${{ github.run_id }}
           path: bench-results/

@@ -261,7 +261,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-881     | LeakSanitizer on for `jit` and `ui-deadlock`, off where programs keep objects; the header says why  |
 | D-882     | `cargo xtask sanitize` is the one driver of the sanitizer and Miri jobs, nightly and local          |
 | D-883     | A stable `ci.yml` step runs clippy on the runtime with each `cheby_sanitize` value                  |
-| D-884     | Miri runs the runtime's pure modules in 14 groups, leaks ignored, with `PROPTEST_CASES=4`           |
+| D-884     | Miri runs the runtime's pure modules in 15 groups, leaks ignored, with `PROPTEST_CASES=4`           |
 | D-886     | `test.toml`'s `timing` is an optional boolean; a wrong type, or `timing` with `skip-run`, exits 2   |
 | D-887     | The serial group is a second libtest run on one thread, after the parallel batch; one summary line  |
 | D-888     | Every variant of a `timing` example runs in the serial group: 24 trials, 30 under 4 threads         |

@@ -31,9 +31,9 @@
 //!   against a baseline (D-718, D-702).
 //! - `check-examples`: runs `cheby check` in every example directory and
 //!   compares the outcome with the expected one (G6).
-//! - `sanitize`: the nightly workflow's thread-sanitizer, address-sanitizer
-//!   and Miri jobs, step by step, for the workflow and for local runs
-//!   (D-721, D-862).
+//! - `sanitize`: the thread-sanitizer and address-sanitizer jobs of
+//!   `nightly.yml` and the job of `miri.yml`, step by step, for the workflows
+//!   and for local runs (D-721, D-862, D-1322).
 //! - `bench-build` (hidden): checks and compiles every function of a
 //!   package on `--jobs` threads and prints the times, the bytes of code
 //!   and the RC operations; `bench-compile` and `check-determinism` run it
@@ -127,8 +127,8 @@ enum Cmd {
     BenchCompile(bench::Args),
     /// Measure the run time of the programs under `bench/runtime` (D-718)
     BenchRun(Box<bench_run::Args>),
-    /// Run the nightly workflow's sanitizer or Miri job, or some of its
-    /// steps, on the pinned nightly (D-721, D-862)
+    /// Run a sanitizer job of nightly.yml or the job of miri.yml, or some of
+    /// its steps, on the pinned nightly (D-721, D-862, D-1322)
     Sanitize(sanitize::Args),
     /// Check and compile every function of a package and print the front
     /// end's and the back end's times in nanoseconds, the bytes of machine

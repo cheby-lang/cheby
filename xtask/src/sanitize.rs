@@ -1,7 +1,7 @@
-//! `cargo xtask sanitize <address|thread|miri>`: the sanitizer and Miri
-//! jobs of the nightly workflow (D-721), one driver for the workflow and for
-//! the local runs that stand as its evidence before the push (D-862;
-//! D-882).
+//! `cargo xtask sanitize <address|thread|miri>`: the sanitizer jobs of
+//! `nightly.yml` and the job of `miri.yml` (D-721, D-1322), one driver for
+//! the workflows and for the local runs that stand as their evidence before
+//! the push (D-862; D-882).
 //!
 //! Every step is a `cargo` command on the pinned nightly [`NIGHTLY`] (D-781).
 //! The driver edits no file, and it builds into its own target directory:
@@ -79,7 +79,7 @@ use std::time::{Duration, Instant};
 use cheby_test_support::milestone::{Expectation, Setting, Verdicts};
 use cheby_test_support::{example, golden, process, threads};
 
-/// The dated nightly of the workflow (D-781, D-721).
+/// The dated nightly of `nightly.yml` and `miri.yml` (D-781, D-721).
 pub const NIGHTLY: &str = "nightly-2026-10-01";
 
 /// `CHEBY_HARNESS_SCALE` of every sanitizer step (D-748, D-725).
@@ -187,12 +187,14 @@ pub struct MiriGroup {
 }
 
 /// The Miri subset (D-884): the runtime's pure modules, the
-/// frame-walk tests (`locate_tests`) and the timer tests written for Miri. The scheduler,
-/// the pool, io, entries and the `loom` models stay out: they switch
-/// stacks, start threads that park or call the poller, which Miri cannot
-/// run. A test is skipped only for its size; a test too slow under Miri at
-/// its normal size gets a `cfg!(miri)` size in its own file where it can.
-/// Ordered longest first, so `--jobs` finishes early.
+/// frame-walk tests (`locate_tests`), the backtrace tests and the timer
+/// tests written for Miri (D-1322). The scheduler, the pool, io, entries
+/// and the `loom` models stay out: they switch stacks, start threads that
+/// park or call the poller, which Miri cannot run. A test is skipped only
+/// for its size; a test too slow under Miri at its normal size gets a
+/// `cfg!(miri)` size in its own file where it can. The four slowest groups
+/// come first, in no order among them, so `--jobs 4`, the job's setting,
+/// starts them at once and the job ends early.
 pub const MIRI_GROUPS: &[MiriGroup] = &[
     MiriGroup {
         name: "hamt",
@@ -1458,6 +1460,24 @@ mod tests {
         assert_eq!(with_caller("a=1", Some("b=2".to_owned()), ':'), "a=1:b=2");
         assert_eq!(with_caller("a=1", Some(" ".to_owned()), ':'), "a=1");
         assert_eq!(with_caller("-Za", None, ' '), "-Za");
+    }
+
+    /// Both workflows name [`NIGHTLY`] and no other dated nightly, so a bump
+    /// that misses a line fails here and not in a scheduled run on `main`.
+    #[test]
+    fn the_workflows_hold_the_dated_nightly() {
+        for name in ["nightly.yml", "miri.yml"] {
+            let workflow = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../.github/workflows")
+                .join(name);
+            let text = std::fs::read_to_string(&workflow).unwrap();
+            let dated: Vec<&str> = text
+                .match_indices("nightly-20")
+                .filter_map(|(at, _)| text.get(at..at.saturating_add(NIGHTLY.len())))
+                .collect();
+            assert!(!dated.is_empty(), "{name} names no dated nightly");
+            assert!(dated.iter().all(|d| *d == NIGHTLY), "{name}: {dated:?}");
+        }
     }
 
     /// D-863: a per-step option is named, with its cause, in the workflow's
