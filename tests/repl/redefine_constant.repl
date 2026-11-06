@@ -1,4 +1,4 @@
-// @decisions: D-547, D-607
+// @decisions: D-547, D-607, D-1334
 > import std::io
 > import store::other
 > const k: Int = 1

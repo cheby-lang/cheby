@@ -1,4 +1,4 @@
-// @decisions: D-625
+// @decisions: D-625, D-1331
 > import std::io
 > import store::brand
 error[E0039]: there is no module `store::brand`

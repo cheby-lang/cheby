@@ -1,4 +1,4 @@
-// @decisions: D-609
+// @decisions: D-609, D-1329
 warning[W0007]: `Option` hides the prelude type `Option`
  --> src/other.cheby:9:10
   |

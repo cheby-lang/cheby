@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-464
+// @decisions: D-1328
 //! A call to a function whose signature is in error drops the caller's body
 //! with no diagnostic in the caller's module. The error is in another
 //! module, and it is what the user sees: no internal compiler error.

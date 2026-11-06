@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-156
+// @decisions: D-156, D-1327
 //! E0058 shows the path of a record update as it is written (§5.11.2).
 
 import std::ops

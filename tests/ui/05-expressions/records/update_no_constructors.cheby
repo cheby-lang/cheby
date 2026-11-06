@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-156
+// @decisions: D-156, D-1327
 //! A record update names a type with named fields, and a type without
 //! constructors has none (§5.11.2).
 

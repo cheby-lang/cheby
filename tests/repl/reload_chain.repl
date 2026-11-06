@@ -1,4 +1,4 @@
-// @decisions: D-043, D-609, D-625
+// @decisions: D-043, D-609, D-625, D-1330
 > import std::io
 > import store::other
 > fn one() -> other::P {

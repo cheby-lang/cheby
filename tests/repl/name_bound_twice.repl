@@ -1,4 +1,4 @@
-// @decisions: D-464, D-624
+// @decisions: D-464, D-624, D-1329
 > import store::other::{alpha}
 > :module store::other
 > alpha::x

@@ -384,6 +384,17 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1323    | The stress mode's idle worker has an empty targeted queue; D-1320's race and figures are corrected  |
 | D-1324    | A refused worker thread hands its slot's queued fibers to the global queue                          |
 | D-1325    | The fix takes one `bench.yml` dispatch, and D-1255's stop line reads it; no re-gate                 |
+| D-1326    | The second nightly and the fix's bench reading read clean, but for `fuzz (check)`                   |
+| D-1327    | A literal of 2^128 or more is E0071, and an update on an interface or type parameter E0058          |
+| D-1328    | A body dropped with no error anywhere is an internal compiler error                                 |
+| D-1329    | A session import that lost its item stays, and each use is E0042                                    |
+| D-1330    | A recheck finishes, and a new signature from it reaches the callers                                 |
+| D-1331    | A module new at a `:reload` can be imported                                                         |
+| D-1332    | A warm command tells a private item from an item in error                                           |
+| D-1333    | A `main` of another target is no `main`                                                             |
+| D-1334    | A reader of a constant follows every redefinition                                                   |
+| D-1335    | What the split brought: the uploads on a cut, `upload-artifact@v7`, the dated nightly's test        |
+| D-1336    | This change takes one nightly and one `bench.yml` dispatch, with no candidate and no re-gate        |
 
 ## Open questions
 

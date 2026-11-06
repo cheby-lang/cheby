@@ -72,6 +72,8 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 - M4's first change removes `CHEBY_POSITIONS` and D-1193's positions byte, with a gate of its own, since it moves cache keys (D-1317). `bench-compile --restarts` then needs another setting for its `settings` cause.
 - `xtask` gets the shipped allocator, so that D-1316's path reads what ships, and 20,000 is read again when it lands.
 - A same-window A/B of M2's `xtask` against M3's reads the fall of 13% to 21% against M2's exit, which sits in the back end with no cause read. Each `xtask` is built for its own tree, since a binary bakes in its repository root. It runs in a quiet window, on AC power with the lid open, since `caffeinate -ims` does not hold off clamshell sleep.
+- What a plain `fn main` does on native in a package with `targets = ["js"]`: nothing says yet, and it runs. `main_of` reads `native` only (D-1333), so it takes a target when `--target js` lands, and the rule is settled with it.
+- Doc examples as tests, from `docs/plan/m5-tooling.md`, are generated bodies, so that slice looks at D-1328's rule.
 
 ## Exit criteria
 

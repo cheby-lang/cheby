@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-084
+// @decisions: D-084, D-1327
 //! 2^128 - 1, the last value the lexer holds, fits no integer type either
 //! (§3.3.4), in an expression or in a pattern, and nor does any value from
 //! 2^127 on in a pattern. These reports do not depend on the one for 2^128.

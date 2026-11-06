@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-156
+// @decisions: D-156, D-1327
 //! An alias in error has its error at its declaration, so a record update
 //! that names it reports nothing more (§5.11.2).
 
