@@ -226,7 +226,7 @@ test "to_string writes each float as float::show does" {
     (0.30000000000000004, "0.30000000000000004"),
     (100.0, "100.0"),
     (-2.5, "-2.5"),
-    (123456.789, "123456.789"),
+    (123_456.789, "123456.789"),
     (0.001, "0.001"),
     (1.0e-5, "0.00001"),
     (1.0e-7, "1.0e-7"),
@@ -250,7 +250,11 @@ test "to_string writes any Int, and one outside the safe range reads back as a F
   let document = Array([Int(int::max_safe + 2), Int(int::min_value), Int(int::max_safe)])
   let text = to_string(document)
   assert text == "[9007199254740993,-9223372036854775808,9007199254740991]"
-  let floats = Array([Float(9007199254740992.0), Float(-9223372036854775808.0), Int(int::max_safe)])
+  let floats = Array([
+    Float(9_007_199_254_740_992.0),
+    Float(-9_223_372_036_854_775_808.0),
+    Int(int::max_safe),
+  ])
   assert parse_value(text) == Ok(floats)
 }
 
@@ -407,8 +411,8 @@ test "parse_value keeps integers and floats apart" {
   assert parse_value("-0") == Ok(Int(0))
   assert parse_value("2.0") == Ok(Float(2.0))
   assert parse_value("1e3") == Ok(Float(1000.0))
-  assert parse_value("9007199254740991") == Ok(Int(9007199254740991))
-  assert parse_value("9007199254740992") == Ok(Float(9007199254740992.0))
+  assert parse_value("9007199254740991") == Ok(Int(9_007_199_254_740_991))
+  assert parse_value("9007199254740992") == Ok(Float(9_007_199_254_740_992.0))
   assert Int(1) != Float(1.0)
 }
 
@@ -439,7 +443,7 @@ test "a syntax error gives the line and the column in code points" {
 }
 
 test "parse_value accepts any nesting depth" {
-  let deep = string::repeat("[", 100000) + string::repeat("]", 100000)
+  let deep = string::repeat("[", 100_000) + string::repeat("]", 100_000)
   assert result::is_ok(parse_value(deep))
 }
 
@@ -459,24 +463,24 @@ test "parse_value reads numbers at the edges of Int and Float" {
     ("-1", Int(-1)),
     ("1.5", Float(1.5)),
     ("0.1", Float(0.1)),
-    ("1e+5", Float(100000.0)),
+    ("1e+5", Float(100_000.0)),
     ("1E+2", Float(100.0)),
     ("1E-2", Float(0.01)),
     ("-1.25e3", Float(-1250.0)),
     ("0.5e-3", Float(0.0005)),
     ("123.456e-2", Float(1.23456)),
-    ("123456789012345", Int(123456789012345)),
-    ("1234567890123456", Int(1234567890123456)),
-    ("-1234567890123456", Int(-1234567890123456)),
-    ("9007199254740991", Int(9007199254740991)),
-    ("-9007199254740991", Int(-9007199254740991)),
-    ("9007199254740992", Float(9007199254740992.0)),
-    ("-9007199254740992", Float(-9007199254740992.0)),
-    ("10000000000000000", Float(10000000000000000.0)),
-    ("12345678901234567890", Float(12345678901234567890.0)),
+    ("123456789012345", Int(123_456_789_012_345)),
+    ("1234567890123456", Int(1_234_567_890_123_456)),
+    ("-1234567890123456", Int(-1_234_567_890_123_456)),
+    ("9007199254740991", Int(9_007_199_254_740_991)),
+    ("-9007199254740991", Int(-9_007_199_254_740_991)),
+    ("9007199254740992", Float(9_007_199_254_740_992.0)),
+    ("-9007199254740992", Float(-9_007_199_254_740_992.0)),
+    ("10000000000000000", Float(10_000_000_000_000_000.0)),
+    ("12345678901234567890", Float(12_345_678_901_234_567_890.0)),
     ("1e400", Float(float::infinity)),
     ("-1e400", Float(float::neg_infinity)),
-    ("[9007199254740991, -0]", Array([Int(9007199254740991), Int(0)])),
+    ("[9007199254740991, -0]", Array([Int(9_007_199_254_740_991), Int(0)])),
   ]
   lists::each(cases, fn((text, want)) { assert (text, parse_value(text)) == (text, Ok(want)) })
   // `==` does not tell zeros apart, so their signs are read from the text.
@@ -671,7 +675,7 @@ test "parsing, writing and decode_value's conversion keep the stack flat at any 
       _ => nest(wrap(node), level - 1, wrap)
     }
   }
-  let depth = 100000
+  let depth = 100_000
   let arrays = nest(Null, depth, fn(inner) { Array([inner]) })
   let text = string::repeat("[", depth) + "null" + string::repeat("]", depth)
   assert to_string(arrays) == text
@@ -684,8 +688,8 @@ test "parsing, writing and decode_value's conversion keep the stack flat at any 
   let open = string::repeat("[", depth)
   assert parse_value(open) == Err(Syntax(Position { line: 1, column: depth + 1 }))
   assert parse_value(open + "x") == Err(Syntax(Position { line: 1, column: depth + 1 }))
-  let objects = nest(Int(1), 10000, fn(inner) { Object([("a", Array([inner]))]) })
-  let object_text = string::repeat(r#"{"a":["#, 10000) + "1" + string::repeat("]}", 10000)
+  let objects = nest(Int(1), 10_000, fn(inner) { Object([("a", Array([inner]))]) })
+  let object_text = string::repeat(r#"{"a":["#, 10_000) + "1" + string::repeat("]}", 10_000)
   assert parse_value(object_text) == Ok(objects)
   assert to_string(objects) == object_text
   // Pretty text grows with the square of the depth, so it is checked less deep.
@@ -784,7 +788,7 @@ test "value gives Null for a missing field and accepts every kind" {
 }
 
 test "value rebuilds a deep document without growing the stack" {
-  let depth = 100000
+  let depth = 100_000
   let text = string::repeat("[", depth) + "null" + string::repeat("]", depth)
   let assert Ok(decoded) = parse(text, value())
   assert to_string(decoded) == text
@@ -1242,11 +1246,11 @@ test "nested lists and pairs add each index and key to the path" {
 }
 
 test "float and int read the numbers parse_value reads" {
-  assert parse("-9007199254740991", decode::float()) == Ok(-9007199254740991.0)
+  assert parse("-9007199254740991", decode::float()) == Ok(-9_007_199_254_740_991.0)
   let floats = decode::list(decode::float())
   assert parse("[1, 2.5, -0, 1e400]", floats) == Ok([1.0, 2.5, 0.0, float::infinity])
   assert parse("-0", decode::int()) == Ok(0)
-  assert parse("-9007199254740991", decode::int()) == Ok(-9007199254740991)
+  assert parse("-9007199254740991", decode::int()) == Ok(-9_007_199_254_740_991)
   let problem = decode::Error { expected: "Int", found: "Float", path: [] }
   assert parse("-9007199254740992", decode::int()) == Err(Decode([problem]))
 }
@@ -1254,5 +1258,5 @@ test "float and int read the numbers parse_value reads" {
 @target(native)
 test "decode_value passes an Int outside the safe range to int and float" {
   assert decode_value(Int(int::max_safe + 2), decode::int()) == Ok(int::max_safe + 2)
-  assert decode_value(Int(int::max_safe + 2), decode::float()) == Ok(9007199254740992.0)
+  assert decode_value(Int(int::max_safe + 2), decode::float()) == Ok(9_007_199_254_740_992.0)
 }

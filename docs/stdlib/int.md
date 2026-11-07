@@ -115,7 +115,7 @@ Returns `n` as an `Int`. Every `I16` fits.
 
 ```cheby
 test "from_i16 widens" {
-  assert int::from_i16(-32768) == -32768
+  assert int::from_i16(-32_768) == -32_768
 }
 ```
 
@@ -186,7 +186,7 @@ Returns `n` as an `Int`. Every `U16` fits.
 
 ```cheby
 test "from_u16 widens" {
-  assert int::from_u16(u16::max_value) == 65535
+  assert int::from_u16(u16::max_value) == 65_535
 }
 ```
 

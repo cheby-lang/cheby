@@ -45,7 +45,7 @@ test "small numbers" {
 
 test "27 climbs a long way before it falls" {
   assert stopping_time(27) == 111
-  assert stopping_time(837799) == 524
+  assert stopping_time(837_799) == 524
 }
 
 test "a start below 1 panics" {

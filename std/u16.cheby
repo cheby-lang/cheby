@@ -117,63 +117,63 @@ pub fn wrapping_from_u64(n: U64) -> U16 {
 }
 
 test "wrapping_from keeps the low 16 bits of every source" {
-  assert wrapping_from_int(-1) == 65535
+  assert wrapping_from_int(-1) == 65_535
   assert wrapping_from_int(0) == 0
   assert wrapping_from_int(1) == 1
-  assert wrapping_from_int(65535) == 65535
-  assert wrapping_from_int(65536) == 0
-  assert wrapping_from_i8(-128) == 65408
-  assert wrapping_from_i8(-17) == 65519
-  assert wrapping_from_i8(-1) == 65535
+  assert wrapping_from_int(65_535) == 65_535
+  assert wrapping_from_int(65_536) == 0
+  assert wrapping_from_i8(-128) == 65_408
+  assert wrapping_from_i8(-17) == 65_519
+  assert wrapping_from_i8(-1) == 65_535
   assert wrapping_from_i8(0) == 0
   assert wrapping_from_i8(1) == 1
   assert wrapping_from_i8(17) == 17
   assert wrapping_from_i8(127) == 127
-  assert wrapping_from_i16(-32768) == 32768
-  assert wrapping_from_i16(-12817) == 52719
-  assert wrapping_from_i16(-1) == 65535
+  assert wrapping_from_i16(-32_768) == 32_768
+  assert wrapping_from_i16(-12_817) == 52_719
+  assert wrapping_from_i16(-1) == 65_535
   assert wrapping_from_i16(0) == 0
   assert wrapping_from_i16(1) == 1
-  assert wrapping_from_i16(12817) == 12817
-  assert wrapping_from_i16(32767) == 32767
+  assert wrapping_from_i16(12_817) == 12_817
+  assert wrapping_from_i16(32_767) == 32_767
   assert wrapping_from_i32(-2_147_483_648) == 0
-  assert wrapping_from_i32(-1_985_229_329) == 52719
-  assert wrapping_from_i32(-1) == 65535
+  assert wrapping_from_i32(-1_985_229_329) == 52_719
+  assert wrapping_from_i32(-1) == 65_535
   assert wrapping_from_i32(0) == 0
   assert wrapping_from_i32(1) == 1
-  assert wrapping_from_i32(65535) == 65535
-  assert wrapping_from_i32(65536) == 0
-  assert wrapping_from_i32(1_985_229_329) == 12817
-  assert wrapping_from_i32(2_147_483_647) == 65535
+  assert wrapping_from_i32(65_535) == 65_535
+  assert wrapping_from_i32(65_536) == 0
+  assert wrapping_from_i32(1_985_229_329) == 12_817
+  assert wrapping_from_i32(2_147_483_647) == 65_535
   assert wrapping_from_i64(-9_223_372_036_854_775_808) == 0
-  assert wrapping_from_i64(-81_985_529_216_486_895) == 12817
-  assert wrapping_from_i64(-1) == 65535
+  assert wrapping_from_i64(-81_985_529_216_486_895) == 12_817
+  assert wrapping_from_i64(-1) == 65_535
   assert wrapping_from_i64(0) == 0
   assert wrapping_from_i64(1) == 1
-  assert wrapping_from_i64(65535) == 65535
-  assert wrapping_from_i64(65536) == 0
-  assert wrapping_from_i64(81_985_529_216_486_895) == 52719
-  assert wrapping_from_i64(9_223_372_036_854_775_807) == 65535
+  assert wrapping_from_i64(65_535) == 65_535
+  assert wrapping_from_i64(65_536) == 0
+  assert wrapping_from_i64(81_985_529_216_486_895) == 52_719
+  assert wrapping_from_i64(9_223_372_036_854_775_807) == 65_535
   assert wrapping_from_u32(0) == 0
   assert wrapping_from_u32(1) == 1
-  assert wrapping_from_u32(65535) == 65535
-  assert wrapping_from_u32(65536) == 0
-  assert wrapping_from_u32(2_309_737_967) == 52719
-  assert wrapping_from_u32(4_294_967_295) == 65535
+  assert wrapping_from_u32(65_535) == 65_535
+  assert wrapping_from_u32(65_536) == 0
+  assert wrapping_from_u32(2_309_737_967) == 52_719
+  assert wrapping_from_u32(4_294_967_295) == 65_535
   assert wrapping_from_u64(0) == 0
   assert wrapping_from_u64(1) == 1
-  assert wrapping_from_u64(65535) == 65535
-  assert wrapping_from_u64(65536) == 0
-  assert wrapping_from_u64(81_985_529_216_486_895) == 52719
-  assert wrapping_from_u64(18_446_744_073_709_551_615) == 65535
+  assert wrapping_from_u64(65_535) == 65_535
+  assert wrapping_from_u64(65_536) == 0
+  assert wrapping_from_u64(81_985_529_216_486_895) == 52_719
+  assert wrapping_from_u64(18_446_744_073_709_551_615) == 65_535
 }
 
 @target(native)
 test "wrapping_from_int keeps the low 16 bits of every Int" {
   assert wrapping_from_int(-9_223_372_036_854_775_808) == 0
-  assert wrapping_from_int(-81_985_529_216_486_895) == 12817
-  assert wrapping_from_int(81_985_529_216_486_895) == 52719
-  assert wrapping_from_int(9_223_372_036_854_775_807) == 65535
+  assert wrapping_from_int(-81_985_529_216_486_895) == 12_817
+  assert wrapping_from_int(81_985_529_216_486_895) == 52_719
+  assert wrapping_from_int(9_223_372_036_854_775_807) == 65_535
 }
 
 // Parsing and text
@@ -204,16 +204,16 @@ test "to_base writes every U16 in every base" {
   assert to_base(1, 10) == Ok("1")
   assert to_base(1, 16) == Ok("1")
   assert to_base(1, 36) == Ok("1")
-  assert to_base(52719, 2) == Ok("1100110111101111")
-  assert to_base(52719, 8) == Ok("146757")
-  assert to_base(52719, 10) == Ok("52719")
-  assert to_base(52719, 16) == Ok("cdef")
-  assert to_base(52719, 36) == Ok("14of")
-  assert to_base(65535, 2) == Ok("1111111111111111")
-  assert to_base(65535, 8) == Ok("177777")
-  assert to_base(65535, 10) == Ok("65535")
-  assert to_base(65535, 16) == Ok("ffff")
-  assert to_base(65535, 36) == Ok("1ekf")
+  assert to_base(52_719, 2) == Ok("1100110111101111")
+  assert to_base(52_719, 8) == Ok("146757")
+  assert to_base(52_719, 10) == Ok("52719")
+  assert to_base(52_719, 16) == Ok("cdef")
+  assert to_base(52_719, 36) == Ok("14of")
+  assert to_base(65_535, 2) == Ok("1111111111111111")
+  assert to_base(65_535, 8) == Ok("177777")
+  assert to_base(65_535, 10) == Ok("65535")
+  assert to_base(65_535, 16) == Ok("ffff")
+  assert to_base(65_535, 36) == Ok("1ekf")
   assert to_base(max_value, 0) == Err(Nil)
   assert to_base(max_value, -16) == Err(Nil)
   assert to_base(min_value, 37) == Err(Nil)
@@ -354,7 +354,7 @@ pub fn wrapping_neg(n: U16) -> U16
 // Tests of `std::int` that need this module.
 
 test "from_u16 widens" {
-  assert int::from_u16(max_value) == 65535
+  assert int::from_u16(max_value) == 65_535
 }
 
 // Examples
@@ -366,20 +366,20 @@ test "the u16 range" {
 
 test "conversions to u16" {
   assert from_u8(255) == 255
-  assert from_u32(65535) == Ok(65535)
-  assert from_int(65536) == Err(Nil)
+  assert from_u32(65_535) == Ok(65_535)
+  assert from_int(65_536) == Err(Nil)
   assert from_i16(-1) == Err(Nil)
   assert wrapping_from_u64(0x0123_4567_89AB_CDEF) == 0xCDEF
   assert wrapping_from_int(-1) == max_value
-  assert wrapping_from_i16(-32768) == 32768
+  assert wrapping_from_i16(-32_768) == 32_768
   assert wrapping_from_int(200) == 200
 }
 
 test "u16 parses and shows decimal digits" {
   let small: U16 = 7
-  assert parse("65535") == Ok(65535)
+  assert parse("65535") == Ok(65_535)
   assert parse("65536") == Err(Nil)
-  assert parse_base("ffff", 16) == Ok(65535)
+  assert parse_base("ffff", 16) == Ok(65_535)
   assert show(max_value) == "65535"
   assert "{small}" == "7"
   assert to_base(max_value, 16) == Ok("ffff")

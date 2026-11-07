@@ -363,8 +363,8 @@ test "the i32 range" {
 }
 
 test "conversions to i32" {
-  assert from_i16(-32768) == -32768
-  assert from_u16(65535) == 65535
+  assert from_i16(-32_768) == -32_768
+  assert from_u16(65_535) == 65_535
   assert from_int(-2_147_483_649) == Err(Nil)
   assert from_i64(-1) == Ok(-1)
   assert from_u32(4_294_967_295) == Err(Nil)

@@ -110,7 +110,7 @@ The lexical forms are defined in [§2.5](02-lexical-structure.md#25-literals). T
 
 ### 5.3.1 Negative literals
 
-When unary `-` is written directly before an integer or float literal, with nothing between them, the pair is treated as one negative literal for type inference and range checking. `-128` is a valid `I8` literal and `-9223372036854775808` is a valid `Int` literal, even though `128` and `9223372036854775808` are out of range for those types.
+When unary `-` is written directly before an integer or float literal, with nothing between them, the pair is treated as one negative literal for type inference and range checking. `-128` is a valid `I8` literal and `-9_223_372_036_854_775_808` is a valid `Int` literal, even though `128` and `9_223_372_036_854_775_808` are out of range for those types.
 
 Whitespace or a comment between a unary `-` and a numeric literal is a compile error, so `- 128` is rejected rather than read as `neg(128)`. `-(128)` negates a parenthesized expression and is not a negative literal, and binary minus, as in `a - 5`, is not affected (D-470).
 

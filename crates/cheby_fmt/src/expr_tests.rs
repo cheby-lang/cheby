@@ -370,6 +370,98 @@ fn fmt_expr_unary_field_access_and_paths_are_tight() {
     body(src, (24, out), out);
 }
 
+/// `literal` in an expression prints as `out` (D-1345).
+#[track_caller]
+fn number(literal: &str, out: &str) {
+    assert_eq!(
+        fmt_at(&format!("const a: Int = {literal}\n"), 100),
+        format!("const a: Int = {out}\n")
+    );
+}
+
+#[test]
+fn fmt_expr_number_groups_five_or_more_digits() {
+    number("10000", "10_000");
+    number("123456", "123_456");
+    number("1234567", "1_234_567");
+    number("18446744073709551615", "18_446_744_073_709_551_615");
+    number("-1000000", "-1_000_000");
+    // Below five digits nothing changes.
+    number("0", "0");
+    number("1000", "1000");
+    number("9999", "9999");
+}
+
+#[test]
+fn fmt_expr_number_keeps_written_separators() {
+    number("10_00", "10_00");
+    number("1_000", "1_000");
+    number("1_0000", "1_0000");
+    number("2026_11_07", "2026_11_07");
+    number("1__000_", "1__000_");
+    number("12345.000_1", "12345.000_1");
+}
+
+#[test]
+fn fmt_expr_number_leaves_prefixed_literals() {
+    number("0x12345678", "0x12345678");
+    number("0b1010101010", "0b1010101010");
+    number("0o1234567", "0o1234567");
+    number("0xFFFF_FFFF", "0xFFFF_FFFF");
+}
+
+#[test]
+fn fmt_expr_number_groups_a_float_s_integer_part() {
+    number("9007199254740992.0", "9_007_199_254_740_992.0");
+    number("10000.123456", "10_000.123456");
+    number("10000e100000", "10_000e100000");
+    number("10000.5E-100000", "10_000.5E-100000");
+    number("3.141592653589793", "3.141592653589793");
+    number("1000.5", "1000.5");
+    number("1e100000", "1e100000");
+}
+
+/// A leading zero is an error (§2.5.1), which the formatter leaves for the
+/// user to fix, as it leaves the gap of D-1158.
+#[test]
+fn fmt_expr_number_leaves_a_leading_zero() {
+    number("012345", "012345");
+    number("0123456.5", "0123456.5");
+}
+
+#[test]
+fn fmt_expr_number_in_a_pattern() {
+    body(
+        "  case n {\n    100000 => 1\n    -100000 => 2\n    10_00 => 3\n    _ => 4\n  }\n",
+        (
+            40,
+            "  case n {\n    100_000 => 1\n    -100_000 => 2\n    10_00 => 3\n    _ => 4\n  }\n",
+        ),
+        "  case n {\n    100_000 => 1\n    -100_000 => 2\n    10_00 => 3\n    _ => 4\n  }\n",
+    );
+}
+
+/// The width counts the separators, so a line that fits only without
+/// them breaks.
+#[test]
+fn fmt_expr_number_counts_towards_the_width() {
+    body(
+        "  let x = f(1000000)\n",
+        (20, "  let x =\n    f(1_000_000)\n"),
+        "  let x = f(1_000_000)\n",
+    );
+}
+
+/// A gap that D-470 rejects keeps its node exactly as written (D-1158),
+/// and that includes the number.
+#[test]
+fn fmt_expr_number_in_a_kept_gap_stays() {
+    assert_eq!(
+        fmt_at("const a: Int = - 100000\n", 100),
+        "const a: Int = - 100000\n"
+    );
+}
+
 #[test]
 fn fmt_expr_negative_literal_gap_is_kept() {
     // `- 1` is an error (D-470); the formatter does not close the gap.

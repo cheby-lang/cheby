@@ -571,9 +571,21 @@ impl<'t> Formatter<'t> {
         self.src.node(node, anchor)
     }
 
-    /// A token as written. A token that holds a line break (a multi-line
-    /// raw string, as in a literal pattern) is a fragment of source whose
-    /// later lines start inside the string and are written exactly.
+    /// A literal: a number as the style prints it (D-1345), and a raw
+    /// string as written.
+    pub(crate) fn literal(&mut self, node: SyntaxNode<'t>) -> Doc {
+        let written = self.as_written(node);
+        match node.first_token() {
+            Some(token) if token.kind() != SyntaxKind::RAW_STRING => self.token(token),
+            _ => written,
+        }
+    }
+
+    /// A token as the style prints it: a number with its digit separators
+    /// (D-1345), and any other token as written. A token that holds a line
+    /// break (a multi-line raw string, as in a literal pattern) is a
+    /// fragment of source whose later lines start inside the string and
+    /// are written exactly.
     pub(crate) fn token(&self, token: SyntaxToken<'t>) -> Doc {
         if token.text().contains('\n') {
             let range = token.text_range();
@@ -581,7 +593,7 @@ impl<'t> Formatter<'t> {
             let end = crate::source::to_usize(range.end());
             self.src.fragment(start, end, self.src.line_indent(start))
         } else {
-            Doc::text(token.text())
+            Doc::text(&crate::number::styled(token.kind(), token.text()))
         }
     }
 

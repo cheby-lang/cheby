@@ -4,9 +4,9 @@
 //! its lossless tree (D-272, D-280) in the one canonical style: a pretty
 //! printer driven by one line width, with no options. Comments and single
 //! blank lines are kept, runs of blank lines collapse to one, imports are
-//! sorted within their block, files use LF and end with one newline, and
-//! string literals are never split. A source with a grammar error is never
-//! formatted.
+//! sorted within their block, files use LF and end with one newline,
+//! string literals are never split, and long decimal numbers get digit
+//! separators (`number`). A source with a grammar error is never formatted.
 //!
 //! The formatter grows in parts (D-1029). The first part laid out the
 //! file's lines, imports and item headers (`layout`); the second lays out
@@ -20,6 +20,7 @@ pub mod doc;
 mod expr;
 mod gap;
 mod layout;
+mod number;
 mod source;
 
 use std::fmt;

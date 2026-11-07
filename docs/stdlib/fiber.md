@@ -177,10 +177,10 @@ test "a fiber can have a larger stack" {
   }
   let outcome = {
     use owner <- fiber::scope()
-    let deep = fiber::spawn_with_stack(owner, 64 * 1024 * 1024, fn() { depth(100000) })
+    let deep = fiber::spawn_with_stack(owner, 64 * 1024 * 1024, fn() { depth(100_000) })
     fiber::join(deep)
   }
-  assert outcome == Ok(100000)
+  assert outcome == Ok(100_000)
 }
 ```
 

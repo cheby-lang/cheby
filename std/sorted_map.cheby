@@ -916,7 +916,7 @@ test "the tree stays balanced through random inserts and removes" {
     }
   }
   fn next(seed: Int) -> Int {
-    (seed * 1103515245 + 12345) % 2147483648
+    (seed * 1_103_515_245 + 12_345) % 2_147_483_648
   }
   // Inserts or removes `count` pseudo-random keys below 500 in `m` and in
   // the reference `seen`, one remove for two inserts, checking the tree
@@ -930,7 +930,7 @@ test "the tree stays balanced through random inserts and removes" {
     case count {
       0 => (m, seen)
       _ => {
-        let key = seed / 65536 % 500
+        let key = seed / 65_536 % 500
         let (changed, changed_keys) = case count % 3 {
           0 => (remove(m, key), set::remove(seen, key))
           _ => (insert(m, key, key * 2), set::insert(seen, key))

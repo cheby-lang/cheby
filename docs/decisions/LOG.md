@@ -2216,3 +2216,15 @@ Open:
 - `progen` and its reference evaluator do not cover guards, as they do not cover `use`. The differential fuzzers therefore test the `case` a guard lowers to, not the guard statement.
 
 Spec: §2.4, §2.8, §3.12.5, §5.1, §5.2, §5.15, §5.18 (new), §6.1, §6.9, §11.2, §11.4, §11.5, §13.5.1, §13.7, §13.8, the tables of chapter 1 and Appendix A. No new diagnostic code: E0007, E0060 and W0008 change. Tree-sitter: grammar change, see Open.
+
+## 2026-11-07: Digit separators in `cheby fmt`
+
+Goal: make long decimal numbers readable without leaving the grouping to each author.
+
+- **D-1345 `cheby fmt` groups the digits of long decimal numbers**: A decimal integer literal of five or more digits written with no `_` is printed with a `_` between groups of three digits, counted from the right: `1000000` becomes `1_000_000`. A float literal's integer part follows the same rule, and its fraction and exponent stay as written: `10000.5` becomes `10_000.5`. Every other literal stays as written: one that holds a `_` anywhere, one of four digits or fewer, one with a base prefix, and one with a leading zero, which is an error for the user to fix. A number in a node kept verbatim by D-1158 stays too. The width counts the separators. The meaning check of D-1153 gets a third exception of the style's own: a number is compared without its `_` characters, so every digit is still compared. Why: the user asked for it, and chose each rule from the measured effect on `std/` and the examples. A written `_` may carry meaning that no rule can rebuild, as in the dollars and cents of `10_00` in example 022, and with no options (D-079) an author could not opt out of regrouping. Regrouping every literal into one spelling was rejected for that reason, at the cost that `1000` and `1_000`, or `1_0000`, all stay. Starting at four digits was rejected because it gives `1_965` and `8_080` for years and ports. Hex, binary and octal literals have no decimal place values, and grouping them gives `0xAA_BBCC`. Grouping a fraction gives `3.141_592_653_589_793`, and constants would stop matching their reference text. Refines D-1030, D-1153.
+
+Open:
+
+- `tests/ui` keeps its numbers as written. CI does not check those sources with `cheby fmt`, and 85 of the 925 differed from its output before this change.
+
+Spec: §13.7. The code in `docs/spec/` and `docs/stdlib/` follows the rule, and ADR bodies stay as they are. No new diagnostic code. Tree-sitter: no grammar change, since §2.5 already allows `_`. `../zed-cheby` needs nothing.
