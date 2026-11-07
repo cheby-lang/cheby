@@ -10,20 +10,28 @@
 # miri.yml, with its own limit, so that this one's conclusion can be read
 # (D-1322).
 #
-# - `fuzz`: a bounded run of each of the four `cargo fuzz` targets
+# - `fuzz`: a bounded run of each of the four `cargo fuzz` targets, with
+#   `rc_differential` run twice, as below
 #   (fuzz/fuzz_targets): `lex`, `parse` and `check` from seed corpora made
 #   of the examples and the UI tests, and `rc_differential`, naive
 #   reference counting against Perceus on generated programs (D-718),
-#   which runs a debug `cheby` built with the stable toolchain and copied
-#   aside first. A finding fails the job and uploads fuzz/artifacts
-#   (D-781). `cargo fuzz` builds under AddressSanitizer, so the step adds
+#   which runs a debug `cheby` copied aside first. It has two legs, side by
+#   side (D-1338): `plain` builds that `cheby` with the stable toolchain,
+#   for the number of programs, and `address` builds it under
+#   AddressSanitizer with the driver below, about five times slower, so
+#   that the programs it runs are watched too. A report changes that
+#   `cheby`'s output and status, which the differential refuses. A finding
+#   fails the job and uploads fuzz/artifacts (D-781).
+#   `cargo fuzz` builds under AddressSanitizer, so the step adds
 #   `--cfg cheby_sanitize="address"` to its `RUSTFLAGS`, which cargo-fuzz
 #   appends to its own: the fiber switches that constant evaluation makes
 #   are told to the sanitizer, and so are the interners' entries, leaked
 #   on purpose, as in the sanitizer jobs (D-898). LeakSanitizer is off
-#   for `check` (`ASAN_OPTIONS=detect_leaks=0`, which cargo-fuzz merges
-#   with its own and which also covers the check at exit that libFuzzer's
-#   `-detect_leaks=0` leaves on, D-898), as for `conformance` below:
+#   for `check` and for `rc_differential`'s `address` leg
+#   (`ASAN_OPTIONS=detect_leaks=0`, which cargo-fuzz merges with its own,
+#   which also covers the check at exit that libFuzzer's `-detect_leaks=0`
+#   leaves on, D-898, and which reaches the `cheby` that the leg starts,
+#   D-1338), as for `conformance` below:
 #   `cheby check` evaluates every constant (D-459), and the results that
 #   D-539 makes static are held only by the JIT's data memory, which
 #   LeakSanitizer does not scan. Every input of `check` builds new
@@ -42,14 +50,17 @@
 #   `CHEBY_RT_TEST_EMULATED=1` (D-725, D-748): the runtime's unit tests with
 #   and without `CHEBY_RT_STRESS_MIGRATE=1`, `cheby_jit`'s tests, the
 #   deadlock UI tests at 4 and 2 threads under migration stress, the 2- and
-#   4-thread conformance trials under migration stress, and the REPL
-#   transcripts, `detached_reload.repl` included, under both sanitizers
-#   (D-831). The address job adds every example run with
+#   4-thread conformance trials under migration stress, the `@aot` trials,
+#   which build each example with the sanitized `cheby` and archive and run
+#   the executable (D-1337), and the REPL transcripts,
+#   `detached_reload.repl` included, under both sanitizers (D-831). The
+#   address job adds every example run with
 #   `CHEBY_RT_POISON=0`, the only runs that take the block cache and the
 #   inline reuse paths (D-844).
-#   JIT code is not instrumented (D-721): the sanitizers see the runtime,
-#   std and the compiler, and the harnesses' `CHEBY_RT_POISON=1` routes
-#   every count operation of generated code through the runtime.
+#   Generated code is not instrumented, in the JIT or in an executable
+#   (D-721, D-1337): the sanitizers see the runtime, std and the compiler,
+#   and the harnesses' `CHEBY_RT_POISON=1` routes every count operation of
+#   generated code through the runtime.
 #   Under the cfg, `cheby` keeps the system allocator instead of mimalloc,
 #   because the sanitizers intercept only the system allocator (D-890).
 #   Options every step passes (the driver sets them; a caller's
@@ -62,7 +73,9 @@
 #   `second_deadlock_stack=1` for TSan.
 #   The `loom` models are skipped (`--skip models::`), since loom switches
 #   stacks on its own (D-863).
-#   LeakSanitizer is on for the `jit` and `ui-deadlock` steps and off
+#   LeakSanitizer is on for the `jit`, `ui-deadlock` and `aot` steps, since
+#   an executable's slot `cb$const$…` is in its own data, which LeakSanitizer
+#   scans (D-1337), and off
 #   (`detect_leaks=0`, a per-step option, D-863) for `runtime` and
 #   `runtime-stress`, because the runtime's unit tests leak on purpose
 #   (frozen constants are immortal, leaked fixtures, child processes that
@@ -91,7 +104,7 @@
 #   today it names none.
 #   A job cut off at its limit ends `cancelled`, where `failure()` is false,
 #   so the logs upload on `failure() || cancelled()`.
-# - The `rc_differential` fuzz job and both sanitizer jobs build
+# - The `rc_differential` fuzz jobs and both sanitizer jobs build
 #   `cheby_cli`, whose mimalloc libmimalloc-sys compiles from C, so they
 #   first run `.github/actions/c-compiler`, which checks the image's C
 #   compiler and installs nothing (D-890).
@@ -128,13 +141,20 @@ env:
 
 jobs:
   fuzz:
-    name: fuzz (${{ matrix.target }})
+    name: fuzz (${{ matrix.target }}${{ matrix.cheby && format(', {0}', matrix.cheby) || '' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        target: [lex, parse, check, rc_differential]
+        include:
+          - target: lex
+          - target: parse
+          - target: check
+          - target: rc_differential
+            cheby: plain
+          - target: rc_differential
+            cheby: address
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -143,6 +163,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-10-01
+          components: rust-src
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -163,17 +184,23 @@ jobs:
             cp "$f" "fuzz/corpus/${{ matrix.target }}/$(echo "$f" | tr / _)"
           done
       - name: Build the debug cheby that rc_differential runs
-        if: matrix.target == 'rc_differential'
+        if: matrix.cheby == 'plain'
         run: |
           cargo build -p cheby_cli --locked
           mkdir -p "$RUNNER_TEMP/rc"
           cp target/debug/cheby "$RUNNER_TEMP/rc/cheby"
           echo "CHEBY_DIFF_BIN=$RUNNER_TEMP/rc/cheby" >> "$GITHUB_ENV"
+      - name: Build the sanitized cheby that rc_differential runs
+        if: matrix.cheby == 'address'
+        run: |
+          mkdir -p "$RUNNER_TEMP/rc"
+          cargo xtask sanitize address --build-cheby "$RUNNER_TEMP/rc/cheby"
+          echo "CHEBY_DIFF_BIN=$RUNNER_TEMP/rc/cheby" >> "$GITHUB_ENV"
       - name: Fuzz ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }} seconds
         working-directory: fuzz
         env:
           RUSTFLAGS: '--cfg cheby_sanitize="address"'
-          ASAN_OPTIONS: ${{ matrix.target == 'check' && 'detect_leaks=0' || '' }}
+          ASAN_OPTIONS: ${{ (matrix.target == 'check' || matrix.cheby == 'address') && 'detect_leaks=0' || '' }}
         run: >-
           cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} --
           -max_total_time=${{ env.FUZZ_SECONDS }} -timeout=600
@@ -182,7 +209,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-artifacts-${{ matrix.target }}
+          name: fuzz-artifacts-${{ matrix.target }}${{ matrix.cheby && format('-{0}', matrix.cheby) || '' }}
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
 

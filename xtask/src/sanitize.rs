@@ -23,7 +23,7 @@
 //!   (D-884), with [`MIRIFLAGS`] and `PROPTEST_CASES=4`.
 //!   `--jobs <n>` runs n groups at once; Miri interprets each on one core.
 //!
-//! The harness steps (`ui-deadlock`, `conformance`, `repl`) and the
+//! The harness steps (`ui-deadlock`, `conformance`, `aot`, `repl`) and the
 //! poison-off pass leave `CHEBY_MILESTONE`, `CHEBY_PENDING` and
 //! `CHEBY_PENDING_ALLOW` as the caller set them: the local evidence runs
 //! with `CHEBY_MILESTONE=M4 CHEBY_PENDING=require`, so a failing M3 trial
@@ -41,7 +41,9 @@
 //! `allocator_may_return_null=1` and
 //! `suppressions=.github/tsan-suppressions.txt`, which lists reports from
 //! dependencies only, each with its reason (D-863). On Linux, the leak
-//! checker is on for the `jit` and `ui-deadlock` steps and off for
+//! checker is on for the `jit`, `ui-deadlock` and `aot` steps, since an
+//! executable's constant slots are in its own data, which the checker scans
+//! (D-1337), and off for
 //! `runtime` and `runtime-stress`, whose unit tests leak on purpose (frozen
 //! constants are immortal, leaked fixtures, child processes that end at a
 //! halt or a refusal without cleanup), and for `conformance`,
@@ -65,7 +67,14 @@
 //! the command exited 0. The last line sums the steps up. `--list` prints
 //! the steps without running anything; `--no-run` only builds what they
 //! need (a local `-Zbuild-std` build takes a lock its test run does not);
-//! `--log-dir` keeps each step's output in a file as it comes.
+//! `--log-dir` keeps each step's output in a file as it comes;
+//! `--build-cheby <path>` runs no step and copies the sanitized `cheby`
+//! there, for `rc_differential`'s `address` leg (D-1338).
+//!
+//! The `aot` step builds the sanitized archive first, since `cargo test`
+//! does not, and `cheby build` looks for it next to the sanitized `cheby`
+//! (D-929). The sanitized `cheby` adds the sanitizer's runtime to the link
+//! line (`cheby_link::link::SANITIZER_RUNTIME`, D-1337).
 
 use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Read, Write as _};
@@ -172,6 +181,10 @@ pub struct Args {
     /// take a lock that the test run does not need)
     #[arg(long)]
     no_run: bool,
+    /// Run no step: build the sanitized `cheby` and copy it to this path,
+    /// as `rc_differential`'s `address` leg does (D-1338)
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["steps", "list", "no_run"])]
+    build_cheby: Option<PathBuf>,
 }
 
 /// One test group of the Miri subset: a libtest filter over the runtime's
@@ -320,10 +333,11 @@ pub const MIRI_GROUPS: &[MiriGroup] = &[
 pub enum Leaks {
     /// `detect_leaks=1` on Linux.
     On,
-    /// `detect_leaks=0`: the runtime's unit tests leak on purpose, programs
-    /// that read a constant hold its static objects (D-539) only in the
-    /// JIT's data memory, which the leak checker does not scan, and the
-    /// REPL never frees its session values (D-547, D-458).
+    /// `detect_leaks=0`: the runtime's unit tests leak on purpose, a
+    /// program under `cheby run` that reads a constant holds its static
+    /// objects (D-539) only in the JIT's data memory, which the leak checker
+    /// does not scan, and the REPL never frees its session values (D-547,
+    /// D-458).
     Off,
 }
 
@@ -336,6 +350,10 @@ pub enum Action {
         env: Vec<(&'static str, &'static str)>,
         args: Vec<&'static str>,
     },
+    /// Builds the sanitized runtime archive next to the sanitized `cheby`,
+    /// where `cheby build` looks for it (D-929, D-1337): `cargo test` does
+    /// not build it.
+    Archive,
     /// Builds the sanitized `cheby` and runs every example's run trial with
     /// `CHEBY_RT_POISON=0`, comparing with the goldens (D-844): the
     /// harnesses poison freed objects in every trial, so only this pass
@@ -459,6 +477,30 @@ pub fn steps() -> Vec<Step> {
             }],
         },
         Step {
+            name: "aot",
+            address: true,
+            thread: true,
+            leaks: Leaks::On,
+            // The `@aot` trial of every example that runs: `cheby build`,
+            // then the executable at every thread variant (D-1025, D-1337).
+            actions: vec![
+                Action::Archive,
+                Action::Test {
+                    env: vec![("CHEBY_THREADS", "4"), ("CHEBY_RT_STRESS_MIGRATE", "1")],
+                    args: vec![
+                        "-p",
+                        "cheby_cli",
+                        "--test",
+                        "conformance",
+                        "--",
+                        "--test-threads",
+                        "1",
+                        "@aot",
+                    ],
+                },
+            ],
+        },
+        Step {
             name: "examples-poison-off",
             address: true,
             thread: false,
@@ -545,6 +587,7 @@ fn describe_action(action: &Action, sanitizer: Sanitizer) -> String {
             words.extend(test_args(args, sanitizer).iter().map(|a| (*a).to_owned()));
             words.join(" ")
         }
+        Action::Archive => "cargo build -p cheby_rt_exe".to_owned(),
         Action::ExamplesPoisonOff => {
             "cargo build -p cheby_cli --bin cheby, then `cheby run` of every example with \
              CHEBY_RT_POISON=0 against its goldens"
@@ -847,6 +890,9 @@ impl Context {
 pub fn run(root: &Path, args: &Args) -> Result<(), String> {
     let planned = select(plan(args.sanitizer), &args.steps)?;
     let name = args.sanitizer.name();
+    if args.build_cheby.is_some() && args.sanitizer == Sanitizer::Miri {
+        return Err("--build-cheby applies to address and thread only".to_owned());
+    }
     if args.list {
         for step in &planned {
             println!("{}", step.name);
@@ -882,6 +928,13 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
         log_dir,
         no_run: args.no_run,
     };
+    if let Some(path) = &args.build_cheby {
+        let path = crate::absolute(path)?;
+        let cheby = build_cheby(&cx, Leaks::Off)?;
+        std::fs::copy(&cheby, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!("sanitize {name}: built `cheby` at {}", path.display());
+        return Ok(());
+    }
     println!(
         "sanitize {name}: {} step(s) on {NIGHTLY} for {}, target directory {}",
         planned.len(),
@@ -963,6 +1016,10 @@ fn seconds(elapsed: Duration) -> String {
 
 /// Runs one address or thread step: each command's build (`--no-run`),
 /// then its tests.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per action, each with its timing and its notes"
+)]
 fn run_step(cx: &Context, step: &Step) -> Outcome {
     let name = cx.sanitizer.name();
     let mut build_time = Duration::ZERO;
@@ -1016,6 +1073,15 @@ fn run_step(cx: &Context, step: &Step) -> Outcome {
                     }
                 }
                 test_time = test_time.saturating_add(started.elapsed());
+            }
+            Action::Archive => {
+                let started = Instant::now();
+                let built = build_archive(cx, step.leaks, log.as_deref());
+                build_time = build_time.saturating_add(started.elapsed());
+                if let Err(e) = built {
+                    success = false;
+                    notes.push(e);
+                }
             }
             Action::ExamplesPoisonOff => {
                 let started = Instant::now();
@@ -1071,6 +1137,18 @@ fn split_args<'a>(args: &'a [&'static str]) -> (&'a [&'static str], &'a [&'stati
             args.get(at.saturating_add(1)..).unwrap_or_default(),
         ),
         None => (args, &[]),
+    }
+}
+
+/// Builds the sanitized runtime archive next to the sanitized `cheby`
+/// (D-929, D-1337).
+fn build_archive(cx: &Context, leaks: Leaks, log: Option<&Path>) -> Result<(), String> {
+    let mut cmd = cx.sanitized("build", leaks);
+    cmd.args(["-p", "cheby_rt_exe"]);
+    if run_scanned(cmd, Output::Live, log)?.success {
+        Ok(())
+    } else {
+        Err("cannot build the sanitized archive".to_owned())
     }
 }
 
@@ -1375,6 +1453,9 @@ mod tests {
         assert_eq!(parse(&["address"]).unwrap().sanitizer, Sanitizer::Address);
         assert!(!parse(&["address"]).unwrap().no_run);
         assert!(parse(&["address", "--no-run"]).unwrap().no_run);
+        let args = parse(&["address", "--build-cheby", "/tmp/cheby"]).unwrap();
+        assert_eq!(args.build_cheby.as_deref(), Some(Path::new("/tmp/cheby")));
+        assert!(parse(&["address", "--build-cheby", "/tmp/c", "--list"]).is_err());
         assert!(parse(&[]).is_err());
         assert!(parse(&["memory"]).is_err());
         assert!(parse(&["miri", "--jobs", "0"]).is_err());
@@ -1390,6 +1471,7 @@ mod tests {
                 "jit",
                 "ui-deadlock",
                 "conformance",
+                "aot",
                 "examples-poison-off",
                 "repl"
             ]
@@ -1402,6 +1484,7 @@ mod tests {
                 "jit",
                 "ui-deadlock",
                 "conformance",
+                "aot",
                 "repl"
             ]
         );
@@ -1433,6 +1516,14 @@ mod tests {
         );
         assert_eq!(
             thread[5].commands,
+            [
+                "cargo build -p cheby_rt_exe",
+                "CHEBY_THREADS=4 CHEBY_RT_STRESS_MIGRATE=1 cargo test -p cheby_cli --test \
+                 conformance -- --test-threads 1 @aot"
+            ]
+        );
+        assert_eq!(
+            thread[6].commands,
             ["cargo test -p cheby_cli --test repl -- --test-threads 1"]
         );
     }
@@ -1444,7 +1535,7 @@ mod tests {
             .filter(|s| s.leaks == Leaks::On)
             .map(|s| s.name)
             .collect();
-        assert_eq!(on, ["jit", "ui-deadlock"]);
+        assert_eq!(on, ["jit", "ui-deadlock", "aot"]);
         let supp = Path::new("/r/.github/tsan-suppressions.txt");
         let (var, linux_on) = sanitizer_options(Sanitizer::Address, Leaks::On, true, supp).unwrap();
         assert_eq!(var, "ASAN_OPTIONS");

@@ -15,7 +15,9 @@ use cheby_codegen_clif::record::{RecordContents, SymbolKind};
 
 use super::{Format, code_model_unit, record_for, replayed};
 use crate::gc;
-use crate::link::{LinkHost, LinkJob, START_STOP_GC, command, flags_for};
+use crate::link::{
+    LinkHost, LinkJob, SANITIZER_RUNTIME, START_STOP_GC, command, flags_for, sanitizer_args,
+};
 
 /// The module record's bytes and relocation offsets in `record`.
 fn module_record(
@@ -238,6 +240,33 @@ fn link_gc_linux_link_line_has_start_stop_gc() {
     );
     if LinkHost::current() == LinkHost::Linux {
         assert!(crate::link::flags().iter().any(|a| a == START_STOP_GC));
+    }
+}
+
+/// D-1337: a sanitizer's runtime comes whole and ahead of libc on Linux and
+/// through an rpath on macOS, and without one the line is D-933's. A
+/// build without the cfg names no runtime, so what ships links as before;
+/// a sanitized build names a file of its toolchain.
+#[test]
+fn link_sanitizer_runtime_joins_only_a_sanitized_link() {
+    assert_eq!(sanitizer_args(LinkHost::Linux, None), Vec::<String>::new());
+    assert_eq!(sanitizer_args(LinkHost::MacOs, None), Vec::<String>::new());
+    assert_eq!(
+        sanitizer_args(LinkHost::Linux, Some("/rt/librustc-nightly_rt.asan.a")),
+        [
+            "-Wl,--whole-archive",
+            "/rt/librustc-nightly_rt.asan.a",
+            "-Wl,--no-whole-archive"
+        ]
+    );
+    assert_eq!(
+        sanitizer_args(LinkHost::MacOs, Some("/rt/librustc-nightly_rt.asan.dylib")),
+        ["/rt/librustc-nightly_rt.asan.dylib", "-Wl,-rpath,/rt"]
+    );
+    if cfg!(any(cheby_sanitize = "address", cheby_sanitize = "thread")) {
+        assert!(SANITIZER_RUNTIME.is_some_and(|path| Path::new(path).is_file()));
+    } else {
+        assert_eq!(SANITIZER_RUNTIME, None);
     }
 }
 
