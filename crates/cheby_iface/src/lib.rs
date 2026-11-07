@@ -32,6 +32,7 @@ mod leak;
 mod name;
 mod roundtrip;
 mod set;
+mod sigprint;
 mod ty;
 
 pub use artifact::{Artifact, read_artifact, write_artifact};
@@ -50,7 +51,11 @@ pub use index::{Idx, IndexVec};
 pub use name::{Interner, Name, sym};
 pub use roundtrip::check_roundtrip;
 pub use set::{DepView, InterfaceSet, ReadLog, def_path};
-pub use ty::{DisplayCx, GenericParam, Generics, Ty, TyInterner, TyKind, display};
+pub use sigprint::{SigOpts, item_signature};
+pub use ty::{
+    DisplayCx, GenericParam, Generics, ImportNames, Ty, TyInterner, TyKind, display,
+    missing_imports,
+};
 
 /// The process-wide tables every phase shares, as `Arc<Globals>`.
 #[derive(Debug, Default)]

@@ -54,7 +54,11 @@ impl BodyCx<'_> {
             Expr::Tuple(t) => self.tuple(t, expected)?,
             // No THIR node: the inner expression in its place.
             Expr::Paren(p) => match p.inner() {
-                Some(inner) => return self.check_expr(inner, expected),
+                Some(inner) => {
+                    let id = self.check_expr(inner, expected)?;
+                    self.note_expr(p.syntax().id(), id, id, expected);
+                    return Ok(id);
+                }
                 None => self.error_expr(span)?,
             },
             Expr::List(l) => self.list(l, expected)?,
@@ -67,7 +71,10 @@ impl BodyCx<'_> {
             // A `_` outside an argument list is E0025 (phase A).
             Expr::Hole(_) => self.error_expr(span)?,
         };
-        self.coerce_expr(id, expected)
+        let node = expr.syntax().id();
+        let out = self.coerce_expr(id, expected)?;
+        self.note_expr(node, id, out, expected);
+        Ok(out)
     }
 
     /// `expected` without a `dyn` type, which the caller converts to.

@@ -60,6 +60,8 @@ pub(crate) struct Signature {
     pub ret: InferTy,
     /// The callee's name and declaration, for E0048.
     pub named: Option<(String, Option<Span>)>,
+    /// Its place in the fact log, when facts are recorded.
+    pub fact: Option<usize>,
 }
 
 impl Signature {
@@ -69,6 +71,7 @@ impl Signature {
             params: Vec::new(),
             ret: InferTy::ERROR,
             named: None,
+            fact: None,
         }
     }
 
@@ -162,10 +165,11 @@ impl BodyCx<'_> {
             && let Res::Def(def) = self.path_res(path.syntax().id())?
             && let Some(sig) = self.def_callee(def, p, spans)?
         {
-            return Ok(sig);
+            return Ok(self.note_call(callee.syntax().id(), sig));
         }
         let id = self.check_expr(callee, None)?;
-        self.value_callee(id, arity, spans)
+        let sig = self.value_callee(id, arity, spans)?;
+        Ok(self.note_call(callee.syntax().id(), sig))
     }
 
     /// A path to an item as a callee: `None` for items that are called as
@@ -204,6 +208,7 @@ impl BodyCx<'_> {
                         bounds,
                     },
                     named,
+                    fact: None,
                 }
             }
             ItemSig::Ctor(ctor) => match &ctor.fields {
@@ -223,6 +228,7 @@ impl BodyCx<'_> {
                         ret: ty,
                         target: Target::Ctor { def, args },
                         named,
+                        fact: None,
                     }
                 }
                 CtorFields::Unit => {
@@ -251,6 +257,7 @@ impl BodyCx<'_> {
                         self_ty,
                     },
                     named,
+                    fact: None,
                 }
             }
             _ => return Ok(None),
@@ -295,6 +302,7 @@ impl BodyCx<'_> {
             params,
             ret,
             named: None,
+            fact: None,
         })
     }
 
@@ -314,7 +322,9 @@ impl BodyCx<'_> {
         }
         if sig.params.len() != args.len() {
             self.arity_error(sig.named.as_ref(), sig.params.len(), args.len(), spans);
-            self.check_args(&error_params(args.len()), args, spans)?;
+            let ids = self.check_args(&error_params(args.len()), args, spans)?;
+            let callback = matches!(args.last(), Some(ArgSrc::Callback(_)));
+            self.note_call_args(sig.fact, ids, None, callback);
             return self.error_expr(spans.call);
         }
         self.expect_result(&sig, expected)?;
@@ -349,7 +359,18 @@ impl BodyCx<'_> {
         args: Vec<ExprId>,
         span: Span,
     ) -> Result<ExprId, Ice> {
-        let args: Box<[ExprId]> = args.into();
+        let fact = sig.fact;
+        let id = self.build_call_inner(sig, args.into(), span)?;
+        self.note_call_expr(fact, id);
+        Ok(id)
+    }
+
+    fn build_call_inner(
+        &mut self,
+        sig: Signature,
+        args: Box<[ExprId]>,
+        span: Span,
+    ) -> Result<ExprId, Ice> {
         match sig.target {
             Target::Fn {
                 def,
@@ -488,7 +509,8 @@ impl BodyCx<'_> {
         }
         if sig.params.len() != written.len() {
             self.arity_error(sig.named.as_ref(), sig.params.len(), written.len(), spans);
-            self.check_args(&error_params(others.len()), &others, spans)?;
+            let ids = self.check_args(&error_params(others.len()), &others, spans)?;
+            self.note_call_args(sig.fact, ids, Some(hole), false);
             return self.error_expr(spans.call);
         }
         let hole_ty = sig

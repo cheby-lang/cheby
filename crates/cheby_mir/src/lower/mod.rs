@@ -106,6 +106,7 @@ impl LowerCx<'_> {
                 own: self.defs.own,
                 deps: self.defs.deps,
                 generics,
+                imports: None,
             },
         )
     }

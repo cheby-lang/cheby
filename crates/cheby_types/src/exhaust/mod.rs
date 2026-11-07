@@ -13,7 +13,9 @@
 //!
 //! A subjectless `case` is not checked: its final `_` arm is required by
 //! the grammar (D-109, D-439).
-
+//!
+//! [`case_facts`] gives the same matching as data, for the language server
+//! (D-1387). It also runs on bodies with errors, and reports nothing.
 //!
 //! The matching itself is [`engine`], which knows nothing about THIR. This
 //! file lowers THIR patterns and closed types into it. A type's
@@ -33,19 +35,68 @@
 
 mod engine;
 
+use std::collections::BTreeMap;
+
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
-    CtorFields, CtorSig, DefId, DefIndex, DepView, Globals, Ice, IfaceItem, ItemSig, ModuleId,
-    ModuleInterface, ModuleTable, PackageId, Ty, TyKind, TypeDefKind, builtin, structure_visible,
+    CtorFields, CtorSig, DefId, DefIndex, DepView, Globals, Ice, IfaceItem, IndexVec, ItemSig,
+    ModuleId, ModuleInterface, ModuleTable, PackageId, Ty, TyKind, TypeDefKind, builtin,
+    structure_visible,
 };
+use cheby_syntax::NodeId;
 
 use crate::TypesInput;
 use crate::infer::{contains_error, substitute};
-use crate::thir::{self, CaseOrigin, ExprId, ExprKind, Lit, ParamOrigin, PatKind, Stmt};
-use engine::{Ctor, ListLen, LitKey, Pat, Shape, Space, Types};
+use crate::thir::{self, CaseOrigin, ExprId, ExprKind, Lit, ParamOrigin, PatId, PatKind, Stmt};
+use engine::{Ctor, ListLen, LitKey, Pat, Shape, Space, Types, Witness, WitnessKind};
 
 /// How many missing values a diagnostic lists before "and N more".
 const SHOWN: usize = 3;
+
+/// The rows of [`CaseFact::missing`], and its `more`.
+type VariantRows = (Vec<Vec<MissingPat>>, bool);
+
+/// What the matching of one `case` with subjects found (D-1387).
+#[derive(Clone, Debug)]
+pub struct CaseFact {
+    /// The `CASE_EXPR`.
+    pub node: NodeId,
+    /// One row per missing value, one pattern per subject, at most 64.
+    pub missing: Vec<Vec<MissingPat>>,
+    /// Whether more values are missing than `missing` holds.
+    pub more: bool,
+    /// The check ran out of budget, so the rows are a `_` fallback.
+    pub too_complex: bool,
+    /// Arms that can never match, by index among the checked arms.
+    pub unreachable: Vec<u32>,
+}
+
+/// A value that no arm matches, as a pattern.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissingPat {
+    /// Any value.
+    Wild,
+    /// An `Int` that no arm names.
+    Int(i128),
+    /// A `String` that no arm names.
+    Str(Box<str>),
+    /// A tuple, with one pattern per element.
+    Tuple(Box<[MissingPat]>),
+    /// A constructor, by def, so the server can name it (§6.2).
+    Ctor {
+        /// The constructor.
+        ctor: DefId,
+        /// One pattern per field, in declared order.
+        fields: Box<[MissingPat]>,
+    },
+    /// A list.
+    List {
+        /// The elements the pattern fixes.
+        items: Box<[MissingPat]>,
+        /// Where in `items` the `..` goes, if the list may be longer.
+        rest_at: Option<u32>,
+    },
+}
 
 /// Checks every `case`, `let`, `let assert` and parameter pattern of
 /// `body`, which has no other errors and closed types.
@@ -59,15 +110,149 @@ pub(crate) fn check_body(
     own: &ModuleInterface,
     body: &thir::Body,
 ) -> Result<Vec<Diagnostic>, Ice> {
-    let cx = TyCx {
-        module: input.module,
-        package: input.package,
-        deps: &input.deps,
-        modules: input.modules,
-        globals: input.globals,
-        own,
-    };
-    check(&cx, body)
+    check(&TyCx::new(input, own), body)
+}
+
+/// A [`CaseFact`] for each `case` with subjects among `nodes`, sorted by
+/// node, with one fact per node.
+///
+/// `nodes` pairs each checked expression with its syntax node, so a `case`
+/// that the tree from the body's root does not reach, such as one in an
+/// orphaned argument, counts. `exprs` may belong to a body with errors,
+/// and its types must be closed.
+pub(crate) fn case_facts(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    exprs: &IndexVec<ExprId, thir::Expr>,
+    nodes: impl IntoIterator<Item = (NodeId, ExprId)>,
+    failed: &[PatId],
+) -> Vec<CaseFact> {
+    collect_case_facts(&TyCx::new(input, own), exprs, nodes, failed)
+}
+
+/// [`case_facts`] with the parts of [`TypesInput`] it reads.
+fn collect_case_facts(
+    cx: &TyCx<'_>,
+    exprs: &IndexVec<ExprId, thir::Expr>,
+    nodes: impl IntoIterator<Item = (NodeId, ExprId)>,
+    failed: &[PatId],
+) -> Vec<CaseFact> {
+    // A parenthesis logs the `case` inside it again, under its own node.
+    // `NodeId` is a preorder index, so the `CASE_EXPR` is the largest.
+    let mut cases: BTreeMap<ExprId, NodeId> = BTreeMap::new();
+    for (node, id) in nodes {
+        cases
+            .entry(id)
+            .and_modify(|seen| *seen = node.max(*seen))
+            .or_insert(node);
+    }
+    let mut facts: Vec<CaseFact> = cases
+        .into_iter()
+        .filter_map(|(id, node)| {
+            let expr = exprs.get(id)?;
+            let ExprKind::Case {
+                subjects,
+                arms,
+                origin: CaseOrigin::Case,
+            } = &expr.kind
+            else {
+                return None;
+            };
+            // Only errored bodies break the invariants the engine relies
+            // on, as with a pattern at a type that is not its subject's.
+            // Checking for each shape costs more than losing this `case`.
+            case_fact(cx, exprs, node, subjects, arms, failed)
+                .ok()
+                .flatten()
+        })
+        .collect();
+    facts.sort_by_key(|fact| fact.node);
+    facts.dedup_by_key(|fact| fact.node);
+    facts
+}
+
+/// The fact of one `case`, or `None` when there is nothing to split on: it
+/// has no subjects, or a subject's type contains an error.
+fn case_fact(
+    cx: &TyCx<'_>,
+    exprs: &IndexVec<ExprId, thir::Expr>,
+    node: NodeId,
+    subjects: &[ExprId],
+    arms: &[thir::Arm],
+    failed: &[PatId],
+) -> Result<Option<CaseFact>, Ice> {
+    if subjects.is_empty() {
+        return Ok(None);
+    }
+    let mut tys = Vec::with_capacity(subjects.len());
+    for &subject in subjects {
+        let ty = exprs.try_get(subject, "case subject")?.ty;
+        if cx.erroneous(ty) {
+            return Ok(None);
+        }
+        tys.push(ty);
+    }
+    // An arm with the wrong number of patterns is an error already, and
+    // the engine needs one pattern per subject. A failed pattern is a `_`
+    // in the tree, which would hide the arms still to fill and mark the
+    // next arm as dead, so its arm says nothing.
+    let checked: Vec<&thir::Arm> = arms
+        .iter()
+        .filter(|arm| arm.pats.len() == subjects.len() && !has_failed_pat(arm, failed))
+        .collect();
+    let mut lowered = Vec::with_capacity(checked.len());
+    for arm in &checked {
+        let pats = arm
+            .pats
+            .iter()
+            .map(|pat| cx.lower(pat))
+            .collect::<Result<Vec<_>, Ice>>()?;
+        lowered.push(pats);
+    }
+    let engine_arms: Vec<engine::Arm<'_>> = lowered
+        .iter()
+        .zip(&checked)
+        .map(|(pats, arm)| engine::Arm {
+            pats,
+            guarded: arm.guard.is_some(),
+        })
+        .collect();
+    let report = engine::check(cx, &tys, &engine_arms)?;
+    let mut missing = report
+        .missing
+        .iter()
+        .map(|row| row.iter().map(|w| cx.missing_pat(w)).collect())
+        .collect::<Result<Vec<Vec<_>>, Ice>>()?;
+    let mut more = report.more;
+    // With no arm, the engine's answer is one `_`, which is all a diagnostic
+    // needs. Filling the arms of `case x { }` wants the constructors.
+    if let ([], [ty]) = (checked.as_slice(), tys.as_slice())
+        && let Some((rows, rest)) = cx.every_variant(*ty)?
+    {
+        missing = rows;
+        more = rest;
+    }
+    let unreachable = report
+        .unreachable
+        .iter()
+        .map(|&index| u32::try_from(index).map_err(|_| Ice::new("exhaustiveness: too many arms")))
+        .collect::<Result<Vec<_>, Ice>>()?;
+    Ok(Some(CaseFact {
+        node,
+        missing,
+        more,
+        too_complex: report.too_complex,
+        unreachable,
+    }))
+}
+
+/// Whether a pattern of `arm`, at any depth, is one of `failed`.
+fn has_failed_pat(arm: &thir::Arm, failed: &[PatId]) -> bool {
+    let mut found = false;
+    for pat in &arm.pats {
+        pat.walk(&mut |p| found |= failed.contains(&p.id));
+    }
+    found
 }
 
 /// [`check_body`] with the parts of [`TypesInput`] it reads.
@@ -369,6 +554,19 @@ struct TyCx<'a> {
     own: &'a ModuleInterface,
 }
 
+impl<'a> TyCx<'a> {
+    fn new(input: &'a TypesInput<'_>, own: &'a ModuleInterface) -> Self {
+        Self {
+            module: input.module,
+            package: input.package,
+            deps: &input.deps,
+            modules: input.modules,
+            globals: input.globals,
+            own,
+        }
+    }
+}
+
 impl TyCx<'_> {
     fn kind(&self, ty: Ty) -> &'static TyKind {
         self.globals.types.kind(ty)
@@ -445,6 +643,61 @@ impl TyCx<'_> {
         let info = self.modules.try_get(ctor.module)?;
         let segment = info.path.segments().last().map_or("?", String::as_str);
         Ok(format!("{segment}::{name}"))
+    }
+
+    /// A witness as data. `render` is the same walk as text.
+    fn missing_pat(&self, witness: &Witness<Ty>) -> Result<MissingPat, Ice> {
+        let WitnessKind::Ctor(ctor, fields) = &witness.kind else {
+            return Ok(MissingPat::Wild);
+        };
+        let items = fields
+            .iter()
+            .map(|field| self.missing_pat(field))
+            .collect::<Result<Box<[_]>, Ice>>()?;
+        Ok(match ctor {
+            Ctor::Lit(LitKey::Int(n)) => MissingPat::Int(*n),
+            Ctor::Lit(LitKey::Str(s)) => MissingPat::Str(s.clone()),
+            Ctor::List(ListLen::Fixed(_)) => MissingPat::List {
+                items,
+                rest_at: None,
+            },
+            Ctor::List(ListLen::Var { prefix, .. }) => MissingPat::List {
+                items,
+                rest_at: Some(*prefix),
+            },
+            Ctor::Variant(tag) => match self.kind(witness.ty) {
+                TyKind::Tuple(_) => MissingPat::Tuple(items),
+                TyKind::Named { def, .. } => MissingPat::Ctor {
+                    ctor: self.ctor_def(*def, *tag)?,
+                    fields: items,
+                },
+                _ => {
+                    return Err(Ice::new(
+                        "exhaustiveness: a variant at a type without variants",
+                    ));
+                }
+            },
+        })
+    }
+
+    /// One row per variant of `ty`, up to the engine's limit, and whether
+    /// more variants exist. `None` for a type with no variants to name,
+    /// which a tuple's single shape counts as.
+    fn every_variant(&self, ty: Ty) -> Result<Option<VariantRows>, Ice> {
+        let (Space::Variants(count), TyKind::Named { def, .. }) = (self.space(ty)?, self.kind(ty))
+        else {
+            return Ok(None);
+        };
+        let mut rows = Vec::new();
+        for tag in (0..count).take(engine::WITNESS_LIMIT) {
+            let fields = self.field_tys(ty, &Ctor::Variant(tag))?;
+            rows.push(vec![MissingPat::Ctor {
+                ctor: self.ctor_def(*def, tag)?,
+                fields: fields.iter().map(|_| MissingPat::Wild).collect(),
+            }]);
+        }
+        let more = usize::try_from(count).is_ok_and(|n| n > rows.len());
+        Ok(Some((rows, more)))
     }
 
     /// Whether `pat` is irrefutable by the rules of §6.1: `_` and

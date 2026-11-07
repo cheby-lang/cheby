@@ -15,7 +15,8 @@ use rustc_hash::FxHashMap;
 
 use crate::builtin;
 use crate::{
-    DefId, DepView, Globals, IndexVec, ModuleId, ModuleInterface, ModuleTable, Name, ParamIdx,
+    DefId, DepView, Globals, IfaceItem, IndexVec, ModuleId, ModuleInterface, ModuleTable, Name,
+    ParamIdx,
 };
 
 /// An interned closed type.
@@ -328,12 +329,30 @@ pub struct DisplayCx<'a> {
     pub deps: &'a DepView<'a>,
     /// The generics in scope, to name `Param` types.
     pub generics: Option<&'a Generics>,
+    /// How the module names what it imports, for the language server's
+    /// text. `None` gives D-463's form, which every diagnostic keeps
+    /// (D-1384).
+    pub imports: Option<&'a ImportNames>,
+}
+
+/// The names a module's imports bind, so that text for a reader of the
+/// module uses names that resolve there (D-1384).
+#[derive(Clone, Debug, Default)]
+pub struct ImportNames {
+    /// `import a::{T as U}`: `T`'s def and the bound name.
+    pub items: FxHashMap<DefId, Name>,
+    /// `import a::b as c`: the module and the bound name.
+    pub modules: FxHashMap<ModuleId, Name>,
 }
 
 /// A type as users write it, for diagnostics (D-463): prelude types and
 /// the current module's types by bare name (`Option<Int>`,
 /// `fn(String) -> Nil`), other types as `<last module segment>::<Name>`
 /// (`map::Map<String, Int>`), type parameters by name.
+///
+/// With [`DisplayCx::imports`], a type the module imports reads as the
+/// module writes it instead: its bound name, or `<module binding>::<Name>`
+/// (D-1384).
 #[must_use]
 pub fn display(ty: Ty, cx: &DisplayCx<'_>) -> String {
     let mut out = String::new();
@@ -341,7 +360,79 @@ pub fn display(ty: Ty, cx: &DisplayCx<'_>) -> String {
     out
 }
 
-fn write_ty(out: &mut String, ty: Ty, cx: &DisplayCx<'_>) {
+/// The modules `ty` names that the viewer has not imported, in the order
+/// `ty` first names them, for text that will be inserted. The viewer is
+/// [`DisplayCx::own`], and its imports are [`DisplayCx::imports`]. A
+/// builtin item outside the prelude counts as its home module, which is
+/// loaded whenever a module of the build names the item.
+#[must_use]
+pub fn missing_imports(ty: Ty, cx: &DisplayCx<'_>) -> Vec<ModuleId> {
+    let mut out = Vec::new();
+    collect_missing(ty, cx, &mut out);
+    out
+}
+
+fn collect_missing(ty: Ty, cx: &DisplayCx<'_>, out: &mut Vec<ModuleId>) {
+    match cx.globals.types.kind(ty) {
+        TyKind::Error | TyKind::Never | TyKind::Param(_) => {}
+        TyKind::Named { def, args } | TyKind::Dyn { iface: def, args } => {
+            if let Some(module) = module_to_import(*def, cx)
+                && !out.contains(&module)
+            {
+                out.push(module);
+            }
+            for arg in args {
+                collect_missing(*arg, cx, out);
+            }
+        }
+        TyKind::Tuple(elems) => {
+            for elem in elems {
+                collect_missing(*elem, cx, out);
+            }
+        }
+        TyKind::Fn { params, ret } => {
+            for param in params {
+                collect_missing(*param, cx, out);
+            }
+            collect_missing(*ret, cx, out);
+        }
+    }
+}
+
+/// The module the viewer must import to name `def`, if it needs one.
+fn module_to_import(def: DefId, cx: &DisplayCx<'_>) -> Option<ModuleId> {
+    if cx
+        .imports
+        .is_some_and(|names| names.items.contains_key(&def))
+    {
+        return None;
+    }
+    let module = if def.module == ModuleId::BUILTIN {
+        let segment = homed_segment(def)?;
+        cx.modules.find(&builtin::home_path(segment))?
+    } else {
+        def.module
+    };
+    let own = cx.own.is_some_and(|own| own.module == module);
+    let imported = cx
+        .imports
+        .is_some_and(|names| names.modules.contains_key(&module));
+    (!own && !imported).then_some(module)
+}
+
+/// The home module's last segment of a builtin item outside the prelude,
+/// which is written through that module, such as `Map` (D-463, D-481).
+fn homed_segment(def: DefId) -> Option<&'static str> {
+    if builtin::is_prelude(def) {
+        return None;
+    }
+    builtin::HOMES
+        .iter()
+        .find(|(home_def, _)| *home_def == def)
+        .map(|&(_, segment)| segment)
+}
+
+pub(crate) fn write_ty(out: &mut String, ty: Ty, cx: &DisplayCx<'_>) {
     match cx.globals.types.kind(ty) {
         TyKind::Error => out.push('_'),
         TyKind::Never => out.push_str("Never"),
@@ -397,42 +488,58 @@ fn write_list(out: &mut String, tys: &[Ty], cx: &DisplayCx<'_>) {
     }
 }
 
-fn write_def(out: &mut String, def: DefId, cx: &DisplayCx<'_>) {
-    let own = cx.own.filter(|own| own.module == def.module);
-    let item = match own {
+/// The item `def` as `cx` may read it.
+pub(crate) fn read_item<'a>(def: DefId, cx: &DisplayCx<'a>) -> Option<&'a IfaceItem> {
+    match cx.own.filter(|own| own.module == def.module) {
         Some(own) => own.item(def.index),
         None => cx.deps.item(def),
-    };
-    let name = item.map_or("?", |item| cx.globals.names.get(item.name));
-    if def.module == ModuleId::BUILTIN {
+    }
+}
+
+pub(crate) fn write_def(out: &mut String, def: DefId, cx: &DisplayCx<'_>) {
+    if let Some(&bound) = cx.imports.and_then(|names| names.items.get(&def)) {
+        out.push_str(cx.globals.names.get(bound));
+        return;
+    }
+    write_qualifier(out, def, cx);
+    let name = read_item(def, cx).map_or("?", |item| cx.globals.names.get(item.name));
+    out.push_str(name);
+}
+
+/// What comes before the name of `def`, which no import names by itself.
+fn write_qualifier(out: &mut String, def: DefId, cx: &DisplayCx<'_>) {
+    let (module, segment) = if def.module == ModuleId::BUILTIN {
         // A builtin item outside the prelude, such as `Map`, is written
         // through its home module, `map::Map`, except in the home module
         // itself (D-463, D-481).
-        if !builtin::is_prelude(def)
-            && let Some(segment) = builtin::HOMES
-                .iter()
-                .find(|(home_def, _)| *home_def == def)
-                .map(|&(_, segment)| segment)
-        {
-            let own_path = cx
-                .own
-                .and_then(|own| cx.modules.get(own.module))
-                .map(|info| &info.path);
-            if own_path != Some(&builtin::home_path(segment)) {
-                out.push_str(segment);
-                out.push_str("::");
-            }
+        let Some(segment) = homed_segment(def) else {
+            return;
+        };
+        let home = builtin::home_path(segment);
+        let own_path = cx
+            .own
+            .and_then(|own| cx.modules.get(own.module))
+            .map(|info| &info.path);
+        if own_path == Some(&home) {
+            return;
         }
-    } else if own.is_none() {
+        (cx.imports.and_then(|_| cx.modules.find(&home)), segment)
+    } else if cx.own.is_some_and(|own| own.module == def.module) {
+        return;
+    } else {
         let segment = cx
             .modules
             .get(def.module)
             .and_then(|info| info.path.segments().last())
             .map_or("?", String::as_str);
-        out.push_str(segment);
-        out.push_str("::");
-    }
-    out.push_str(name);
+        (Some(def.module), segment)
+    };
+    let binding = cx
+        .imports
+        .zip(module)
+        .and_then(|(names, module)| names.modules.get(&module));
+    out.push_str(binding.map_or(segment, |&name| cx.globals.names.get(name)));
+    out.push_str("::");
 }
 
 #[cfg(test)]
@@ -502,6 +609,7 @@ mod tests {
             own: None,
             deps: &deps,
             generics: None,
+            imports: None,
         };
         let t = &globals.types;
         let opt = t.named(builtin::OPTION, [Ty::INT]);

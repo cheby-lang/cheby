@@ -120,7 +120,8 @@ impl BodyCx<'_> {
             .expr_tys
             .get_mut(id)
             .ok_or_else(|| Ice::new(format!("no expression {id:?}")))?;
-        *slot = ty;
+        let old = std::mem::replace(slot, ty);
+        self.note_overwritten(id, &old);
         Ok(())
     }
 
@@ -133,6 +134,7 @@ impl BodyCx<'_> {
         span: Span,
         origin: Option<(Span, String)>,
     ) {
+        self.note_mismatch(span, expected, found);
         let label = format!(
             "expected `{}`, found `{}`",
             self.show(expected),

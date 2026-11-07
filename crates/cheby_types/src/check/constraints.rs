@@ -122,10 +122,12 @@ impl BodyCx<'_> {
 
     /// Reports the E0063 or E0065 of `err` at `span`.
     fn unsatisfied(&mut self, err: &Unsatisfied, span: Span, need: Need) {
+        self.note_unsatisfied(span, err);
         let cx = IfaceCx {
             input: self.input,
             own: self.own,
             generics: &self.generics,
+            query: false,
         };
         let diag = ifaces::unsatisfied_diagnostic(&cx, err, span, need);
         self.report(diag);
@@ -174,6 +176,7 @@ impl BodyCx<'_> {
                 input: self.input,
                 own: self.own,
                 generics: &self.generics,
+                query: false,
             };
             match ifaces::operator(&cx, op, ty)? {
                 Ok(imp) => imp,
@@ -210,6 +213,7 @@ impl BodyCx<'_> {
                 input: self.input,
                 own: self.own,
                 generics: &self.generics,
+                query: false,
             };
             match ifaces::negation(&cx, ty)? {
                 Ok(imp) => imp,
@@ -247,6 +251,7 @@ impl BodyCx<'_> {
             input: self.input,
             own: self.own,
             generics: &self.generics,
+            query: false,
         };
         let callee = match ifaces::show(&cx, ty)? {
             Ok(callee) => callee,
@@ -281,6 +286,7 @@ impl BodyCx<'_> {
             input: self.input,
             own: self.own,
             generics: &self.generics,
+            query: false,
         };
         let resolved = match ifaces::iface_call(&cx, iface_fn, ty)? {
             Ok(callee) => callee,
@@ -312,6 +318,7 @@ impl BodyCx<'_> {
             input: self.input,
             own: self.own,
             generics: &self.generics,
+            query: false,
         };
         let dict = match ifaces::dyn_coerce(&cx, ty, iface)? {
             Ok(dict) => dict,
@@ -345,6 +352,7 @@ impl BodyCx<'_> {
             input: self.input,
             own: self.own,
             generics: &self.generics,
+            query: false,
         };
         let dict = match ifaces::satisfy(&cx, ty, iface)? {
             Ok(dict) => dict,
@@ -416,6 +424,12 @@ pub(super) fn placeholder_dict(iface: DefId) -> Dict {
         ty: Ty::ERROR,
         fns: Box::new([]),
     }
+}
+
+/// Whether `dict` is still [`placeholder_dict`]'s: a resolved dictionary
+/// is of a closed type, which is never the error type.
+pub(super) fn is_placeholder(dict: &Dict) -> bool {
+    matches!(dict, Dict::Impl { ty, .. } if *ty == Ty::ERROR)
 }
 
 /// The text of `op`.

@@ -7,6 +7,9 @@
 //!   the module's own interface and its dependencies' interfaces, and
 //!   return [`thir`]. A body with an error is not returned, so MIR never
 //!   sees errors.
+//! - [`check_bodies_recording`] also returns [`facts`], what the language
+//!   server reads of each body. An errored body leaves facts but no THIR.
+//! - [`satisfaction`] answers queries about structural satisfaction.
 //! - [`infer`] (C1) holds the body-local inference types and unification.
 //! - [`package_warnings`] (C14) is the whole-package warning pass, which
 //!   the driver runs after every local module is checked, for
@@ -30,10 +33,12 @@ mod check;
 mod consts;
 mod decl;
 mod exhaust;
+pub mod facts;
 mod ifaces;
 pub mod infer;
 mod lower_ty;
 pub mod repl;
+pub mod satisfaction;
 mod sig;
 mod targets;
 pub mod thir;
@@ -52,7 +57,8 @@ use cheby_iface::{
 use cheby_resolve::ResolvedModule;
 use cheby_syntax::SyntaxTree;
 
-pub use check::{Tests, check_bodies, check_bodies_with, check_item};
+pub use check::{Tests, check_bodies, check_bodies_recording, check_bodies_with, check_item};
+pub use satisfaction::{OpFn, Reason, Unsatisfied, Want};
 pub use sig::build_interface;
 pub use warnings::{
     ModuleRefs, PackageCandidate, PackageModule, dropped_body, module_refs, package_warnings,
@@ -101,6 +107,7 @@ impl<'a> TypesInput<'a> {
             own: Some(own),
             deps: &self.deps,
             generics,
+            imports: None,
         }
     }
 

@@ -1914,6 +1914,7 @@ mod tests {
                 own: Some(&entry.iface),
                 deps: &view,
                 generics: None,
+                imports: None,
             };
             let ty = entry.body.as_ref().unwrap().shown;
             // Named types of earlier entries need their interfaces.

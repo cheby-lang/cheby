@@ -41,6 +41,8 @@
 //!   for dictionaries passed for bounds (D-502).
 //!   The top-level callee of an operator, interpolation or interface call
 //!   is not a dictionary and needs no descriptor.
+//! - **Queries.** [`crate::satisfaction`] runs the same solver with
+//!   [`IfaceCx::query`] set, over a view of every loaded module (D-1386).
 
 mod decls;
 mod diag;
@@ -49,10 +51,10 @@ mod solve;
 mod tests;
 pub(crate) mod tyutil;
 
-use cheby_iface::{DefId, Generics, Ice, ModuleId, Name, ParamIdx, Ty, Vis};
+use cheby_iface::{DefId, Generics, Ice, ModuleId, Name, ParamIdx, Ty, TyInterner, Vis};
 
 pub(crate) use decls::{check_interface_decls, check_object_safe};
-pub(crate) use diag::unsatisfied_diagnostic;
+pub(crate) use diag::{reason_text, unsatisfied_diagnostic};
 
 use crate::TypesInput;
 use crate::thir::{BinOpKind, Callee, Dict, OpImpl};
@@ -66,22 +68,27 @@ pub(crate) struct IfaceCx<'a> {
     /// The enclosing top-level item's generics: the bounds of its `Param`
     /// types.
     pub generics: &'a Generics,
+    /// Whether this is a query and not a check (D-1386). A query asks
+    /// whether the functions exist and passes no dictionary, so a missing
+    /// descriptor (E0065) does not apply.
+    pub query: bool,
 }
 
 /// Why a type does not satisfy an interface or provide an operator, for
-/// [`unsatisfied_diagnostic`].
+/// a diagnostic or the answer of a query.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Unsatisfied {
+pub struct Unsatisfied {
     /// The type that does not satisfy the requirement.
     pub ty: Ty,
     /// What was required of it.
     pub want: Want,
+    /// Why not.
     pub reason: Reason,
 }
 
 /// A requirement on a type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Want {
+pub enum Want {
     /// Every function of an interface (§8.2).
     Iface(DefId),
     /// The function behind an operator, found by name and signature in the
@@ -91,12 +98,18 @@ pub(crate) enum Want {
 
 /// The functions behind the overloadable operators (§8.7, D-118).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OpFn {
+pub enum OpFn {
+    /// `add`, behind `+`.
     Add,
+    /// `sub`, behind `-`.
     Sub,
+    /// `mul`, behind `*`.
     Mul,
+    /// `div`, behind `/`.
     Div,
+    /// `neg`, behind unary `-`.
     Neg,
+    /// `compare`, behind `<`, `<=`, `>` and `>=`.
     Compare,
 }
 
@@ -144,66 +157,95 @@ impl OpFn {
 /// Why a requirement is not met. Nested reasons explain conditional
 /// conformance and tuples.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Reason {
+pub enum Reason {
     /// The type's module has no function `name`, or the name is not a
-    /// function. `required` is the function type it must have (`Self`
-    /// replaced), `func` the interface function, if any.
+    /// function.
     Missing {
+        /// The function's name.
         name: Name,
+        /// The interface function, if any.
         func: Option<DefId>,
+        /// The function type it must have, with `Self` replaced.
         required: Ty,
+        /// The module looked in.
         module: ModuleId,
     },
     /// `found` has the right signature but is less visible than the type
     /// (D-164, ADR-0034).
     LessVisible {
+        /// The function that would count.
         found: DefId,
+        /// The interface function, if any.
         func: Option<DefId>,
+        /// The type's visibility.
         type_vis: Vis,
     },
-    /// `found` has the wrong signature: `actual` (with its own type
-    /// parameters) instead of `required`.
+    /// `found` has the wrong signature: `actual` instead of `required`.
     Signature {
+        /// The function of that name.
         found: DefId,
+        /// The interface function, if any.
         func: Option<DefId>,
+        /// The function type it must have, with `Self` replaced.
         required: Ty,
+        /// Its function type, with its own type parameters.
         actual: Ty,
     },
     /// The home module `std::<home>` of a builtin type is not readable
     /// from the checked module (D-447, D-489).
-    HomeNotInDeps { home: &'static str },
+    HomeNotInDeps {
+        /// The home module's last segment.
+        home: &'static str,
+    },
     /// The type is declared in no module: a tuple (for interfaces other
     /// than `Show` and `Compare`), a function type, `Never`, or a `dyn`
     /// value used with an operator.
     NoModule,
     /// A type parameter none of whose bounds gives the requirement.
-    Param { param: ParamIdx },
+    Param {
+        /// The type parameter.
+        param: ParamIdx,
+    },
     /// `dyn has`, which satisfies only `has` and what it embeds.
-    Dyn { has: DefId },
+    Dyn {
+        /// The interface of the `dyn` type.
+        has: DefId,
+    },
     /// Element `index` of a tuple does not satisfy the interface.
     Element {
+        /// The element's position, from zero.
         index: usize,
+        /// Why the element does not.
         inner: Box<Unsatisfied>,
     },
     /// The satisfying function `found` has a bound on its type parameter
     /// `param` that the instantiation does not meet (D-064).
     Bound {
+        /// The satisfying function.
         found: DefId,
+        /// Its type parameter.
         param: ParamIdx,
+        /// Why the type argument does not meet the bound.
         inner: Box<Unsatisfied>,
     },
     /// The satisfying function `found` has the type parameter `param`,
     /// which matching its `Self` parameter against the type leaves
     /// undetermined (D-504).
     Undetermined {
+        /// The function that would count.
         found: DefId,
+        /// Its undetermined type parameter.
         param: ParamIdx,
+        /// Its function type, with its own type parameters.
         actual: Ty,
     },
     /// The type mentions the type parameter `param`, which has no bound to
     /// supply its descriptor (D-236): E0065.
-    Descriptor { param: ParamIdx },
-    /// The requirement nests more than [`solve::DEPTH_LIMIT`] levels.
+    Descriptor {
+        /// The type parameter.
+        param: ParamIdx,
+    },
+    /// The requirement nests too deep for the solver.
     TooDeep,
 }
 
@@ -320,6 +362,29 @@ pub(crate) fn dyn_coerce(
     iface: DefId,
 ) -> Result<Result<Dict, Unsatisfied>, Ice> {
     cx.satisfy_ty(from, iface, 0)
+}
+
+/// Whether a parameter of type `param`, read with its function's type
+/// parameters as variables, accepts an argument of type `arg`. It is the
+/// one-way match of satisfaction, so `arg`'s own parameters are rigid, a
+/// repeated variable must match the same type, and neither bounds nor a
+/// conversion to `dyn` count.
+///
+/// # Errors
+///
+/// An [`Ice`] if a type parameter's index is out of range.
+pub fn accepts(types: &TyInterner, param: Ty, arg: Ty) -> Result<bool, Ice> {
+    let top = tyutil::params_of(types, param)
+        .iter()
+        .map(|p| p.as_u32())
+        .max();
+    let slots = match top {
+        Some(top) => usize::try_from(top)
+            .map_err(|_| Ice::new("too many type parameters"))?
+            .saturating_add(1),
+        None => 0,
+    };
+    tyutil::match_ty(types, param, arg, &mut vec![None; slots])
 }
 
 /// `Self` in interface signatures.

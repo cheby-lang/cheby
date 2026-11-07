@@ -1074,6 +1074,7 @@ impl Session {
             own: Some(own),
             deps: &deps,
             generics: None,
+            imports: None,
         };
         Ok(self.repl.show_ty(ty, &cx))
     }

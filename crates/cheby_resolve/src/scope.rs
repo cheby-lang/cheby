@@ -3,7 +3,8 @@
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
-    DefId, DefIndex, DefKind, Ice, IndexVec, ModuleId, ModuleInterface, Name, Namespace, builtin,
+    DefId, DefIndex, DefKind, Ice, ImportNames, IndexVec, ModuleId, ModuleInterface, Name,
+    Namespace, builtin,
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -77,6 +78,41 @@ impl ModuleScope {
             .iter()
             .filter(|(_, entry)| entry.source != ScopeSource::Withdrawn)
             .map(|(&name, entry)| (name, entry))
+    }
+
+    /// How the module names what it imports, for text a reader of the
+    /// module sees (D-1384). When two imports bind one item or module, the
+    /// first one written gives the name, so the result does not depend on
+    /// the order of the maps (D-264).
+    #[must_use]
+    pub fn import_names(&self) -> ImportNames {
+        let mut imports: Vec<_> = [Namespace::Type, Namespace::Value]
+            .into_iter()
+            .flat_map(|ns| self.iter(ns))
+            .filter_map(|(name, entry)| match entry.source {
+                ScopeSource::Import(position) => Some((
+                    position,
+                    entry.span.map(|span| span.range.start()),
+                    name,
+                    entry.res,
+                )),
+                _ => None,
+            })
+            .collect();
+        imports.sort_by_key(|&(position, start, ..)| (position, start));
+        let mut names = ImportNames::default();
+        for (_, _, name, res) in imports {
+            match res {
+                Res::Def(def) => {
+                    names.items.entry(def).or_insert(name);
+                }
+                Res::Module(module) => {
+                    names.modules.entry(module).or_insert(name);
+                }
+                _ => {}
+            }
+        }
+        names
     }
 
     /// Whether an import of `name` collided with another name (E0041).
@@ -433,9 +469,17 @@ fn add_prelude(
 
 #[cfg(test)]
 mod tests {
-    use cheby_iface::{Globals, ModuleId};
+    use std::sync::Arc;
+
+    use cheby_diag::FileId;
+    use cheby_iface::{
+        CtorFields, CtorSig, DepView, DisplayCx, Globals, IfaceItem, InterfaceSet, ItemSig,
+        ModuleId, ModuleInfo, ModuleTable, PackageId, TypeDef, TypeDefKind, Vis, display,
+    };
+    use cheby_package::{ModulePath, Targets};
 
     use super::*;
+    use crate::{ResolvedModule, StdCatalog, collect_imports};
 
     #[test]
     fn iter_leaves_out_what_get_cannot_find() {
@@ -455,5 +499,204 @@ mod tests {
         let values: Vec<Name> = scope.iter(Namespace::Value).map(|(n, _)| n).collect();
         assert_eq!(values, [shown]);
         assert_eq!(scope.iter(Namespace::Type).count(), 0);
+    }
+
+    /// `a::b`, with the type `T` and its constructor `T`, and the type `V`.
+    struct Fixture {
+        globals: Globals,
+        modules: ModuleTable,
+        set: InterfaceSet,
+        dep: ModuleId,
+        app: ModuleId,
+    }
+
+    const T: u32 = 0;
+    const T_CTOR: u32 = 1;
+    const V: u32 = 2;
+
+    fn fixture() -> Fixture {
+        let globals = Globals::new();
+        let mut modules = ModuleTable::new();
+        let mut add = |path: ModulePath| {
+            modules
+                .add(ModuleInfo {
+                    path,
+                    package: PackageId::LOCAL,
+                    file: None,
+                })
+                .unwrap()
+        };
+        let dep = add(ModulePath::root("a").child("b"));
+        let app = add(ModulePath::root("app"));
+        let item = |name: &str, kind, parent, sig| IfaceItem {
+            name: globals.names.intern(name),
+            kind,
+            vis: Vis::Pub,
+            parent,
+            span: None,
+            targets: Targets::ALL,
+            deprecated: None,
+            sig,
+        };
+        let ty = |ctors: &[u32]| {
+            ItemSig::Type(TypeDef {
+                generics: cheby_iface::Generics::empty(),
+                kind: TypeDefKind::Adt {
+                    ctors: ctors.iter().copied().map(DefIndex::from_u32).collect(),
+                },
+                exposed: true,
+                home: None,
+                hooks: None,
+            })
+        };
+        let ctor = ItemSig::Ctor(CtorSig {
+            ty: DefIndex::from_u32(T),
+            tag: 0,
+            fields: CtorFields::Unit,
+        });
+        let items = vec![
+            item("T", DefKind::Type, None, ty(&[T_CTOR])),
+            item("T", DefKind::Ctor, Some(DefIndex::from_u32(T)), ctor),
+            item("V", DefKind::Type, None, ty(&[])),
+        ];
+        let iface = ModuleInterface::new(dep, PackageId::LOCAL, IndexVec::from_raw(items).unwrap())
+            .unwrap();
+        let mut set = InterfaceSet::new(builtin::interface(&globals));
+        set.insert(iface.into()).unwrap();
+        Fixture {
+            globals,
+            modules,
+            set,
+            dep,
+            app,
+        }
+    }
+
+    impl Fixture {
+        fn resolve(&self, text: &str) -> ResolvedModule {
+            let file = FileId::new(self.app.as_u32());
+            let (tree, errors) = cheby_syntax::parse(file, Arc::from(text)).into_parts();
+            assert!(errors.is_empty(), "{errors:?}");
+            let imports = collect_imports(&tree, &self.globals.names);
+            let targets = vec![ImportTarget::Module(self.dep); imports.len()];
+            let allowed = [self.dep];
+            let (module, diags) = crate::resolve_module(&ResolveInput {
+                module: self.app,
+                package: PackageId::LOCAL,
+                tree: &tree,
+                imports: &imports,
+                targets: &targets,
+                deps: DepView::new(&self.set, &allowed),
+                modules: &self.modules,
+                globals: &self.globals,
+                std: StdCatalog::default(),
+                package_targets: Targets::ALL,
+            })
+            .unwrap();
+            assert!(diags.is_empty(), "{diags:?}");
+            module
+        }
+
+        fn def(&self, index: u32) -> DefId {
+            DefId::new(self.dep, DefIndex::from_u32(index))
+        }
+
+        fn show(&self, index: u32, imports: &ImportNames) -> String {
+            let allowed = [self.dep];
+            let cx = DisplayCx {
+                globals: &self.globals,
+                modules: &self.modules,
+                own: None,
+                deps: &DepView::new(&self.set, &allowed),
+                generics: None,
+                imports: Some(imports),
+            };
+            display(self.globals.types.named(self.def(index), []), &cx)
+        }
+    }
+
+    #[test]
+    fn a_module_alias_is_a_module_name() {
+        let f = fixture();
+        let scope = f.resolve("import a::b as c\n").scope;
+        let names = scope.import_names();
+        assert_eq!(names.items.len(), 0);
+        let bound = names.modules.get(&f.dep).copied().unwrap();
+        assert_eq!(f.globals.names.get(bound), "c");
+        assert_eq!(f.show(T, &names), "c::T");
+    }
+
+    #[test]
+    fn a_plain_import_binds_its_last_segment() {
+        let f = fixture();
+        let names = f.resolve("import a::b\n").scope.import_names();
+        assert_eq!(f.show(V, &names), "b::V");
+    }
+
+    #[test]
+    fn an_item_alias_binds_the_type_and_its_constructor() {
+        let f = fixture();
+        let names = f.resolve("import a::b::{T as U}\n").scope.import_names();
+        assert_eq!(f.show(T, &names), "U");
+        let ctor = names.items.get(&f.def(T_CTOR)).copied().unwrap();
+        assert_eq!(f.globals.names.get(ctor), "U");
+        // Nothing binds the module itself.
+        assert_eq!(names.modules.len(), 0);
+        assert_eq!(f.show(V, &names), "b::V");
+    }
+
+    #[test]
+    fn the_first_import_of_an_item_gives_its_name() {
+        // One fixture, so each order has the same `Name`s and so the same
+        // hash order, which at most one of them can agree with.
+        let f = fixture();
+        for (text, first) in [
+            (
+                "import a::b::{V as Zed, V as Abc}\nimport a::b::{V as Mid}\n",
+                "Zed",
+            ),
+            (
+                "import a::b::{V as Abc, V as Zed}\nimport a::b::{V as Mid}\n",
+                "Abc",
+            ),
+            (
+                "import a::b::{V as Mid}\nimport a::b::{V as Zed, V as Abc}\n",
+                "Mid",
+            ),
+        ] {
+            let names = f.resolve(text).scope.import_names();
+            assert_eq!(f.show(V, &names), first, "{text}");
+        }
+    }
+
+    #[test]
+    fn own_items_and_the_prelude_are_not_imports() {
+        let f = fixture();
+        let names = f.resolve("type Own {\n  Own,\n}\n").scope.import_names();
+        assert_eq!(names.items.len(), 0);
+        assert_eq!(names.modules.len(), 0);
+    }
+
+    #[test]
+    fn a_withdrawn_or_failed_import_names_nothing() {
+        let globals = Globals::new();
+        let entry = |res, source| ScopeEntry {
+            res,
+            source,
+            span: None,
+        };
+        let module = ModuleId::from_u32(3);
+        let mut scope = ModuleScope::default();
+        scope.values.insert(
+            globals.names.intern("gone"),
+            entry(Res::Module(module), ScopeSource::Withdrawn),
+        );
+        scope.values.insert(
+            globals.names.intern("failed"),
+            entry(Res::Err, ScopeSource::Import(0)),
+        );
+        let names = scope.import_names();
+        assert_eq!(names.modules.len(), 0);
+        assert_eq!(names.items.len(), 0);
     }
 }

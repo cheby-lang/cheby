@@ -17,7 +17,8 @@
 //! The files of this directory: `mod.rs` holds [`BodyCx`], the items and
 //! the end of a body; `expr`, `call`, `stmt`, `closure`,
 //! `desugar`, `coerce`, `constraints` and `interp` the expression core;
-//! `pat`, `case` and `record` patterns, `case` and records.
+//! `pat`, `case` and `record` patterns, `case` and records; `facts` the
+//! hooks of a recording run (D-1380).
 
 mod call;
 mod case;
@@ -26,6 +27,7 @@ mod coerce;
 mod constraints;
 mod desugar;
 mod expr;
+mod facts;
 mod interp;
 mod pat;
 mod record;
@@ -43,6 +45,7 @@ use cheby_resolve::{BodyRes, ItemDef, LocalId, Res};
 use cheby_syntax::ast::{self, AstNode, Block, ConstDecl, FnDecl, RetType, TestDecl, Type};
 use rayon::prelude::*;
 
+use crate::facts::{BodyFacts, FactLog, ModuleFacts};
 use crate::ifaces::{self, IfaceCx};
 use crate::infer::{InferCtxt, InferTy, TyVid, VarKind, contains_error};
 use crate::lower_ty::TyLowering;
@@ -95,6 +98,36 @@ pub fn check_bodies_with(
     own: &ModuleInterface,
     tests: Tests,
 ) -> Result<(thir::Module, Vec<Diagnostic>), Ice> {
+    let (module, diags, _) = check_bodies_inner(input, own, tests, false)?;
+    Ok((module, diags))
+}
+
+/// [`check_bodies_with`], with the facts of every body, errored bodies
+/// included (D-1380). Diagnostics and THIR are the same as without
+/// recording, unless an [`Ice`] ends a body or a pass.
+///
+/// A recording run survives such an [`Ice`], for the language server: a
+/// body it ends goes to [`ModuleFacts::lost`], and a module-wide pass to
+/// [`ModuleFacts::lost_passes`].
+///
+/// # Errors
+///
+/// None today, since a recording run keeps every [`Ice`] in its facts. The
+/// [`Result`] matches [`check_bodies_with`].
+pub fn check_bodies_recording(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    tests: Tests,
+) -> Result<(thir::Module, Vec<Diagnostic>, ModuleFacts), Ice> {
+    check_bodies_inner(input, own, tests, true)
+}
+
+fn check_bodies_inner(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    tests: Tests,
+    record: bool,
+) -> Result<(thir::Module, Vec<Diagnostic>, ModuleFacts), Ice> {
     let skip_tests = tests == Tests::SkipStd && input.package == PackageId::STD;
     let mut module = thir::Module {
         module: input.module,
@@ -119,11 +152,20 @@ pub fn check_bodies_with(
     // so the result never depends on the schedule.
     let checked_items: Vec<_> = bodies
         .par_iter()
-        .map(|&index| check_item(input, own, index))
+        .map(|&index| (index, check_item_inner(input, own, index, record)))
         .collect();
-    for result in checked_items {
-        let (checked, found) = result?;
+    let mut facts = ModuleFacts::default();
+    for (index, result) in checked_items {
+        let (checked, found, body_facts) = match result {
+            Ok(done) => done,
+            Err(ice) if record => {
+                facts.lost.push((index, ice));
+                continue;
+            }
+            Err(ice) => return Err(ice),
+        };
         diags.extend(found);
+        facts.bodies.extend(body_facts);
         match checked {
             Some(thir::Item::Fn(f)) => module.fns.push(f),
             Some(thir::Item::Const(c)) => module.consts.push(c),
@@ -133,10 +175,53 @@ pub fn check_bodies_with(
     }
     #[cfg(test)]
     drop_for_test(input, &mut module);
-    diags.extend(targets::check_module(input, own, &module)?);
-    diags.extend(consts::check_module(input, own, &module)?);
-    diags.extend(warnings::module_warnings(input, own, &module)?);
-    Ok((module, diags))
+    let mut pass = |found: Result<Vec<Diagnostic>, Ice>| match found {
+        Ok(found) => {
+            diags.extend(found);
+            Ok(())
+        }
+        Err(ice) if record => {
+            facts.lost_passes.push(ice);
+            Ok(())
+        }
+        Err(ice) => Err(ice),
+    };
+    #[cfg(test)]
+    pass(pass_ice_for_test(input))?;
+    pass(targets::check_module(input, own, &module))?;
+    pass(consts::check_module(input, own, &module))?;
+    pass(warnings::module_warnings(input, own, &module))?;
+    Ok((module, diags, facts))
+}
+
+/// Test hook: an [`Ice`] from a body named `ice_by_test`, so tests can see
+/// a recording run survive one. The name is the switch, like
+/// [`drop_for_test`]'s.
+#[cfg(test)]
+fn body_ice_for_test(input: &TypesInput<'_>, index: DefIndex) -> Result<(), Ice> {
+    let named = input
+        .resolved
+        .item(index)
+        .is_some_and(|item| input.globals.names.get(item.name) == "ice_by_test");
+    if named {
+        return Err(Ice::new("a body ended by a test"));
+    }
+    Ok(())
+}
+
+/// Test hook: an [`Ice`] from a module-wide pass, in a module with an item
+/// named `pass_ice_by_test`.
+#[cfg(test)]
+fn pass_ice_for_test(input: &TypesInput<'_>) -> Result<Vec<Diagnostic>, Ice> {
+    let named = input
+        .resolved
+        .items
+        .iter()
+        .any(|item| input.globals.names.get(item.name) == "pass_ice_by_test");
+    if named {
+        return Err(Ice::new("a pass ended by a test"));
+    }
+    Ok(Vec::new())
 }
 
 /// Test hook: drops every body named `dropped_by_test` with no diagnostic,
@@ -169,6 +254,22 @@ pub fn check_item(
     own: &ModuleInterface,
     def: DefIndex,
 ) -> Result<(Option<thir::Item>, Vec<Diagnostic>), Ice> {
+    let (item, diags, _) = check_item_inner(input, own, def, false)?;
+    Ok((item, diags))
+}
+
+/// What checking one item gives: its THIR, its diagnostics and, when
+/// recording, its body's facts.
+type CheckedItem = (Option<thir::Item>, Vec<Diagnostic>, Option<BodyFacts>);
+
+fn check_item_inner(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    def: DefIndex,
+    record: bool,
+) -> Result<CheckedItem, Ice> {
+    #[cfg(test)]
+    body_ice_for_test(input, def)?;
     let item = input
         .resolved
         .item(def)
@@ -176,13 +277,18 @@ pub fn check_item(
     let iface_item = own
         .item(def)
         .ok_or_else(|| Ice::new("an item is missing from its own interface"))?;
-    match item.kind {
-        DefKind::Fn => check_fn(input, own, def, item, iface_item),
-        DefKind::Const => check_const(input, own, def, item, iface_item),
-        DefKind::Test => check_test(input, own, def, item),
+    let (checked, diags, mut facts) = match item.kind {
+        DefKind::Fn => check_fn(input, own, def, item, iface_item, record)?,
+        DefKind::Const => check_const(input, own, def, item, iface_item, record)?,
+        DefKind::Test => check_test(input, own, def, item, record)?,
         // Other kinds have no body.
-        _ => Ok((None, Vec::new())),
+        _ => (None, Vec::new(), None),
+    };
+    // What ends a body after the log does, such as E0061 or a bad signature.
+    if let Some(facts) = &mut facts {
+        facts.errored |= checked.is_none();
     }
+    Ok((checked, diags, facts))
 }
 
 /// The resolution of item `index`'s body.
@@ -223,7 +329,8 @@ fn check_fn(
     index: DefIndex,
     item: &ItemDef,
     iface_item: &IfaceItem,
-) -> Result<(Option<thir::Item>, Vec<Diagnostic>), Ice> {
+    record: bool,
+) -> Result<CheckedItem, Ice> {
     let decl = fn_decl(input, item)?;
     let (params, ret, generics, sig_ok) = match &iface_item.sig {
         ItemSig::Fn(sig) => (
@@ -267,6 +374,7 @@ fn check_fn(
     };
     let def = input.def_id(index);
     let mut diags = Vec::new();
+    let mut facts = None;
     let native_external = item.attrs.native_external().map(|(symbol, span)| External {
         symbol: symbol.into(),
         span,
@@ -291,12 +399,13 @@ fn check_fn(
                     "the return type is omitted, so it is `Nil`".to_owned(),
                 ),
             };
-            let mut cx = BodyCx::new(input, own, res, generics.clone())?;
+            let mut cx = BodyCx::new(input, own, res, index, generics.clone(), record)?;
             let body = cx.check_fn_body(block, &params, ret, origin)?;
             diags.append(&mut cx.diags);
+            facts = cx.facts_out.take();
             match body {
                 Some(body) => Some(body),
-                None => return Ok((None, diags)),
+                None => return Ok((None, diags, facts)),
             }
         }
     };
@@ -313,7 +422,7 @@ fn check_fn(
     if !sig_ok || has_error(&diags) || (body.is_none() && native_external.is_none() && !js_only) {
         // A function with neither a body nor any external was reported by
         // the resolver (E0046).
-        return Ok((None, diags));
+        return Ok((None, diags, facts));
     }
     let entry = match entry_kind {
         None => None,
@@ -331,6 +440,7 @@ fn check_fn(
             entry,
         })),
         diags,
+        facts,
     ))
 }
 
@@ -352,6 +462,7 @@ fn entry_info(
                 input,
                 own,
                 generics,
+                query: false,
             };
             let show = if err_ty == Ty::NEVER {
                 None
@@ -371,7 +482,8 @@ fn check_const(
     index: DefIndex,
     item: &ItemDef,
     iface_item: &IfaceItem,
-) -> Result<(Option<thir::Item>, Vec<Diagnostic>), Ice> {
+    record: bool,
+) -> Result<CheckedItem, Ice> {
     let decl = input
         .tree
         .node(item.node)
@@ -384,10 +496,10 @@ fn check_const(
     };
     // A missing initializer or type is a syntax error.
     let Some(value) = decl.value() else {
-        return Ok((None, Vec::new()));
+        return Ok((None, Vec::new(), None));
     };
     let res = body_res(input, index)?;
-    let mut cx = BodyCx::new(input, own, res, Generics::empty())?;
+    let mut cx = BodyCx::new(input, own, res, index, Generics::empty(), record)?;
     let origin = decl.ty().map(|t| {
         (
             t.significant_span(),
@@ -399,8 +511,9 @@ fn check_const(
     let body = cx.finish(value, ty)?;
     let mut deps = std::mem::take(&mut cx.const_deps);
     let diags = std::mem::take(&mut cx.diags);
+    let facts = cx.facts_out.take();
     let Some(body) = body.filter(|_| sig_ok) else {
-        return Ok((None, diags));
+        return Ok((None, diags, facts));
     };
     deps.sort_by_cached_key(|&dep| {
         let path = input.modules.get(dep.module).map(|m| m.path.clone());
@@ -415,6 +528,7 @@ fn check_const(
             deps: deps.into(),
         })),
         diags,
+        facts,
     ))
 }
 
@@ -425,25 +539,27 @@ fn check_test(
     own: &ModuleInterface,
     index: DefIndex,
     item: &ItemDef,
-) -> Result<(Option<thir::Item>, Vec<Diagnostic>), Ice> {
+    record: bool,
+) -> Result<CheckedItem, Ice> {
     let decl = input
         .tree
         .node(item.node)
         .and_then(TestDecl::cast)
         .ok_or_else(|| Ice::new("a test item's node is not a test declaration"))?;
     let (Some(block), Some(name)) = (decl.body(), decl.name()) else {
-        return Ok((None, Vec::new()));
+        return Ok((None, Vec::new(), None));
     };
     let res = body_res(input, index)?;
     // An interpolated test name is a syntax error.
     let name_text = name.plain_value().unwrap_or_default();
-    let mut cx = BodyCx::new(input, own, res, Generics::empty())?;
+    let mut cx = BodyCx::new(input, own, res, index, Generics::empty(), record)?;
     let value = cx.block(block, None)?;
     let kind = cx.test_result(value)?;
     let body = cx.finish(value, Ty::NIL)?;
     let diags = std::mem::take(&mut cx.diags);
+    let facts = cx.facts_out.take();
     let (Some(mut body), Some(kind)) = (body, kind) else {
-        return Ok((None, diags));
+        return Ok((None, diags, facts));
     };
     let mut scratch = Vec::new();
     body.ret = match &kind {
@@ -466,6 +582,7 @@ fn check_test(
             entry,
         })),
         diags,
+        facts,
     ))
 }
 
@@ -555,6 +672,12 @@ pub(crate) struct BodyCx<'a> {
     /// Whether the body has an error, reported here or before (a silent
     /// [`cheby_resolve::Res::Err`] or an erroneous signature).
     pub errored: bool,
+    /// The top-level item this body belongs to.
+    pub item: DefIndex,
+    /// What the hooks of `facts.rs` append: `None` unless recording.
+    pub facts: Option<Box<FactLog>>,
+    /// The log's result, filled at the end of [`Self::finish`].
+    pub facts_out: Option<BodyFacts>,
 }
 
 impl<'a> BodyCx<'a> {
@@ -562,7 +685,9 @@ impl<'a> BodyCx<'a> {
         input: &'a TypesInput<'a>,
         own: &'a ModuleInterface,
         res: &'a BodyRes,
+        item: DefIndex,
         generics: Generics,
+        record: bool,
     ) -> Result<Self, Ice> {
         let locals = res.locals.indices().map(|_| None).collect();
         Ok(Self {
@@ -585,6 +710,9 @@ impl<'a> BodyCx<'a> {
             pat_path: Vec::new(),
             diags: Vec::new(),
             errored: false,
+            item,
+            facts: record.then(Box::default),
+            facts_out: None,
         })
     }
 
@@ -848,6 +976,7 @@ impl<'a> BodyCx<'a> {
         self.report_unresolved(unresolved)?;
         self.check_literals(&exprs);
         self.resolve_deferred(&mut exprs)?;
+        self.extract_facts(&exprs, &pat_tys, &locals)?;
         if self.errored || has_error(&self.diags) {
             return Ok(None);
         }

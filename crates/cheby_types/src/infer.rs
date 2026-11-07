@@ -964,6 +964,7 @@ mod tests {
             own: None,
             deps: &deps,
             generics: None,
+            imports: None,
         };
         let mut cx = InferCtxt::new(&g);
         let v = cx.new_var(span(), VarKind::General).unwrap();

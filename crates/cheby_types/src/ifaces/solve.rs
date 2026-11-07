@@ -420,13 +420,17 @@ impl<'a> IfaceCx<'a> {
     }
 
     /// `dict`, a dictionary built for `ty`, if `ty`'s descriptor can be
-    /// built here (D-236, D-502).
+    /// built here (D-236, D-502). A query passes no dictionary, so it needs
+    /// no descriptor.
     fn with_descriptor(
         &self,
         ty: Ty,
         want: Want,
         dict: Dict,
     ) -> Result<Result<Dict, Unsatisfied>, Ice> {
+        if self.query {
+            return Ok(Ok(dict));
+        }
         Ok(match self.unbounded_param(ty)? {
             Some(param) => Err(Unsatisfied {
                 ty,

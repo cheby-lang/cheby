@@ -15,6 +15,7 @@ use cheby_resolve::{LocalKind, Res};
 use cheby_syntax::ast::{self, AstNode, AstToken, FieldInit, RecordEntry};
 
 use super::{BodyCx, Expected};
+use crate::facts::FieldSite;
 use crate::infer::{InferTy, VarKind, instantiate};
 use crate::thir::{ExprId, ExprKind, UpdateField};
 
@@ -345,7 +346,10 @@ impl BodyCx<'_> {
                 continue;
             };
             let found = info.named_field(names, name.text());
+            let label = (name.span(), name.text());
+            let (owner, ctor) = (info.ty_def, Some(info.def));
             let Some((index, field_ty)) = found else {
+                self.note_field_label(label, FieldSite::Init, owner, ctor, None);
                 self.unknown_field(&info, name.text(), name.span(), &all_fields);
                 if let Some(value) = field.value() {
                     self.check_expr(value, None)?;
@@ -365,6 +369,7 @@ impl BodyCx<'_> {
                 seen.push((index, name.span()));
             }
             let expected = Expected::new(self.field_ty(field_ty, &args), None);
+            self.note_field_label(label, FieldSite::Init, owner, ctor, Some(&expected.ty));
             let value = self.field_value(field, Some(&expected))?;
             fields.push((index, value));
         }
@@ -457,7 +462,9 @@ impl BodyCx<'_> {
                 return Err(Ice::new("a punned field resolved to a module or a type"));
             }
         };
-        self.expect_expr(id, expected)
+        let out = self.expect_expr(id, expected)?;
+        self.note_expr(field.syntax().id(), id, out, expected);
+        Ok(out)
     }
 
     /// E0058 for a field the constructor does not have.
@@ -538,12 +545,16 @@ impl BodyCx<'_> {
             let Some((index_per_ctor, field_ty)) =
                 self.common_field(ty_def, &ctors, text, name.span(), "updated")
             else {
+                let label = (name.span(), text);
+                self.note_field_label(label, FieldSite::Update, ty_def, None, None);
                 if let Some(value) = field.value() {
                     self.check_expr(value, None)?;
                 }
                 continue;
             };
             let expected = Expected::new(self.field_ty(field_ty, &args), None);
+            let label = (name.span(), text);
+            self.note_field_label(label, FieldSite::Update, ty_def, None, Some(&expected.ty));
             let value = self.field_value(field, Some(&expected))?;
             fields.push(UpdateField {
                 value,
@@ -601,6 +612,7 @@ impl BodyCx<'_> {
         }
         let (instance, vars) = self.adt_instance(ty_def, path_span)?;
         self.silence(&vars)?;
+        self.note_mismatch(base_span, &instance, &known);
         let label = format!(
             "expected `{}`, found `{}`",
             self.show(&instance),
@@ -911,6 +923,7 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         let base_ty = self.ty_of(base)?;
         let base_span = self.span_of(base)?;
+        let fact = self.note_field_read(name_span, text, &base_ty);
         let Some(known) = self.known_ty(&base_ty)? else {
             let hint = self.field_owner(text);
             let what = format!("read its field `{text}`");
@@ -924,6 +937,7 @@ impl BodyCx<'_> {
             self.no_fields(&known, text, name_span, base_span);
             return self.error_expr(span);
         };
+        self.note_field_owner(fact, ty_def);
         let Some(ctors) = self.adt_ctors(ty_def)? else {
             if matches!(self.input.item(self.own, ty_def)?.sig, ItemSig::Type(_)) {
                 self.no_fields(&known, text, name_span, base_span);
@@ -951,6 +965,7 @@ impl BodyCx<'_> {
             })
             .ok_or_else(|| Ice::new("a common field without a name"))?;
         let ty = self.field_ty(field_ty, &args);
+        self.note_field_ty(fact, &ty);
         self.push(
             ExprKind::Field {
                 base,

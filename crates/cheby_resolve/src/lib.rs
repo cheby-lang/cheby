@@ -27,6 +27,7 @@
 //! by the `NodeId`s stored here.
 
 mod body;
+mod docs;
 mod imports;
 mod items;
 mod naming;
@@ -45,6 +46,7 @@ use cheby_package::Targets;
 use cheby_syntax::{NodeId, SyntaxTree};
 use rustc_hash::FxHashMap;
 
+pub use docs::{field_docs, item_docs};
 pub use imports::{
     ImportItemRequest, ImportRequest, ImportTarget, Lookup, ModuleLookup, closest_name,
     collect_imports, cycle_diagnostic, resolve_import_targets,

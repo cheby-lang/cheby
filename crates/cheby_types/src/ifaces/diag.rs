@@ -41,6 +41,12 @@ pub(crate) fn unsatisfied_diagnostic(
     diag
 }
 
+/// One line on why `err` holds, for the answer of a query (D-1386). A
+/// diagnostic's notes need its span and its need; this text needs neither.
+pub(crate) fn reason_text(cx: &IfaceCx<'_>, err: &Unsatisfied) -> String {
+    Writer { cx }.reason(err)
+}
+
 /// The innermost reason, if it is a missing descriptor.
 fn descriptor_leaf(err: &Unsatisfied) -> Option<(&Unsatisfied, ParamIdx)> {
     match &err.reason {
@@ -228,23 +234,9 @@ impl Writer<'_, '_> {
             Reason::HomeNotInDeps { home } => diag.with_note(format!(
                 "`{ty}` gets its functions from `std::{home}`, which is not supported yet (D-451)"
             )),
-            Reason::NoModule => {
-                let note = match self.cx.input.globals.types.kind(err.ty) {
-                    TyKind::Tuple(_) => {
-                        "tuples satisfy only `Show`, `Compare` and empty interfaces (§8.2, D-167)"
-                    }
-                    TyKind::Fn { .. } => "function types satisfy only empty interfaces (§8.2, D-166)",
-                    TyKind::Dyn { .. } => "operators are not defined on `dyn` values (§8.6, §8.7)",
-                    _ => "`Never` is declared in no module, so it satisfies only empty interfaces",
-                };
-                diag.with_note(note)
-            }
+            Reason::NoModule => diag.with_note(self.no_module(err.ty)),
             Reason::Param { param } => self.param(diag, err, *param),
-            Reason::Dyn { has } => diag.with_note(format!(
-                "`dyn {}` satisfies only `{}` and the interfaces it embeds (§8.6)",
-                self.iface(*has),
-                self.iface(*has)
-            )),
+            Reason::Dyn { has } => diag.with_note(self.dyn_only(*has)),
             Reason::Element { index, inner } => {
                 let diag = diag.with_note(format!(
                     "element {} of `{ty}` is `{}`, which does not satisfy `{}` (§8.2, D-167)",
@@ -277,10 +269,98 @@ impl Writer<'_, '_> {
                 "`{ty}` mentions the type parameter `{}`, which has no bound (D-236)",
                 self.param_name(*param)
             )),
-            Reason::TooDeep => diag.with_note(format!(
-                "the requirement nests more than {} levels deep",
-                super::solve::DEPTH_LIMIT
-            )),
+            Reason::TooDeep => diag.with_note(too_deep()),
+        }
+    }
+
+    /// Why a type declared in no module does not meet a requirement.
+    fn no_module(&self, ty: Ty) -> &'static str {
+        match self.cx.input.globals.types.kind(ty) {
+            TyKind::Tuple(_) => {
+                "tuples satisfy only `Show`, `Compare` and empty interfaces (§8.2, D-167)"
+            }
+            TyKind::Fn { .. } => "function types satisfy only empty interfaces (§8.2, D-166)",
+            TyKind::Dyn { .. } => "operators are not defined on `dyn` values (§8.6, §8.7)",
+            _ => "`Never` is declared in no module, so it satisfies only empty interfaces",
+        }
+    }
+
+    /// What `dyn has` satisfies.
+    fn dyn_only(&self, has: DefId) -> String {
+        format!(
+            "`dyn {}` satisfies only `{}` and the interfaces it embeds (§8.6)",
+            self.iface(has),
+            self.iface(has)
+        )
+    }
+
+    /// `err`'s reason as one line. Nested reasons follow their parent's
+    /// text. A home module outside the view is not loaded, because a query
+    /// sees every loaded module.
+    fn reason(&self, err: &Unsatisfied) -> String {
+        let ty = self.ty(err.ty);
+        match &err.reason {
+            Reason::Missing {
+                name,
+                required,
+                module,
+                ..
+            } => format!(
+                "`{}` has no function `{}`",
+                self.path(*module),
+                sig(self.cx.input.globals.names.get(*name), &self.ty(*required))
+            ),
+            Reason::LessVisible { found, .. } => {
+                format!("`{}` is less visible than `{ty}`", self.func(*found))
+            }
+            Reason::Signature {
+                found,
+                required,
+                actual,
+                ..
+            } => {
+                let name = self.name(*found);
+                format!(
+                    "`{}` has the signature `{}`, not `{}`",
+                    self.func(*found),
+                    sig(name, &self.ty_in(*actual, *found)),
+                    sig(name, &self.ty(*required))
+                )
+            }
+            Reason::HomeNotInDeps { home } => format!("`std::{home}` is not loaded"),
+            Reason::NoModule => self.no_module(err.ty).to_owned(),
+            Reason::Param { param } => format!(
+                "the type parameter `{}` has no bound `{}`",
+                self.param_name(*param),
+                self.want(err.want)
+            ),
+            Reason::Dyn { has } => self.dyn_only(*has),
+            Reason::Element { index, inner } => format!(
+                "element {} of `{ty}`: {}",
+                index.saturating_add(1),
+                self.reason(inner)
+            ),
+            Reason::Bound {
+                found,
+                param,
+                inner,
+            } => format!(
+                "`{}` requires `{}: {}`: {}",
+                self.func(*found),
+                self.generic_name(*found, *param),
+                self.want(inner.want),
+                self.reason(inner)
+            ),
+            Reason::Undetermined { found, param, .. } => format!(
+                "nothing determines the type parameter `{}` of `{}`",
+                self.generic_name(*found, *param),
+                self.func(*found)
+            ),
+            Reason::Descriptor { param } => format!(
+                "the type parameter `{}` has no bound",
+                self.param_name(*param)
+            ),
+            Reason::TooDeep => too_deep(),
         }
     }
 
@@ -563,6 +643,14 @@ impl Writer<'_, '_> {
             _ => diag,
         }
     }
+}
+
+/// The text of [`Reason::TooDeep`].
+fn too_deep() -> String {
+    format!(
+        "the requirement nests more than {} levels deep",
+        super::solve::DEPTH_LIMIT
+    )
 }
 
 /// `show(Point) -> String` for a function type `fn(Point) -> String`.
