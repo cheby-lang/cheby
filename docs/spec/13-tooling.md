@@ -316,6 +316,8 @@ _Note:_ the reference formatter is a pretty printer driven by one line width, 10
 
 Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). With it, each warning is rendered as an error with its own code, as in `error[W0002]: unused binding …`, and the first one has the note "warnings are denied by `--deny-warnings`". The command then fails with exit status 1, and `cheby run` and `cheby test` run nothing (D-549). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452). A denied warning of those phases, such as one about the manifest, is rendered as an error but does not stop the later checks, because a warning never comes from a broken file. The command still fails with status 1 after them, `cheby check` evaluates no constants, and `cheby run` and `cheby test` compile and run nothing (D-621).
 
+_Note:_ in the language server, the rule that diagnostics never come from a broken file holds through a file's last good text. While a file has such an error, the other files are checked against that text, so their diagnostics do not come from a broken file either ([§13.11](#1311-language-server)) (D-1347).
+
 The following are warnings (D-080 and the cited decisions):
 
 | Warning                                                                 | Decision             |
@@ -390,7 +392,7 @@ Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics
 
 ## 13.9 Compile-time evaluation
 
-Constant initializers ([§4.5](04-declarations.md#45-constants)) are run by the compiler with the JIT (D-090). Because the language server compiles code continuously, evaluation must be bounded (ADR-0027):
+Constant initializers ([§4.5](04-declarations.md#45-constants)) are run by the compiler with the JIT (D-090). Because the language server evaluates constants without being asked, evaluation must be bounded (ADR-0027):
 
 - Each constant's evaluation is limited to 10 seconds and 1 GiB by default. The limits can be adjusted for a package in `cheby.toml` ([§13.3](#133-manifest)). Exceeding a limit is a compile error on that constant (D-195).
 - The time limit is wall-clock time for one evaluation of a constant at the top level, including the constants it forces. It stops a loop at its next function entry or tail call, so a single long call into a standard-library kernel cannot be interrupted. The memory limit is the peak number of heap bytes that the evaluation keeps live at once, including the constants it forces and what kernels allocate, so a constant that builds and drops large temporaries can finish (D-536). Every command evaluates constants with the same code, which infers no borrowing ([§9.2](09-memory-model.md#92-reference-counting)), so the peak, and with it the verdict, is the same under `cheby check`, `cheby run`, `cheby test` and `cheby build` (D-978). Constants evaluated earlier and REPL session values do not count, so a constant's verdict never depends on what was evaluated before it. Every allocation is checked against the limit before memory is requested, so a single request over the limit exceeds it too (D-617), and so does a request whose size overflows. A standard-library list update that takes its arguments over checks the limit first against an upper bound of what it allocates, so the limit may stop it up to that bound before the peak would reach the limit (D-738). A request under the limit that the system refuses is not over the limit: it panics with `out of memory`, which is E0075 ([§11.8.2](11-errors-and-panics.md#1182-out-of-memory), D-642).
@@ -422,19 +424,30 @@ Hash-based collections (`Map`, `Set`) may appear in constants, even though the h
 
 `cheby lsp` implements the Language Server Protocol over standard input and output (D-031). It provides at least diagnostics, hover with types, go to definition, find references, rename, completion and formatting through `cheby fmt`.
 
-The language server evaluates constants under the limits of [§13.9](#139-compile-time-evaluation), and never runs `main` or tests on its own.
+The server's diagnostics follow `cheby check`, not `cheby build` ([§13.1](#131-the-cheby-command)). When no module file of a package has an error found while lexing, parsing or checking syntax, the server must publish the diagnostics that `cheby check` reports for the text the editor holds, and those of evaluating constants once they arrive (D-1348).
+
+A module file with such an error must show only what those phases report. The server checks the other files against that file's last good text, so their diagnostics stay real and none comes from a broken file. The last good text is the newest text of the file seen in the session without such an error, or else its text on disk if that has none (D-1347, D-1355, D-1356). A file with no last good text counts as empty, and the files that import it, directly or not, keep the diagnostics they last showed, and warnings about unused package-visible items are held back for that run (D-1357). The server still answers requests such as hover from the text the editor holds, and must not publish what the later phases of that analysis report (D-1347). This binds the server only: `cheby check` stops as [§13.8](#138-diagnostics-and-warnings) says (D-452).
+
+The language server evaluates constants under the limits of [§13.9](#139-compile-time-evaluation), and never runs `main` or tests on its own. The server process itself must not run generated code, so a separate process evaluates the constants, away from the requests (D-1349). That process runs at the first report of a session in which no file has an error, and then at each save whose report has none (D-1411). The diagnostics of evaluating constants join the published ones when it finishes, and show only while a file's text is the text it read (D-1348, D-1412). A run that a new save or one of the server's own limits cuts short reports nothing, so these diagnostics may be missing until the next run ends (D-1348, D-1411).
+
+_Note:_ until M6, the reference implementation's language server does not evaluate constants on Windows, so these diagnostics do not appear there (D-1414).
 
 ### 13.11.1 Generating JSON code
 
-Cheby has no derive (D-057, ADR-0022). Instead, the language server offers a code action on a type declaration that writes a `to_json` function and a decoder for the type against `std::json` (D-210, D-215). The generated functions are ordinary source code in the type's module. They are meant to be read and edited by hand, and nothing regenerates or checks them afterwards: there is no CLI generator and no staleness check (D-215).
+Cheby has no derive (D-057, ADR-0022). Instead, the language server offers a code action on a type declaration that writes a `to_json` function and a decoder for the type against `std::json` (D-210, D-215). The generated functions are ordinary source code in the type's module. They are meant to be read and edited by hand, and nothing regenerates or checks them afterwards: there is no CLI generator and no staleness check (D-215). The action is offered for a type only while neither of its functions exists, so to generate them again a user deletes them first (D-1402).
 
 The generated code follows these conventions:
 
 - Each field becomes a JSON key with the field's name unchanged, such as `first_name` (D-225). Renaming a key is a hand edit.
 - A variant without fields is encoded as a JSON string of its name in snake_case, such as `"paperback"`.
-- A variant with named fields is encoded as an internally tagged object: a `"type"` key with the variant's name in snake_case, followed by its fields, such as `{"type":"circle","radius":1.0}` (D-224). If a field is itself called `type`, the generated code must be edited by hand.
+- A variant with named fields is encoded as an internally tagged object: a `"type"` key with the variant's name in snake_case, followed by its fields, such as `{"type":"circle","radius":1.0}` (D-224).
+- A variant with positional fields is encoded the same way, with each field's position as its key, such as `{"type":"pair","0":1,"1":"x"}` (D-1403).
 - A field whose type is declared in another module is encoded and decoded through that module's own `to_json` and decoder.
-- The encoding function has the signature that `std::json`'s encoding interface requires, and the visibility of the type, so that the type satisfies the interface ([§8.2](08-interfaces.md#82-satisfaction)).
+- A field of type `json::Value` is written as it is. A field whose type has no JSON form becomes `todo` with a comment, so the rest of the code stays useful and the warning for `todo` keeps the gap visible ([§13.8](#138-diagnostics-and-warnings)). Sized integers, `Map`, `Set`, tuples, functions, `dyn` types, `Bytes` and `Nil` have no JSON form here (D-1407).
+- The encoding function has the signature that `std::json`'s encoding interface requires, and the visibility of the type, so that the type satisfies the interface ([§8.2](08-interfaces.md#82-satisfaction)). The note below gives the one exception.
+- For a generic type, the encoding function has a bound `T: json::ToJson` on each type parameter, so the type satisfies the interface for the type arguments that do ([§8.2.2](08-interfaces.md#822-conditional-conformance), D-064). The decoder takes one decoder parameter per type parameter. `Box<Int>` does not satisfy the interface, since `Int` has no `to_json`, so a field of that type becomes `todo` (D-1406).
+
+_Note:_ a module can satisfy an interface for only one type ([§8.2.1](08-interfaces.md#821-one-type-per-interface-per-module), D-045). So a second type in a module, one whose module already has these functions for another type, gets functions named `<type>_to_json` and `<type>_decoder`, and a comment that says they do not satisfy `json::ToJson`. A field whose type is declared in the same module and has no functions yet gets them in the same edit (D-1404).
 
 The code action is part of the language server, not of the language. Its exact output is informative, and it may improve between toolchain versions without affecting existing code.
 

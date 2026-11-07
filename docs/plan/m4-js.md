@@ -42,6 +42,7 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 ### 4.5 The LSP core (M5 lane)
 
 - The LSP core lands with M4, starting no earlier than M3's third checkpoint, because it sits on the driver's front-end APIs that M3's cache rewrites. Its protocol questions are settled in its own design step ([m5-tooling.md](m5-tooling.md), D-1029).
+- That design step is done: D-1347 to D-1426 settle what the server does and how it is built. Its slices, exit criterion and progress are in [m5-tooling.md](m5-tooling.md#status). It is built on its own branch, and `tests/milestone` stays `M4` while it lands (D-1352).
 
 ### 4.6 Context values (tier 4)
 
