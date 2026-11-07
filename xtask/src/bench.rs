@@ -13,6 +13,15 @@
 //! check` of `small-10000` (seed 2) filled with std's records first, so
 //! std's first use reads apart ([`cold_columns`]).
 //!
+//! The same rows also get a table of the AOT path, through the `cheby`
+//! binary (D-1346, [`aot_columns`]; not for the `huge_literals` shapes):
+//! `cheby build -o` with `--jobs 1` and with the default on a cache that
+//! std's records fill, so the speedup compares like with like; a warm
+//! rebuild with nothing changed; one function body edited, then `cheby
+//! build`; the `link` phase of a warm build; and the executable's size.
+//! A build compiles the modules `main` reaches, not the whole project, so
+//! the table gives times and no lines per second.
+//!
 //! For generated projects of 10k, 100k and 1M lines (`--quick`: 10k only)
 //! it measures:
 //!
@@ -235,6 +244,9 @@ struct Row {
     edit_to_run: Option<Duration>,
     /// The cold `check` and `build` columns (D-975, D-1266).
     cold: Cold,
+    /// The AOT table's columns (D-1346); `None` for the shapes not built
+    /// (`huge_literals`).
+    aot: Option<Aot>,
 }
 
 /// The size of what `bench_build` built (D-718).
@@ -316,6 +328,11 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             None
         };
         let cold = cold_columns(&cheby, &dir, &fill, runs, env, !huge)?;
+        // Last: its edits must not reach the columns above.
+        let aot = cold
+            .build_std_warm
+            .map(|many| aot_columns(&cheby, &dir, &fill, runs, env, many))
+            .transpose()?;
         rows.push(Row {
             lines: project.lines(),
             elements: huge.then_some(lines),
@@ -326,14 +343,16 @@ pub fn run(root: &Path, args: &Args) -> Result<(), String> {
             size,
             edit_to_run,
             cold,
+            aot,
         });
     }
     eprintln!("bench-compile: std's first use, {FIRST_USE_ROUNDS} rounds");
     let first_use = std_first_use(&cheby, &base, env)?;
     let table = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         render(&rows),
         render_cold(&rows),
+        render_aot(&rows),
         render_first_use(first_use)
     );
     print!("{table}");
@@ -487,9 +506,9 @@ fn cold_columns(
         fastest(runs, || {
             let cache = crate::cache::fresh("cold")?;
             if std_warm {
-                time_on(cheby, fill, cache.path(), &check_args, env)?;
+                time_on(cheby, fill, cache.path(), &check_args, env, None)?;
             }
-            time_on(cheby, dir, cache.path(), args, env)
+            time_on(cheby, dir, cache.path(), args, env, None)
         })
     };
     let cold = Cold {
@@ -510,14 +529,89 @@ fn cold_columns(
     Ok(cold)
 }
 
+/// The AOT table's columns of a row (D-1346).
+#[derive(Clone, Copy, Debug)]
+struct Aot {
+    /// `cheby build -o` on a cache that std's records fill, with `--jobs
+    /// 1` and with the default.
+    build: [Duration; 2],
+    /// `cheby build -o` with nothing changed, on a cache that the same
+    /// build filled.
+    warm: Duration,
+    /// One function body edited, then `cheby build -o` on that cache.
+    edit_to_build: Duration,
+    /// The `link` phase of one warm build.
+    link: Duration,
+    /// The size of the executable.
+    exe_bytes: u64,
+}
+
+/// The AOT table's columns of the project in `dir` (D-1346). `many` is
+/// [`Cold::build_std_warm`], the default-threads reading of the same
+/// measurement, so only the `--jobs 1` one runs here. The warm and edit
+/// readings share one cache, and the `link` phase comes from a run of its
+/// own, so that no timed run has `CHEBY_PHASES` set. The edits stay in the
+/// project; the directory beside `dir` is removed afterwards.
+fn aot_columns(
+    cheby: &Path,
+    dir: &Path,
+    fill: &Path,
+    runs: usize,
+    env: &[(String, String)],
+    many: Duration,
+) -> Result<Aot, String> {
+    let out = dir.with_extension("build");
+    let exe = out.join("bench");
+    let exe_arg = exe
+        .to_str()
+        .ok_or_else(|| format!("{}: not UTF-8", exe.display()))?;
+    let build_args = ["build", "-o", exe_arg];
+    let one = fastest(runs, || {
+        let cache = crate::cache::fresh("aot")?;
+        time_on(cheby, fill, cache.path(), &["check"], env, None)?;
+        let args = ["--jobs", "1", "build", "-o", exe_arg];
+        time_on(cheby, dir, cache.path(), &args, env, None)
+    })?;
+    let cache = crate::cache::fresh("aot")?;
+    time_on(cheby, dir, cache.path(), &build_args, env, None)?;
+    let warm = fastest(runs, || {
+        time_on(cheby, dir, cache.path(), &build_args, env, None)
+    })?;
+    let phases = out.join("phases");
+    time_on(cheby, dir, cache.path(), &build_args, env, Some(&phases))?;
+    let text =
+        std::fs::read_to_string(&phases).map_err(|e| format!("{}: {e}", phases.display()))?;
+    let link = crate::bench_oqp11::parse_phases(&text)?
+        .get("link")
+        .copied()
+        .ok_or_else(|| format!("{}: no `link` phase", phases.display()))?;
+    let edit_to_build = fastest(runs, || {
+        edit_one_body(dir)?;
+        time_on(cheby, dir, cache.path(), &build_args, env, None)
+    })?;
+    let exe_bytes = std::fs::metadata(&exe)
+        .map_err(|e| format!("{}: {e}", exe.display()))?
+        .len();
+    let _ = std::fs::remove_dir_all(&out);
+    Ok(Aot {
+        build: [one, many],
+        warm,
+        edit_to_build,
+        link: Duration::from_nanos(link),
+        exe_bytes,
+    })
+}
+
 /// Times `cheby <args>` in `dir` on the cache `cache` with `env` set; it
-/// must succeed. `CHEBY_CACHE_LOG` and `CHEBY_PHASES` are never set.
+/// must succeed. `CHEBY_CACHE_LOG` is never set, and `CHEBY_PHASES` only
+/// names `phases`, for a run whose time is not a reading.
 fn time_on(
     cheby: &Path,
     dir: &Path,
     cache: &Path,
     args: &[&str],
     env: &[(String, String)],
+    phases: Option<&Path>,
 ) -> Result<Duration, String> {
     let mut cmd = Command::new(cheby);
     for (key, value) in env {
@@ -526,6 +620,9 @@ fn time_on(
     cmd.env("CHEBY_CACHE", cache)
         .env_remove("CHEBY_CACHE_LOG")
         .env_remove("CHEBY_PHASES");
+    if let Some(file) = phases {
+        cmd.env("CHEBY_PHASES", file);
+    }
     let start = Instant::now();
     let out = cmd
         .arg("--color=never")
@@ -570,6 +667,54 @@ fn render_cold(rows: &[Row]) -> String {
         "\nCold columns (D-975, D-1266): `cheby check` and `cheby build -o` on an empty cache, \
          std's first use inside them, and on a cache that std's records already fill; each the \
          fastest of the row's runs, every run on a fresh cache. Reported, never enforced.\n",
+    );
+    out
+}
+
+/// The AOT table (D-1346), empty when no row was built.
+fn render_aot(rows: &[Row]) -> String {
+    let built: Vec<(&Row, &Aot)> = rows
+        .iter()
+        .filter_map(|row| row.aot.as_ref().map(|aot| (row, aot)))
+        .collect();
+    if built.is_empty() {
+        return String::new();
+    }
+    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let secs = |d: Duration| format!("{:.3} s", d.as_secs_f64());
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "\n| Project | Build, 1 thread | Build, {threads} threads | Build speedup | Warm build | \
+         Edit to build | Link | Executable KiB |"
+    );
+    out.push_str(
+        "| ------- | --------------- | --------------- | ------------- | ---------- | \
+         ------------- | ---- | -------------- |\n",
+    );
+    for (row, aot) in built {
+        let [one, many] = aot.build;
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            row.label(),
+            secs(one),
+            secs(many),
+            speedup(one, many),
+            secs(aot.warm),
+            secs(aot.edit_to_build),
+            secs(aot.link),
+            kib(aot.exe_bytes),
+        );
+    }
+    out.push_str(
+        "\nAOT (D-1346): `cheby build -o` through the `cheby` binary, so with its cache writes and \
+         its allocator. Build is a cold package on a cache that std's records fill, with `--jobs \
+         1` and the default; warm build changes nothing; edit to build changes one function body \
+         and uses the default threads; link is that phase of one warm build. Each time is the \
+         fastest of the row's runs, but link is one run. A build compiles the modules `main` \
+         reaches, which on most shapes is not the whole project, so these times give no lines per \
+         second and do not compare with the JIT's columns. Reported, never enforced.\n",
     );
     out
 }
@@ -745,6 +890,11 @@ impl Row {
             "cold_build_ns": self.cold.build.map(nanos),
             "cold_check_std_warm_ns": nanos(self.cold.check_std_warm),
             "cold_build_std_warm_ns": self.cold.build_std_warm.map(nanos),
+            "aot_build_ns": self.aot.map(|aot| aot.build.map(nanos)),
+            "aot_warm_build_ns": self.aot.map(|aot| nanos(aot.warm)),
+            "aot_edit_to_build_ns": self.aot.map(|aot| nanos(aot.edit_to_build)),
+            "aot_link_ns": self.aot.map(|aot| nanos(aot.link)),
+            "aot_exe_bytes": self.aot.map(|aot| aot.exe_bytes),
         });
         // Only the `huge_literals` rows: the default rows keep their keys.
         if let (Some(elements), Some(fields)) = (self.elements, row.as_object_mut()) {
@@ -1224,6 +1374,7 @@ mod tests {
                 check_std_warm: ms(20),
                 build_std_warm: build.map(|_| ms(30)),
             },
+            aot: None,
         };
         let field = |row: &Value, key: &str| row.get(key).cloned();
         let built = row(Shape::Wide, Some(ms(200))).to_json();
@@ -1248,6 +1399,65 @@ mod tests {
             table.contains("| 10000 lines, `wide` | 0.100 s | 0.020 s | 0.200 s | 0.030 s |"),
             "{table}"
         );
+    }
+
+    /// D-1346: a built row's JSON and table have the AOT columns, a row
+    /// not built has them `null` and no table line, and a run of no built
+    /// row has no table.
+    #[test]
+    fn aot_columns_are_in_built_rows() {
+        let ms = Duration::from_millis;
+        let row = |shape, aot| Row {
+            lines: 10_000,
+            elements: None,
+            shape,
+            modules: 40,
+            check: [ms(1); 2],
+            build: [(ms(1), ms(2)); 2],
+            size: BuildSize::default(),
+            edit_to_run: None,
+            cold: Cold::default(),
+            aot,
+        };
+        let aot = Aot {
+            build: [ms(400), ms(100)],
+            warm: ms(80),
+            edit_to_build: ms(90),
+            link: ms(60),
+            exe_bytes: 2048,
+        };
+        let field = |row: &Value, key: &str| row.get(key).cloned();
+        let built = row(Shape::Deep, Some(aot)).to_json();
+        assert_eq!(
+            field(&built, "aot_build_ns"),
+            Some(json!([400_000_000, 100_000_000]))
+        );
+        assert_eq!(field(&built, "aot_warm_build_ns"), Some(json!(80_000_000)));
+        assert_eq!(
+            field(&built, "aot_edit_to_build_ns"),
+            Some(json!(90_000_000))
+        );
+        assert_eq!(field(&built, "aot_link_ns"), Some(json!(60_000_000)));
+        assert_eq!(field(&built, "aot_exe_bytes"), Some(json!(2048)));
+        let not_built = row(Shape::HugeList, None).to_json();
+        for key in [
+            "aot_build_ns",
+            "aot_warm_build_ns",
+            "aot_edit_to_build_ns",
+            "aot_link_ns",
+            "aot_exe_bytes",
+        ] {
+            assert_eq!(field(&not_built, key), Some(Value::Null), "{key}");
+        }
+        let table = render_aot(&[row(Shape::Deep, Some(aot)), row(Shape::HugeList, None)]);
+        assert!(
+            table.contains(
+                "| 10000 lines, `deep` | 0.400 s | 0.100 s | 4.0x | 0.080 s | 0.090 s | 0.060 s | 2.0 |"
+            ),
+            "{table}"
+        );
+        assert!(!table.contains("huge_list"), "{table}");
+        assert_eq!(render_aot(&[row(Shape::HugeList, None)]), "");
     }
 
     #[test]
