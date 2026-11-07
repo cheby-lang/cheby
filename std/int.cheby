@@ -56,7 +56,7 @@ pub fn from_i8(n: I8) -> Int
 pub fn from_i16(n: I16) -> Int
 
 test "from_i16 widens" {
-  assert from_i16(-32768) == -32768
+  assert from_i16(-32_768) == -32_768
 }
 
 /// Returns `n` as an `Int`. Every `I32` fits.

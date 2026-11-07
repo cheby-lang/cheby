@@ -260,8 +260,8 @@ test "parse_value keeps integers and floats apart" {
   assert json::parse_value("-0") == Ok(json::Int(0))
   assert json::parse_value("2.0") == Ok(json::Float(2.0))
   assert json::parse_value("1e3") == Ok(json::Float(1000.0))
-  assert json::parse_value("9007199254740991") == Ok(json::Int(9007199254740991))
-  assert json::parse_value("9007199254740992") == Ok(json::Float(9007199254740992.0))
+  assert json::parse_value("9007199254740991") == Ok(json::Int(9_007_199_254_740_991))
+  assert json::parse_value("9007199254740992") == Ok(json::Float(9_007_199_254_740_992.0))
   assert json::Int(1) != json::Float(1.0)
 }
 
@@ -301,7 +301,7 @@ test "a syntax error gives the line and the column in code points" {
 }
 
 test "parse_value accepts any nesting depth" {
-  let deep = string::repeat("[", 100000) + string::repeat("]", 100000)
+  let deep = string::repeat("[", 100_000) + string::repeat("]", 100_000)
   assert result::is_ok(json::parse_value(deep))
 }
 

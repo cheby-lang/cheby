@@ -126,15 +126,15 @@ test "wrapping_from keeps the low 8 bits of every source" {
   assert wrapping_from_i8(1) == 1
   assert wrapping_from_i8(17) == 17
   assert wrapping_from_i8(127) == 127
-  assert wrapping_from_i16(-32768) == 0
-  assert wrapping_from_i16(-12817) == 239
+  assert wrapping_from_i16(-32_768) == 0
+  assert wrapping_from_i16(-12_817) == 239
   assert wrapping_from_i16(-1) == 255
   assert wrapping_from_i16(0) == 0
   assert wrapping_from_i16(1) == 1
   assert wrapping_from_i16(255) == 255
   assert wrapping_from_i16(256) == 0
-  assert wrapping_from_i16(12817) == 17
-  assert wrapping_from_i16(32767) == 255
+  assert wrapping_from_i16(12_817) == 17
+  assert wrapping_from_i16(32_767) == 255
   assert wrapping_from_i32(-2_147_483_648) == 0
   assert wrapping_from_i32(-1_985_229_329) == 239
   assert wrapping_from_i32(-1) == 255
@@ -157,8 +157,8 @@ test "wrapping_from keeps the low 8 bits of every source" {
   assert wrapping_from_u16(1) == 1
   assert wrapping_from_u16(255) == 255
   assert wrapping_from_u16(256) == 0
-  assert wrapping_from_u16(52719) == 239
-  assert wrapping_from_u16(65535) == 255
+  assert wrapping_from_u16(52_719) == 239
+  assert wrapping_from_u16(65_535) == 255
   assert wrapping_from_u32(0) == 0
   assert wrapping_from_u32(1) == 1
   assert wrapping_from_u32(255) == 255

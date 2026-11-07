@@ -22,10 +22,10 @@ const worker_count: Int = 4
 
 /// Starts whose stopping times vary a lot, from 0 steps for 1 to 524
 /// for 837799.
-const starts: List<Int> = [27, 97, 871, 6171, 77031, 837799, 9, 703, 7, 1]
+const starts: List<Int> = [27, 97, 871, 6171, 77_031, 837_799, 9, 703, 7, 1]
 
 /// The same starts with a 0 in the middle, which makes its job panic.
-const faulty_starts: List<Int> = [27, 97, 871, 6171, 0, 77031, 837799, 9, 703, 7, 1]
+const faulty_starts: List<Int> = [27, 97, 871, 6171, 0, 77_031, 837_799, 9, 703, 7, 1]
 
 fn main() {
   report("All starts are positive", pool::map(starts, worker_count, timed))

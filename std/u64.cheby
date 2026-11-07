@@ -144,13 +144,13 @@ test "wrapping_from keeps the low 64 bits of every source" {
   assert wrapping_from_i8(1) == 1
   assert wrapping_from_i8(17) == 17
   assert wrapping_from_i8(127) == 127
-  assert wrapping_from_i16(-32768) == 18_446_744_073_709_518_848
-  assert wrapping_from_i16(-12817) == 18_446_744_073_709_538_799
+  assert wrapping_from_i16(-32_768) == 18_446_744_073_709_518_848
+  assert wrapping_from_i16(-12_817) == 18_446_744_073_709_538_799
   assert wrapping_from_i16(-1) == 18_446_744_073_709_551_615
   assert wrapping_from_i16(0) == 0
   assert wrapping_from_i16(1) == 1
-  assert wrapping_from_i16(12817) == 12817
-  assert wrapping_from_i16(32767) == 32767
+  assert wrapping_from_i16(12_817) == 12_817
+  assert wrapping_from_i16(32_767) == 32_767
   assert wrapping_from_i32(-2_147_483_648) == 18_446_744_071_562_067_968
   assert wrapping_from_i32(-1_985_229_329) == 18_446_744_071_724_322_287
   assert wrapping_from_i32(-1) == 18_446_744_073_709_551_615

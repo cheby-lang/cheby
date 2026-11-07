@@ -132,13 +132,13 @@ test "wrapping_from keeps the low 32 bits of every source" {
   assert wrapping_from_i8(1) == 1
   assert wrapping_from_i8(17) == 17
   assert wrapping_from_i8(127) == 127
-  assert wrapping_from_i16(-32768) == 4_294_934_528
-  assert wrapping_from_i16(-12817) == 4_294_954_479
+  assert wrapping_from_i16(-32_768) == 4_294_934_528
+  assert wrapping_from_i16(-12_817) == 4_294_954_479
   assert wrapping_from_i16(-1) == 4_294_967_295
   assert wrapping_from_i16(0) == 0
   assert wrapping_from_i16(1) == 1
-  assert wrapping_from_i16(12817) == 12817
-  assert wrapping_from_i16(32767) == 32767
+  assert wrapping_from_i16(12_817) == 12_817
+  assert wrapping_from_i16(32_767) == 32_767
   assert wrapping_from_i32(-2_147_483_648) == 2_147_483_648
   assert wrapping_from_i32(-1_985_229_329) == 2_309_737_967
   assert wrapping_from_i32(-1) == 4_294_967_295
@@ -355,7 +355,7 @@ test "the u32 range" {
 
 test "conversions to u32" {
   assert from_u8(255) == 255
-  assert from_u16(65535) == 65535
+  assert from_u16(65_535) == 65_535
   assert from_int(4_294_967_295) == Ok(4_294_967_295)
   assert from_int(-1) == Err(Nil)
   assert from_u64(4_294_967_296) == Err(Nil)

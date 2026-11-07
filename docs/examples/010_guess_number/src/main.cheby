@@ -122,7 +122,7 @@ test "parse_args reads the maximum from the only argument" {
 test "parse_args rejects bad maximums and extra arguments" {
   assert parse_args(["ten"]) == Err(MaxNotANumber("ten"))
   assert parse_args(["0"]) == Err(MaxOutOfRange(0))
-  assert parse_args(["1000001"]) == Err(MaxOutOfRange(1000001))
+  assert parse_args(["1000001"]) == Err(MaxOutOfRange(1_000_001))
   assert parse_args(["10", "20"]) == Err(TooManyArguments(2))
 }
 

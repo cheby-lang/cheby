@@ -84,7 +84,8 @@ fn is_significant(kind: SyntaxKind) -> bool {
 
 /// What formatting must keep of one top-level node: its node kinds in
 /// preorder and its significant tokens, without a laid-out list's
-/// trailing comma; a one-element tuple's comma is kept.
+/// trailing comma and a number's digit separators (D-1345); a one-element
+/// tuple's comma is kept.
 fn shape(node: SyntaxNode<'_>) -> (Vec<SyntaxKind>, Vec<String>) {
     let kinds = node.descendants().map(SyntaxNode::kind).collect();
     let tokens: Vec<_> = node.tokens().filter(|t| is_significant(t.kind())).collect();
@@ -103,7 +104,12 @@ fn shape(node: SyntaxNode<'_>) -> (Vec<SyntaxKind>, Vec<String>) {
                         | SyntaxKind::R_BRACK
                 ) && next.parent() == token.parent()
             });
-        if !trailing_comma {
+        if matches!(
+            token.kind(),
+            SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER
+        ) {
+            texts.push(token.text().replace('_', ""));
+        } else if !trailing_comma {
             texts.push(token.text().replace("\r\n", "\n"));
         }
     }
@@ -275,6 +281,25 @@ fn fmt_corpus_one_element_tuple_comma_is_compared() {
     assert_eq!(
         shapes("const a: Int = (x, y,)\n"),
         shapes("const a: Int = (x, y)\n")
+    );
+}
+
+/// The meaning check's digit-separator exception covers only the `_`
+/// characters of a number: every digit is compared.
+#[test]
+fn fmt_corpus_number_digits_are_compared() {
+    let shapes = |text: &str| meaning(&parse_clean(text).unwrap()).others;
+    assert_eq!(
+        shapes("const a: Int = 10000\n"),
+        shapes("const a: Int = 10_000\n")
+    );
+    assert_ne!(
+        shapes("const a: Int = 10000\n"),
+        shapes("const a: Int = 100_000\n")
+    );
+    assert_ne!(
+        shapes("const a: Float = 10000.5\n"),
+        shapes("const a: Float = 10000.25\n")
     );
 }
 

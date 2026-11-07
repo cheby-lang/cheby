@@ -271,7 +271,8 @@ impl<'t> Formatter<'t> {
     /// a gap D-470 rejects or a shape the grammar does not produce.
     pub(crate) fn syntax(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
         match node.kind() {
-            SyntaxKind::LITERAL | SyntaxKind::STRING_LIT => Some(self.as_written(node)),
+            SyntaxKind::LITERAL => Some(self.literal(node)),
+            SyntaxKind::STRING_LIT => Some(self.as_written(node)),
             SyntaxKind::BIN_EXPR => self.binary(node),
             SyntaxKind::PREFIX_EXPR | SyntaxKind::LITERAL_PAT => self.prefix(node),
             SyntaxKind::RECORD_EXPR => self.record(node),

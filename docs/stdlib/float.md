@@ -156,7 +156,7 @@ test "from_int converts" {
 
 @target(native)
 test "from_int rounds beyond 2^53" {
-  assert float::from_int(int::max_safe + 2) == 9007199254740992.0
+  assert float::from_int(int::max_safe + 2) == 9_007_199_254_740_992.0
 }
 ```
 
@@ -188,7 +188,7 @@ Returns `n` as a `Float`. Every `I16` is exact.
 
 ```cheby
 test "from_i16 is exact" {
-  assert float::from_i16(-32768) == -32768.0
+  assert float::from_i16(-32_768) == -32_768.0
 }
 ```
 
@@ -204,7 +204,7 @@ Returns `n` as a `Float`. Every `I32` is exact.
 
 ```cheby
 test "from_i32 is exact" {
-  assert float::from_i32(i32::max_value) == 2147483647.0
+  assert float::from_i32(i32::max_value) == 2_147_483_647.0
 }
 ```
 
@@ -221,7 +221,7 @@ Returns `n` as a `Float`, rounded to the nearest value, ties to even, when `n` i
 ```cheby
 test "from_i64 rounds beyond 2^53" {
   assert float::from_i64(-42) == -42.0
-  assert float::from_i64(9_007_199_254_740_993) == 9007199254740992.0
+  assert float::from_i64(9_007_199_254_740_993) == 9_007_199_254_740_992.0
 }
 ```
 
@@ -253,7 +253,7 @@ Returns `n` as a `Float`. Every `U16` is exact.
 
 ```cheby
 test "from_u16 is exact" {
-  assert float::from_u16(65535) == 65535.0
+  assert float::from_u16(65_535) == 65_535.0
 }
 ```
 
@@ -269,7 +269,7 @@ Returns `n` as a `Float`. Every `U32` is exact.
 
 ```cheby
 test "from_u32 is exact" {
-  assert float::from_u32(u32::max_value) == 4294967295.0
+  assert float::from_u32(u32::max_value) == 4_294_967_295.0
   assert 0.5 * float::from_u32(10) == 5.0
 }
 ```
@@ -286,7 +286,7 @@ Returns `n` as a `Float`, rounded to the nearest value, ties to even, when `n` i
 
 ```cheby
 test "from_u64 rounds beyond 2^53" {
-  assert float::from_u64(u64::max_value) == 18446744073709551616.0
+  assert float::from_u64(u64::max_value) == 18_446_744_073_709_551_616.0
 }
 ```
 

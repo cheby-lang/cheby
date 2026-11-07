@@ -65,7 +65,7 @@ Never change language behavior in the spec, the examples or the compiler without
 
 ## Writing Cheby code
 
-Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, and an arm's body on the arm's line with one space before `=>`. Agents often get these rules wrong:
+Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, and `_` between groups of three digits in a decimal number of five or more digits. Agents often get these rules wrong:
 
 - No `for`, `while`, `loop` or `if` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Arm guards use `when`.
 - No `return` (D-1340). Leave a block early with `guard cond else { … }` or `let guard p = e else { … }`, whose `else` block's value becomes the block's. A non-empty `else` block is always broken over lines (D-1343).
