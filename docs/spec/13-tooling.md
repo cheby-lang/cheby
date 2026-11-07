@@ -146,7 +146,7 @@ The REPL reads one entry at a time (D-605):
 - A closing bracket that matches nothing ends the entry, and the checker reports it. At the end of input, an unfinished entry is still checked, so its error is reported.
 - Text of only blanks and comments is not an entry and takes no number.
 - An entry is declarations and imports when its first line that is neither blank nor a `//` comment starts with `@`, `///` or `//!`, or with one of the words `fn` not followed by `(`, `pub`, `priv`, `type`, `interface`, `const`, `import` or `test`. It is checked as a module.
-- Any other entry is statements, checked as the body of a block. When its last statement is an expression whose type is not `Never`, its value is shown ([§13.5.5](#1355-prompt-output-and-standard-streams)). The names bound by its top-level `let` and `let assert` statements become session values.
+- Any other entry is statements, checked as the body of a block. When its last statement is an expression whose type is not `Never`, its value is shown ([§13.5.5](#1355-prompt-output-and-standard-streams)). The names bound by its top-level `let` and `let assert` statements become session values. A `let guard` binds its names only in the rest of the entry, as a `use` binder does, so they do not (D-1341).
 - A shown `Result` is not a discarded result, and a session value is not an unused binding ([§13.8](#138-diagnostics-and-warnings)).
 - An entry with an error binds nothing, and its unused-binding warnings are not shown.
 
@@ -308,7 +308,7 @@ The standard library's `test` blocks sit next to the code they test, in its sour
 - `cheby fmt --check` writes nothing. It lists each file that would change on standard output, one per line, and exits with status 1 if any would, for CI (D-1031). A file named on the command line is listed as given, in command-line order. Without arguments, files are listed relative to the package root, in sorted order, and standard input is listed as `-` (D-1146).
 - The formatter is part of the compatibility promise: after 1.0, rule changes to the canonical style are allowed, but `cheby fmt` must be able to migrate code when a language change needs it (D-075).
 
-The style itself is defined by the formatter, not by this specification. Examples in this specification use it: two-space indentation, one statement per line (D-1155), trailing commas in multi-line lists (D-1152), a type definition's variants or fields one per line (D-1274), every pipeline broken with `|>` at the start of each line (D-1275), and an arm's body starting on the arm's line, with one space before `=>` (D-1276).
+The style itself is defined by the formatter, not by this specification. Examples in this specification use it: two-space indentation, one statement per line (D-1155), trailing commas in multi-line lists (D-1152), a type definition's variants or fields one per line (D-1274), every pipeline broken with `|>` at the start of each line (D-1275), an arm's body starting on the arm's line, with one space before `=>` (D-1276), and the `else` block of a guard always broken over lines (D-1343).
 
 _Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns (D-1252). It sorts the imports within each block of imports, a run of imports on consecutive lines with no blank line or comment between them, by module path in byte order (D-1148). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147). It breaks a type definition's body, a pipeline and a block that is an arm's body over lines even when they fit (D-1274, D-1275, D-1276).
 
@@ -318,20 +318,20 @@ Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is pa
 
 The following are warnings (D-080 and the cited decisions):
 
-| Warning                                                                 | Decision            |
-| ----------------------------------------------------------------------- | ------------------- |
-| unused local binding, parameter or import                               | D-080, D-515        |
-| unused `priv` item                                                      | D-080, D-152, D-516 |
-| unused package-visible item, when nothing in the package uses it        | D-080, D-152, D-516 |
-| discarding a `Result` in statement position (silenced with `let _ = …`) | D-153               |
-| a local declaration or import that hides a prelude name                 | D-146, D-487        |
-| `let assert` with an irrefutable pattern                                | D-159, D-509        |
-| `todo` in compiled code                                                 | D-068               |
-| unreachable `case` arm                                                  | D-022               |
-| `==` on a type statically known to contain a function or handle type    | D-070, D-233, D-518 |
-| use of a `@deprecated` item                                             | D-200, D-517        |
-| a written tuple type with a tuple element or with four or more elements | D-243, D-440        |
-| a negative integer literal passed as a standard-library count argument  | D-298, D-303, D-518 |
+| Warning                                                                 | Decision             |
+| ----------------------------------------------------------------------- | -------------------- |
+| unused local binding, parameter or import                               | D-080, D-515         |
+| unused `priv` item                                                      | D-080, D-152, D-516  |
+| unused package-visible item, when nothing in the package uses it        | D-080, D-152, D-516  |
+| discarding a `Result` in statement position (silenced with `let _ = …`) | D-153                |
+| a local declaration or import that hides a prelude name                 | D-146, D-487         |
+| `let assert` or `let guard` with an irrefutable pattern                 | D-159, D-509, D-1341 |
+| `todo` in compiled code                                                 | D-068                |
+| unreachable `case` arm                                                  | D-022                |
+| `==` on a type statically known to contain a function or handle type    | D-070, D-233, D-518  |
+| use of a `@deprecated` item                                             | D-200, D-517         |
+| a written tuple type with a tuple element or with four or more elements | D-243, D-440         |
+| a negative integer literal passed as a standard-library count argument  | D-298, D-303, D-518  |
 
 Unused `pub` items are never reported (D-152). What counts as a use is fixed as follows (D-515, D-516):
 

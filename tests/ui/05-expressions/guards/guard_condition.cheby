@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-1340
+//! `guard` runs the rest of the block when its condition holds, and the
+//! `else` block otherwise, whose value is the block's (§5.18).
+import std::io
+
+fn sign(n: Int) -> String {
+  guard n != 0 else {
+    "zero"
+  }
+  guard n > 0 else {
+    "negative"
+  }
+  "positive"
+}
+
+fn main() {
+  io::println(sign(0))
+  io::println(sign(-1))
+  io::println(sign(1))
+}

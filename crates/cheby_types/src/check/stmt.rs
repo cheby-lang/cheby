@@ -1,4 +1,4 @@
-//! Blocks and statements (§5.1, §5.2, §11.4, §11.5).
+//! Blocks and statements (§5.1, §5.2, §5.18, §11.4, §11.5).
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
@@ -11,8 +11,8 @@ use crate::thir::{self, ExprId, ExprKind};
 
 impl BodyCx<'_> {
     /// A block. Its value is its last statement when that is an
-    /// expression, checked against `expected`, or the value of a `use`;
-    /// otherwise `Nil` (§5.1).
+    /// expression, checked against `expected`, or the value of a `use` or
+    /// a guard; otherwise `Nil` (§5.1).
     pub(crate) fn block(
         &mut self,
         block: Block<'_>,
@@ -23,7 +23,7 @@ impl BodyCx<'_> {
     }
 
     /// The statements `stmts` of a block spanning `span`: a whole block,
-    /// or the rest of one after a `use`.
+    /// or the rest of one after a `use` or a guard.
     pub(crate) fn block_stmts<'a>(
         &mut self,
         stmts: &'a [Stmt<'a>],
@@ -40,6 +40,12 @@ impl BodyCx<'_> {
                     let rest = stmts.get(n.saturating_add(1)..).unwrap_or_default();
                     let call = self.use_stmt(u, rest, expected)?;
                     tail = Some(self.coerce_expr(call, expected)?);
+                    break;
+                }
+                // So does a guard (§5.18), whose `case` is already coerced.
+                Stmt::Guard(g) => {
+                    let rest = stmts.get(n.saturating_add(1)..).unwrap_or_default();
+                    tail = Some(self.guard_stmt(g, rest, expected)?);
                     break;
                 }
                 Stmt::Expr(e) if last => tail = Some(self.check_expr(e, expected)?),
@@ -78,6 +84,7 @@ impl BodyCx<'_> {
             Stmt::Assert(a) => self.assert_stmt(a),
             Stmt::LocalFn(f) => Ok(self.local_fn(f)?.map(thir::Stmt::Expr)),
             Stmt::Use(_) => Err(Ice::new("a `use` statement outside a block's statements")),
+            Stmt::Guard(_) => Err(Ice::new("a guard outside a block's statements")),
         }
     }
 
@@ -85,17 +92,7 @@ impl BodyCx<'_> {
     /// (§11.4). The value is checked first, against the annotation if
     /// there is one; then the pattern binds.
     fn let_stmt(&mut self, stmt: LetStmt<'_>) -> Result<Option<thir::Stmt>, Ice> {
-        let annotation = match stmt.ty() {
-            Some(written) => {
-                let span = written.significant_span();
-                let ty = self.lower_written_ty(written)?;
-                Some(Expected::new(
-                    ty,
-                    Some((span, "expected because of this annotation".to_owned())),
-                ))
-            }
-            None => None,
-        };
+        let annotation = self.annotation(stmt.ty())?;
         let init = match stmt.value() {
             Some(value) => self.check_expr(value, annotation.as_ref())?,
             // A `let` without a value is a syntax error.
@@ -116,6 +113,22 @@ impl BodyCx<'_> {
         let pat = self.check_pat(pattern, &ty, PatSite::LetAssert)?;
         let message = self.message(stmt.message().and_then(Message::value))?;
         Ok(Some(thir::Stmt::LetAssert { pat, init, message }))
+    }
+
+    /// The expected type that a `let`'s written type gives its value.
+    pub(super) fn annotation(
+        &mut self,
+        written: Option<cheby_syntax::ast::Type<'_>>,
+    ) -> Result<Option<Expected>, Ice> {
+        let Some(written) = written else {
+            return Ok(None);
+        };
+        let span = written.significant_span();
+        let ty = self.lower_written_ty(written)?;
+        Ok(Some(Expected::new(
+            ty,
+            Some((span, "expected because of this annotation".to_owned())),
+        )))
     }
 
     /// `assert cond as message` (§11.5, D-096, D-160).

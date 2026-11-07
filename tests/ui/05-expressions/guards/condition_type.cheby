@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-1341
+//! A guard's condition must have type `Bool` (§5.18.1).
+
+pub fn f(n: Int) -> Int {
+  guard n else {
+    0
+  }
+  1
+}

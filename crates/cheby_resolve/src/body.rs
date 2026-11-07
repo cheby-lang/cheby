@@ -495,6 +495,22 @@ impl Cx<'_, '_> {
                     }
                 }
             }
+            Stmt::Guard(s) => {
+                if let Some(value) = s.value() {
+                    self.expr(value)?;
+                }
+                if let Some(ty) = s.ty() {
+                    self.ty(ty)?;
+                }
+                // Before the pattern, whose names are bound only in the
+                // rest of the block (§5.18).
+                if let Some(block) = s.else_block() {
+                    self.block(block)?;
+                }
+                if let Some(pat) = s.pattern() {
+                    self.pat(pat, LocalKind::Let, &mut PatState::default())?;
+                }
+            }
             Stmt::Assert(s) => {
                 if let Some(cond) = s.condition() {
                     self.expr(cond)?;

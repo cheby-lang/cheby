@@ -1,0 +1,8 @@
+error[E0013]: expected a statement, found `else`
+ --> tests/ui/05-expressions/guards/stray_else.cheby:6:3
+  |
+6 |   else {
+  |   ^^^^
+  |
+  = help: `else` follows the condition of a `guard`; branching is `case`
+

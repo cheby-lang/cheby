@@ -1,0 +1,16 @@
+// @mode: run-pass
+// @decisions: D-1341, D-497
+//! An `else` block of type `Never` leaves the type to the rest of the
+//! block (§5.18.2).
+import std::io
+
+fn main() {
+  let next = fn(k) {
+    guard k > 0 else {
+      panic as "not positive"
+    }
+    k + 1
+  }
+  let value = next(1)
+  io::println("{value}")
+}

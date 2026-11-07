@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-1341
+//! The names of a `let guard` are not visible in its `else` block
+//! (§5.18.1).
+
+pub fn f(x: Option<Int>) -> Int {
+  let guard Some(n) = x else {
+    n
+  }
+  n
+}

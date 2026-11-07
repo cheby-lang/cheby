@@ -1,6 +1,6 @@
 # 6. Patterns
 
-Patterns take values apart and bind names to their pieces. They are used in `case` arms ([§5.9](05-expressions.md#59-case-expressions)), `let` ([§5.2](05-expressions.md#52-let-bindings)), `let assert` ([§11.4](11-errors-and-panics.md#114-let-assert)) and `use` binders ([§5.10](05-expressions.md#510-use)).
+Patterns take values apart and bind names to their pieces. They are used in `case` arms ([§5.9](05-expressions.md#59-case-expressions)), `let` ([§5.2](05-expressions.md#52-let-bindings)), `let assert` ([§11.4](11-errors-and-panics.md#114-let-assert)), `let guard` ([§5.18](05-expressions.md#518-guard-statements)) and `use` binders ([§5.10](05-expressions.md#510-use)).
 
 ## 6.1 Pattern syntax
 
@@ -36,7 +36,7 @@ A pattern is **irrefutable** if it matches every value of its type. The irrefuta
 - `[..]` and `[..rest]`,
 - alternatives with at least one irrefutable alternative, and `p as x` when `p` is irrefutable.
 
-Every other pattern is **refutable**. `let`, `use` binders and the parameters of closures and local functions (D-242) require irrefutable patterns. `case` arms and `let assert` accept both.
+Every other pattern is **refutable**. `let`, `use` binders and the parameters of closures and local functions (D-242) require irrefutable patterns. `case` arms, `let assert` and `let guard` accept both.
 
 This list is syntactic (D-509). Alternatives that match every value only together do not make an irrefutable pattern, so `let True | False = b` is a compile error, and `let assert True | False = b` gets no warning ([§11.4](11-errors-and-panics.md#114-let-assert)).
 
@@ -183,4 +183,4 @@ Both checks are bounded by a fixed budget, so that their cost has a limit and th
 
 _Note:_ the reference implementation allows 2,000,000 steps per pass and collects at most 64 missing values. It groups rows by the constructor or literal they start with, so a large table of literal or variant arms checks in about linear time (D-508).
 
-`let assert` uses a refutable pattern and panics when it does not match instead of requiring exhaustiveness ([§11.4](11-errors-and-panics.md#114-let-assert)).
+`let assert` uses a refutable pattern and panics when it does not match instead of requiring exhaustiveness ([§11.4](11-errors-and-panics.md#114-let-assert)). `let guard` needs no exhaustiveness either, because its `else` block takes every value that does not match, and that block is never reported as unreachable ([§5.18](05-expressions.md#518-guard-statements)).

@@ -57,6 +57,20 @@ Converting between error types is done with ordinary functions such as `result::
 
 The same pattern works for `Option` with `option::then`, and for any other callback-taking function ([§5.10](05-expressions.md#510-use)).
 
+A step that fails with an error of the function's own, and does not need the value that failed, can use `guard` or `let guard` instead ([§5.18](05-expressions.md#518-guard-statements)) (D-1340):
+
+```cheby
+fn find_user(users: Map<String, User>, id: String) -> Result<User, AppError> {
+  guard id != "" else {
+    Err(EmptyId)
+  }
+  let guard Some(user) = map::get(users, id) else {
+    Err(UnknownUser)
+  }
+  Ok(user)
+}
+```
+
 ## 11.3 Unwinding
 
 When a fiber panics or is cancelled, it **unwinds**: its stack frames are removed from the innermost outwards, and for each frame the runtime releases the references the frame holds (D-733, ADR-0061). Unwinding stops at the `scope` or `timeout` call that catches the panic or that the cancellation targets, because scope bodies and timeout functions run on the calling fiber ([§10.3](10-concurrency.md#103-scopes), [§10.7](10-concurrency.md#107-cancellation)). Otherwise it removes every frame and the fiber ends (D-665, D-667). As a consequence:
@@ -77,7 +91,7 @@ _Note:_ the mechanism releases the same references at the same points as any oth
 let_assert_stmt = "let" "assert" pattern [ ":" type ] "=" expr [ "as" expr ] ;
 ```
 
-`let assert` binds with a **refutable** pattern (D-068). If the value matches, the pattern's names are bound for the rest of the block, as with `let`. If it does not match, the fiber panics.
+`let assert` binds with a **refutable** pattern (D-068). If the value matches, the pattern's names are bound for the rest of the block, as with `let`. If it does not match, the fiber panics. A mismatch that is not a bug is written with `let guard` ([§5.18](05-expressions.md#518-guard-statements)).
 
 ```cheby
 let assert Ok(config) = load_config("app.toml")
@@ -107,7 +121,7 @@ A `let assert` whose pattern is irrefutable is a warning, since a plain `let` wo
 assert_stmt = "assert" expr [ "as" expr ] ;
 ```
 
-`assert expr` evaluates an expression of type `Bool` and panics if it is `False` (D-096). It may be used anywhere a statement may appear, not only in tests (D-096).
+`assert expr` evaluates an expression of type `Bool` and panics if it is `False` (D-096). It may be used anywhere a statement may appear, not only in tests (D-096). A condition that may fail without a bug is written with `guard` ([§5.18](05-expressions.md#518-guard-statements)).
 
 A failed `assert e` has the panic message `assertion failed: <source text of e>`. When `e` is a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), two more lines follow with the debug-printed values of both operands, labelled `left:` and `right:`. The labels are right-aligned, so `left:` is indented by two spaces and `right:` by one (D-096, D-528). The panic is located at the start of `e`, not at the `assert` keyword (D-570).
 

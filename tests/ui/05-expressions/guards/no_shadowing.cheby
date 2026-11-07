@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-1341, D-051
+//! A `let guard` follows the no-shadowing rule (§5.18.1).
+
+pub fn f(n: Option<Int>) -> Int {
+  let guard Some(n) = n else {
+    0
+  }
+  n
+}

@@ -151,7 +151,9 @@ pub use patterns::{
     ListPatItem, LiteralPat, LiteralPatKind, OrPat, ParenPat, Pat, PosPatList, RestPat, TuplePat,
     WildcardPat,
 };
-pub use stmts::{AssertStmt, Block, LetStmt, LocalFn, Message, Stmt, UseBinder, UseStmt};
+pub use stmts::{
+    AssertStmt, Block, ElseClause, GuardStmt, LetStmt, LocalFn, Message, Stmt, UseBinder, UseStmt,
+};
 pub use tokens::{
     DocComment, FloatLit, Ident, IntLit, ModuleDoc, Name, RawStringLit, StringEscape, StringText,
     TypeName,

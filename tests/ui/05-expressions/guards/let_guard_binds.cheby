@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @decisions: D-1340
+//! `let guard` binds its pattern's names for the rest of the block, and
+//! runs the `else` block when the value does not match (§5.18).
+import std::io
+
+fn first_or(xs: List<Int>, fallback: Int) -> Int {
+  let guard [first, ..] = xs else {
+    fallback
+  }
+  first + 1
+}
+
+fn main() {
+  let a = first_or([1, 2], 0)
+  let b = first_or([], 7)
+  io::println("{a} {b}")
+}

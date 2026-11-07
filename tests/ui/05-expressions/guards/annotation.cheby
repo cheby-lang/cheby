@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-1341
+//! A `let guard`'s written type constrains the value (§5.18.1).
+
+pub fn f(x: Option<Int>) -> Int {
+  let guard Some(n): Option<String> = x else {
+    0
+  }
+  let _ = n
+  1
+}

@@ -1476,7 +1476,16 @@ fn make_body(
     let mut elems: Vec<ExprId> = vec![shown_id];
     let bindings = bind_values(input, iface, body, &stmts, &mut elems)?;
     if elems.len() < 2 {
-        elems.push(nil);
+        // A fresh `Nil`: `shown_id` may be a `use` or a guard, which the
+        // tuple must not run twice (D-1344).
+        elems.push(body.exprs.push(thir::Expr {
+            kind: ExprKind::Block {
+                stmts: Box::new([]),
+                tail: None,
+            },
+            ty: Ty::NIL,
+            span,
+        })?);
     }
     let tys = elems
         .iter()

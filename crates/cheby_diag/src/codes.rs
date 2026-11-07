@@ -229,7 +229,7 @@ codes! {
     W0005 Warning 5 UNUSED_PACKAGE_ITEM "package-visible item that nothing in the package uses";
     W0006 Warning 6 DISCARDED_RESULT "`Result` discarded in statement position";
     W0007 Warning 7 HIDDEN_PRELUDE_NAME "local declaration or import that hides a prelude name";
-    W0008 Warning 8 IRREFUTABLE_LET_ASSERT "`let assert` with an irrefutable pattern";
+    W0008 Warning 8 IRREFUTABLE_LET_ASSERT "`let assert` or `let guard` with an irrefutable pattern";
     W0009 Warning 9 TODO "`todo` in compiled code";
     W0010 Warning 10 UNREACHABLE_ARM "`case` arm that can never match";
     W0011 Warning 11 FUNCTION_EQUALITY "`==` or `!=` on a type statically known to contain a function or handle";

@@ -1,0 +1,7 @@
+// @mode: parse-fail
+// @decisions: D-1342
+//! `else` is a keyword, so it cannot be a name (§2.4).
+
+pub fn f(else: Int) -> Int {
+  else
+}

@@ -1,0 +1,11 @@
+// @mode: check-pass
+// @decisions: D-1341, D-159
+//! A `let guard` whose pattern is irrefutable warns, because its `else`
+//! block can never run (§5.18.1).
+
+pub fn f(pair: (Int, Int)) -> Int {
+  let guard (a, b) = pair else {
+    0
+  }
+  a + b
+}

@@ -578,7 +578,9 @@ fn reserved_words_explain_grammar_errors() {
     );
     assert_eq!(
         helps_of(&in_fn("  return n")),
-        ["Cheby has no `return`; a function returns the value of its body"]
+        [
+            "Cheby has no `return`; a function returns the value of its body, and `guard` leaves a block early"
+        ]
     );
     assert_eq!(
         helps_of(&in_fn("  let mut x = 1")),

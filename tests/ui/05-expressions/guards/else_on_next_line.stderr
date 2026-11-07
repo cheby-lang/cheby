@@ -1,0 +1,8 @@
+error[E0014]: unexpected line break
+ --> tests/ui/05-expressions/guards/else_on_next_line.cheby:6:11
+  |
+6 |   guard ok
+  |           ^ expected `else`
+  |
+  = note: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`
+

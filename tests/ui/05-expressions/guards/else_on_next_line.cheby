@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1341
+//! `else` is not a continuation token (§2.8).
+
+pub fn f(ok: Bool) -> Int {
+  guard ok
+  else {
+    0
+  }
+  1
+}

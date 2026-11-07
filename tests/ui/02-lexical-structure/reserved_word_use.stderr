@@ -4,5 +4,5 @@ error[E0007]: `return` is a reserved word
 10 |   return("done")
    |   ^^^^^^ reserved, cannot be used as a name
    |
-   = help: Cheby has no `return`; a function returns the value of its body
+   = help: Cheby has no `return`; a function returns the value of its body, and `guard` leaves a block early
 

@@ -359,6 +359,7 @@ fn name(color: Color) -> Int {
         ExprKind::Case {
             subjects: Box::new([subject]),
             arms: Box::new([arm(vec![red], None, one), arm(vec![green], None, two)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -413,6 +414,7 @@ fn f(a: Bool, b: Bool) -> Int {
                 arm(vec![f1, w1], Some(guard), two),
                 arm(vec![f2, w2], None, three),
             ]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -456,6 +458,7 @@ fn f(n: Int) -> Int {
         ExprKind::Case {
             subjects: Box::new([subject]),
             arms: Box::new([arm(vec![wild], None, one), arm(vec![zero], None, two)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -711,6 +714,7 @@ fn named_fields_and_other_modules() {
         ExprKind::Case {
             subjects: Box::new([s]),
             arms: Box::new([arm(vec![circle], None, one)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -724,6 +728,7 @@ fn named_fields_and_other_modules() {
         ExprKind::Case {
             subjects: Box::new([d]),
             arms: Box::new([arm(vec![north], None, one)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -760,6 +765,7 @@ fn opaque_types_need_a_wildcard() {
         ExprKind::Case {
             subjects: Box::new([o]),
             arms: Box::new([arm(vec![x], None, one)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -774,6 +780,7 @@ fn opaque_types_need_a_wildcard() {
         ExprKind::Case {
             subjects: Box::new([s]),
             arms: Box::new([arm(vec![wild], None, one)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -797,6 +804,7 @@ fn opaque_types_need_a_wildcard() {
         ExprKind::Case {
             subjects: Box::new([p]),
             arms: Box::new([arm(vec![some], None, one)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -853,6 +861,7 @@ fn nested_and_subjectless_cases() {
                 body: one,
                 span: bld.at("_ => 1", 0),
             }]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -866,6 +875,7 @@ fn nested_and_subjectless_cases() {
         ExprKind::Case {
             subjects: Box::new([o]),
             arms: Box::new([arm(vec![none], None, one)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -943,6 +953,7 @@ fn patterns_over_the_error_type_are_not_checked() {
         ExprKind::Case {
             subjects: Box::new([subject]),
             arms: Box::new([arm(vec![some], None, one), arm(vec![none], None, zero)]),
+            origin: crate::thir::CaseOrigin::Case,
         },
         Ty::INT,
         "case",

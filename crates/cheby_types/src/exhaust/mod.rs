@@ -41,7 +41,7 @@ use cheby_iface::{
 
 use crate::TypesInput;
 use crate::infer::{contains_error, substitute};
-use crate::thir::{self, ExprId, ExprKind, Lit, ParamOrigin, PatKind, Stmt};
+use crate::thir::{self, CaseOrigin, ExprId, ExprKind, Lit, ParamOrigin, PatKind, Stmt};
 use engine::{Ctor, ListLen, LitKey, Pat, Shape, Space, Types};
 
 /// How many missing values a diagnostic lists before "and N more".
@@ -77,7 +77,16 @@ fn check(cx: &TyCx<'_>, body: &thir::Body) -> Result<Vec<Diagnostic>, Ice> {
     while let Some(id) = stack.pop() {
         let expr = body.exprs.try_get(id, "expression")?;
         match &expr.kind {
-            ExprKind::Case { subjects, arms } if !subjects.is_empty() => {
+            ExprKind::Case {
+                arms,
+                origin: CaseOrigin::LetGuard,
+                ..
+            } => {
+                if let Some([pat]) = arms.first().map(|arm| &*arm.pats) {
+                    check_let_guard(cx, pat, &mut diags)?;
+                }
+            }
+            ExprKind::Case { subjects, arms, .. } if !subjects.is_empty() => {
                 check_case(cx, body, subjects, arms, &mut diags)?;
             }
             ExprKind::Block { stmts, .. } => {
@@ -306,6 +315,24 @@ fn check_let_assert(
             )
             .with_primary(pat.span, "this pattern matches every value of its type")
             .with_help("use `let` instead, since the assertion can never fail"),
+        );
+    }
+    Ok(())
+}
+
+/// W0008 for a `let guard` whose `else` block can never run (D-1341).
+fn check_let_guard(cx: &TyCx<'_>, pat: &thir::Pat, diags: &mut Vec<Diagnostic>) -> Result<(), Ice> {
+    if cx.erroneous(pat.ty) {
+        return Ok(());
+    }
+    if cx.irrefutable(pat)? {
+        diags.push(
+            Diagnostic::new(
+                codes::IRREFUTABLE_LET_ASSERT,
+                "`let guard` with a pattern that always matches",
+            )
+            .with_primary(pat.span, "this pattern matches every value of its type")
+            .with_help("use `let` instead, since the `else` block can never run"),
         );
     }
     Ok(())

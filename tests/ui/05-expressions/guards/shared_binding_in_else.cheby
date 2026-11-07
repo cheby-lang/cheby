@@ -1,0 +1,19 @@
+// @mode: run-pass
+// @decisions: D-1341
+//! The pattern's names are not visible in the `else` block, so a `let`
+//! there may use the same name (§5.18.1).
+import std::io
+
+fn f(x: Option<Int>) -> Int {
+  let guard Some(n) = x else {
+    let n = 0
+    n
+  }
+  n + 1
+}
+
+fn main() {
+  let a = f(None)
+  let b = f(Some(1))
+  io::println("{a} {b}")
+}

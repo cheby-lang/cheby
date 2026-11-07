@@ -8,8 +8,10 @@ Cheby is expression-oriented. Function bodies, blocks, `case` expressions and `u
 block       = "{" [ NL ] [ stmt { NL stmt } ] [ NL ] "}" ;
 stmt        = let_stmt
             | let_assert_stmt
+            | let_guard_stmt
             | use_stmt
             | assert_stmt
+            | guard_stmt
             | local_fn
             | expr ;
 ```
@@ -19,7 +21,7 @@ A block is a sequence of statements separated by newlines (D-051, [§2.8](02-lex
 - the value of its last statement, if that statement is an expression,
 - `Nil`, if the block is empty or its last statement is a `let`, `let assert`, `assert` or local function ([§3.6](03-types.md#36-nil)).
 
-A `use` statement consumes the rest of its block ([§5.10](#510-use)), so it is always effectively the last statement, and the block's value is the value of the `use`.
+A `use` statement consumes the rest of its block ([§5.10](#510-use)), so it is always effectively the last statement, and the block's value is the value of the `use`. A `guard` or `let guard` statement consumes the rest of its block in the same way ([§5.18](#518-guard-statements)) (D-1340).
 
 A block is itself an expression and may appear wherever an expression may, for example as a `case` arm body. Bindings introduced inside a block are visible only in the rest of that block.
 
@@ -41,7 +43,7 @@ fn save_all(items: List<Item>) -> Nil {
 }
 ```
 
-There is no `return`. A function returns the value of its body block. Early exits are written with `case` or `use`.
+There is no `return`. A function returns the value of its body block. Early exits are written with `case`, `use`, `guard` or `let guard` ([§5.18](#518-guard-statements)) (D-1340).
 
 ## 5.2 Let bindings
 
@@ -49,7 +51,7 @@ There is no `return`. A function returns the value of its body block. Early exit
 let_stmt    = "let" pattern [ ":" type ] "=" expr ;
 ```
 
-`let` evaluates the expression and matches it against the pattern, binding the pattern's names for the rest of the block. The pattern must be **irrefutable**: it must match every value of the type ([§6.1](06-patterns.md#61-pattern-syntax)). Refutable patterns need `let assert` ([§11.4](11-errors-and-panics.md#114-let-assert)).
+`let` evaluates the expression and matches it against the pattern, binding the pattern's names for the rest of the block. The pattern must be **irrefutable**: it must match every value of the type ([§6.1](06-patterns.md#61-pattern-syntax)). Refutable patterns need `let assert` ([§11.4](11-errors-and-panics.md#114-let-assert)) or `let guard` ([§5.18](#518-guard-statements)).
 
 The optional type annotation constrains the expression's type.
 
@@ -78,7 +80,7 @@ A new binding must not have the same name as any name already in scope at that p
 - every top-level function and constant of the current module, whether declared before or after,
 - every module name and value brought into scope by an `import` ([§7.5](07-modules-and-packages.md#75-imports)).
 
-The rule applies to every construct that introduces a value name: `let`, `let assert`, pattern bindings in `case` arms, `use` binders, function and closure parameters, and local function names (D-062).
+The rule applies to every construct that introduces a value name: `let`, `let assert`, `let guard`, pattern bindings in `case` arms, `use` binders, function and closure parameters, and local function names (D-062).
 
 Names that are never in scope at the same time do not conflict. Two sibling `case` arms, or two closures that are not nested in each other, may bind the same name.
 
@@ -577,6 +579,7 @@ Evaluation is strict and left to right (D-120):
 - In tuples, lists, constructors and record updates, items in the order written.
 - In `x |> f(_, a)`, `x` first, then `a`.
 - In `case`, the subjects in order, then guards in arm order, each at most once per arm (D-571).
+- In `guard` and `let guard`, the condition or expression, then either the `else` block or the rest of the block (D-1340).
 
 ### 5.15.2 Tail position
 
@@ -585,6 +588,7 @@ An expression is in **tail position** if its value becomes the result of the enc
 - the body block of a function, closure or local function,
 - the last statement of a block that is in tail position,
 - the body of each arm of a `case` in tail position,
+- the `else` block of a `guard` or `let guard` whose block is in tail position (D-1340),
 - the right operand of `&&` or `||` in tail position,
 - the call that a `|>` in tail position desugars to,
 - the call that a `use` in tail position desugars to.
@@ -644,3 +648,126 @@ path_expr   = [ LOWER "::" ] ( LOWER | UPPER ) [ "::" type_args ]
 An unqualified name refers to a local binding, a top-level item of the current module, an imported value or a prelude constructor ([§7.7](07-modules-and-packages.md#77-namespaces-and-name-resolution)). A qualified name `module::name` refers to an item of an imported module that is visible to the current module: a package-visible or `pub` item of a module in the same package, or a `pub` item of a module in another package, never a `priv` item ([§7.3](07-modules-and-packages.md#73-visibility), D-060, D-162).
 
 A path to an interface function, such as `Show::show`, may be used as a value, as in `list::map(xs, Show::show)`. The value is a function that calls the interface function through the function package chosen by the type of its `Self` argument, like an interface call ([§8.5](08-interfaces.md#85-calling-interface-functions)) (D-500).
+
+## 5.18 Guard statements
+
+```ebnf
+guard_stmt     = "guard" expr "else" block ;
+let_guard_stmt = "let" "guard" pattern [ ":" type ] "=" expr "else" block ;
+```
+
+A guard states what must hold for the rest of its block to run (D-1340). When it does not hold, the `else` block runs instead, and its value is the value of the enclosing block. Guards are the counterparts of `assert` and `let assert`, which panic instead ([§11.4](11-errors-and-panics.md#114-let-assert), [§11.5](11-errors-and-panics.md#115-assert)):
+
+| When it does not hold | `Bool` condition     | Pattern                      |
+| --------------------- | -------------------- | ---------------------------- |
+| Panic                 | `assert c`           | `let assert p = e`           |
+| Leave the block       | `guard c else { … }` | `let guard p = e else { … }` |
+
+```cheby
+fn withdraw(id: AccountId, amount: Int) -> Result<Account, BankError> {
+  guard amount > 0 else {
+    Err(InvalidAmount)
+  }
+  let guard Some(account) = find(id) else {
+    Err(NotFound)
+  }
+  guard account.balance >= amount else {
+    Err(InsufficientFunds)
+  }
+  Ok(debit(account, amount))
+}
+```
+
+### 5.18.1 Meaning
+
+Like `use`, a guard consumes the rest of its block ([§5.10](#510-use)). This statement:
+
+```cheby
+guard c else {
+  b…
+}
+rest…
+```
+
+is equivalent to
+
+```cheby
+case c {
+  False => {
+    b…
+  }
+  True => {
+    rest…
+  }
+}
+```
+
+and this statement:
+
+```cheby
+let guard p = e else {
+  b…
+}
+rest…
+```
+
+is equivalent to
+
+```cheby
+case e {
+  p => {
+    rest…
+  }
+  _ => {
+    b…
+  }
+}
+```
+
+- The condition of a `guard` must have type `Bool` (D-1341).
+- The pattern of a `let guard` may be refutable. An irrefutable pattern is a warning, because the `else` block could never run ([§6.1](06-patterns.md#61-pattern-syntax)) (D-1341).
+- The optional type annotation of a `let guard` constrains the expression's type, as in `let`.
+- The names of the pattern are bound in the rest of the block only. They are not visible in `e` or in the `else` block. They follow the no-shadowing rule ([§5.2](#52-let-bindings)).
+- The `else` block is a block, so its braces are required. It cannot read the value that failed to match, so a failure that needs that value is written with `case` or `use` (D-1341).
+- A `let guard` has no `when`. A further condition is a `guard` on the next line, which also gives it its own `else` block (D-1341).
+- If nothing follows the guard, the rest of the block is empty and its value is `Nil`, as with `use`, so the `else` block must have type `Nil` too.
+
+### 5.18.2 Types
+
+The `else` block and the rest of the block must have the same type, which is the type of the enclosing block. An expected type passes into both ([§3.12.5](03-types.md#3125-expected-types-and-conversions)).
+
+They are checked in source order: the condition or expression, then the `else` block, then the rest of the block (D-1341). Without an expected type, the `else` block fixes the type unless its type is `Never`, as the first arm of a `case` does ([§5.9](#59-case-expressions)).
+
+### 5.18.3 What a guard leaves
+
+A guard leaves its enclosing block and nothing further (D-1340). In the body block of a function, that gives the function's result. In any other block, it gives that block's value, and evaluation goes on after the block:
+
+```cheby
+fn describe(count: Int) -> String {
+  let label = {
+    guard count > 0 else {
+      "none"
+    }
+    "{count} items"
+  }
+  "found {label}"
+}
+```
+
+`describe(0)` returns `"found none"`.
+
+The rest of a block after a `use` is a callback, so a guard there gives the callback's result ([§5.10](#510-use)). With `result::try` that becomes the result of the function, and with `list::try_fold` the fold goes on:
+
+```cheby
+fn total_of_positives(xs: List<Int>) -> Result<Int, String> {
+  use sum, x <- list::try_fold(xs, 0)
+  guard x >= 0 else {
+    Ok(sum)
+  }
+  Ok(sum + x)
+}
+```
+
+`total_of_positives([1, -5, 2])` returns `Ok(3)`. The `else` block skips `-5`, and the fold goes on with `2`.
+
+_Note:_ a guard is a `case`, so unlike a `use`, it creates no closure. It suits code on a hot path as well as code that exits early.

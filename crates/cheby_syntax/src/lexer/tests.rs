@@ -161,13 +161,13 @@ fn identifiers_and_keywords() {
             (FN_KW, "fn"),
         ]
     );
-    let keywords = "as assert case const dyn exposed fn import interface let panic priv pub \
-                    test todo type use when";
+    let keywords = "as assert case const dyn else exposed fn guard import interface let panic \
+                    priv pub test todo type use when";
     let all = kinds(keywords);
-    assert_eq!(all.len(), 18);
+    assert_eq!(all.len(), 20);
     assert!(all.iter().all(|k| k.is_keyword()));
     // Reserved words are identifiers here; validation reports them.
-    assert_eq!(kinds("if else match go self return"), [LOWER_IDENT; 6]);
+    assert_eq!(kinds("if match go self return"), [LOWER_IDENT; 5]);
     assert_eq!(error_codes("if go myValue My_Type"), Vec::<String>::new());
 }
 

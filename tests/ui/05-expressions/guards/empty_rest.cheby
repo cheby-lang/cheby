@@ -1,0 +1,16 @@
+// @mode: run-pass
+// @decisions: D-1341
+//! If nothing follows a guard, the rest of the block is empty and its
+//! value is `Nil` (§5.18.1).
+import std::io
+
+fn warn_unless(ok: Bool) {
+  guard ok else {
+    io::println("warned")
+  }
+}
+
+fn main() {
+  warn_unless(True)
+  warn_unless(False)
+}

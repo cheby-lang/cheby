@@ -1150,7 +1150,7 @@ fn names_are_checked_once_where_bound() {
     assert_eq!(ret.labels[0].message, "reserved, cannot be used as a name");
     assert_eq!(
         ret.helps[0].message,
-        "Cheby has no `return`; a function returns the value of its body"
+        "Cheby has no `return`; a function returns the value of its body, and `guard` leaves a block early"
     );
     assert!(!b.messages().iter().any(|m| m.contains("cannot find")));
 }

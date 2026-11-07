@@ -261,6 +261,7 @@ pub enum ExprKind {
     Case {
         subjects: Box<[ExprId]>,
         arms: Box<[Arm]>,
+        origin: CaseOrigin,
     },
     /// `x.name`, with the field's index in every constructor of the base
     /// type (C4, D-071).
@@ -352,7 +353,7 @@ impl ExprKind {
                 out.extend(*tail);
             }
             Self::Closure { body, .. } | Self::LocalFn { body, .. } => out.push(*body),
-            Self::Case { subjects, arms } => {
+            Self::Case { subjects, arms, .. } => {
                 out.extend(subjects.iter().copied());
                 for arm in arms {
                     out.extend(arm.guard);
@@ -732,6 +733,18 @@ pub struct Arm {
     pub span: Span,
 }
 
+/// What a [`ExprKind::Case`] was written as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CaseOrigin {
+    /// A `case`, or a `guard`, which is a subjectless `case` that needs no
+    /// checks of its own.
+    Case,
+    /// `let guard p = e else { … }` and the rest of its block (§5.18): the
+    /// arm `p`, then a `_` arm for the `else` block. It is not checked for
+    /// reachability, and an irrefutable `p` is W0008 (D-1341).
+    LetGuard,
+}
+
 /// An element of a list literal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ListItem {
@@ -866,6 +879,7 @@ mod tests {
                     body: e(3),
                     span: span(4),
                 }]),
+                origin: CaseOrigin::Case,
             }), // 4
             expr(ExprKind::Block {
                 stmts: Box::new([

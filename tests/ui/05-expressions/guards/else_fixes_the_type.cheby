@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-1341, D-497
+//! Without an expected type the `else` block is checked first and fixes
+//! the type, so the rest of the block is checked against it (§5.18.2).
+
+pub fn f(ok: Bool) -> Nil {
+  let value = {
+    guard ok else {
+      1
+    }
+    "text"
+  }
+  let _ = value
+  Nil
+}

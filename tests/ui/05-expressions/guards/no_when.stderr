@@ -1,0 +1,6 @@
+error[E0013]: expected `else`, found `when`
+ --> tests/ui/05-expressions/guards/no_when.cheby:6:25
+  |
+6 |   let guard Some(n) = x when n > 0 else {
+  |                         ^^^^
+

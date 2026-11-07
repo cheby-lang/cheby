@@ -1,0 +1,8 @@
+error[E0042]: cannot find value `n` in this scope
+ --> tests/ui/05-expressions/guards/names_not_in_value.cheby:6:28
+  |
+6 |   let guard Some(n) = Some(n) else {
+  |                            ^ not found
+  |
+  = help: a value with a similar name exists: `f`
+

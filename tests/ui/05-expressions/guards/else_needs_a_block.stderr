@@ -1,0 +1,6 @@
+error[E0013]: expected `{`, found integer
+ --> tests/ui/05-expressions/guards/else_needs_a_block.cheby:6:17
+  |
+6 |   guard ok else 0
+  |                 ^
+

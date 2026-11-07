@@ -334,7 +334,7 @@ When an expression is checked, it may have an **expected type**, known at that p
 - the element type of a list, for each element of a list literal, when the list type is expected;
 - the element types of a tuple, for the elements of a tuple expression, when the tuple type is expected.
 
-An expected type passes into the result of a block and into every arm body of a `case`.
+An expected type passes into the result of a block, into every arm body of a `case` and into the `else` block of a `guard` or `let guard` ([§5.18](05-expressions.md#518-guard-statements)).
 
 The two conversions are:
 

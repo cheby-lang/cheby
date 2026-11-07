@@ -1,15 +1,17 @@
 //! `case` expressions (§5.9, C5): subjects, arms, guards and the
-//! subjectless form. Exhaustiveness and reachability are checked on THIR
-//! by `crate::exhaust`, so nothing is recorded for them here.
+//! subjectless form, and the guard statements, which are `case`s with the
+//! rest of the block in an arm (§5.18). Exhaustiveness and reachability
+//! are checked on THIR by `crate::exhaust`, so nothing is recorded for
+//! them here.
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{Ice, Ty};
-use cheby_syntax::ast::{self, AstNode, CaseArmKind, Expr};
+use cheby_syntax::ast::{self, AstNode, CaseArmKind, Expr, Stmt};
 
 use super::record::plural;
 use super::{BodyCx, Expected, PatSite};
 use crate::infer::InferTy;
-use crate::thir::{self, ExprId, ExprKind};
+use crate::thir::{self, CaseOrigin, ExprId, ExprKind, PatKind};
 
 /// The type of a `case` as its arms are checked (§5.9.1, §3.12.5).
 /// Without a known expected type, the first arm that is not `Never`
@@ -23,6 +25,17 @@ enum ArmTy {
     /// No expected type: the first arm that is not `Never` fixed it, and
     /// later arms are checked against it.
     Fixed(Expected),
+}
+
+impl ArmTy {
+    /// The type of the `case` once every arm is checked.
+    fn finished(self) -> InferTy {
+        match self {
+            Self::Expected(e) | Self::Fixed(e) => e.ty,
+            // Every arm diverges (or there is none, a syntax error).
+            Self::Open => InferTy::NEVER,
+        }
+    }
 }
 
 impl BodyCx<'_> {
@@ -45,12 +58,7 @@ impl BodyCx<'_> {
         // An expected type still unknown is treated like none, and the
         // `case`'s type is unified with it at the end: a diverging arm
         // checked against it would make it `Never`.
-        let mut arm_ty = match expected {
-            Some(e) if !matches!(self.infcx.shallow(&e.ty)?, InferTy::Var(_)) => {
-                ArmTy::Expected(e.clone())
-            }
-            _ => ArmTy::Open,
-        };
+        let mut arm_ty = self.arm_ty(expected)?;
         let against_expected = matches!(arm_ty, ArmTy::Expected(_));
         let mut arms = Vec::new();
         for arm in case.arms() {
@@ -67,21 +75,124 @@ impl BodyCx<'_> {
             };
             arms.push(checked);
         }
-        let ty = match arm_ty {
-            ArmTy::Expected(e) | ArmTy::Fixed(e) => e.ty,
-            // Every arm diverges (or there is none, a syntax error).
-            ArmTy::Open => InferTy::NEVER,
-        };
+        let ty = arm_ty.finished();
         let id = self.push(
             ExprKind::Case {
                 subjects: subjects.into(),
                 arms: arms.into(),
+                origin: CaseOrigin::Case,
             },
             ty,
             span,
         )?;
         if against_expected {
             // The arms were checked against it.
+            return Ok(id);
+        }
+        self.expect_expr(id, expected)
+    }
+
+    /// The type of a `case` before its first arm.
+    fn arm_ty(&mut self, expected: Option<&Expected>) -> Result<ArmTy, Ice> {
+        Ok(match expected {
+            Some(e) if !matches!(self.infcx.shallow(&e.ty)?, InferTy::Var(_)) => {
+                ArmTy::Expected(e.clone())
+            }
+            _ => ArmTy::Open,
+        })
+    }
+
+    /// A `guard` or `let guard` and the statements after it (§5.18): the
+    /// value of the enclosing block, already coerced to `expected`.
+    ///
+    /// `guard c` is the subjectless `case` with the arm `c` for the rest of
+    /// the block and a default arm for the `else` block. `let guard p = e`
+    /// is `case e` with the arm `p` for the rest and a `_` arm for the
+    /// `else` block. Either way the `else` block is checked first, in
+    /// source order, so it is the one that fixes the type (D-1341).
+    pub(crate) fn guard_stmt<'a>(
+        &mut self,
+        stmt: ast::GuardStmt<'a>,
+        rest: &'a [Stmt<'a>],
+        expected: Option<&Expected>,
+    ) -> Result<ExprId, Ice> {
+        let span = stmt.significant_span();
+        let rest_span = match (rest.first(), rest.last()) {
+            (Some(first), Some(last)) => cover(first.significant_span(), last.significant_span()),
+            _ => span,
+        };
+        let is_let = stmt.let_keyword().is_some();
+        let (subjects, pat, condition) = if is_let {
+            let annotation = self.annotation(stmt.ty())?;
+            let init = match stmt.value() {
+                Some(value) => self.check_expr(value, annotation.as_ref())?,
+                // A `let guard` without a value is a syntax error.
+                None => self.error_expr(span)?,
+            };
+            let ty = match annotation {
+                Some(annotation) => annotation.ty,
+                None => self.ty_of(init)?,
+            };
+            let pat = if let Some(pattern) = stmt.pattern() {
+                self.check_pat(pattern, &ty, PatSite::LetGuard)?
+            } else {
+                // A `let guard` without a pattern is a syntax error.
+                self.errored = true;
+                self.make_pat(PatKind::Wild, &ty, span)?
+            };
+            let wild = self.make_pat(PatKind::Wild, &ty, span)?;
+            (vec![init], Some((pat, wild)), None)
+        } else {
+            (Vec::new(), None, self.condition(stmt.value())?)
+        };
+        let mut arm_ty = self.arm_ty(expected)?;
+        let against_expected = matches!(arm_ty, ArmTy::Expected(_));
+        let else_body = stmt.else_block().map(Expr::Block);
+        let label = "the block has the type of this `else` block";
+        let else_arm = match else_body {
+            Some(body) => self.arm_value(&mut arm_ty, label, |cx, expected| {
+                cx.check_expr(body, expected)
+            })?,
+            // A guard without an `else` block is a syntax error.
+            None => self.error_expr(span)?,
+        };
+        let rest_arm = self.arm_value(&mut arm_ty, label, |cx, expected| {
+            cx.block_stmts(rest, rest_span, expected)
+        })?;
+        let (rest_pats, else_pats) = match pat {
+            Some((pat, wild)) => (vec![pat], vec![wild]),
+            None => (Vec::new(), Vec::new()),
+        };
+        let arms = vec![
+            thir::Arm {
+                pats: rest_pats.into(),
+                guard: condition,
+                body: rest_arm,
+                span: rest_span,
+            },
+            thir::Arm {
+                pats: else_pats.into(),
+                guard: None,
+                body: else_arm,
+                span,
+            },
+        ];
+        let ty = arm_ty.finished();
+        let origin = if is_let {
+            CaseOrigin::LetGuard
+        } else {
+            CaseOrigin::Case
+        };
+        let id = self.push(
+            ExprKind::Case {
+                subjects: subjects.into(),
+                arms: arms.into(),
+                origin,
+            },
+            ty,
+            span,
+        )?;
+        if against_expected {
             return Ok(id);
         }
         self.expect_expr(id, expected)
@@ -195,10 +306,26 @@ impl BodyCx<'_> {
         let Some(body) = body else {
             return self.error_expr(span);
         };
+        self.arm_value(
+            arm_ty,
+            "the `case` has the type of this first arm",
+            |cx, expected| cx.check_expr(body, expected),
+        )
+    }
+
+    /// The value of an arm, checked by `check` against what it is given,
+    /// and the type of the `case` so far (§5.9.1). `label` marks the arm
+    /// when it is the one that fixes that type.
+    fn arm_value(
+        &mut self,
+        arm_ty: &mut ArmTy,
+        label: &str,
+        mut check: impl FnMut(&mut Self, Option<&Expected>) -> Result<ExprId, Ice>,
+    ) -> Result<ExprId, Ice> {
         match arm_ty {
             ArmTy::Expected(expected) => {
                 let expected = expected.clone();
-                self.check_expr(body, Some(&expected))
+                check(self, Some(&expected))
             }
             ArmTy::Fixed(fixed) => {
                 let fixed = fixed.clone();
@@ -206,7 +333,7 @@ impl BodyCx<'_> {
                     // A type still unknown would become `Never` if a
                     // diverging arm were checked against it, so the arm
                     // is checked on its own and then unified.
-                    let id = self.check_expr(body, None)?;
+                    let id = check(self, None)?;
                     let found = self.ty_of(id)?;
                     if self.infcx.shallow(&found)? != InferTy::NEVER {
                         let span = self.span_of(id)?;
@@ -214,17 +341,14 @@ impl BodyCx<'_> {
                     }
                     Ok(id)
                 } else {
-                    self.check_expr(body, Some(&fixed))
+                    check(self, Some(&fixed))
                 }
             }
             ArmTy::Open => {
-                let id = self.check_expr(body, None)?;
+                let id = check(self, None)?;
                 let found = self.ty_of(id)?;
                 if self.infcx.shallow(&found)? != InferTy::NEVER {
-                    let origin = (
-                        self.span_of(id)?,
-                        "the `case` has the type of this first arm".to_owned(),
-                    );
+                    let origin = (self.span_of(id)?, label.to_owned());
                     *arm_ty = ArmTy::Fixed(Expected::new(found, Some(origin)));
                 }
                 Ok(id)

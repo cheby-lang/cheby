@@ -219,6 +219,15 @@ fn nesting_below_the_limit_parses() {
         nested("", "f", "()", depth),
         nested("", "1", " |> f(_, 1)", depth),
         format!("fn f() {{\n{}  x\n}}\n", "  use x <- f()\n".repeat(depth)),
+        // Each guard counts until the end of its block too (D-1341).
+        format!(
+            "fn f() {{\n{}  x\n}}\n",
+            "  guard y else {}\n".repeat(depth)
+        ),
+        format!(
+            "fn f() {{\n{}  x\n}}\n",
+            "  let guard Some(z) = y else {}\n".repeat(depth)
+        ),
         format!(
             "fn f(x: {}Int{}) {{}}\n",
             "List<".repeat(depth),
@@ -258,6 +267,15 @@ fn nesting_above_the_limit_is_e0016() {
         nested("", "f", "()", depth),
         nested("", "f", "(1).g", depth),
         format!("fn f() {{\n{}  x\n}}\n", "  use x <- f()\n".repeat(depth)),
+        // Each guard counts until the end of its block too (D-1341).
+        format!(
+            "fn f() {{\n{}  x\n}}\n",
+            "  guard y else {}\n".repeat(depth)
+        ),
+        format!(
+            "fn f() {{\n{}  x\n}}\n",
+            "  let guard Some(z) = y else {}\n".repeat(depth)
+        ),
         // Indented: in column 1, `fn g` with no `}` to close the body
         // ends it (an item boundary).
         format!("fn f() {{\n{}\n}}\n", "  fn g() {\n".repeat(depth)),
