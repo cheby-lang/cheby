@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1341
+//! The `{` of an `else` block is on the line of the `else` (§2.8).
+
+pub fn f(ok: Bool) -> Int {
+  guard ok else
+  {
+    0
+  }
+  1
+}

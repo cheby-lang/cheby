@@ -1,0 +1,11 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/guards/empty_rest_type.cheby:7:3
+  |
+6 |   pub fn f(ok: Bool) -> Int {
+  |                         --- expected because of this return type
+7 |     guard ok else {
+  |  ___^
+8 | |     1
+9 | |   }
+  | |___^ expected `Int`, found `Nil`
+

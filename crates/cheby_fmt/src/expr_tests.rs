@@ -550,3 +550,41 @@ fn fmt_type_return_type_stays_on_the_line_of_the_parameters() {
     );
     assert_eq!(fmt_at(src, 100), src);
 }
+
+#[test]
+fn a_guards_else_block_is_always_broken() {
+    // D-1343: at any width, even when the whole guard would fit on a line.
+    body(
+        "  guard n > 0 else { 0 }\n",
+        (20, "  guard n > 0 else {\n    0\n  }\n"),
+        "  guard n > 0 else {\n    0\n  }\n",
+    );
+    body(
+        "  let guard Some(x) = y else { 0 }\n",
+        (30, "  let guard Some(x) = y else {\n    0\n  }\n"),
+        "  let guard Some(x) = y else {\n    0\n  }\n",
+    );
+}
+
+#[test]
+fn an_empty_else_block_stays_empty() {
+    body(
+        "  guard ok else {\n  }\n",
+        (20, "  guard ok else {}\n"),
+        "  guard ok else {}\n",
+    );
+}
+
+#[test]
+fn else_never_starts_a_line() {
+    // D-1343: a condition that does not fit breaks where D-1157 allows,
+    // and `else {` follows its last line.
+    body(
+        "  guard check(first, second) else { 0 }\n",
+        (
+            20,
+            "  guard check(\n    first,\n    second,\n  ) else {\n    0\n  }\n",
+        ),
+        "  guard check(first, second) else {\n    0\n  }\n",
+    );
+}

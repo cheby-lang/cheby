@@ -1,0 +1,34 @@
+// @decisions: D-1341
+> import std::io
+> fn half(n: Int) -> Option<Int> {
+.   guard n % 2 == 0 else {
+.     None
+.   }
+.   Some(n / 2)
+. }
+> half(4)
+Some(2) : Option<Int>
+> half(3)
+None : Option<Int>
+> guard 1 > 2 else {
+.   io::println("left")
+. }
+left
+> let guard Some(n) = half(4) else {
+.   io::println("odd")
+. }
+warning[W0002]: unused binding `n`
+ --> <repl:6>:1:16
+  |
+1 | let guard Some(n) = half(4) else {
+  |                ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_n`
+
+> n
+error[E0042]: cannot find value `n` in this scope
+ --> <repl:7>:1:1
+  |
+1 | n
+  | ^ not found
+

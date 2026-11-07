@@ -50,21 +50,20 @@ Identifiers are ASCII only (D-127). A non-ASCII letter in an identifier is a com
 
 ## 2.4 Keywords
 
-The following words are reserved and cannot be used as `LOWER` identifiers:
+The following words are keywords and cannot be used as `LOWER` identifiers (D-1342):
 
 ```
-as        assert    case      const     dyn       exposed   fn
-import    interface let       panic     priv      pub       test
-todo      type      use       when
+as        assert    case      const     dyn       else      exposed
+fn        guard     import    interface let       panic     priv
+pub       test      todo      type      use       when
 ```
 
 The following words are also reserved, although Cheby gives them no meaning (D-128, D-240):
 
 ```
-if        else      for       while     loop      break     continue
-return    mut       impl      trait     struct    enum      match
-async     await     macro     self      super     where     yield
-go
+if        for       while     loop      break     continue  return
+mut       impl      trait     struct    enum      match     async
+await     macro     self      super     where     yield     go
 ```
 
 They are reserved so the compiler can give targeted errors for constructs Cheby deliberately lacks (for example "Cheby has no `if`, use `case`", or "Cheby has no `go`, spawn a fiber in a scope" for Go's `go` statement), and so they stay free for later additions, since adding keywords after 1.0 would break code (D-075, D-128).
@@ -177,6 +176,7 @@ The parser ignores an `NL` token, so the line continues, if any of the following
 In addition:
 
 - A leading `-` on the next line does **not** continue the previous line, so it is always unary (D-107).
+- `else` is not a continuation token. It must be on the line where a guard's condition or expression ends, and the `{` of its block must be on the line of the `else` ([§5.18](05-expressions.md#518-guard-statements)) (D-1341).
 - The parser always knows whether a `<` or `>` is a bracket or an operator. In type positions `<` always opens type arguments, and in expressions type arguments appear only after `::` (a turbofish, `list::new::<Int>()`).
 
 _Example:_ continuation in pipelines and conditions.

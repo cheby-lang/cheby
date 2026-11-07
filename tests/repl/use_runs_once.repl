@@ -1,0 +1,8 @@
+// @decisions: D-1344
+> import std::io
+> fn each(next: fn(Int) -> Nil) {
+.   io::println("called")
+.   next(1)
+. }
+> use _ <- each
+called

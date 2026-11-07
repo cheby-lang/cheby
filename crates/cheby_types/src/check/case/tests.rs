@@ -24,7 +24,7 @@ fn case_forms_check_into_thir() {
         body.exprs
             .iter()
             .find_map(|e| match &e.kind {
-                ExprKind::Case { subjects, arms } => Some((subjects.len(), arms.clone())),
+                ExprKind::Case { subjects, arms, .. } => Some((subjects.len(), arms.clone())),
                 _ => None,
             })
             .unwrap()

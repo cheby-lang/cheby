@@ -473,6 +473,7 @@ impl Lowerer<'_> {
                     def: Rc::new(def),
                 })
             }
+            ast::Stmt::Guard(stmt) => Err(self.unsupported(stmt.syntax(), "a guard")),
             ast::Stmt::Use(stmt) => Err(self.unsupported(stmt.syntax(), "`use`")),
             ast::Stmt::Expr(expr) => Ok(Stmt::Expr(self.expr(expr)?)),
         }

@@ -130,6 +130,12 @@ const fn starts_line(parent: SyntaxKind) -> bool {
     )
 }
 
+/// Whether `node` is the block of a guard's `else`.
+fn is_else_block(node: SyntaxNode<'_>) -> bool {
+    node.parent()
+        .is_some_and(|parent| parent.kind() == SyntaxKind::ELSE_CLAUSE)
+}
+
 /// Checks that `node` starts with `{` and ends with `}`.
 fn check_braces(node: SyntaxNode<'_>) -> Option<()> {
     let first = node.children_with_tokens().next()?;
@@ -271,7 +277,7 @@ impl<'t> Formatter<'t> {
             SyntaxKind::RECORD_EXPR => self.record(node),
             SyntaxKind::BLOCK => self.block(node, false),
             SyntaxKind::CASE_BODY => self.braced(node, false),
-            SyntaxKind::LET_STMT => self.seq(node, Some(SyntaxKind::EQ)),
+            SyntaxKind::LET_STMT | SyntaxKind::GUARD_STMT => self.seq(node, Some(SyntaxKind::EQ)),
             SyntaxKind::USE_STMT => self.seq(node, Some(SyntaxKind::LEFT_ARROW)),
             SyntaxKind::CASE_ARM | SyntaxKind::COND_ARM => {
                 self.seq(node, Some(SyntaxKind::FAT_ARROW))
@@ -290,6 +296,7 @@ impl<'t> Formatter<'t> {
             | SyntaxKind::CLOSURE
             | SyntaxKind::CASE_EXPR
             | SyntaxKind::ASSERT_STMT
+            | SyntaxKind::ELSE_CLAUSE
             | SyntaxKind::USE_BINDER
             | SyntaxKind::WILDCARD_PAT
             | SyntaxKind::IDENT_PAT
@@ -599,13 +606,13 @@ impl<'t> Formatter<'t> {
     }
 
     /// A block: `{}` when empty; with `body` (an item's, a test's or a
-    /// local function's), as an arm's body (D-1276), or with more than one
-    /// statement or a comment, one statement per line; else
-    /// `{ statement }` when it fits (D-1155).
+    /// local function's), as an arm's body (D-1276), as a guard's `else`
+    /// block (D-1343), or with more than one statement or a comment, one
+    /// statement per line; else `{ statement }` when it fits (D-1155).
     pub(crate) fn block(&mut self, node: SyntaxNode<'t>, body: bool) -> Option<Doc> {
         // D-1276: an arm's block body is always broken, one
         // statement per line, even one statement that fits.
-        if !body && !is_arm_body(node) {
+        if !body && !is_arm_body(node) && !is_else_block(node) {
             let entries = entries(node, Some((SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)));
             if let [entry] = entries.as_slice()
                 && let SyntaxElement::Node(stmt) = entry.elem

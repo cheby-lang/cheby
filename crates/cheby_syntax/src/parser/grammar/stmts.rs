@@ -12,13 +12,16 @@ use super::items::{fn_rest, visibility};
 use super::patterns::pattern;
 use super::types::type_;
 use crate::SyntaxKind::{
-    self, AS_KW, ASSERT_KW, ASSERT_STMT, BLOCK, CASE_BODY, COLON, COMMA, EOF, EQ, FN_KW, L_BRACE,
-    LEFT_ARROW, LET_KW, LET_STMT, LOCAL_FN, LOWER_IDENT, MESSAGE, NEWLINE, PRIV_KW, PUB_KW,
-    R_BRACE, USE_BINDER, USE_KW, USE_STMT,
+    self, AS_KW, ASSERT_KW, ASSERT_STMT, BLOCK, CASE_BODY, COLON, COMMA, ELSE_CLAUSE, ELSE_KW, EOF,
+    EQ, FN_KW, GUARD_KW, GUARD_STMT, L_BRACE, LEFT_ARROW, LET_KW, LET_STMT, LOCAL_FN, LOWER_IDENT,
+    MESSAGE, NEWLINE, PRIV_KW, PUB_KW, R_BRACE, USE_BINDER, USE_KW, USE_STMT,
 };
 use crate::TokenSet;
 use crate::parser::recovery::{BLOCK_BREAK, EXPR_FIRST, STMT_STOP};
 use crate::parser::{CompletedMarker, Parser};
+
+/// The keywords that start a statement.
+const STMT_KEYWORDS: TokenSet = TokenSet::new(&[LET_KW, USE_KW, ASSERT_KW, GUARD_KW]);
 
 /// `{ stmt NL stmt … }`. Returns `None` only when nesting is too deep.
 ///
@@ -64,9 +67,7 @@ pub(super) fn line_body(
     let m = p.start();
     let delim = p.open_delim(L_BRACE);
     let starts = |p: &Parser<'_>| {
-        p.at_ts(first)
-            || (kind == BLOCK
-                && (p.at_ts(TokenSet::new(&[LET_KW, USE_KW, ASSERT_KW])) || at_local_fn(p)))
+        p.at_ts(first) || (kind == BLOCK && (p.at_ts(STMT_KEYWORDS) || at_local_fn(p)))
     };
     let ends = |p: &Parser<'_>| {
         p.at(R_BRACE)
@@ -76,10 +77,11 @@ pub(super) fn line_body(
             || (p.at_item_recovery()
                 && (kind == CASE_BODY || (p.at_column_one() && p.never_closed(&delim))))
     };
-    // A `use` nests the rest of its block in a callback (§5.10), and later
-    // passes recurse into it, so it counts as a level of nesting until the
-    // end of the block (D-441, D-519).
-    let mut uses = 0_u32;
+    // A `use` nests the rest of its block in a callback (§5.10), a guard
+    // in an arm (§5.18), and later passes recurse into it, so each counts
+    // as a level of nesting until the end of the block (D-441, D-519,
+    // D-1341).
+    let mut nested = 0_u32;
     loop {
         while p.eat(NEWLINE) {}
         if ends(p) {
@@ -87,10 +89,10 @@ pub(super) fn line_body(
         }
         let before = p.position();
         if starts(p) {
-            let is_use = kind == BLOCK && p.at(USE_KW);
+            let nests = kind == BLOCK && at_nesting_stmt(p);
             entry(p);
-            if is_use && p.enter() {
-                uses = uses.saturating_add(1);
+            if nests && p.enter() {
+                nested = nested.saturating_add(1);
             }
         } else {
             p.expected(what);
@@ -110,7 +112,7 @@ pub(super) fn line_body(
             if cut {
                 while p.eat(NEWLINE) {}
                 let keeps = if kind == BLOCK {
-                    p.at_ts(TokenSet::new(&[LET_KW, USE_KW, ASSERT_KW])) || at_local_fn(p)
+                    p.at_ts(STMT_KEYWORDS) || at_local_fn(p)
                 } else {
                     starts(p)
                 };
@@ -129,11 +131,22 @@ pub(super) fn line_body(
             p.bump_error();
         }
     }
-    for _ in 0..uses {
+    for _ in 0..nested {
         p.leave();
     }
     p.close_delim(delim);
     m.complete(p, kind)
+}
+
+/// Whether the statement here consumes the rest of its block: a `use`
+/// or a guard.
+fn at_nesting_stmt(p: &Parser<'_>) -> bool {
+    p.at(USE_KW) || p.at(GUARD_KW) || at_let_guard(p)
+}
+
+/// `let guard` (§5.18).
+fn at_let_guard(p: &Parser<'_>) -> bool {
+    p.at(LET_KW) && p.nth_at(1, GUARD_KW)
 }
 
 /// Whether a line starts with a keyword that cannot start a statement.
@@ -151,6 +164,8 @@ fn at_local_fn(p: &Parser<'_>) -> bool {
 
 fn stmt(p: &mut Parser<'_>) {
     match p.current() {
+        GUARD_KW => guard_stmt(p),
+        LET_KW if at_let_guard(p) => let_guard_stmt(p),
         LET_KW => let_stmt(p),
         USE_KW => use_stmt(p),
         ASSERT_KW => {
@@ -194,6 +209,48 @@ fn let_stmt(p: &mut Parser<'_>) {
         }
     }
     m.complete(p, LET_STMT);
+}
+
+/// `guard cond else { … }` (§5.18, D-1340).
+fn guard_stmt(p: &mut Parser<'_>) {
+    let m = p.start();
+    p.bump(GUARD_KW);
+    expr(p);
+    else_clause(p);
+    m.complete(p, GUARD_STMT);
+}
+
+/// `let guard pattern [: Type] = expr else { … }` (§5.18, D-1340).
+fn let_guard_stmt(p: &mut Parser<'_>) {
+    let m = p.start();
+    p.bump(LET_KW);
+    p.bump(GUARD_KW);
+    pattern(p);
+    if p.eat(COLON) {
+        type_(p);
+    }
+    if p.expect(EQ) {
+        expr(p);
+        else_clause(p);
+    }
+    m.complete(p, GUARD_STMT);
+}
+
+/// `else { … }`, with `else` and `{` on the line where the guard's
+/// condition or value ends (§2.8, D-1341).
+fn else_clause(p: &mut Parser<'_>) {
+    if !p.at(ELSE_KW) {
+        p.expected(ELSE_KW.describe());
+        return;
+    }
+    let m = p.start();
+    p.bump(ELSE_KW);
+    if p.at(L_BRACE) {
+        block(p);
+    } else {
+        p.expected(L_BRACE.describe());
+    }
+    m.complete(p, ELSE_CLAUSE);
 }
 
 /// `use a, b: T <- f(x)` (§5.10).

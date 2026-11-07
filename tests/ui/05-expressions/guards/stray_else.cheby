@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1342
+//! `else` follows a guard's condition and nothing else (§2.4).
+
+pub fn f(n: Int) -> Int {
+  else {
+    n
+  }
+}

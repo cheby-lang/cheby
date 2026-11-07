@@ -1,0 +1,12 @@
+// @mode: check-pass
+// @decisions: D-1341, D-509
+//! Irrefutability is syntactic, so alternatives that cover every value
+//! only together give no warning, and nothing reports the `else` block as
+//! unreachable (§6.1, §6.9).
+
+pub fn f(b: Bool) -> Int {
+  let guard True | False = b else {
+    0
+  }
+  1
+}

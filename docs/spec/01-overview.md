@@ -24,6 +24,7 @@ This chapter is informative. It summarizes the language and points to the normat
 | Exhaustive `case` with guards, multiple subjects and a subjectless form       | [5](05-expressions.md), [6](06-patterns.md)           | D-052, D-109               |
 | Guaranteed tail calls, including mutual and indirect calls                    | [5](05-expressions.md), [12](12-targets-and-ffi.md)   | D-015, D-120, D-861        |
 | Gleam-style `use` for callbacks, errors and resources                         | [5](05-expressions.md), [11](11-errors-and-panics.md) | D-018, D-023               |
+| `guard` and `let guard` for early exit without a callback                     | [5](05-expressions.md)                                | D-1340                     |
 | Pipe operator `\|>` and function capture `f(a, _)`                            | [5](05-expressions.md)                                | D-050, D-244, D-245        |
 | Structural interfaces, satisfied implicitly by module functions               | [8](08-interfaces.md)                                 | D-020, D-061, D-063        |
 | Operator overloading through interfaces                                       | [8](08-interfaces.md)                                 | D-034, D-047, D-118        |
@@ -47,6 +48,7 @@ Each of these is a decision, not an omission. Proposals to add them should first
 | ---------------------------------- | --------------------------------------------------- | ---------------------- |
 | `for`, `while`, `loop`             | Recursion with guaranteed tail calls, library folds | D-002, ADR-0001        |
 | `if` / `else`                      | `case`, including subjectless `case { … }`          | D-002, D-109           |
+| `return`                           | `guard`, `let guard`, `use` and `case`              | D-1340, ADR-0075       |
 | Mutable variables, cells or arrays | Immutable values, fiber-held state, Perceus reuse   | D-017, ADR-0007        |
 | Shadowing (`let x = x + 1`)        | A new name for each step                            | D-051, D-062, ADR-0021 |
 | Methods and `impl` blocks          | Module functions and `\|>`                          | D-061, ADR-0023        |

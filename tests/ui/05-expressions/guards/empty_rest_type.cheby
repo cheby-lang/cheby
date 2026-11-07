@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-1341
+//! With nothing after the guard, the block's value is `Nil`, which is not
+//! the function's result (§5.18.1).
+
+pub fn f(ok: Bool) -> Int {
+  guard ok else {
+    1
+  }
+}

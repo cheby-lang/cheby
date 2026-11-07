@@ -4,7 +4,7 @@ error[E0007]: `return` is a reserved word
 7 |   let return = 1
   |       ^^^^^^ reserved, cannot be used as a name
   |
-  = help: Cheby has no `return`; a function returns the value of its body
+  = help: Cheby has no `return`; a function returns the value of its body, and `guard` leaves a block early
 
 error[E0007]: `loop` is a reserved word
  --> tests/ui/02-lexical-structure/reserved_words.cheby:8:7

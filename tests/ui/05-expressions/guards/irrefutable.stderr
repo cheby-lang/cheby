@@ -1,0 +1,8 @@
+warning[W0008]: `let guard` with a pattern that always matches
+ --> tests/ui/05-expressions/guards/irrefutable.cheby:7:13
+  |
+7 |   let guard (a, b) = pair else {
+  |             ^^^^^^ this pattern matches every value of its type
+  |
+  = help: use `let` instead, since the `else` block can never run
+

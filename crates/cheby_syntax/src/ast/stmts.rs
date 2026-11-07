@@ -1,4 +1,5 @@
-//! Views of blocks and statements (App. A.4, §5.1, §5.2, §5.8, §5.10).
+//! Views of blocks and statements (App. A.4, §5.1, §5.2, §5.8, §5.10,
+//! §5.18).
 
 use super::{
     AstChildren, Expr, Ident, Param, ParamList, Pat, RetType, Type, TypeParamList, Visibility,
@@ -17,6 +18,10 @@ ast_nodes! {
     UseBinder = USE_BINDER;
     /// `assert cond as msg` (D-160).
     AssertStmt = ASSERT_STMT;
+    /// `guard cond else { … }` or `let guard p = e else { … }` (§5.18).
+    GuardStmt = GUARD_STMT;
+    /// The `else { … }` of a guard (§5.18).
+    ElseClause = ELSE_CLAUSE;
     /// A local named function (§5.8).
     LocalFn = LOCAL_FN;
     /// `as expr`, the message of `let assert`, `assert`, `panic` and
@@ -30,6 +35,7 @@ ast_enum! {
         Let(LetStmt),
         Use(UseStmt),
         Assert(AssertStmt),
+        Guard(GuardStmt),
         LocalFn(LocalFn),
         Expr(Expr),
     }
@@ -125,6 +131,46 @@ impl<'t> AssertStmt<'t> {
     /// The `as` message, if written.
     #[must_use]
     pub fn message(self) -> Option<Message<'t>> {
+        child(self.0)
+    }
+}
+
+impl<'t> GuardStmt<'t> {
+    /// The `let` of `let guard`, if written.
+    #[must_use]
+    pub fn let_keyword(self) -> Option<SyntaxToken<'t>> {
+        token(self.0, SyntaxKind::LET_KW)
+    }
+
+    /// The pattern of a `let guard`.
+    #[must_use]
+    pub fn pattern(self) -> Option<Pat<'t>> {
+        child(self.0)
+    }
+
+    /// The written type of a `let guard`, if any.
+    #[must_use]
+    pub fn ty(self) -> Option<Type<'t>> {
+        child(self.0)
+    }
+
+    /// The condition of a `guard`, or the value after `=` of a `let guard`.
+    #[must_use]
+    pub fn value(self) -> Option<Expr<'t>> {
+        child(self.0)
+    }
+
+    /// The block after `else`.
+    #[must_use]
+    pub fn else_block(self) -> Option<Block<'t>> {
+        child::<ElseClause<'t>>(self.0).and_then(ElseClause::block)
+    }
+}
+
+impl<'t> ElseClause<'t> {
+    /// The block.
+    #[must_use]
+    pub fn block(self) -> Option<Block<'t>> {
         child(self.0)
     }
 }

@@ -31,8 +31,8 @@ use cheby_diag::{Diagnostic, FileId, Span, TextRange, TextSize};
 
 use self::input::{Consumed, Input, NlMode};
 use crate::SyntaxKind::{
-    self, AT, AT_BANG, COMMENT, EOF, ERROR, ERROR_TOKEN, FN_KW, GE, GT, L_BRACE, L_BRACK, L_PAREN,
-    LOWER_IDENT, LT, NEWLINE, R_BRACE, R_BRACK, R_PAREN, SHR, WHITESPACE,
+    self, AT, AT_BANG, COMMENT, ELSE_KW, EOF, ERROR, ERROR_TOKEN, FN_KW, GE, GT, L_BRACE, L_BRACK,
+    L_PAREN, LOWER_IDENT, LT, NEWLINE, R_BRACE, R_BRACK, R_PAREN, SHR, WHITESPACE,
 };
 use crate::TokenSet;
 use crate::event::Event;
@@ -79,8 +79,9 @@ fn explain_reserved_words(lexed: &Lexed, text: &str, errors: &mut [Diagnostic]) 
         let at = span.range.start();
         // The first token that starts at or after the error.
         let next = tokens.partition_point(|t| t.start < at);
-        let here =
-            (lexed.kind(next) == LOWER_IDENT && lexed.range(next).start() == at).then_some(next);
+        let here = (matches!(lexed.kind(next), LOWER_IDENT | ELSE_KW)
+            && lexed.range(next).start() == at)
+            .then_some(next);
         let previous = next.checked_sub(1).and_then(|i| previous_on_line(lexed, i));
         let before = previous.filter(|&i| lexed.kind(i) == LOWER_IDENT);
         let before_group = previous

@@ -15,11 +15,15 @@ use crate::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 #[must_use]
 pub fn reserved_word_help(word: &str) -> Option<String> {
     let help = match word {
-        "if" | "else" | "match" => format!("Cheby has no `{word}`; use `case`"),
+        "if" | "match" => format!("Cheby has no `{word}`; use `case`"),
+        // A keyword since D-1342, so it reaches here only from the parser.
+        "else" => "`else` follows the condition of a `guard`; branching is `case`".to_owned(),
         "for" | "while" | "loop" | "break" | "continue" => {
             format!("Cheby has no `{word}`; use recursion, often through a local `fn`")
         }
-        "return" => "Cheby has no `return`; a function returns the value of its body".to_owned(),
+        "return" => "Cheby has no `return`; a function returns the value of its body, \
+             and `guard` leaves a block early"
+            .to_owned(),
         "mut" => "values are immutable; bind a new name".to_owned(),
         "impl" | "trait" => {
             format!("Cheby has no `{word}`; use module functions and `interface`")

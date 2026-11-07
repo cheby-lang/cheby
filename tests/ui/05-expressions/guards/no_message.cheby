@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1341
+//! A `let guard` has no `as` message, which belongs to `let assert`
+//! (§5.18).
+
+pub fn f(x: Option<Int>) -> Int {
+  let guard Some(n) = x as "missing" else {
+    0
+  }
+  n
+}

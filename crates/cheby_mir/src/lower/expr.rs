@@ -52,7 +52,7 @@ impl BodyCx<'_, '_> {
                 body,
             } => self.local_fn(*local, params, *body, span),
             ExprKind::SelfRef { local } => self.self_ref(*local),
-            ExprKind::Case { subjects, arms } => self.case(subjects, arms, ty, span, tail),
+            ExprKind::Case { subjects, arms, .. } => self.case(subjects, arms, ty, span, tail),
             ExprKind::Field {
                 base,
                 index_per_ctor,

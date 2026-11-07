@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-1340, D-120, D-015
+//! The `else` block and the last statement after a guard are in tail
+//! position, so neither loop grows the stack (§5.15.2).
+import std::io
+
+fn through_rest(n: Int, acc: Int) -> Int {
+  guard n > 0 else {
+    acc
+  }
+  through_rest(n - 1, acc + 1)
+}
+
+fn through_else(n: Int, acc: Int) -> Int {
+  guard n == 0 else {
+    through_else(n - 1, acc + 1)
+  }
+  acc
+}
+
+fn through_let_guard(xs: Option<Int>, acc: Int) -> Int {
+  let guard Some(n) = xs else {
+    acc
+  }
+  let next = case n {
+    0 => None
+    _ => Some(n - 1)
+  }
+  through_let_guard(next, acc + 1)
+}
+
+fn main() {
+  let a = through_rest(5000000, 0)
+  let b = through_else(5000000, 0)
+  let c = through_let_guard(Some(5000000), 0)
+  io::println("{a} {b} {c}")
+}

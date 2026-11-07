@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1341
+//! The `else` of a guard takes a block, not an expression (§5.18.1).
+
+pub fn f(ok: Bool) -> Int {
+  guard ok else 0
+  1
+}

@@ -1,10 +1,11 @@
 //! Token sets for lookahead and error recovery (§4.6 of the phase-A design).
 
 use crate::SyntaxKind::{
-    AS_KW, ASSERT_KW, AT, AT_BANG, BANG, CASE_KW, COMMA, CONST_KW, DYN_KW, EOF, EQ, EXPOSED_KW,
-    FAT_ARROW, FLOAT_NUMBER, FN_KW, IMPORT_KW, INT_NUMBER, INTERFACE_KW, L_BRACE, L_BRACK, L_PAREN,
-    LET_KW, LOWER_IDENT, MINUS, NEWLINE, PANIC_KW, PRIV_KW, PUB_KW, R_BRACE, R_BRACK, R_PAREN,
-    RAW_STRING, STRING_START, TEST_KW, TODO_KW, TYPE_KW, UNDERSCORE, UPPER_IDENT, USE_KW, WHEN_KW,
+    AS_KW, ASSERT_KW, AT, AT_BANG, BANG, CASE_KW, COMMA, CONST_KW, DYN_KW, ELSE_KW, EOF, EQ,
+    EXPOSED_KW, FAT_ARROW, FLOAT_NUMBER, FN_KW, GUARD_KW, IMPORT_KW, INT_NUMBER, INTERFACE_KW,
+    L_BRACE, L_BRACK, L_PAREN, LET_KW, LOWER_IDENT, MINUS, NEWLINE, PANIC_KW, PRIV_KW, PUB_KW,
+    R_BRACE, R_BRACK, R_PAREN, RAW_STRING, STRING_START, TEST_KW, TODO_KW, TYPE_KW, UNDERSCORE,
+    UPPER_IDENT, USE_KW, WHEN_KW,
 };
 use crate::TokenSet;
 
@@ -91,7 +92,7 @@ pub(super) const EXPR_FIRST: TokenSet = TokenSet::new(&[
 /// without consuming anything: they belong to an enclosing construct.
 pub(super) const EXPR_RECOVERY: TokenSet = TokenSet::new(&[
     NEWLINE, EOF, COMMA, R_PAREN, R_BRACK, R_BRACE, L_BRACE, EQ, FAT_ARROW, WHEN_KW, AS_KW, LET_KW,
-    USE_KW, ASSERT_KW,
+    USE_KW, ASSERT_KW, GUARD_KW, ELSE_KW,
 ]);
 
 /// Where a comma list stops when it meets a token it cannot use: closers
@@ -99,7 +100,7 @@ pub(super) const EXPR_RECOVERY: TokenSet = TokenSet::new(&[
 /// stand directly in a list and so belong to the construct around it (a
 /// `case` arm, a `let`). Brace lists also stop at a significant line break.
 pub(super) const LIST_STOP: TokenSet = TokenSet::new(&[
-    R_PAREN, R_BRACK, R_BRACE, LET_KW, USE_KW, ASSERT_KW, FAT_ARROW, EQ, EOF,
+    R_PAREN, R_BRACK, R_BRACE, LET_KW, USE_KW, ASSERT_KW, GUARD_KW, ELSE_KW, FAT_ARROW, EQ, EOF,
 ]);
 
 /// Where a statement-level skip stops.

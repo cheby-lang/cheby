@@ -29,6 +29,8 @@ pub(crate) enum PatSite {
     Let,
     /// `let assert pat = …`.
     LetAssert,
+    /// `let guard pat = … else { … }`.
+    LetGuard,
     /// A `case` arm, one pattern per subject.
     CaseArm,
     /// A closure or local-function parameter.
@@ -42,7 +44,7 @@ impl PatSite {
     /// the note of a mismatch.
     const fn matched(self) -> &'static str {
         match self {
-            Self::Let | Self::LetAssert => "the value after `=`",
+            Self::Let | Self::LetAssert | Self::LetGuard => "the value after `=`",
             Self::CaseArm => "its subject",
             Self::Param => "the parameter",
             Self::UseBinder => "the value the function passes to the rest of the block",
@@ -155,7 +157,12 @@ impl BodyCx<'_> {
         self.make_pat(kind, expected, span)
     }
 
-    fn make_pat(&mut self, kind: PatKind, ty: &InferTy, span: Span) -> Result<thir::Pat, Ice> {
+    pub(super) fn make_pat(
+        &mut self,
+        kind: PatKind,
+        ty: &InferTy,
+        span: Span,
+    ) -> Result<thir::Pat, Ice> {
         let id = self.new_pat_id(ty.clone(), span)?;
         Ok(thir::Pat {
             id,

@@ -106,16 +106,20 @@ There is no parenthesized type. `(T)` is a `tuple_type` with one element and a c
 block           = "{" [ NL ] [ stmt { NL stmt } ] [ NL ] "}" ;
 stmt            = let_stmt
                 | let_assert_stmt
+                | let_guard_stmt
                 | use_stmt
                 | assert_stmt
+                | guard_stmt
                 | local_fn
                 | expr ;
 
 let_stmt        = "let" pattern [ ":" type ] "=" expr ;
 let_assert_stmt = "let" "assert" pattern [ ":" type ] "=" expr [ "as" expr ] ;   (* String message, D-159 *)
+let_guard_stmt  = "let" "guard" pattern [ ":" type ] "=" expr "else" block ;       (* D-1340 *)
 use_stmt        = "use" [ use_binder { "," use_binder } ] "<-" expr ;
 use_binder      = pattern [ ":" type ] ;
 assert_stmt     = "assert" expr [ "as" expr ] ;                                  (* String message, D-160 *)
+guard_stmt      = "guard" expr "else" block ;                                    (* Bool condition, D-1340 *)
 local_fn        = "fn" LOWER "(" [ closure_params ] ")" [ "->" type ] block ;
 ```
 
@@ -258,14 +262,14 @@ Identifiers are ASCII only (D-127). `LOWER` excludes keywords. A reserved word t
 Keywords ([§2.4](02-lexical-structure.md#24-keywords)):
 
 ```
-as  assert  case  const  dyn  exposed  fn  import  interface
+as  assert  case  const  dyn  else  exposed  fn  guard  import  interface
 let  panic  priv  pub  test  todo  type  use  when
 ```
 
 Reserved words, which have no meaning but cannot be used as identifiers (D-128, D-240):
 
 ```
-if  else  for  while  loop  break  continue  return  mut  impl
+if  for  while  loop  break  continue  return  mut  impl
 trait  struct  enum  match  async  await  macro  self  super  where  yield
 go
 ```

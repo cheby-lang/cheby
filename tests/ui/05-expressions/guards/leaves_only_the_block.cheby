@@ -1,0 +1,20 @@
+// @mode: run-pass
+// @decisions: D-1340
+//! A guard leaves its enclosing block and nothing further, so evaluation
+//! goes on after a block used as a value (§5.18.3).
+import std::io
+
+fn describe(count: Int) -> String {
+  let label = {
+    guard count > 0 else {
+      "none"
+    }
+    "{count} items"
+  }
+  "found {label}"
+}
+
+fn main() {
+  io::println(describe(0))
+  io::println(describe(2))
+}

@@ -67,7 +67,8 @@ Never change language behavior in the spec, the examples or the compiler without
 
 Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, and an arm's body on the arm's line with one space before `=>`. Agents often get these rules wrong:
 
-- No `for`, `while`, `loop`, `if` or `else` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Guards use `when`.
+- No `for`, `while`, `loop` or `if` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Arm guards use `when`.
+- No `return` (D-1340). Leave a block early with `guard cond else { … }` or `let guard p = e else { … }`, whose `else` block's value becomes the block's. A non-empty `else` block is always broken over lines (D-1343).
 - No mutation and no shadowing (D-017, D-051). Every `let` introduces a new name.
 - No methods or `impl` (D-061). Call module functions: `list::map(xs, f)`. Paths use `::`.
 - Pipes need an explicit hole (D-244): `xs |> list::map(_, f)`. Only one-parameter functions are piped bare: `xs |> list::length`. `f(_)` is an error everywhere (D-245).

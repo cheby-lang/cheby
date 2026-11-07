@@ -73,8 +73,10 @@ syntax_kinds! {
         CASE_KW,
         CONST_KW,
         DYN_KW,
+        ELSE_KW,
         EXPOSED_KW,
         FN_KW,
+        GUARD_KW,
         IMPORT_KW,
         INTERFACE_KW,
         LET_KW,
@@ -176,6 +178,8 @@ syntax_kinds! {
         USE_STMT,
         USE_BINDER,
         ASSERT_STMT,
+        GUARD_STMT,
+        ELSE_CLAUSE,
         LOCAL_FN,
         MESSAGE,
         // Expressions.
@@ -265,14 +269,14 @@ impl SyntaxKind {
         )
     }
 
-    /// Whether this kind is one of the 18 keywords of §2.4.
+    /// Whether this kind is one of the 20 keywords of §2.4.
     #[must_use]
     pub const fn is_keyword(self) -> bool {
         let raw = self.to_u16();
         Self::AS_KW.to_u16() <= raw && raw <= Self::WHEN_KW.to_u16()
     }
 
-    /// The keyword spelled `text`, if `text` is one of the 18 keywords.
+    /// The keyword spelled `text`, if `text` is one of the 20 keywords.
     /// Reserved words (D-128, D-240) are not keywords and give `None`.
     #[must_use]
     pub fn from_keyword(text: &str) -> Option<Self> {
@@ -282,8 +286,10 @@ impl SyntaxKind {
             "case" => Self::CASE_KW,
             "const" => Self::CONST_KW,
             "dyn" => Self::DYN_KW,
+            "else" => Self::ELSE_KW,
             "exposed" => Self::EXPOSED_KW,
             "fn" => Self::FN_KW,
+            "guard" => Self::GUARD_KW,
             "import" => Self::IMPORT_KW,
             "interface" => Self::INTERFACE_KW,
             "let" => Self::LET_KW,
@@ -311,8 +317,10 @@ impl SyntaxKind {
             Self::CASE_KW => "case",
             Self::CONST_KW => "const",
             Self::DYN_KW => "dyn",
+            Self::ELSE_KW => "else",
             Self::EXPOSED_KW => "exposed",
             Self::FN_KW => "fn",
+            Self::GUARD_KW => "guard",
             Self::IMPORT_KW => "import",
             Self::INTERFACE_KW => "interface",
             Self::LET_KW => "let",
@@ -396,8 +404,10 @@ impl SyntaxKind {
             Self::CASE_KW => "`case`",
             Self::CONST_KW => "`const`",
             Self::DYN_KW => "`dyn`",
+            Self::ELSE_KW => "`else`",
             Self::EXPOSED_KW => "`exposed`",
             Self::FN_KW => "`fn`",
+            Self::GUARD_KW => "`guard`",
             Self::IMPORT_KW => "`import`",
             Self::INTERFACE_KW => "`interface`",
             Self::LET_KW => "`let`",
@@ -490,6 +500,8 @@ impl SyntaxKind {
             Self::USE_STMT => "`use` statement",
             Self::USE_BINDER => "`use` binder",
             Self::ASSERT_STMT => "`assert` statement",
+            Self::GUARD_STMT => "guard statement",
+            Self::ELSE_CLAUSE => "`else` block",
             Self::LOCAL_FN => "local function",
             Self::MESSAGE => "message",
             Self::LITERAL => "literal",
@@ -549,19 +561,19 @@ mod tests {
 
     #[test]
     fn tokens_before_nodes() {
-        assert_eq!(SyntaxKind::EOF.to_u16(), 74);
+        assert_eq!(SyntaxKind::EOF.to_u16(), 76);
         assert!(SyntaxKind::EOF.is_token());
         assert!(SyntaxKind::R_BRACE.is_token());
         assert!(SyntaxKind::SOURCE_FILE.is_node());
         assert!(SyntaxKind::ERROR.is_node());
         let tokens = SyntaxKind::ALL.iter().filter(|k| k.is_token()).count();
-        assert_eq!(tokens, 75);
+        assert_eq!(tokens, 77);
     }
 
     #[test]
     fn keywords() {
         let keywords: Vec<_> = SyntaxKind::ALL.iter().filter(|k| k.is_keyword()).collect();
-        assert_eq!(keywords.len(), 18);
+        assert_eq!(keywords.len(), 20);
         for kind in keywords {
             let text = kind.fixed_text().unwrap();
             assert_eq!(SyntaxKind::from_keyword(text), Some(*kind));

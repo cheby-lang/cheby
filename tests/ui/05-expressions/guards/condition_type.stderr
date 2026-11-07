@@ -1,0 +1,6 @@
+error[E0047]: mismatched types
+ --> tests/ui/05-expressions/guards/condition_type.cheby:6:9
+  |
+6 |   guard n else {
+  |         ^ expected `Bool`, found `Int`
+

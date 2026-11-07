@@ -1,16 +1,18 @@
 //! Names of packages, modules and dependency keys: `LOWER` identifiers
 //! that are neither keywords nor reserved words (§2.3, §2.4, §7.1, §7.2).
 
-/// The 18 keywords of §2.4. `cheby_syntax` lexes exactly these as keyword
+/// The 20 keywords of §2.4. `cheby_syntax` lexes exactly these as keyword
 /// tokens; a unit test checks that the two lists agree.
-pub(crate) const KEYWORDS: [&str; 18] = [
+pub(crate) const KEYWORDS: [&str; 20] = [
     "as",
     "assert",
     "case",
     "const",
     "dyn",
+    "else",
     "exposed",
     "fn",
+    "guard",
     "import",
     "interface",
     "let",
@@ -25,9 +27,9 @@ pub(crate) const KEYWORDS: [&str; 18] = [
 ];
 
 /// The reserved words of §2.4 that have no meaning (D-128, D-240).
-pub(crate) const RESERVED: [&str; 22] = [
-    "if", "else", "for", "while", "loop", "break", "continue", "return", "mut", "impl", "trait",
-    "struct", "enum", "match", "async", "await", "macro", "self", "super", "where", "yield", "go",
+pub(crate) const RESERVED: [&str; 21] = [
+    "if", "for", "while", "loop", "break", "continue", "return", "mut", "impl", "trait", "struct",
+    "enum", "match", "async", "await", "macro", "self", "super", "where", "yield", "go",
 ];
 
 /// Whether `name` is a `LOWER` identifier (§2.3) that is not `_`, a

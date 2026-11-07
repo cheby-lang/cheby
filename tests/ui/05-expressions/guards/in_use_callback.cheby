@@ -1,0 +1,19 @@
+// @mode: run-pass
+// @decisions: D-1340
+//! The rest of a block after a `use` is a callback, so a guard there gives
+//! the callback's result and the fold goes on (§5.18.3).
+import std::io
+import std::list
+
+fn total_of_positives(xs: List<Int>) -> Result<Int, String> {
+  use sum, x <- list::try_fold(xs, 0)
+  guard x >= 0 else {
+    Ok(sum)
+  }
+  Ok(sum + x)
+}
+
+fn main() {
+  let total = total_of_positives([1, -5, 2])
+  io::println("{total:?}")
+}
