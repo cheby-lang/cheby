@@ -42,8 +42,9 @@
 #   --oqp11 --restarts`: `wide` and `deep` at 1M lines with seed 1, a cold
 #   run, five body edits and five `main` edits under `CHEBY_PHASES`, and the
 #   restart causes at 100k and 1M), then D-247's throughput with the cold
-#   `check` and `build` columns at 100k and 1M (`bench-compile --shapes
-#   100k,1m`). `.github/scripts/bench_oqp11.py` writes their tables to the
+#   `check` and `build` columns and the AOT table at 100k and 1M
+#   (`bench-compile --shapes 100k,1m`; D-1346).
+#   `.github/scripts/bench_oqp11.py` writes their tables to the
 #   step summary, and `oqp11.json` and `compile.json` upload with the rest.
 #   They add about 25-50 minutes. Each has `continue-on-error` and its own
 #   timeout, so a failure or a hang of theirs never fails or cancels the
@@ -174,8 +175,8 @@ jobs:
           python3 -I .github/scripts/bench_oqp11.py \
             --title "OQ-P11 and RB-3's restarts (D-974, D-1256)" \
             bench-results/oqp11.json >> "$GITHUB_STEP_SUMMARY"
-      # D-247's compile throughput and the cold `check` and `build` columns
-      # (D-975, D-1266) at 100k and 1M lines.
+      # D-247's compile throughput, the cold `check` and `build` columns
+      # (D-975, D-1266) and the AOT table (D-1346) at 100k and 1M lines.
       - name: Compile throughput and the cold columns (D-247, D-975)
         if: ${{ inputs.compile }}
         continue-on-error: true

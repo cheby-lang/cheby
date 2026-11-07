@@ -1,10 +1,11 @@
 """Renders `cargo xtask bench-compile --json`'s OQ-P11 readings as Markdown (K7; D-974, D-975,
-D-1035, D-1256, D-1266). Standard library only; run it as `python3 -I`.
+D-1035, D-1256, D-1266, D-1346). Standard library only; run it as `python3 -I`.
 
 Usage: python3 -I bench_oqp11.py [--title T] FILE
 
 FILE is the JSON of `bench-compile --oqp11 --restarts` (`oqp11.json`) or of a plain
-`bench-compile` (`compile.json`, whose `rows` carry the cold columns). It prints, as present:
+`bench-compile` (`compile.json`, whose `rows` carry the cold and AOT columns). It prints, as
+present:
 
 - OQ-P11 (D-974): per shape the cold run's time (reported, never budgeted) and, per edit kind
   (`body_edit`, `main_edit`) from the edit rounds' `phases_median` (never the cold run: D-923's
@@ -22,6 +23,8 @@ FILE is the JSON of `bench-compile --oqp11 --restarts` (`oqp11.json`) or of a pl
   as a reading.
 - The cold columns (D-975, D-1266): a cold `cheby check` and `cheby build` on an empty cache and
   on a cache that std's records fill, and the difference, std's first use inside them.
+- The AOT columns (D-1346): `cheby build` with one thread and the default, a warm rebuild, one body
+  edited then a build, the link and the executable's size, for the rows that were built.
 
 Exit status: 0 when something was rendered; 1 when the file has no `oqp11`, no `restarts` and no
 cold column; 2 on a usage error or a file that is not such JSON (an edit's median or a phase that
@@ -288,6 +291,33 @@ def render_cold(rows, out):
     out.append("")
 
 
+def render_aot(rows, out):
+    out.append("### AOT builds (D-1346)")
+    out.append("")
+    out.append(
+        "| Project | Build, 1 thread | Build, default threads | Warm build | Edit to build | Link | "
+        "Executable KiB |"
+    )
+    out.append(
+        "| ------- | --------------- | ---------------------- | ---------- | ------------- | ---- | "
+        "-------------- |"
+    )
+    for row in rows:
+        one, many = row["aot_build_ns"]
+        out.append(
+            f"| {row.get('lines')} lines, `{row.get('shape')}` | {secs(one)} | {secs(many)} | "
+            f"{secs(row.get('aot_warm_build_ns'))} | {secs(row.get('aot_edit_to_build_ns'))} | "
+            f"{secs(row.get('aot_link_ns'))} | {row['aot_exe_bytes'] / 1024:.1f} |"
+        )
+    out.append("")
+    out.append(
+        "`cheby build -o` through the `cheby` binary. Build is a cold package on a cache that std's "
+        "records fill. A build compiles the modules `main` reaches, so these times give no lines "
+        "per second and do not compare with the JIT's columns. Reported, never enforced (D-1346)."
+    )
+    out.append("")
+
+
 def main(argv):
     title = None
     args = list(argv)
@@ -322,6 +352,9 @@ def main(argv):
         if cold:
             render_cold(cold, out)
             rendered = True
+        aot = [r for r in cold if r.get("aot_build_ns") is not None]
+        if aot:
+            render_aot(aot, out)
     except (Malformed, TypeError, ValueError, KeyError, AttributeError) as e:
         print(f"bench_oqp11.py: {args[0]} is not such JSON: {e}", file=sys.stderr)
         return 2

@@ -2228,3 +2228,15 @@ Open:
 - `tests/ui` keeps its numbers as written. CI does not check those sources with `cheby fmt`, and 85 of the 925 differed from its output before this change.
 
 Spec: §13.7. The code in `docs/spec/` and `docs/stdlib/` follows the rule, and ADR bodies stay as they are. No new diagnostic code. Tree-sitter: no grammar change, since §2.5 already allows `_`. `../zed-cheby` needs nothing.
+
+## 2026-11-07: AOT builds in `bench-compile`
+
+Goal: report what `cheby build` costs beyond D-1280's one cold time, since the throughput columns read only the JIT.
+
+- **D-1346 `bench-compile` gets an AOT table, read through the `cheby` binary**: Every row but the `huge_literals` shapes gets a reported table of `cheby build -o`. It holds a build with `--jobs 1` beside D-1280's default-threads build, both on a cache that std's records fill, with their speedup. It also holds a warm rebuild with nothing changed, one function body edited and then a build, the `link` phase of one warm build, and the executable's size. The table gives no lines per second, because a build compiles the modules `main` reaches, and only `deep` reaches them all. It does not compare with the JIT's columns. The table runs on every `bench-compile` without a flag, and nothing is enforced. Why: the in-memory reading stays D-247's (D-975), and the binary gives what users run, with its cache writes and mimalloc, and works with `--cheby`. Rejected: an AOT mode in `xtask bench-build`, which needs a new driver entry point, ignores `--cheby`, has no mimalloc (D-1316) and has no warm or edit reading. On the Apple M3 the link is about 70% of a warm build at 10k lines and 10% to 20% at 1M, where a warm build takes 0.31 s to 0.55 s and an edit 0.38 s to 0.58 s. The table adds about 25 s to `--shapes 100k,1m`. Extends D-1280.
+
+Open:
+
+- The table has no reading on `ubuntu-24.04` yet. Its cost under `bench.yml`'s 45-minute step comes from the Apple M3 alone.
+
+Spec: none. No new diagnostic code. Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
