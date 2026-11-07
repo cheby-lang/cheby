@@ -48,6 +48,8 @@
 //!   (D-1127). Windows sweeps nothing until M6 (D-1127, D-935).
 //! - A `cc` that cannot be started and a failed link are tool errors that
 //!   show the linker's output, which is never parsed (D-933).
+//! - A `--cfg cheby_sanitize` build adds its sanitizer's runtime to the
+//!   line ([`sanitizer_args`], D-1337). Every other build adds nothing.
 //!
 //! [`check_copies`] is D-918's check over the copies of a link, which
 //! `cheby build` runs in debug toolchains before linking.
@@ -171,6 +173,36 @@ pub fn flags_for(host: LinkHost) -> Vec<String> {
 /// (§12.5.4).
 pub const START_STOP_GC: &str = "-Wl,-z,start-stop-gc";
 
+/// The sanitizer's runtime in the toolchain of a `--cfg cheby_sanitize`
+/// build, from `build.rs`, and `None` in every other build (D-1337).
+pub const SANITIZER_RUNTIME: Option<&str> = option_env!("CHEBY_SANITIZER_RUNTIME");
+
+/// What the link line takes for the sanitizer's `runtime`, before the
+/// inputs (D-1337). The archive's instrumented code needs it, and rustc
+/// leaves it out of a staticlib. On Linux it is a static archive, taken
+/// whole so that its interceptors are linked, and ahead of libc, which
+/// they stand in front of. On macOS it is a shared library, found through
+/// an rpath. Nothing with `None`, so other builds link as D-933 says.
+#[must_use]
+pub fn sanitizer_args(host: LinkHost, runtime: Option<&str>) -> Vec<String> {
+    let Some(runtime) = runtime else {
+        return Vec::new();
+    };
+    match host {
+        LinkHost::Linux => vec![
+            "-Wl,--whole-archive".to_owned(),
+            runtime.to_owned(),
+            "-Wl,--no-whole-archive".to_owned(),
+        ],
+        LinkHost::MacOs => {
+            let dir = Path::new(runtime)
+                .parent()
+                .map_or_else(String::new, |dir| dir.display().to_string());
+            vec![runtime.to_owned(), format!("-Wl,-rpath,{dir}")]
+        }
+    }
+}
+
 /// The command that links `names` (the objects' files in `objects`, in
 /// order) with `job`'s archive and libraries into `staged`, for `host`
 /// (module documentation): what [`link`] runs.
@@ -188,6 +220,7 @@ pub fn command(
     }
     cmd.current_dir(objects)
         .args(flags_for(host))
+        .args(sanitizer_args(host, SANITIZER_RUNTIME))
         .arg("-o")
         .arg(staged)
         .args(names)

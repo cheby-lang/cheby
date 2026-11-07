@@ -395,6 +395,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1334    | A reader of a constant follows every redefinition                                                   |
 | D-1335    | What the split brought: the uploads on a cut, `upload-artifact@v7`, the dated nightly's test        |
 | D-1336    | This change takes one nightly and one `bench.yml` dispatch, with no candidate and no re-gate        |
+| D-1337    | Executables run under both sanitizers, in a step `aot`                                              |
+| D-1338    | `rc_differential` runs twice, with a plain and a sanitized `cheby`                                  |
+| D-1339    | MemorySanitizer is not used                                                                         |
 
 ## Open questions
 

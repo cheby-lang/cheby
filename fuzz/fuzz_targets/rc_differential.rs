@@ -34,6 +34,12 @@
 //!   cargo +nightly-2026-10-01 fuzz run rc_differential -- -max_total_time=1800
 //! ```
 //!
+//! A `cheby` built under AddressSanitizer also watches the programs, at
+//! about a fifth of the speed, so the nightly runs both (D-1338). Build it
+//! with `cargo xtask sanitize address --build-cheby /tmp/rc/cheby` and add
+//! `ASAN_OPTIONS=detect_leaks=0`, which reaches each `cheby`: `cheby run`
+//! holds a constant's objects where LeakSanitizer cannot see them (D-881).
+//!
 //! Each execution starts `cheby` four times (check and three runs), so
 //! expect a few executions per second.
 

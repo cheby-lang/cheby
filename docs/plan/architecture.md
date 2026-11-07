@@ -319,7 +319,7 @@ Stacks are slots of power-of-two classes from 512 KiB to 16 GiB, carved from sha
 
 The entry check keeps D-457's 256 KiB of headroom below the stack pointer.
 
-Under a sanitizer build's `--cfg cheby_sanitize="address"` or `"thread"` (D-875), `fiber/sanitizer.rs` tells the sanitizer about every fiber switch: AddressSanitizer's start and finish calls, with a fake stack per fiber freed when the fiber retires, and ThreadSanitizer's fiber create, switch and destroy (D-876). A reused slot is unpoisoned before a new fiber's first frame (D-877), the overflow check reads the stack pointer with inline assembly (D-878), the allocator's cached blocks are poisoned while cached (D-880), fiber stack slots are LeakSanitizer root regions (D-881), and a shared count's last decrement acquires with a load instead of a fence (D-879). Without the cfg every hook is an inline no-op.
+Under a sanitizer build's `--cfg cheby_sanitize="address"` or `"thread"` (D-875), `cheby build` adds the toolchain's sanitizer runtime to the link line (D-1337), and `fiber/sanitizer.rs` tells the sanitizer about every fiber switch: AddressSanitizer's start and finish calls, with a fake stack per fiber freed when the fiber retires, and ThreadSanitizer's fiber create, switch and destroy (D-876). A reused slot is unpoisoned before a new fiber's first frame (D-877), the overflow check reads the stack pointer with inline assembly (D-878), the allocator's cached blocks are poisoned while cached (D-880), fiber stack slots are LeakSanitizer root regions (D-881), and a shared count's last decrement acquires with a load instead of a fence (D-879). Without the cfg every hook is an inline no-op.
 
 ### 3.3 The scheduler
 
