@@ -4,14 +4,14 @@
 //! (E0062, §6.7), and the opacity of constructors where they are used
 //! (E0043, §4.3.4).
 
-use cheby_diag::{Diagnostic, Span, codes};
+use cheby_diag::{Diagnostic, Span, TextRange, TextSize, codes};
 use cheby_iface::{DefId, DefIndex, DefKind, Ice, Name, Namespace, ParamIdx};
-use cheby_syntax::NodeId;
 use cheby_syntax::ast::{
     Arg, AstNode, AstToken, Block, CaseArmKind, CtorPatFields, Expr, FieldPatEntry, Ident,
     InterfaceRef, Item, ListItem, ListPatItem, Param, Pat, PathNode, RecordEntry, RetType, Stmt,
     StringPart, Type, TypeBody, TypeParamList, VariantFields,
 };
+use cheby_syntax::{NodeId, SyntaxKind, SyntaxNode, SyntaxToken};
 use rustc_hash::FxHashMap;
 
 use crate::paths::{PathCx, PathShape};
@@ -76,6 +76,7 @@ fn resolve_item(
         in_sig: true,
         later_fns: Vec::new(),
         binding_params: None,
+        visible_from: None,
     };
     let mut has_body = false;
     match item {
@@ -92,12 +93,14 @@ fn resolve_item(
                 cx.enter_body();
                 cx.push_scope();
                 for param in f.params() {
-                    let Some(name) = param.name() else { continue };
-                    let local = cx.bind(name, LocalKind::Param, param.syntax().id())?;
+                    let local = match param.name() {
+                        Some(name) => cx.bind(name, LocalKind::Param, param.syntax().id())?,
+                        None => cx.placeholder_param(param)?,
+                    };
                     cx.res.params.push(local);
                 }
                 cx.block_contents(body)?;
-                cx.pop_scope();
+                cx.pop_scope(block_end(body));
             }
         }
         Item::Const(c) => {
@@ -109,7 +112,7 @@ fn resolve_item(
                 cx.enter_body();
                 cx.push_scope();
                 cx.expr(value)?;
-                cx.pop_scope();
+                cx.pop_scope(settled_end(value.syntax(), true));
             }
         }
         Item::Test(t) => {
@@ -118,7 +121,7 @@ fn resolve_item(
                 cx.enter_body();
                 cx.push_scope();
                 cx.block_contents(body)?;
-                cx.pop_scope();
+                cx.pop_scope(block_end(body));
             }
         }
         Item::Type(t) => {
@@ -207,6 +210,88 @@ struct Cx<'a, 'd> {
     /// what they belong to, and the index of their scope, so E0044 can
     /// tell a clash with a binding from around it.
     binding_params: Option<(&'static str, usize)>,
+    /// Where the names of the current `let`, `use` or `let guard` become
+    /// visible. `None` elsewhere: a name is visible from its own end.
+    visible_from: Option<TextSize>,
+}
+
+/// Where the scope of `block`'s names ends: at its `}`, or, with none,
+/// where [`after_open`] says.
+fn block_end(block: Block<'_>) -> TextSize {
+    let node = block.syntax();
+    node.first_token_of_kind(SyntaxKind::R_BRACE)
+        .map_or_else(|| after_open(node), |brace| brace.text_range().start())
+}
+
+/// Where `node` really ends. If it is `complete` and closes all it opens,
+/// that is past the spaces after it, since a cursor there is still on its
+/// line: the next token that is not a space, or [`TextSize::MAX`] at the
+/// end of the file. Otherwise a cursor in the text after it is still inside
+/// it, so it ends where [`after_open`] says.
+fn settled_end(node: SyntaxNode<'_>, complete: bool) -> TextSize {
+    if complete && !ends_open(node) {
+        std::iter::successors(node.last_token(), |token| token.next_token())
+            .skip(1)
+            .find(|token| token.kind() != SyntaxKind::WHITESPACE)
+            .map_or(TextSize::MAX, |token| token.text_range().start())
+    } else {
+        after_open(node)
+    }
+}
+
+/// The first offset past text that `node` left open: the start of the next
+/// significant token, or [`TextSize::MAX`] at the end of the file, since a
+/// cursor after the last token of an unclosed block is outside every node.
+fn after_open(node: SyntaxNode<'_>) -> TextSize {
+    std::iter::successors(node.last_token(), |token| token.next_token())
+        .skip(1)
+        .find(is_significant)
+        .map_or(TextSize::MAX, |token| token.text_range().start())
+}
+
+/// Whether `token` is neither trivia nor a line break.
+fn is_significant(token: &SyntaxToken<'_>) -> bool {
+    !token.kind().is_trivia() && token.kind() != SyntaxKind::NEWLINE
+}
+
+/// Whether `node` ends in a missing operand, or its last token is inside a
+/// delimiter that a descendant of `node` opened and never closed. An
+/// operator, a `.` or an `as` as the last token waits for what follows it.
+/// Otherwise nothing follows that token in `node`, so every delimited node
+/// around it is open, except its own parent when the token is that parent's
+/// closer.
+fn ends_open(node: SyntaxNode<'_>) -> bool {
+    let Some(last) = node.tokens().rev().find(is_significant) else {
+        return false;
+    };
+    let unfinished = last.kind() == SyntaxKind::DOT
+        || last.parent().is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                SyntaxKind::BIN_EXPR | SyntaxKind::PREFIX_EXPR | SyntaxKind::MESSAGE
+            )
+        });
+    if unfinished {
+        return true;
+    }
+    let closes_parent = matches!(
+        last.kind(),
+        SyntaxKind::R_BRACE | SyntaxKind::R_PAREN | SyntaxKind::R_BRACK
+    );
+    last.parent()
+        .into_iter()
+        .flat_map(SyntaxNode::ancestors)
+        .take_while(|ancestor| ancestor.id() != node.id())
+        .skip(usize::from(closes_parent))
+        .any(|ancestor| {
+            [
+                SyntaxKind::L_BRACE,
+                SyntaxKind::L_PAREN,
+                SyntaxKind::L_BRACK,
+            ]
+            .into_iter()
+            .any(|open| ancestor.first_token_of_kind(open).is_some())
+        })
 }
 
 /// The names bound so far by one pattern, or by the patterns of one `case`
@@ -350,8 +435,13 @@ impl Cx<'_, '_> {
         self.scopes.push(Vec::new());
     }
 
-    fn pop_scope(&mut self) {
-        for (name, _) in self.scopes.pop().unwrap_or_default().into_iter().rev() {
+    /// Leaves the innermost scope, whose names stay visible up to `end`.
+    fn pop_scope(&mut self, end: TextSize) {
+        for (name, local) in self.scopes.pop().unwrap_or_default().into_iter().rev() {
+            if let Some(decl) = self.res.locals.get_mut(local) {
+                let start = decl.scope.start();
+                decl.scope = TextRange::new(start, end.max(start));
+            }
             if let Some(stack) = self.in_scope.get_mut(&name) {
                 stack.pop();
                 if stack.is_empty() {
@@ -367,10 +457,12 @@ impl Cx<'_, '_> {
         let interned = self.intern(name.text());
         let span = name.span();
         self.check_shadowing(interned, span)?;
+        let start = self.visible_from.unwrap_or(span.range.end());
         let local = self.res.locals.push(LocalDecl {
             name: interned,
             span,
             kind,
+            scope: TextRange::empty(start),
         })?;
         self.scopes
             .last_mut()
@@ -379,6 +471,24 @@ impl Cx<'_, '_> {
         self.in_scope.entry(interned).or_default().push(local);
         self.res.bindings.insert(node, local);
         Ok(local)
+    }
+
+    /// A local for a parameter of a top-level function that is not a plain
+    /// name. Phase A rejects that (E0021 or a grammar error), so only a
+    /// tolerant run gets here, and this keeps the positions of the
+    /// signature, which counts every parameter. Its `_` keeps W0002 quiet
+    /// (§2.3), and its empty scope keeps it from every query. The names
+    /// inside the pattern stay unbound, since no pattern is checked for
+    /// them.
+    fn placeholder_param(&mut self, param: Param<'_>) -> Result<LocalId, Ice> {
+        let name = self.intern("_param");
+        let span = param.significant_span();
+        self.res.locals.push(LocalDecl {
+            name,
+            span,
+            kind: LocalKind::Param,
+            scope: TextRange::empty(span.range.end()),
+        })
     }
 
     fn check_shadowing(&mut self, name: Name, span: Span) -> Result<(), Ice> {
@@ -469,7 +579,7 @@ impl Cx<'_, '_> {
     fn block(&mut self, block: Block<'_>) -> Result<(), Ice> {
         self.push_scope();
         let result = self.block_contents(block);
-        self.pop_scope();
+        self.pop_scope(block_end(block));
         result
     }
 
@@ -502,7 +612,9 @@ impl Cx<'_, '_> {
                     self.expr(message)?;
                 }
                 if let Some(pat) = s.pattern() {
+                    self.visible_from = Some(settled_end(s.syntax(), s.value().is_some()));
                     self.pat(pat, LocalKind::Let, &mut PatState::default())?;
+                    self.visible_from = None;
                 }
             }
             Stmt::Use(s) => {
@@ -510,6 +622,7 @@ impl Cx<'_, '_> {
                     self.expr(value)?;
                 }
                 let mut state = PatState::default();
+                self.visible_from = Some(settled_end(s.syntax(), s.value().is_some()));
                 for binder in s.binders() {
                     if let Some(ty) = binder.ty() {
                         self.ty(ty)?;
@@ -518,6 +631,7 @@ impl Cx<'_, '_> {
                         self.pat(pat, LocalKind::UseBinder, &mut state)?;
                     }
                 }
+                self.visible_from = None;
             }
             Stmt::Guard(s) => {
                 if let Some(value) = s.value() {
@@ -532,7 +646,9 @@ impl Cx<'_, '_> {
                     self.block(block)?;
                 }
                 if let Some(pat) = s.pattern() {
+                    self.visible_from = Some(settled_end(s.syntax(), s.value().is_some()));
                     self.pat(pat, LocalKind::Let, &mut PatState::default())?;
+                    self.visible_from = None;
                 }
             }
             Stmt::Assert(s) => {
@@ -559,7 +675,7 @@ impl Cx<'_, '_> {
                 if let Some(body) = f.body() {
                     self.block_contents(body)?;
                 }
-                self.pop_scope();
+                self.pop_scope(f.body().map_or_else(|| after_open(f.syntax()), block_end));
             }
             Stmt::Expr(e) => self.expr(e)?,
         }
@@ -683,7 +799,7 @@ impl Cx<'_, '_> {
                 if let Some(body) = c.body() {
                     self.block_contents(body)?;
                 }
-                self.pop_scope();
+                self.pop_scope(c.body().map_or_else(|| after_open(c.syntax()), block_end));
             }
             Expr::Case(c) => {
                 for subject in c.subjects() {
@@ -691,6 +807,10 @@ impl Cx<'_, '_> {
                 }
                 for arm in c.arms() {
                     self.push_scope();
+                    let has_body = match arm {
+                        CaseArmKind::Case(arm) => arm.body().is_some(),
+                        CaseArmKind::Cond(arm) => arm.body().is_some(),
+                    };
                     match arm {
                         CaseArmKind::Case(arm) => {
                             let mut state = PatState::default();
@@ -715,7 +835,7 @@ impl Cx<'_, '_> {
                             }
                         }
                     }
-                    self.pop_scope();
+                    self.pop_scope(settled_end(arm.syntax(), has_body));
                 }
             }
             Expr::Panic(p) => {

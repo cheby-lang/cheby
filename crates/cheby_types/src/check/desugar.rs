@@ -61,6 +61,9 @@ impl BodyCx<'_> {
             span: rest_span,
         };
         let Some(rhs) = u.value() else {
+            // Only a broken tree gets here: the rest of the block is still
+            // checked, for a tolerant run's facts.
+            self.callback(callback, Some(&Expected::plain(InferTy::ERROR)))?;
             return self.error_expr(span);
         };
         let call = match rhs {
@@ -234,6 +237,11 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         let span = b.significant_span();
         let (Some(lhs), Some(rhs)) = (b.lhs(), b.rhs()) else {
+            // Only a broken tree gets here: `xs |> ` still checks `xs`, for
+            // a tolerant run's facts.
+            if let Some(lhs) = b.lhs() {
+                self.check_expr(lhs, None)?;
+            }
             return self.error_expr(span);
         };
         if let Expr::Call(c) = rhs

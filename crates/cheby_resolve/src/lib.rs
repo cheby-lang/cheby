@@ -34,7 +34,9 @@ mod paths;
 pub mod repl;
 mod scope;
 
-use cheby_diag::{Diagnostic, Span};
+use std::cmp::Reverse;
+
+use cheby_diag::{Diagnostic, Span, TextRange, TextSize};
 use cheby_iface::{
     DefId, DefIndex, DefKind, DepView, Globals, Ice, IndexVec, ModuleId, ModuleTable, Name,
     PackageId, ParamIdx, Vis,
@@ -270,12 +272,48 @@ pub struct BodyRes {
     pub names: FxHashMap<NodeId, Res>,
 }
 
+impl BodyRes {
+    /// The locals visible to a cursor at `offset`, innermost first: by
+    /// where they become visible, descending, and the later binding first
+    /// among those of one statement. Names cannot be shadowed (D-051), so
+    /// they are unique here, except where E0044 was reported.
+    #[must_use]
+    pub fn locals_at(&self, offset: TextSize) -> Vec<(LocalId, &LocalDecl)> {
+        let mut locals: Vec<_> = self
+            .locals
+            .iter_enumerated()
+            .filter(|(_, decl)| decl.visible_at(offset))
+            .collect();
+        locals.sort_by_key(|&(local, decl)| Reverse((decl.scope.start(), local)));
+        locals
+    }
+}
+
 /// A local binding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalDecl {
     pub name: Name,
     pub span: Span,
     pub kind: LocalKind,
+    /// Where a use of the name finds this local: after the end of its
+    /// binding statement, or of its name, up to the end of its scope. See
+    /// [`LocalDecl::visible_at`]. A closed block's scope ends at its `}`.
+    /// An unclosed one's ends at the next significant token, or at
+    /// [`TextSize::MAX`] at the end of the file. The range is empty for a
+    /// local nothing can use (D-1383).
+    pub scope: TextRange,
+}
+
+impl LocalDecl {
+    /// Whether a cursor at `offset` is in this local's scope. Both edges
+    /// differ from [`TextRange::contains`] because a cursor sits between
+    /// bytes, after what is being typed. A cursor at the start is still in
+    /// the binding statement (`let x = x|`), and one at the end is still
+    /// before the `}`, or at the end of a `case` arm's body (`x => x|`).
+    #[must_use]
+    pub const fn visible_at(&self, offset: TextSize) -> bool {
+        self.scope.start() < offset && offset <= self.scope.end()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

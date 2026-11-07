@@ -1,0 +1,374 @@
+SOURCE_FILE@0..368
+  FN_DECL@0..89
+    FN_KW@0..2 "fn"
+    WHITESPACE@2..3 " "
+    LOWER_IDENT@3..13 "before_let"
+    PARAM_LIST@13..21
+      L_PAREN@13..14 "("
+      PARAM@14..20
+        IDENT_PAT@14..15
+          LOWER_IDENT@14..15 "x"
+        COLON@15..16 ":"
+        WHITESPACE@16..17 " "
+        PATH_TYPE@17..20
+          PATH@17..20
+            UPPER_IDENT@17..20 "Int"
+      R_PAREN@20..21 ")"
+    WHITESPACE@21..22 " "
+    RET_TYPE@22..28
+      THIN_ARROW@22..24 "->"
+      WHITESPACE@24..25 " "
+      PATH_TYPE@25..28
+        PATH@25..28
+          UPPER_IDENT@25..28 "Int"
+    WHITESPACE@28..29 " "
+    BLOCK@29..89
+      L_BRACE@29..30 "{"
+      NEWLINE@30..31 "\n"
+      WHITESPACE@31..33 "  "
+      LET_STMT@33..72
+        LET_KW@33..36 "let"
+        WHITESPACE@36..37 " "
+        IDENT_PAT@37..38
+          LOWER_IDENT@37..38 "y"
+        WHITESPACE@38..39 " "
+        EQ@39..40 "="
+        WHITESPACE@40..41 " "
+        CASE_EXPR@41..72
+          CASE_KW@41..45 "case"
+          WHITESPACE@45..46 " "
+          PATH_EXPR@46..47
+            PATH@46..47
+              LOWER_IDENT@46..47 "x"
+          WHITESPACE@47..48 " "
+          CASE_BODY@48..72
+            L_BRACE@48..49 "{"
+            NEWLINE@49..50 "\n"
+            WHITESPACE@50..54 "    "
+            CASE_ARM@54..60
+              LITERAL_PAT@54..55
+                INT_NUMBER@54..55 "0"
+              WHITESPACE@55..56 " "
+              FAT_ARROW@56..58 "=>"
+              WHITESPACE@58..59 " "
+              LITERAL@59..60
+                INT_NUMBER@59..60 "1"
+            NEWLINE@60..61 "\n"
+            WHITESPACE@61..65 "    "
+            CASE_ARM@65..71
+              WILDCARD_PAT@65..66
+                UNDERSCORE@65..66 "_"
+              WHITESPACE@66..67 " "
+              FAT_ARROW@67..69 "=>"
+              WHITESPACE@69..70 " "
+              LITERAL@70..71
+                INT_NUMBER@70..71 "2"
+            NEWLINE@71..72 "\n"
+      WHITESPACE@72..74 "  "
+      LET_STMT@74..83
+        LET_KW@74..77 "let"
+        WHITESPACE@77..78 " "
+        IDENT_PAT@78..79
+          LOWER_IDENT@78..79 "z"
+        WHITESPACE@79..80 " "
+        EQ@80..81 "="
+        WHITESPACE@81..82 " "
+        PATH_EXPR@82..83
+          PATH@82..83
+            LOWER_IDENT@82..83 "y"
+      NEWLINE@83..84 "\n"
+      WHITESPACE@84..86 "  "
+      PATH_EXPR@86..87
+        PATH@86..87
+          LOWER_IDENT@86..87 "z"
+      NEWLINE@87..88 "\n"
+      R_BRACE@88..89 "}"
+  NEWLINE@89..90 "\n"
+  NEWLINE@90..91 "\n"
+  FN_DECL@91..168
+    FN_KW@91..93 "fn"
+    WHITESPACE@93..94 " "
+    LOWER_IDENT@94..107 "before_assert"
+    PARAM_LIST@107..115
+      L_PAREN@107..108 "("
+      PARAM@108..114
+        IDENT_PAT@108..109
+          LOWER_IDENT@108..109 "x"
+        COLON@109..110 ":"
+        WHITESPACE@110..111 " "
+        PATH_TYPE@111..114
+          PATH@111..114
+            UPPER_IDENT@111..114 "Int"
+      R_PAREN@114..115 ")"
+    WHITESPACE@115..116 " "
+    RET_TYPE@116..122
+      THIN_ARROW@116..118 "->"
+      WHITESPACE@118..119 " "
+      PATH_TYPE@119..122
+        PATH@119..122
+          UPPER_IDENT@119..122 "Int"
+    WHITESPACE@122..123 " "
+    BLOCK@123..168
+      L_BRACE@123..124 "{"
+      NEWLINE@124..125 "\n"
+      WHITESPACE@125..127 "  "
+      CASE_EXPR@127..147
+        CASE_KW@127..131 "case"
+        WHITESPACE@131..132 " "
+        PATH_EXPR@132..133
+          PATH@132..133
+            LOWER_IDENT@132..133 "x"
+        WHITESPACE@133..134 " "
+        CASE_BODY@134..147
+          L_BRACE@134..135 "{"
+          NEWLINE@135..136 "\n"
+          WHITESPACE@136..140 "    "
+          CASE_ARM@140..146
+            LITERAL_PAT@140..141
+              INT_NUMBER@140..141 "0"
+            WHITESPACE@141..142 " "
+            FAT_ARROW@142..144 "=>"
+            WHITESPACE@144..145 " "
+            LITERAL@145..146
+              INT_NUMBER@145..146 "1"
+          NEWLINE@146..147 "\n"
+      WHITESPACE@147..149 "  "
+      ASSERT_STMT@149..162
+        ASSERT_KW@149..155 "assert"
+        WHITESPACE@155..156 " "
+        BIN_EXPR@156..162
+          PATH_EXPR@156..157
+            PATH@156..157
+              LOWER_IDENT@156..157 "x"
+          WHITESPACE@157..158 " "
+          EQ2@158..160 "=="
+          WHITESPACE@160..161 " "
+          LITERAL@161..162
+            INT_NUMBER@161..162 "0"
+      NEWLINE@162..163 "\n"
+      WHITESPACE@163..165 "  "
+      PATH_EXPR@165..166
+        PATH@165..166
+          LOWER_IDENT@165..166 "x"
+      NEWLINE@166..167 "\n"
+      R_BRACE@167..168 "}"
+  NEWLINE@168..169 "\n"
+  NEWLINE@169..170 "\n"
+  FN_DECL@170..243
+    FN_KW@170..172 "fn"
+    WHITESPACE@172..173 " "
+    LOWER_IDENT@173..183 "before_use"
+    PARAM_LIST@183..191
+      L_PAREN@183..184 "("
+      PARAM@184..190
+        IDENT_PAT@184..185
+          LOWER_IDENT@184..185 "x"
+        COLON@185..186 ":"
+        WHITESPACE@186..187 " "
+        PATH_TYPE@187..190
+          PATH@187..190
+            UPPER_IDENT@187..190 "Int"
+      R_PAREN@190..191 ")"
+    WHITESPACE@191..192 " "
+    RET_TYPE@192..198
+      THIN_ARROW@192..194 "->"
+      WHITESPACE@194..195 " "
+      PATH_TYPE@195..198
+        PATH@195..198
+          UPPER_IDENT@195..198 "Int"
+    WHITESPACE@198..199 " "
+    BLOCK@199..243
+      L_BRACE@199..200 "{"
+      NEWLINE@200..201 "\n"
+      WHITESPACE@201..203 "  "
+      CASE_EXPR@203..223
+        CASE_KW@203..207 "case"
+        WHITESPACE@207..208 " "
+        PATH_EXPR@208..209
+          PATH@208..209
+            LOWER_IDENT@208..209 "x"
+        WHITESPACE@209..210 " "
+        CASE_BODY@210..223
+          L_BRACE@210..211 "{"
+          NEWLINE@211..212 "\n"
+          WHITESPACE@212..216 "    "
+          CASE_ARM@216..222
+            WILDCARD_PAT@216..217
+              UNDERSCORE@216..217 "_"
+            WHITESPACE@217..218 " "
+            FAT_ARROW@218..220 "=>"
+            WHITESPACE@220..221 " "
+            LITERAL@221..222
+              INT_NUMBER@221..222 "1"
+          NEWLINE@222..223 "\n"
+      WHITESPACE@223..225 "  "
+      USE_STMT@225..237
+        USE_KW@225..228 "use"
+        WHITESPACE@228..229 " "
+        USE_BINDER@229..230
+          IDENT_PAT@229..230
+            LOWER_IDENT@229..230 "y"
+        WHITESPACE@230..231 " "
+        LEFT_ARROW@231..233 "<-"
+        WHITESPACE@233..234 " "
+        CALL_EXPR@234..237
+          PATH_EXPR@234..235
+            PATH@234..235
+              LOWER_IDENT@234..235 "f"
+          ARG_LIST@235..237
+            L_PAREN@235..236 "("
+            R_PAREN@236..237 ")"
+      NEWLINE@237..238 "\n"
+      WHITESPACE@238..240 "  "
+      PATH_EXPR@240..241
+        PATH@240..241
+          LOWER_IDENT@240..241 "y"
+      NEWLINE@241..242 "\n"
+      R_BRACE@242..243 "}"
+  NEWLINE@243..244 "\n"
+  NEWLINE@244..245 "\n"
+  FN_DECL@245..336
+    FN_KW@245..247 "fn"
+    WHITESPACE@247..248 " "
+    LOWER_IDENT@248..260 "before_guard"
+    PARAM_LIST@260..268
+      L_PAREN@260..261 "("
+      PARAM@261..267
+        IDENT_PAT@261..262
+          LOWER_IDENT@261..262 "x"
+        COLON@262..263 ":"
+        WHITESPACE@263..264 " "
+        PATH_TYPE@264..267
+          PATH@264..267
+            UPPER_IDENT@264..267 "Int"
+      R_PAREN@267..268 ")"
+    WHITESPACE@268..269 " "
+    RET_TYPE@269..275
+      THIN_ARROW@269..271 "->"
+      WHITESPACE@271..272 " "
+      PATH_TYPE@272..275
+        PATH@272..275
+          UPPER_IDENT@272..275 "Int"
+    WHITESPACE@275..276 " "
+    BLOCK@276..336
+      L_BRACE@276..277 "{"
+      NEWLINE@277..278 "\n"
+      WHITESPACE@278..280 "  "
+      CASE_EXPR@280..300
+        CASE_KW@280..284 "case"
+        WHITESPACE@284..285 " "
+        PATH_EXPR@285..286
+          PATH@285..286
+            LOWER_IDENT@285..286 "x"
+        WHITESPACE@286..287 " "
+        CASE_BODY@287..300
+          L_BRACE@287..288 "{"
+          NEWLINE@288..289 "\n"
+          WHITESPACE@289..293 "    "
+          CASE_ARM@293..299
+            WILDCARD_PAT@293..294
+              UNDERSCORE@293..294 "_"
+            WHITESPACE@294..295 " "
+            FAT_ARROW@295..297 "=>"
+            WHITESPACE@297..298 " "
+            LITERAL@298..299
+              INT_NUMBER@298..299 "1"
+          NEWLINE@299..300 "\n"
+      WHITESPACE@300..302 "  "
+      GUARD_STMT@302..330
+        GUARD_KW@302..307 "guard"
+        WHITESPACE@307..308 " "
+        BIN_EXPR@308..313
+          PATH_EXPR@308..309
+            PATH@308..309
+              LOWER_IDENT@308..309 "x"
+          WHITESPACE@309..310 " "
+          GT@310..311 ">"
+          WHITESPACE@311..312 " "
+          LITERAL@312..313
+            INT_NUMBER@312..313 "0"
+        WHITESPACE@313..314 " "
+        ELSE_CLAUSE@314..330
+          ELSE_KW@314..318 "else"
+          WHITESPACE@318..319 " "
+          BLOCK@319..330
+            L_BRACE@319..320 "{"
+            NEWLINE@320..321 "\n"
+            WHITESPACE@321..325 "    "
+            LITERAL@325..326
+              INT_NUMBER@325..326 "0"
+            NEWLINE@326..327 "\n"
+            WHITESPACE@327..329 "  "
+            R_BRACE@329..330 "}"
+      NEWLINE@330..331 "\n"
+      WHITESPACE@331..333 "  "
+      PATH_EXPR@333..334
+        PATH@333..334
+          LOWER_IDENT@333..334 "x"
+      NEWLINE@334..335 "\n"
+      R_BRACE@335..336 "}"
+  NEWLINE@336..337 "\n"
+  NEWLINE@337..338 "\n"
+  FN_DECL@338..367
+    FN_KW@338..340 "fn"
+    WHITESPACE@340..341 " "
+    LOWER_IDENT@341..350 "after_all"
+    PARAM_LIST@350..352
+      L_PAREN@350..351 "("
+      R_PAREN@351..352 ")"
+    WHITESPACE@352..353 " "
+    RET_TYPE@353..359
+      THIN_ARROW@353..355 "->"
+      WHITESPACE@355..356 " "
+      PATH_TYPE@356..359
+        PATH@356..359
+          UPPER_IDENT@356..359 "Int"
+    WHITESPACE@359..360 " "
+    BLOCK@360..367
+      L_BRACE@360..361 "{"
+      NEWLINE@361..362 "\n"
+      WHITESPACE@362..364 "  "
+      LITERAL@364..365
+        INT_NUMBER@364..365 "1"
+      NEWLINE@365..366 "\n"
+      R_BRACE@366..367 "}"
+  NEWLINE@367..368 "\n"
+
+// errors
+
+error[E0015]: unclosed `{`
+ --> err/recovery_open_case.cheby:5:3
+  |
+2 |   let y = case x {
+  |                  - this `{` is never closed
+...
+5 |   let z = y
+  |   ^^^ expected `}`
+
+error[E0015]: unclosed `{`
+  --> err/recovery_open_case.cheby:12:3
+   |
+10 |   case x {
+   |          - this `{` is never closed
+11 |     0 => 1
+12 |   assert x == 0
+   |   ^^^^^^ expected `}`
+
+error[E0015]: unclosed `{`
+  --> err/recovery_open_case.cheby:19:3
+   |
+17 |   case x {
+   |          - this `{` is never closed
+18 |     _ => 1
+19 |   use y <- f()
+   |   ^^^ expected `}`
+
+error[E0015]: unclosed `{`
+  --> err/recovery_open_case.cheby:26:3
+   |
+24 |   case x {
+   |          - this `{` is never closed
+25 |     _ => 1
+26 |   guard x > 0 else {
+   |   ^^^^^ expected `}`
+

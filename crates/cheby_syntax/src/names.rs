@@ -6,9 +6,20 @@
 //! name adds nothing (D-059, D-128). The parser uses [`reserved_word_help`]
 //! to explain a grammar error that a reserved word causes, such as `if`.
 
-use cheby_diag::{Diagnostic, Span, codes};
+use cheby_diag::{Diagnostic, FileId, Span, codes};
 
 use crate::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+
+/// The case a new name must have: that of the name it replaces.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum NameCase {
+    /// A `LOWER` name: a local, a field, a function, a constant, an import
+    /// alias.
+    Lower,
+    /// An `UPPER` name: a type, a constructor, an interface, a type
+    /// parameter.
+    Upper,
+}
 
 /// The targeted help for a reserved word (§2.4, D-128, D-240), or `None`
 /// if `word` is not reserved.
@@ -107,6 +118,57 @@ pub fn check_name(token: SyntaxToken<'_>) -> Option<Diagnostic> {
     }
 }
 
+/// Checks that `text` can be written as a name of case `want`, so that
+/// neither a grammar error nor E0005, E0006 or E0007 can follow from its
+/// spelling. A leading `_`, as in `_x`, is allowed.
+///
+/// # Errors
+///
+/// Returns why `text` cannot be such a name, as a sentence for the user.
+pub fn check_candidate(text: &str, want: NameCase) -> Result<(), String> {
+    let lexed = crate::lexer::lex(FileId::new(0), text);
+    let invalid = || format!("`{text}` is not a valid name");
+    let [token] = lexed.tokens() else {
+        return Err(invalid());
+    };
+    if SyntaxKind::from_keyword(text).is_some() {
+        return Err(format!("`{text}` is a keyword"));
+    }
+    if !matches!(
+        token.kind,
+        SyntaxKind::LOWER_IDENT | SyntaxKind::UPPER_IDENT
+    ) {
+        return Err(invalid());
+    }
+    if !lexed.errors().is_empty() {
+        return Err(format!("`{text}` is not ASCII"));
+    }
+    match (token.kind, want) {
+        (SyntaxKind::LOWER_IDENT, NameCase::Lower) => {
+            if let Some(help) = reserved_word_help(text) {
+                return Err(format!("`{text}` is a reserved word: {help}"));
+            }
+            if to_snake_case(text) != text {
+                return Err(format!("`{text}` is not in snake_case"));
+            }
+            Ok(())
+        }
+        (SyntaxKind::UPPER_IDENT, NameCase::Upper) => {
+            if to_pascal_case(text) != text {
+                return Err(format!("`{text}` is not in PascalCase"));
+            }
+            Ok(())
+        }
+        (SyntaxKind::UPPER_IDENT, NameCase::Lower) => {
+            Err(format!("`{text}` must start with a lower-case letter"))
+        }
+        (SyntaxKind::LOWER_IDENT, NameCase::Upper) => {
+            Err(format!("`{text}` must start with an upper-case letter"))
+        }
+        _ => Err(invalid()),
+    }
+}
+
 /// The name that `node` binds or declares, if `node` is a binding or a
 /// declaration: an item, a variant, a record field, an interface function,
 /// a type parameter, a local function, an import's `as` name, or a name in
@@ -190,7 +252,7 @@ mod tests {
 
     use cheby_diag::FileId;
 
-    use super::{bound_name, check_name, to_pascal_case, to_snake_case};
+    use super::{NameCase, bound_name, check_candidate, check_name, to_pascal_case, to_snake_case};
 
     #[test]
     fn case_conversions() {
@@ -275,6 +337,61 @@ mod tests {
                     Some("E0006: name `someField` is not in snake_case".to_owned())
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn candidates_that_are_good_names() {
+        for name in ["x", "_x", "my_value", "x1", "a__b", "x_"] {
+            assert_eq!(check_candidate(name, NameCase::Lower), Ok(()), "{name}");
+        }
+        for name in ["T", "MyType", "HTTPServer", "V2"] {
+            assert_eq!(check_candidate(name, NameCase::Upper), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
+    fn candidates_that_are_refused() {
+        let refused = |text, want| check_candidate(text, want).unwrap_err();
+        let lower = NameCase::Lower;
+        let upper = NameCase::Upper;
+        for text in [
+            "", "x-y", "a b", " a", "a\n", "a//b", "_", "1", "+", "\"a\"", "/*",
+        ] {
+            let want = format!("`{text}` is not a valid name");
+            assert_eq!(refused(text, lower), want);
+            assert_eq!(refused(text, upper), want);
+        }
+        assert_eq!(refused("fn", lower), "`fn` is a keyword");
+        assert_eq!(refused("guard", lower), "`guard` is a keyword");
+        assert_eq!(refused("caf\u{e9}", lower), "`caf\u{e9}` is not ASCII");
+        assert_eq!(
+            refused("if", lower),
+            "`if` is a reserved word: Cheby has no `if`; use `case`"
+        );
+        assert_eq!(refused("myValue", lower), "`myValue` is not in snake_case");
+        assert_eq!(refused("My_Type", upper), "`My_Type` is not in PascalCase");
+        assert_eq!(
+            refused("Foo", lower),
+            "`Foo` must start with a lower-case letter"
+        );
+        assert_eq!(
+            refused("foo", upper),
+            "`foo` must start with an upper-case letter"
+        );
+    }
+
+    /// A name that passes gets no E0006 or E0007 where it is bound.
+    #[test]
+    fn a_good_candidate_passes_the_binding_check() {
+        for name in ["x", "_x", "a__b"] {
+            let text = format!("const {name}: Int = 1\n");
+            assert_eq!(checked(&text), [(name.to_owned(), None)]);
+        }
+        let text = "type HTTPServer {\n  V2,\n}\n";
+        assert_eq!(
+            checked(text),
+            [("HTTPServer".to_owned(), None), ("V2".to_owned(), None)]
         );
     }
 

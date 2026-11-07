@@ -5,9 +5,15 @@
 //! items and the end of a body.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use cheby_diag::{Diagnostic, SourceMap};
-use cheby_iface::{DefId, ItemSig, Ty, TyKind, builtin};
+use cheby_iface::{
+    DefId, DepView, Globals, InterfaceSet, ItemSig, ModuleInfo, ModuleTable, PackageId, Ty, TyKind,
+    builtin,
+};
+use cheby_package::ModulePath;
+use cheby_resolve::{ResolveInput, StdCatalog, resolve_module};
 
 use crate::test_support::quiet::{build, build_package, build_with_std};
 use crate::test_support::{Build, has_syntax_errors};
@@ -1733,4 +1739,123 @@ fn long_list_patterns_check_on_default_worker_stacks() {
         "pub fn first_run(xs: List<Int>) -> Int {{\n  case xs {{\n    [{}] => 1\n    _ => 0\n  }}\n}}\n",
         elements.join(", ")
     ));
+}
+
+// ---- broken trees ----------------------------------------------------------
+
+/// A root module that phase A rejects, run past phase A as a tolerant run
+/// does: resolution, the interface and the bodies, over a tree with errors.
+/// An `Ice` at any step fails the test. Gives each checked function's name
+/// and the codes of the errors after phase A, sorted.
+fn tolerant(text: &str) -> (Vec<String>, Vec<String>) {
+    assert!(has_syntax_errors(text), "phase A accepts this:\n{text}");
+    let globals = Globals::new();
+    let mut modules = ModuleTable::new();
+    let mut sources = SourceMap::new();
+    let file = sources.add_file("src/main.cheby", text).unwrap();
+    let module = modules
+        .add(ModuleInfo {
+            path: ModulePath::root("app"),
+            package: PackageId::LOCAL,
+            file: Some(file),
+        })
+        .unwrap();
+    let (tree, _) = cheby_syntax::parse(file, Arc::from(text)).into_parts();
+    let set = InterfaceSet::new(builtin::interface(&globals));
+    let (resolved, mut diags) = resolve_module(&ResolveInput {
+        module,
+        package: PackageId::LOCAL,
+        tree: &tree,
+        imports: &[],
+        targets: &[],
+        deps: DepView::new(&set, &[]),
+        modules: &modules,
+        globals: &globals,
+        std: StdCatalog { known: &[] },
+        package_targets: cheby_package::Targets::ALL,
+    })
+    .unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));
+    let input = crate::TypesInput {
+        module,
+        package: PackageId::LOCAL,
+        tree: &tree,
+        resolved: &resolved,
+        deps: DepView::new(&set, &[]),
+        modules: &modules,
+        globals: &globals,
+    };
+    let (iface, more) =
+        crate::build_interface(&input).unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));
+    diags.extend(more);
+    let (thir, more) = crate::check_bodies_with(&input, &iface, crate::Tests::All)
+        .unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));
+    diags.extend(more);
+    let checked = thir
+        .fns
+        .iter()
+        .map(|f| {
+            let item = iface.item(f.def.index).unwrap();
+            globals.names.get(item.name).to_owned()
+        })
+        .collect();
+    let mut codes: Vec<String> = diags
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.code.to_string())
+        .collect();
+    codes.sort();
+    (checked, codes)
+}
+
+#[test]
+fn a_pattern_parameter_keeps_its_position_in_a_tolerant_run() {
+    // `check/mod.rs`: every parameter of the signature has a local (F §2.1).
+    let (checked, codes) = tolerant(
+        "fn sum((a, b): (Int, Int), c: Int) -> Int {\n  c\n}\n\nfn other() -> Int {\n  0\n}\n",
+    );
+    assert_eq!(checked, ["sum", "other"], "{codes:?}");
+    assert_eq!(codes, Vec::<String>::new());
+}
+
+#[test]
+fn an_as_pattern_without_a_name_is_a_silent_error_in_a_tolerant_run() {
+    // `check/pat.rs`: the resolver binds no local for `p as` (F §2.2).
+    for pattern in ["p as", "(p as)", "(p as, _)", "p as | q as", "0 as"] {
+        let (checked, codes) = tolerant(&format!(
+            "fn f(n: Int) -> Int {{\n  case n {{\n    {pattern} => 0\n    _ => 1\n  }}\n}}\n\n\
+             fn other() -> Int {{\n  0\n}}\n"
+        ));
+        assert_eq!(checked, ["other"], "{pattern}: {codes:?}");
+    }
+}
+
+#[test]
+fn the_left_of_an_unfinished_pipe_is_checked() {
+    let (checked, codes) = tolerant("fn f() {\n  (True && 1) |> \n}\n");
+    assert_eq!(codes, ["E0047"]);
+    assert_eq!(checked, Vec::<String>::new());
+}
+
+#[test]
+fn the_left_of_an_unfinished_operator_is_checked() {
+    let (checked, codes) = tolerant("fn f() -> Int {\n  (True && 1) + \n}\n");
+    assert_eq!(codes, ["E0047"]);
+    assert_eq!(checked, Vec::<String>::new());
+}
+
+#[test]
+fn the_rest_of_the_block_after_an_unfinished_use_is_checked() {
+    let (checked, codes) =
+        tolerant("fn f() -> Int {\n  use x <- \n  let y: Int = x\n  True && 1\n}\n");
+    assert_eq!(codes, ["E0047"]);
+    assert_eq!(checked, Vec::<String>::new());
+}
+
+#[test]
+fn an_unfinished_use_at_the_end_of_a_block_is_a_silent_error() {
+    for binders in ["x", "", "(a, b)", "x: Int, y"] {
+        let (checked, codes) = tolerant(&format!("fn f() -> Int {{\n  use {binders} <- \n}}\n"));
+        assert_eq!(codes, Vec::<String>::new(), "{binders}");
+        assert_eq!(checked, Vec::<String>::new(), "{binders}");
+    }
 }

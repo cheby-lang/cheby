@@ -2939,7 +2939,14 @@ fn run_inner(
         for &dep in &c.deps {
             let d = index(dep)?;
             let std_hit = std_hits.contains_key(&dep);
-            if (std_hit || (is_local(dep) && !fresh.get(d).copied().unwrap_or(false)))
+            // A std hit counts as fresh, but a module that read one was not
+            // checked on fresh interfaces, and the check below would mix its
+            // defs with those of the std modules checked from source.
+            let dep_read_std_hit = get(&checked, dep)?
+                .as_ref()
+                .is_some_and(|c| c.deps.iter().any(|x| std_hits.contains_key(x)));
+            if (std_hit
+                || (is_local(dep) && (dep_read_std_hit || !fresh.get(d).copied().unwrap_or(false))))
                 && let Some(slot) = again.get_mut(d)
             {
                 if std_hit

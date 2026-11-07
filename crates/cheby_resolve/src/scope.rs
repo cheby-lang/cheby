@@ -68,6 +68,17 @@ impl ModuleScope {
             .map(|(&name, _)| name)
     }
 
+    /// The names of `ns`, in no particular order, so a caller that shows
+    /// them sorts them (D-264). As for [`ModuleScope::get`], a withdrawn
+    /// name is left out. The prelude and home re-exports are in, and each
+    /// entry's `source` tells them apart.
+    pub fn iter(&self, ns: Namespace) -> impl Iterator<Item = (Name, &ScopeEntry)> {
+        self.map(ns)
+            .iter()
+            .filter(|(_, entry)| entry.source != ScopeSource::Withdrawn)
+            .map(|(&name, entry)| (name, entry))
+    }
+
     /// Whether an import of `name` collided with another name (E0041).
     #[must_use]
     pub fn is_conflicted(&self, name: Name) -> bool {
@@ -418,4 +429,31 @@ fn add_prelude(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use cheby_iface::{Globals, ModuleId};
+
+    use super::*;
+
+    #[test]
+    fn iter_leaves_out_what_get_cannot_find() {
+        let globals = Globals::new();
+        let shown = globals.names.intern("shown");
+        let withdrawn = globals.names.intern("withdrawn");
+        let entry = |source| ScopeEntry {
+            res: Res::Module(ModuleId::BUILTIN),
+            source,
+            span: None,
+        };
+        let mut scope = ModuleScope::default();
+        scope.values.insert(shown, entry(ScopeSource::Import(0)));
+        scope
+            .values
+            .insert(withdrawn, entry(ScopeSource::Withdrawn));
+        let values: Vec<Name> = scope.iter(Namespace::Value).map(|(n, _)| n).collect();
+        assert_eq!(values, [shown]);
+        assert_eq!(scope.iter(Namespace::Type).count(), 0);
+    }
 }

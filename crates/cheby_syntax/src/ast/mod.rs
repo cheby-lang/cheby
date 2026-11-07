@@ -439,6 +439,28 @@ fn leading_docs(node: SyntaxNode<'_>) -> impl Iterator<Item = DocComment<'_>> {
         .filter_map(DocComment::cast)
 }
 
+/// The Markdown of `///` doc comment lines: each line without one leading
+/// space, joined with `\n`. Nothing else changes.
+#[must_use]
+pub fn doc_text<'t>(docs: impl Iterator<Item = DocComment<'t>>) -> String {
+    join_doc_lines(docs.map(DocComment::content))
+}
+
+/// The Markdown of `//!` module doc lines, as [`doc_text`] gives it for
+/// `///` lines.
+#[must_use]
+pub fn module_doc_text<'t>(docs: impl Iterator<Item = ModuleDoc<'t>>) -> String {
+    join_doc_lines(docs.map(ModuleDoc::content))
+}
+
+/// `lines`, each without one leading space, joined with `\n`.
+fn join_doc_lines<'t>(lines: impl Iterator<Item = &'t str>) -> String {
+    let lines: Vec<&str> = lines
+        .map(|line| line.strip_prefix(' ').unwrap_or(line))
+        .collect();
+    lines.join("\n")
+}
+
 /// The range from the first to the last significant token of `node`.
 fn significant_span(node: SyntaxNode<'_>) -> Span {
     let significant =

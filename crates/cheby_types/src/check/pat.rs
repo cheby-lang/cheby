@@ -181,12 +181,13 @@ impl BodyCx<'_> {
         ty: &InferTy,
         span: Span,
     ) -> Result<cheby_resolve::LocalId, Ice> {
-        let local = self
-            .res
-            .bindings
-            .get(&node)
-            .copied()
-            .ok_or_else(|| Ice::new("a pattern binding was not resolved"))?;
+        let Some(local) = self.res.bindings.get(&node).copied() else {
+            // Only a tree with a grammar error has a binding without a
+            // name, such as `p as`, which the resolver skips.
+            self.errored = true;
+            let name = self.synthetic_name("%unnamed");
+            return self.new_local(name, ty.clone(), span);
+        };
         if self.pat_path.contains(&local) {
             // Bound twice on one path through the pattern: E0044 from the
             // resolver, which gave both bindings one local. Their types

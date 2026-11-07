@@ -592,6 +592,11 @@ impl BodyCx<'_> {
             BinOp::Rem => BinOpKind::Rem,
         };
         let (Some(lhs), Some(rhs)) = (b.lhs(), b.rhs()) else {
+            // Only a broken tree gets here: the operand that is there is
+            // still checked, for a tolerant run's facts.
+            if let Some(operand) = b.lhs().or_else(|| b.rhs()) {
+                self.check_expr(operand, None)?;
+            }
             return self.error_expr(span);
         };
         if matches!(op, BinOpKind::And | BinOpKind::Or) {

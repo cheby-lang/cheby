@@ -371,11 +371,21 @@ fn build(local: &[(&str, &str)]) -> Build {
     build_package("app", local)
 }
 
+fn build_package(package: &str, local: &[(&str, &str)]) -> Build {
+    build_with(package, local, false)
+}
+
+/// As [`build`], going on past syntax errors, as a tolerant run does, with
+/// them among the diagnostics.
+fn build_tolerant(local: &[(&str, &str)]) -> Build {
+    build_with("app", local, true)
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the whole front end of a build, in order"
 )]
-fn build_package(package: &str, local: &[(&str, &str)]) -> Build {
+fn build_with(package: &str, local: &[(&str, &str)], tolerant: bool) -> Build {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
     let mut trees = FxHashMap::default();
@@ -396,9 +406,10 @@ fn build_package(package: &str, local: &[(&str, &str)]) -> Build {
             .unwrap();
         let (tree, errors) = parse(id, text);
         assert!(
-            errors.is_empty(),
+            tolerant || errors.is_empty(),
             "syntax errors in test source: {errors:?}"
         );
+        diags.extend(errors);
         trees.insert(id, tree);
     }
     let planned = planned();
@@ -1801,4 +1812,266 @@ fn e0055_only_exported_names_without_a_reserved_prefix() {
     assert!(runtime_export_reserved("cheby_rt_alloc", span, &everything).is_none());
     assert!(runtime_export_reserved("cb$fn$app$main", span, &everything).is_none());
     assert!(runtime_export_reserved("cheby_list_length", span, &everything).is_some());
+}
+
+const NO_LOCALS: [&str; 0] = [];
+
+/// The names `locals_at` gives at the `|` of `marked`, in the body of the
+/// module's last item with a body, innermost first.
+fn locals_at(marked: &str) -> Vec<&'static str> {
+    locals_at_mark(marked, '|')
+}
+
+/// [`locals_at`] with the cursor at `mark`, for text with a `|` of its own.
+fn locals_at_mark(marked: &str, mark: char) -> Vec<&'static str> {
+    let offset = marked.find(mark).unwrap();
+    let text = marked.replacen(mark, "", 1);
+    let b = build_tolerant(&[("", &text)]);
+    let app = b.resolved("app");
+    let index = app.bodies.keys().max().unwrap();
+    app.bodies[index]
+        .locals_at(u32::try_from(offset).unwrap())
+        .into_iter()
+        .map(|(_, decl)| b.globals.names.get(decl.name))
+        .collect()
+}
+
+#[test]
+fn locals_at_a_let() {
+    // Its own value does not see it, at the edge either.
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = x|\n}\n"), ["a"]);
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = |x\n}\n"), ["a"]);
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = |\n}\n"), ["a"]);
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = 1|\n}\n"), ["a"]);
+    // The next line does, and an earlier one does not.
+    assert_eq!(
+        locals_at("fn f(a: Int) {\n  let x = 1\n  x|\n}\n"),
+        ["x", "a"]
+    );
+    assert_eq!(locals_at("fn f(a: Int) {\n  |\n  let x = 1\n}\n"), ["a"]);
+    // One statement's names, the later one first.
+    assert_eq!(
+        locals_at("fn f(t: Int) {\n  let (a, b) = t\n  |\n}\n"),
+        ["b", "a", "t"]
+    );
+}
+
+#[test]
+fn locals_at_block_edges() {
+    let inner = "fn f() {\n  let a = {\n    let y = 1\n    y|\n  }\n  a\n}\n";
+    assert_eq!(locals_at(inner), ["y"]);
+    assert_eq!(
+        locals_at("fn f() {\n  let a = { let y = 1\n  |}\n}\n"),
+        ["y"]
+    );
+    // Past the `}`, and in the statement the block ends.
+    assert_eq!(
+        locals_at("fn f() {\n  let a = { let y = 1\n  }|\n}\n"),
+        NO_LOCALS
+    );
+    assert_eq!(
+        locals_at("fn f() {\n  let a = {\n    let y = 1\n    y\n  }\n  |\n}\n"),
+        ["a"]
+    );
+    // A parameter ends with the body. The file goes on, but not the scope.
+    assert_eq!(locals_at("fn f(a: Int) {\n  a|\n}\n"), ["a"]);
+    assert_eq!(locals_at("fn f(a: Int) {\n  a\n|}\n"), ["a"]);
+    assert_eq!(locals_at("fn f(a: Int) {\n  a\n}|\n"), NO_LOCALS);
+}
+
+#[test]
+fn locals_at_case_arms() {
+    let arms = |first: &str, second: &str| {
+        format!("fn f(v: Int) {{\n  case v {{\n    x => {first}\n    y => {second}\n  }}\n}}\n")
+    };
+    // The end of an arm's body is still the arm.
+    assert_eq!(locals_at(&arms("x|", "y")), ["x", "v"]);
+    assert_eq!(locals_at(&arms("x", "y|")), ["y", "v"]);
+    assert_eq!(locals_at(&arms("|x", "y")), ["x", "v"]);
+    // No body yet: the cursor is where it will be.
+    assert_eq!(locals_at(&arms(" |", "y")), ["x", "v"]);
+    assert_eq!(locals_at(&arms("x", "y\n  |")), ["v"]);
+    assert_eq!(
+        locals_at("fn f(v: Int) {\n  case v {\n    x when |x => x\n  }\n}\n"),
+        ["x", "v"]
+    );
+}
+
+#[test]
+fn locals_at_closures_and_local_functions() {
+    let closure = "fn f(a: Int) {\n  let g = fn(b) {\n    let c = b\n    c|\n  }\n  g\n}\n";
+    assert_eq!(locals_at(closure), ["c", "b", "a"]);
+    let after = "fn f(a: Int) {\n  let g = fn(b) {\n    b\n  }\n  |g\n}\n";
+    assert_eq!(locals_at(after), ["g", "a"]);
+    // A local function: only after its name, inside its own body too, but
+    // not before it (D-110). Its parameters end with its body.
+    let before = "fn f() {\n  |\n  fn g(b: Int) -> Int {\n    b\n  }\n  g\n}\n";
+    assert_eq!(locals_at(before), NO_LOCALS);
+    let inside = "fn f() {\n  fn g(b: Int) -> Int {\n    |g(b)\n  }\n  g\n}\n";
+    assert_eq!(locals_at(inside), ["b", "g"]);
+    let later = "fn f() {\n  fn g(b: Int) -> Int {\n    b\n  }\n  |g\n}\n";
+    assert_eq!(locals_at(later), ["g"]);
+}
+
+#[test]
+fn locals_at_use_and_guard() {
+    let binder = "fn f(a: Int) {\n  use x <- a(|)\n  x\n}\n";
+    assert_eq!(locals_at(binder), ["a"]);
+    let rest = "fn f(a: Int) {\n  use x <- a()\n  |x\n}\n";
+    assert_eq!(locals_at(rest), ["x", "a"]);
+    // The `else` block is before the pattern's names (§5.18).
+    let otherwise = "fn f(a: Int) {\n  let guard Some(x) = a else {\n    |a\n  }\n  x\n}\n";
+    assert_eq!(locals_at(otherwise), ["a"]);
+    let rest = "fn f(a: Int) {\n  let guard Some(x) = a else {\n    a\n  }\n  |x\n}\n";
+    assert_eq!(locals_at(rest), ["x", "a"]);
+}
+
+#[test]
+fn locals_at_a_missing_operand() {
+    let in_let = |value: &str| format!("fn f(a: Int) {{\n  let x = {value}\n}}\n");
+    // The binding is not in scope in its own unfinished value.
+    for value in ["1 + @", "1 +\n    @", "a |> @", "- @", "a. @"] {
+        assert_eq!(locals_at_mark(&in_let(value), '@'), ["a"], "{value}");
+    }
+    let text = "fn f(a: Int) {\n  let assert Some(x) = a as @\n}\n";
+    assert_eq!(locals_at_mark(text, '@'), ["a"]);
+    let text = "fn f(a: Int) {\n  use x <- a |> @\n}\n";
+    assert_eq!(locals_at_mark(text, '@'), ["a"]);
+    // The next statement ends it.
+    let text = "fn f(a: Int) {\n  let x = a |>\n  let y = x@\n}\n";
+    assert_eq!(locals_at_mark(text, '@'), ["x", "a"]);
+    // An arm keeps its binding in its unfinished body.
+    for body in ["1 + @", "v |> @", "- @", "x. @"] {
+        let text = format!("fn f(v: Int) {{\n  case v {{\n    x => {body}\n  }}\n}}\n");
+        assert_eq!(locals_at_mark(&text, '@'), ["x", "v"], "{body}");
+    }
+    // A value with all its operands ends where it did.
+    assert_eq!(locals_at_mark(&in_let("1 + 2@"), '@'), ["a"]);
+    for value in ["1 + 2\n  @", "a |> b\n  @", "-1\n  @", "a.b\n  @"] {
+        assert_eq!(locals_at_mark(&in_let(value), '@'), ["x", "a"], "{value}");
+    }
+    let text = "fn f(a: Int) {\n  let assert Some(x) = a as \"m\"\n  |\n}\n";
+    assert_eq!(locals_at(text), ["x", "a"]);
+}
+
+#[test]
+fn locals_at_spaces_after_the_end() {
+    // Spaces on the line of a `let` are still the `let`.
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = 1 |\n}\n"), ["a"]);
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = 1 |"), ["a"]);
+    assert_eq!(
+        locals_at("fn f(a: Int) {\n  let guard Some(x) = a |\n}\n"),
+        ["a"]
+    );
+    // The closure's parameter is where its body will be, its binding is not.
+    assert_eq!(locals_at("fn f(a: Int) {\n  let g = fn(b) |"), ["b", "a"]);
+    // The next line is not.
+    assert_eq!(
+        locals_at("fn f(a: Int) {\n  let x = 1 \n  |\n}\n"),
+        ["x", "a"]
+    );
+    // Nor is it for an arm.
+    let arm = |body: &str| format!("fn f(v: Int) {{\n  case v {{\n    x => {body}\n  }}\n}}\n");
+    assert_eq!(locals_at(&arm("x |")), ["x", "v"]);
+    assert_eq!(locals_at(&arm("x \n    |")), ["v"]);
+}
+
+#[test]
+fn locals_at_an_unclosed_block() {
+    // A cursor past the last token is outside every node.
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = 1\n  |"), ["x", "a"]);
+    assert_eq!(
+        locals_at("fn f(a: Int) {\n  let x = 1\n\n\n  x|"),
+        ["x", "a"]
+    );
+    // The last token closes a nested block, not the body.
+    assert_eq!(
+        locals_at("fn f(a: Int) {\n  let x = { 1 }\n  |"),
+        ["x", "a"]
+    );
+    // A `let` whose value is unclosed is not over, at the end of the file.
+    assert_eq!(
+        locals_at("fn f(a: Int) {\n  let x = {\n    let y = 1\n    |"),
+        ["y", "a"]
+    );
+    assert_eq!(locals_at("fn f(a: Int) {\n  let x = a(\n  |"), ["a"]);
+    // An arm with an unclosed body, or with none.
+    assert_eq!(
+        locals_at("fn f(v: Int) {\n  case v {\n    x => {\n      1\n      |"),
+        ["x", "v"]
+    );
+    assert_eq!(
+        locals_at("fn f(v: Int) {\n  case v {\n    x => g(\n      |"),
+        ["x", "v"]
+    );
+    assert_eq!(
+        locals_at("fn f(v: Int) {\n  case v {\n    x => |"),
+        ["x", "v"]
+    );
+}
+
+#[test]
+fn locals_at_a_block_cut_short() {
+    // A `)` ends the unclosed block of a closure, and the outer block
+    // goes on without its names.
+    let text = "fn f(a: Int) {\n  a(fn(b) {\n    1\n  |)\n  2\n}\n";
+    assert_eq!(locals_at(text), ["b", "a"]);
+    let text = "fn f(a: Int) {\n  a(fn(b) {\n    1\n  )\n  |2\n}\n";
+    assert_eq!(locals_at(text), ["a"]);
+    // So does an item, which leaves the `let` it cut short unfinished.
+    let text = "fn f(a: Int) {\n  let x = {\n    1\n  |\ntype T {\n  A,\n}\n";
+    assert_eq!(locals_at(text), ["a"]);
+}
+
+#[test]
+fn a_parameter_that_is_not_a_name_keeps_its_position() {
+    let text = "fn f(a: Int, (b, c): Int, d: Int) {\n  a\n}\n";
+    let b = build_tolerant(&[("", text)]);
+    assert_eq!(b.codes(), ["E0021"]);
+    let app = b.resolved("app");
+    let body = app.bodies.values().next().unwrap();
+    let names: Vec<_> = body
+        .params
+        .iter()
+        .map(|&p| b.globals.names.get(body.locals.get(p).unwrap().name))
+        .collect();
+    assert_eq!(names, ["a", "_param", "d"]);
+    // Its names stay unbound, and nothing finds the placeholder.
+    let in_body = u32::try_from(text.rfind('a').unwrap()).unwrap();
+    let visible: Vec<_> = body
+        .locals_at(in_body)
+        .into_iter()
+        .map(|(_, decl)| b.globals.names.get(decl.name))
+        .collect();
+    assert_eq!(visible, ["d", "a"]);
+    let placeholder = body.locals.get(body.params[1]).unwrap();
+    assert!(placeholder.scope.is_empty());
+    assert_eq!(placeholder.kind, LocalKind::Param);
+
+    // The input of the `Ice`: the parameter list is cut short.
+    let b = build_tolerant(&[("", "fn main(() {\n  1\n}\n")]);
+    assert_eq!(b.codes(), ["E0015"]);
+    let app = b.resolved("app");
+    assert_eq!(app.bodies.values().next().unwrap().params.len(), 1);
+}
+
+#[test]
+fn module_scope_iter_lists_a_namespace() {
+    let b = build(&[("", HELLO)]);
+    let app = b.resolved("app");
+    let values: FxHashMap<&str, ScopeSource> = app
+        .scope
+        .iter(cheby_iface::Namespace::Value)
+        .map(|(name, entry)| (b.globals.names.get(name), entry.source))
+        .collect();
+    assert_eq!(values["main"], ScopeSource::Item);
+    assert_eq!(values["io"], ScopeSource::Import(0));
+    assert_eq!(values["Some"], ScopeSource::Prelude);
+    let types: Vec<_> = app
+        .scope
+        .iter(cheby_iface::Namespace::Type)
+        .map(|(name, _)| b.globals.names.get(name))
+        .collect();
+    assert!(types.contains(&"String"));
+    assert!(!types.contains(&"main"));
 }
