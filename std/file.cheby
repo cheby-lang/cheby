@@ -28,6 +28,7 @@
 
 import std::bytes
 import std::duration
+import std::filepath
 import std::io
 import std::result
 import std::string
@@ -57,7 +58,7 @@ type EntryKind {
 
 test "a file handle prints as File" {
   use dir <- with_temp_dir()
-  use handle <- with_create(dir + "/shown.txt")
+  use handle <- with_create(filepath::join(dir, "shown.txt"))
   let input = stdin()
   assert "{handle:?}" == "<File>"
   assert "{input:?}" == "<File>"
@@ -89,7 +90,7 @@ test "a path with U+0000 is invalid input" {
 
 test "open reads a file from its start" {
   use dir <- with_temp_dir()
-  let target = dir + "/notes.txt"
+  let target = filepath::join(dir, "notes.txt")
   use _ <- result::try(io::write_file(target, "first\nsecond\n"))
   use source <- result::try(open(target))
   use line <- result::try(read_line(source))
@@ -114,7 +115,7 @@ test "create needs the directory to exist" {
 
 test "create truncates a file that exists" {
   use dir <- with_temp_dir()
-  let target = dir + "/out.txt"
+  let target = filepath::join(dir, "out.txt")
   use _ <- result::try(io::write_file(target, "old text"))
   use handle <- result::try(create(target))
   use _ <- result::try(write(handle, "new"))
@@ -140,7 +141,7 @@ test "append needs the directory to exist" {
 
 test "append writes after what the file holds" {
   use dir <- with_temp_dir()
-  let target = dir + "/log.txt"
+  let target = filepath::join(dir, "log.txt")
   use _ <- result::try(io::write_file(target, "a\n"))
   use log <- result::try(append(target))
   use _ <- result::try(write_line(log, "b"))
@@ -161,7 +162,7 @@ pub fn create_new(path: String) -> Result<File, io::Error> {
 
 test "create_new refuses a path that exists" {
   use dir <- with_temp_dir()
-  let target = dir + "/lock"
+  let target = filepath::join(dir, "lock")
   use _ <- result::try(create_new(target))
   let assert Err(reason) = create_new(target)
   assert io::is_already_exists(reason)
@@ -206,7 +207,7 @@ test "with_open does not call its body when the file cannot be opened" {
 
 test "with_open reads a file line by line" {
   use dir <- with_temp_dir()
-  let target = dir + "/lines.txt"
+  let target = filepath::join(dir, "lines.txt")
   use _ <- result::try(io::write_file(target, "a\nb\nc"))
   use total <- result::try({
     use source <- with_open(target)
@@ -225,7 +226,7 @@ test "with_open reads a file line by line" {
 
 test "with_open closes a handle that escapes its body" {
   use dir <- with_temp_dir()
-  let target = dir + "/lines.txt"
+  let target = filepath::join(dir, "lines.txt")
   use _ <- result::try(io::write_file(target, "a\n"))
   use kept <- result::try(with_open(target, fn(source) { Ok(source) }))
   let assert Err(reason) = read_line(kept)
@@ -253,7 +254,7 @@ test "with_create does not call its body when the directory is missing" {
 
 test "with_create writes a new file" {
   use dir <- with_temp_dir()
-  let target = dir + "/log.txt"
+  let target = filepath::join(dir, "log.txt")
   use _ <- result::try({
     use handle <- with_create(target)
     write_line(handle, "started")
@@ -296,7 +297,7 @@ pub fn with_create_new<T>(
 
 test "with_create_new does not call its body when the file exists" {
   use dir <- with_temp_dir()
-  let target = dir + "/lock"
+  let target = filepath::join(dir, "lock")
   use _ <- result::try(with_create_new(target, fn(handle) { write(handle, "1") }))
   let outcome = with_create_new(target, fn(_) { Ok(Nil) })
   let assert Err(reason) = outcome
@@ -315,7 +316,7 @@ pub fn close(file: File) -> Result<Nil, io::Error> {
 
 test "close closes the handle now" {
   use dir <- with_temp_dir()
-  let target = dir + "/saved.txt"
+  let target = filepath::join(dir, "saved.txt")
   use handle <- result::try(create(target))
   use _ <- result::try(write(handle, "saved"))
   use _ <- result::try(close(handle))
@@ -330,7 +331,7 @@ test "close closes the handle now" {
 
 test "closing a file twice is closed" {
   use dir <- with_temp_dir()
-  let path = dir + "/notes.txt"
+  let path = filepath::join(dir, "notes.txt")
   use _ <- result::try(io::write_file(path, "notes"))
   use source <- result::try(open(path))
   use _ <- result::try(close(source))
@@ -355,7 +356,7 @@ pub fn read_line(file: File) -> Result<Option<String>, io::Error> {
 
 test "read_line removes line endings" {
   use dir <- with_temp_dir()
-  let target = dir + "/lines.txt"
+  let target = filepath::join(dir, "lines.txt")
   use _ <- result::try(io::write_file(target, "one\r\ntwo\nthree"))
   use source <- with_open(target)
   assert read_line(source) == Ok(Some("one"))
@@ -368,7 +369,7 @@ test "read_line removes line endings" {
 
 test "read_line consumes a line that is not UTF-8" {
   use dir <- with_temp_dir()
-  let target = dir + "/mixed.txt"
+  let target = filepath::join(dir, "mixed.txt")
   use _ <- result::try(io::write_file_bytes(target, bytes::from_list([0xFF, 0x0A, 0x6F, 0x6B])))
   use source <- with_open(target)
   let assert Err(reason) = read_line(source)
@@ -391,7 +392,7 @@ pub fn read_bytes(file: File, limit: Int) -> Result<Option<bytes::Bytes>, io::Er
 
 test "read_bytes returns at most its limit" {
   use dir <- with_temp_dir()
-  let target = dir + "/image.png"
+  let target = filepath::join(dir, "image.png")
   let data = bytes::from_list([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
   use _ <- result::try(io::write_file_bytes(target, data))
   use source <- with_open(target)
@@ -421,7 +422,7 @@ pub fn write(file: File, text: String) -> Result<Nil, io::Error> {
 
 test "write writes text as it is" {
   use dir <- with_temp_dir()
-  let target = dir + "/report.txt"
+  let target = filepath::join(dir, "report.txt")
   use _ <- result::try({
     use handle <- with_create(target)
     write(handle, string::join(["a", "b"], "\n") + "\n")
@@ -442,7 +443,7 @@ pub fn write_line(file: File, text: String) -> Result<Nil, io::Error> {
 
 test "write_line ends each line with a newline" {
   use dir <- with_temp_dir()
-  let target = dir + "/events.log"
+  let target = filepath::join(dir, "events.log")
   fn log_event(event) {
     use handle <- with_append(target)
     write_line(handle, event)
@@ -462,7 +463,7 @@ pub fn write_bytes(file: File, data: bytes::Bytes) -> Result<Nil, io::Error> {
 
 test "write_bytes writes bytes unchanged" {
   use dir <- with_temp_dir()
-  let target = dir + "/header.bin"
+  let target = filepath::join(dir, "header.bin")
   let data = bytes::from_list([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF])
   use _ <- result::try({
     use handle <- with_create(target)
@@ -528,9 +529,9 @@ test "list_dir reports a missing directory" {
 
 test "list_dir sorts names by their bytes" {
   use dir <- with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/b.txt", ""))
-  use _ <- result::try(io::write_file(dir + "/Zed.txt", ""))
-  use _ <- result::try(create_dir(dir + "/a"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "b.txt"), ""))
+  use _ <- result::try(io::write_file(filepath::join(dir, "Zed.txt"), ""))
+  use _ <- result::try(create_dir(filepath::join(dir, "a")))
   use names <- result::try(list_dir(dir))
   assert names == ["Zed.txt", "a", "b.txt"]
   Ok(Nil)
@@ -538,7 +539,7 @@ test "list_dir sorts names by their bytes" {
 
 test "listing a file is not a directory" {
   use dir <- with_temp_dir()
-  let path = dir + "/plain.txt"
+  let path = filepath::join(dir, "plain.txt")
   use _ <- result::try(io::write_file(path, "plain"))
   let assert Err(reason) = list_dir(path)
   assert io::is_not_a_directory(reason)
@@ -558,8 +559,8 @@ test "create_dir needs its parent" {
 
 test "create_dir refuses a path that exists" {
   use dir <- with_temp_dir()
-  use _ <- result::try(create_dir(dir + "/child"))
-  let assert Err(reason) = create_dir(dir + "/child")
+  use _ <- result::try(create_dir(filepath::join(dir, "child")))
+  let assert Err(reason) = create_dir(filepath::join(dir, "child"))
   assert io::is_already_exists(reason)
   Ok(Nil)
 }
@@ -575,7 +576,7 @@ test "creating a directory twice is already exists" {
     }
   }
   use dir <- with_temp_dir()
-  let path = dir + "/cache"
+  let path = filepath::join(dir, "cache")
   use _ <- result::try(create_dir(path))
   let assert Err(reason) = create_dir(path)
   assert io::is_already_exists(reason)
@@ -592,13 +593,13 @@ pub fn create_dir_all(path: String) -> Result<Nil, io::Error> {
 
 test "create_dir_all creates every missing directory" {
   use dir <- with_temp_dir()
-  let daily = dir + "/reports/daily"
+  let daily = filepath::join(dir, "reports/daily")
   use _ <- result::try(create_dir_all(daily))
   use _ <- result::try(create_dir_all(daily))
   use found <- result::try(info(daily))
   assert is_dir(found)
-  use _ <- result::try(io::write_file(dir + "/plain", ""))
-  let assert Err(reason) = create_dir_all(dir + "/plain")
+  use _ <- result::try(io::write_file(filepath::join(dir, "plain"), ""))
+  let assert Err(reason) = create_dir_all(filepath::join(dir, "plain"))
   assert io::is_already_exists(reason)
   Ok(Nil)
 }
@@ -615,7 +616,7 @@ test "remove_file reports a missing file" {
 
 test "remove_file removes a file" {
   use dir <- with_temp_dir()
-  let target = dir + "/old.txt"
+  let target = filepath::join(dir, "old.txt")
   use _ <- result::try(io::write_file(target, "old"))
   use _ <- result::try(remove_file(target))
   let assert Err(reason) = info(target)
@@ -635,12 +636,12 @@ test "remove_dir reports a missing directory" {
 
 test "remove_dir removes only an empty directory" {
   use dir <- with_temp_dir()
-  let child = dir + "/child"
+  let child = filepath::join(dir, "child")
   use _ <- result::try(create_dir(child))
-  use _ <- result::try(io::write_file(child + "/kept.txt", ""))
+  use _ <- result::try(io::write_file(filepath::join(child, "kept.txt"), ""))
   let assert Err(reason) = remove_dir(child)
   assert io::is_directory_not_empty(reason)
-  use _ <- result::try(remove_file(child + "/kept.txt"))
+  use _ <- result::try(remove_file(filepath::join(child, "kept.txt")))
   use _ <- result::try(remove_dir(child))
   use names <- result::try(list_dir(dir))
   assert names == []
@@ -649,9 +650,9 @@ test "remove_dir removes only an empty directory" {
 
 test "removing a directory with entries is directory not empty" {
   use dir <- with_temp_dir()
-  let full = dir + "/full"
+  let full = filepath::join(dir, "full")
   use _ <- result::try(create_dir(full))
-  use _ <- result::try(io::write_file(full + "/entry.txt", "entry"))
+  use _ <- result::try(io::write_file(filepath::join(full, "entry.txt"), "entry"))
   let assert Err(reason) = remove_dir(full)
   assert io::is_directory_not_empty(reason)
   assert "{reason}" == "directory not empty"
@@ -667,9 +668,9 @@ pub fn remove_dir_all(path: String) -> Result<Nil, io::Error> {
 
 test "remove_dir_all removes a whole tree" {
   use dir <- with_temp_dir()
-  let tree = dir + "/tree"
-  use _ <- result::try(create_dir_all(tree + "/a/b"))
-  use _ <- result::try(io::write_file(tree + "/a/b/leaf.txt", "leaf"))
+  let tree = filepath::join(dir, "tree")
+  use _ <- result::try(create_dir_all(filepath::join(tree, "a/b")))
+  use _ <- result::try(io::write_file(filepath::join(tree, "a/b/leaf.txt"), "leaf"))
   use _ <- result::try(remove_dir_all(tree))
   let assert Err(reason) = info(tree)
   assert io::is_not_found(reason)
@@ -678,14 +679,14 @@ test "remove_dir_all removes a whole tree" {
 
 test "remove_dir_all reports a missing path" {
   use dir <- with_temp_dir()
-  let assert Err(reason) = remove_dir_all(dir + "/missing")
+  let assert Err(reason) = remove_dir_all(filepath::join(dir, "missing"))
   assert io::is_not_found(reason)
   Ok(Nil)
 }
 
 test "remove_dir_all refuses a file" {
   use dir <- with_temp_dir()
-  let target = dir + "/plain.txt"
+  let target = filepath::join(dir, "plain.txt")
   use _ <- result::try(io::write_file(target, "plain"))
   let assert Err(reason) = remove_dir_all(target)
   assert io::is_not_a_directory(reason)
@@ -707,12 +708,12 @@ test "rename reports a missing source" {
 
 test "rename replaces a file at the new path" {
   use dir <- with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/a.txt", "new"))
-  use _ <- result::try(io::write_file(dir + "/b.txt", "old"))
-  use _ <- result::try(rename(dir + "/a.txt", dir + "/b.txt"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "a.txt"), "new"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "b.txt"), "old"))
+  use _ <- result::try(rename(filepath::join(dir, "a.txt"), filepath::join(dir, "b.txt")))
   use names <- result::try(list_dir(dir))
   assert names == ["b.txt"]
-  use text <- result::try(io::read_file(dir + "/b.txt"))
+  use text <- result::try(io::read_file(filepath::join(dir, "b.txt")))
   assert text == "new"
   Ok(Nil)
 }
@@ -752,7 +753,7 @@ test "with_temp_dir gives a new, empty directory" {
 
 test "with_temp_dir removes its directory afterwards" {
   let assert Ok(kept) = with_temp_dir(fn(dir) {
-    use _ <- result::try(io::write_file(dir + "/left.txt", "left"))
+    use _ <- result::try(io::write_file(filepath::join(dir, "left.txt"), "left"))
     Ok(dir)
   })
   let assert Err(reason) = info(kept)
@@ -765,24 +766,24 @@ test "with_temp_dir removes its directory afterwards" {
 test "copy moves every byte of one file to another" {
   use dir <- with_temp_dir()
   let data = bytes::from_string(string::repeat("block ", 20_000))
-  use _ <- result::try(io::write_file_bytes(dir + "/from.bin", data))
-  use copied <- result::try(with_open(dir + "/from.bin", fn(source) {
-    with_create(dir + "/to.bin", fn(sink) { io::copy(source, sink) })
+  use _ <- result::try(io::write_file_bytes(filepath::join(dir, "from.bin"), data))
+  use copied <- result::try(with_open(filepath::join(dir, "from.bin"), fn(source) {
+    with_create(filepath::join(dir, "to.bin"), fn(sink) { io::copy(source, sink) })
   }))
   assert copied == bytes::length(data)
-  assert io::read_file_bytes(dir + "/to.bin") == Ok(data)
+  assert io::read_file_bytes(filepath::join(dir, "to.bin")) == Ok(data)
   Ok(Nil)
 }
 
 test "copy stops at the end of an empty file and writes nothing to a standard stream" {
   use dir <- with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/empty.txt", ""))
+  use _ <- result::try(io::write_file(filepath::join(dir, "empty.txt"), ""))
   let output: dyn io::Sink = stdout()
   let errors: dyn io::Sink = stderr()
-  use to_output <- result::try(with_open(dir + "/empty.txt", fn(source) {
+  use to_output <- result::try(with_open(filepath::join(dir, "empty.txt"), fn(source) {
     io::copy(source, output)
   }))
-  use to_errors <- result::try(with_open(dir + "/empty.txt", fn(source) {
+  use to_errors <- result::try(with_open(filepath::join(dir, "empty.txt"), fn(source) {
     io::copy(source, errors)
   }))
   assert to_output == 0
@@ -792,9 +793,11 @@ test "copy stops at the end of an empty file and writes nothing to a standard st
 
 test "copy stops at the first error of its sink" {
   use dir <- with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/from.txt", "some text"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "from.txt"), "some text"))
   // A standard input handle does not write: its sink fails at once.
-  let assert Err(reason) = with_open(dir + "/from.txt", fn(source) { io::copy(source, stdin()) })
+  let assert Err(reason) = with_open(filepath::join(dir, "from.txt"), fn(source) {
+    io::copy(source, stdin())
+  })
   assert io::is_invalid_input(reason)
   Ok(Nil)
 }
@@ -843,7 +846,7 @@ pub fn size(entry: Info) -> Int {
 
 test "size counts bytes" {
   use dir <- with_temp_dir()
-  let target = dir + "/word.txt"
+  let target = filepath::join(dir, "word.txt")
   use _ <- result::try(io::write_file(target, "héllo"))
   use found <- result::try(info(target))
   assert size(found) == 6
@@ -869,11 +872,11 @@ pub fn is_dir(entry: Info) -> Bool {
 
 test "is_dir tells a directory from a file" {
   use dir <- with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/plain.txt", ""))
+  use _ <- result::try(io::write_file(filepath::join(dir, "plain.txt"), ""))
   use folder <- result::try(info(dir))
   assert is_dir(folder)
   assert !is_file(folder)
-  use plain <- result::try(info(dir + "/plain.txt"))
+  use plain <- result::try(info(filepath::join(dir, "plain.txt")))
   assert !is_dir(plain)
   Ok(Nil)
 }
@@ -894,7 +897,7 @@ pub fn modified(entry: Info) -> time::Timestamp {
 
 test "a new file was modified after 2020 began" {
   use dir <- with_temp_dir()
-  let target = dir + "/new.txt"
+  let target = filepath::join(dir, "new.txt")
   use _ <- result::try(io::write_file(target, ""))
   use found <- result::try(info(target))
   assert modified(found) > time::from_unix(duration::seconds(1_577_836_800))
@@ -905,7 +908,7 @@ test "a new file was modified after 2020 began" {
 
 test "read_file returns the text as stored" {
   use dir <- with_temp_dir()
-  let path = dir + "/notes.txt"
+  let path = filepath::join(dir, "notes.txt")
   let stored = bytes::from_list([0xEF, 0xBB, 0xBF, 0x61, 0x0D, 0x0A])
   use _ <- result::try(io::write_file_bytes(path, stored))
   assert io::read_file(path) == Ok("\u{FEFF}a\r\n")
@@ -916,7 +919,7 @@ test "read_file returns the text as stored" {
 
 test "a file that is not UTF-8 is invalid data" {
   use dir <- with_temp_dir()
-  let path = dir + "/latin1.txt"
+  let path = filepath::join(dir, "latin1.txt")
   use _ <- result::try(io::write_file_bytes(path, bytes::from_list([0x66, 0xFF])))
   let assert Err(reason) = io::read_file(path)
   assert io::is_invalid_data(reason)

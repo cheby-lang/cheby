@@ -1,5 +1,6 @@
-//! `std::env` kernels (D-347): the program's arguments and name, and
-//! environment variables. None can fail; text from the operating system
+//! `std::env` kernels (D-347): the program's arguments and name,
+//! environment variables, and the working directory (D-1440). Only the
+//! working directory can fail; elsewhere, text from the operating system
 //! that is not valid UTF-8 has each invalid sequence replaced with U+FFFD
 //! (D-311).
 //!
@@ -15,6 +16,7 @@ use std::ffi::OsString;
 
 use crate::abi::Word;
 use crate::entry;
+use crate::io::{INVALID_UTF8, KIND_INVALID_DATA, err_pair, kind_code, os_message};
 use crate::list;
 use crate::panic::fatal;
 use crate::unwind::guard::{DropOnUnwind, guarded};
@@ -92,6 +94,39 @@ fn lossy(text: &OsString) -> String {
     text.to_string_lossy().into_owned()
 }
 
+/// `env::sys_current_dir`: `Ok` of the working directory in the host's
+/// own form, or the `Err` pair (D-1440): kind 1 when the directory was
+/// removed, 2 when it may not be read, 3 when it is not valid UTF-8
+/// (D-311), and 0 with the system's message otherwise. `getcwd` waits on
+/// nothing, so the kernel takes no context and runs inline, as `get` does.
+#[unsafe(no_mangle)]
+pub extern "C" fn cheby_env_sys_current_dir() -> Word {
+    guarded(None, || match working_dir() {
+        Ok(dir) => {
+            let text = values::string(&dir);
+            // The new string is released if its `Ok` cannot be allocated.
+            let held = DropOnUnwind::new([text]);
+            let result = values::ok(text);
+            held.disarm();
+            result
+        }
+        Err((kind, message)) => err_pair(kind, &message),
+    })
+}
+
+/// The working directory as text, or the kind and message of its failure.
+fn working_dir() -> Result<String, (i64, String)> {
+    let dir = std::env::current_dir().map_err(|error| (kind_code(&error), os_message(&error)))?;
+    utf8(dir.into_os_string())
+}
+
+/// Text from the operating system, or the invalid-data failure when it is
+/// not valid UTF-8 (D-311): a replaced name would point elsewhere.
+fn utf8(text: OsString) -> Result<String, (i64, String)> {
+    text.into_string()
+        .map_err(|_| (KIND_INVALID_DATA, INVALID_UTF8.to_owned()))
+}
+
 /// One kernel: symbol, address, C parameter types and C result type.
 type Entry = (
     &'static str,
@@ -105,7 +140,7 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 3] {
+fn all() -> [Entry; 4] {
     [
         ("cheby_env_args", cheby_env_args as *const u8, &[], "Word"),
         (
@@ -118,6 +153,12 @@ fn all() -> [Entry; 3] {
             "cheby_env_get",
             cheby_env_get as *const u8,
             &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_env_sys_current_dir",
+            cheby_env_sys_current_dir as *const u8,
+            &[],
             "Word",
         ),
     ]
@@ -229,5 +270,37 @@ mod tests {
         }
         assert!(valid_name("HOME"));
         assert!(!valid_name("A=B"));
+    }
+
+    #[test]
+    fn current_dir_is_the_working_directory() {
+        let before = live();
+        let word = cheby_env_sys_current_dir();
+        let expected = std::env::current_dir()
+            .unwrap()
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        // SAFETY: a live `Result<String, _>` owned by the test.
+        unsafe {
+            let dir = values::read_result(word).expect("the working directory is readable");
+            assert_eq!(values::str_of(dir), expected);
+            rc::drop(word);
+        }
+        assert_eq!(live(), before);
+    }
+
+    #[test]
+    fn a_working_directory_that_is_not_utf8_is_invalid_data() {
+        assert_eq!(utf8(OsString::from("/home/me")), Ok("/home/me".to_owned()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let text = OsString::from_vec(vec![b'/', b'a', 0xFF]);
+            assert_eq!(
+                utf8(text),
+                Err((KIND_INVALID_DATA, INVALID_UTF8.to_owned()))
+            );
+        }
     }
 }

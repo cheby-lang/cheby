@@ -169,7 +169,7 @@ fn count_lines(total: Int) -> Result<Int, io::Error> {
 
 ## Files
 
-A path is a `String`, and a relative path is resolved against the program's working directory. The text of an error does not include the path, so callers add it themselves, as the examples do with `"cannot read {path}: {reason}"`. A path that contains U+0000 gives an `Err` for which `is_invalid_input` holds, in every function of this section (D-981).
+A path is a `String`, and a relative path is resolved against the program's working directory. The text of an error does not include the path, so callers add it themselves, as the examples do with `"cannot read {path}: {reason}"`. [`std::filepath`](filepath.md) builds and takes apart paths (D-1432). A path that contains U+0000 gives an `Err` for which `is_invalid_input` holds, in every function of this section (D-981).
 
 ### `read_file`
 
@@ -192,7 +192,7 @@ test "read_file reports a missing file" {
 ```cheby
 test "read_file returns the text as stored" {
   use dir <- file::with_temp_dir()
-  let path = dir + "/notes.txt"
+  let path = filepath::join(dir, "notes.txt")
   let stored = bytes::from_list([0xEF, 0xBB, 0xBF, 0x61, 0x0D, 0x0A])
   use _ <- result::try(io::write_file_bytes(path, stored))
   assert io::read_file(path) == Ok("\u{FEFF}a\r\n")
@@ -315,12 +315,12 @@ Reads blocks of at most 64 KiB from `source` until its end, writes each one to `
 test "copy moves every byte of one file to another" {
   use dir <- file::with_temp_dir()
   let data = bytes::from_string(string::repeat("block ", 20_000))
-  use _ <- result::try(io::write_file_bytes(dir + "/from.bin", data))
-  use copied <- result::try(file::with_open(dir + "/from.bin", fn(source) {
-    file::with_create(dir + "/to.bin", fn(sink) { io::copy(source, sink) })
+  use _ <- result::try(io::write_file_bytes(filepath::join(dir, "from.bin"), data))
+  use copied <- result::try(file::with_open(filepath::join(dir, "from.bin"), fn(source) {
+    file::with_create(filepath::join(dir, "to.bin"), fn(sink) { io::copy(source, sink) })
   }))
   assert copied == bytes::length(data)
-  assert io::read_file_bytes(dir + "/to.bin") == Ok(data)
+  assert io::read_file_bytes(filepath::join(dir, "to.bin")) == Ok(data)
   Ok(Nil)
 }
 ```
@@ -430,7 +430,7 @@ Tells whether `error` means that text read from the operating system was not val
 ```cheby
 test "a file that is not UTF-8 is invalid data" {
   use dir <- file::with_temp_dir()
-  let path = dir + "/latin1.txt"
+  let path = filepath::join(dir, "latin1.txt")
   use _ <- result::try(io::write_file_bytes(path, bytes::from_list([0x66, 0xFF])))
   let assert Err(reason) = io::read_file(path)
   assert io::is_invalid_data(reason)
@@ -461,7 +461,7 @@ test "creating a directory twice is already exists" {
     }
   }
   use dir <- file::with_temp_dir()
-  let path = dir + "/cache"
+  let path = filepath::join(dir, "cache")
   use _ <- result::try(file::create_dir(path))
   let assert Err(reason) = file::create_dir(path)
   assert io::is_already_exists(reason)
@@ -504,7 +504,7 @@ Tells whether `error` means that a path names something other than a directory w
 ```cheby
 test "listing a file is not a directory" {
   use dir <- file::with_temp_dir()
-  let path = dir + "/plain.txt"
+  let path = filepath::join(dir, "plain.txt")
   use _ <- result::try(io::write_file(path, "plain"))
   let assert Err(reason) = file::list_dir(path)
   assert io::is_not_a_directory(reason)
@@ -526,9 +526,9 @@ Tells whether `error` means that a directory could not be removed because it has
 ```cheby
 test "removing a directory with entries is directory not empty" {
   use dir <- file::with_temp_dir()
-  let full = dir + "/full"
+  let full = filepath::join(dir, "full")
   use _ <- result::try(file::create_dir(full))
-  use _ <- result::try(io::write_file(full + "/entry.txt", "entry"))
+  use _ <- result::try(io::write_file(filepath::join(full, "entry.txt"), "entry"))
   let assert Err(reason) = file::remove_dir(full)
   assert io::is_directory_not_empty(reason)
   assert "{reason}" == "directory not empty"
@@ -633,7 +633,7 @@ Tells whether `error` means that a handle was used after it was closed: a `file:
 ```cheby
 test "closing a file twice is closed" {
   use dir <- file::with_temp_dir()
-  let path = dir + "/notes.txt"
+  let path = filepath::join(dir, "notes.txt")
   use _ <- result::try(io::write_file(path, "notes"))
   use source <- result::try(file::open(path))
   use _ <- result::try(file::close(source))
