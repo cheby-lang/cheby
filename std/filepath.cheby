@@ -1,0 +1,607 @@
+//! Lexical file paths: joining, taking apart and comparing paths as text,
+//! with no access to the file system (D-1432).
+//!
+//! `/` and `\` both separate components, on every platform and target, and
+//! a path's root is `/`, a drive such as `C:/`, or a UNC share such as
+//! `//server/share` (D-1433). Every function that returns a path returns
+//! it normalized as Go's `Clean` does, written with `/`, except `child`,
+//! which keeps a directory entry's name as written (D-1434, D-1436).
+//!
+//! The module is written in Cheby over `std::list` and `std::string`, with
+//! no kernels, so constants can run it and every target gives the same
+//! text (D-232, D-991). Its name is Go's, so that a module that imports it
+//! may still call its values `path` (D-062, D-1432).
+
+import std::list
+import std::string
+
+// Joining
+
+/// Returns `base` followed by the components of `relative`, normalized.
+/// `relative`'s root is dropped, so the result stays under `base`, except
+/// where a `..` climbs out of it. An empty `base` is `.` (D-1077, D-1435).
+pub fn join(base: String, relative: String) -> String {
+  let start = read(base)
+  render(Path {
+    root: start.root,
+    names: resolve(is_rooted(start.root), list::append(start.names, parts_of(relative))),
+  })
+}
+
+test "join keeps an absolute second argument under its base" {
+  assert join("a", "/b") == "a/b"
+  assert join("a", "C:/b") == "a/C:/b"
+  assert join("a", "//srv/share/x") == "a/srv/share/x"
+  assert join("", "/b") == "b"
+  assert join("", "") == "."
+}
+
+test "join normalizes its result" {
+  assert join("a/b", "../c") == "a/c"
+  assert join("uploads", "../../etc") == "../etc"
+  assert join("C:\\Temp", "x") == "C:/Temp/x"
+  assert join("/", "..") == "/"
+}
+
+/// Joins `parts` from left to right, starting from the first part
+/// normalized, so the first part keeps its root. No parts give `.`
+/// (D-1435).
+pub fn join_all(parts: List<String>) -> String {
+  case list::first(parts) {
+    None => "."
+    Some(first) => list::fold(list::drop(parts, 1), normalize(first), join)
+  }
+}
+
+test "join_all joins from left to right" {
+  assert join_all([]) == "."
+  assert join_all(["/usr", "local", "bin"]) == "/usr/local/bin"
+  assert join_all(["a", "/b", "c"]) == "a/b/c"
+}
+
+/// Returns `join(base, relative)`, or `None` when a `..` of `relative`
+/// would climb above `base`. The check reads the text alone, so a symbolic
+/// link inside `base` can still lead out of it (D-1435).
+pub fn join_within(base: String, relative: String) -> Option<String> {
+  let depth = list::fold(parts_of(relative), Some(0), fn(reached, part) {
+    case reached, part {
+      None, _ => None
+      Some(0), ".." => None
+      Some(level), ".." => Some(level - 1)
+      Some(level), _ => Some(level + 1)
+    }
+  })
+  case depth {
+    Some(_) => Some(join(base, relative))
+    None => None
+  }
+}
+
+test "join_within refuses to climb above its base" {
+  assert join_within("up", "x/../y") == Some("up/y")
+  assert join_within("up", "../../etc") == None
+  assert join_within("up", "x/../..") == None
+  assert join_within("up", "/etc") == Some("up/etc")
+  assert join_within("../up", "x") == Some("../up/x")
+}
+
+/// Appends the entry name `name` to `dir` with neither normalized, so a
+/// name from `file::list_dir` that holds `\` stays one name. Returns `None`
+/// when `name` is `""`, `.` or `..`, or contains `/` (D-1436).
+pub fn child(dir: String, name: String) -> Option<String> {
+  case {
+    name == "" || name == "." || name == ".." || string::contains(name, "/") => None
+    dir == "" => Some(name)
+    string::ends_with(dir, "/") || string::ends_with(dir, "\\") => Some(dir + name)
+    _ => Some(dir + "/" + name)
+  }
+}
+
+test "child keeps a name as written" {
+  assert child("dir", "a\\b") == Some("dir/a\\b")
+  assert child("C:\\Temp", "x") == Some("C:\\Temp/x")
+  assert child("/", "etc") == Some("/etc")
+  assert child("", "a") == Some("a")
+}
+
+test "child refuses what is not one name" {
+  assert child("dir", "") == None
+  assert child("dir", ".") == None
+  assert child("dir", "..") == None
+  assert child("dir", "x/y") == None
+}
+
+// Normalizing
+
+/// Returns `path` with repeated separators, `.` and a trailing separator
+/// removed, each `..` resolved against the name before it, every separator
+/// written as `/`, and `.` for an empty result, as Go's `Clean` does
+/// (D-1434).
+pub fn normalize(path: String) -> String {
+  render(read(path))
+}
+
+test "normalize cleans a path as Go does" {
+  assert normalize("a//./b/../c/") == "a/c"
+  assert normalize("../a/..") == ".."
+  assert normalize("/..") == "/"
+  assert normalize("") == "."
+  assert normalize("C:\\a\\..\\b") == "C:/b"
+}
+
+test "normalize reads drives and shares" {
+  assert normalize("\\\\srv\\share\\x\\") == "//srv/share/x"
+  assert normalize("//a") == "/a"
+  assert normalize("C:") == "C:."
+  assert normalize("C:x/..") == "C:."
+  assert normalize("a/../C:x") == "./C:x"
+}
+
+// Taking a path apart
+
+/// Returns the root of `path` as `normalize` writes it, if it has one,
+/// followed by its names, so `join_all(components(path))` is
+/// `normalize(path)` (D-1437).
+pub fn components(path: String) -> List<String> {
+  let read_path = read(path)
+  let head = case read_path.root {
+    NoRoot => case list::first(read_path.names) {
+      Some(first) when looks_like_drive(first) => ["."]
+      _ => []
+    }
+    Plain => ["/"]
+    DriveRoot(letter) => [letter + ":/"]
+    DrivePrefix(letter) => [letter + ":"]
+    Unc(share) => ["//" + share]
+  }
+  list::append(head, read_path.names)
+}
+
+test "components lists the root and the names" {
+  assert components("/a/b") == ["/", "a", "b"]
+  assert components("a\\b") == ["a", "b"]
+  assert components("C:x") == ["C:", "x"]
+  assert components("//srv/share/x") == ["//srv/share", "x"]
+  assert components(".") == []
+}
+
+test "components joins back into the normalized path" {
+  assert join_all(components("C:x")) == normalize("C:x")
+  assert join_all(components("/a/./b/")) == normalize("/a/./b/")
+  assert join_all(components("a/../C:x")) == normalize("a/../C:x")
+}
+
+/// Returns the last name of `path`, or `None` when it has none or the last
+/// is `..` (D-1437).
+pub fn file_name(path: String) -> Option<String> {
+  case list::last(read(path).names) {
+    Some("..") => None
+    found => found
+  }
+}
+
+test "file_name reads the last name" {
+  assert file_name("a/b") == Some("b")
+  assert file_name("a/b/") == Some("b")
+  assert file_name("/") == None
+  assert file_name("a/..") == None
+  assert file_name("..") == None
+}
+
+/// Returns `path` without its last name, or `None` when it has no name or
+/// the last is `..`. What is left is the root, or `.` when there is none
+/// (D-1437).
+pub fn parent(path: String) -> Option<String> {
+  let read_path = read(path)
+  case list::last(read_path.names) {
+    None => None
+    Some("..") => None
+    Some(_) => Some(render(Path {
+      root: read_path.root,
+      names: list::take(read_path.names, list::length(read_path.names) - 1),
+    }))
+  }
+}
+
+test "parent removes the last name" {
+  assert parent("a/b") == Some("a")
+  assert parent("a") == Some(".")
+  assert parent("/a") == Some("/")
+  assert parent("C:\\Temp\\x") == Some("C:/Temp")
+  assert parent("C:x") == Some("C:.")
+}
+
+test "parent has no answer at a root or above" {
+  assert parent("/") == None
+  assert parent("") == None
+  assert parent("../..") == None
+}
+
+/// Returns `path`'s parent and file name, or `None` exactly when it has no
+/// file name (D-1437).
+pub fn split(path: String) -> Option<(String, String)> {
+  case parent(path), file_name(path) {
+    Some(dir), Some(name) => Some((dir, name))
+    _, _ => None
+  }
+}
+
+test "split gives the parent and the name" {
+  assert split("a/b") == Some(("a", "b"))
+  assert split("b") == Some((".", "b"))
+  assert split("/") == None
+}
+
+/// Returns the normalized `path`, followed by each of its parents until
+/// `parent` gives `None` (D-1437).
+pub fn ancestors(path: String) -> List<String> {
+  fn walk(current, found) {
+    let more = list::push(found, current)
+    case parent(current) {
+      Some(next) => walk(next, more)
+      None => more
+    }
+  }
+  walk(normalize(path), [])
+}
+
+test "ancestors starts with the path itself" {
+  assert ancestors("a/b/c") == ["a/b/c", "a/b", "a", "."]
+  assert ancestors("/x") == ["/x", "/"]
+  assert ancestors("") == ["."]
+  assert ancestors("../a") == ["../a", ".."]
+}
+
+// Extensions
+
+/// Returns the file name of `path` without its extension, or `None` when
+/// it has no file name (D-1438).
+pub fn stem(path: String) -> Option<String> {
+  case file_name(path) {
+    Some(name) => {
+      let (head, _) = split_dot(name)
+      Some(head)
+    }
+    None => None
+  }
+}
+
+test "stem drops the last extension" {
+  assert stem("a.tar.gz") == Some("a.tar")
+  assert stem(".bashrc") == Some(".bashrc")
+  assert stem("dir/notes") == Some("notes")
+  assert stem("/") == None
+}
+
+/// Returns the text after the last `.` of the file name of `path`, or
+/// `None` when it has no file name, has no `.`, or has its only `.` first,
+/// as `.bashrc` does (D-1438).
+pub fn extension(path: String) -> Option<String> {
+  case file_name(path) {
+    Some(name) => {
+      let (_, tail) = split_dot(name)
+      tail
+    }
+    None => None
+  }
+}
+
+test "extension reads the text after the last dot" {
+  assert extension("a.tar.gz") == Some("gz")
+  assert extension("a") == None
+  assert extension("a.") == Some("")
+  assert extension(".bashrc") == None
+  assert extension("v1.2/notes") == None
+}
+
+/// Returns every extension of the file name of `path`, front to back, so
+/// its last element is `extension`'s (D-1438).
+pub fn extensions(path: String) -> List<String> {
+  fn collect(name, found) {
+    case split_dot(name) {
+      (head, Some(tail)) => collect(head, list::prepend(found, tail))
+      (_, None) => found
+    }
+  }
+  case file_name(path) {
+    Some(name) => collect(name, [])
+    None => []
+  }
+}
+
+test "extensions lists every extension" {
+  assert extensions("a.tar.gz") == ["tar", "gz"]
+  assert extensions("v1.2.3") == ["2", "3"]
+  assert extensions(".config.json") == ["json"]
+  assert extensions(".bashrc") == []
+}
+
+/// Returns `path` with its extension replaced by `new_extension`, after
+/// one leading `.` is dropped from it, or removed when that leaves `""`. A
+/// path with no file name comes back normalized (D-1438).
+pub fn with_extension(path: String, new_extension: String) -> String {
+  let wanted = string::remove_prefix(new_extension, ".")
+  case split(path) {
+    Some((dir, name)) => {
+      let (head, _) = split_dot(name)
+      case wanted {
+        "" => join(dir, head)
+        _ => join(dir, head + "." + wanted)
+      }
+    }
+    None => normalize(path)
+  }
+}
+
+test "with_extension replaces the last extension" {
+  assert with_extension("a.txt", "md") == "a.md"
+  assert with_extension("a.txt", ".md") == "a.md"
+  assert with_extension("a.tar.gz", "zip") == "a.tar.zip"
+  assert with_extension("dir/a", "md") == "dir/a.md"
+  assert with_extension(".bashrc", "bak") == ".bashrc.bak"
+}
+
+test "with_extension removes the extension with empty text" {
+  assert with_extension("a.txt", "") == "a"
+  assert with_extension("/", "md") == "/"
+}
+
+/// Returns `path` with its file name replaced by `name`, or with `name`
+/// appended when it has none, as `join` writes it (D-1438).
+pub fn with_file_name(path: String, name: String) -> String {
+  case split(path) {
+    Some((dir, _)) => join(dir, name)
+    None => join(path, name)
+  }
+}
+
+test "with_file_name replaces the last name" {
+  assert with_file_name("a/b", "c") == "a/c"
+  assert with_file_name("b", "c") == "c"
+  assert with_file_name("/", "c") == "/c"
+  assert with_file_name("..", "c") == "../c"
+}
+
+// Comparing and relating
+
+/// Tells whether `path` starts with a root: `/`, a drive such as `C:/`, or
+/// a share such as `//server/share`. A drive with no separator after it,
+/// as in `C:x`, is relative (D-1439).
+pub fn is_absolute(path: String) -> Bool {
+  is_rooted(read(path).root)
+}
+
+test "is_absolute reads every kind of root" {
+  assert is_absolute("/x")
+  assert is_absolute("C:/x")
+  assert is_absolute("C:\\x")
+  assert is_absolute("//srv/share/x")
+  assert !is_absolute("C:x")
+  assert !is_absolute("x")
+}
+
+/// Tells whether the components of `prefix` begin the components of
+/// `path` (D-1439).
+pub fn starts_with(path: String, prefix: String) -> Bool {
+  let wanted = components(prefix)
+  list::take(components(path), list::length(wanted)) == wanted
+}
+
+test "starts_with compares whole components" {
+  assert starts_with("/a/b", "/a")
+  assert !starts_with("/ab", "/a")
+  assert !starts_with("a/b", "/a")
+  assert starts_with("a", "")
+}
+
+/// Tells whether the components of `suffix` end the components of `path`.
+/// A suffix with a root matches only a whole path (D-1439).
+pub fn ends_with(path: String, suffix: String) -> Bool {
+  let found = components(path)
+  let wanted = components(suffix)
+  let extra = list::length(found) - list::length(wanted)
+  extra >= 0 && list::drop(found, extra) == wanted
+}
+
+test "ends_with compares whole components" {
+  assert ends_with("a/b/c", "b/c")
+  assert !ends_with("a/bc", "c")
+  assert ends_with("/a/b", "/a/b")
+  assert !ends_with("x/a/b", "/a/b")
+  assert ends_with("a", "")
+}
+
+/// Returns a path from `base` to `path`, with `..` for each name of
+/// `base` that it climbs, as Go's `Rel` does. Returns `None` when the two
+/// have different roots, or when the part of `base` that differs holds a
+/// `..` (D-1439).
+pub fn relative_to(path: String, base: String) -> Option<String> {
+  let target = read(path)
+  let from = read(base)
+  fn shared(index) {
+    case list::get(target.names, index), list::get(from.names, index) {
+      Some(a), Some(b) when a == b => shared(index + 1)
+      _, _ => index
+    }
+  }
+  let common = shared(0)
+  let climbed = list::drop(from.names, common)
+  case target.root == from.root && !list::contains(climbed, "..") {
+    True => Some(render(Path {
+      root: NoRoot,
+      names: list::append(
+        list::repeat("..", list::length(climbed)),
+        list::drop(target.names, common),
+      ),
+    }))
+    False => None
+  }
+}
+
+test "relative_to climbs out of the base" {
+  assert relative_to("/a/b/c", "/a") == Some("b/c")
+  assert relative_to("/a/x", "/a/b") == Some("../x")
+  assert relative_to("/a", "/a") == Some(".")
+  assert relative_to("../a", "../b") == Some("../a")
+}
+
+test "relative_to needs one root and a known base" {
+  assert relative_to("a", "/a") == None
+  assert relative_to("C:/x", "D:/x") == None
+  assert relative_to("x", "../y") == None
+}
+
+/// Returns `path` normalized when it is absolute, and otherwise
+/// `join(cwd, path)`, which is absolute when `cwd` is (D-1439).
+pub fn absolute(path: String, cwd: String) -> String {
+  case is_absolute(path) {
+    True => normalize(path)
+    False => join(cwd, path)
+  }
+}
+
+test "absolute keeps an absolute path and joins a relative one" {
+  assert absolute("/etc", "/home") == "/etc"
+  assert absolute("x", "/home") == "/home/x"
+  assert absolute("../x", "C:\\Users\\me") == "C:/Users/x"
+}
+
+// Reading paths
+
+/// A path's root (D-1433). A drive holds its letter, and a share holds
+/// `server/share`.
+priv type Root {
+  NoRoot,
+  Plain,
+  DriveRoot(String),
+  DrivePrefix(String),
+  Unc(String),
+}
+
+/// A path read as its root and its names, with `.` removed and `..`
+/// resolved (D-1434).
+priv type Path {
+  root: Root,
+  names: List<String>,
+}
+
+/// Reads `path`, with `\` taken as `/` (D-1433).
+priv fn read(path: String) -> Path {
+  let (root, rest) = root_of(string::replace(path, "\\", "/"))
+  Path { root, names: resolve(is_rooted(root), parts_of(rest)) }
+}
+
+/// The root at the start of `text`, whose separators are all `/`, and the
+/// text after it.
+priv fn root_of(text: String) -> (Root, String) {
+  let first = string::slice(text, 0, 1)
+  let second = string::slice(text, 1, 2)
+  let third = string::slice(text, 2, 3)
+  let after_drive = string::slice(text, 2, string::length(text))
+  case {
+    first == "/" && second == "/" && third != "/" && third != "" => share_or_plain(text)
+    first == "/" => (Plain, text)
+    is_letter(first) && second == ":" && third == "/" => (DriveRoot(first), after_drive)
+    is_letter(first) && second == ":" => (DrivePrefix(first), after_drive)
+    _ => (NoRoot, text)
+  }
+}
+
+/// A UNC root when `text`, which starts with exactly two separators, goes
+/// on with a server and a share name, and a plain root otherwise.
+priv fn share_or_plain(text: String) -> (Root, String) {
+  let rest = string::slice(text, 2, string::length(text))
+  case string::split_once(rest, "/") {
+    Some((server, after)) => {
+      let (share, more) = case string::split_once(after, "/") {
+        Some(pieces) => pieces
+        None => (after, "")
+      }
+      case share {
+        "" => (Plain, text)
+        _ => (Unc(server + "/" + share), more)
+      }
+    }
+    None => (Plain, text)
+  }
+}
+
+/// The components of `text`, read at both separators, without empty ones
+/// and `.`.
+priv fn parts_of(text: String) -> List<String> {
+  text
+  |> string::replace(_, "\\", "/")
+  |> string::split(_, "/")
+  |> list::filter(_, fn(part) { part != "" && part != "." })
+}
+
+/// `parts` with each `..` removing the name before it. A `..` with no name
+/// before it is dropped after a root and kept otherwise (D-1434).
+priv fn resolve(rooted: Bool, parts: List<String>) -> List<String> {
+  list::fold(parts, [], fn(kept, part) {
+    case part, list::last(kept), rooted {
+      "..", Some(last), _ when last != ".." => list::take(kept, list::length(kept) - 1)
+      "..", _, True => kept
+      _, _, _ => list::push(kept, part)
+    }
+  })
+}
+
+/// Tells whether `root` makes a path absolute.
+priv fn is_rooted(root: Root) -> Bool {
+  case root {
+    Plain => True
+    DriveRoot(_) => True
+    Unc(_) => True
+    NoRoot => False
+    DrivePrefix(_) => False
+  }
+}
+
+/// Writes `path` with `/` between its names. A relative path whose first
+/// name could be read as a drive gets `./` in front, as Go's `Clean` does
+/// on Windows (D-1434).
+priv fn render(path: Path) -> String {
+  let body = string::join(path.names, "/")
+  let empty = list::is_empty(path.names)
+  case path.root {
+    NoRoot => case {
+      empty => "."
+      looks_like_drive(body) => "./" + body
+      _ => body
+    }
+    Plain => "/" + body
+    DriveRoot(letter) => letter + ":/" + body
+    DrivePrefix(letter) => case empty {
+      True => letter + ":."
+      False => letter + ":" + body
+    }
+    Unc(share) => case empty {
+      True => "//" + share
+      False => "//" + share + "/" + body
+    }
+  }
+}
+
+/// Tells whether `text` starts with an ASCII letter and `:`.
+priv fn looks_like_drive(text: String) -> Bool {
+  is_letter(string::slice(text, 0, 1)) && string::slice(text, 1, 2) == ":"
+}
+
+/// Tells whether `text` is one ASCII letter.
+priv fn is_letter(text: String) -> Bool {
+  text >= "A" && text <= "Z" || text >= "a" && text <= "z"
+}
+
+/// The stem and the extension of a file name, by Rust's rules: no
+/// extension when the name is `..`, has no `.`, or has nothing before its
+/// last `.` (D-1438).
+priv fn split_dot(name: String) -> (String, Option<String>) {
+  let pieces = string::split(name, ".")
+  let count = list::length(pieces)
+  let head = string::join(list::take(pieces, count - 1), ".")
+  case name == ".." || count == 1 || head == "" {
+    True => (name, None)
+    False => (head, list::last(pieces))
+  }
+}

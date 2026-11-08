@@ -73,11 +73,12 @@ Tier 3 is implemented on native in M3, in the order `std::time` with `std::time:
 
 ### Tier 4
 
-| Module                       | Contents                                                                                     |
-| ---------------------------- | -------------------------------------------------------------------------------------------- |
-| [`std::context`](context.md) | values provided for the duration of a callback, which every fiber spawned meanwhile inherits |
+| Module                         | Contents                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------- |
+| [`std::context`](context.md)   | values provided for the duration of a callback, which every fiber spawned meanwhile inherits |
+| [`std::filepath`](filepath.md) | lexical paths: joining, taking apart and comparing them, the same on every platform          |
 
-Tier 4 is implemented in M4, natively and on JS together (D-1049). It also changes three earlier modules: `std::time` reads its clock from context (D-1047), `std::random`'s host functions draw from a seeded stream when one is provided (D-1048), and every spawn of `std::fiber` copies the spawning fiber's context (D-1044). Until M4, these parts are drafts with no code, and their tests in the pages of shipped modules are pending for M4 (D-741).
+Tier 4 is implemented in M4, natively and on JS together (D-1049). `std::filepath` is Cheby with no kernels, so it ships before M4 and runs on JS unchanged (D-1432). It also changes three earlier modules: `std::time` reads its clock from context (D-1047), `std::random`'s host functions draw from a seeded stream when one is provided (D-1048), and every spawn of `std::fiber` copies the spawning fiber's context (D-1044). Until M4, these parts are drafts with no code, and their tests in the pages of shipped modules are pending for M4 (D-741).
 
 ## Entry format
 

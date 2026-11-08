@@ -55,6 +55,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/file.cheby"),
     },
     StdModule {
+        path: "filepath",
+        source: include_str!("../../../std/filepath.cheby"),
+    },
+    StdModule {
         path: "float",
         source: include_str!("../../../std/float.cheby"),
     },

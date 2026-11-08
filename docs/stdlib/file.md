@@ -11,7 +11,7 @@ pub type Info
 - **Handle.** `File` is a handle ([§9.5](../spec/09-memory-model.md#95-handles-and-drop-functions), D-101). It prints as `<File>`, `==` and hashing panic when they reach one, W0011 warns about a comparison that can reach one, and no constant may hold one (D-233, D-647). It is an external type of this module whose drop function the runtime supplies, as for the tier-2 handles (D-703, D-982). The file closes right after the last use of the last reference to it (D-205), on the fiber that released it (D-171), also when that fiber unwinds, or on the thread that acts for that fiber when a package's `@blocking` function released it ([§9.5](../spec/09-memory-model.md#95-handles-and-drop-functions), D-1311). The drop function closes the descriptor and ignores any error. It never writes, because a `File` buffers nothing for writing (D-994).
 - **`Info`.** What [`info`](#info) found about a path. It is opaque plain data with structural `==`, read through accessor functions, so fields can be added after 1.0 (D-996).
 - **Errors.** Every function that can fail returns `io::Error`, the error type of [`std::io`](io.md). The kinds these functions cause have predicates there, such as `io::is_already_exists` and `io::is_closed`, each with a fixed text (D-981).
-- **Paths.** As in `io.md` "Files": a path is a `String`, a relative path is resolved against the working directory, and the text of an error never includes the path. `/` separates components on every platform, including Windows. There are no path functions, and no way to read or change the working directory (D-996).
+- **Paths.** As in `io.md` "Files": a path is a `String`, a relative path is resolved against the working directory, and the text of an error never includes the path. `/` separates components on every platform, including Windows. [`std::filepath`](filepath.md) joins and takes paths apart, and builds the paths of a directory walk from the names of [`list_dir`](#list_dir) with [`filepath::child`](filepath.md#child). [`env::current_dir`](env.md#current_dir) reads the working directory, and nothing changes it (D-996, D-1432, D-1440).
 - **Blocking pool.** Every function that touches the operating system runs on the blocking pool while the calling fiber is suspended, so other fibers keep running (D-042, D-683, [§10.9](../spec/10-concurrency.md#109-blocking-io)). That work cannot be interrupted. A fiber that a cancellation has already reached never starts the work (D-816). A cancellation that arrives during a write, an open, a close or a change to a directory is delivered when the work returns, and the result is released, because the work changes the outside world and the caller must know whether it happened (D-670). So a cancelled `write` has written its text. A refill of a handle's read-ahead buffer is different: a cancellation that reaches a fiber waiting for one is delivered at once, and the fiber unwinds without waiting. The refill runs to its end on its pool thread, holding its own reference to the handle, and its bytes land in the handle's buffer, which the handle owns rather than the fiber. The next read on the handle waits for a refill still running and then gets those bytes, so no line is lost (D-983, D-995, D-1065).
 - **Several fibers, one file.** Any fiber may use a `File` it holds. Operations on one handle run one at a time, in the order they reach it. A `read_line` therefore never sees half of another fiber's `write`.
 - **Streams.** `File` satisfies `io::Source` and `io::Sink` through [`read_bytes`](#read_bytes) and [`write_bytes`](#write_bytes), with no code of its own, so [`io::copy`](io.md#copy) and other code generic over a stream take a file, a standard stream or a `net::Connection` alike (§8.2, D-1062, D-1071, D-1072).
@@ -49,7 +49,7 @@ test "a path with U+0000 is invalid input" {
 
 test "open reads a file from its start" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/notes.txt"
+  let target = filepath::join(dir, "notes.txt")
   use _ <- result::try(io::write_file(target, "first\nsecond\n"))
   use source <- result::try(file::open(target))
   use line <- result::try(file::read_line(source))
@@ -77,7 +77,7 @@ test "create needs the directory to exist" {
 
 test "create truncates a file that exists" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/out.txt"
+  let target = filepath::join(dir, "out.txt")
   use _ <- result::try(io::write_file(target, "old text"))
   use handle <- result::try(file::create(target))
   use _ <- result::try(file::write(handle, "new"))
@@ -106,7 +106,7 @@ test "append needs the directory to exist" {
 
 test "append writes after what the file holds" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/log.txt"
+  let target = filepath::join(dir, "log.txt")
   use _ <- result::try(io::write_file(target, "a\n"))
   use log <- result::try(file::append(target))
   use _ <- result::try(file::write_line(log, "b"))
@@ -130,7 +130,7 @@ Creates the file at `path` and opens it for writing, only if nothing exists at `
 ```cheby
 test "create_new refuses a path that exists" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/lock"
+  let target = filepath::join(dir, "lock")
   use _ <- result::try(file::create_new(target))
   let assert Err(reason) = file::create_new(target)
   assert io::is_already_exists(reason)
@@ -181,7 +181,7 @@ test "with_open does not call its body when the file cannot be opened" {
 
 test "with_open reads a file line by line" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/lines.txt"
+  let target = filepath::join(dir, "lines.txt")
   use _ <- result::try(io::write_file(target, "a\nb\nc"))
   use total <- result::try({
     use source <- file::with_open(target)
@@ -200,7 +200,7 @@ test "with_open reads a file line by line" {
 
 test "with_open closes a handle that escapes its body" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/lines.txt"
+  let target = filepath::join(dir, "lines.txt")
   use _ <- result::try(io::write_file(target, "a\n"))
   use kept <- result::try(file::with_open(target, fn(source) { Ok(source) }))
   let assert Err(reason) = file::read_line(kept)
@@ -231,7 +231,7 @@ test "with_create does not call its body when the directory is missing" {
 
 test "with_create writes a new file" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/log.txt"
+  let target = filepath::join(dir, "log.txt")
   use _ <- result::try({
     use handle <- file::with_create(target)
     file::write_line(handle, "started")
@@ -275,7 +275,7 @@ Creates and opens the file at `path` as [`create_new`](#create_new) does, calls 
 ```cheby
 test "with_create_new does not call its body when the file exists" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/lock"
+  let target = filepath::join(dir, "lock")
   use _ <- result::try(file::with_create_new(target, fn(handle) { file::write(handle, "1") }))
   let outcome = file::with_create_new(target, fn(_) { Ok(Nil) })
   let assert Err(reason) = outcome
@@ -300,7 +300,7 @@ Closes `file` now and reports what the operating system says about it. Every lat
 ```cheby
 test "close closes the handle now" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/saved.txt"
+  let target = filepath::join(dir, "saved.txt")
   use handle <- result::try(file::create(target))
   use _ <- result::try(file::write(handle, "saved"))
   use _ <- result::try(file::close(handle))
@@ -332,7 +332,7 @@ Reads the next line from `file`, as `io::read_line` reads standard input: `Ok(So
 ```cheby
 test "read_line removes line endings" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/lines.txt"
+  let target = filepath::join(dir, "lines.txt")
   use _ <- result::try(io::write_file(target, "one\r\ntwo\nthree"))
   use source <- file::with_open(target)
   assert file::read_line(source) == Ok(Some("one"))
@@ -345,7 +345,7 @@ test "read_line removes line endings" {
 
 test "read_line consumes a line that is not UTF-8" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/mixed.txt"
+  let target = filepath::join(dir, "mixed.txt")
   use _ <- result::try(io::write_file_bytes(target, bytes::from_list([0xFF, 0x0A, 0x6F, 0x6B])))
   use source <- file::with_open(target)
   let assert Err(reason) = file::read_line(source)
@@ -370,7 +370,7 @@ Reads the next bytes of `file`, at least one and at most `limit`, without decodi
 ```cheby
 test "read_bytes returns at most its limit" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/image.png"
+  let target = filepath::join(dir, "image.png")
   let data = bytes::from_list([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
   use _ <- result::try(io::write_file_bytes(target, data))
   use source <- file::with_open(target)
@@ -409,7 +409,7 @@ Writes `text` to `file` as UTF-8, with no line ending. The whole text is written
 ```cheby
 test "write writes text as it is" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/report.txt"
+  let target = filepath::join(dir, "report.txt")
   use _ <- result::try({
     use handle <- file::with_create(target)
     file::write(handle, string::join(["a", "b"], "\n") + "\n")
@@ -437,7 +437,7 @@ Writes `text` and the line ending `\n` to `file`, in one write. The line ending 
 ```cheby
 test "write_line ends each line with a newline" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/events.log"
+  let target = filepath::join(dir, "events.log")
   fn log_event(event) {
     use handle <- file::with_append(target)
     file::write_line(handle, event)
@@ -464,7 +464,7 @@ Writes `data` to `file` unchanged. The whole of `data` is written before the cal
 ```cheby
 test "write_bytes writes bytes unchanged" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/header.bin"
+  let target = filepath::join(dir, "header.bin")
   let data = bytes::from_list([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF])
   use _ <- result::try({
     use handle <- file::with_create(target)
@@ -580,9 +580,9 @@ test "list_dir reports a missing directory" {
 
 test "list_dir sorts names by their bytes" {
   use dir <- file::with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/b.txt", ""))
-  use _ <- result::try(io::write_file(dir + "/Zed.txt", ""))
-  use _ <- result::try(file::create_dir(dir + "/a"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "b.txt"), ""))
+  use _ <- result::try(io::write_file(filepath::join(dir, "Zed.txt"), ""))
+  use _ <- result::try(file::create_dir(filepath::join(dir, "a")))
   use names <- result::try(file::list_dir(dir))
   assert names == ["Zed.txt", "a", "b.txt"]
   Ok(Nil)
@@ -608,8 +608,8 @@ test "create_dir needs its parent" {
 
 test "create_dir refuses a path that exists" {
   use dir <- file::with_temp_dir()
-  use _ <- result::try(file::create_dir(dir + "/child"))
-  let assert Err(reason) = file::create_dir(dir + "/child")
+  use _ <- result::try(file::create_dir(filepath::join(dir, "child")))
+  let assert Err(reason) = file::create_dir(filepath::join(dir, "child"))
   assert io::is_already_exists(reason)
   Ok(Nil)
 }
@@ -629,13 +629,13 @@ Creates the directory `path` and every missing directory above it. A directory t
 ```cheby
 test "create_dir_all creates every missing directory" {
   use dir <- file::with_temp_dir()
-  let daily = dir + "/reports/daily"
+  let daily = filepath::join(dir, "reports/daily")
   use _ <- result::try(file::create_dir_all(daily))
   use _ <- result::try(file::create_dir_all(daily))
   use found <- result::try(file::info(daily))
   assert file::is_dir(found)
-  use _ <- result::try(io::write_file(dir + "/plain", ""))
-  let assert Err(reason) = file::create_dir_all(dir + "/plain")
+  use _ <- result::try(io::write_file(filepath::join(dir, "plain"), ""))
+  let assert Err(reason) = file::create_dir_all(filepath::join(dir, "plain"))
   assert io::is_already_exists(reason)
   Ok(Nil)
 }
@@ -660,7 +660,7 @@ test "remove_file reports a missing file" {
 
 test "remove_file removes a file" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/old.txt"
+  let target = filepath::join(dir, "old.txt")
   use _ <- result::try(io::write_file(target, "old"))
   use _ <- result::try(file::remove_file(target))
   let assert Err(reason) = file::info(target)
@@ -688,12 +688,12 @@ test "remove_dir reports a missing directory" {
 
 test "remove_dir removes only an empty directory" {
   use dir <- file::with_temp_dir()
-  let child = dir + "/child"
+  let child = filepath::join(dir, "child")
   use _ <- result::try(file::create_dir(child))
-  use _ <- result::try(io::write_file(child + "/kept.txt", ""))
+  use _ <- result::try(io::write_file(filepath::join(child, "kept.txt"), ""))
   let assert Err(reason) = file::remove_dir(child)
   assert io::is_directory_not_empty(reason)
-  use _ <- result::try(file::remove_file(child + "/kept.txt"))
+  use _ <- result::try(file::remove_file(filepath::join(child, "kept.txt")))
   use _ <- result::try(file::remove_dir(child))
   use names <- result::try(file::list_dir(dir))
   assert names == []
@@ -717,9 +717,9 @@ When nothing exists at `path`, or `path` names a file, it fails as [`remove_dir`
 ```cheby
 test "remove_dir_all removes a whole tree" {
   use dir <- file::with_temp_dir()
-  let tree = dir + "/tree"
-  use _ <- result::try(file::create_dir_all(tree + "/a/b"))
-  use _ <- result::try(io::write_file(tree + "/a/b/leaf.txt", "leaf"))
+  let tree = filepath::join(dir, "tree")
+  use _ <- result::try(file::create_dir_all(filepath::join(tree, "a/b")))
+  use _ <- result::try(io::write_file(filepath::join(tree, "a/b/leaf.txt"), "leaf"))
   use _ <- result::try(file::remove_dir_all(tree))
   let assert Err(reason) = file::info(tree)
   assert io::is_not_found(reason)
@@ -746,12 +746,12 @@ test "rename reports a missing source" {
 
 test "rename replaces a file at the new path" {
   use dir <- file::with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/a.txt", "new"))
-  use _ <- result::try(io::write_file(dir + "/b.txt", "old"))
-  use _ <- result::try(file::rename(dir + "/a.txt", dir + "/b.txt"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "a.txt"), "new"))
+  use _ <- result::try(io::write_file(filepath::join(dir, "b.txt"), "old"))
+  use _ <- result::try(file::rename(filepath::join(dir, "a.txt"), filepath::join(dir, "b.txt")))
   use names <- result::try(file::list_dir(dir))
   assert names == ["b.txt"]
-  use text <- result::try(io::read_file(dir + "/b.txt"))
+  use text <- result::try(io::read_file(filepath::join(dir, "b.txt")))
   assert text == "new"
   Ok(Nil)
 }
@@ -765,7 +765,7 @@ test "rename replaces a file at the new path" {
 pub fn with_temp_dir<T>(body: fn(String) -> Result<T, io::Error>) -> Result<T, io::Error>
 ```
 
-Creates a new, empty directory with a random name under the host's temporary directory, calls `body` with its path, and removes the directory and everything in it, as [`remove_dir_all`](#remove_dir_all) does, when `body` returns. The path is in the host's own form, such as `/tmp/…` or `C:\Users\…\Temp\…`, and a program builds paths inside it with `/`, which every platform accepts (D-996). Under `cheby test`, the directory lies under the run's temporary root. Its path differs from run to run, so it never belongs in a golden (D-1066, D-1067).
+Creates a new, empty directory with a random name under the host's temporary directory, calls `body` with its path, and removes the directory and everything in it, as [`remove_dir_all`](#remove_dir_all) does, when `body` returns. The path is in the host's own form, such as `/tmp/…` or `C:\Users\…\Temp\…`, and a program builds paths inside it with [`filepath::join`](filepath.md#join), whose `/` every platform accepts (D-996, D-1435). Under `cheby test`, the directory lies under the run's temporary root. Its path differs from run to run, so it never belongs in a golden (D-1066, D-1067).
 
 As for [`with_open`](#with_open), a failure to remove the directory is returned only when `body` returned `Ok` (D-993). When `body` panics or is cancelled, the directory stays, since Cheby has no `finally` (ADR-0029) and a drop function must not wait (D-703). Under `cheby test`, it is removed with the run's temporary root when the run ends (D-1067).
 
@@ -784,7 +784,7 @@ test "with_temp_dir gives a new, empty directory" {
 
 test "with_temp_dir removes its directory afterwards" {
   let assert Ok(kept) = file::with_temp_dir(fn(dir) {
-    use _ <- result::try(io::write_file(dir + "/left.txt", "left"))
+    use _ <- result::try(io::write_file(filepath::join(dir, "left.txt"), "left"))
     Ok(dir)
   })
   let assert Err(reason) = file::info(kept)
@@ -827,7 +827,7 @@ Returns the size in bytes of the file that `entry` describes. For a directory th
 ```cheby
 test "size counts bytes" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/word.txt"
+  let target = filepath::join(dir, "word.txt")
   use _ <- result::try(io::write_file(target, "héllo"))
   use found <- result::try(file::info(target))
   assert file::size(found) == 6
@@ -861,11 +861,11 @@ Tells whether `entry` describes a directory. An entry that is neither a file nor
 ```cheby
 test "is_dir tells a directory from a file" {
   use dir <- file::with_temp_dir()
-  use _ <- result::try(io::write_file(dir + "/plain.txt", ""))
+  use _ <- result::try(io::write_file(filepath::join(dir, "plain.txt"), ""))
   use folder <- result::try(file::info(dir))
   assert file::is_dir(folder)
   assert !file::is_file(folder)
-  use plain <- result::try(file::info(dir + "/plain.txt"))
+  use plain <- result::try(file::info(filepath::join(dir, "plain.txt")))
   assert !file::is_dir(plain)
   Ok(Nil)
 }
@@ -886,7 +886,7 @@ The exact time depends on the host's clock, so the test only checks that a new f
 ```cheby
 test "a new file was modified after 2020 began" {
   use dir <- file::with_temp_dir()
-  let target = dir + "/new.txt"
+  let target = filepath::join(dir, "new.txt")
   use _ <- result::try(io::write_file(target, ""))
   use found <- result::try(file::info(target))
   assert file::modified(found) > time::from_unix(duration::seconds(1_577_836_800))
@@ -904,5 +904,5 @@ Each of these can be added later without breaking a program (D-996):
 - a buffered writer type (D-994);
 - an unscoped `create_temp_dir`, which would leave the removal to its caller, and temporary files, which a directory from [`with_temp_dir`](#with_temp_dir) holds any number of (D-1066);
 - scoped openers that take a function to wrap the error, such as `with_open_as(path, wrap, body)` (D-1075);
-- the working directory and changing it, which would be process-wide state that every fiber shares;
-- path functions such as joining or taking an extension, in a later module whose name that tier decides, since `path` is the parameter of most functions here (D-1053). It works on `String`s, with no `Path` type, and its `join` keeps the result under its base: `join("a", "/b")` gives `a/b`, as Go's `path.Join` does, not `/b` as in Rust and Python, so that `join(base, input)` cannot leave `base` (D-1077).
+- changing the working directory, which would be process-wide state that every fiber shares. [`env::current_dir`](env.md#current_dir) reads it (D-1440);
+- symbolic-link-aware path functions, such as resolving a path to its canonical form. The lexical ones are in [`std::filepath`](filepath.md), whose `join` keeps the result under its base, as Go's `path.Join` does (D-1077, D-1432).

@@ -1,8 +1,8 @@
 # `std::env`
 
-The program's command-line arguments and environment variables. `main` takes no parameters, so any module reads them through this module (D-183, §10.10). Tier 1 only reads the environment. It has no function that changes a variable.
+The program's command-line arguments, environment variables and working directory. `main` takes no parameters, so any module reads them through this module (D-183, §10.10). Tier 1 only reads the environment. It has no function that changes a variable or the working directory.
 
-None of these functions can fail. Text from the operating system that is not valid UTF-8 has each invalid sequence replaced with U+FFFD (D-311).
+Only `current_dir` can fail, and it imports `std::io` for its error (D-1440). In the other functions, text from the operating system that is not valid UTF-8 has each invalid sequence replaced with U+FFFD (D-311).
 
 The examples are not `test` blocks where their results depend on how the program was started. They are top-level functions marked _Example_.
 
@@ -86,3 +86,25 @@ fn port() -> Result<Int, Nil> {
 ```
 
 `get` returns `None` for a name no variable can have, such as `""`, `"A=B"` or a name containing U+0000, and never panics (D-370).
+
+### `current_dir`
+
+```cheby
+pub fn current_dir() -> Result<String, io::Error>
+```
+
+Returns the working directory in the host's own form, such as `C:\Users\me` or `/home/me` (D-1440). Nothing in Cheby changes the working directory. [`filepath::absolute`](filepath.md#absolute) joins a relative path to it, and the functions of `std::filepath` read both separators (D-1433, D-1439).
+
+- **Fails:** `Err` for which `io::is_not_found` holds when the directory was removed, `io::is_permission_denied` when the program may not read it, and `io::is_invalid_data` when it is not valid UTF-8 (D-311). `Err` for every other failure of the operating system.
+- **Cost:** O(n) in the length of the path, plus the system call. Informative.
+
+_Example_, not a `test` because the directory depends on where the program was started:
+
+```cheby
+fn config_path(relative: String) -> Result<String, io::Error> {
+  use dir <- result::try(env::current_dir())
+  Ok(filepath::absolute(relative, dir))
+}
+```
+
+On JS hosts it is `process.cwd()`, and hosts without a process follow OQ-P14.

@@ -110,7 +110,7 @@ fn main() -> Result<Nil, http::Error> {
 Each of these can be added later without breaking a program (D-1024):
 
 - starting other processes, reading their output and waiting for them;
-- the process id, the parent's id and the working directory;
+- the process id and the parent's id. The working directory is read with [`env::current_dir`](env.md#current_dir) (D-1440);
 - signals other than `SIGINT` and `SIGTERM`, and handling a signal in any way other than [`until_interrupted`](#until_interrupted) (D-1073);
 - changing environment variables (D-988).
 
