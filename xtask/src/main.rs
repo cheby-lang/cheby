@@ -374,7 +374,7 @@ fn coverage(root: &Path) -> Result<(), String> {
     let uncovered: Vec<_> = cited.difference(&covered).copied().collect();
     let unknown: Vec<_> = covered.difference(&cited).copied().collect();
     println!(
-        "D-number coverage: {}/{} decisions cited in the spec have a UI test or a REPL transcript",
+        "D-number coverage: {}/{} decisions cited in the spec have a test",
         cited.len().saturating_sub(uncovered.len()),
         cited.len()
     );

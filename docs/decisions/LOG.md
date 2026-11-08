@@ -2380,3 +2380,19 @@ Open:
 - This repository's `std/*.cheby` files open in single-file mode, where `@std_hooks` may report errors.
 
 Spec: §13.8, §13.11, §13.11.1. No new diagnostic code. Tree-sitter: no grammar change. `../zed-cheby` gains a language server, `runnables.scm` and `tasks.json`.
+
+## 2026-11-08: The language server, checkpoint 1
+
+Goal: settle what waves W1 to W5 found before the server's requests land.
+
+- **D-1427 The cycle cut takes every import of one edge**: In a Q run the cut picks one edge per cycle, preferring an edge out of the newest edited module, and turns every import along that edge into a failed import. So `import app::b` and `import app::b::{g}` both fail. Why: failing one of two imports of the same module leaves the cycle in place. Refines D-1358.
+- **D-1428 Coverage counts language server tests**: `cargo xtask coverage` counts the decisions in the `// @decisions:` headers under `tests/lsp` as it counts a UI test's, and prints "D-number coverage: <n>/<m> decisions cited in the spec have a test". Why: `lsp` is the fourth harness (D-1352), and the old sentence named only two of them. Refines D-638.
+- **D-1429 A second type's names are snake_case**: In D-1404's `<type>_to_json` and `<type>_decoder`, `<type>` is the type's name in snake_case, so `Odd` gives `odd_to_json` and `odd_decoder`. Why: function names are snake_case (D-059), and a test needs the name pinned. Refines D-1404.
+- **D-1430 A malformed frame ends the server**: A frame whose body is not a JSON-RPC message ends `cheby lsp` with status 1 and one line on stderr, as `lsp-server`'s reader does. Stdout stays clean. A protocol trial pins it. Why: clients send well-formed frames, and editors restart a server that exits. Rejected: our own stdio transport that answers -32700 and goes on, about 200 lines for a case no client produces.
+- **D-1431 A panic outside a run drops the package's session**: A panic while the server invalidates or sweeps a package's files drops that package's session, and the next event starts a new one with a cold run. A panic inside a run keeps the session (D-1362). Why: a half-updated session could give wrong answers, and a cold run costs about a second. Refines D-1362.
+
+Open:
+
+- Zed's behaviour is unverified until the CP1 session is read.
+
+Spec: §13.11.1's note on a second type. No new diagnostic code. Tree-sitter: no grammar change.
