@@ -219,6 +219,20 @@ impl Manifest {
         Self::parse_in(file, text, None, diagnostics)
     }
 
+    /// Checks the manifest `text` of `file`, for the package at `root`,
+    /// as [`Manifest::load`] does once it has read the file: the sources
+    /// of `[native]` are checked on disk (D-940). The language server
+    /// passes the editor's unsaved text of `cheby.toml` here.
+    #[must_use]
+    pub fn parse_at(
+        file: FileId,
+        text: &str,
+        root: &Path,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<Self> {
+        Self::parse_in(file, text, Some(root), diagnostics)
+    }
+
     /// [`Manifest::parse`], checking the files of `[native]`'s sources
     /// against the package at `root` when it is given.
     fn parse_in(

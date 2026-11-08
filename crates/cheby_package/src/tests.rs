@@ -985,3 +985,208 @@ error[E0036]: `[native]` is not allowed in a package that does not target `nativ
     assert_eq!(rendered, "");
     assert_eq!(manifest.unwrap().native.unwrap().libraries, ["m"]);
 }
+
+/// Every file under `dir`, recursively, without following links.
+fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap())
+        .collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        if entry.file_type().unwrap().is_dir() {
+            files_under(&entry.path(), out);
+        } else {
+            out.push(entry.path());
+        }
+    }
+}
+
+/// `module_file` accepts exactly the files `discover` finds under `root`,
+/// and gives the same answer for each, from an absolute path and from one
+/// relative to the root.
+fn assert_module_file_inverts_discover(root: &Path, package: &str) {
+    let mut diags = Vec::new();
+    let discovered = discover(root, package, &mut diags).unwrap();
+    assert!(!discovered.is_empty(), "{}", root.display());
+    let mut files = Vec::new();
+    files_under(root, &mut files);
+    let mut mapped: Vec<ModuleFile> = files
+        .iter()
+        .filter_map(|file| module_file(root, package, file))
+        .collect();
+    mapped.sort_by(|a, b| a.display.cmp(&b.display));
+    assert_eq!(mapped, discovered, "{}", root.display());
+    for module in &discovered {
+        assert_eq!(
+            module_file(root, package, &module.file).as_ref(),
+            Some(module)
+        );
+        let dotted = Path::new(".").join(&module.file);
+        assert_eq!(module_file(root, package, &dotted).as_ref(), Some(module));
+    }
+}
+
+#[test]
+fn module_file_inverts_discover_on_every_example() {
+    for dir in examples() {
+        let mut sources = SourceMap::new();
+        let mut diags = Vec::new();
+        let manifest = Manifest::load(&dir, &mut sources, &mut diags)
+            .unwrap()
+            .unwrap();
+        assert_module_file_inverts_discover(&dir, &manifest.name);
+    }
+}
+
+/// Copies the names of `from`'s tree, as empty files, under `to`.
+fn mirror(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            mirror(&entry.path(), &target);
+        } else {
+            std::fs::write(target, "").unwrap();
+        }
+    }
+}
+
+#[test]
+fn module_file_inverts_discover_on_std() {
+    // std is not laid out as a package, so its tree is mirrored under the
+    // `src/` of one.
+    let root = temp_dir("std_mirror");
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    mirror(&std_dir, &root.join(SOURCE_DIR));
+    assert_module_file_inverts_discover(&root, "std");
+    let json = module_file(&root, "std", &root.join("src/json/decode.cheby"));
+    assert_eq!(
+        json.map(|m| m.path.to_string()),
+        Some("std::json::decode".to_owned())
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn module_file_inverts_discover_on_bad_names() {
+    let root = temp_dir("module_file_rules");
+    write(
+        &root,
+        &[
+            "cheby.toml",
+            "main.cheby",
+            "other/x.cheby",
+            "src/main.cheby",
+            "src/web.cheby",
+            "src/web/router.cheby",
+            "src/main/inner.cheby",
+            "src/random_ffi.mjs",
+            "src/.hidden.cheby",
+            "src/.cache/x.cheby",
+            "src/HttpClient.cheby",
+            "src/web-server/x.cheby",
+            "src/type.cheby",
+            "src/a.b.cheby",
+            "src/_.cheby",
+            "src/.cheby",
+        ],
+    );
+    assert_module_file_inverts_discover(&root, "my_app");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn module_file_is_lexical() {
+    let root = Path::new("/work/my_app");
+    let path_of = |file: &str| module_file(root, "my_app", Path::new(file)).map(|m| m.path);
+    let shown = |file: &str| path_of(file).map(|p| p.to_string());
+    // A buffer that is not on disk is still a module.
+    assert_eq!(
+        module_file(root, "my_app", &root.join("src/web/new_file.cheby")),
+        Some(ModuleFile {
+            path: ModulePath::root("my_app").child("web").child("new_file"),
+            file: PathBuf::from("src/web/new_file.cheby"),
+            display: "src/web/new_file.cheby".to_owned(),
+        })
+    );
+    assert_eq!(
+        shown("/work/my_app/src/main.cheby").as_deref(),
+        Some("my_app")
+    );
+    assert_eq!(shown("src/main.cheby").as_deref(), Some("my_app"));
+    assert_eq!(
+        shown("src/main/main.cheby").as_deref(),
+        Some("my_app::main::main")
+    );
+    for outside in [
+        "/work/my_app",
+        "/work/my_app/src",
+        "/work/my_app/cheby.toml",
+        "/work/my_app/main.cheby",
+        "/work/other/src/main.cheby",
+        "/work/my_app/src/../src/main.cheby",
+        "/work/my_app/src/a/../b.cheby",
+        "src",
+        "../my_app/src/main.cheby",
+        "src/notes.txt",
+        "src/web.cheby.bak",
+        "src/web/Router.cheby",
+        "src/if.cheby",
+        "src/web/_.cheby",
+        "src/js-helpers/x.cheby",
+        "src/.git/x.cheby",
+        "src/.cheby",
+    ] {
+        assert_eq!(path_of(outside), None, "{outside}");
+    }
+}
+
+/// Directories nest as deep under `src/` as `discover` walks, and no
+/// deeper.
+#[test]
+fn module_file_follows_the_depth_limit() {
+    let root = temp_dir("module_file_depth");
+    let deep = |levels: usize| {
+        let mut file = PathBuf::from(SOURCE_DIR);
+        for _ in 0..levels {
+            file.push("d");
+        }
+        file.push("m.cheby");
+        file
+    };
+    write(&root, &[deep(64).to_str().unwrap()]);
+    assert_module_file_inverts_discover(&root, "app");
+    write(&root, &[deep(65).to_str().unwrap()]);
+    let mut diags = Vec::new();
+    assert!(discover(&root, "app", &mut diags).is_err());
+    assert_eq!(module_file(&root, "app", &deep(65)), None);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// `parse_at` checks `[native]`'s sources on disk as `load` does, and
+/// `parse` does not.
+#[test]
+fn parse_at_checks_native_sources_on_disk() {
+    let text = format!("{NATIVE_HEAD}\n[native]\nsources = [\"src/ok.c\", \"src/missing.c\"]\n");
+    let (root, loaded, from_load) = load_native("parse_at", &text, &["src/ok.c"]);
+    let mut sources = SourceMap::new();
+    let file = sources.add_file(MANIFEST_FILE, text.as_str()).unwrap();
+    let mut diags = Vec::new();
+    let manifest = Manifest::parse_at(file, &text, &root, &mut diags);
+    sources.sort(&mut diags);
+    assert_eq!(manifest, loaded);
+    assert_eq!(render_all(&diags, &sources), from_load);
+    assert!(
+        from_load.contains("error[E0036]: the C source `src/missing.c` does not exist"),
+        "{from_load}"
+    );
+    let (manifest, from_parse) = parse(&text);
+    assert_eq!(from_parse, "");
+    assert_eq!(
+        manifest.unwrap().native.unwrap().sources,
+        ["src/ok.c", "src/missing.c"]
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

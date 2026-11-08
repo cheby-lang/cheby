@@ -63,6 +63,7 @@ use cheby_runtime::RunConfig;
 use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
+pub mod analysis;
 mod aot;
 mod backend;
 mod borrowing;
@@ -1321,6 +1322,8 @@ pub fn parse_file(
 
 #[cfg(test)]
 mod alone_tests;
+#[cfg(test)]
+mod analysis_tests;
 #[cfg(test)]
 mod aot_tests;
 #[cfg(test)]

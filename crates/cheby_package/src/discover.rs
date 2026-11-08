@@ -13,7 +13,7 @@
 //! in which the file system lists a directory (D-264).
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use cheby_diag::{Diagnostic, codes};
 
@@ -118,6 +118,70 @@ pub fn discover(
     Ok(modules)
 }
 
+/// The module that `file` holds in the package `package` at `root`, the
+/// inverse of [`discover`] for one file. `file` is a path under `root`, or
+/// a path relative to it. The answer is lexical: the file need not exist,
+/// so an unsaved buffer under `src/` is a module, and no symbolic link is
+/// read. Returns `None` when `file` is outside `src/`, when a directory
+/// or the file has a name that [`discover`] reports as E0037 or skips,
+/// when the path has a `..` component, and when its directories nest
+/// deeper than [`discover`] walks.
+#[must_use]
+pub fn module_file(root: &Path, package: &str, file: &Path) -> Option<ModuleFile> {
+    let relative = match file.strip_prefix(root) {
+        Ok(relative) => relative,
+        Err(_) if file.is_relative() => file,
+        Err(_) => return None,
+    };
+    let mut names = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => names.push(name.to_str()?),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    let (&name, dirs) = names.split_last()?;
+    let (&first, dirs) = dirs.split_first()?;
+    if first != SOURCE_DIR || dirs.len() > MAX_DEPTH || !dirs.iter().all(|d| is_valid_name(d)) {
+        return None;
+    }
+    let stem = module_stem(name).filter(|stem| is_valid_name(stem))?;
+    let prefix: Vec<String> = dirs.iter().map(|&d| d.to_owned()).collect();
+    Some(module_at(package, &prefix, stem, name))
+}
+
+/// The stem of a module file's name, `name` without `.cheby`, or `None`
+/// for a name without that extension.
+fn module_stem(name: &str) -> Option<&str> {
+    name.strip_suffix(EXTENSION)
+        .and_then(|s| s.strip_suffix('.'))
+}
+
+/// The module in file `name`, with stem `stem`, in the directories
+/// `prefix` under `src/`. [`discover`] and [`module_file`] both build
+/// their answers here, so the two agree.
+fn module_at(package: &str, prefix: &[String], stem: &str, name: &str) -> ModuleFile {
+    let mut path = ModulePath::root(package);
+    for segment in prefix {
+        path = path.child(segment);
+    }
+    if !(prefix.is_empty() && name == ROOT_FILE) {
+        path = path.child(stem);
+    }
+    let display = display(prefix, Some(name));
+    let mut file = PathBuf::from(SOURCE_DIR);
+    for segment in prefix {
+        file.push(segment);
+    }
+    file.push(name);
+    ModuleFile {
+        path,
+        file,
+        display,
+    }
+}
+
 struct Walk<'a> {
     package: &'a str,
     modules: Vec<ModuleFile>,
@@ -164,37 +228,14 @@ impl Walk<'_> {
                     inner.push(name);
                     self.dir(&path, &inner, depth.saturating_add(1))?;
                 }
-            } else if let Some(stem) = name
-                .strip_suffix(EXTENSION)
-                .and_then(|s| s.strip_suffix('.'))
+            } else if let Some(stem) = module_stem(&name)
                 && self.check_name(prefix, &name, stem, "file")
             {
-                self.module(prefix, stem, &name);
+                self.modules
+                    .push(module_at(self.package, prefix, stem, &name));
             }
         }
         Ok(())
-    }
-
-    /// Records the module in file `name`, with stem `stem`, under `prefix`.
-    fn module(&mut self, prefix: &[String], stem: &str, name: &str) {
-        let mut path = ModulePath::root(self.package);
-        for segment in prefix {
-            path = path.child(segment);
-        }
-        if !(prefix.is_empty() && name == ROOT_FILE) {
-            path = path.child(stem);
-        }
-        let display = display(prefix, Some(name));
-        let mut file = PathBuf::from(SOURCE_DIR);
-        for segment in prefix {
-            file.push(segment);
-        }
-        file.push(name);
-        self.modules.push(ModuleFile {
-            path,
-            file,
-            display,
-        });
     }
 
     /// Reports E0037 unless `stem` is a valid module name.
