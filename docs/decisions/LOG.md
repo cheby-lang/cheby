@@ -2375,7 +2375,7 @@ Goal: settle what `cheby lsp` does and how it is built, before M5's server lands
 Open:
 
 - A note when renaming a `pub` item waits for M5's dependencies: until then no other package can use it.
-- Zed's behaviour is unverified until the first recorded session.
+- ~~Zed's behaviour is unverified until the first recorded session.~~ Done: the CP1 session, read on 2026-11-08.
 - Answer quality is measured on 30 examples. Examples 030 and 031 wait for M5's dependencies.
 - This repository's `std/*.cheby` files open in single-file mode, where `@std_hooks` may report errors.
 
@@ -2390,9 +2390,10 @@ Goal: settle what waves W1 to W5 found before the server's requests land.
 - **D-1429 A second type's names are snake_case**: In D-1404's `<type>_to_json` and `<type>_decoder`, `<type>` is the type's name in snake_case, so `Odd` gives `odd_to_json` and `odd_decoder`. Why: function names are snake_case (D-059), and a test needs the name pinned. Refines D-1404.
 - **D-1430 A malformed frame ends the server**: A frame whose body is not a JSON-RPC message ends `cheby lsp` with status 1 and one line on stderr, as `lsp-server`'s reader does. Stdout stays clean. A protocol trial pins it. Why: clients send well-formed frames, and editors restart a server that exits. Rejected: our own stdio transport that answers -32700 and goes on, about 200 lines for a case no client produces.
 - **D-1431 A panic outside a run drops the package's session**: A panic while the server invalidates or sweeps a package's files drops that package's session, and the next event starts a new one with a cold run. A panic inside a run keeps the session (D-1362). Why: a half-updated session could give wrong answers, and a cold run costs about a second. Refines D-1362.
+- **D-1442 A publish only when the list or version changes**: The server skips a publish when the path's last publish had the same version and the same diagnostics. So a `didSave`, a settings change or a sweep that changes nothing sends nothing. `didOpen` and `didClose` forget the path's last publish, so an opened document still gets a publish with its version, even an empty one, and a closed file still gets its publish without one. A client or test that needs to know a job has finished sends a request afterwards, which waits for the current analysis (A §3.3). Why: in the CP1 session Zed autosaved a second after typing stopped, sometimes twice, and with a publish after each save and after each half of a close and open, one pause sent up to three identical lists. Waiting on an unchanged publish was only a test convenience, and a request gives the same barrier with no traffic. Refines D-1373.
 
 Open:
 
-- Zed's behaviour is unverified until the CP1 session is read.
+- ~~Zed's behaviour is unverified until the CP1 session is read.~~ Done: read on 2026-11-08 with Zed 1.27.0 → D-1442. The diagnostics panel, diagnostic tags, file watchers with dynamic registration and `fileOperations` were not exercised and wait for CP2.
 
 Spec: §13.11.1's note on a second type. No new diagnostic code. Tree-sitter: no grammar change.
