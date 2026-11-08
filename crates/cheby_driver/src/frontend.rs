@@ -637,13 +637,6 @@ pub(crate) struct Retain {
     pub tolerant: bool,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "W4: `StdBase` uses STD and `verify` uses VERIFY; BUILD and LIVE are used"
-    )
-)]
 impl Retain {
     /// A build: today's behaviour.
     pub(crate) const BUILD: Self = Self {

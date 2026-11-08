@@ -12,13 +12,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cheby_diag::{Code, FileId, SourceFile, SourceMap, TextRange};
 use cheby_iface::{
     DefId, DefIndex, DefKind, DepView, Generics, Globals, Ice, InterfaceSet, ItemSig, ModuleId,
     ModuleInterface, ModuleTable, Name, Namespace, PackageId, ParamIdx,
 };
-use cheby_package::ModulePath;
+use cheby_package::{ModulePath, Targets};
 use cheby_resolve::{ImportRequest, ImportTarget, ResolvedModule};
 use cheby_syntax::SyntaxTree;
 use cheby_types::facts::ModuleFacts;
@@ -56,6 +57,9 @@ pub struct AnalysisStatus {
     /// The imports a cycle cut made unresolved (D-1358): the importing
     /// file and the import's range in it.
     pub cut_imports: Vec<(PathBuf, TextRange)>,
+    /// The run used the last good manifest, since the live one gave none
+    /// (A §2.7).
+    pub manifest_is_last_good: bool,
 }
 
 /// One entry of [`Snapshot::baseline`]: a diagnostic of the run as a
@@ -121,6 +125,10 @@ pub(crate) struct Parts {
     pub files: BTreeMap<PathBuf, FileId>,
     pub broken: BTreeSet<PathBuf>,
     pub baseline: Vec<BaselineEntry>,
+    /// The run's targets, after `--target` narrowed the manifest's.
+    pub targets: Targets,
+    /// The run's manifest is the last good one, not the live one.
+    pub manifest_is_last_good: bool,
 }
 
 /// One immutable generation: everything keyed by run-local ids lives here.
@@ -140,6 +148,7 @@ pub struct Snapshot {
     /// Every module with an interface, sorted.
     all_ids: Vec<ModuleId>,
     baseline: Vec<BaselineEntry>,
+    targets: Targets,
     status: AnalysisStatus,
 }
 
@@ -176,6 +185,8 @@ impl Snapshot {
             files,
             broken,
             baseline,
+            targets,
+            manifest_is_last_good,
         } = parts;
         let count = sources.files().count();
         let mut locations = vec![FileLocation::Synthetic; count];
@@ -244,9 +255,11 @@ impl Snapshot {
             importers,
             all_ids,
             baseline,
+            targets,
             status: AnalysisStatus {
                 broken,
                 cut_imports,
+                manifest_is_last_good,
             },
         }
     }
@@ -311,6 +324,13 @@ impl Snapshot {
             .and_then(|id| self.module(id))
     }
 
+    /// The hash of the bytes the module file `file` was read from
+    /// (D-963). For a file that was not UTF-8 it is not its lossy text's.
+    pub(crate) fn bytes_hash(&self, file: FileId) -> Option<crate::cache::Hash128> {
+        let id = self.module_at(file)?.id();
+        self.front.source_hashes(id).map(|h| h.sip128)
+    }
+
     /// The module `id`.
     #[must_use]
     pub fn module(&self, id: ModuleId) -> Option<ModuleView<'_>> {
@@ -353,6 +373,12 @@ impl Snapshot {
     #[must_use]
     pub fn globals(&self) -> &Globals {
         &self.front.globals
+    }
+
+    /// What a run beside this one shares with it: the interners and the
+    /// targets, after `--target` (plan §1.6). `verify` runs on them.
+    pub(crate) fn run_context(&self) -> (Arc<Globals>, Targets) {
+        (Arc::clone(&self.front.globals), self.targets)
     }
 
     /// Every module of the run, by id and by path.

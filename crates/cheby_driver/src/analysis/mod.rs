@@ -12,6 +12,14 @@
 //!   normalized text.
 //! - [`Session`] over an [`Overlay`]: each run gives a [`Live`], with an
 //!   immutable [`Snapshot`] for queries and [`FileReport`]s to publish.
+//!   It runs the two-track algorithm (D-1347): a [`Live`] that is not the
+//!   check carries a [`StrictPlan`], which [`Session::analyze_strict`]
+//!   runs as the D run.
+//! - [`StdBase`]: every shipped std module checked once, with its plain
+//!   [`StdIndex`], and [`materialize_std`] for std's files on disk
+//!   (D-1369, D-1372).
+//! - [`verify`]: a stateless re-check of an edit plan against a snapshot
+//!   (D-1389).
 //!
 //! The re-exports below are what a client needs to read a snapshot: data
 //! types and pure helpers of the phase crates, so that `cheby_lsp` needs no
@@ -22,7 +30,18 @@ mod inputs;
 mod plain;
 mod session;
 mod snapshot;
+mod std_base;
 mod symbol;
+mod verify;
+
+#[cfg(test)]
+mod std_base_tests;
+#[cfg(test)]
+mod sweep_tests;
+#[cfg(test)]
+mod two_track_tests;
+#[cfg(test)]
+mod verify_tests;
 
 pub use cheby_diag::{
     Code, Diagnostic, Edit, FileId, Help, Label, LabelStyle, Severity, SourceFile, SourceMap, Span,
@@ -56,14 +75,19 @@ pub use plain::{
     InputsKey, NormMap, Placed, PlainDiagnostic, PlainEdit, PlainHelp, PlainLabel, exact_key,
     normalize, normalized_key, plain,
 };
-pub use session::{FileReport, Live, Report, Session, SessionConfig};
+pub use session::{FileReport, Live, Report, Session, SessionConfig, StrictPlan};
 pub use snapshot::{
     AnalysisStatus, BaselineEntry, FileLocation, ModuleView, Snapshot, SnapshotId, SymbolTarget,
 };
+pub use std_base::{
+    StdBase, StdField, StdIndex, StdItem, StdModuleEntry, TypeHead, materialize_std,
+};
 pub use symbol::{Member, Symbol, SymbolNs};
+pub use verify::{VerifyOutcome, VerifyRequest, verify};
 
 /// What crosses threads in the server: a snapshot and its reports are
-/// shared by the request pool, and a session moves to the analysis
+/// shared by the request pool, as are the std base and what `verify` takes
+/// and gives on a query thread, and a session moves to the analysis
 /// thread. These fail to compile if a field ever breaks that.
 const _: () = {
     const fn shared<T: Send + Sync>() {}
@@ -76,5 +100,12 @@ const _: () = {
     shared::<Symbol>();
     shared::<Overlay>();
     shared::<Globals>();
+    shared::<AnalysisStatus>();
+    shared::<StrictPlan>();
+    shared::<StdBase>();
+    shared::<StdIndex>();
+    shared::<StdItem>();
+    shared::<VerifyRequest<'static>>();
+    shared::<VerifyOutcome>();
     movable::<Session>();
 };
