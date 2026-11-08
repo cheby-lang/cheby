@@ -1,9 +1,12 @@
 //! Developer commands (docs/plan/m0-foundation.md, task 0.10):
 //!
-//! - `bless`: rewrites the goldens of examples and UI tests from the
-//!   current `cheby` binary, including the goldens beside package UI tests
-//!   (directories with their own `cheby.toml`). An example's `cheby test`
-//!   trial has no goldens, so blessing only runs it.
+//! - `bless`: rewrites the goldens of examples, UI tests and the language
+//!   server's golden tests under `tests/lsp/` from the current `cheby`
+//!   binary, including the goldens beside package UI tests (directories
+//!   with their own `cheby.toml`). An example's `cheby test` trial has no
+//!   goldens, so blessing only runs it, and the LSP harness ignores its
+//!   trials that have none (D-1352). REPL transcripts are blessed by hand
+//!   (`tests/repl/README.md`).
 //! - `gen-bench`: generates a synthetic benchmark project.
 //! - `check-determinism`: checks that outputs are the same byte for byte
 //!   from different paths (D-264), executables of `cheby build` included
@@ -15,10 +18,11 @@
 //! The commands that build `cheby` ([`build_cheby`]) build the runtime
 //! archive `libcheby_rt_exe.a` in the same cargo invocation, since
 //! `cheby build` links it (D-929).
-//! - `coverage`: lists decisions cited in the spec that no UI test or REPL
-//!   transcript names, reading `@decisions` from each test's header
-//!   (`src/main.cheby` of a package test) and from each transcript's
-//!   header (D-638).
+//! - `coverage`: lists decisions cited in the spec that no UI test, REPL
+//!   transcript or LSP golden test names, reading `@decisions` from each
+//!   test's header (`src/main.cheby` of a package test), from each
+//!   transcript's header (D-638) and from each test under `tests/lsp/`
+//!   (D-1352).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
@@ -72,7 +76,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
-    /// Rewrite goldens of examples and UI tests from the current `cheby`
+    /// Rewrite goldens of examples, UI tests and LSP tests from the current `cheby`
     Bless {
         /// Only bless tests whose name contains this filter
         filter: Option<String>,
@@ -113,7 +117,7 @@ enum Cmd {
     /// `rustc --print native-static-libs` and open each recorded file
     /// (D-933, D-943)
     CheckNativeLibs,
-    /// List decisions cited in the spec that no UI test names
+    /// List decisions cited in the spec that no test names
     Coverage,
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
     /// commit and with the compiler parser, and compare
@@ -190,6 +194,8 @@ fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
             "conformance",
             "--test",
             "ui",
+            "--test",
+            "lsp",
             "--",
         ])
         .env("CHEBY_BLESS", "1");
@@ -361,6 +367,10 @@ fn coverage(root: &Path) -> Result<(), String> {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         covered.extend(header.decisions);
     }
+    // So do the language server's golden tests (D-1352).
+    for test in cheby_test_support::lsp::case::all(root)? {
+        covered.extend(test.header?.decisions);
+    }
     let uncovered: Vec<_> = cited.difference(&covered).copied().collect();
     let unknown: Vec<_> = covered.difference(&cited).copied().collect();
     println!(
@@ -371,7 +381,7 @@ fn coverage(root: &Path) -> Result<(), String> {
     print_wrapped("uncovered", &uncovered);
     // Plan-level and tooling decisions may be tested without being cited
     // in the spec, so this is informative only.
-    print_wrapped("named by UI tests but not cited in the spec", &unknown);
+    print_wrapped("named by tests but not cited in the spec", &unknown);
     Ok(())
 }
 

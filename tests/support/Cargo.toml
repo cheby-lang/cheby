@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 cheby_diag.workspace = true
 cheby_syntax.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 
 [lints]

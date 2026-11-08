@@ -26,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::milestone::Milestone;
+use crate::milestone::{Expectation, Milestone, Setting};
 
 #[derive(Debug, Clone)]
 pub struct Example {
@@ -165,6 +165,24 @@ pub fn serial_names(examples: &[Example]) -> Vec<&str> {
 }
 
 impl Example {
+    /// What a harness expects of a trial that only checks the example:
+    /// `current`'s expectation of its milestone, except that a `skip-run`
+    /// example of a later milestone is tolerated. Its milestone names when
+    /// its fixture arrives, not when `cheby check` can handle it, so a pass
+    /// before that milestone is reported as pending, not as an unexpected
+    /// pass (D-445). An example with dependencies, such as 030, has
+    /// milestone M5, when dependencies resolve (D-446). That check is
+    /// tolerated: a strict run does not require it before the milestone.
+    /// The conformance harness's check-only trial and the language server
+    /// harness's trials of examples use it (D-1352).
+    #[must_use]
+    pub fn check_only_expectation(&self, current: Setting) -> Expectation {
+        match current.expectation(self.config.milestone) {
+            Expectation::Fail if self.config.skip_run => Expectation::Tolerated,
+            other => other,
+        }
+    }
+
     /// Reads the example's inputs and goldens.
     ///
     /// # Errors

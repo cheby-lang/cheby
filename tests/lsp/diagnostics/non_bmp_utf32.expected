@@ -1,0 +1,21 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `nope` in this scope",
+      "range": {
+        "end": {
+          "character": 24,
+          "line": 7
+        },
+        "start": {
+          "character": 20,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+// @decisions: D-1368
+// @encoding: utf-32
+//! A diagnostic after characters outside the BMP, in utf-32 columns.
+
+import std::io
+
+fn main() {
+  io::println("😀é😀 {nope}")
+}

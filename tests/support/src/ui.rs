@@ -355,8 +355,10 @@ impl UiTest {
 /// The codes that only the back end reports: an unresolved native symbol
 /// and the constant-evaluation errors. `cheby check` reports them after it
 /// has built a JIT for the package's constants. E0069 is also a front-end
-/// code; counting it here only ignores a few more tests on Windows.
-const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
+/// code; counting it here only ignores a few more tests on Windows. The
+/// language server harness skips the parity trials of goldens that hold
+/// one until the server's constants child lands (D-1348, D-1349).
+pub const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
 
 /// The extensions of the input files of a run test (D-543), and its
 /// environment file (D-1043).

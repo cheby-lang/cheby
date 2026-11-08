@@ -1,0 +1,8 @@
+// @decisions: D-1373
+//! Each module's diagnostics are published on its own URI.
+
+import two_modules::util
+
+fn main() {
+  assert util::answer() == 42
+}

@@ -29,7 +29,7 @@ cheby/
     cheby_consteval/      compile-time evaluation of constants
     cheby_repl/           REPL session
     cheby_fmt/            formatter (M5)
-    cheby_lsp/            language server (M5)
+    cheby_lsp/            language server: protocol, open documents, diagnostics (M5)
     cheby_doc/            documentation generator (M5)
     cheby_pkg/            dependency resolution and fetching (M5)
     cheby_cli/            the `cheby` binary, whose build script computes the build ID (M3)
@@ -39,6 +39,7 @@ cheby/
     ui/                   compile-time rule tests (D-275)
     conformance/          harness that runs docs/examples against goldens
     repl/                 scripted REPL sessions
+    lsp/                  language server tests and goldens, run over stdio (D-1352)
     support/              cheby_test_support: shared harness code, and from M2 the program generator (D-809)
   bench/                  synthetic project generator and runtime benchmarks
   fuzz/                   cargo-fuzz targets: lex, parse, check, and naive-versus-Perceus RC (M2)
@@ -97,10 +98,10 @@ Per-module steps run once per module in import-graph order, with independent mod
 ### 2.1 Syntax
 
 - Hand-written lexer and recursive-descent parser over a lossless concrete syntax tree (D-272). The same tree serves the compiler, the formatter and the language server.
-- The parser emits events (start node, token, finish node), and a builder turns them into a flat, arena-allocated tree written for Cheby (D-280). Later phases see it only through typed AST views. Cursors, parent links and incremental reparsing for the language server live in `cheby_syntax`.
+- The parser emits events (start node, token, finish node), and a builder turns them into a flat, arena-allocated tree written for Cheby (D-280). Later phases see it only through typed AST views. Cursors and parent links live in `cheby_syntax`. Nothing reparses incrementally: the language server parses every file in full on each run (§4.3).
 - The lexer emits an `NL` for every line break outside strings and comments, and the parser decides continuation (D-231).
 - String interpolation is lexed into segments, so `"{x:?}"` produces tokens the parser can check ([§2.5.4](../spec/02-lexical-structure.md)).
-- Error recovery is required from the start, because the language server parses incomplete code.
+- Error recovery is required, because the language server parses incomplete code. A file with grammar errors still gets a tree, and while it has them the server publishes its phase-A diagnostics and checks the other files against their last good text (D-1347).
 - Parsing is checked against `tree-sitter-cheby` on every example and UI test, so the editor grammar and the compiler cannot drift silently ([testing.md](testing.md#5-parser-cross-check)).
 
 ### 2.2 Names and modules
@@ -423,6 +424,21 @@ A panicking or cancelled fiber unwinds its stack and releases each frame's refer
 - **Output:** `Session::analyze_live` gives a `Live`: an `Arc<Snapshot>` for queries, and plain `FileReport`s to publish, whose diagnostics are `PlainDiagnostic`s of paths, ranges and strings (D-1364). The Q run's diagnostics publish only when no file has a phase-A error, no import is cut, and nothing is lost or dropped silently, since then the Q run is the check (D-1359). Otherwise only the broken files' phase-A diagnostics publish.
 - **Identity:** handles are per run. `Symbol`, made of strings, is the only identity that crosses snapshots: `Snapshot::key_of` names a definition and `Snapshot::find` maps the name into another snapshot (D-1365). Text keys are `Hash128`s, of the exact bytes or of the normalized text, with `NormMap` between them (D-1393, D-1412).
 - **Re-exports:** the module re-exports the data types and pure helpers a reader of a snapshot needs, from `cheby_diag`, `cheby_iface`, `cheby_package`, `cheby_resolve` and `cheby_types`, with the fact and satisfaction types, so `cheby_lsp` needs no edge to the phase crates. No phase function is re-exported (D-1350). `Snapshot`, `Live` and the reports are `Send + Sync`, which `const` assertions check.
+
+### 4.3 The language server
+
+`cheby lsp` runs `cheby_lsp`, which serves LSP 3.17 over stdio through `lsp-server` and `lsp-types` (D-1351). The crate reaches the compiler only through `cheby_driver::analysis` (§4.2).
+
+- **Threads:** the main loop owns all server state and never parses or checks. It reads the client's messages, the analysis thread's events and a debounce timer, and only it writes to the connection. One analysis thread, `cheby-analysis`, with a 256 MiB stack, owns a `Session` per package root and runs one job at a time on the worker pool that `cheby lsp` sizes as the building commands do (D-601, D-622).
+- **Handshake and shutdown** are the server's own, not `lsp-server`'s helpers (D-1377). `exit`, or the end of input, ends it with status 0 after `shutdown` and 1 before it.
+- **Documents:** sync is incremental. A document belongs to the package of its nearest `cheby.toml` (D-1375). Positions use the negotiated encoding, UTF-8, else UTF-32, else UTF-16, and count `\n`, `\r\n` and a lone `\r` as line ends (D-1368). Until a file watcher lands, an open, close or save sweeps the package's files on disk.
+- **Runs:** an edit starts a debounce. A job is phase A and the Q run on the open texts and disk, then the D run when the Q run plans one and no newer edit supersedes the job (D-1347). A panic in a run is caught on the analysis thread and ends that run only.
+- **Publishing:** every package file and `cheby.toml` are published, open or closed. An open document gets a publish with its version after every job, even an empty or unchanged list, so a client can wait for it. A closed file is published when its list changes, and a file that leaves the package gets one empty publish (D-1373). The published diagnostics are `cheby check`'s (D-1348).
+- **Settings:** one `cheby` object, read from `initializationOptions`, `workspace/configuration` and `didChangeConfiguration`, in layers over the defaults. A bad value is skipped with a warning (D-1376).
+- **Handles:** the driver's generation handles stay out of the server's state. The crate's `clippy.toml` bans their types, and only request handlers, from a later wave, will read a snapshot (D-1366).
+- **Capabilities:** the server advertises only what it serves. Today that is `positionEncoding` and `textDocumentSync` (D-1379).
+
+The harness `cargo test -p cheby_cli --test lsp` runs the built server as an editor would ([testing.md](testing.md#10-language-server-tests)).
 
 ## 5. Standard library location
 

@@ -38,7 +38,7 @@ The formatter core, the LSP core and `cheby new` were placed with M2 and did not
 
 ## Status
 
-In progress. The formatter core and `cheby new` landed with M3. `cheby lsp`, `cheby doc`, `add`, `update` and `fetch` are still stubs, and doc examples are not run as tests.
+In progress. The formatter core and `cheby new` landed with M3. `cheby lsp` serves the protocol and publishes diagnostics (W5 of the `lsp` branch); `cheby doc`, `add`, `update` and `fetch` are still stubs, and doc examples are not run as tests.
 
 The language server's design is logged: D-1347 to D-1426 in the [language server](../decisions/LOG.md#2026-11-07-the-language-server) session, ADRs 0076 to 0078, and §13.8, §13.11 and §13.11.1 of the spec. That session is the design step of D-1029, and D-1353 and D-1426 set the scope that the slices above list. The exit criterion on the server's diagnostics is D-1348's, which names `cheby check`, not `cheby build`.
 

@@ -1,0 +1,6 @@
+// @decisions: D-1347
+//! A file that does not parse shows its grammar errors only.
+
+fn main() {
+  let pair = (1,
+}

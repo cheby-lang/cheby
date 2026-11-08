@@ -20,6 +20,12 @@
 //!   given files, or standard input for `-` (D-1031).
 //! - `cheby new <name>` creates a package in the working directory
 //!   (D-1032, [`new`]).
+//! - `cheby lsp` serves the language server over stdio until `exit` or
+//!   the end of input (§13.11, [`cheby_lsp::run`]). It starts the worker
+//!   pool as the commands that build do, and passes this binary's build ID
+//!   and its own path, for the server's child jobs (D-1349). The status is
+//!   0 after `shutdown` and 1 before it (D-1377). A hidden `--stdio` flag
+//!   is accepted and ignored, since clients add it.
 //!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are `error:` lines
@@ -151,7 +157,11 @@ enum Command {
         paths: Vec<std::path::PathBuf>,
     },
     /// Run the language server over stdio (§13.11)
-    Lsp,
+    Lsp {
+        /// Accepted and ignored: clients that pass it mean this server's only transport
+        #[arg(long, hide = true)]
+        stdio: bool,
+    },
     /// Generate HTML documentation (§13.10)
     Doc,
     /// Add a dependency to the manifest and lockfile (§13.4)
@@ -219,8 +229,9 @@ fn run_command() -> ExitCode {
         std::io::stderr().is_terminal(),
     );
     let out = Out { colors };
-    // The commands that build start the worker pool first (D-551). `-j`
-    // is global, and the commands that build nothing ignore it (D-622).
+    // The commands that build start the worker pool first (D-551), and so
+    // does the language server, whose analysis runs the front end on it.
+    // `-j` is global, and the commands that build nothing ignore it (D-622).
     let builds = matches!(
         cli.command,
         Command::Check { .. }
@@ -228,6 +239,7 @@ fn run_command() -> ExitCode {
             | Command::Run { .. }
             | Command::Repl { .. }
             | Command::Test { .. }
+            | Command::Lsp { .. }
     );
     if builds && let Err(e) = cheby_driver::configure_jobs(cli.jobs) {
         return out.error(e.message());
@@ -292,7 +304,12 @@ fn run_command() -> ExitCode {
             },
         ),
         Command::Fmt { check, paths } => fmt(out, check, &paths),
-        Command::Lsp => out.not_yet("lsp", "M5"),
+        // The flag only names the one transport there is.
+        Command::Lsp { stdio: _ } => cheby_lsp::run(cheby_lsp::ServerOptions {
+            build: build_id::build_id(),
+            // Without its own path the server runs no child jobs.
+            child: std::env::current_exe().ok(),
+        }),
         Command::Doc => out.not_yet("doc", "M5"),
         Command::Add => out.not_yet("add", "M5"),
         Command::Update => out.not_yet("update", "M5"),

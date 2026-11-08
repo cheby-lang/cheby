@@ -1,0 +1,17 @@
+== initialize
+{
+  "capabilities": {
+    "positionEncoding": "utf-8",
+    "textDocumentSync": {
+      "change": 2,
+      "openClose": true,
+      "save": {
+        "includeText": false
+      }
+    }
+  },
+  "serverInfo": {
+    "name": "cheby",
+    "version": "<version>"
+  }
+}

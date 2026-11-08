@@ -1,0 +1,71 @@
+# The crate-local lint of D-1366 (plan §1.4, A §1.5). A crate-local
+# clippy.toml replaces the root one, so its four settings are repeated.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Generation handles, and the types that hold them, are valid for one run
+# only: misuse gives a silent wrong answer. They may appear only in the one
+# module `features`, which carries a single `#[expect]`. The lint sees
+# written type names only, so a value held through inference is review's
+# job. Each path was probed: a path clippy cannot find is a warning, which
+# CI turns into a failure, so a wrong entry cannot pass silently.
+disallowed-types = [
+  { path = "cheby_driver::analysis::Ty", reason = "a generation handle: use a Symbol" },
+  { path = "cheby_driver::analysis::Name", reason = "a generation handle: use a string" },
+  { path = "cheby_driver::analysis::DefId", reason = "a generation handle: use a Symbol" },
+  { path = "cheby_driver::analysis::DefIndex", reason = "a generation handle: use a Symbol" },
+  { path = "cheby_driver::analysis::ModuleId", reason = "a generation handle: use a module path" },
+  { path = "cheby_driver::analysis::ParamIdx", reason = "a generation handle" },
+  { path = "cheby_driver::analysis::FileId", reason = "a generation handle: use a path" },
+  { path = "cheby_driver::analysis::Span", reason = "a generation handle: use a path and a range" },
+  { path = "cheby_driver::analysis::Diagnostic", reason = "holds spans: use PlainDiagnostic (D-1364)" },
+  { path = "cheby_driver::analysis::Res", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::IfaceItem", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::ScopeEntry", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::BodyFacts", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::CallFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::CaseFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::DynFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::ExprFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::FieldFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::FieldSite", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::MismatchFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::MissingPat", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::ModuleFacts", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::OpFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::ShowFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::UnsatisfiedFact", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::thir::ExprId", reason = "a generation handle" },
+  { path = "cheby_driver::analysis::thir::PatId", reason = "a generation handle" },
+  { path = "cheby_driver::analysis::thir::Callee", reason = "holds generation handles" },
+  { path = "cheby_driver::analysis::thir::Dict", reason = "holds generation handles" },
+  { path = "cheby_resolve::LocalId", reason = "a generation handle" },
+  { path = "cheby_syntax::NodeId", reason = "a generation handle" },
+  { path = "cheby_syntax::TokenId", reason = "a generation handle" },
+  { path = "cheby_syntax::ast::AstId", reason = "a generation handle" },
+]
+
+# Raw handle numbers are banned everywhere, `features` included.
+disallowed-methods = [
+  { path = "cheby_iface::ModuleId::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_iface::ModuleId::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_iface::DefIndex::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_iface::DefIndex::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_iface::ParamIdx::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_iface::ParamIdx::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_iface::PackageId::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_iface::PackageId::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_iface::Name::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_types::thir::ExprId::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_types::thir::ExprId::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_types::thir::PatId::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_types::thir::PatId::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_resolve::LocalId::as_u32", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_resolve::LocalId::from_u32", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_diag::FileId::new", reason = "a raw handle number must not enter a handler" },
+  { path = "cheby_diag::FileId::index", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_syntax::NodeId::index", reason = "a raw handle number must not leave a handler" },
+  { path = "cheby_syntax::TokenId::index", reason = "a raw handle number must not leave a handler" },
+]
