@@ -503,7 +503,7 @@ pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
     })
 }
 
-/// `list::sort_with` (D-1447): a stable bottom-up merge sort that calls
+/// `list::sort_with` (D-1448): a stable bottom-up merge sort that calls
 /// `by` through `callback::call` (D-484, D-526). Runs of one element are
 /// merged in adjacent pairs, front to back, and a last run without a
 /// partner waits for the next round, until one run is left. A merge takes

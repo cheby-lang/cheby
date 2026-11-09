@@ -279,8 +279,8 @@ fn builtin_arithmetic_kinds() {
 }
 
 /// Comparisons of numbers and `Bool` are `compare`; `==` on `String` is
-/// `str_eq`, on other uniform types `equal` with the location (D-556);
-/// `!=` negates.
+/// `str_eq`, on an `Option` of numbers a comparison of tags and payloads,
+/// on other uniform types `equal` with the location (D-556); `!=` negates.
 #[test]
 fn equality_and_ordering_by_type() {
     let l = scalars();
@@ -311,11 +311,12 @@ fn equality_and_ordering_by_type() {
         lists.contains("str#1 = \"src/main.cheby:105:3\""),
         "{lists}"
     );
+    // An `Option<Int>` is compared inline: tags, then the payloads.
     let options = f(&l, "ne_options");
-    assert!(
-        options.contains("call_runtime equal(borrow _0, borrow _1, borrow const str#1)"),
-        "{options}"
-    );
+    assert!(!options.contains("call_runtime equal"), "{options}");
+    assert!(options.contains("read_tag _0 of option"), "{options}");
+    assert!(options.contains("field _0.0 of ctor Some"), "{options}");
+    assert!(options.contains("compare eq int"), "{options}");
     assert!(options.contains("= not _"), "{options}");
 }
 

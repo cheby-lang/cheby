@@ -1027,7 +1027,7 @@ pub fn sort_with<T>(xs: List<T>, compare: fn(T, T) -> Order) -> List<T>
 
 Returns the elements of `xs` in increasing order by `compare`, where `Less` means the first argument goes first (D-335). The sort is stable (D-299).
 
-It is a bottom-up merge sort, and every target runs this algorithm, so a `compare` that is not a consistent order gives the same list everywhere and sees the same calls in the same order (D-1447). Each element starts as a run of one. Each round merges the runs in adjacent pairs, front to back, and a last run without a partner waits for the next round, until one run is left. A merge calls `compare` with the front elements of its left and right runs, takes the right one when the result is `Greater` and the left one otherwise, and copies the rest of either run once the other is empty. The runtime runs the sort and calls `compare` back, as `map::upsert` calls its function (D-1447).
+It is a bottom-up merge sort, and every target runs this algorithm, so a `compare` that is not a consistent order gives the same list everywhere and sees the same calls in the same order (D-1448). Each element starts as a run of one. Each round merges the runs in adjacent pairs, front to back, and a last run without a partner waits for the next round, until one run is left. A merge calls `compare` with the front elements of its left and right runs, takes the right one when the result is `Greater` and the left one otherwise, and copies the rest of either run once the other is empty. The runtime runs the sort and calls `compare` back, as `map::upsert` calls its function (D-1448).
 
 - **Cost:** O(n log n) calls to `compare`. Informative.
 

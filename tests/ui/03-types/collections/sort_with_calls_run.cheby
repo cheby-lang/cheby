@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-299, D-1447
+// @decisions: D-299, D-1448
 //! `list::sort_with` merges runs of one element in adjacent pairs, front
 //! to back, and compares the front elements of two runs, so a comparison
 //! that prints sees the same calls in the same order on every target.

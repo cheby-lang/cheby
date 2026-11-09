@@ -364,7 +364,7 @@ test "map can merge elements" {
 pub fn union<T>(s: Set<T>, other: Set<T>) -> Set<T>
 ```
 
-Returns the elements that are in `s` or in `other`. Where both hold an element, the one in `s` is kept (D-588). It walks the smaller of the two sets (D-1446).
+Returns the elements that are in `s` or in `other`. Where both hold an element, the one in `s` is kept (D-588). It walks the smaller of the two sets (D-1447).
 
 - **Cost:** O(m log (n + k)), effectively O(m), where k is the size of `other` and m the smaller of n and k. Informative.
 
@@ -393,7 +393,7 @@ test "union keeps the elements of its first set" {
 pub fn intersection<T>(s: Set<T>, other: Set<T>) -> Set<T>
 ```
 
-Returns the elements of `s` that are also in `other`, so where both hold an element, the one in `s` is kept (D-588). It walks the smaller of the two sets (D-1446).
+Returns the elements of `s` that are also in `other`, so where both hold an element, the one in `s` is kept (D-588). It walks the smaller of the two sets (D-1447).
 
 - **Cost:** O(m log (n + k)), effectively O(m), where k is the size of `other` and m the smaller of n and k. Informative.
 
@@ -422,7 +422,7 @@ test "intersection keeps the elements of its first set" {
 pub fn difference<T>(s: Set<T>, other: Set<T>) -> Set<T>
 ```
 
-Returns the elements of `s` that are not in `other`. It walks the smaller of the two sets (D-1446).
+Returns the elements of `s` that are not in `other`. It walks the smaller of the two sets (D-1447).
 
 - **Cost:** O(m log (n + k)), effectively O(m), where k is the size of `other` and m the smaller of n and k. Informative.
 
@@ -449,7 +449,7 @@ test "difference gives the same set from either size" {
 pub fn is_subset<T>(s: Set<T>, other: Set<T>) -> Bool
 ```
 
-Tells whether every element of `s` is in `other`. It stops at the first element that is not, and gives `False` at once when `s` is larger than `other` (D-1446).
+Tells whether every element of `s` is in `other`. It stops at the first element that is not, and gives `False` at once when `s` is larger than `other` (D-1447).
 
 - **Cost:** O(1) when n is larger than k, the size of `other`, and O(n log k), effectively O(n), otherwise. Informative.
 

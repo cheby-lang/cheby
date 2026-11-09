@@ -7,9 +7,11 @@
 //! [`Rvalue::FloatArith`] (IEEE 754, never panics, D-527), `& | ^` are
 //! [`Rvalue::Bitwise`], and comparisons of numbers and `Bool` are
 //! [`Rvalue::Compare`], which follows `compare`'s total order on floats
-//! (§3.14, D-135, D-527). `==` on `String` is [`RuntimeFn::StrEq`], on
-//! every other uniform type structural [`RuntimeFn::Equal`] with the
-//! operator's location (D-556); `!=` is the negation. An overloaded
+//! (§3.14, D-135, D-527). `==` on any other type is
+//! [`super::equality`]'s: byte equality of strings, a comparison of the
+//! fields of a tuple or an ADT the module knows, and otherwise structural
+//! [`crate::ir::RuntimeFn::Equal`] with the operator's location (D-556);
+//! `!=` is the negation. An overloaded
 //! operator (§5.4.3, §5.4.4) calls the operand type's function; a
 //! comparison tests the `Order` it returns. `&&` and `||` branch, and
 //! their right operand is in tail position when the whole expression is
@@ -24,7 +26,7 @@ use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
 use cheby_types::thir::{BinOpKind, Callee as ThirCallee, ExprId, FloatLit, Lit, OpImpl};
 
-use crate::ir::{ArithOp, BitOp, CmpOp, Const, Operand, RuntimeFn, Rvalue, TagType};
+use crate::ir::{ArithOp, BitOp, CmpOp, Const, Operand, Rvalue, TagType};
 use crate::lower::body::BodyCx;
 use crate::repr::Repr;
 
@@ -79,6 +81,13 @@ impl BodyCx<'_, '_> {
             return self.logical(and, lhs, rhs, tail);
         }
         let operand_ty = self.operand_ty(lhs, rhs)?;
+        if matches!(op, BinOpKind::Eq | BinOpKind::Ne)
+            && matches!(imp, OpImpl::Builtin)
+            && self.compares_written(lhs, rhs, operand_ty)?
+        {
+            let ne = op == BinOpKind::Ne;
+            return self.equality_written(ne, (lhs, rhs), operand_ty, span);
+        }
         let Some((l, r)) = self.operands(lhs, rhs, operand_ty)? else {
             return Ok(None);
         };
@@ -230,28 +239,18 @@ impl BodyCx<'_, '_> {
     fn equality(&mut self, ne: bool, operands: BinaryOperands, span: Span) -> Result<Operand, Ice> {
         let BinaryOperands { lhs, rhs, ty } = operands;
         let repr = self.repr_of(ty);
-        let eq = if repr == Repr::Value {
-            if ty == Ty::STRING {
-                Rvalue::CallRuntime {
-                    func: RuntimeFn::StrEq,
-                    args: vec![lhs, rhs],
-                }
-            } else {
-                let loc = self.location(span)?;
-                Rvalue::CallRuntime {
-                    func: RuntimeFn::Equal,
-                    args: vec![lhs, rhs, loc],
-                }
-            }
-        } else {
+        if repr != Repr::Value {
             let op = if ne { CmpOp::Ne } else { CmpOp::Eq };
             let l = self.define(Repr::Bool, Rvalue::Compare { op, lhs, rhs, repr })?;
             return Ok(Operand::Local(l));
-        };
-        let mut l = self.define(Repr::Bool, eq)?;
-        if ne {
-            l = self.define(Repr::Bool, Rvalue::Not(Operand::Local(l)))?;
         }
+        // Strings by their bytes, values of a structure the module knows
+        // field by field, and the rest by the runtime's walk.
+        let eq = self.values_equal(lhs, rhs, ty, span)?;
+        if !ne {
+            return Ok(eq);
+        }
+        let l = self.define(Repr::Bool, Rvalue::Not(eq))?;
         Ok(Operand::Local(l))
     }
 

@@ -1,0 +1,58 @@
+// @mode: run-pass
+// @decisions: D-069, D-136, D-556
+//! `==` on tuples and ADTs compares tags first and then fields, left to
+//! right, as the structural walk does, whether an operand is a value or
+//! written in place. Floats inside follow §3.3.2, strings compare by text
+//! and lists inside by the walk, and a written operand's parts are
+//! evaluated in written order.
+
+import std::io
+
+type Shape {
+  Circle(Float),
+  Rect { w: Int, h: Int },
+  Empty,
+}
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let some = Some(1)
+  let none: Option<Int> = None
+  assert some == Some(1)
+  assert some != Some(2)
+  assert some != None
+  assert none == None
+  assert Some(1) != None
+  let pair = (1, "a")
+  assert pair == (1, "a")
+  assert pair != (1, "b")
+  assert (0.0, 1) == (-0.0, 1)
+  let nan = 0.0 / 0.0
+  assert (nan, 1) == (nan, 1)
+  let rect = Rect { w: 2, h: 3 }
+  assert rect == Rect { h: 3, w: 2 }
+  assert rect != Circle(1.0)
+  assert Empty == Empty
+  assert rect != Empty
+  let lists = ([1, 2], Some([3]))
+  assert lists == ([1, 2], Some([3]))
+  assert lists != ([1, 2], Some([4]))
+  assert Point { x: 1, y: 2 } == Point { x: 1, y: 2 }
+  let ok: Result<Int, String> = Ok(3)
+  assert ok != Err("3")
+  assert ok == Ok(3)
+  assert Less != Greater
+  let tuples = ((say("first", 1), say("second", 2)) == (say("third", 1), say("fourth", 2)))
+  io::println("{tuples}")
+  let records = Rect { h: say("h", 3), w: say("w", 2) } == rect
+  io::println("{records}")
+}
+
+fn say(word: String, n: Int) -> Int {
+  io::println(word)
+  n
+}

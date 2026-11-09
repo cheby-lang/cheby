@@ -176,34 +176,51 @@ bb46:
 }
 
 fn std::io::equal(_0: value, _1: value) -> value check str#0 {
-  entry unwind bb3
+  entry unwind bb8
   str#0 = "std/io.cheby:101:4"
-  str#1 = "std/io.cheby:102:3"
 bb0:
-  _2: value = call std::io::hash(_0) ; unwind bb4
-  _3: value = call std::io::hash(_1) ; unwind bb5
-  _4: bool = call_runtime equal(borrow _2, borrow _3, borrow const str#1) ; unwind bb6
-  drop _2
-  drop _3
-  _5: value = box bool _4
-  return _5
-bb1:
-  resume
+  _2: value = call std::io::hash(_0) ; unwind bb9
+  _3: value = call std::io::hash(_1) ; unwind bb10
+  _5: value = field _2.0 of tuple/2
+  _6: int = unbox int _5
+  _7: value = field _3.0 of tuple/2
+  _8: int = unbox int _7
+  _9: bool = compare eq int _6, _8
+  branch _9, bb3, bb5
+bb1(_4: bool):
+  _13: value = box bool _4
+  return _13
 bb2:
-  drop _0
-  goto bb1()
+  goto bb1(const bool false)
 bb3:
-  drop _1
-  goto bb2()
+  _10: value = field _2.1 of tuple/2
+  drop _2 of tuple/2 keep [_10 @1]
+  _11: value = field _3.1 of tuple/2
+  drop _3 of tuple/2 keep [_11 @1]
+  _12: bool = call_runtime str_eq(borrow _10, borrow _11)
+  drop _10
+  drop _11
+  branch _12, bb4, bb2
 bb4:
-  drop _1
-  goto bb1()
+  goto bb1(const bool true)
 bb5:
   drop _2
-  goto bb1()
-bb6:
   drop _3
-  goto bb5()
+  goto bb2()
+bb6:
+  resume
+bb7:
+  drop _0
+  goto bb6()
+bb8:
+  drop _1
+  goto bb7()
+bb9:
+  drop _1
+  goto bb6()
+bb10:
+  drop _2
+  goto bb6()
 }
 
 fn std::io::debug(_0: value) -> value check str#0 {

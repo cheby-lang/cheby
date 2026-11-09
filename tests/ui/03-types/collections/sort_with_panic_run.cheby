@@ -1,5 +1,5 @@
 // @mode: run-fail
-// @decisions: D-526, D-1447
+// @decisions: D-526, D-1448
 //! A panic inside the comparison `list::sort_with` calls is reported like
 //! any other panic: the runtime calls it back through a trampoline, so its
 //! location is the panic's (§11).

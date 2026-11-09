@@ -815,7 +815,7 @@ test "sort orders by compare" {
 /// goes first, stably (D-299, D-335). It is a bottom-up merge sort: runs of one element are
 /// merged in adjacent pairs, front to back, until one run is left, and a merge takes from the
 /// left run unless `by` returns `Greater`, so equal elements keep their order. The runtime
-/// runs it, calling `by` back, with the same pairs and calls on every target (D-1447).
+/// runs it, calling `by` back, with the same pairs and calls on every target (D-1448).
 @external(native, "cheby_list_sort_with")
 @external(js, "./list.mjs", "sort_with")
 pub fn sort_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> List<T>
