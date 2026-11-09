@@ -4,17 +4,30 @@
 
 ## Trial groups
 
-| Group                     | What it checks                                                                                                                                                             | Golden                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `protocol/<name>`         | Handshake, `shutdown` and `exit`, end of input, a frame that is not JSON-RPC, error answers, `$/cancelRequest`, encodings, publishing, standard output holding frames only | two, in `tests/lsp/protocol/` |
-| `format/<name>`           | Formatting of a text no file here can hold, such as CRLF line ends                                                                                                         | none, `cheby fmt` runs        |
-| `examples/<name>`         | Every request the server advertises, at every identifier of every example, is answered with no JSON-RPC error. Formatting returns no edit                                  | none                          |
-| `symbols/examples/<name>` | The outline of every source file of an example equals its item list                                                                                                        | none, the parser's items      |
-| `parity/examples/<name>`  | The published diagnostics equal `cheby check`'s (D-1348)                                                                                                                   | none, `cheby check` runs      |
-| `parity/ui/<name>`        | The published diagnostics equal the `.stderr` golden of a UI check test                                                                                                    | the UI test's own             |
-| `golden/<name>`           | The exact answers of a test in this directory                                                                                                                              | `<name>.expected`             |
+| Group                      | What it checks                                                                                                                                                             | Golden                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `protocol/<name>`          | Handshake, `shutdown` and `exit`, end of input, a frame that is not JSON-RPC, error answers, `$/cancelRequest`, encodings, publishing, standard output holding frames only | two, in `tests/lsp/protocol/` |
+| `format/<name>`            | Formatting of a text no file here can hold, such as CRLF line ends                                                                                                         | none, `cheby fmt` runs        |
+| `examples/<name>`          | Every request the server advertises, at every identifier of every example, is answered with no JSON-RPC error. Formatting returns no edit                                  | none                          |
+| `navigation/<name>`        | An answer followed into another file: `std_round_trip` goes from `io::println` into std's sources, opens that file and hovers in it (R-17)                                 | none                          |
+| `quality/hover_on_mutants` | The quality gate of plan W7: hover on seeded body mutants of the examples, graded against the clean text. Same at or above 90%, key probe at or above 95%                  | none, the clean text's hovers |
+| `symbols/examples/<name>`  | The outline of every source file of an example equals its item list                                                                                                        | none, the parser's items      |
+| `parity/examples/<name>`   | The published diagnostics equal `cheby check`'s (D-1348)                                                                                                                   | none, `cheby check` runs      |
+| `parity/ui/<name>`         | The published diagnostics equal the `.stderr` golden of a UI check test                                                                                                    | the UI test's own             |
+| `golden/<name>`            | The exact answers of a test in this directory                                                                                                                              | `<name>.expected`             |
 
-The examples group sends only what the server's `capabilities` advertise, so it grows stricter as features land (D-1379).
+The examples group sends only what the server's `capabilities` advertise, so it grows stricter as features land (D-1379). Position requests go to every identifier: hover, definition, declaration, typeDefinition, implementation, references, documentHighlight, completion, signatureHelp, codeAction, prepareCallHierarchy, selectionRange, rangeFormatting and prepareRename, then rename where prepareRename accepted. Each item a prepareCallHierarchy answer holds gets `callHierarchy/incomingCalls` and `callHierarchy/outgoingCalls`. Each file gets the document requests: documentSymbol, formatting, foldingRange, documentLink, codeLens, inlayHint, and `semanticTokens/full` and `semanticTokens/range` over the whole text, as the provider's `full` and `range` say. `workspace/symbol` is asked once with an empty query and once with every distinct name of the example. A `…Provider` the harness does not know fails the trial, so a new capability cannot go unswept.
+
+### The quality gate
+
+`quality/hover_on_mutants` measures what `facts.md` §0.1 measured in process, through the real server. Its mutants are §0.1's ten body edits: `dot`, `new_dot`, `open_call`, `half_let`, `open_case`, `pipe_end`, `drop_brace`, `typo`, `drop_arg` and `mismatch`. They sit at the sites §0.1's probe chose, found from the syntax tree: a local is a one-segment path whose name a pattern or a local function of the same item binds, since no name is shadowed (D-051). Every site of every example is shuffled with §0.1's seed, and the first 50 of each kind are kept, so the run is deterministic and a drop is a real change. An example whose clean text has an error, such as 030, which needs a dependency, is left out before the sample is drawn, so every kind gets its full 50.
+
+Each example gets one server, which keeps it warm as an editor would. Every source is opened, and the hover at each identifier of an edited item is asked on the clean text. Each mutant is then sent as an edit of its file, and the hovers are asked again at the same identifiers, moved by the edit. Identifiers in the replaced text are skipped. What is graded is every code block of the answer, joined, so an item's instantiated form counts with its header. An answer whose only block is a header, such as a non-generic function's signature, a module's import or a type parameter's bounds, is not graded: it comes from interfaces, and no body edit can change it. `facts.md` §0.1 graded the type from the facts. An identifier whose clean blocks hold a `_` standing alone is not graded either.
+
+- **Same**: the block is unchanged. The floor is 90%.
+- **Key probe**: hover on what an editing feature needs at the cursor. For `dot` it is the receiver, for `new_dot` the name just typed, for `pipe_end` the left side's last name or its callee, and for `open_call` the callee. It passes when the answer still shows a type that is not wholly unknown: not `_`, and not the bare name that a local of unknown type shows when its clean block had `: T`. For `open_call` it needs more, as §0.1 asks: the callee's call signature, the instantiated `fn(…) -> …` block of a generic item or the `fn(…)` type of a local, with no parameter whose type is `_` at the head. An open call whose callee shows no call signature on the clean text, such as a non-generic function, has no key probe. A `pipe_end` whose left side ends in no name, such as a literal, has no key probe. The floor is 95%.
+
+The trial prints both numbers and §0.1's table, by kind: mutants, those with a grammar error, graded identifiers, same, partial, other and missing, same before and after the edit, and key probes.
 
 A frame whose body is not a JSON-RPC message ends the server with status 1 and one line on standard error, and the server answers nothing (D-1430). `protocol/malformed_frame_ends_with_1` sends three such bodies after `initialize` and one before it, each to a fresh server, and waits for the end with the input still open.
 
@@ -28,7 +41,7 @@ Parity opens only `src/main.cheby` and waits for its publish. The other files ar
 
 ## Golden tests
 
-A test is one `.cheby` file, which the harness copies into a package named `lsp_test` as `src/main.cheby`. A test may also be a directory with its own `cheby.toml`, copied as it is. A file with `@package: none` is copied alone, under its own name, into a directory with no `cheby.toml` above it, and the server is started as Zed starts one for a file outside its worktree: rooted at that directory, with no workspace folders. The server then serves it in single-file mode (D-1371), as `single_file/type_error` checks. Its expected answers are in `<name>.expected` beside the file or the directory.
+A test is one `.cheby` file, which the harness copies into a package named `lsp_test` as `src/main.cheby`. A test may also be a directory with its own `cheby.toml`, copied as it is. A file with `@package: none` is copied alone, under its own name, into a directory with no `cheby.toml` above it, and the server is started as Zed starts one for a file outside its worktree: rooted at that directory, with no workspace folders. The server then serves it in single-file mode (D-1371), as `single_file/type_error` checks. `single_file/names_no_package` checks that hover, the call hierarchy and `workspace/symbol` name no package for it (D-1477). Its expected answers are in `<name>.expected` beside the file or the directory.
 
 The files here are test input, not examples. They need not be valid Cheby, need not be in `cheby fmt`'s form, and are outside `cargo xtask cross-check`.
 
@@ -46,7 +59,7 @@ The file, or a package's `src/main.cheby`, starts with `// @key: value` lines:
 | `@requests`  | document requests sent for every source file  | none       |
 | `@package`   | `none`: the file is opened outside a package  | `lsp_test` |
 
-The `standard` client announces every capability the server reads but no position encodings, so it runs on UTF-16 (D-1368). `full` adds all three encodings. `@settings` is sent as `initializationOptions` and as the answer to `workspace/configuration`. `@requests` takes `documentSymbol`, `formatting`, `foldingRange`, `documentLink`, `codeLens`, `semanticTokens` and `inlayHint`.
+The `standard` client announces every capability the server reads but no position encodings, so it runs on UTF-16 (D-1368). `full` adds all three encodings. `@settings` is sent as `initializationOptions` and as the answer to `workspace/configuration`. `@requests` takes `documentSymbol`, `formatting`, `foldingRange`, `documentLink`, `codeLens`, `semanticTokens` (`full`), `semanticTokensRange` (the whole text) and `inlayHint`.
 
 ### Markers
 
@@ -64,7 +77,7 @@ fn main() {
 - `//> L:C name args` names the compiler's 1-based line and code-point column instead, for a column a caret cannot reach, such as column 1.
 - Ordinary comments between a marker and its line are skipped.
 
-The names are `hover`, `definition`, `declaration`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `completion`, `signatureHelp`, `prepareRename`, `rename NEW_NAME`, `codeAction [KIND]`, `prepareCallHierarchy`, `selectionRange` and `rangeFormatting`. `references noDeclaration` leaves out the declaration. A code action gets the published diagnostics that touch its range.
+The names are `hover`, `definition`, `declaration`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `completion`, `signatureHelp`, `prepareRename`, `rename NEW_NAME`, `codeAction [KIND]`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`, `workspaceSymbol [QUERY]`, `selectionRange` and `rangeFormatting`. `references noDeclaration` leaves out the declaration. A code action gets the published diagnostics that touch its range. `incomingCalls` and `outgoingCalls` send `prepareCallHierarchy` at the marker, then the follow-up with each item it prepared: the block is a list of one answer per item, or the prepare answer itself when it prepared none. `workspaceSymbol` sends only its words, joined by spaces, as the query; its position means nothing.
 
 ### The `.expected` file
 
@@ -84,6 +97,13 @@ The goldens under `format/`, `symbols/` and `folding/` are written by hand from 
 - `documentSymbol`, hierarchical: `range` is the item's node, from its first doc comment or attribute to its last token, and `selectionRange` its name, or a test's string literal with its quotes. A function's or an interface function's `detail` is its parameter list and, after one space, its return type, printed on one line, with comments, line breaks and trailing commas dropped. A positional variant's `detail` is its field list. A field's and a constant's `detail` is the type as written, and an alias's the aliased type. An alias is a `TypeParameter`. `children` and `detail` are left out when there are none. `@deprecated` gives `"tags": [1]` to a client whose `tagSupport` lists it, as the `standard` client's does, and `"deprecated": true` to any other.
 - `documentSymbol`, flat, for a client without `hierarchicalDocumentSymbolSupport`: one `SymbolInformation` per symbol in the same order, a child with its parent's name as `containerName`.
 - `foldingRange`, for a client without `lineFoldingOnly`: the node's range, from the opener to the end of the closer, in the client's encoding. A block or a body of variants, fields, interface functions or case arms has no `kind`. A multi-line list, argument list, parameter list or pipeline has `"region"`, a run of imports `"imports"`, and a run of comments of any kind on adjacent lines `"comment"`, so a test's header and module doc fold together.
+
+### Name features
+
+The goldens under `hover/`, `definition/`, `references/`, `highlight/`, `hierarchy/`, `links/` and `tokens/` each come in three states: `clean`, `type_error` and `grammar_error`, so every answer is pinned on broken text too. `definition/declaration_of_show` comes in the same three states, with `_type_error` and `_grammar_error` after its name (D-1478). `references/clean` and the `links/` tests are packages of more than one module. `tokens/non_ascii` checks columns after text that is not ASCII. Their answers were written by hand and checked position by position against the sources.
+
+- `hover`: the first code block is the declaration (`facts.md` §1.8), printed as `facts.md` §6.1 says. An instantiated form, where it is from, notes and docs follow.
+- `semanticTokens`: the raw `data` of the answer, five numbers per token, in the legend the server advertises.
 
 Paths are relative to the package, and materialized std files show as `<std>/…`, so goldens hold no absolute path (D-264). The server's version in `serverInfo` shows as `<version>`. Locations of `references` and the edits of `rename` are sorted by path, line and column.
 

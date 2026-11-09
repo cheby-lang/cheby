@@ -1,0 +1,112 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 18
+        },
+        "start": {
+          "character": 0,
+          "line": 18
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 16
+              },
+              "start": {
+                "character": 13,
+                "line": 16
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:15:11 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 13
+      },
+      "start": {
+        "character": 6,
+        "line": 13
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 11,
+        "line": 14
+      },
+      "start": {
+        "character": 10,
+        "line": 14
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 14
+      },
+      "start": {
+        "character": 14,
+        "line": 14
+      }
+    }
+  }
+]
+
+== src/main.cheby:17:15 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 14
+      },
+      "start": {
+        "character": 6,
+        "line": 14
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 16
+      },
+      "start": {
+        "character": 14,
+        "line": 16
+      }
+    }
+  }
+]

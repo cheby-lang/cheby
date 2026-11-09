@@ -665,6 +665,7 @@ impl Session {
             baseline,
             targets: context.targets,
             manifest_is_last_good: context.manifest_is_last_good,
+            single_file: matches!(self.kind, PackageKind::SingleFile { .. }),
             sources,
         }))
     }

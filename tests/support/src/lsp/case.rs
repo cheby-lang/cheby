@@ -373,7 +373,13 @@ pub fn position_method(name: &str) -> Option<&'static str> {
         "prepareRename" => "textDocument/prepareRename",
         "rename" => "textDocument/rename",
         "codeAction" => "textDocument/codeAction",
-        "prepareCallHierarchy" => "textDocument/prepareCallHierarchy",
+        // The follow-ups start with a `prepareCallHierarchy` at the marker
+        // ([`hierarchy_follow_up`]).
+        "prepareCallHierarchy" | "incomingCalls" | "outgoingCalls" => {
+            "textDocument/prepareCallHierarchy"
+        }
+        // The marker's position is not sent, only its words as the query.
+        "workspaceSymbol" => "workspace/symbol",
         "selectionRange" => "textDocument/selectionRange",
         "rangeFormatting" => "textDocument/rangeFormatting",
         _ => return None,
@@ -390,9 +396,21 @@ pub fn document_method(name: &str) -> Option<&'static str> {
         "documentLink" => "textDocument/documentLink",
         "codeLens" => "textDocument/codeLens",
         "semanticTokens" => "textDocument/semanticTokens/full",
+        "semanticTokensRange" => "textDocument/semanticTokens/range",
         "inlayHint" => "textDocument/inlayHint",
         _ => return None,
     })
+}
+
+/// The method that follows a `prepareCallHierarchy` for marker `name`,
+/// `incomingCalls` or `outgoingCalls`, sent with each item it prepared.
+#[must_use]
+pub fn hierarchy_follow_up(name: &str) -> Option<&'static str> {
+    match name {
+        "incomingCalls" => Some("callHierarchy/incomingCalls"),
+        "outgoingCalls" => Some("callHierarchy/outgoingCalls"),
+        _ => None,
+    }
 }
 
 /// The byte ranges of every identifier and type name token of `text`,
@@ -427,6 +445,8 @@ pub struct Advertised {
     pub document: Vec<&'static str>,
     /// Whether `rename` is advertised.
     pub rename: bool,
+    /// Whether `workspace/symbol` is advertised.
+    pub workspace_symbol: bool,
 }
 
 impl Advertised {
@@ -465,9 +485,15 @@ impl Advertised {
             ("foldingRangeProvider", "foldingRange"),
             ("documentLinkProvider", "documentLink"),
             ("codeLensProvider", "codeLens"),
-            ("semanticTokensProvider", "semanticTokens"),
             ("inlayHintProvider", "inlayHint"),
         ];
+        // `semanticTokensProvider` names its requests: `full` and `range`.
+        let tokens = |key: &str| {
+            capabilities
+                .get("semanticTokensProvider")
+                .and_then(|p| p.get(key))
+                .is_some_and(|v| !v.is_null() && v != &Value::Bool(false))
+        };
         let unknown: Vec<&str> = capabilities
             .as_object()
             .into_iter()
@@ -475,8 +501,10 @@ impl Advertised {
             .map(String::as_str)
             .filter(|key| key.ends_with("Provider") && has(key))
             .filter(|key| {
-                *key != "renameProvider"
-                    && !position_table.iter().any(|(k, _)| k == key)
+                !matches!(
+                    *key,
+                    "renameProvider" | "workspaceSymbolProvider" | "semanticTokensProvider"
+                ) && !position_table.iter().any(|(k, _)| k == key)
                     && !document_table.iter().any(|(k, _)| k == key)
             })
             .collect();
@@ -500,15 +528,22 @@ impl Advertised {
         if prepare {
             position.push("prepareRename");
         }
-        let document = document_table
+        let mut document: Vec<&'static str> = document_table
             .iter()
             .filter(|(key, _)| has(key))
             .map(|&(_, name)| name)
             .collect();
+        if tokens("full") {
+            document.push("semanticTokens");
+        }
+        if tokens("range") {
+            document.push("semanticTokensRange");
+        }
         Ok(Self {
             position,
             document,
             rename,
+            workspace_symbol: has("workspaceSymbolProvider"),
         })
     }
 }
@@ -560,6 +595,7 @@ pub fn position_params(
             json!({ "textDocument": document, "range": range, "context": context })
         }
         "selectionRange" => json!({ "textDocument": document, "positions": [start.to_json()] }),
+        "workspaceSymbol" => json!({ "query": args.join(" ") }),
         "rangeFormatting" => json!({
             "textDocument": document,
             "range": range,
@@ -590,7 +626,7 @@ pub fn document_params(
     let document = json!({ "uri": uri });
     let params = match name {
         "formatting" => json!({ "textDocument": document, "options": formatting_options() }),
-        "inlayHint" => json!({
+        "inlayHint" | "semanticTokensRange" => json!({
             "textDocument": document,
             "range": { "start": { "line": 0, "character": 0 }, "end": last.to_json() },
         }),
@@ -775,8 +811,45 @@ mod tests {
         let ranged = Advertised::of(&json!({ "documentRangeFormattingProvider": true })).unwrap();
         assert_eq!(ranged.position, ["rangeFormatting"]);
         // An unknown provider fails, unless it is not advertised.
-        assert!(Advertised::of(&json!({ "workspaceSymbolProvider": true })).is_err());
-        assert!(Advertised::of(&json!({ "workspaceSymbolProvider": false })).is_ok());
+        assert!(Advertised::of(&json!({ "monikerProvider": true })).is_err());
+        assert!(Advertised::of(&json!({ "monikerProvider": false })).is_ok());
+        let workspace = Advertised::of(&json!({ "workspaceSymbolProvider": true })).unwrap();
+        assert!(workspace.workspace_symbol);
+        let tokens =
+            |provider: Value| Advertised::of(&json!({ "semanticTokensProvider": provider }));
+        let both = tokens(json!({ "legend": {}, "full": true, "range": true })).unwrap();
+        assert_eq!(both.document, ["semanticTokens", "semanticTokensRange"]);
+        let full = tokens(json!({ "legend": {}, "full": { "delta": false } })).unwrap();
+        assert_eq!(full.document, ["semanticTokens"]);
+        assert_eq!(
+            tokens(json!({ "legend": {} })).unwrap().document,
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn hierarchy_and_workspace_markers() {
+        let found = markers("fn f() {}\n// ^ incomingCalls\n// ^ workspaceSymbol ma in\n").unwrap();
+        assert_eq!(
+            hierarchy_follow_up(&found[0].name),
+            Some("callHierarchy/incomingCalls")
+        );
+        assert_eq!(hierarchy_follow_up("prepareCallHierarchy"), None);
+        let at = Position {
+            line: 0,
+            character: 3,
+        };
+        let (method, params) = position_params(
+            "workspaceSymbol",
+            "file:///a",
+            at,
+            None,
+            &found[1].args,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(method, "workspace/symbol");
+        assert_eq!(params, json!({ "query": "ma in" }));
     }
 
     #[test]

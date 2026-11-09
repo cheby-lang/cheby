@@ -1,0 +1,224 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 15
+        },
+        "start": {
+          "character": 15,
+          "line": 15
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 15
+              },
+              "start": {
+                "character": 9,
+                "line": 15
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:16:16 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 16,
+        "line": 15
+      },
+      "start": {
+        "character": 15,
+        "line": 15
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 7,
+        "line": 14
+      },
+      "start": {
+        "character": 6,
+        "line": 14
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 14
+      },
+      "start": {
+        "character": 6,
+        "line": 14
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:18:13 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 13,
+        "line": 17
+      },
+      "start": {
+        "character": 12,
+        "line": 17
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 11
+      },
+      "start": {
+        "character": 0,
+        "line": 9
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 6,
+        "line": 9
+      },
+      "start": {
+        "character": 3,
+        "line": 9
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:20:10 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 10,
+        "line": 19
+      },
+      "start": {
+        "character": 9,
+        "line": 19
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 7,
+        "line": 17
+      },
+      "start": {
+        "character": 6,
+        "line": 17
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 17
+      },
+      "start": {
+        "character": 6,
+        "line": 17
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:20:12 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 12,
+        "line": 19
+      },
+      "start": {
+        "character": 11,
+        "line": 19
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 8,
+        "line": 5
+      },
+      "start": {
+        "character": 2,
+        "line": 5
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 3,
+        "line": 5
+      },
+      "start": {
+        "character": 2,
+        "line": 5
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:20:17 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 17,
+        "line": 19
+      },
+      "start": {
+        "character": 16,
+        "line": 19
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 7,
+        "line": 15
+      },
+      "start": {
+        "character": 6,
+        "line": 15
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 15
+      },
+      "start": {
+        "character": 6,
+        "line": 15
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]

@@ -219,6 +219,21 @@ impl<'a> Lines<'a> {
         }
         end
     }
+
+    /// The text from `start` to `end`, both on one line and inside its
+    /// content, or `None` for a range that is not.
+    #[must_use]
+    pub fn slice(&self, start: Position, end: Position, encoding: Encoding) -> Option<&'a str> {
+        let content = self.line(usize::try_from(start.line).ok()?)?;
+        if start.line != end.line
+            || start > end
+            || usize::try_from(end.character).ok()? > encoding.count(content)
+        {
+            return None;
+        }
+        let (a, b) = (self.offset(start, encoding), self.offset(end, encoding));
+        self.text.get(a..b)
+    }
 }
 
 /// `offset` moved back to a character boundary of `text`.

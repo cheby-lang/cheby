@@ -65,6 +65,7 @@ use self::state::{Doc, Once, Package};
 use self::watch::Watch;
 use crate::ServerOptions;
 use crate::analysis_thread::{self, Event, Work};
+use crate::features::stdlib::StdService;
 use crate::features::{CancelToken, LiveText};
 use crate::text::lines::PositionEncoding;
 use crate::text::uri::{UriMap, normalize, uri_to_path};
@@ -153,6 +154,8 @@ pub(crate) struct Server {
     folders: Vec<PathBuf>,
     /// Where std's sources may be materialized, for routing (A §6.3).
     std_dirs: Vec<PathBuf>,
+    /// The std base and std's sources, for requests.
+    std: Arc<StdService>,
     /// File watchers and sweeps (A §8).
     watch: Watch,
     /// Open documents by normalized path.
@@ -230,6 +233,7 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         QueryPool::spawn().map_err(|e| format!("cannot start the query threads: {e}"))?;
     let watch = Watch::new(&params).map_err(|e| format!("cannot start the sweep thread: {e}"))?;
     let std_dirs = sessions::std_dirs(options.build);
+    let std = Arc::new(StdService::new(options.build));
     let caps = ClientCaps::from_params(&params);
     let encoding = caps.encoding();
     let layers = Layers {
@@ -255,6 +259,7 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         warned: Once::default(),
         folders: folders(&params),
         std_dirs,
+        std,
         watch,
         docs: BTreeMap::new(),
         uris: UriMap::new(),

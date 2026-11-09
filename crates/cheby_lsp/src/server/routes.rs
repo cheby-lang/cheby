@@ -12,8 +12,13 @@ use lsp_server::ResponseError;
 use serde_json::Value;
 
 use super::Server;
-use crate::features::handlers::{folding, format, selection, symbols};
-use crate::features::{Class, Route};
+use crate::features::handlers::nav::NavEnv;
+use crate::features::handlers::workspace_symbol::StdSymbols;
+use crate::features::handlers::{
+    folding, format, hierarchy, hover, links, nav, selection, symbols, tokens, workspace_symbol,
+};
+use crate::features::ide::hover::StdDocs;
+use crate::features::{Class, RequestCx, Route};
 
 /// A notification's handler.
 pub(super) type NotificationHandler = fn(&mut Server, Value);
@@ -56,8 +61,19 @@ const fn null() -> Value {
     Value::Null
 }
 
+/// What navigation reads besides its snapshot.
+fn nav_env<'a>(cx: &RequestCx<'a>) -> NavEnv<'a> {
+    NavEnv {
+        links: cx.caps.links,
+        std_dir: cx.std.dir(),
+    }
+}
+
 /// The requests served on the query pool, by class (A §3.3, plan §1.10).
-/// All of W6's read only the document's live text, so they never wait.
+/// The text requests read only the document's live text, so they never
+/// wait. A request that may answer with a place in another open document
+/// is `Package`, so that place is where the client sees it; `declaration`
+/// is `Doc`, as plan §1.10 has it.
 const QUERIES: &[Route] = &[
     Route {
         method: "textDocument/documentSymbol",
@@ -92,6 +108,117 @@ const QUERIES: &[Route] = &[
         class: Class::Text(format::range_formatting),
         fallback: null,
         edits: true,
+    },
+    Route {
+        method: "textDocument/hover",
+        class: Class::Doc(|cx, analyzed, params| {
+            hover::hover(
+                cx,
+                analyzed,
+                params,
+                cx.caps.hover,
+                StdDocs::Service(cx.std),
+            )
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/definition",
+        class: Class::Package(|cx, analyzed, params| {
+            nav::definition(cx, analyzed, params, &nav_env(cx))
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/declaration",
+        class: Class::Doc(|cx, analyzed, params| {
+            nav::declaration(cx, analyzed, params, &nav_env(cx))
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/typeDefinition",
+        class: Class::Package(|cx, analyzed, params| {
+            nav::type_definition(cx, analyzed, params, &nav_env(cx))
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/references",
+        class: Class::Package(|cx, analyzed, params| {
+            nav::references(cx, analyzed, params, &nav_env(cx))
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/documentHighlight",
+        class: Class::Doc(|cx, analyzed, params| {
+            nav::document_highlight(cx, analyzed, params, &nav_env(cx))
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/prepareCallHierarchy",
+        class: Class::Package(|cx, analyzed, params| {
+            hierarchy::prepare(cx, analyzed, params, cx.std.dir())
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "callHierarchy/incomingCalls",
+        class: Class::Package(|cx, analyzed, params| {
+            hierarchy::incoming_calls(cx, analyzed, params, cx.std.dir())
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "callHierarchy/outgoingCalls",
+        class: Class::Package(|cx, analyzed, params| {
+            hierarchy::outgoing_calls(cx, analyzed, params, cx.std.dir())
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/documentLink",
+        class: Class::Doc(|cx, analyzed, params| {
+            links::document_link(cx, analyzed, params, cx.std.dir())
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "workspace/symbol",
+        class: Class::Workspace(|cx, packages, params| {
+            let std = cx
+                .std
+                .index()
+                .zip(cx.std.dir())
+                .map(|(index, dir)| StdSymbols { index, dir });
+            workspace_symbol::workspace_symbol(cx, packages, params, std)
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/semanticTokens/full",
+        class: Class::Doc(tokens::full),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/semanticTokens/range",
+        class: Class::Doc(tokens::range),
+        fallback: null,
+        edits: false,
     },
 ];
 

@@ -1,0 +1,6 @@
+//! A module to link to.
+
+/// The greeting.
+pub fn greeting() -> String {
+  "hi"
+}

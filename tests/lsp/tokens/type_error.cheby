@@ -1,0 +1,16 @@
+// @decisions: D-1396
+// @requests: semanticTokens
+//! A body with a type error keeps its kinds, and a name that does not
+//! resolve gets the kind its syntax gives: a callee is a function.
+
+import std::io
+
+pub fn twice(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let s: String = twice(1)
+  let t = missing(s)
+  io::println(t)
+}

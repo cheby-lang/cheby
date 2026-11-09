@@ -2,7 +2,7 @@
 //! stdio, one process per trial (D-1352, docs/plan/testing.md,
 //! `tests/lsp/README.md`). The client is `cheby_test_support::lsp`.
 //!
-//! Six groups of trials:
+//! Eight groups of trials:
 //!
 //! - `protocol/<name>`: the handshake, `shutdown` and `exit` and their exit
 //!   codes, the end of input, a frame that is not JSON-RPC (D-1430), error
@@ -22,6 +22,15 @@
 //!   exit of the server; `null` is an answer. Formatting must return no
 //!   edit, since every example is a `cheby fmt` fixed point. The group
 //!   tightens as the server advertises more (D-1379).
+//! - `navigation/<name>`: an answer followed into another file. In
+//!   `std_round_trip`, definition on `io::println` leads into std's
+//!   materialized sources, that file is opened, and hover in it answers
+//!   (R-17).
+//! - `quality/hover_on_mutants`: the quality gate of plan W7 (`facts.md`
+//!   §0.1, §10). Seeded body mutants of the examples go to a warm server,
+//!   and hover at each identifier of the edited item is graded against
+//!   the clean text: same at or above 90%, key probe at or above 95%. It
+//!   prints both numbers and the table by kind.
 //! - `parity/examples/<name>` and `parity/ui/<name>`: the published
 //!   diagnostics equal `cheby check`'s (D-1348), for an example by running
 //!   `cheby check`, for a UI check test by reading its `.stderr` golden.
@@ -81,6 +90,7 @@ use cheby_test_support::lsp::case::{self, Advertised, Layout, LspTest};
 use cheby_test_support::lsp::client::{self, codes};
 use cheby_test_support::lsp::outline;
 use cheby_test_support::lsp::parity::{self, Key};
+use cheby_test_support::lsp::quality::{self, Mutant};
 use cheby_test_support::lsp::serde_json::{self, Value, json};
 use cheby_test_support::lsp::text::{self, Bom, Lines, Position};
 use cheby_test_support::lsp::{Client, ClientKind, Encoding, Ended, Paths, StartOptions};
@@ -180,6 +190,17 @@ fn main() -> ExitCode {
             trials.push(trial);
         }
     }
+    for navigation in NAVIGATION {
+        trials.push(protocol_trial(
+            "navigation",
+            navigation,
+            &env,
+            current,
+            &verdicts,
+            bless,
+        ));
+    }
+    trials.push(quality_trial(&examples, &env, current, &verdicts, bless));
     for test in golden_tests {
         trials.push(golden_trial(test, &env, current, &verdicts, bless));
     }
@@ -504,7 +525,14 @@ const FORMAT: &[Protocol] = &[Protocol {
     golden: false,
 }];
 
-/// One trial of `group`, `protocol` or `format`.
+/// The `navigation/*` trials, which follow an answer into another file.
+const NAVIGATION: &[Protocol] = &[Protocol {
+    name: "std_round_trip",
+    run: std_round_trip,
+    golden: false,
+}];
+
+/// One trial of `group`, `protocol`, `format` or `navigation`.
 fn protocol_trial(
     group: &str,
     protocol: &'static Protocol,
@@ -1081,6 +1109,8 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
     let advertised = Advertised::of(init.get("capabilities").unwrap_or(&Value::Null))?;
     let uris = open_all(&mut client, &files)?;
     let encoding = client.encoding();
+    // The queries of `workspace/symbol`: none, then every name once.
+    let mut queries = BTreeSet::from([String::new()]);
     for (file, uri) in files.iter().zip(&uris) {
         let path = dir.join(file);
         let text =
@@ -1094,6 +1124,9 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
         let mut requests = Vec::new();
         let mut renames = Vec::new();
         for (start, end) in case::identifiers(&text) {
+            if let Some(word) = text.get(start..end) {
+                queries.insert(word.to_owned());
+            }
             let (a, b) = (
                 lines.position(start, encoding),
                 lines.position(end, encoding),
@@ -1121,6 +1154,7 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
             requests.push((format!("{file} {name}"), method, params));
         }
         let prepared = send_all(&mut client, requests)?;
+        send_all(&mut client, hierarchy_calls(&prepared))?;
         // A rename where `prepareRename` accepted the position.
         if advertised.rename {
             let mut rename_requests = Vec::new();
@@ -1153,7 +1187,34 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
             ));
         }
     }
+    if advertised.workspace_symbol {
+        let requests = queries
+            .into_iter()
+            .map(|query| {
+                let label = format!("workspace/symbol `{query}`");
+                (label, "workspace/symbol", json!({ "query": query }))
+            })
+            .collect();
+        send_all(&mut client, requests)?;
+    }
     client.shutdown()?.expect(0)
+}
+
+/// Both directions of each item that the `prepareCallHierarchy` answers
+/// among `prepared` hold.
+fn hierarchy_calls(prepared: &BTreeMap<String, Value>) -> Vec<(String, &'static str, Value)> {
+    let mut calls = Vec::new();
+    for (label, answer) in prepared {
+        if !label.ends_with(" prepareCallHierarchy") {
+            continue;
+        }
+        for item in answer.as_array().into_iter().flatten() {
+            for method in ["callHierarchy/incomingCalls", "callHierarchy/outgoingCalls"] {
+                calls.push((format!("{label} {method}"), method, json!({ "item": item })));
+            }
+        }
+    }
+    calls
 }
 
 /// Sends `requests` in batches; each must be answered without an error.
@@ -1228,6 +1289,515 @@ fn outline_is_the_item_list(env: &Env, dir: &Path) -> Result<(), String> {
             .map_err(|e| client.fail(&format!("{file}: {e}")))?;
     }
     client.shutdown()?.expect(0)
+}
+
+// ---------------------------------------------------------------------
+// navigation/*
+
+/// A root module that calls into std.
+const STD_CALLER: &str = "//! A package for the std round trip.\n\nimport std::io\n\nfn main() {\n  io::println(\"hi\")\n}\n";
+
+/// R-17: definition on `io::println` leads into std's materialized
+/// sources, that file opens as a std document (A §6.3), and hover inside
+/// it answers. On the function's own name it shows the function, and the
+/// call hierarchy and links answer there. From the package, the callers
+/// of `io::println` include `main`, and its references with the
+/// declaration hold std's. Every other identifier of the file must be
+/// answered without an error, `null` included, since a std body has no
+/// facts (R-17).
+fn std_round_trip(env: &Env, dir: &Path) -> Result<(), String> {
+    write_package(dir, &[("cheby.toml", MANIFEST), (ROOT_MODULE, STD_CALLER)])?;
+    let (mut client, init) = session(env, dir, ClientKind::Standard, None, None)?;
+    let advertised = Advertised::of(init.get("capabilities").unwrap_or(&Value::Null))?;
+    for needed in ["definition", "hover"] {
+        if !advertised.position.contains(&needed) {
+            return Err(format!("the server does not advertise `{needed}`"));
+        }
+    }
+    let encoding = client.encoding();
+    let uri = client.open(Path::new(ROOT_MODULE))?;
+    client.diagnostics(&uri, Some(1))?;
+    let at = STD_CALLER
+        .find("println")
+        .ok_or("no `println` in the caller")?;
+    let position = Lines::new(STD_CALLER, Bom::Counted).position(at, encoding);
+    let answer = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": uri }, "position": position.to_json() }),
+    )?;
+    let (target, name_at) = first_target(&answer)
+        .ok_or_else(|| client.fail(&format!("definition of `io::println` gave {answer}")))?;
+    let shown = client.display(&target);
+    if !(shown.starts_with("<std>/") && shown.ends_with("io.cheby")) {
+        return Err(client.fail(&format!(
+            "definition of `io::println` is in {shown}, not std's `io.cheby`"
+        )));
+    }
+    let path = cheby_test_support::lsp::uri::uri_to_path(&target)
+        .ok_or_else(|| format!("{target} is not a file URI"))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let lines = Lines::new(&text, Bom::Counted);
+    let name_end = Position {
+        character: name_at.character.saturating_add(7),
+        ..name_at
+    };
+    if lines.slice(name_at, name_end, encoding) != Some("println") {
+        return Err(client.fail(&format!(
+            "definition of `io::println` points at {}:{}, which is not its name",
+            name_at.line, name_at.character
+        )));
+    }
+    // A std document is never published (A §6.3), so nothing is waited
+    // for: the hovers wait for its text themselves (D-1367).
+    client.open_text(&target, &text)?;
+    let hover = |position: Position| {
+        (
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": target }, "position": position.to_json() }),
+        )
+    };
+    let on_name = client.request("textDocument/hover", hover(name_at).1)?;
+    if !quality::shown(&on_name).is_some_and(|s| s.contains("println")) {
+        return Err(client.fail(&format!(
+            "hover on `println` in std's `io.cheby` gave {on_name}"
+        )));
+    }
+    std_calls_and_links(&mut client, &uri, position, &target, name_at)?;
+    let requests = case::identifiers(&text)
+        .into_iter()
+        .map(|(start, _)| {
+            let at = lines.position(start, encoding);
+            let (method, params) = hover(at);
+            (
+                format!("{shown}:{}:{} hover", at.line, at.character),
+                method,
+                params,
+            )
+        })
+        .collect();
+    send_all(&mut client, requests)?;
+    client.shutdown()?.expect(0)
+}
+
+/// The std round trip's call hierarchy and links: `println`'s own name
+/// in the opened std document `target` prepares, and the document links.
+/// From the package's `uri`, at `position` on `io::println`, its callers
+/// include `main`, and its references with the declaration hold std's
+/// name at `name_at`.
+fn std_calls_and_links(
+    client: &mut Client,
+    uri: &str,
+    position: Position,
+    target: &str,
+    name_at: Position,
+) -> Result<(), String> {
+    // The call hierarchy and links answer in the std document too.
+    let in_std = json!({ "textDocument": { "uri": target }, "position": name_at.to_json() });
+    let prepared = client.request("textDocument/prepareCallHierarchy", in_std)?;
+    if prepared.pointer("/0/name") != Some(&json!("println")) {
+        return Err(client.fail(&format!(
+            "prepareCallHierarchy on `println` in std's `io.cheby` gave {prepared}"
+        )));
+    }
+    let doc_links = client.request(
+        "textDocument/documentLink",
+        json!({ "textDocument": { "uri": target } }),
+    )?;
+    if doc_links.as_array().is_none_or(Vec::is_empty) {
+        return Err(client.fail(&format!(
+            "documentLink in std's `io.cheby`, which imports, gave {doc_links}"
+        )));
+    }
+    // The package's callers of a std function come from the package that
+    // asked, and its references hold std's declaration.
+    let in_main = json!({ "textDocument": { "uri": uri }, "position": position.to_json() });
+    let prepared = client.request("textDocument/prepareCallHierarchy", in_main)?;
+    let item = prepared.get(0).cloned().ok_or_else(|| {
+        client.fail(&format!(
+            "prepareCallHierarchy on `io::println` gave {prepared}"
+        ))
+    })?;
+    let incoming = client.request("callHierarchy/incomingCalls", json!({ "item": item }))?;
+    if incoming.pointer("/0/from/name") != Some(&json!("main")) {
+        return Err(client.fail(&format!(
+            "incomingCalls of `io::println` gave {incoming}, not `main`"
+        )));
+    }
+    let refs = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": position.to_json(),
+            "context": { "includeDeclaration": true },
+        }),
+    )?;
+    let has_decl = refs.as_array().is_some_and(|locations| {
+        locations.iter().any(|l| {
+            l.get("uri").and_then(Value::as_str) == Some(target)
+                && l.pointer("/range/start")
+                    .and_then(|p| Position::from_json(p).ok())
+                    == Some(name_at)
+        })
+    });
+    if !has_decl {
+        return Err(client.fail(&format!(
+            "references of `io::println` with its declaration gave {refs}"
+        )));
+    }
+    Ok(())
+}
+
+/// The URI and the name's position of the first target of a definition
+/// answer: a `Location`, a list of them, or a list of `LocationLink`s.
+fn first_target(answer: &Value) -> Option<(String, Position)> {
+    let first = match answer {
+        Value::Array(items) => items.first()?,
+        other => other,
+    };
+    let (uri, range) = match first.get("targetUri") {
+        Some(uri) => (uri, first.get("targetSelectionRange")?),
+        None => (first.get("uri")?, first.get("range")?),
+    };
+    let start = Position::from_json(range.get("start")?).ok()?;
+    Some((uri.as_str()?.to_owned(), start))
+}
+
+// ---------------------------------------------------------------------
+// quality/*
+
+/// Edits of each kind the quality gate samples. `facts.md` §0.1 took 100
+/// in process; through a debug server 50 of each, about 500 mutants,
+/// keep the trial near its budget.
+const QUALITY_PER_KIND: usize = 50;
+
+/// Servers the quality gate runs at once, one example each.
+const QUALITY_WORKERS: usize = 4;
+
+/// The quality gate of plan W7 (`facts.md` §0.1, §10): `quality::sample` of the
+/// body mutants of every example, each sent to a warm server of its
+/// example as an edit of its open file, and hover graded at every
+/// identifier of the edited item against the clean text. An example whose
+/// clean text has an error, such as one that needs a dependency, is left
+/// out, since nothing in it is known when clean. Same must reach
+/// `quality::SAME_FLOOR` and the key probe `quality::KEY_FLOOR`. Both
+/// numbers are printed, with the table of `facts.md` §0.1.
+fn quality_trial(
+    examples: &[Example],
+    env: &Arc<Env>,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+) -> Trial {
+    let name = "quality/hover_on_mutants".to_owned();
+    let expectation = current.expectation(Milestone::M1);
+    let env = Arc::clone(env);
+    let examples = examples.to_vec();
+    trial(
+        name,
+        Milestone::M1,
+        expectation,
+        verdicts,
+        bless,
+        move || quality_gate(&env, &examples),
+    )
+}
+
+fn quality_gate(env: &Env, examples: &[Example]) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    // The clean check comes before the sample, so every mutant drawn is
+    // graded and each kind gets its full share.
+    let indices: Vec<usize> = (0..examples.len()).collect();
+    let mut skipped = Vec::new();
+    let mut sites = Vec::new();
+    for (&index, clean) in on_workers(&indices, |&index| match examples.get(index) {
+        Some(ex) => is_clean(env, ex),
+        None => Err(format!("no example {index}")),
+    })? {
+        let Some(ex) = examples.get(index) else {
+            continue;
+        };
+        if !clean? {
+            skipped.push(ex.name.as_str());
+            continue;
+        }
+        for file in sources(&ex.dir)? {
+            let path = ex.dir.join(&file);
+            let text =
+                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            sites.extend(
+                quality::mutants(&file, &text)
+                    .into_iter()
+                    .map(|m| (index, m)),
+            );
+        }
+    }
+    let total_sites = sites.len();
+    let chosen = quality::sample(sites, QUALITY_PER_KIND, |(_, m)| m.kind);
+    let mut drawn: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut by_example: BTreeMap<usize, Vec<Mutant>> = BTreeMap::new();
+    for (index, m) in chosen {
+        let count = drawn.entry(m.kind).or_default();
+        *count = count.saturating_add(1);
+        by_example.entry(index).or_default().push(m);
+    }
+    let jobs: Vec<(usize, Vec<Mutant>)> = by_example.into_iter().collect();
+    let results = on_workers(&jobs, |(index, mutants)| match examples.get(*index) {
+        Some(ex) => gate_example(env, ex, mutants),
+        None => Err(format!("no example {index}")),
+    })?;
+    let mut report = quality::Report::default();
+    // Each failure once, with the examples that gave it.
+    let mut failures: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for ((index, _), outcome) in results {
+        let name = examples.get(*index).map_or("?", |ex| ex.name.as_str());
+        match outcome {
+            Ok(part) => report.merge(&part),
+            Err(e) => failures.entry(e).or_default().push(name),
+        }
+    }
+    if !failures.is_empty() {
+        let shown: Vec<String> = failures
+            .into_iter()
+            .map(|(e, names)| format!("{}: {e}", names.join(", ")))
+            .collect();
+        return Err(shown.join("\n"));
+    }
+    let total = report.total();
+    println!(
+        "quality gate: {} of {total_sites} sites, drawn {}, in {:.1} s; left out, not clean: {}\n{}\
+         quality gate: same {:.1}% (floor {}%), key probe {:.1}% (floor {}%)",
+        total.mutants,
+        drawn
+            .iter()
+            .map(|(kind, n)| format!("{kind} {n}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        started.elapsed().as_secs_f64(),
+        if skipped.is_empty() {
+            "none".to_owned()
+        } else {
+            skipped.join(", ")
+        },
+        report.table(),
+        total.same_pct(),
+        quality::SAME_FLOOR,
+        total.key_pct(),
+        quality::KEY_FLOOR,
+    );
+    report
+        .verdict()
+        .map_err(|e| format!("{e}\n{}", report.table()))
+}
+
+/// Runs `f` on each of `jobs` on `QUALITY_WORKERS` threads, and gives
+/// each job with its result, in the order of `jobs`.
+fn on_workers<T: Sync, R: Send>(
+    jobs: &[T],
+    f: impl Fn(&T) -> R + Sync,
+) -> Result<Vec<(&T, R)>, String> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(BTreeMap::new());
+    std::thread::scope(|scope| {
+        for _ in 0..QUALITY_WORKERS {
+            scope.spawn(|| {
+                loop {
+                    let job = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(item) = jobs.get(job) else {
+                        break;
+                    };
+                    let outcome = f(item);
+                    if let Ok(mut results) = results.lock() {
+                        results.insert(job, outcome);
+                    }
+                }
+            });
+        }
+    });
+    let results = results
+        .into_inner()
+        .map_err(|_| "a quality worker panicked".to_owned())?;
+    if results.len() != jobs.len() {
+        return Err("a quality worker stopped early".to_owned());
+    }
+    Ok(jobs.iter().zip(results.into_values()).collect())
+}
+
+/// An example's copy, opened in a server that advertises hover.
+struct Opened {
+    _scratch: Scratch,
+    dir: PathBuf,
+    client: Client,
+    files: Vec<String>,
+    uris: Vec<String>,
+}
+
+fn open_example(env: &Env, ex: &Example) -> Result<Opened, String> {
+    let scratch = Scratch::new(&format!("quality/{}", ex.name))?;
+    let dir = scratch.path().to_path_buf();
+    copy_dir(&ex.dir, &dir)?;
+    let files = sources(&dir)?;
+    let (mut client, init) = session(env, &dir, ClientKind::Standard, None, None)?;
+    let advertised = Advertised::of(init.get("capabilities").unwrap_or(&Value::Null))?;
+    if !advertised.position.contains(&"hover") {
+        return Err("the server does not advertise `hoverProvider`".to_owned());
+    }
+    let uris = open_all(&mut client, &files)?;
+    Ok(Opened {
+        _scratch: scratch,
+        dir,
+        client,
+        files,
+        uris,
+    })
+}
+
+/// Whether the server publishes no error for any open file.
+fn published_clean(client: &Client) -> bool {
+    client.published().values().all(|params| {
+        client::diagnostics_of(params)
+            .iter()
+            .all(|d| d.get("severity").and_then(Value::as_u64) != Some(1))
+    })
+}
+
+/// Whether example `ex`'s clean text has no error, as its server sees it.
+fn is_clean(env: &Env, ex: &Example) -> Result<bool, String> {
+    // `_scratch` keeps the copy until the server has shut down.
+    let Opened {
+        _scratch, client, ..
+    } = open_example(env, ex)?;
+    let clean = published_clean(&client);
+    client.shutdown()?.expect(0)?;
+    Ok(clean)
+}
+
+/// Runs `mutants`, all of example `ex`, whose clean text has no error,
+/// through one server.
+fn gate_example(env: &Env, ex: &Example, mutants: &[Mutant]) -> Result<quality::Report, String> {
+    let Opened {
+        _scratch,
+        dir,
+        mut client,
+        files,
+        uris,
+    } = open_example(env, ex)?;
+    if !published_clean(&client) {
+        client.shutdown()?.expect(0)?;
+        return Err("the clean text had an error on the second open".to_owned());
+    }
+    let mut by_file: BTreeMap<&str, Vec<&Mutant>> = BTreeMap::new();
+    for m in mutants {
+        by_file.entry(m.file.as_str()).or_default().push(m);
+    }
+    let mut report = quality::Report::default();
+    for (file, mutants) in by_file {
+        let uri = files
+            .iter()
+            .position(|f| f == file)
+            .and_then(|i| uris.get(i))
+            .ok_or_else(|| format!("{file} is not open"))?
+            .clone();
+        let path = dir.join(file);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut wanted: BTreeSet<usize> = case::identifiers(&text)
+            .into_iter()
+            .map(|(start, _)| start)
+            .filter(|&start| mutants.iter().any(|m| m.in_item(start)))
+            .collect();
+        wanted.extend(mutants.iter().filter_map(|m| m.key.map(|k| k.clean)));
+        let clean = hover_at(&mut client, &uri, &text, &wanted)?;
+        for m in mutants {
+            let Some(mutated) = m.apply(&text) else {
+                continue;
+            };
+            let tally = report.kind(m.kind);
+            tally.mutants = tally.mutants.saturating_add(1);
+            if quality::has_grammar_error(&mutated) {
+                tally.grammar = tally.grammar.saturating_add(1);
+            }
+            let version = client.change(&uri, &mutated)?;
+            client.diagnostics(&uri, Some(version))?;
+            let graded: Vec<(usize, usize, &str)> = clean
+                .iter()
+                .filter(|&(&at, _)| m.in_item(at))
+                .filter_map(|(&at, shown)| {
+                    let shown = shown.as_deref().filter(|s| !quality::has_hole(s))?;
+                    Some((at, m.map(at)?, shown))
+                })
+                .collect();
+            // An open call's probe asks only where the clean hover shows
+            // the callee's call signature: a generic item or a local.
+            let call = m.kind == "open_call";
+            let key = m.key.filter(|k| {
+                clean.get(&k.clean).is_some_and(|s| {
+                    s.as_deref().is_some_and(|s| {
+                        !quality::has_hole(s) && (!call || quality::call_ok(Some(s)))
+                    })
+                })
+            });
+            let mut asked: BTreeSet<usize> = graded.iter().map(|&(_, at, _)| at).collect();
+            asked.extend(key.map(|k| k.mutated));
+            let got = hover_at(&mut client, &uri, &mutated, &asked)
+                .map_err(|e| format!("{} at {file}:{}: {e}", m.kind, m.start))?;
+            let tally = report.kind(m.kind);
+            for (at, mapped, shown) in graded {
+                let answer = got.get(&mapped).and_then(Option::as_deref);
+                tally.grade(quality::grade(shown, answer), at < m.start);
+            }
+            if let Some(key) = key {
+                let reference = clean.get(&key.clean).and_then(Option::as_deref);
+                let answer = got.get(&key.mutated).and_then(Option::as_deref);
+                tally.key(if call {
+                    quality::call_ok(answer)
+                } else {
+                    quality::key_ok(reference, answer)
+                });
+            }
+        }
+        let version = client.change(&uri, &text)?;
+        client.diagnostics(&uri, Some(version))?;
+    }
+    client.shutdown()?.expect(0)?;
+    Ok(report)
+}
+
+/// What the quality gate grades of hover at each of the byte offsets `at`
+/// of `text`, the text of the open `uri` (`quality::graded_text`). An
+/// error answer fails.
+fn hover_at(
+    client: &mut Client,
+    uri: &str,
+    text: &str,
+    at: &BTreeSet<usize>,
+) -> Result<BTreeMap<usize, Option<String>>, String> {
+    let lines = Lines::new(text, Bom::Counted);
+    let encoding = client.encoding();
+    let offsets: Vec<usize> = at.iter().copied().collect();
+    let mut shown = BTreeMap::new();
+    for chunk in offsets.chunks(BATCH) {
+        let calls = chunk
+            .iter()
+            .map(|&offset| {
+                let position = lines.position(offset, encoding);
+                (
+                    "textDocument/hover",
+                    json!({ "textDocument": { "uri": uri }, "position": position.to_json() }),
+                )
+            })
+            .collect();
+        for (&offset, answer) in chunk.iter().zip(client.batch(calls)?) {
+            let answer = answer.map_err(|e| {
+                let position = lines.position(offset, encoding);
+                client.fail(&format!(
+                    "hover at {}:{} answered {e}",
+                    position.line, position.character
+                ))
+            })?;
+            shown.insert(offset, quality::graded_text(&answer));
+        }
+    }
+    Ok(shown)
 }
 
 // ---------------------------------------------------------------------
@@ -1461,7 +2031,17 @@ fn golden_trial(
 /// The golden text of a test: its diagnostics, then one block per marker
 /// and per document request, in file and line order.
 fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String, String> {
-    let (mut client, files) = if header.loose {
+    let (client, files) = golden_session(env, dir, header)?;
+    golden_blocks(env, dir, header, client, &files)
+}
+
+/// A golden test's initialized server and its source files.
+fn golden_session(
+    env: &Env,
+    dir: &Path,
+    header: &case::Header,
+) -> Result<(Client, Vec<String>), String> {
+    if header.loose {
         // As Zed opens a file outside its worktree: rooted at the file's
         // directory, with no workspace folder (D-1371).
         let files = loose_sources(dir)?;
@@ -1477,7 +2057,7 @@ fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String
             map.insert("workspaceFolders".to_owned(), json!([]));
         }
         client.initialize(params)?;
-        (client, files)
+        Ok((client, files))
     } else {
         let files = sources(dir)?;
         let (client, _) = session(
@@ -1487,10 +2067,21 @@ fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String
             header.encoding,
             header.settings.clone(),
         )?;
-        (client, files)
-    };
+        Ok((client, files))
+    }
+}
+
+/// The blocks of [`golden_answers`], from a `client` that has not opened
+/// `files` yet.
+fn golden_blocks(
+    env: &Env,
+    dir: &Path,
+    header: &case::Header,
+    mut client: Client,
+    files: &[String],
+) -> Result<String, String> {
     let paths = client.paths().clone();
-    let uris = open_all(&mut client, &files)?;
+    let uris = open_all(&mut client, files)?;
     let encoding = client.encoding();
     let mut blocks = Vec::new();
     for (file, uri) in files.iter().zip(&uris) {
@@ -1522,7 +2113,10 @@ fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String
                 &marker.args,
                 &diagnostics,
             )?;
-            let answer = answer_value(&mut client, method, params, &marker.name)?;
+            let mut answer = answer_value(&mut client, method, params, &marker.name)?;
+            if let Some(follow_up) = case::hierarchy_follow_up(&marker.name) {
+                answer = follow_hierarchy(&mut client, follow_up, &answer, &marker.name)?;
+            }
             if marker.name == "rangeFormatting" {
                 check_range_formatting(&answer, &text, marker.line)
                     .map_err(|e| format!("{}: {e}", marker.label(file)))?;
@@ -1558,6 +2152,30 @@ fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String
         text.push_str(&block);
     }
     Ok(text)
+}
+
+/// A call hierarchy marker's answer: `follow_up` sent with each item that
+/// `prepared`, the answer of its `prepareCallHierarchy`, holds, as one
+/// list per item, or `prepared` itself when it holds none or failed.
+fn follow_hierarchy(
+    client: &mut Client,
+    follow_up: &str,
+    prepared: &Value,
+    name: &str,
+) -> Result<Value, String> {
+    let Some(items) = prepared.as_array().filter(|items| !items.is_empty()) else {
+        return Ok(prepared.clone());
+    };
+    let mut answers = Vec::with_capacity(items.len());
+    for item in items {
+        answers.push(answer_value(
+            client,
+            follow_up,
+            json!({ "item": item }),
+            name,
+        )?);
+    }
+    Ok(Value::Array(answers))
 }
 
 /// `cheby fmt -`'s output for `text`, `None` when it refuses the text.

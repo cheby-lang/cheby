@@ -1,12 +1,48 @@
 == initialize
 {
   "capabilities": {
+    "callHierarchyProvider": true,
+    "declarationProvider": true,
+    "definitionProvider": true,
     "documentFormattingProvider": true,
+    "documentHighlightProvider": true,
+    "documentLinkProvider": {
+      "resolveProvider": false
+    },
     "documentRangeFormattingProvider": true,
     "documentSymbolProvider": true,
     "foldingRangeProvider": true,
+    "hoverProvider": true,
     "positionEncoding": "utf-16",
+    "referencesProvider": true,
     "selectionRangeProvider": true,
+    "semanticTokensProvider": {
+      "full": true,
+      "legend": {
+        "tokenModifiers": [
+          "declaration",
+          "deprecated",
+          "defaultLibrary",
+          "async",
+          "implicitDyn"
+        ],
+        "tokenTypes": [
+          "namespace",
+          "type",
+          "enum",
+          "struct",
+          "interface",
+          "typeParameter",
+          "parameter",
+          "variable",
+          "property",
+          "enumMember",
+          "function",
+          "method"
+        ]
+      },
+      "range": true
+    },
     "textDocumentSync": {
       "change": 2,
       "openClose": true,
@@ -14,12 +50,14 @@
         "includeText": false
       }
     },
+    "typeDefinitionProvider": true,
     "workspace": {
       "workspaceFolders": {
         "changeNotifications": true,
         "supported": true
       }
-    }
+    },
+    "workspaceSymbolProvider": true
   },
   "serverInfo": {
     "name": "cheby",

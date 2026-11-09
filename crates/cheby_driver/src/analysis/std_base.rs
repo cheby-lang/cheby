@@ -115,6 +115,7 @@ impl StdBase {
             baseline,
             targets,
             manifest_is_last_good: false,
+            single_file: false,
         });
         let index = StdIndex::of(&snapshot)?;
         Ok(Arc::new(Self {

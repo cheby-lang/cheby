@@ -1,0 +1,237 @@
+== diagnostics
+{}
+
+== names_no_package.cheby:16:30 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nfn double(n: Int) -> Int\n```\n\n---\n\nDoubles `n`."
+  },
+  "range": {
+    "end": {
+      "character": 35,
+      "line": 15
+    },
+    "start": {
+      "character": 29,
+      "line": 15
+    }
+  }
+}
+
+== names_no_package.cheby:16:18 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>\n```\n```cheby\nfn(List<Int>, fn(Int) -> Int) -> List<Int>\n```\n\n---\n\nDefined in `std::list`.\n\n---\n\nReturns the results of calling `f` on each element, in order."
+  },
+  "range": {
+    "end": {
+      "character": 20,
+      "line": 15
+    },
+    "start": {
+      "character": 17,
+      "line": 15
+    }
+  }
+}
+
+== names_no_package.cheby:16:30 prepareCallHierarchy
+[
+  {
+    "data": {
+      "module": "script",
+      "name": "double",
+      "ns": "value",
+      "origin": "names_no_package.cheby"
+    },
+    "kind": 12,
+    "name": "double",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 12
+      },
+      "start": {
+        "character": 0,
+        "line": 9
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 9,
+        "line": 10
+      },
+      "start": {
+        "character": 3,
+        "line": 10
+      }
+    },
+    "uri": "names_no_package.cheby"
+  }
+]
+
+== names_no_package.cheby:15:4 outgoingCalls
+[
+  [
+    {
+      "fromRanges": [
+        {
+          "end": {
+            "character": 35,
+            "line": 15
+          },
+          "start": {
+            "character": 29,
+            "line": 15
+          }
+        }
+      ],
+      "to": {
+        "data": {
+          "module": "script",
+          "name": "double",
+          "ns": "value",
+          "origin": "names_no_package.cheby"
+        },
+        "kind": 12,
+        "name": "double",
+        "range": {
+          "end": {
+            "character": 1,
+            "line": 12
+          },
+          "start": {
+            "character": 0,
+            "line": 9
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 9,
+            "line": 10
+          },
+          "start": {
+            "character": 3,
+            "line": 10
+          }
+        },
+        "uri": "names_no_package.cheby"
+      }
+    },
+    {
+      "fromRanges": [
+        {
+          "end": {
+            "character": 21,
+            "line": 19
+          },
+          "start": {
+            "character": 15,
+            "line": 19
+          }
+        }
+      ],
+      "to": {
+        "data": {
+          "module": "std::list",
+          "name": "length",
+          "ns": "value",
+          "origin": "names_no_package.cheby"
+        },
+        "detail": "std::list",
+        "kind": 12,
+        "name": "length",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 73
+          },
+          "start": {
+            "character": 7,
+            "line": 73
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 13,
+            "line": 73
+          },
+          "start": {
+            "character": 7,
+            "line": 73
+          }
+        },
+        "uri": "<std>/std/list.cheby"
+      }
+    },
+    {
+      "fromRanges": [
+        {
+          "end": {
+            "character": 20,
+            "line": 15
+          },
+          "start": {
+            "character": 17,
+            "line": 15
+          }
+        }
+      ],
+      "to": {
+        "data": {
+          "module": "std::list",
+          "name": "map",
+          "ns": "value",
+          "origin": "names_no_package.cheby"
+        },
+        "detail": "std::list",
+        "kind": 12,
+        "name": "map",
+        "range": {
+          "end": {
+            "character": 10,
+            "line": 428
+          },
+          "start": {
+            "character": 7,
+            "line": 428
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 10,
+            "line": 428
+          },
+          "start": {
+            "character": 7,
+            "line": 428
+          }
+        },
+        "uri": "<std>/std/list.cheby"
+      }
+    }
+  ]
+]
+
+== names_no_package.cheby:20:5 workspaceSymbol double
+[
+  {
+    "kind": 12,
+    "location": {
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 10
+        },
+        "start": {
+          "character": 3,
+          "line": 10
+        }
+      },
+      "uri": "names_no_package.cheby"
+    },
+    "name": "double"
+  }
+]

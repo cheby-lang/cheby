@@ -1,0 +1,73 @@
+// @decisions: D-1380, D-1381, D-1382, D-1383, D-1426
+//! Hover in a file with a grammar error: the rest of the body keeps its
+//! facts, and a name nothing resolves falls back to the local in scope.
+
+/// Something that can be doubled.
+interface Twice {
+  fn twice(Self) -> Self
+  //         ^ hover
+}
+
+/// A point.
+type Point {
+  /// Across.
+  x: Int,
+  y: Int,
+}
+
+/// Adds two points.
+fn add(a: Point, b: Point) -> Point {
+  Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+/// Shows a point.
+fn show(p: Point) -> String {
+  "({p.x}, {p.y})"
+}
+
+/// The first of `xs`, or `fallback`.
+fn first_or<T>(xs: List<T>, fallback: T) -> T {
+//          ^ hover
+//             ^ hover
+  case xs {
+    [head, ..] => head
+    [] => fallback
+  }
+}
+
+fn apply(n: Int, f: fn(Int) -> Int) -> Int {
+  f(n)
+}
+
+fn plus(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn later(n: Int) -> Int {
+  assert n > 0
+  todo
+// ^ hover
+}
+
+fn main() {
+  let x = 1
+  //      ^ hover
+  let start = Point { x, y: 2 }
+  //                  ^ hover
+  let sum = start + start
+  //              ^ hover
+  let label = "{sum}"
+  //           ^ hover
+  //             ^ hover
+  let bigger = apply(x, plus(_, 1))
+  //                         ^ hover
+  let picked = first_or([start], sum)
+  //                ^ hover
+  assert label == "(2, 4)" && bigger == 2 && picked.x == 1 && later(1) == 0
+  //           ^ hover
+  //                                                ^ hover
+  let broken = sum.
+  //            ^ hover
+  let c = ) start
+  //          ^ hover
+}

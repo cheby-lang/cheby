@@ -1,0 +1,105 @@
+== diagnostics
+{}
+
+== src/main.cheby:20:7 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 19
+      },
+      "start": {
+        "character": 6,
+        "line": 19
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 11,
+        "line": 21
+      },
+      "start": {
+        "character": 10,
+        "line": 21
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 21
+      },
+      "start": {
+        "character": 14,
+        "line": 21
+      }
+    }
+  }
+]
+
+== src/main.cheby:23:15 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 22
+      },
+      "start": {
+        "character": 14,
+        "line": 22
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 22,
+        "line": 24
+      },
+      "start": {
+        "character": 21,
+        "line": 24
+      }
+    }
+  }
+]
+
+== src/main.cheby:25:11 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 14
+      },
+      "start": {
+        "character": 3,
+        "line": 14
+      }
+    }
+  },
+  {
+    "kind": 1,
+    "range": {
+      "end": {
+        "character": 13,
+        "line": 24
+      },
+      "start": {
+        "character": 10,
+        "line": 24
+      }
+    }
+  }
+]

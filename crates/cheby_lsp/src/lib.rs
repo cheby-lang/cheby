@@ -37,6 +37,13 @@
 #![deny(clippy::print_stdout)]
 
 mod analysis_thread;
+// The one module that may name a generation handle's type (plan §1.4,
+// D-1366). The lint sees written type names only, so a value held through
+// inference elsewhere is review's job (R-10).
+#[expect(
+    clippy::disallowed_types,
+    reason = "features may hold generation handles (D-1366)"
+)]
 mod features;
 mod server;
 mod text;
@@ -62,6 +69,9 @@ pub struct ServerOptions {
 /// is 0 after `shutdown`, else 1.
 #[must_use]
 pub fn run(options: ServerOptions) -> ExitCode {
+    // The std base is checked once per process. It starts now, so the
+    // first request that needs it seldom waits (A §7).
+    features::stdlib::warm();
     let (connection, io) = Connection::stdio();
     match server::serve(connection, options) {
         Ok(ended) => {

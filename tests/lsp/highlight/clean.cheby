@@ -1,0 +1,27 @@
+// @decisions: D-1353
+//! Highlight on clean text: a local is written at its binding and read
+//! elsewhere, a punned pattern writes the local it binds, and the braces
+//! of `{q}` are an implicit use of `show`.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn add(a: Point, b: Point) -> Point {
+  Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn show(p: Point) -> String {
+  "({p.x}, {p.y})"
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  //  ^ documentHighlight
+  let q = p + p
+  let Point { x, y } = q
+  //          ^ documentHighlight
+  assert "{q}" == "({x}, {y})"
+  //      ^ documentHighlight
+}

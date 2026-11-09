@@ -34,10 +34,6 @@ impl<'t> TokenAt<'t> {
 
     /// The token on the right: the one that starts at the offset, or the
     /// one that holds it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "hover and go-to use it from W7")
-    )]
     #[must_use]
     pub(crate) fn right(self) -> Option<SyntaxToken<'t>> {
         match self {
@@ -76,10 +72,6 @@ pub(crate) fn token_at(root: SyntaxNode<'_>, offset: TextSize) -> TokenAt<'_> {
 /// The token a name feature should look at: a name if either side has one,
 /// else an operator, else a keyword (X §1.5). Each class looks right first,
 /// then left.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "hover and go-to use it from W7")
-)]
 #[must_use]
 pub(crate) fn pick_ident(at: TokenAt<'_>) -> Option<SyntaxToken<'_>> {
     let (left, right) = match at {

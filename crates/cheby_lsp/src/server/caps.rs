@@ -15,15 +15,20 @@
 //! at `initialized` when the client allows dynamic registration (A §8.1).
 
 use lsp_types::{
-    FoldingRangeProviderCapability, OneOf, PositionEncodingKind, SaveOptions,
-    SelectionRangeProviderCapability, ServerCapabilities, TextDocumentSyncCapability,
+    CallHierarchyServerCapability, DeclarationCapability, DocumentLinkOptions,
+    FoldingRangeProviderCapability, HoverProviderCapability, OneOf, PositionEncodingKind,
+    SaveOptions, SelectionRangeProviderCapability, ServerCapabilities, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
-    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    TypeDefinitionProviderCapability, WorkspaceFoldersServerCapabilities,
+    WorkspaceServerCapabilities,
 };
 use serde_json::Value;
 
 use crate::features::handlers::folding::FoldingCaps;
+use crate::features::handlers::hover::HoverCaps;
+use crate::features::handlers::nav::LinkCaps;
 use crate::features::handlers::symbols::SymbolCaps;
+use crate::features::handlers::tokens;
 use crate::text::lines::PositionEncoding;
 
 /// The client capabilities the server reads, as plain fields.
@@ -42,6 +47,10 @@ pub(crate) struct ClientCaps {
     pub symbols: SymbolCaps,
     /// `textDocument.foldingRange`: what a fold may be.
     pub folding: FoldingCaps,
+    /// `textDocument.hover.contentFormat`: Markdown or plain text.
+    pub hover: HoverCaps,
+    /// The `linkSupport` of definition, declaration and typeDefinition.
+    pub links: LinkCaps,
 }
 
 impl ClientCaps {
@@ -74,6 +83,8 @@ impl ClientCaps {
             ),
             symbols: SymbolCaps::from_params(params),
             folding: FoldingCaps::from_params(params),
+            hover: HoverCaps::from_params(params),
+            links: LinkCaps::from_params(params),
         }
     }
 
@@ -84,9 +95,10 @@ impl ClientCaps {
 }
 
 /// The server's capabilities: the position encoding, incremental text sync
-/// with open, close and save, which is what diagnostics need, the text
-/// requests of `routes` (plan §1.10), and workspace folders with their
-/// changes (A §6.5).
+/// with open, close and save, which is what diagnostics need, the requests
+/// of `routes` (plan §1.10), and workspace folders with their changes
+/// (A §6.5). Semantic tokens are `full` and `range` with no `delta`
+/// (D-1396), and nothing is resolved later.
 pub(crate) fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
     ServerCapabilities {
         position_encoding: Some(encoding.kind()),
@@ -106,6 +118,19 @@ pub(crate) fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilit
         selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_range_formatting_provider: Some(OneOf::Left(true)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
+        declaration_provider: Some(DeclarationCapability::Simple(true)),
+        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+        references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
+        document_link_provider: Some(DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+        }),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        semantic_tokens_provider: Some(tokens::provider()),
         workspace: Some(WorkspaceServerCapabilities {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
@@ -134,12 +159,27 @@ mod tests {
             "textDocument/selectionRange" => "selectionRangeProvider",
             "textDocument/formatting" => "documentFormattingProvider",
             "textDocument/rangeFormatting" => "documentRangeFormattingProvider",
+            "textDocument/hover" => "hoverProvider",
+            "textDocument/definition" => "definitionProvider",
+            "textDocument/declaration" => "declarationProvider",
+            "textDocument/typeDefinition" => "typeDefinitionProvider",
+            "textDocument/references" => "referencesProvider",
+            "textDocument/documentHighlight" => "documentHighlightProvider",
+            "textDocument/prepareCallHierarchy"
+            | "callHierarchy/incomingCalls"
+            | "callHierarchy/outgoingCalls" => "callHierarchyProvider",
+            "textDocument/documentLink" => "documentLinkProvider",
+            "workspace/symbol" => "workspaceSymbolProvider",
+            "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
+                "semanticTokensProvider"
+            }
             other => panic!("no provider is known for `{other}`"),
         };
         let mut routed: Vec<&str> = super::super::routes::query_methods()
             .map(provider)
             .collect();
         routed.sort_unstable();
+        routed.dedup();
         let mut advertised: Vec<&str> = caps
             .as_object()
             .expect("an object")
@@ -149,5 +189,20 @@ mod tests {
             .collect();
         advertised.sort_unstable();
         assert_eq!(advertised, routed);
+    }
+
+    /// Semantic tokens are `full` and `range` with E's legend, and no
+    /// `delta` (D-1396).
+    #[test]
+    fn semantic_tokens_are_full_and_range_without_delta() {
+        let caps = serde_json::to_value(server_capabilities(PositionEncoding::Utf16))
+            .expect("capabilities serialize");
+        let tokens = &caps["semanticTokensProvider"];
+        assert_eq!(tokens["full"], serde_json::json!(true));
+        assert_eq!(tokens["range"], serde_json::json!(true));
+        assert_eq!(
+            tokens["legend"],
+            serde_json::to_value(tokens::legend()).expect("the legend serializes")
+        );
     }
 }

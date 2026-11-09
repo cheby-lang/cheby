@@ -313,6 +313,28 @@ fn advertised(encoding: &str) -> Value {
         "documentFormattingProvider": true,
         "documentRangeFormattingProvider": true,
         "foldingRangeProvider": true,
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "declarationProvider": true,
+        "typeDefinitionProvider": true,
+        "referencesProvider": true,
+        "documentHighlightProvider": true,
+        "callHierarchyProvider": true,
+        "documentLinkProvider": { "resolveProvider": false },
+        "workspaceSymbolProvider": true,
+        "semanticTokensProvider": {
+            "legend": {
+                "tokenTypes": [
+                    "namespace", "type", "enum", "struct", "interface", "typeParameter",
+                    "parameter", "variable", "property", "enumMember", "function", "method",
+                ],
+                "tokenModifiers": [
+                    "declaration", "deprecated", "defaultLibrary", "async", "implicitDyn",
+                ],
+            },
+            "full": true,
+            "range": true,
+        },
         "workspace": {
             "workspaceFolders": { "supported": true, "changeNotifications": true },
         },

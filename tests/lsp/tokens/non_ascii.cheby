@@ -1,0 +1,12 @@
+// @decisions: D-1368, D-1396
+// @requests: semanticTokens
+//! Columns and lengths after characters outside ASCII, in UTF-16.
+
+pub fn tag(n: Int) -> (String, Int) {
+  ("😀é", n)
+}
+
+fn main() {
+  let (label, count) = tag(1)
+  assert label == "😀é" && count == 1
+}

@@ -1,0 +1,24 @@
+// @decisions: D-1478
+//! Declaration of a function that provides `show`, in a body with a type
+//! error: still its definition, at its name, at a call and at the braces
+//! of `{p}`.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+/// Shows a point.
+fn show(p: Point) -> String {
+  //> 12:4 declaration
+  "({p.x}, {p.y})"
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let text: Int = show(p)
+  //              ^ declaration
+  assert "{p}" == "(1, 2)"
+  //      ^ declaration
+  assert text == 6
+}

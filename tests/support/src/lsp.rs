@@ -20,6 +20,8 @@
 //!   publishes them, reduced to one comparable key (D-1348).
 //! - [`outline`]: the outline a `documentSymbol` answer must give, read
 //!   from the parser's item list (`features.md` §5.1).
+//! - [`quality`]: the quality gate of plan W7, `facts.md` §0.1's seeded
+//!   body mutants and the grading of hover on them.
 //!
 //! `serde_json` is re-exported, so the harness, a test target of
 //! `cheby_cli`, needs no dependency of its own.
@@ -31,6 +33,7 @@ pub mod client;
 pub mod frame;
 pub mod outline;
 pub mod parity;
+pub mod quality;
 pub mod text;
 pub mod uri;
 

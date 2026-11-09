@@ -129,6 +129,8 @@ pub(crate) struct Parts {
     pub targets: Targets,
     /// The run's manifest is the last good one, not the live one.
     pub manifest_is_last_good: bool,
+    /// The run is of one file in single-file mode (D-1371).
+    pub single_file: bool,
 }
 
 /// One immutable generation: everything keyed by run-local ids lives here.
@@ -150,6 +152,7 @@ pub struct Snapshot {
     baseline: Vec<BaselineEntry>,
     targets: Targets,
     status: AnalysisStatus,
+    single_file: bool,
 }
 
 impl std::fmt::Debug for Snapshot {
@@ -187,6 +190,7 @@ impl Snapshot {
             baseline,
             targets,
             manifest_is_last_good,
+            single_file,
         } = parts;
         let count = sources.files().count();
         let mut locations = vec![FileLocation::Synthetic; count];
@@ -261,6 +265,7 @@ impl Snapshot {
                 cut_imports,
                 manifest_is_last_good,
             },
+            single_file,
         }
     }
 
@@ -274,6 +279,14 @@ impl Snapshot {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The run is of one file in single-file mode (D-1371), whose package
+    /// and module are the synthetic `script`, a name no answer shows
+    /// (D-1477).
+    #[must_use]
+    pub const fn is_single_file(&self) -> bool {
+        self.single_file
     }
 
     /// The state of the run.

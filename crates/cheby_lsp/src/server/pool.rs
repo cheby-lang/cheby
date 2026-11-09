@@ -23,7 +23,8 @@ use serde_json::Value;
 use super::schedule::{Parked, Want};
 use super::sessions::DocRoute;
 use super::state::package_root;
-use super::{ClientCaps, Server, Settings, codes};
+use super::{ClientCaps, Effect, Server, Settings, codes};
+use crate::features::stdlib::StdService;
 use crate::features::{
     Analyzed, CancelToken, Class, HandlerOutput, LiveText, RequestCx, RequestError, Route,
 };
@@ -44,6 +45,8 @@ pub(crate) struct RequestEnv {
     pub caps: ClientCaps,
     /// The session's position encoding.
     pub encoding: PositionEncoding,
+    /// Std's base and sources.
+    pub std: Arc<StdService>,
 }
 
 /// What a handler reads.
@@ -53,6 +56,13 @@ pub(crate) enum QueryTarget {
     Text(Arc<LiveText>),
     /// A snapshot, for a document or package handler.
     Snapshot(Arc<Analyzed>),
+    /// The std base's snapshot, for a document or package handler on an
+    /// opened std document (A §6.3). The pool thread waits for the base,
+    /// never the main loop, and answers the route's fallback when it
+    /// failed.
+    Std,
+    /// The newest snapshot of each package, for a workspace handler.
+    Workspace(Vec<Arc<Analyzed>>),
 }
 
 /// One request for the pool.
@@ -157,6 +167,7 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         caps: &env.caps,
         encoding: env.encoding,
         cancel: &cancel,
+        std: &env.std,
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| match (route.class, &target) {
         (Class::Text(handler), QueryTarget::Text(live)) => match live.doc_text() {
@@ -168,11 +179,40 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         (Class::Doc(handler) | Class::Package(handler), QueryTarget::Snapshot(analyzed)) => {
             handler(&cx, analyzed, params)
         }
-        (Class::Text(_), QueryTarget::Snapshot(_))
-        | (Class::Doc(_) | Class::Package(_), QueryTarget::Text(_)) => Err(RequestError::Failed(
-            format!("`{}` got the wrong kind of input", route.method),
-        )),
+        (Class::Doc(handler) | Class::Package(handler), QueryTarget::Std) => {
+            match env.std.ready() {
+                Some(ready) => handler(&cx, &ready.analyzed, params),
+                None => Ok(HandlerOutput::value((route.fallback)())),
+            }
+        }
+        (Class::Workspace(handler), QueryTarget::Workspace(packages)) => {
+            let packages: Vec<&Analyzed> = packages.iter().map(|a| &**a).collect();
+            handler(&cx, &packages, params)
+        }
+        (
+            Class::Text(_),
+            QueryTarget::Snapshot(_) | QueryTarget::Std | QueryTarget::Workspace(_),
+        )
+        | (Class::Doc(_) | Class::Package(_), QueryTarget::Text(_) | QueryTarget::Workspace(_))
+        | (
+            Class::Workspace(_),
+            QueryTarget::Text(_) | QueryTarget::Snapshot(_) | QueryTarget::Std,
+        ) => Err(RequestError::Failed(format!(
+            "`{}` got the wrong kind of input",
+            route.method
+        ))),
     }));
+    // A failure of std is logged once, by the first answer after it.
+    let outcome = outcome.map(|result| {
+        result.map(|mut output| {
+            if let Some(message) = env.std.unreported_failure() {
+                output
+                    .effects
+                    .push(Effect::log(MessageType::ERROR, message));
+            }
+            output
+        })
+    });
     match outcome {
         Ok(result) => result.map_err(QueryFailure::Error),
         Err(payload) => {
@@ -193,6 +233,18 @@ impl Server {
     /// waits for one until then (D-1367). With no open document or package
     /// to read, it gets its route's fallback.
     pub(crate) fn dispatch_query(&mut self, id: RequestId, route: &'static Route, params: Value) {
+        // A workspace request names no document: it reads each package's
+        // newest snapshot as it is, and waits for none (A §3.3).
+        if matches!(route.class, Class::Workspace(_)) {
+            let packages = self
+                .served
+                .values()
+                .map(|served| Arc::clone(&served.analyzed))
+                .collect();
+            let env = self.env();
+            self.start_query(id, route, params, QueryTarget::Workspace(packages), env);
+            return;
+        }
         let path = match document_path(&params) {
             Ok(Some(path)) => path,
             // A URI that names no file, such as `untitled:`, is neither open
@@ -227,7 +279,21 @@ impl Server {
                 Some(live) => self.start_query(id, route, params, QueryTarget::Text(live), env),
                 None => self.answer(id, Ok((route.fallback)())),
             },
-            Class::Doc(_) | Class::Package(_) => {
+            Class::Doc(_) | Class::Package(_) | Class::Workspace(_) => {
+                // An opened std document reads the std base's snapshot
+                // until it is edited, and then gets the fallback (A §6.3).
+                // The pool thread waits for the base, so the main loop
+                // never does.
+                if let Some(doc) = self.docs.get(&path)
+                    && matches!(doc.route, DocRoute::Std)
+                {
+                    if doc.diverged {
+                        self.answer(id, Ok((route.fallback)()));
+                    } else {
+                        self.start_query(id, route, params, QueryTarget::Std, env);
+                    }
+                    return;
+                }
                 let Some(root) = self.root_of(&path) else {
                     self.answer(id, Ok((route.fallback)()));
                     return;
@@ -241,7 +307,7 @@ impl Server {
                             .map(|(path, doc)| (path.clone(), doc.stamp))
                             .collect(),
                     },
-                    Class::Doc(_) | Class::Text(_) => Want {
+                    Class::Doc(_) | Class::Text(_) | Class::Workspace(_) => Want {
                         texts: self
                             .docs
                             .get(&path)
@@ -300,6 +366,7 @@ impl Server {
             settings: Arc::clone(&self.settings),
             caps: self.caps.clone(),
             encoding: self.encoding,
+            std: Arc::clone(&self.std),
         })
     }
 
@@ -387,11 +454,19 @@ impl Server {
     }
 }
 
-/// The normalized path of `params.textDocument.uri`: `Ok(None)` for a URI
+/// The normalized path of `params.textDocument.uri`, or for a call
+/// hierarchy's calls of the document the item was prepared in,
+/// `params.item.data.origin`, else `params.item.uri`: `Ok(None)` for a URI
 /// that names no file, `Err` for malformed parameters.
 fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
     let uri: Uri = params
         .pointer("/textDocument/uri")
+        .or_else(|| {
+            params
+                .pointer("/item/data/origin")
+                .filter(|v| v.is_string())
+        })
+        .or_else(|| params.pointer("/item/uri"))
         .and_then(Value::as_str)
         .ok_or(())?
         .parse()

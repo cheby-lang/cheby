@@ -9,6 +9,11 @@
 //! - [`Class::Doc`]: a snapshot of the document's exact text (A §4).
 //! - [`Class::Package`]: a snapshot of the exact text of every open
 //!   document of the package, for answers that span files.
+//! - [`Class::Workspace`]: the newest snapshot of every package, as they
+//!   are, for answers about the whole workspace (A §3.3).
+//!
+//! A request on an opened std document reads the std base's snapshot,
+//! whatever its class, until the document is edited (A §6.3, `stdlib`).
 //!
 //! A handler runs on the query pool (`server::pool`), never on the main
 //! loop. It gets a [`RequestCx`] and returns a [`HandlerOutput`]: a value
@@ -17,6 +22,8 @@
 
 pub(crate) mod handlers;
 pub(crate) mod ide;
+pub(crate) mod index;
+pub(crate) mod stdlib;
 #[cfg(test)]
 mod testing;
 
@@ -30,6 +37,7 @@ use lsp_server::ResponseError;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use self::stdlib::StdService;
 use crate::server::codes;
 use crate::server::{ClientCaps, Effect, Settings};
 use crate::text::lines::{Bom, LspLines, PositionEncoding};
@@ -41,7 +49,6 @@ use crate::text::lines::{Bom, LspLines, PositionEncoding};
 pub(crate) struct Analyzed {
     /// The snapshot: immutable, and the owner of every handle it exposes.
     pub snapshot: Arc<Snapshot>,
-    #[cfg_attr(not(test), expect(dead_code, reason = "W7's index is the first memo"))]
     /// What handlers compute from the snapshot once and share.
     pub memo: Memo,
 }
@@ -60,7 +67,10 @@ impl Analyzed {
 /// the package index, item ranges and satisfaction join it with the waves
 /// that read them (plan §1.5).
 #[derive(Debug, Default)]
-pub(crate) struct Memo {}
+pub(crate) struct Memo {
+    /// The occurrence index (F §5).
+    pub index: index::IndexMemo,
+}
 
 /// What a handler gives back: the response's value, and the effects the
 /// main loop applies before it sends the response (plan §1.5).
@@ -164,10 +174,6 @@ impl CancelToken {
 /// reads the main loop's state.
 #[derive(Debug)]
 pub(crate) struct RequestCx<'a> {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "W8's completion reads the first setting")
-    )]
     /// The settings in force when the request arrived.
     pub settings: &'a Settings,
     /// What the client can do.
@@ -176,6 +182,8 @@ pub(crate) struct RequestCx<'a> {
     pub encoding: PositionEncoding,
     /// Set by `$/cancelRequest`.
     pub cancel: &'a CancelToken,
+    /// The std base and std's sources on disk.
+    pub std: &'a StdService,
 }
 
 /// A document's live text and its own parse, never a snapshot (A §3.3).
@@ -185,10 +193,10 @@ pub(crate) struct RequestCx<'a> {
 /// mix the two.
 #[derive(Debug)]
 pub(crate) struct DocText {
-    #[cfg_attr(not(test), expect(dead_code, reason = "W7's text features read it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no request reads it yet"))]
     /// The document's normalized path.
     pub path: PathBuf,
-    #[cfg_attr(not(test), expect(dead_code, reason = "W7's text features read it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no request reads it yet"))]
     /// The client's version of the text.
     pub version: Option<i32>,
     /// The text, as the client holds it.
@@ -198,7 +206,7 @@ pub(crate) struct DocText {
     /// Its line index. A BOM counts, since the client sent the text
     /// (D-1368).
     pub lines: LspLines,
-    #[cfg_attr(not(test), expect(dead_code, reason = "W7's text features read it"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "no request reads it yet"))]
     /// Its phase-A errors, grammar and syntax validation (D-1355), with
     /// ranges in `text`.
     pub errors: Vec<PlainDiagnostic>,
@@ -285,24 +293,24 @@ pub(crate) type TextHandler =
 pub(crate) type SnapshotHandler =
     fn(&RequestCx<'_>, &Analyzed, Value) -> Result<HandlerOutput, RequestError>;
 
+/// A handler of a [`Class::Workspace`] request: one snapshot per package,
+/// in no particular order.
+pub(crate) type WorkspaceHandler =
+    fn(&RequestCx<'_>, &[&Analyzed], Value) -> Result<HandlerOutput, RequestError>;
+
 /// What a request reads, and so when it can run (A §3.3, §4).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Class {
     /// The live text of an open document, at once.
     Text(TextHandler),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "W7's navigation is the first snapshot request")
-    )]
     /// A snapshot holding the document's text as the request saw it.
     Doc(SnapshotHandler),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "W7's navigation is the first snapshot request")
-    )]
     /// A snapshot holding every open document of the package as the
     /// request saw them.
     Package(SnapshotHandler),
+    /// The newest snapshot of every package, at once. The request names no
+    /// document.
+    Workspace(WorkspaceHandler),
 }
 
 /// One method served off the main loop (A §3.3).

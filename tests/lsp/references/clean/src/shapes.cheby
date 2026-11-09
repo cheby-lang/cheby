@@ -1,0 +1,13 @@
+//! Points, for references across modules.
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn add(a: Point, b: Point) -> Point {
+  //    ^ references
+  //    ^ references noDeclaration
+  Point { x: a.x + b.x, y: a.y + b.y }
+  //      ^ references
+}

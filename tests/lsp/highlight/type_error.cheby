@@ -1,0 +1,20 @@
+// @decisions: D-1353
+//! Highlight in a body with a type error.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn add(a: Point, b: Point) -> Point {
+  Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let n: Int = p
+  let q = p + p
+  //  ^ documentHighlight
+  assert q.x == n
+  //            ^ documentHighlight
+}

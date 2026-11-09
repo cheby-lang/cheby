@@ -1,0 +1,37 @@
+== diagnostics
+{}
+
+== src/main.cheby documentLink
+[
+  {
+    "range": {
+      "end": {
+        "character": 18,
+        "line": 4
+      },
+      "start": {
+        "character": 7,
+        "line": 4
+      }
+    },
+    "target": "src/util.cheby",
+    "tooltip": "links::util"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 14,
+        "line": 5
+      },
+      "start": {
+        "character": 7,
+        "line": 5
+      }
+    },
+    "target": "<std>/std/io.cheby",
+    "tooltip": "std::io"
+  }
+]
+
+== src/util.cheby documentLink
+[]
