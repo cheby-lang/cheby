@@ -177,7 +177,7 @@ const KIND_NOT_FOUND: i64 = 1;
 /// The kind code of `io::is_permission_denied`.
 const KIND_PERMISSION_DENIED: i64 = 2;
 /// The kind code of `io::is_invalid_data` (D-311).
-const KIND_INVALID_DATA: i64 = 3;
+pub(crate) const KIND_INVALID_DATA: i64 = 3;
 /// The kind code of `io::is_invalid_input`: a path that contains U+0000
 /// (D-981).
 const KIND_INVALID_INPUT: i64 = 13;
@@ -192,10 +192,10 @@ fn invalid_path(path: &str) -> Option<Word> {
 
 /// The message of an invalid-UTF-8 failure. `std::io` drops the message of
 /// a kind with a predicate (D-345), so it never reaches the program.
-const INVALID_UTF8: &str = "invalid UTF-8";
+pub(crate) const INVALID_UTF8: &str = "invalid UTF-8";
 
 /// The kind code of an IO error (D-484).
-fn kind_code(error: &io::Error) -> i64 {
+pub(crate) fn kind_code(error: &io::Error) -> i64 {
     match error.kind() {
         io::ErrorKind::NotFound => KIND_NOT_FOUND,
         io::ErrorKind::PermissionDenied => KIND_PERMISSION_DENIED,

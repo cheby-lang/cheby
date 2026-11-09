@@ -482,7 +482,7 @@ mod tests {
             );
         }
         assert_eq!(registered, declared);
-        assert_eq!(registered.len(), 30 + 38 + 11 + 3);
+        assert_eq!(registered.len(), 30 + 38 + 11 + 4);
     }
 
     /// A kernel declaration: its native symbol, whether it is
