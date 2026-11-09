@@ -812,43 +812,33 @@ test "sort orders by compare" {
 }
 
 /// Returns the elements in increasing order by `by`, where `Less` means the first argument
-/// goes first, stably (D-299, D-335).
-pub fn sort_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> List<T> {
-  // A bottom-up merge sort: runs of one element are merged in adjacent
-  // pairs until one run is left. A merge takes from the left run while its
-  // element is not `Greater`, which keeps equal elements in order. The
-  // algorithm is the same on every target because it is written here.
-  fn merge(found: List<T>, left: List<T>, right: List<T>) -> List<T> {
-    case left, right {
-      [], _ => append(found, right)
-      _, [] => append(found, left)
-      [a, ..left_rest], [b, ..right_rest] => case by(a, b) {
-        Greater => merge(push(found, b), left, right_rest)
-        _ => merge(push(found, a), left_rest, right)
-      }
-    }
-  }
-  fn merge_pairs(merged: List<List<T>>, runs: List<List<T>>) -> List<List<T>> {
-    case runs {
-      [left, right, ..rest] => merge_pairs(push(merged, merge([], left, right)), rest)
-      [run] => push(merged, run)
-      [] => merged
-    }
-  }
-  fn sort_runs(runs: List<List<T>>) -> List<T> {
-    case runs {
-      [] => []
-      [sorted] => sorted
-      _ => sort_runs(merge_pairs([], runs))
-    }
-  }
-  sort_runs(map(xs, fn(item) { [item] }))
-}
+/// goes first, stably (D-299, D-335). It is a bottom-up merge sort: runs of one element are
+/// merged in adjacent pairs, front to back, until one run is left, and a merge takes from the
+/// left run unless `by` returns `Greater`, so equal elements keep their order. The runtime
+/// runs it, calling `by` back, with the same pairs and calls on every target (D-1448).
+@external(native, "cheby_list_sort_with")
+@external(js, "./list.mjs", "sort_with")
+pub fn sort_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> List<T>
 
 test "sort_with is stable" {
   let by_length = fn(a: String, b: String) { int::compare(string::length(a), string::length(b)) }
   assert sort_with(["bb", "a", "cc", "d"], by_length) == ["a", "d", "bb", "cc"]
   assert sort_with([1, 3, 2], fn(a, b) { int::compare(b, a) }) == [3, 2, 1]
+}
+
+test "sort_with merges in the same order for any comparison" {
+  assert sort_with([1, 2, 3, 4, 5], fn(_, _) { Greater }) == [5, 4, 3, 2, 1]
+  assert sort_with([1, 2, 3, 4, 5, 6], fn(_, _) { Greater }) == [6, 5, 4, 3, 2, 1]
+  assert sort_with([3, 1, 2], fn(_, _) { Less }) == [3, 1, 2]
+  assert sort_with(new::<Int>(), fn(_, _) { Greater }) == []
+  let mixed = sort_with(range(0, 13), fn(x, y) {
+    case (x * 7 + y * 3) % 5 {
+      0 => Greater
+      1 => Equal
+      _ => Less
+    }
+  })
+  assert mixed == [0, 1, 2, 8, 3, 9, 4, 10, 5, 11, 6, 12, 7]
 }
 
 /// Compares two lists lexicographically (D-136). It makes `List<T>` satisfy `Compare` when

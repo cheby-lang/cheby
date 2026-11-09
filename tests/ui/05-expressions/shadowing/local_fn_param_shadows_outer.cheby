@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-062
+//! A local function's parameters follow the no-shadowing rule, so the
+//! usual recursive helper cannot reuse the names of the function around
+//! it, and the help says which binding to rename.
+
+fn count_down(n: Int, total: Int) -> Int {
+  fn step(n, total) {
+    case n {
+      0 => total
+      _ => step(n - 1, total + n)
+    }
+  }
+  step(n, total)
+}
+
+fn main() {
+  assert count_down(3, 0) == 6
+}

@@ -15,7 +15,7 @@ use siphasher::sip::SipHasher13;
 
 use super::raw::{Raw, View, f32_hash_bits, float_hash_bits, view};
 use super::{Reached, hooks};
-use crate::abi::Word;
+use crate::abi::{self, Word};
 use crate::alloc::scratch::ScratchVec;
 use crate::layout::FieldKind;
 use crate::object::{read_field, to_u64, to_usize, word_to_ptr};
@@ -284,6 +284,12 @@ pub unsafe fn hash_with_seed(word: Word, seed: u64) -> Result<u64, Reached> {
     Ok(hasher.finish())
 }
 
+/// Writes a tagged integer, as [`step`] does.
+fn tagged(h: &mut Hasher, word: Word) {
+    h.write_u8(mark::INT);
+    h.write_u64(abi::untag_int(word).cast_unsigned());
+}
+
 /// Writes a decoded raw field.
 fn raw(h: &mut Hasher, field: Raw) {
     match field {
@@ -346,8 +352,16 @@ unsafe fn step(word: Word, h: &mut Hasher) -> Result<(), Reached> {
         View::Tuple(fields) => {
             h.write_u8(mark::TUPLE);
             h.write_u64(to_u64(fields.len()));
-            for field in fields {
-                h.push(field);
+            // The leading tagged integers are written here, as their own
+            // steps would write them next, so a tuple of integers leaves no
+            // work and the hash is the same.
+            let mut index = 0;
+            while index < fields.len() && abi::is_tagged_int(fields.get(index)) {
+                tagged(h, fields.get(index));
+                index = index.saturating_add(1);
+            }
+            for rest in index..fields.len() {
+                h.push(fields.get(rest));
             }
         }
         View::Ctor(info) => {
@@ -365,13 +379,23 @@ unsafe fn step(word: Word, h: &mut Hasher) -> Result<(), Reached> {
             }
             h.write_u64(u64::from(info.tag));
             let obj = word_to_ptr(word);
-            for field in &info.fields {
-                // SAFETY: a live constructor with this field.
-                let bits = unsafe { read_field(obj, to_usize(u64::from(field.offset))) };
-                if field.kind == FieldKind::Value {
-                    h.push(bits);
+            // SAFETY (both loops): a live constructor with these fields.
+            let bits = |offset: u32| unsafe { read_field(obj, to_usize(u64::from(offset))) };
+            // Raw fields are written as they come, and value fields after
+            // them, in order. The leading value fields that are tagged
+            // integers are written here, as their own steps would write
+            // them next, so a constructor of scalars leaves no work.
+            for field in info.fields.iter().filter(|f| f.kind != FieldKind::Value) {
+                raw(h, Raw::decode(field.kind, bits(field.offset)));
+            }
+            let mut leading = true;
+            for field in info.fields.iter().filter(|f| f.kind == FieldKind::Value) {
+                let word = bits(field.offset);
+                if leading && abi::is_tagged_int(word) {
+                    tagged(h, word);
                 } else {
-                    raw(h, Raw::decode(field.kind, bits));
+                    leading = false;
+                    h.push(word);
                 }
             }
         }

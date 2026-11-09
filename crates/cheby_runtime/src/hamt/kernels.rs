@@ -326,6 +326,31 @@ pub unsafe extern "C" fn cheby_set_contains(s: u64, item: u64) -> bool {
     })
 }
 
+/// `set::sys_get`, the private kernel behind `set::intersection`: the
+/// stored element `==` to `item`, which may print differently from it,
+/// as `-0.0` does from `0.0` (D-588). O(log n).
+///
+/// # Safety
+///
+/// `s` is a live set and `item` a live uniform word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_set_sys_get(s: u64, item: u64) -> u64 {
+    guarded(None, || {
+        // SAFETY: forwarded from the caller.
+        let found = ops::find(unsafe { set(s) }, Collection::Set, item);
+        let stored = found.map(|found| {
+            let stored = found.key();
+            dup_word(stored);
+            stored
+        });
+        // The reference is released if the `Some` cannot be allocated.
+        let held = DropOnUnwind::new([stored.unwrap_or(0)]);
+        let result = values::option(stored);
+        held.disarm();
+        result
+    })
+}
+
 /// `set::insert`: unchanged when present. O(log n); in place at count one.
 ///
 /// # Safety
@@ -373,7 +398,7 @@ pub unsafe extern "C" fn cheby_set_to_list(s: u64) -> u64 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-pub(super) fn all() -> [(&'static str, *const u8); 20] {
+pub(super) fn all() -> [(&'static str, *const u8); 21] {
     [
         ("cheby_map_new", cheby_map_new as *const u8),
         ("cheby_map_from_list", cheby_map_from_list as *const u8),
@@ -392,6 +417,7 @@ pub(super) fn all() -> [(&'static str, *const u8); 20] {
         ("cheby_set_size", cheby_set_size as *const u8),
         ("cheby_set_is_empty", cheby_set_is_empty as *const u8),
         ("cheby_set_contains", cheby_set_contains as *const u8),
+        ("cheby_set_sys_get", cheby_set_sys_get as *const u8),
         ("cheby_set_insert", cheby_set_insert as *const u8),
         ("cheby_set_remove", cheby_set_remove as *const u8),
         ("cheby_set_to_list", cheby_set_to_list as *const u8),

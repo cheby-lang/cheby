@@ -1,0 +1,11 @@
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/03-types/equality/inline_function_field_panics.cheby:10:10
+   |
+10 |   assert held == Some(double)
+   |          ^^^^^^^^^^^^^^^^^^^^ `Option<fn(Int) -> Int>` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+panicked at tests/ui/03-types/equality/inline_function_field_panics.cheby:10:10:
+equality or hashing reached a function value or a handle

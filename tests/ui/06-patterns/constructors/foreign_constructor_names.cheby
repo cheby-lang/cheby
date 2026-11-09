@@ -1,0 +1,23 @@
+// @mode: check-fail
+//! Constructor names from other languages, such as `Error`, `Just` and
+//! `Lt`, point to the prelude's constructor of the same meaning.
+
+fn describe(order: Order) -> String {
+  case order {
+    Lt => "less"
+    Eq => "equal"
+    Gt => "greater"
+  }
+}
+
+fn check(found: Result<Int, String>) -> Option<Int> {
+  case found {
+    Ok(n) => Just(n)
+    Error(_) => Nothing
+  }
+}
+
+fn main() {
+  assert describe(Less) == "less"
+  assert check(Ok(1)) == Some(1)
+}

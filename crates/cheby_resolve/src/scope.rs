@@ -59,6 +59,15 @@ impl ModuleScope {
             .filter(|entry| entry.source != ScopeSource::Withdrawn)
     }
 
+    /// The names of namespace `ns` that a lookup finds, in no particular
+    /// order.
+    pub fn names(&self, ns: Namespace) -> impl Iterator<Item = Name> + '_ {
+        self.map(ns)
+            .iter()
+            .filter(|(_, entry)| entry.source != ScopeSource::Withdrawn)
+            .map(|(&name, _)| name)
+    }
+
     /// Whether an import of `name` collided with another name (E0041).
     #[must_use]
     pub fn is_conflicted(&self, name: Name) -> bool {

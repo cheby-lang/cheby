@@ -137,16 +137,37 @@ impl PathCx<'_> {
             format!("cannot find {what} `{text}` in this scope"),
         )
         .with_primary(span, "not found");
+        let constructor =
+            ns == Namespace::Value && text.starts_with(|c: char| c.is_ascii_uppercase());
+        if constructor && let Some((target, help)) = self.foreign_constructor(text) {
+            return diag.with_suggestion(help, span, target);
+        }
         let mut candidates: Vec<&str> = self
             .items
             .iter()
             .filter(|item| item.kind.namespace() == Some(ns))
             .map(|item| self.text(item.name))
             .collect();
+        // A constructor may come from the prelude or an import, as `Some`
+        // and `Err` do.
+        if constructor {
+            candidates.extend(
+                self.scope
+                    .names(ns)
+                    .map(|name| self.text(name))
+                    .filter(|name| name.starts_with(|c: char| c.is_ascii_uppercase())),
+            );
+        }
         candidates.sort_unstable();
+        candidates.dedup();
         if let Some(close) = closest_name(text, candidates) {
+            let kind = if constructor {
+                "constructor"
+            } else {
+                ns.describe()
+            };
             diag = diag.with_suggestion(
-                format!("a {} with a similar name exists: `{close}`", ns.describe()),
+                format!("a {kind} with a similar name exists: `{close}`"),
                 span,
                 close,
             );
@@ -157,6 +178,35 @@ impl PathCx<'_> {
             diag = diag.with_help(help);
         }
         diag
+    }
+
+    /// The constructor of the prelude that another language's name means,
+    /// as `Error` means `Err`, with a help line, if that constructor is in
+    /// scope.
+    fn foreign_constructor(&self, text: &str) -> Option<(&'static str, String)> {
+        let (target, help) = match text {
+            "Error" | "Failure" => ("Err", "the failure case of `Result` is `Err`".to_owned()),
+            "Success" => ("Ok", "the success case of `Result` is `Ok`".to_owned()),
+            "Just" => ("Some", "the present case of `Option` is `Some`".to_owned()),
+            "Nothing" | "Null" => ("None", "the absent case of `Option` is `None`".to_owned()),
+            "Lt" | "LT" | "Eq" | "EQ" | "Gt" | "GT" => {
+                let target = match text {
+                    "Lt" | "LT" => "Less",
+                    "Eq" | "EQ" => "Equal",
+                    _ => "Greater",
+                };
+                let help = format!(
+                    "`Order`'s constructors are `Less`, `Equal` and `Greater`, so this one is \
+                     `{target}`"
+                );
+                (target, help)
+            }
+            _ => return None,
+        };
+        let name = self.input.globals.names.intern(target);
+        self.scope
+            .get(Namespace::Value, name)
+            .map(|_| (target, help))
     }
 
     /// Where an unknown type name may come from: a builtin type outside

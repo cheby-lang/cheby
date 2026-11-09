@@ -75,6 +75,7 @@ fn resolve_item(
         sig_paths: FxHashMap::default(),
         in_sig: true,
         later_fns: Vec::new(),
+        binding_params: None,
     };
     let mut has_body = false;
     match item {
@@ -202,6 +203,10 @@ struct Cx<'a, 'd> {
     /// The local functions of the enclosing blocks that are not declared
     /// yet, for the note on a use before the declaration (D-110).
     later_fns: Vec<(Name, Span)>,
+    /// While the parameters of a local function or a closure are bound:
+    /// what they belong to, and the index of their scope, so E0044 can
+    /// tell a clash with a binding from around it.
+    binding_params: Option<(&'static str, usize)>,
 }
 
 /// The names bound so far by one pattern, or by the patterns of one `case`
@@ -378,7 +383,18 @@ impl Cx<'_, '_> {
 
     fn check_shadowing(&mut self, name: Name, span: Span) -> Result<(), Ice> {
         let text = self.text(name);
+        // A parameter of a local function or a closure that reuses a name
+        // from around it: the usual clash of a recursive helper (§5.2.3).
+        let mut param_owner = None;
         let earlier = if let Some(local) = self.lookup_local(name) {
+            if let Some((owner, depth)) = self.binding_params
+                && self
+                    .scopes
+                    .get(..depth)
+                    .is_some_and(|outer| outer.iter().flatten().any(|&(_, l)| l == local))
+            {
+                param_owner = Some(owner);
+            }
             let decl = self.res.locals.try_get(local, "local")?;
             Some((
                 decl.span,
@@ -427,14 +443,22 @@ impl Cx<'_, '_> {
             }
         };
         if let Some((first, message, label)) = earlier {
+            let help = match param_owner {
+                Some(owner) => format!(
+                    "the parameters of a {owner} cannot reuse a name from around it (§5.2.3); \
+                     rename this parameter, or rename the outer `{text}`, for example to \
+                     `initial_{text}`"
+                ),
+                None => format!(
+                    "give this binding a new name, such as `{text}_2`; names cannot be \
+                     shadowed (§5.2.3)"
+                ),
+            };
             self.diags.push(
                 Diagnostic::new(codes::SHADOWED_NAME, message)
                     .with_primary(span, "bound again here")
                     .with_secondary(first, label)
-                    .with_help(format!(
-                        "give this binding a new name, such as `{text}_2`; names cannot be \
-                         shadowed (§5.2.3)"
-                    )),
+                    .with_help(help),
             );
         }
         Ok(())
@@ -530,7 +554,7 @@ impl Cx<'_, '_> {
                     self.bind(name, LocalKind::LocalFn, f.syntax().id())?;
                 }
                 self.push_scope();
-                self.params(f.params())?;
+                self.params(f.params(), "local `fn`")?;
                 self.ret(f.ret_type())?;
                 if let Some(body) = f.body() {
                     self.block_contents(body)?;
@@ -544,17 +568,27 @@ impl Cx<'_, '_> {
 
     /// Closure and local-function parameters: irrefutable patterns with
     /// optional types (D-242). A name bound twice among them is E0044.
-    fn params<'t>(&mut self, params: impl Iterator<Item = Param<'t>>) -> Result<(), Ice> {
+    /// `owner` names what the parameters belong to, for E0044's help.
+    fn params<'t>(
+        &mut self,
+        params: impl Iterator<Item = Param<'t>>,
+        owner: &'static str,
+    ) -> Result<(), Ice> {
+        let outer = self
+            .binding_params
+            .replace((owner, self.scopes.len().saturating_sub(1)));
         let mut state = PatState::default();
-        for param in params {
+        let result = params.into_iter().try_for_each(|param| {
             if let Some(ty) = param.ty() {
                 self.ty(ty)?;
             }
             if let Some(pat) = param.pattern() {
                 self.pat(pat, LocalKind::ClosureParam, &mut state)?;
             }
-        }
-        Ok(())
+            Ok(())
+        });
+        self.binding_params = outer;
+        result
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per expression kind")]
@@ -644,7 +678,7 @@ impl Cx<'_, '_> {
             Expr::Block(b) => self.block(b)?,
             Expr::Closure(c) => {
                 self.push_scope();
-                self.params(c.params())?;
+                self.params(c.params(), "closure")?;
                 self.ret(c.ret_type())?;
                 if let Some(body) = c.body() {
                     self.block_contents(body)?;

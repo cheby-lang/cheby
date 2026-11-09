@@ -2264,3 +2264,16 @@ Open:
 - `std::filepath` has no `glob`, no `~` expansion and no directory walk. `file.md`'s "Not in tier 3" list keeps the walk (D-996), and the others can come later without breaking a program.
 
 Spec: none. Stdlib: `filepath.md` (new), `env.md`, `file.md`, `io.md`, `process.md` and the README. No new diagnostic code. Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-11-09: Advent of Code readiness
+
+Goal: fix what the Advent of Code 2024 bug-bash found before Advent of Code 2026.
+
+- **D-1447 The hashed set's combining functions walk the smaller set**: `set::union`, `set::intersection` and `set::difference` walk the smaller of their two sets, and `set::is_subset` gives `False` at once when `s` is larger than `other`. Their results do not change. Where both sets hold `==` elements, `union` and `intersection` keep the one in `s` (D-588): `union` removes and inserts each element of a smaller `s`, and `intersection` looks each element of a smaller `other` up in `s` through a private kernel, `sys_get`, which returns the element a set stores that is `==` to its argument. The kernel is bound as every kernel is, with `./set.mjs` `sys_get` on JS in M4 (D-484). The costs of the three become O(m log (n + k)), where m is the smaller of the two sizes, and `is_subset` costs O(1) when `s` is larger. Why: in the bug-bash, day 23's clique search took 15 times Python's time because `intersection(big, small)` walked the big set, and that repro now takes 0.02 s instead of 3.8 s. Keeping the elements of whichever set is walked needs no kernel, but it would make the elements of a result depend on the sizes of the two sets. Documenting "pass the smaller set first" leaves the trap in place.
+- **D-1448 `list::sort_with` is a kernel**: `list::sort_with` becomes a runtime kernel that calls its comparison back, as `map::upsert` calls its function (D-526), and `list::sort` stays Cheby over it. Every target runs one algorithm: a bottom-up merge sort that starts from runs of one element and merges them in adjacent pairs, front to back, where a last run without a partner waits for the next round, and a merge takes the right front element only when the comparison returns `Greater`. It is the Cheby merge sort it replaces, so any comparison, consistent or not, gives the same list and sees the same calls in the same order, and M4's JS kernel follows it. Why: in the bug-bash, the sort took 80% of day 1's time on a large input and most of day 5's, and 1M random Ints took 1.5 s, against 0.1 s for CPython. The kernel takes 0.29 s. A Cheby rewrite that merges by index and starts from natural runs gained only 10% on random input. Keeping the old algorithm keeps D-299's results on every target without a new rule. Refines D-484.
+
+Open:
+
+- `sorted_set::intersection` and `union` still walk `s`. `ordered_set`'s must, since they keep the order of `s`.
+
+Spec: `docs/stdlib/set.md` for `union`, `intersection`, `difference` and `is_subset`, `docs/stdlib/list.md` for `sort_with`, `docs/plan/stdlib.md` §1 and `docs/stdlib/bytes.md` for the kernels that call back, and `docs/plan/m4-js.md` §4.7 for `./set.mjs` `sys_get` and `./list.mjs` `sort_with`. No new diagnostic code. Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

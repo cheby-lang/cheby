@@ -1,0 +1,48 @@
+error[E0042]: cannot find constructor `Lt` in this scope
+ --> tests/ui/06-patterns/constructors/foreign_constructor_names.cheby:7:5
+  |
+7 |     Lt => "less"
+  |     ^^ not found
+  |
+  = help: `Order`'s constructors are `Less`, `Equal` and `Greater`, so this one is `Less`
+
+error[E0042]: cannot find constructor `Eq` in this scope
+ --> tests/ui/06-patterns/constructors/foreign_constructor_names.cheby:8:5
+  |
+8 |     Eq => "equal"
+  |     ^^ not found
+  |
+  = help: `Order`'s constructors are `Less`, `Equal` and `Greater`, so this one is `Equal`
+
+error[E0042]: cannot find constructor `Gt` in this scope
+ --> tests/ui/06-patterns/constructors/foreign_constructor_names.cheby:9:5
+  |
+9 |     Gt => "greater"
+  |     ^^ not found
+  |
+  = help: `Order`'s constructors are `Less`, `Equal` and `Greater`, so this one is `Greater`
+
+error[E0042]: cannot find value `Just` in this scope
+  --> tests/ui/06-patterns/constructors/foreign_constructor_names.cheby:15:14
+   |
+15 |     Ok(n) => Just(n)
+   |              ^^^^ not found
+   |
+   = help: the present case of `Option` is `Some`
+
+error[E0042]: cannot find constructor `Error` in this scope
+  --> tests/ui/06-patterns/constructors/foreign_constructor_names.cheby:16:5
+   |
+16 |     Error(_) => Nothing
+   |     ^^^^^ not found
+   |
+   = help: the failure case of `Result` is `Err`
+
+error[E0042]: cannot find value `Nothing` in this scope
+  --> tests/ui/06-patterns/constructors/foreign_constructor_names.cheby:16:17
+   |
+16 |     Error(_) => Nothing
+   |                 ^^^^^^^ not found
+   |
+   = help: the absent case of `Option` is `None`
+

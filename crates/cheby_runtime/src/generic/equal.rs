@@ -1,11 +1,11 @@
 //! Structural equality (`==`, §3.13).
 
-use super::raw::{Raw, View, f32_eq, float_eq, view};
+use super::raw::{Raw, TupleFields, View, f32_eq, float_eq, view};
 use super::{Reached, hooks};
-use crate::abi::Word;
+use crate::abi::{self, Word};
 use crate::alloc::scratch::ScratchVec;
 use crate::desc;
-use crate::layout::FieldKind;
+use crate::layout::{FieldKind, LayoutInfo};
 use crate::object::{read_field, to_usize, word_to_ptr};
 use crate::panic::fatal;
 
@@ -85,6 +85,77 @@ pub unsafe fn equal(a: Word, b: Word) -> Result<bool, Reached> {
     Ok(true)
 }
 
+/// Compares two tuples of one type: their leading elements that are
+/// tagged integers on both sides here, as their own steps would compare
+/// them first, so a tuple of integers leaves no work, and the rest later,
+/// in order.
+fn tuples(xs: TupleFields, ys: TupleFields, later: &mut ScratchVec<Task>) -> bool {
+    if xs.len() != ys.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < xs.len() {
+        let (x, y) = (xs.get(index), ys.get(index));
+        if !(abi::is_tagged_int(x) && abi::is_tagged_int(y)) {
+            break;
+        }
+        if x != y {
+            return false;
+        }
+        index = index.saturating_add(1);
+    }
+    later.extend((index..xs.len()).map(|i| Task::Pair(xs.get(i), ys.get(i))));
+    true
+}
+
+/// Compares the fields of two constructors with the same tag. Until the
+/// first field that needs a walk of its own, raw fields and tagged integers
+/// are compared here, in field order, so a constructor of scalars leaves no
+/// work; the rest go to `later`, in order.
+///
+/// # Safety
+///
+/// `a` and `b` are live constructors with the layouts `x` and `y`.
+unsafe fn ctor_fields(
+    a: Word,
+    b: Word,
+    x: &LayoutInfo,
+    y: &LayoutInfo,
+    later: &mut ScratchVec<Task>,
+) -> bool {
+    let (pa, pb) = (word_to_ptr(a), word_to_ptr(b));
+    let mut leading = true;
+    for (fx, fy) in x.fields.iter().zip(y.fields.iter()) {
+        let offsets = (
+            to_usize(u64::from(fx.offset)),
+            to_usize(u64::from(fy.offset)),
+        );
+        // SAFETY: live constructors with these fields.
+        let (wx, wy) = unsafe { (read_field(pa, offsets.0), read_field(pb, offsets.1)) };
+        let task = if fx.kind == FieldKind::Value {
+            if leading && abi::is_tagged_int(wx) && abi::is_tagged_int(wy) {
+                if wx != wy {
+                    return false;
+                }
+                continue;
+            }
+            Task::Pair(wx, wy)
+        } else {
+            let (rx, ry) = (Raw::decode(fx.kind, wx), Raw::decode(fy.kind, wy));
+            if leading {
+                if !rx.same(ry) {
+                    return false;
+                }
+                continue;
+            }
+            Task::Raw(rx, ry)
+        };
+        leading = false;
+        later.push(task);
+    }
+    true
+}
+
 /// Compares one level of `a` and `b`, appending the comparisons of their
 /// parts to `later` in order. `Ok(false)` when they already differ.
 ///
@@ -108,13 +179,7 @@ unsafe fn step(
         (View::Float(x), View::Float(y)) => float_eq(x, y),
         (View::F32(x), View::F32(y)) => f32_eq(x, y),
         (View::String(x), View::String(y)) | (View::Bytes(x), View::Bytes(y)) => x == y,
-        (View::Tuple(xs), View::Tuple(ys)) => {
-            if xs.len() != ys.len() {
-                return Ok(false);
-            }
-            later.extend(xs.into_iter().zip(ys).map(|(x, y)| Task::Pair(x, y)));
-            true
-        }
+        (View::Tuple(xs), View::Tuple(ys)) => tuples(xs, ys, later),
         (View::Ctor(x), View::Ctor(y)) => {
             // Hashing and equality never use layout ids (D-538): the same
             // constructor may be registered twice under different ids.
@@ -130,21 +195,8 @@ unsafe fn step(
             if x.tag != y.tag {
                 return Ok(false);
             }
-            let (pa, pb) = (word_to_ptr(a), word_to_ptr(b));
-            for (fx, fy) in x.fields.iter().zip(y.fields.iter()) {
-                let offsets = (
-                    to_usize(u64::from(fx.offset)),
-                    to_usize(u64::from(fy.offset)),
-                );
-                // SAFETY: live constructors with these fields.
-                let (wx, wy) = unsafe { (read_field(pa, offsets.0), read_field(pb, offsets.1)) };
-                later.push(if fx.kind == FieldKind::Value {
-                    Task::Pair(wx, wy)
-                } else {
-                    Task::Raw(Raw::decode(fx.kind, wx), Raw::decode(fy.kind, wy))
-                });
-            }
-            true
+            // SAFETY: live constructors of one type with these layouts.
+            unsafe { ctor_fields(a, b, x, y, later) }
         }
         (View::Custom(kind), View::Custom(other)) => {
             if kind != other {

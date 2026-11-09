@@ -239,9 +239,15 @@ test "map can merge elements" {
 
 // Combining
 
-/// Returns the elements that are in `s` or in `other`.
+/// Returns the elements that are in `s` or in `other`. Where both hold
+/// an element, the one in `s` is kept (D-588). It walks the smaller set.
 pub fn union<T>(s: Set<T>, other: Set<T>) -> Set<T> {
-  list::fold(to_list(other), s, insert)
+  case size(other) <= size(s) {
+    True => fold(other, s, insert)
+    // Each element of `s` replaces the equal element of `other`, so the
+    // result keeps the elements of `s`, as inserting into `s` does.
+    False => fold(s, other, fn(found, item) { insert(remove(found, item), item) })
+  }
 }
 
 test "union joins two sets" {
@@ -250,10 +256,35 @@ test "union joins two sets" {
   assert union(low, high) == from_list([1, 2, 3, 4])
 }
 
-/// Returns the elements of `s` that are also in `other`.
-pub fn intersection<T>(s: Set<T>, other: Set<T>) -> Set<T> {
-  filter(s, fn(item) { contains(other, item) })
+test "union keeps the elements of its first set" {
+  let small = from_list([-0.0])
+  let large = from_list([0.0, 1.0, 2.0])
+  let from_small = union(small, large)
+  let from_large = union(large, small)
+  assert "{from_small:?}" == "set::from_list([-0.0, 1.0, 2.0])"
+  assert "{from_large:?}" == "set::from_list([0.0, 1.0, 2.0])"
 }
+
+/// Returns the elements of `s` that are also in `other`. It walks the
+/// smaller set.
+pub fn intersection<T>(s: Set<T>, other: Set<T>) -> Set<T> {
+  case size(s) <= size(other) {
+    True => filter(s, fn(item) { contains(other, item) })
+    // `sys_get` gives the element that `s` holds, which can print
+    // differently from the equal element of `other` (D-588).
+    False => fold(other, new(), fn(found, item) {
+      case sys_get(s, item) {
+        Some(stored) => insert(found, stored)
+        None => found
+      }
+    })
+  }
+}
+
+/// The element of `s` that is `==` to `item`.
+@external(native, "cheby_set_sys_get")
+@external(js, "./set.mjs", "sys_get")
+priv fn sys_get<T>(s: Set<T>, item: T) -> Option<T>
 
 test "intersection keeps the shared elements" {
   let low = from_list([1, 2, 3])
@@ -261,9 +292,22 @@ test "intersection keeps the shared elements" {
   assert intersection(low, high) == from_list([2, 3])
 }
 
-/// Returns the elements of `s` that are not in `other`.
+test "intersection keeps the elements of its first set" {
+  let small = from_list([-0.0, 5.0])
+  let large = from_list([0.0, 1.0, 2.0])
+  let from_small = intersection(small, large)
+  let from_large = intersection(large, small)
+  assert "{from_small:?}" == "set::from_list([-0.0])"
+  assert "{from_large:?}" == "set::from_list([0.0])"
+}
+
+/// Returns the elements of `s` that are not in `other`. It walks the
+/// smaller set.
 pub fn difference<T>(s: Set<T>, other: Set<T>) -> Set<T> {
-  filter(s, fn(item) { !contains(other, item) })
+  case size(other) < size(s) {
+    True => fold(other, s, remove)
+    False => filter(s, fn(item) { !contains(other, item) })
+  }
 }
 
 test "difference removes the elements of the second set" {
@@ -272,9 +316,17 @@ test "difference removes the elements of the second set" {
   assert difference(low, high) == from_list([1])
 }
 
-/// Tells whether every element of `s` is in `other`, stopping at the first that is not.
+test "difference gives the same set from either size" {
+  let many = from_list([1, 2, 3, 4, 5])
+  let few = from_list([2, 9])
+  assert difference(many, few) == from_list([1, 3, 4, 5])
+  assert difference(few, many) == from_list([9])
+}
+
+/// Tells whether every element of `s` is in `other`, stopping at the first
+/// that is not. A larger `s` is never a subset, and gives `False` at once.
 pub fn is_subset<T>(s: Set<T>, other: Set<T>) -> Bool {
-  list::all(to_list(s), fn(item) { contains(other, item) })
+  size(s) <= size(other) && list::all(to_list(s), fn(item) { contains(other, item) })
 }
 
 test "is_subset checks every element" {

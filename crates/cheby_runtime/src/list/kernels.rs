@@ -8,14 +8,18 @@
 //! call, so the kernel updates the root in place, dups it and returns it,
 //! and the wrapper's drop leaves it at count one (plan §6, D-522).
 
+use std::cmp::Ordering;
+
 use super::node::{Root, dup_word, register};
 use super::ops;
 use crate::abi::{PanicKind, Word};
 use crate::alloc::{self, scratch::ScratchVec};
+use crate::callback;
 use crate::ctx::ExecCtx;
 use crate::entry;
 use crate::generic::{self, Reached};
 use crate::panic::fatal;
+use crate::rc;
 use crate::unwind::guard::{DropOnUnwind, guarded};
 use crate::unwind::raise::raise_panic;
 use crate::values;
@@ -499,6 +503,108 @@ pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
     })
 }
 
+/// `list::sort_with` (D-1448): a stable bottom-up merge sort that calls
+/// `by` through `callback::call` (D-484, D-526). Runs of one element are
+/// merged in adjacent pairs, front to back, and a last run without a
+/// partner waits for the next round, until one run is left. A merge takes
+/// from the left run unless `by` of the two front elements returns
+/// `Greater`, and copies what is left of either run once the other is
+/// empty. These are the pairs and the order of the Cheby merge sort this
+/// kernel replaced, so every `by`, even one that is not a consistent
+/// order, gives the same list and sees the same calls. O(n log n) calls.
+///
+/// Elements are borrowed from `xs` into scratch buffers, which the memory
+/// limit counts (D-617) and an unwinding from a panicking `by` drops
+/// (D-697); each call gets its two arguments as new references, and the
+/// result holds new references.
+///
+/// # Safety
+///
+/// `xs` is a live list and `by` a live closure of two parameters that
+/// returns an `Order`; called on an entry's thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_list_sort_with(xs: u64, by: u64) -> u64 {
+    guarded(None, || {
+        register();
+        let mut from: ScratchVec<Word> = ScratchVec::new();
+        // SAFETY: forwarded from the caller.
+        from.extend(unsafe { super::iter(xs) });
+        let n = from.len();
+        if n < 2 {
+            dup_word(xs);
+            return xs;
+        }
+        let mut into: ScratchVec<Word> = ScratchVec::new();
+        into.extend(std::iter::repeat_n(0, n));
+        let mut width = 1_usize;
+        while width < n {
+            let mut start = 0;
+            while start < n {
+                let middle = start.saturating_add(width).min(n);
+                let end = middle.saturating_add(width).min(n);
+                let (Some(left), Some(right), Some(out)) = (
+                    from.get(start..middle),
+                    from.get(middle..end),
+                    into.get_mut(start..end),
+                ) else {
+                    fatal(format_args!("`list::sort_with` lost a run at {start}"));
+                };
+                // SAFETY: on the caller's entry thread, as required.
+                unsafe { merge(left, right, out, by) };
+                start = end;
+            }
+            std::mem::swap(&mut from, &mut into);
+            width = width.saturating_mul(2);
+        }
+        for &item in from.iter() {
+            dup_word(item);
+        }
+        super::from_iter(from.drain())
+    })
+}
+
+/// Merges two sorted runs of borrowed elements into `out`, which is as
+/// long as both, for [`cheby_list_sort_with`].
+///
+/// # Safety
+///
+/// As for [`cheby_list_sort_with`]; the elements are live.
+unsafe fn merge(left: &[Word], right: &[Word], out: &mut [Word], by: Word) {
+    let (mut i, mut j) = (0, 0);
+    for slot in out.iter_mut() {
+        let next = match (left.get(i), right.get(j)) {
+            (Some(&a), Some(&b)) => {
+                dup_word(a);
+                dup_word(b);
+                // SAFETY: on the caller's entry thread; the closure is
+                // borrowed and its arguments given away.
+                let order = unsafe { callback::call(by, &[a, b]) };
+                // SAFETY: `by` returns an `Order`, owned.
+                let greater = unsafe { values::word_to_order(order) } == Ordering::Greater;
+                // SAFETY: the result is owned.
+                unsafe { rc::drop(order) };
+                if greater {
+                    j = j.saturating_add(1);
+                    b
+                } else {
+                    i = i.saturating_add(1);
+                    a
+                }
+            }
+            (Some(&a), None) => {
+                i = i.saturating_add(1);
+                a
+            }
+            (None, Some(&b)) => {
+                j = j.saturating_add(1);
+                b
+            }
+            (None, None) => fatal(format_args!("`list::sort_with` merged past its runs")),
+        };
+        *slot = next;
+    }
+}
+
 /// An open-addressing hash table of the indices of the kept elements of
 /// [`cheby_list_unique`], keyed by their hashes, at most half full. A slot
 /// holds a hash and an index plus one; 0 marks an empty slot.
@@ -561,7 +667,7 @@ impl Table {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-pub(super) fn all() -> [(&'static str, *const u8); 11] {
+pub(super) fn all() -> [(&'static str, *const u8); 12] {
     [
         ("cheby_list_length", cheby_list_length as *const u8),
         ("cheby_list_get", cheby_list_get as *const u8),
@@ -574,5 +680,6 @@ pub(super) fn all() -> [(&'static str, *const u8); 11] {
         ("cheby_list_drop", cheby_list_drop as *const u8),
         ("cheby_list_split_at", cheby_list_split_at as *const u8),
         ("cheby_list_unique", cheby_list_unique as *const u8),
+        ("cheby_list_sort_with", cheby_list_sort_with as *const u8),
     ]
 }

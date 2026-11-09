@@ -34,6 +34,7 @@ mod consts;
 mod data;
 mod dict;
 mod entry;
+mod equality;
 mod expr;
 mod external;
 mod interp;

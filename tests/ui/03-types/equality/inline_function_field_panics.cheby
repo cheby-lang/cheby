@@ -1,0 +1,11 @@
+// @mode: run-fail
+// @decisions: D-233, D-556
+//! A function inside a tuple or constructor still makes `==` panic at the
+//! operator, also when an operand is written in place and compared field
+//! by field.
+
+fn main() {
+  let double = fn(n: Int) { n * 2 }
+  let held = Some(double)
+  assert held == Some(double)
+}

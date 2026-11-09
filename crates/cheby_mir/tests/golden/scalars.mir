@@ -277,15 +277,33 @@ bb1:
 }
 
 fn app::ne_options(borrow _0: value, borrow _1: value) -> value check str#0 {
-  entry unwind bb1
+  entry unwind bb7
   str#0 = "src/main.cheby:108:4"
-  str#1 = "src/main.cheby:109:3"
 bb0:
-  _2: bool = call_runtime equal(borrow _0, borrow _1, borrow const str#1) ; unwind bb1
-  _3: bool = not _2
-  _4: value = box bool _3
-  return _4
-bb1:
+  _3: int = read_tag _0 of option
+  _4: int = read_tag _1 of option
+  _5: bool = compare eq int _3, _4
+  branch _5, bb3, bb2
+bb1(_2: bool):
+  _11: bool = not _2
+  _12: value = box bool _11
+  return _12
+bb2:
+  goto bb1(const bool false)
+bb3:
+  switch _3 [0 => bb4, _ => bb5]
+bb4:
+  _6: value = field _0.0 of ctor Some
+  _7: int = unbox int _6
+  _8: value = field _1.0 of ctor Some
+  _9: int = unbox int _8
+  _10: bool = compare eq int _7, _9
+  branch _10, bb6, bb2
+bb5:
+  goto bb1(const bool true)
+bb6:
+  goto bb1(const bool true)
+bb7:
   resume
 }
 
@@ -614,6 +632,7 @@ bb10:
 }
 
 layout ctor app::Money: Money.Money tag 0 key 1d45d7fd0ae72c04 [int @8]
+foreign_layout ctor Some: Option.Some tag 0 key af80d07f7bb18e70 [value @8]
 callee app::add(value, borrow value) -> value
 callee app::compare(borrow value, borrow value) -> value
 callee app::neg(borrow value) -> value

@@ -1,0 +1,20 @@
+error[E0044]: `n` is already bound
+ --> tests/ui/05-expressions/shadowing/local_fn_param_shadows_outer.cheby:8:11
+  |
+7 | fn count_down(n: Int, total: Int) -> Int {
+  |               - first bound here
+8 |   fn step(n, total) {
+  |           ^ bound again here
+  |
+  = help: the parameters of a local `fn` cannot reuse a name from around it (§5.2.3); rename this parameter, or rename the outer `n`, for example to `initial_n`
+
+error[E0044]: `total` is already bound
+ --> tests/ui/05-expressions/shadowing/local_fn_param_shadows_outer.cheby:8:14
+  |
+7 | fn count_down(n: Int, total: Int) -> Int {
+  |                       ----- first bound here
+8 |   fn step(n, total) {
+  |              ^^^^^ bound again here
+  |
+  = help: the parameters of a local `fn` cannot reuse a name from around it (§5.2.3); rename this parameter, or rename the outer `total`, for example to `initial_total`
+

@@ -38,7 +38,8 @@ pub use kernels::{
     cheby_map_from_list, cheby_map_get, cheby_map_has_key, cheby_map_insert, cheby_map_is_empty,
     cheby_map_keys, cheby_map_new, cheby_map_remove, cheby_map_size, cheby_map_to_list,
     cheby_map_upsert, cheby_map_values, cheby_set_contains, cheby_set_from_list, cheby_set_insert,
-    cheby_set_is_empty, cheby_set_new, cheby_set_remove, cheby_set_size, cheby_set_to_list,
+    cheby_set_is_empty, cheby_set_new, cheby_set_remove, cheby_set_size, cheby_set_sys_get,
+    cheby_set_to_list,
 };
 pub use node::{Collection, EMPTY_MAP, EMPTY_SET, StaticRoot};
 

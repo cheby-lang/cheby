@@ -1027,6 +1027,8 @@ pub fn sort_with<T>(xs: List<T>, compare: fn(T, T) -> Order) -> List<T>
 
 Returns the elements of `xs` in increasing order by `compare`, where `Less` means the first argument goes first (D-335). The sort is stable (D-299).
 
+It is a bottom-up merge sort, and every target runs this algorithm, so a `compare` that is not a consistent order gives the same list everywhere and sees the same calls in the same order (D-1448). Each element starts as a run of one. Each round merges the runs in adjacent pairs, front to back, and a last run without a partner waits for the next round, until one run is left. A merge calls `compare` with the front elements of its left and right runs, takes the right one when the result is `Greater` and the left one otherwise, and copies the rest of either run once the other is empty. The runtime runs the sort and calls `compare` back, as `map::upsert` calls its function (D-1448).
+
 - **Cost:** O(n log n) calls to `compare`. Informative.
 
 ```cheby
@@ -1034,6 +1036,23 @@ test "sort_with is stable" {
   let by_length = fn(a: String, b: String) { int::compare(string::length(a), string::length(b)) }
   assert list::sort_with(["bb", "a", "cc", "d"], by_length) == ["a", "d", "bb", "cc"]
   assert list::sort_with([1, 3, 2], fn(a, b) { int::compare(b, a) }) == [3, 2, 1]
+}
+```
+
+```cheby
+test "sort_with merges in the same order for any comparison" {
+  assert list::sort_with([1, 2, 3, 4, 5], fn(_, _) { Greater }) == [5, 4, 3, 2, 1]
+  assert list::sort_with([1, 2, 3, 4, 5, 6], fn(_, _) { Greater }) == [6, 5, 4, 3, 2, 1]
+  assert list::sort_with([3, 1, 2], fn(_, _) { Less }) == [3, 1, 2]
+  assert list::sort_with(list::new::<Int>(), fn(_, _) { Greater }) == []
+  let mixed = list::sort_with(list::range(0, 13), fn(x, y) {
+    case (x * 7 + y * 3) % 5 {
+      0 => Greater
+      1 => Equal
+      _ => Less
+    }
+  })
+  assert mixed == [0, 1, 2, 8, 3, 9, 4, 10, 5, 11, 6, 12, 7]
 }
 ```
 

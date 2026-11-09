@@ -790,6 +790,7 @@ fn kernels_are_registered_with_their_std_symbols() {
             "cheby_list_drop",
             "cheby_list_split_at",
             "cheby_list_unique",
+            "cheby_list_sort_with",
         ]
     );
     assert!(table.iter().all(|(_, address)| !address.is_null()));
