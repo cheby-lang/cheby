@@ -6,5 +6,5 @@ error[E0044]: `text` is already bound
 10 |   let shout = fn(text) { text }
    |                  ^^^^ bound again here
    |
-   = help: give this binding a new name, such as `text_2`; names cannot be shadowed (§5.2.3)
+   = help: the parameters of a closure cannot reuse a name from around it (§5.2.3); rename this parameter, or rename the outer `text`, for example to `initial_text`
 

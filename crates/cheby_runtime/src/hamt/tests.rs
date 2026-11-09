@@ -494,6 +494,35 @@ fn present_keys_keep_the_stored_key() {
 }
 
 #[test]
+fn sys_get_returns_the_stored_element() {
+    balanced(|| {
+        // -0.0 == 0.0 (§3.3.2): the lookup finds the element the set
+        // stored, not the one it was given (D-588).
+        let zero = values::f64_word(0.0);
+        let negative = values::f64_word(-0.0);
+        // SAFETY: live borrowed arguments.
+        unsafe {
+            let s = cheby_set_insert(cheby_set_new(), negative);
+            let got = cheby_set_sys_get(s, zero);
+            let stored = values::read_option(got).expect("a present element");
+            assert_eq!(values::word_to_f64(stored).to_bits(), (-0.0_f64).to_bits());
+            drop_word(got);
+            let one = values::f64_word(1.0);
+            let missing = cheby_set_sys_get(s, one);
+            assert_eq!(values::read_option(missing), None);
+            drop_word(missing);
+            drop_word(one);
+            let empty = cheby_set_sys_get(cheby_set_new(), zero);
+            assert_eq!(values::read_option(empty), None);
+            drop_word(empty);
+            drop_word(s);
+        }
+        drop_word(zero);
+        drop_word(negative);
+    });
+}
+
+#[test]
 fn kernels_update_in_place_at_count_one_and_copy_when_shared() {
     balanced(|| {
         let model: BTreeMap<Key, i64> = (0..200).map(|i| (Key::Int(i), i)).collect();
@@ -1436,7 +1465,7 @@ fn kernels_are_registered_with_their_std_symbols() {
     let mut out = Vec::new();
     super::kernels(&mut out);
     let names: BTreeSet<&str> = out.iter().map(|(name, _)| *name).collect();
-    assert_eq!(names.len(), 20);
+    assert_eq!(names.len(), 21);
     for module in ["map", "set"] {
         let source = std::fs::read_to_string(format!(
             "{}/../../std/{module}.cheby",

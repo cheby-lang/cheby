@@ -364,9 +364,9 @@ test "map can merge elements" {
 pub fn union<T>(s: Set<T>, other: Set<T>) -> Set<T>
 ```
 
-Returns the elements that are in `s` or in `other`.
+Returns the elements that are in `s` or in `other`. Where both hold an element, the one in `s` is kept (D-588). It walks the smaller of the two sets (D-1446).
 
-- **Cost:** O(k log (n + k)), effectively O(k), where k is the size of `other`. Informative.
+- **Cost:** O(m log (n + k)), effectively O(m), where k is the size of `other` and m the smaller of n and k. Informative.
 
 ```cheby
 test "union joins two sets" {
@@ -376,15 +376,26 @@ test "union joins two sets" {
 }
 ```
 
+```cheby
+test "union keeps the elements of its first set" {
+  let small = set::from_list([-0.0])
+  let large = set::from_list([0.0, 1.0, 2.0])
+  let from_small = set::union(small, large)
+  let from_large = set::union(large, small)
+  assert "{from_small:?}" == "set::from_list([-0.0, 1.0, 2.0])"
+  assert "{from_large:?}" == "set::from_list([0.0, 1.0, 2.0])"
+}
+```
+
 ### `intersection`
 
 ```cheby
 pub fn intersection<T>(s: Set<T>, other: Set<T>) -> Set<T>
 ```
 
-Returns the elements of `s` that are also in `other`.
+Returns the elements of `s` that are also in `other`, so where both hold an element, the one in `s` is kept (D-588). It walks the smaller of the two sets (D-1446).
 
-- **Cost:** O(n log k), effectively O(n), where k is the size of `other`. Informative.
+- **Cost:** O(m log (n + k)), effectively O(m), where k is the size of `other` and m the smaller of n and k. Informative.
 
 ```cheby
 test "intersection keeps the shared elements" {
@@ -394,15 +405,26 @@ test "intersection keeps the shared elements" {
 }
 ```
 
+```cheby
+test "intersection keeps the elements of its first set" {
+  let small = set::from_list([-0.0, 5.0])
+  let large = set::from_list([0.0, 1.0, 2.0])
+  let from_small = set::intersection(small, large)
+  let from_large = set::intersection(large, small)
+  assert "{from_small:?}" == "set::from_list([-0.0])"
+  assert "{from_large:?}" == "set::from_list([0.0])"
+}
+```
+
 ### `difference`
 
 ```cheby
 pub fn difference<T>(s: Set<T>, other: Set<T>) -> Set<T>
 ```
 
-Returns the elements of `s` that are not in `other`.
+Returns the elements of `s` that are not in `other`. It walks the smaller of the two sets (D-1446).
 
-- **Cost:** O(n log k), effectively O(n), where k is the size of `other`. Informative.
+- **Cost:** O(m log (n + k)), effectively O(m), where k is the size of `other` and m the smaller of n and k. Informative.
 
 ```cheby
 test "difference removes the elements of the second set" {
@@ -412,15 +434,24 @@ test "difference removes the elements of the second set" {
 }
 ```
 
+```cheby
+test "difference gives the same set from either size" {
+  let many = set::from_list([1, 2, 3, 4, 5])
+  let few = set::from_list([2, 9])
+  assert set::difference(many, few) == set::from_list([1, 3, 4, 5])
+  assert set::difference(few, many) == set::from_list([9])
+}
+```
+
 ### `is_subset`
 
 ```cheby
 pub fn is_subset<T>(s: Set<T>, other: Set<T>) -> Bool
 ```
 
-Tells whether every element of `s` is in `other`. It stops at the first element that is not.
+Tells whether every element of `s` is in `other`. It stops at the first element that is not, and gives `False` at once when `s` is larger than `other` (D-1446).
 
-- **Cost:** O(n log k), effectively O(n), where k is the size of `other`. Informative.
+- **Cost:** O(1) when n is larger than k, the size of `other`, and O(n log k), effectively O(n), otherwise. Informative.
 
 ```cheby
 test "is_subset checks every element" {

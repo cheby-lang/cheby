@@ -1,0 +1,8 @@
+error[E0042]: cannot find constructor `Sme` in this scope
+ --> tests/ui/06-patterns/constructors/unknown_constructor_suggests_prelude.cheby:7:5
+  |
+7 |     Sme(n) => n
+  |     ^^^ not found
+  |
+  = help: a constructor with a similar name exists: `Some`
+

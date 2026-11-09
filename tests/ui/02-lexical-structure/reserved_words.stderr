@@ -13,6 +13,7 @@ error[E0007]: `loop` is a reserved word
   |       ^^^^ reserved, cannot be used as a name
   |
   = help: Cheby has no `loop`; use recursion, often through a local `fn`
+  = help: choose another name; a local recursive helper is often called `step`
 
 error[E0007]: `impl` is a reserved word
  --> tests/ui/02-lexical-structure/reserved_words.cheby:9:7

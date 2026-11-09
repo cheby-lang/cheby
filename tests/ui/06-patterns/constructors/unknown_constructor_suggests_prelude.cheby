@@ -1,0 +1,14 @@
+// @mode: check-fail
+//! An unknown constructor is compared with the constructors in scope,
+//! including those of the prelude, so a typo of `Some` suggests it.
+
+fn first(found: Option<Int>) -> Int {
+  case found {
+    Sme(n) => n
+    None => 0
+  }
+}
+
+fn main() {
+  assert first(Some(1)) == 1
+}

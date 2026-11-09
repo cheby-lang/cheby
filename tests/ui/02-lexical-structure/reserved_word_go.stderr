@@ -5,4 +5,5 @@ error[E0007]: `go` is a reserved word
   |      ^^ reserved, cannot be used as a name
   |
   = help: Cheby has no `go`; spawn a fiber in a scope
+  = help: choose another name; a local recursive helper is often called `step`
 

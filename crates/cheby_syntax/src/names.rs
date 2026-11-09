@@ -43,11 +43,16 @@ pub fn reserved_word_help(word: &str) -> Option<String> {
 #[must_use]
 pub fn reserved_word_error(word: &str, span: Span) -> Option<Diagnostic> {
     let help = reserved_word_help(word)?;
-    Some(
-        Diagnostic::new(codes::RESERVED_WORD, format!("`{word}` is a reserved word"))
-            .with_primary(span, "reserved, cannot be used as a name")
-            .with_help(help),
-    )
+    let diag = Diagnostic::new(codes::RESERVED_WORD, format!("`{word}` is a reserved word"))
+        .with_primary(span, "reserved, cannot be used as a name")
+        .with_help(help);
+    // The two words people reach for when naming a recursive helper.
+    Some(match word {
+        "go" | "loop" => {
+            diag.with_help("choose another name; a local recursive helper is often called `step`")
+        }
+        _ => diag,
+    })
 }
 
 /// E0007 or E0006 for the name `token` where it is bound or declared, or

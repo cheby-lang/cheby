@@ -2240,3 +2240,15 @@ Open:
 - The table has no reading on `ubuntu-24.04` yet. Its cost under `bench.yml`'s 45-minute step comes from the Apple M3 alone.
 
 Spec: none. No new diagnostic code. Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-11-09: Advent of Code readiness
+
+Goal: fix what the Advent of Code 2024 bug-bash found before Advent of Code 2026.
+
+- **D-1446 The hashed set's combining functions walk the smaller set**: `set::union`, `set::intersection` and `set::difference` walk the smaller of their two sets, and `set::is_subset` gives `False` at once when `s` is larger than `other`. Their results do not change. Where both sets hold `==` elements, `union` and `intersection` keep the one in `s` (D-588): `union` removes and inserts each element of a smaller `s`, and `intersection` looks each element of a smaller `other` up in `s` through a private kernel, `sys_get`, which returns the element a set stores that is `==` to its argument. The kernel is bound as every kernel is, with `./set.mjs` `sys_get` on JS in M4 (D-484). The costs of the three become O(m log (n + k)), where m is the smaller of the two sizes, and `is_subset` costs O(1) when `s` is larger. Why: in the bug-bash, day 23's clique search took 15 times Python's time because `intersection(big, small)` walked the big set, and that repro now takes 0.02 s instead of 3.8 s. Keeping the elements of whichever set is walked needs no kernel, but it would make the elements of a result depend on the sizes of the two sets. Documenting "pass the smaller set first" leaves the trap in place.
+
+Open:
+
+- `sorted_set::intersection` and `union` still walk `s`. `ordered_set`'s must, since they keep the order of `s`.
+
+Spec: `docs/stdlib/set.md` for `union`, `intersection`, `difference` and `is_subset`, and `docs/plan/m4-js.md` §4.7 for `./set.mjs` `sys_get`. No new diagnostic code. Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
