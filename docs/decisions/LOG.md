@@ -2397,3 +2397,18 @@ Open:
 - ~~Zed's behaviour is unverified until the CP1 session is read.~~ Done: read on 2026-11-08 with Zed 1.27.0 → D-1442. The diagnostics panel, diagnostic tags, file watchers with dynamic registration and `fileOperations` were not exercised and wait for CP2.
 
 Spec: §13.11.1's note on a second type. No new diagnostic code. Tree-sitter: no grammar change.
+
+## 2026-11-09: The language server, wave 6
+
+Goal: settle what wave 6's requests, sessions and text features found.
+
+- **D-1443 Requests wait for edits, not for jobs**: A request waits only until a snapshot covers the document texts it names (D-1367). A `didSave`, a settings change, a sweep or a watched-file change makes no request wait, so a request sent after one may be answered from the snapshot before that job. A client or test that needs to know a job has finished waits for `cheby/idle` (D-1415). Why: A §4 already says a request never waits for a closed file's disk change, and making requests wait after every save would slow hover and completion after each of Zed's one-second autosaves. D-1442's last sentence promised a barrier the server does not keep. Refines D-1442, whose last sentence this replaces.
+- **D-1444 Range formatting keeps a CRLF file's line ends**: `rangeFormatting` compares lines with a final `\r` ignored, and a kept hunk whose old lines end in `\r\n` is written with `\r\n`. Whole-file `formatting` still writes LF, as `cheby fmt` does (§13.7). A kept hunk is taken whole, so it can reach a neighbouring line or item, such as the blank lines above a reformatted function. Why: with LF edits every line of a CRLF file differs, and formatting a selection would rewrite the whole file. Refines D-1399.
+- **D-1445 A request names its text by edit stamp**: Each open document carries an edit stamp, which rises on every `didOpen` and `didChange` and never restarts within a server. A request's wait and its `ContentModified` verdict compare stamps, not LSP versions, and the version is only echoed in publishes. Why: in the CP1 session Zed restarted versions at 0 after every close and reopen, so versions cannot order the texts of one path. Refines D-1367.
+- **D-1446 Which files get single-file mode, and for how long**: Only a document whose path ends in `.cheby` gets single-file mode when no package owns it. Any other document with no package, such as a stray `cheby.toml`, gets no session and no publish. A single-file session ends as soon as its document closes, with one empty publish, and gets no grace period. Why: a reviewer measured an orphaned `cheby.toml` parsed as Cheby and published with E0013. A loose session holds one file and restarts in about a millisecond, while Zed's close-and-open on every rename would leave a held session behind each time. Refines D-1371, D-1375.
+
+Open:
+
+- None.
+
+Spec: none. No new diagnostic code. Tree-sitter: no grammar change.

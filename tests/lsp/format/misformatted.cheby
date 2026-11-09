@@ -1,0 +1,11 @@
+// @requests: formatting
+//! Each changed run of lines is one edit, and applying them gives `cheby fmt`'s text.
+
+fn add(a: Int,b: Int) -> Int {
+    a + b
+}
+
+fn main() {
+  let total = add(1,2)
+  assert total == 3
+}

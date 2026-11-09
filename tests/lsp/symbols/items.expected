@@ -1,0 +1,461 @@
+== diagnostics
+{}
+
+== src/main.cheby documentSymbol
+[
+  {
+    "detail": "(a: Int, b: Int) -> Int",
+    "kind": 12,
+    "name": "add",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 6
+      },
+      "start": {
+        "character": 0,
+        "line": 3
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 10,
+        "line": 4
+      },
+      "start": {
+        "character": 7,
+        "line": 4
+      }
+    }
+  },
+  {
+    "detail": "(a: Int, b: Int) -> Int",
+    "kind": 12,
+    "name": "plus",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 11
+      },
+      "start": {
+        "character": 0,
+        "line": 8
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 11,
+        "line": 9
+      },
+      "start": {
+        "character": 7,
+        "line": 9
+      }
+    },
+    "tags": [
+      1
+    ]
+  },
+  {
+    "children": [
+      {
+        "kind": 22,
+        "name": "Dot",
+        "range": {
+          "end": {
+            "character": 5,
+            "line": 14
+          },
+          "start": {
+            "character": 2,
+            "line": 14
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 5,
+            "line": 14
+          },
+          "start": {
+            "character": 2,
+            "line": 14
+          }
+        }
+      },
+      {
+        "detail": "(Float)",
+        "kind": 22,
+        "name": "Circle",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 15
+          },
+          "start": {
+            "character": 2,
+            "line": 15
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 8,
+            "line": 15
+          },
+          "start": {
+            "character": 2,
+            "line": 15
+          }
+        }
+      },
+      {
+        "children": [
+          {
+            "detail": "Float",
+            "kind": 8,
+            "name": "width",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 16
+              },
+              "start": {
+                "character": 9,
+                "line": 16
+              }
+            },
+            "selectionRange": {
+              "end": {
+                "character": 14,
+                "line": 16
+              },
+              "start": {
+                "character": 9,
+                "line": 16
+              }
+            }
+          },
+          {
+            "detail": "Float",
+            "kind": 8,
+            "name": "height",
+            "range": {
+              "end": {
+                "character": 36,
+                "line": 16
+              },
+              "start": {
+                "character": 23,
+                "line": 16
+              }
+            },
+            "selectionRange": {
+              "end": {
+                "character": 29,
+                "line": 16
+              },
+              "start": {
+                "character": 23,
+                "line": 16
+              }
+            }
+          }
+        ],
+        "kind": 22,
+        "name": "Rect",
+        "range": {
+          "end": {
+            "character": 38,
+            "line": 16
+          },
+          "start": {
+            "character": 2,
+            "line": 16
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 6,
+            "line": 16
+          },
+          "start": {
+            "character": 2,
+            "line": 16
+          }
+        }
+      }
+    ],
+    "kind": 10,
+    "name": "Shape",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 17
+      },
+      "start": {
+        "character": 0,
+        "line": 13
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 14,
+        "line": 13
+      },
+      "start": {
+        "character": 9,
+        "line": 13
+      }
+    }
+  },
+  {
+    "children": [
+      {
+        "detail": "Int",
+        "kind": 8,
+        "name": "x",
+        "range": {
+          "end": {
+            "character": 8,
+            "line": 20
+          },
+          "start": {
+            "character": 2,
+            "line": 20
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 3,
+            "line": 20
+          },
+          "start": {
+            "character": 2,
+            "line": 20
+          }
+        }
+      },
+      {
+        "detail": "Int",
+        "kind": 8,
+        "name": "y",
+        "range": {
+          "end": {
+            "character": 8,
+            "line": 21
+          },
+          "start": {
+            "character": 2,
+            "line": 21
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 3,
+            "line": 21
+          },
+          "start": {
+            "character": 2,
+            "line": 21
+          }
+        }
+      }
+    ],
+    "kind": 23,
+    "name": "Point",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 22
+      },
+      "start": {
+        "character": 0,
+        "line": 19
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 14,
+        "line": 19
+      },
+      "start": {
+        "character": 9,
+        "line": 19
+      }
+    }
+  },
+  {
+    "detail": "(Int, Int)",
+    "kind": 26,
+    "name": "Pair",
+    "range": {
+      "end": {
+        "character": 26,
+        "line": 24
+      },
+      "start": {
+        "character": 0,
+        "line": 24
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 13,
+        "line": 24
+      },
+      "start": {
+        "character": 9,
+        "line": 24
+      }
+    }
+  },
+  {
+    "detail": "Int",
+    "kind": 14,
+    "name": "limit",
+    "range": {
+      "end": {
+        "character": 25,
+        "line": 26
+      },
+      "start": {
+        "character": 0,
+        "line": 26
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 15,
+        "line": 26
+      },
+      "start": {
+        "character": 10,
+        "line": 26
+      }
+    }
+  },
+  {
+    "children": [
+      {
+        "detail": "(Self) -> String",
+        "kind": 6,
+        "name": "describe",
+        "range": {
+          "end": {
+            "character": 29,
+            "line": 29
+          },
+          "start": {
+            "character": 2,
+            "line": 29
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 13,
+            "line": 29
+          },
+          "start": {
+            "character": 5,
+            "line": 29
+          }
+        }
+      },
+      {
+        "detail": "(Self) -> Int",
+        "kind": 6,
+        "name": "tag",
+        "range": {
+          "end": {
+            "character": 21,
+            "line": 30
+          },
+          "start": {
+            "character": 2,
+            "line": 30
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 8,
+            "line": 30
+          },
+          "start": {
+            "character": 5,
+            "line": 30
+          }
+        }
+      }
+    ],
+    "kind": 11,
+    "name": "Describe",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 31
+      },
+      "start": {
+        "character": 0,
+        "line": 28
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 22,
+        "line": 28
+      },
+      "start": {
+        "character": 14,
+        "line": 28
+      }
+    }
+  },
+  {
+    "detail": "()",
+    "kind": 12,
+    "name": "main",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 38
+      },
+      "start": {
+        "character": 0,
+        "line": 33
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 7,
+        "line": 33
+      },
+      "start": {
+        "character": 3,
+        "line": 33
+      }
+    }
+  },
+  {
+    "kind": 12,
+    "name": "add works",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 42
+      },
+      "start": {
+        "character": 0,
+        "line": 40
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 16,
+        "line": 40
+      },
+      "start": {
+        "character": 5,
+        "line": 40
+      }
+    }
+  }
+]

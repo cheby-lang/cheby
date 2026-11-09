@@ -1,0 +1,14 @@
+// @requests: foldingRange
+//! Runs of comments on adjacent lines fold as comments, and so does a run of imports.
+
+import std::io
+import std::list
+
+// A comment of two lines
+// before the function.
+/// Its doc comment.
+fn main() {
+  // One line alone does not fold.
+  let n = list::length([1, 2])
+  io::println("{n}")
+}

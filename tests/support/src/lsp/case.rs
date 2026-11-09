@@ -61,6 +61,10 @@ pub struct Header {
     pub settings: Option<Value>,
     /// Document requests sent for each source file.
     pub requests: Vec<String>,
+    /// `@package: none`: the file is opened alone, in a directory with no
+    /// `cheby.toml` above it, so the server serves it in single-file mode
+    /// (D-1371).
+    pub loose: bool,
 }
 
 impl Default for Header {
@@ -72,6 +76,7 @@ impl Default for Header {
             encoding: None,
             settings: None,
             requests: Vec::new(),
+            loose: false,
         }
     }
 }
@@ -127,10 +132,16 @@ impl Header {
                         header.requests.push(name.to_owned());
                     }
                 }
+                "package" => {
+                    if value != "none" {
+                        return Err(format!("@package: `{value}` is not none"));
+                    }
+                    header.loose = true;
+                }
                 other => {
                     return Err(format!(
                         "unknown directive `@{other}`; the keys are decisions, milestone, \
-                         client, encoding, settings and requests"
+                         client, encoding, settings, requests and package"
                     ));
                 }
             }
@@ -602,9 +613,14 @@ fn touches(d: &Value, start: Position, end: Position) -> bool {
 
 /// Sorts what a request answers where the order means nothing, so goldens
 /// do not depend on it: locations of `references` and the edits of a
-/// `rename`, by path, line and column.
+/// `rename`, by path, line and column, and the ranges of `foldingRange`
+/// by start, then end.
 #[must_use]
 pub fn canonical(name: &str, answer: Value) -> Value {
+    fn fold_key(v: &Value) -> [u64; 4] {
+        ["startLine", "startCharacter", "endLine", "endCharacter"]
+            .map(|f| v.get(f).and_then(Value::as_u64).unwrap_or(0))
+    }
     fn key(v: &Value) -> (String, u64, u64) {
         let uri = v
             .get("uri")
@@ -621,6 +637,10 @@ pub fn canonical(name: &str, answer: Value) -> Value {
     match (name, answer) {
         ("references", Value::Array(mut items)) => {
             items.sort_by_key(key);
+            Value::Array(items)
+        }
+        ("foldingRange", Value::Array(mut items)) => {
+            items.sort_by_key(fold_key);
             Value::Array(items)
         }
         ("rename", Value::Object(mut edit)) => {
@@ -665,6 +685,8 @@ mod tests {
             Some(json!({"analysis": {"debounceMs": 0}}))
         );
         assert_eq!(header.requests, ["documentSymbol", "formatting"]);
+        assert!(!header.loose);
+        assert!(Header::of("// @package: none\n").unwrap().loose);
         assert_eq!(Header::of("fn main() {}\n").unwrap(), Header::default());
         for bad in [
             "// @mode: check-pass\n",
@@ -672,6 +694,7 @@ mod tests {
             "// @encoding: utf-7\n",
             "// @settings: {\n",
             "// @requests: hover\n",
+            "// @package: app\n",
             "// @milestone: M2\n// @milestone: M3\n",
             "// @decisions D-1\n",
         ] {
@@ -783,5 +806,13 @@ mod tests {
         let sorted = canonical("references", refs);
         assert_eq!(sorted[0]["range"]["start"]["line"], json!(1));
         assert_eq!(sorted[2]["uri"], json!("file:///b"));
+        let folds = json!([
+            {"startLine": 4, "endLine": 9},
+            {"startLine": 0, "startCharacter": 3, "endLine": 9},
+            {"startLine": 0, "endLine": 1, "kind": "comment"},
+        ]);
+        let sorted = canonical("foldingRange", folds);
+        assert_eq!(sorted[0]["kind"], json!("comment"));
+        assert_eq!(sorted[2]["startLine"], json!(4));
     }
 }

@@ -11,7 +11,14 @@
 //! notification other than `exit` is dropped. After `shutdown`, every
 //! request is answered `InvalidRequest`. `exit` ends the loop with status
 //! 0 after `shutdown` and 1 before it; the end of input ends it the same
-//! way.
+//! way. So does a frame whose body is not a JSON-RPC message, since it
+//! ends `lsp-server`'s reader (D-1430).
+//!
+//! A request the loop does not answer itself has a route in `features`:
+//! a text request runs at once on the query pool, and a snapshot request
+//! when its package's newest snapshot holds the text it names (D-1367,
+//! `schedule`, `pool`). Handlers never write to the connection: the loop
+//! applies their effects, then sends their response.
 //!
 //! Nothing below this module holds a generation handle: only `features`
 //! may (D-1366). The crate's `clippy.toml` enforces it.
@@ -19,13 +26,22 @@
 mod caps;
 mod docs;
 mod effects;
+mod pool;
 mod publish;
+#[cfg(test)]
+mod request_tests;
 mod routes;
 mod schedule;
+#[cfg(test)]
+mod session_tests;
+mod sessions;
 mod settings;
+#[cfg(test)]
+mod single_file_tests;
 mod state;
 #[cfg(test)]
 mod tests;
+mod watch;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -39,12 +55,17 @@ use lsp_types::{InitializeResult, MessageType, ServerInfo, Uri};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use self::caps::{ClientCaps, server_capabilities};
-use self::effects::Effect;
-use self::settings::Settings;
+pub(crate) use self::caps::ClientCaps;
+use self::caps::server_capabilities;
+pub(crate) use self::effects::Effect;
+use self::pool::{QueryDone, QueryPool};
+use self::schedule::{JobTexts, Parked, Served};
+pub(crate) use self::settings::Settings;
 use self::state::{Doc, Once, Package};
+use self::watch::Watch;
 use crate::ServerOptions;
-use crate::analysis_thread::{self, Event, Job};
+use crate::analysis_thread::{self, Event, Work};
+use crate::features::{CancelToken, LiveText};
 use crate::text::lines::PositionEncoding;
 use crate::text::uri::{UriMap, normalize, uri_to_path};
 
@@ -55,11 +76,18 @@ pub(crate) mod codes {
     pub(crate) const INVALID_REQUEST: i32 = -32600;
     /// `MethodNotFound`.
     pub(crate) const METHOD_NOT_FOUND: i32 = -32601;
-    /// `InternalError`.
-    #[cfg(test)]
+    /// `InvalidParams`.
+    pub(crate) const INVALID_PARAMS: i32 = -32602;
+    /// `InternalError`: a handler panicked (A §3.7).
     pub(crate) const INTERNAL_ERROR: i32 = -32603;
     /// `ServerNotInitialized`.
     pub(crate) const SERVER_NOT_INITIALIZED: i32 = -32002;
+    /// `RequestCancelled` (A §3.5).
+    pub(crate) const REQUEST_CANCELLED: i32 = -32800;
+    /// `ContentModified` (D-1367).
+    pub(crate) const CONTENT_MODIFIED: i32 = -32801;
+    /// `RequestFailed`: also a wait past `analysis.requestWaitMs` (D-1367).
+    pub(crate) const REQUEST_FAILED: i32 = -32803;
 }
 
 /// The manifest's file name.
@@ -105,7 +133,7 @@ struct Layers {
 pub(crate) struct Server {
     connection: Connection,
     queue: ReqQueue<(), Outgoing>,
-    jobs: Sender<Job>,
+    jobs: Sender<Work>,
     events: Receiver<Event>,
     options: ServerOptions,
     /// The package whose job is on the analysis thread.
@@ -120,8 +148,13 @@ pub(crate) struct Server {
     layers: Layers,
     /// Settings warnings already logged.
     warned: Once,
-    /// The workspace folders, normalized paths.
+    /// The workspace folders, normalized paths. They only seed sessions:
+    /// a document routes by its own path (A §6.5).
     folders: Vec<PathBuf>,
+    /// Where std's sources may be materialized, for routing (A §6.3).
+    std_dirs: Vec<PathBuf>,
+    /// File watchers and sweeps (A §8).
+    watch: Watch,
     /// Open documents by normalized path.
     docs: BTreeMap<PathBuf, Doc>,
     /// The client's spelling of each open document's URI.
@@ -130,6 +163,37 @@ pub(crate) struct Server {
     packages: BTreeMap<PathBuf, Package>,
     /// The order of the latest edit.
     stamp: u64,
+    /// The query threads.
+    pool: QueryPool,
+    /// Their finished requests.
+    query_done: Receiver<QueryDone>,
+    /// Requests waiting for an analysis of their text (A §4).
+    parked: Vec<Parked>,
+    /// Requests on the query pool, with their cancel tokens.
+    in_pool: BTreeMap<RequestId, CancelToken>,
+    /// Each package's newest snapshot as requests read it.
+    served: BTreeMap<PathBuf, Served>,
+    /// The texts of the job on the analysis thread.
+    in_flight: Option<JobTexts>,
+    /// The live text of open documents that text requests read, with the
+    /// stamp it was made at.
+    texts: BTreeMap<PathBuf, (u64, Arc<LiveText>)>,
+    /// What tests switch on through `cheby/testHold`, `cheby/testPanicRun`
+    /// and `cheby/testNoDebounce`.
+    #[cfg(test)]
+    test: TestSwitches,
+}
+
+/// The server's switches that only tests set.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestSwitches {
+    /// The analysis thread is held: no job starts.
+    hold: bool,
+    /// The next job's Q run panics after it ran (R-14).
+    panic_next: bool,
+    /// An edit's debounce never ends, so only a flush starts a run.
+    no_debounce: bool,
 }
 
 impl std::fmt::Debug for Server {
@@ -141,6 +205,8 @@ impl std::fmt::Debug for Server {
             .field("settings", &self.settings)
             .field("docs", &self.docs.keys().collect::<Vec<_>>())
             .field("packages", &self.packages.keys().collect::<Vec<_>>())
+            .field("parked", &self.parked.len())
+            .field("in_pool", &self.in_pool.len())
             .finish_non_exhaustive()
     }
 }
@@ -160,6 +226,10 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
     };
     let (jobs, events) = analysis_thread::spawn(Arc::new(Globals::new()))
         .map_err(|e| format!("cannot start the analysis thread: {e}"))?;
+    let (pool, query_done) =
+        QueryPool::spawn().map_err(|e| format!("cannot start the query threads: {e}"))?;
+    let watch = Watch::new(&params).map_err(|e| format!("cannot start the sweep thread: {e}"))?;
+    let std_dirs = sessions::std_dirs(options.build);
     let caps = ClientCaps::from_params(&params);
     let encoding = caps.encoding();
     let layers = Layers {
@@ -184,10 +254,21 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         layers,
         warned: Once::default(),
         folders: folders(&params),
+        std_dirs,
+        watch,
         docs: BTreeMap::new(),
         uris: UriMap::new(),
         packages: BTreeMap::new(),
         stamp: 0,
+        pool,
+        query_done,
+        parked: Vec::new(),
+        in_pool: BTreeMap::new(),
+        served: BTreeMap::new(),
+        in_flight: None,
+        texts: BTreeMap::new(),
+        #[cfg(test)]
+        test: TestSwitches::default(),
     };
     server.initialize(id);
     Ok(server.main_loop())
@@ -275,7 +356,11 @@ impl Server {
             }
             let timer = self
                 .next_deadline()
+                .into_iter()
+                .chain(self.session_deadline())
+                .min()
                 .map_or_else(never, crossbeam_channel::at);
+            let swept = self.watch.swept();
             let events = if events_open {
                 self.events.clone()
             } else {
@@ -283,6 +368,9 @@ impl Server {
             };
             select! {
                 recv(self.connection.receiver) -> message => match message {
+                    // The end of input, or a malformed frame, which ends
+                    // `lsp-server`'s reader: status 1 before `shutdown`
+                    // (D-1430).
                     Err(_) => return self.ended(true),
                     Ok(message) => {
                         if self.on_message(message) {
@@ -301,9 +389,23 @@ impl Server {
                         );
                     }
                 }
+                recv(self.query_done) -> done => {
+                    // The pool holds a sender while any thread lives.
+                    if let Ok(done) = done {
+                        self.on_query_done(done);
+                    }
+                }
+                recv(swept) -> found => {
+                    if let Ok(found) = found {
+                        self.on_swept(found);
+                    }
+                }
                 recv(timer) -> _ => {}
             }
+            self.expire_parked();
             self.schedule();
+            self.end_idle_sessions();
+            self.sync_sweeps();
         }
     }
 
@@ -330,7 +432,8 @@ impl Server {
         }
     }
 
-    /// One request, answered at once on the main loop.
+    /// One request: answered on the main loop when its route is the loop's
+    /// own, else sent off it by its class (A §3.3).
     fn on_request(&mut self, request: Request) {
         let Request { id, method, params } = request;
         let response = if self.shutting_down {
@@ -339,21 +442,28 @@ impl Server {
                 codes::INVALID_REQUEST,
                 format!("`{method}` after `shutdown`"),
             )
-        } else {
-            match routes::request(&method) {
-                Some(handler) => match handler(self, params) {
-                    Ok(value) => Response::new_ok(id, value),
-                    Err(error) => Response {
-                        id,
-                        response_result: Err(error),
-                    },
-                },
-                None => Response::new_err(
+        } else if let Some(handler) = routes::request(&method) {
+            match handler(self, params) {
+                Ok(value) => Response::new_ok(id, value),
+                Err(error) => Response {
                     id,
-                    codes::METHOD_NOT_FOUND,
-                    format!("unknown method `{method}`"),
-                ),
+                    response_result: Err(error),
+                },
             }
+        } else if let Some(route) = routes::query(&method) {
+            self.dispatch_query(id, route, params);
+            return;
+        } else if let Some(result) = self.test_request(&method, &params) {
+            Response {
+                id,
+                response_result: result,
+            }
+        } else {
+            Response::new_err(
+                id,
+                codes::METHOD_NOT_FOUND,
+                format!("unknown method `{method}`"),
+            )
         };
         self.send(response.into());
     }
@@ -365,6 +475,10 @@ impl Server {
             return true;
         }
         if self.shutting_down {
+            return false;
+        }
+        if method == "$/cancelRequest" {
+            self.on_cancel_request(&params);
             return false;
         }
         if let Some(handler) = routes::notification(&method) {
@@ -388,14 +502,26 @@ impl Server {
                 root,
                 result,
                 strict_follows,
-            } => self.on_live(&root, result, !strict_follows),
-            Event::Strict { root, result } => self.on_strict(&root, result),
+            } => {
+                let snapshot = result.as_ref().ok().and_then(|live| live.snapshot.clone());
+                let texts = self.in_flight.take();
+                if let (Some(texts), Some(package)) = (&texts, self.packages.get_mut(&root)) {
+                    package.job_stamps.clone_from(&texts.stamps);
+                }
+                self.on_live(&root, result, !strict_follows);
+                self.landed(&root, snapshot, texts);
+            }
+            Event::Strict { root, result } => {
+                self.on_strict(&root, result);
+                self.wake(&root);
+            }
         }
     }
 
-    /// `initialized`: register for settings changes, ask for settings, and
-    /// start the session of each workspace folder that is a package root,
-    /// so that closed files are published before anything opens (D-1375).
+    /// `initialized`: register for settings changes and file changes, ask
+    /// for settings, and start the session of each workspace folder that is
+    /// a package root, so that closed files are published before anything
+    /// opens (D-1375).
     fn on_initialized(&mut self, _params: Value) {
         if self.caps.config_dynamic {
             self.apply(Effect::Request {
@@ -408,40 +534,27 @@ impl Server {
                 }),
             });
         }
+        self.watch_folders();
         self.pull_configuration();
-        let roots: Vec<PathBuf> = self
-            .folders
-            .iter()
-            .filter(|folder| folder.join(MANIFEST).is_file())
-            .cloned()
-            .collect();
-        for root in roots {
-            self.ensure_package(&root);
-            self.mark_dirty(
-                &root,
-                analysis_thread::Changed::default(),
-                schedule::Urgency::Flush,
-            );
+        for folder in self.folders.clone() {
+            self.start_folder(&folder);
         }
     }
 
-    /// `workspace/didChangeConfiguration`: a client that answers
-    /// `workspace/configuration` is asked again; another carries the
-    /// settings in `params.settings.cheby`.
+    /// `workspace/didChangeConfiguration`: the push's `settings.cheby`
+    /// when it carries the key (D-1376), else the client is asked, when it
+    /// answers `workspace/configuration`. Zed pushes the key to every
+    /// server, also when nothing changed, so asking after each push would
+    /// only double the traffic (cp-notes, CP1).
     #[expect(
         clippy::needless_pass_by_value,
         reason = "a notification handler's signature"
     )]
     fn on_did_change_configuration(&mut self, params: Value) {
-        if self.caps.configuration {
-            self.pull_configuration();
-            return;
+        match settings::pushed(&params) {
+            Some(settings) => self.set_configuration(settings.clone()),
+            None => self.pull_configuration(),
         }
-        let settings = params
-            .pointer("/settings/cheby")
-            .cloned()
-            .unwrap_or_default();
-        self.set_configuration(settings);
     }
 
     /// Asks the client for the `cheby` section, when it can answer.
@@ -511,10 +624,12 @@ impl Server {
         })
     }
 
-    /// `shutdown`: answered `null`. Every later request is refused.
+    /// `shutdown`: answered `null`, after each parked request is answered
+    /// `RequestCancelled` (A §3.2). Every later request is refused.
     #[expect(clippy::unnecessary_wraps, reason = "a request handler's signature")]
     fn on_shutdown(&mut self, _params: Value) -> Result<Value, lsp_server::ResponseError> {
         self.shutting_down = true;
+        self.cancel_parked();
         Ok(Value::Null)
     }
 

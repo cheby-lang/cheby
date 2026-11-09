@@ -1,0 +1,31 @@
+// @requests: foldingRange
+//! Blocks, case bodies and type, field and interface bodies fold.
+
+pub type Shape {
+  Dot,
+  Circle(Float),
+}
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub interface Describe {
+  fn describe(Self) -> String
+}
+
+fn area(shape: Shape) -> Float {
+  case shape {
+    Dot => 0.0
+    Circle(r) => r * r
+  }
+}
+
+fn main() {
+  let double = fn(n: Int) {
+    n * 2
+  }
+  assert double(2) == 4
+  assert area(Dot) == 0.0
+}

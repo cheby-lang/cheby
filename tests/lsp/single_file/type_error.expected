@@ -1,0 +1,39 @@
+== diagnostics
+{
+  "type_error.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 5
+        },
+        "start": {
+          "character": 2,
+          "line": 5
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 4
+              },
+              "start": {
+                "character": 15,
+                "line": 4
+              }
+            },
+            "uri": "type_error.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}

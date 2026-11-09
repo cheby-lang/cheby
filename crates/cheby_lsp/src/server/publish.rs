@@ -1,19 +1,26 @@
-//! Publishing diagnostics (A §8.4, D-1373).
+//! Publishing diagnostics (A §8.4, D-1373, D-1442).
 //!
 //! Every file of a package is published, open or closed, `cheby.toml`
-//! included, as `cheby check` reports them. An open document gets a publish
-//! with its version after each run that covers that version, even an empty
-//! or unchanged list, which is what a client waits for. A closed file is
-//! published only when its list changed. A file that leaves the package
-//! gets one empty publish, and is then forgotten. Only the package that
-//! owns a path publishes it, so a nested package's list is its own.
+//! included, as `cheby check` reports them. A publish is skipped when the
+//! path's last one had the same version and the same list (D-1442), so a
+//! save, a settings change or a sweep that changes nothing sends nothing.
+//! `didOpen` and `didClose` forget the path's last publish, so an opened
+//! document still gets a publish with its version, even an empty one, and
+//! a closed file its publish without one. An open document is published
+//! only from a run that read its current text, named by edit stamp, since
+//! Zed restarts versions at 0 on reopen (cp-notes, CP1). A file that
+//! leaves the package gets one empty publish, and is then forgotten. Only
+//! the session that owns a path under `sessions::route` publishes it, so a
+//! nested package's list is its own (A §6.5). Std is never published. A
+//! single-file session publishes its one document by the same rules
+//! (D-1371).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cheby_driver::analysis::{
-    FileReport, Hash128, Live, PlainDiagnostic, Report, Severity, TextOrigin,
+    FileReport, Hash128, Live, PackageKind, PlainDiagnostic, Report, Severity, TextOrigin,
 };
 use lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, MessageType,
@@ -22,7 +29,7 @@ use lsp_types::{
 
 use super::Server;
 use super::effects::Effect;
-use super::state::{Published, package_root};
+use super::state::Published;
 use crate::analysis_thread::RunFailure;
 use crate::text::lines::{Bom, LspLines};
 
@@ -55,7 +62,7 @@ impl Server {
         }
         if done {
             self.catch_up(root);
-            self.job_done(root);
+            self.finish(root);
         }
     }
 
@@ -67,7 +74,15 @@ impl Server {
             Err(failure) => self.run_failed(root, failure.message()),
         }
         self.catch_up(root);
+        self.finish(root);
+    }
+
+    /// The package at `root` had the last event of its job.
+    fn finish(&mut self, root: &Path) {
         self.job_done(root);
+        if let Some(package) = self.packages.get_mut(root) {
+            package.job_stamps.clear();
+        }
     }
 
     /// Publishes a report's files, and shows its tool errors once.
@@ -93,37 +108,50 @@ impl Server {
     /// Publishes each of `files` under the rules of the module doc.
     fn publish_files(&mut self, root: &Path, files: &BTreeMap<PathBuf, Arc<FileReport>>) {
         for (path, report) in files {
-            if package_root(path).as_deref() != Some(root) {
+            if !self.owns(root, path) {
                 continue;
             }
-            let open = self.docs.get(path).map(|doc| doc.version);
-            let stale = match (open, report.version) {
-                (Some(now), Some(ran)) => now > ran,
-                // Opened or closed after the job started: the run read the
-                // other text, and `didOpen` or `didClose` marked the
-                // package for a run that reads this one.
-                (Some(_), None) | (None, Some(_)) => true,
-                (None, None) => false,
-            };
-            if stale {
+            let version = match self.current(root, path) {
+                Current::Open(version) => Some(version),
+                Current::Closed => None,
                 // A newer run follows and publishes this file.
-                continue;
-            }
+                Current::Stale => continue,
+            };
             let diagnostics = self.convert(root, path, report, files);
-            let version = open.and(report.version);
-            self.publish(root, path, diagnostics, version, open.is_some());
+            self.publish(root, path, diagnostics, version);
         }
     }
 
-    /// Sends one file's list: always for an open document, else only when
-    /// it changed.
+    /// How the job in flight of `root` read `path`, against the text the
+    /// client holds now. Texts are compared by edit stamp: a document
+    /// closed and opened again starts at version 0, which an older run may
+    /// have read too.
+    fn current(&self, root: &Path, path: &Path) -> Current {
+        let Some(package) = self.packages.get(root) else {
+            return Current::Stale;
+        };
+        match (self.docs.get(path), package.job_stamps.get(path)) {
+            (Some(doc), Some(&stamp)) if doc.stamp == stamp => Current::Open(
+                package
+                    .job_versions
+                    .get(path)
+                    .copied()
+                    .unwrap_or(doc.version),
+            ),
+            (Some(_), _) | (None, Some(_)) => Current::Stale,
+            (None, None) => Current::Closed,
+        }
+    }
+
+    /// Sends one file's list, unless it equals the path's last publish in
+    /// version and diagnostics and `didOpen` or `didClose` did not forget
+    /// that one (D-1442).
     fn publish(
         &mut self,
         root: &Path,
         path: &Path,
         diagnostics: Vec<Diagnostic>,
         version: Option<i32>,
-        always: bool,
     ) {
         let sent = Hash128::of(
             serde_json::to_string(&diagnostics)
@@ -136,8 +164,8 @@ impl Server {
         let same = package
             .published
             .get(path)
-            .is_some_and(|old| old.sent == sent && old.version == version);
-        if same && !always {
+            .is_some_and(|old| !old.forgotten && old.sent == sent && old.version == version);
+        if same {
             return;
         }
         let Ok(uri) = self.uris.uri_of(path) else {
@@ -149,6 +177,7 @@ impl Server {
                 version,
                 sent,
                 diagnostics: diagnostics.clone(),
+                forgotten: false,
             },
         );
         let params = PublishDiagnosticsParams {
@@ -163,20 +192,30 @@ impl Server {
     }
 
     /// One empty publish for each published file that left the package
-    /// (D-1373).
+    /// (D-1373), or that the package no longer owns, such as a file of a
+    /// nested package whose `cheby.toml` appeared (A §6.5). A file that a
+    /// live session owns now gets nothing here, since its owner publishes
+    /// it, maybe already.
     fn forget_gone(&mut self, root: &Path, live: &Live) {
-        let Some(package) = self.packages.get_mut(root) else {
+        let Some(package) = self.packages.get(root) else {
             return;
         };
         let gone: Vec<PathBuf> = package
             .published
             .keys()
-            .filter(|path| !live.files.contains(*path))
+            .filter(|path| !live.files.contains(*path) || !self.owns(root, path))
             .cloned()
             .collect();
         for path in gone {
             if let Some(package) = self.packages.get_mut(root) {
                 package.published.remove(&path);
+            }
+            let elsewhere = self
+                .route_of(&path)
+                .root()
+                .is_some_and(|owner| owner != root && self.packages.contains_key(owner));
+            if elsewhere {
+                continue;
             }
             let Ok(uri) = self.uris.uri_of(&path) else {
                 continue;
@@ -194,28 +233,27 @@ impl Server {
         }
     }
 
-    /// After a job's last event: each open document of the job whose
-    /// version is still current and was not published with it gets its
-    /// list again with that version, so every version a client waits for
-    /// is published (A §8.4). A document the job never published, such as
-    /// a module while `cheby.toml` has errors, gets an empty list.
+    /// After a job's last event: each open document of the job whose text
+    /// is still the one the job read, and that was not published with its
+    /// version, gets its list again with that version, so every version a
+    /// client waits for is published (A §8.4). A document the job never
+    /// published, such as a module while `cheby.toml` has errors, gets an
+    /// empty list.
     fn catch_up(&mut self, root: &Path) {
         let Some(package) = self.packages.get(root) else {
             return;
         };
         let due: Vec<(PathBuf, i32)> = package
-            .job_versions
+            .job_stamps
             .iter()
-            .filter(|(path, version)| {
-                self.docs
-                    .get(*path)
-                    .is_some_and(|doc| doc.version == **version)
-                    && package
-                        .published
-                        .get(*path)
-                        .is_none_or(|p| p.version != Some(**version))
+            .filter_map(|(path, stamp)| {
+                let doc = self.docs.get(path).filter(|doc| doc.stamp == *stamp)?;
+                let published = package
+                    .published
+                    .get(path)
+                    .is_some_and(|p| !p.forgotten && p.version == Some(doc.version));
+                (!published && self.owns(root, path)).then(|| (path.clone(), doc.version))
             })
-            .map(|(path, version)| (path.clone(), *version))
             .collect();
         for (path, version) in due {
             let diagnostics = self
@@ -224,7 +262,7 @@ impl Server {
                 .and_then(|package| package.published.get(&path))
                 .map(|published| published.diagnostics.clone())
                 .unwrap_or_default();
-            self.publish(root, &path, diagnostics, Some(version), true);
+            self.publish(root, &path, diagnostics, Some(version));
         }
     }
 
@@ -314,6 +352,12 @@ impl Server {
         };
         let mut message = d.message.clone();
         let mut related = Vec::new();
+        // A single-file session is keyed by its file: paths show relative
+        // to the file's directory.
+        let shown_root = match self.packages.get(root).map(|package| &package.kind) {
+            Some(PackageKind::SingleFile { .. }) => root.parent().unwrap_or(root),
+            Some(PackageKind::Package) | None => root,
+        };
         for label in &d.related {
             let Some((other, other_lines)) = self.placed(&label.path, files, texts) else {
                 continue;
@@ -329,7 +373,7 @@ impl Server {
                 });
             } else {
                 message.push_str(&related_line(
-                    root,
+                    shown_root,
                     &label.path,
                     label_range,
                     &label.message,
@@ -351,6 +395,19 @@ impl Server {
             data: None,
         }
     }
+}
+
+/// How a job read a file, against the text the client holds now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Current {
+    /// An open document whose current text the job read, at this version.
+    Open(i32),
+    /// A file closed all along, read from disk.
+    Closed,
+    /// The job read other text: an edit, an open or a close came since it
+    /// started, and each of them marked the package for a run that reads
+    /// the new text.
+    Stale,
 }
 
 /// The texts of one [`Server::convert`] call and their line indexes, by

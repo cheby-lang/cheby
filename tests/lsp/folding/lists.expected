@@ -1,0 +1,46 @@
+== diagnostics
+{}
+
+== src/main.cheby foldingRange
+[
+  {
+    "endCharacter": 89,
+    "endLine": 1,
+    "kind": "comment",
+    "startCharacter": 0,
+    "startLine": 0
+  },
+  {
+    "endCharacter": 1,
+    "endLine": 9,
+    "kind": "region",
+    "startCharacter": 6,
+    "startLine": 5
+  },
+  {
+    "endCharacter": 1,
+    "endLine": 11,
+    "startCharacter": 9,
+    "startLine": 9
+  },
+  {
+    "endCharacter": 1,
+    "endLine": 23,
+    "startCharacter": 10,
+    "startLine": 13
+  },
+  {
+    "endCharacter": 3,
+    "endLine": 17,
+    "kind": "region",
+    "startCharacter": 11,
+    "startLine": 14
+  },
+  {
+    "endCharacter": 47,
+    "endLine": 20,
+    "kind": "region",
+    "startCharacter": 14,
+    "startLine": 18
+  }
+]

@@ -1,0 +1,33 @@
+== diagnostics
+{}
+
+== src/main.cheby foldingRange
+[
+  {
+    "endCharacter": 86,
+    "endLine": 1,
+    "kind": "comment",
+    "startCharacter": 0,
+    "startLine": 0
+  },
+  {
+    "endCharacter": 16,
+    "endLine": 4,
+    "kind": "imports",
+    "startCharacter": 0,
+    "startLine": 3
+  },
+  {
+    "endCharacter": 20,
+    "endLine": 8,
+    "kind": "comment",
+    "startCharacter": 0,
+    "startLine": 6
+  },
+  {
+    "endCharacter": 1,
+    "endLine": 13,
+    "startCharacter": 10,
+    "startLine": 9
+  }
+]

@@ -34,6 +34,10 @@
 //! Q run only: it comes back in [`Live::failed`], with no snapshot, and the
 //! session runs again on the next call (R-14). A contained internal error
 //! leaves a snapshot and plans a D run (D-1359, D-1362).
+//!
+//! A session of [`PackageKind::SingleFile`] analyzes one file that is no
+//! module of any package, under a synthetic manifest (D-1371, A §6.4):
+//! `single`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -52,11 +56,36 @@ use crate::cache::Hash128;
 use crate::frontend::{CutCycles, Frontend, Retain, RunExtras, run_analysis};
 use crate::{Error, Module, Package, SourceHashes, parse_file};
 
+mod single;
+
+/// Which files a session analyzes (A §1.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PackageKind {
+    /// The package whose `cheby.toml` is in the session's root.
+    Package,
+    /// One file that is no module of any package, as the only module of a
+    /// package with a synthetic manifest (D-1371, A §6.4). Constants are
+    /// never evaluated in it.
+    SingleFile {
+        /// The file, an absolute path in the session's root.
+        file: PathBuf,
+        /// No `cheby.toml` is above the file: it gets all of a run's
+        /// diagnostics but W0005. Otherwise it sits inside a package
+        /// without being one of its modules, and gets its phase-A
+        /// diagnostics only, since its imports of that package's modules
+        /// cannot resolve.
+        strict: bool,
+    },
+}
+
 /// What a session analyzes and with what.
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
-    /// The package root, the directory of `cheby.toml`.
+    /// The package root, the directory of `cheby.toml`. Ignored in
+    /// single-file mode, whose root is the directory of its file.
     pub root: PathBuf,
+    /// A package, or one file in single-file mode.
+    pub kind: PackageKind,
     /// `--target`: check for this target only (D-550).
     pub target: Option<Target>,
     /// The interners, one per process, shared by every session (A §1.6).
@@ -68,6 +97,7 @@ pub struct SessionConfig {
 pub struct Session {
     id: u32,
     root: PathBuf,
+    kind: PackageKind,
     target: Option<Target>,
     globals: Arc<Globals>,
     disk: DiskView,
@@ -134,7 +164,8 @@ pub struct Report {
     /// No error in any file, none in `tool`, and no file broken, so the
     /// package is one that `cheby check` accepts (D-1359). The child may
     /// run when this holds for the latest report and the latest
-    /// [`Live::broken`] is empty (A §11).
+    /// [`Live::broken`] is empty (A §11). Always false in single-file
+    /// mode, which has no child (A §6.4).
     pub clean: bool,
     /// The run read a last good text or a stub in place of a live text.
     /// While it is true, no fix removes code for W0003, W0004 or W0005,
@@ -361,15 +392,28 @@ struct StrictLoad {
 }
 
 impl Session {
-    /// A session over the package at `config.root`, which is made
-    /// absolute. Nothing is read yet.
+    /// A session over the package at `config.root`, or over the file of
+    /// single-file mode, rooted at the file's directory (A §6.4). Both are
+    /// made absolute. Nothing is read yet.
     #[must_use]
     pub fn new(config: SessionConfig) -> Self {
-        let root = std::path::absolute(&config.root).unwrap_or(config.root);
+        let kind = match config.kind {
+            PackageKind::SingleFile { file, strict } => PackageKind::SingleFile {
+                file: std::path::absolute(&file).unwrap_or(file),
+                strict,
+            },
+            PackageKind::Package => PackageKind::Package,
+        };
+        let root = match &kind {
+            PackageKind::SingleFile { file, .. } => file.parent().map(Path::to_path_buf),
+            PackageKind::Package => None,
+        }
+        .unwrap_or_else(|| std::path::absolute(&config.root).unwrap_or(config.root));
         Self {
             id: SESSIONS.fetch_add(1, Ordering::Relaxed),
             disk: DiskView::new(root.clone()),
             root,
+            kind,
             target: config.target,
             globals: config.globals,
             generation: 0,
@@ -418,12 +462,18 @@ impl Session {
     /// one for the run, and its own diagnostics go to `phase_a`. With no
     /// last good one, only the open files are parsed (A §2.7).
     ///
+    /// In single-file mode the run is `single`'s instead (D-1371).
+    ///
     /// # Errors
     ///
     /// An [`Error`] for a package that cannot be read (A §2.7), or a
     /// target it does not have.
     pub fn analyze_live(&mut self, overlay: &Overlay) -> Result<Live, Error> {
         self.generation = self.generation.saturating_add(1);
+        if let PackageKind::SingleFile { file, strict } = &self.kind {
+            let (file, strict) = (file.clone(), *strict);
+            return self.analyze_single(overlay, &file, strict);
+        }
         let first = load(&self.root, overlay, &mut self.disk, self.target)?;
         let state = manifest_state(&first);
         if state == ManifestState::Clean {
@@ -641,10 +691,16 @@ impl Session {
             package,
             mut sources,
             mut diagnostics,
-            files,
+            mut files,
             live,
             stubs,
         } = load_strict(&self.root, &plan, self.target)?;
+        let single = matches!(self.kind, PackageKind::SingleFile { .. });
+        if single {
+            // The synthetic manifest is no file to publish: a diagnostic
+            // with no span goes to the file, as in the Q run (A §6.4).
+            files.retain(|f| f.path != plan.manifest.path);
+        }
         let extras = RunExtras {
             globals: Arc::clone(&self.globals),
             retain: Retain::BUILD,
@@ -668,10 +724,12 @@ impl Session {
             .map(|f| f.file)
             .collect();
         held.retain(|file| !fixed_held.contains(file));
-        let clean = !plan.substituted()
+        let clean = !single
+            && !plan.substituted()
             && plan.tool.is_empty()
             && !diagnostics.iter().any(Diagnostic::is_error);
-        if !stubs.is_empty() {
+        // Single-file mode never reports W0005 (D-1371).
+        if !stubs.is_empty() || single {
             diagnostics.retain(|d| d.code != codes::UNUSED_PACKAGE_ITEM);
         }
         let run = RunFiles {

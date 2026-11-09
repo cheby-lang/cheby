@@ -1,12 +1,23 @@
 == initialize
 {
   "capabilities": {
+    "documentFormattingProvider": true,
+    "documentRangeFormattingProvider": true,
+    "documentSymbolProvider": true,
+    "foldingRangeProvider": true,
     "positionEncoding": "utf-8",
+    "selectionRangeProvider": true,
     "textDocumentSync": {
       "change": 2,
       "openClose": true,
       "save": {
         "includeText": false
+      }
+    },
+    "workspace": {
+      "workspaceFolders": {
+        "changeNotifications": true,
+        "supported": true
       }
     }
   },

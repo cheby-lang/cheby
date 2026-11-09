@@ -2,15 +2,20 @@
 //! stdio, one process per trial (D-1352, docs/plan/testing.md,
 //! `tests/lsp/README.md`). The client is `cheby_test_support::lsp`.
 //!
-//! Four groups of trials:
+//! Six groups of trials:
 //!
 //! - `protocol/<name>`: the handshake, `shutdown` and `exit` and their exit
-//!   codes, the end of input, error answers (`MethodNotFound`,
-//!   `ServerNotInitialized`, `InvalidRequest` after `shutdown`),
-//!   `$/cancelRequest`, malformed params, the negotiated position encoding
-//!   (D-1368), the publishing rules (D-1373), and that standard output
-//!   holds frames only (A §3.7). Two of them compare the `initialize`
-//!   answer with a golden: `tests/lsp/protocol/<name>.expected`.
+//!   codes, the end of input, a frame that is not JSON-RPC (D-1430), error
+//!   answers (`MethodNotFound`, `ServerNotInitialized`, `InvalidRequest`
+//!   after `shutdown`), `$/cancelRequest`, malformed params, the negotiated
+//!   position encoding (D-1368), the publishing rules (D-1373, D-1442), and
+//!   that standard output holds frames only (A §3.7). Two of them compare
+//!   the `initialize` answer with a golden:
+//!   `tests/lsp/protocol/<name>.expected`.
+//! - `format/<name>`: formatting cases a file cannot hold, such as CRLF
+//!   line ends, which `.gitattributes` turns into LF.
+//! - `symbols/examples/<name>`: the outline of every source file of every
+//!   example equals its item list (`features.md` §5.1).
 //! - `examples/<name>`: every example's sources are opened, and every
 //!   request the server advertises is sent at every identifier and type
 //!   name. Each must be answered in time, with no JSON-RPC error and no
@@ -30,7 +35,17 @@
 //! - `golden/<name>`: the tests under `tests/lsp/`, whose exact answers are
 //!   in `<name>.expected`. `CHEBY_BLESS=1` rewrites those goldens, and the
 //!   two protocol goldens, except for a test of a later milestone. It
-//!   ignores every trial that has no golden.
+//!   ignores every trial that has no golden. Whatever the golden says, a
+//!   `formatting` answer must give `cheby fmt`'s text when applied, and a
+//!   `rangeFormatting` edit must touch the lines of its range.
+//!
+//! Waits (D-1442): a publish comes for each new version of an open
+//! document and after each `didOpen` and `didClose`, but not for a run
+//! that changes neither the version nor the list. So no trial waits for a
+//! publish after `didSave` or a settings change. A request does not wait
+//! for such a run either: it waits only for the text it names (D-1367). A
+//! trial that needs the server to have caught up sends an edit and waits
+//! for that version's publish, since a package's jobs run in order.
 //!
 //! Milestones (D-1352, D-288, D-544): protocol trials and golden tests
 //! carry the header default, M1, so they are binding while
@@ -64,9 +79,10 @@ use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::example::{self, Example};
 use cheby_test_support::lsp::case::{self, Advertised, Layout, LspTest};
 use cheby_test_support::lsp::client::{self, codes};
+use cheby_test_support::lsp::outline;
 use cheby_test_support::lsp::parity::{self, Key};
 use cheby_test_support::lsp::serde_json::{self, Value, json};
-use cheby_test_support::lsp::text::{Bom, Lines, Position};
+use cheby_test_support::lsp::text::{self, Bom, Lines, Position};
 use cheby_test_support::lsp::{Client, ClientKind, Encoding, Ended, Paths, StartOptions};
 use cheby_test_support::milestone::{Expectation, Milestone, POISON_ENV, Setting, Verdicts};
 use cheby_test_support::ui::{self, Mode, UiTest};
@@ -135,10 +151,20 @@ fn main() -> ExitCode {
     });
     let mut trials = Vec::new();
     for protocol in PROTOCOL {
-        trials.push(protocol_trial(protocol, &env, current, &verdicts, bless));
+        trials.push(protocol_trial(
+            "protocol", protocol, &env, current, &verdicts, bless,
+        ));
+    }
+    for format in FORMAT {
+        trials.push(protocol_trial(
+            "format", format, &env, current, &verdicts, bless,
+        ));
     }
     for ex in &examples {
         trials.push(example_trial(ex.clone(), &env, current, &verdicts, bless));
+    }
+    for ex in &examples {
+        trials.push(symbols_trial(ex.clone(), &env, current, &verdicts, bless));
     }
     for ex in &examples {
         trials.push(example_parity_trial(
@@ -256,6 +282,30 @@ fn single_file_package(dir: &Path, name: &str, source: &Path) -> Result<(), Stri
     std::fs::copy(source, src.join("main.cheby"))
         .map_err(|e| format!("{}: {e}", source.display()))?;
     Ok(())
+}
+
+/// Copies `source` into `dir` under its own name, with no `cheby.toml`:
+/// a file outside every package (D-1371).
+fn loose_file(dir: &Path, source: &Path) -> Result<(), String> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| format!("{}: no file name", source.display()))?;
+    std::fs::copy(source, dir.join(name)).map_err(|e| format!("{}: {e}", source.display()))?;
+    Ok(())
+}
+
+/// The `.cheby` files directly in `dir`, by name, for a loose test.
+fn loose_sources(dir: &Path) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        if path.extension().is_some_and(|e| e == "cheby") {
+            files.push(cheby_test_support::display_relative(&path, dir));
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 /// Writes `files`, relative paths and texts, into `dir`.
@@ -376,6 +426,11 @@ const PROTOCOL: &[Protocol] = &[
         golden: false,
     },
     Protocol {
+        name: "malformed_frame_ends_with_1",
+        run: malformed_frame_ends_with_1,
+        golden: false,
+    },
+    Protocol {
         name: "request_before_initialize_is_server_not_initialized",
         run: request_before_initialize,
         golden: false,
@@ -435,16 +490,30 @@ const PROTOCOL: &[Protocol] = &[
         run: deleted_file_gets_one_empty_publish,
         golden: false,
     },
+    Protocol {
+        name: "close_and_reopen_publish_again",
+        run: close_and_reopen_publish_again,
+        golden: false,
+    },
 ];
 
+/// The `format/*` trials, which need a text no file can hold.
+const FORMAT: &[Protocol] = &[Protocol {
+    name: "crlf_is_converted",
+    run: crlf_is_converted,
+    golden: false,
+}];
+
+/// One trial of `group`, `protocol` or `format`.
 fn protocol_trial(
+    group: &str,
     protocol: &'static Protocol,
     env: &Arc<Env>,
     current: Setting,
     verdicts: &Verdicts,
     bless: bool,
 ) -> Trial {
-    let name = format!("protocol/{}", protocol.name);
+    let name = format!("{group}/{}", protocol.name);
     let expectation = current.expectation(Milestone::M1);
     let ignored = bless && !protocol.golden;
     let env = Arc::clone(env);
@@ -472,6 +541,8 @@ const FIXED_MAIN: &str = "//! A package with a type error.\n\nfn answer() -> Int
 /// A module with a type error.
 const BROKEN_UTIL: &str =
     "//! A module with a type error.\n\npub fn answer() -> Int {\n  \"forty-two\"\n}\n";
+/// A root module that `cheby fmt` changes.
+const MISFORMATTED_MAIN: &str = "//! A package for the protocol trials.\n\nfn main() {\n    let n = [1,2]\n  assert n == [1, 2]\n}\n";
 const MANIFEST: &str = "name = \"protocol\"\nversion = \"0.0.0\"\n";
 
 fn initialize_answers_capabilities(env: &Env, dir: &Path) -> Result<(), String> {
@@ -579,6 +650,56 @@ fn exit_without_shutdown_gives_1(env: &Env, dir: &Path) -> Result<(), String> {
 fn end_of_input_gives_1(env: &Env, dir: &Path) -> Result<(), String> {
     let (client, _) = session(env, dir, ClientKind::Standard, None, None)?;
     client.end_input()?.expect(1)
+}
+
+/// D-1430: a frame whose body is not a JSON-RPC message ends `cheby lsp`
+/// with status 1 and one line on standard error, with the input still
+/// open, and the server answers nothing. Each body goes to a fresh server,
+/// after `initialize`, and the first one also before it.
+fn malformed_frame_ends_with_1(env: &Env, dir: &Path) -> Result<(), String> {
+    let not_json: &[u8] = b"{not json";
+    let bodies: [(&str, &[u8]); 3] = [
+        ("a body that is not JSON", not_json),
+        (
+            "neither a request, a notification nor an answer",
+            br#"{"jsonrpc":"2.0","params":{}}"#,
+        ),
+        (
+            "a batch",
+            br#"[{"jsonrpc":"2.0","method":"initialized","params":{}}]"#,
+        ),
+    ];
+    let cases = bodies
+        .iter()
+        .map(|&(what, body)| (what.to_owned(), body, true))
+        .chain(std::iter::once((
+            "a body that is not JSON, before `initialize`".to_owned(),
+            not_json,
+            false,
+        )));
+    for (what, body, initialized) in cases {
+        let mut client = if initialized {
+            session(env, dir, ClientKind::Standard, None, None)?.0
+        } else {
+            start(env, dir)?
+        };
+        client.send_raw(body)?;
+        let ended = client.wait_end().map_err(|e| format!("{what}: {e}"))?;
+        ended.expect(1).map_err(|e| format!("{what}: {e}"))?;
+        no_unexpected_answers(&ended).map_err(|e| format!("{what}: {e}"))?;
+        let lines = ended
+            .stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count();
+        if lines != 1 {
+            return Err(format!(
+                "{what}: standard error holds {lines} lines, not one:\n{}",
+                ended.stderr
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn request_before_initialize(env: &Env, dir: &Path) -> Result<(), String> {
@@ -821,6 +942,67 @@ fn deleted_file_gets_one_empty_publish(env: &Env, dir: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// D-1442, D-1373: `didClose` and `didOpen` forget a path's last publish,
+/// so a closed file gets its list again without a version, and a reopened
+/// one with its version, though the list is the same. Zed starts versions
+/// again at 0 when it reopens a path (CP1).
+fn close_and_reopen_publish_again(env: &Env, dir: &Path) -> Result<(), String> {
+    write_package(
+        dir,
+        &[("cheby.toml", MANIFEST), (ROOT_MODULE, BROKEN_TYPE_MAIN)],
+    )?;
+    let (mut client, _) = session(env, dir, ClientKind::Standard, None, None)?;
+    let uri = client.open(Path::new(ROOT_MODULE))?;
+    let open = client.diagnostics(&uri, Some(1))?;
+    if !has_code(&open, "E0047") {
+        return Err(format!("version 1 has no E0047: {open:?}"));
+    }
+    // The closed file's publish at start, if any, came before version 1's.
+    client.take_notifications();
+    client.close(&uri)?;
+    let closed = client.notification("the publish of the closed src/main.cheby", |m| {
+        client::is_publish_of(m, &uri) && !has_version(m)
+    })?;
+    if !has_code(&client::diagnostics_of(&closed), "E0047") {
+        return Err(format!("the closed file's publish has no E0047: {closed}"));
+    }
+    client.open_version(&uri, BROKEN_TYPE_MAIN, 0)?;
+    let reopened = client.diagnostics(&uri, Some(0))?;
+    if !has_code(&reopened, "E0047") {
+        return Err(format!("the reopened version 0 has no E0047: {reopened:?}"));
+    }
+    client.shutdown()?.expect(0)
+}
+
+/// `features.md` §5.4: CRLF is converted as `cheby fmt` converts it, by the
+/// diff. A CRLF text otherwise in `cheby fmt`'s form gets edits, and
+/// applying the edits of either text gives `cheby fmt`'s output.
+fn crlf_is_converted(env: &Env, dir: &Path) -> Result<(), String> {
+    write_package(dir, &[("cheby.toml", MANIFEST), (ROOT_MODULE, CLEAN_MAIN)])?;
+    let (mut client, _) = session(env, dir, ClientKind::Standard, None, None)?;
+    let uri = client.uri(Path::new(ROOT_MODULE))?;
+    for (what, lf) in [
+        ("in `cheby fmt`'s form", CLEAN_MAIN),
+        ("misformatted", MISFORMATTED_MAIN),
+    ] {
+        let crlf = lf.replace('\n', "\r\n");
+        client.open_text(&uri, &crlf)?;
+        let answer = client.request(
+            "textDocument/formatting",
+            json!({ "textDocument": { "uri": uri }, "options": case::formatting_options() }),
+        )?;
+        if answer.as_array().is_none_or(Vec::is_empty) {
+            return Err(format!(
+                "a CRLF text {what} was formatted with no edit: {answer}"
+            ));
+        }
+        check_formatting(env, dir, &crlf, &answer, client.encoding())
+            .map_err(|e| format!("a CRLF text {what}: {e}"))?;
+        client.close(&uri)?;
+    }
+    client.shutdown()?.expect(0)
+}
+
 fn has_version(message: &Value) -> bool {
     client::params(message)
         .get("version")
@@ -999,6 +1181,53 @@ fn send_all(
         }
     }
     Ok(answers)
+}
+
+// ---------------------------------------------------------------------
+// symbols/examples/*
+
+fn symbols_trial(
+    ex: Example,
+    env: &Arc<Env>,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+) -> Trial {
+    let name = format!("symbols/examples/{}", ex.name);
+    let expectation = ex.check_only_expectation(current);
+    let milestone = ex.config.milestone;
+    let env = Arc::clone(env);
+    let trial_name = name.clone();
+    trial(name, milestone, expectation, verdicts, bless, move || {
+        let scratch = Scratch::new(&trial_name)?;
+        copy_dir(&ex.dir, scratch.path())?;
+        outline_is_the_item_list(&env, scratch.path())
+    })
+}
+
+/// `features.md` §5.1: the outline of each source file is its item list.
+/// A text request never waits for analysis (D-1367), so each is sent as
+/// soon as its document is open.
+fn outline_is_the_item_list(env: &Env, dir: &Path) -> Result<(), String> {
+    let files = sources(dir)?;
+    let (mut client, init) = session(env, dir, ClientKind::Standard, None, None)?;
+    let advertised = Advertised::of(init.get("capabilities").unwrap_or(&Value::Null))?;
+    if !advertised.document.contains(&"documentSymbol") {
+        return Err("the server does not advertise `documentSymbolProvider`".to_owned());
+    }
+    for file in &files {
+        let path = dir.join(file);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let uri = client.open(Path::new(file))?;
+        let answer = client.request(
+            "textDocument/documentSymbol",
+            json!({ "textDocument": { "uri": uri } }),
+        )?;
+        outline::check(&outline::expected(&text), &answer)
+            .map_err(|e| client.fail(&format!("{file}: {e}")))?;
+    }
+    client.shutdown()?.expect(0)
 }
 
 // ---------------------------------------------------------------------
@@ -1211,11 +1440,15 @@ fn golden_trial(
         let bless = bless && expectation != Expectation::Fail;
         let header = test.header.clone()?;
         let scratch = Scratch::new(&trial_name)?;
-        match test.layout {
-            Layout::File => {
+        match (test.layout, header.loose) {
+            (Layout::File, false) => {
                 single_file_package(scratch.path(), case::PACKAGE_NAME, &test.path)?;
             }
-            Layout::Package => copy_dir(&test.path, scratch.path())?,
+            (Layout::File, true) => loose_file(scratch.path(), &test.path)?,
+            (Layout::Package, false) => copy_dir(&test.path, scratch.path())?,
+            (Layout::Package, true) => {
+                return Err("`@package: none` needs a test that is one file".to_owned());
+            }
         }
         let answers = golden_answers(&env, scratch.path(), &header)?;
         if bless {
@@ -1228,14 +1461,34 @@ fn golden_trial(
 /// The golden text of a test: its diagnostics, then one block per marker
 /// and per document request, in file and line order.
 fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String, String> {
-    let files = sources(dir)?;
-    let (mut client, _) = session(
-        env,
-        dir,
-        header.client,
-        header.encoding,
-        header.settings.clone(),
-    )?;
+    let (mut client, files) = if header.loose {
+        // As Zed opens a file outside its worktree: rooted at the file's
+        // directory, with no workspace folder (D-1371).
+        let files = loose_sources(dir)?;
+        let mut client = start(env, dir)?;
+        if let Some(settings) = &header.settings {
+            client.set_configuration(settings.clone());
+        }
+        let mut params = client.initialize_params(
+            &header.client.capabilities(header.encoding),
+            header.settings.clone(),
+        )?;
+        if let Some(map) = params.as_object_mut() {
+            map.insert("workspaceFolders".to_owned(), json!([]));
+        }
+        client.initialize(params)?;
+        (client, files)
+    } else {
+        let files = sources(dir)?;
+        let (client, _) = session(
+            env,
+            dir,
+            header.client,
+            header.encoding,
+            header.settings.clone(),
+        )?;
+        (client, files)
+    };
     let paths = client.paths().clone();
     let uris = open_all(&mut client, &files)?;
     let encoding = client.encoding();
@@ -1270,12 +1523,20 @@ fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String
                 &diagnostics,
             )?;
             let answer = answer_value(&mut client, method, params, &marker.name)?;
+            if marker.name == "rangeFormatting" {
+                check_range_formatting(&answer, &text, marker.line)
+                    .map_err(|e| format!("{}: {e}", marker.label(file)))?;
+            }
             blocks.push(case::block(&marker.label(file), &paths.normalize(&answer)));
         }
         let last = lines.position(text.len(), encoding);
         for name in &header.requests {
             let (method, params) = case::document_params(name, uri, last)?;
             let answer = answer_value(&mut client, method, params, name)?;
+            if name == "formatting" {
+                check_formatting(env, dir, &text, &answer, encoding)
+                    .map_err(|e| format!("{file} formatting: {e}"))?;
+            }
             blocks.push(case::block(
                 &format!("{file} {name}"),
                 &paths.normalize(&answer),
@@ -1297,6 +1558,95 @@ fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String
         text.push_str(&block);
     }
     Ok(text)
+}
+
+/// `cheby fmt -`'s output for `text`, `None` when it refuses the text.
+fn run_fmt(env: &Env, dir: &Path, text: &str) -> Result<Option<String>, String> {
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "fmt", "-"])
+        .current_dir(dir)
+        .env("NO_COLOR", "1");
+    env.cache.apply(&mut cmd);
+    let out = process::run(cmd, Some(text.as_bytes()), env.timeout)?;
+    Ok((out.status == Some(0)).then_some(out.stdout))
+}
+
+/// `features.md` §5.4: a `formatting` answer applied to `text` gives
+/// `cheby fmt`'s output byte for byte, `[]` when that is `text` itself,
+/// and `null` when `cheby fmt` refuses the text.
+fn check_formatting(
+    env: &Env,
+    dir: &Path,
+    text: &str,
+    answer: &Value,
+    encoding: Encoding,
+) -> Result<(), String> {
+    let formatted = run_fmt(env, dir, text)?;
+    match (answer, formatted) {
+        (Value::Null, None) => Ok(()),
+        (Value::Null, Some(_)) => Err("`null`, but `cheby fmt` formats the text".to_owned()),
+        (_, None) => Err(format!(
+            "`cheby fmt` refuses the text, so the answer must be `null`, not {answer}"
+        )),
+        (Value::Array(edits), Some(formatted)) => {
+            let applied = text::apply_text_edits(text, edits, encoding, Bom::Counted)?;
+            if applied != formatted {
+                return Err(format!(
+                    "applying the edits gives\n{applied}\nbut `cheby fmt` gives\n{formatted}"
+                ));
+            }
+            if formatted == text && !edits.is_empty() {
+                return Err(format!(
+                    "edits for a text `cheby fmt` leaves alone: {answer}"
+                ));
+            }
+            Ok(())
+        }
+        (_, Some(_)) => Err(format!("neither a list of edits nor `null`: {answer}")),
+    }
+}
+
+/// `features.md` §5.4, D-1399: every edit of a `rangeFormatting` answer
+/// touches the lines of the range, here the marker's one `line` of `text`.
+/// An edit that only removes and inserts `import` lines is exempt: the
+/// formatter sorts imports, and the other half of a moved import is kept
+/// with the half the range touches.
+fn check_range_formatting(answer: &Value, text: &str, line: usize) -> Result<(), String> {
+    let Some(edits) = answer.as_array() else {
+        return Ok(());
+    };
+    let line = u32::try_from(line).unwrap_or(u32::MAX);
+    let lines: Vec<&str> = text.lines().collect();
+    for edit in edits {
+        let range = edit.get("range").unwrap_or(&Value::Null);
+        let start = Position::from_json(range.get("start").unwrap_or(&Value::Null))?;
+        let end = Position::from_json(range.get("end").unwrap_or(&Value::Null))?;
+        // A whole-line hunk ends at column 0 of the line after it.
+        let last = if end.character == 0 && end.line > start.line {
+            end.line.saturating_sub(1)
+        } else {
+            end.line
+        };
+        let removed = (start.line..end.line)
+            .filter_map(|n| lines.get(usize::try_from(n).ok()?).copied())
+            .collect::<Vec<_>>();
+        let inserted = edit.get("newText").and_then(Value::as_str).unwrap_or("");
+        let imports_only = removed
+            .iter()
+            .copied()
+            .chain(inserted.lines())
+            .all(|l| l.trim_start().starts_with("import "));
+        if imports_only {
+            continue;
+        }
+        if line < start.line || last < line {
+            return Err(format!(
+                "an edit of lines {}..={last} does not touch line {line}: {edit}",
+                start.line
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The answer of a request, or its error as `{"error": {code, message}}`.

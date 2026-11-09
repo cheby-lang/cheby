@@ -12,7 +12,8 @@ use cheby_iface::Globals;
 use cheby_package::MANIFEST_FILE;
 
 use super::{
-    FileReport, Live, Overlay, OverlayFile, Report, Session, SessionConfig, TextOrigin, codes,
+    FileReport, Live, Overlay, OverlayFile, PackageKind, Report, Session, SessionConfig,
+    TextOrigin, codes,
 };
 use crate::parse_file;
 
@@ -67,6 +68,7 @@ fn package(name: &str, files: &[(&str, &str)]) -> Temp {
 fn session(root: &Temp) -> Session {
     Session::new(SessionConfig {
         root: root.0.clone(),
+        kind: PackageKind::Package,
         target: None,
         globals: Arc::new(Globals::new()),
     })
@@ -561,6 +563,7 @@ fn example_030_reports_e0036_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/030_shop_service");
     let mut s = Session::new(SessionConfig {
         root: std::path::absolute(&root).unwrap(),
+        kind: PackageKind::Package,
         target: None,
         globals: Arc::new(Globals::new()),
     });

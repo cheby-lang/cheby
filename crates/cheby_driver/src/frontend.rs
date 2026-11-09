@@ -142,7 +142,7 @@ pub(crate) struct Frontend {
     /// [`Scope::None`].
     pub trees: Vec<Option<SyntaxTree>>,
     /// The imports a [`CutCycles`] run turned into failed imports: the
-    /// importing module and the import's span (D-1358). Each cycle cuts
+    /// importing module and the import's span (D-1358, D-1427). Each cycle cuts
     /// every import of one edge, so one entry per import cut; one cycle may
     /// cut several.
     pub cut_imports: Vec<(ModuleId, Span)>,
@@ -2853,7 +2853,7 @@ fn run_inner(
 
     // The graph and the order (G1).
     let mut graph = import_graph(modules.len(), &targets, &implicit)?;
-    // D-1358: a run that cuts cycles turns every import of one edge per
+    // D-1358, D-1427: a run that cuts cycles turns every import of one edge per
     // cycle into a failed import, and what is left goes to the arm below
     // as usual.
     let mut cut_imports = Vec::new();
@@ -3471,7 +3471,7 @@ fn import_graph(
     Ok(graph)
 }
 
-/// The cycle cut of a [`CutCycles`] run (A §2.5, D-1358). While `graph`
+/// The cycle cut of a [`CutCycles`] run (A §2.5, D-1358, D-1427). While `graph`
 /// has a cycle, one edge of the first cycle that has an import edge is
 /// cut: the edge out of [`CutCycles::prefer_from`] if the cycle has one,
 /// else the largest `(from, to)`. Every import of `from` that targets `to`

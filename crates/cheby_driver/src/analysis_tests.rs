@@ -11,8 +11,8 @@ use cheby_iface::{DefId, DefKind, Globals, ItemSig, ModuleId};
 use cheby_package::{MANIFEST_FILE, ModulePath};
 
 use crate::analysis::{
-    FileReport, Live, Overlay, OverlayFile, PlainDiagnostic, PlainEdit, PlainHelp, PlainLabel,
-    Report, Session, SessionConfig, Snapshot, Symbol, SymbolNs, SymbolTarget,
+    FileReport, Live, Overlay, OverlayFile, PackageKind, PlainDiagnostic, PlainEdit, PlainHelp,
+    PlainLabel, Report, Session, SessionConfig, Snapshot, Symbol, SymbolNs, SymbolTarget,
 };
 use crate::frontend::{Retain, RunExtras, run_analysis};
 
@@ -132,6 +132,7 @@ fn session(root: &Path) -> Session {
 fn session_with(root: &Path, globals: Arc<Globals>) -> Session {
     Session::new(SessionConfig {
         root: root.to_path_buf(),
+        kind: PackageKind::Package,
         target: None,
         globals,
     })

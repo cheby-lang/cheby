@@ -37,6 +37,7 @@
 #![deny(clippy::print_stdout)]
 
 mod analysis_thread;
+mod features;
 mod server;
 mod text;
 
@@ -64,9 +65,11 @@ pub fn run(options: ServerOptions) -> ExitCode {
     let (connection, io) = Connection::stdio();
     match server::serve(connection, options) {
         Ok(ended) => {
-            // The reader ends at `exit` or at the end of input. A client
-            // that stopped reading may leave it blocked on stdin, so the
-            // threads are joined only in the first two cases.
+            // The reader ends at `exit`, at the end of input, or at a
+            // frame whose body is not a JSON-RPC message. A client that
+            // stopped reading may leave it blocked on stdin, so the threads
+            // are joined only in those cases. A malformed frame ends the
+            // server with status 1 and this one line on stderr (D-1430).
             if ended.joinable
                 && let Err(e) = io.join()
             {

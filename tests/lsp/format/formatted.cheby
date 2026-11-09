@@ -1,0 +1,7 @@
+// @requests: formatting
+//! A file already in `cheby fmt`'s form gets no edit.
+
+fn main() {
+  let n = 1
+  assert n == 1
+}

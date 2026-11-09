@@ -1,13 +1,26 @@
 //! `didOpen`, `didChange`, `didClose` and `didSave` (A §3.2, §5).
 //!
 //! The server keeps each open document's text, edited in place by
-//! incremental changes, and routes the document to its package by the
-//! nearest `cheby.toml` (D-1375). A package gets a session at its first
-//! open document. With no file watcher yet, an open, close or save also
-//! sweeps the package's files on disk (A §8.3), so a file deleted or
-//! changed outside the editor shows at the next of them.
+//! incremental changes, and routes the document by its own path
+//! (`sessions`, A §6.4). A package gets a session at its first open
+//! document. An open, close or save also sweeps the package's files on
+//! disk (A §8.3, D-1374), so a file deleted or changed outside the editor
+//! shows at the next of them even when no watcher reports it.
+//!
+//! Zed restarts a document's version at 0 after every close and open, and
+//! reports a rename of an open file as `didClose` of the old URI then
+//! `didOpen` of the new one (cp-notes, CP1). Neither needs anything here:
+//! a text is named by its edit stamp, which rises at every open and edit
+//! and never restarts, not by its version (D-1445, `schedule`), and the
+//! old path leaves the package at the close's sweep, which publishes its
+//! one empty list (D-1373). `didOpen` and `didClose` forget the path's
+//! last publish, so the next one is sent even when unchanged (D-1442).
+//!
+//! A document outside every package, or inside one without being one of
+//! its modules, gets a single-file session of its own at its open, which
+//! ends at its close with one empty publish (D-1371, `sessions`).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
@@ -17,13 +30,14 @@ use serde_json::Value;
 
 use super::Server;
 use super::schedule::Urgency;
-use super::state::{Doc, Package, package_root};
+use super::sessions::DocRoute;
+use super::state::Doc;
 use crate::analysis_thread::Changed;
 use crate::text::lines::apply_change;
 use crate::text::uri::normalize;
 
 /// A sweep of disk, for open, close and save.
-const SWEEP: Changed = Changed {
+pub(crate) const SWEEP: Changed = Changed {
     sweep: true,
     paths: Vec::new(),
 };
@@ -42,10 +56,11 @@ impl Server {
             );
             return;
         };
-        let root = package_root(&path);
-        if let Some(root) = &root {
-            self.ensure_package(root);
-        }
+        let route = self.route_of(&path);
+        let root = route.root().map(std::path::Path::to_path_buf);
+        self.ensure_route(&route);
+        self.forget_publish(&path);
+        // The text's identity for requests and publishes (D-1445).
         let stamp = self.next_stamp();
         self.docs.insert(
             path,
@@ -55,12 +70,18 @@ impl Server {
                 shared: None,
                 stamp,
                 root: root.clone(),
+                route,
+                diverged: false,
             },
         );
         if let Some(root) = root {
             self.touch(&root, stamp);
             self.mark_dirty(&root, SWEEP, Urgency::Flush);
+            self.settle(&root);
         }
+        // With no watcher, an open may be the first news of a `cheby.toml`
+        // that came or went above another open document.
+        self.reroute();
     }
 
     /// `textDocument/didChange`.
@@ -71,6 +92,7 @@ impl Server {
         let Some(path) = self.open_path(&params.text_document.uri) else {
             return;
         };
+        // A new text: a request names it by this stamp (D-1445).
         let stamp = self.next_stamp();
         let encoding = self.encoding;
         let Some(doc) = self.docs.get_mut(&path) else {
@@ -83,7 +105,20 @@ impl Server {
         doc.version = params.text_document.version;
         doc.shared = None;
         doc.stamp = stamp;
+        // An edited std file no longer matches std's snapshot, so its
+        // snapshot requests get their fallback from now on (A §6.3).
+        let diverged = doc.route == DocRoute::Std && !doc.diverged;
+        doc.diverged |= doc.route == DocRoute::Std;
         let root = doc.root.clone();
+        if diverged {
+            self.log(
+                MessageType::INFO,
+                format!(
+                    "{} is a std source; edits to it are not analyzed",
+                    path.display()
+                ),
+            );
+        }
         if lost {
             self.log(
                 MessageType::WARNING,
@@ -108,12 +143,21 @@ impl Server {
             return;
         };
         let doc = self.docs.remove(&path);
-        self.uris.remove(&path);
-        if let Some(root) = doc.and_then(|doc| doc.root) {
-            let stamp = self.next_stamp();
-            self.touch(&root, stamp);
-            self.mark_dirty(&root, SWEEP, Urgency::Flush);
+        self.forget_publish(&path);
+        match doc.map(|doc| (doc.root, doc.route)) {
+            // Nothing refreshes a closed file outside every package, so its
+            // session ends now, with one empty publish (D-1371, D-1373).
+            Some((Some(root), DocRoute::SingleFile { .. })) => self.end_session(&root),
+            Some((Some(root), _)) => {
+                let stamp = self.next_stamp();
+                self.touch(&root, stamp);
+                self.mark_dirty(&root, SWEEP, Urgency::Flush);
+                self.settle(&root);
+            }
+            Some((None, _)) | None => {}
         }
+        self.uris.remove(&path);
+        self.reroute();
     }
 
     /// `textDocument/didSave`: disk may have changed, here and elsewhere.
@@ -132,32 +176,14 @@ impl Server {
             };
             self.mark_dirty(&root, changed, Urgency::Flush);
         }
+        // A document outside every package rejoins one whose `cheby.toml`
+        // appeared, even when no watcher reported it (A §8.2, §8.3).
+        self.reroute();
     }
 
     /// The path of an open document, by any spelling of its URI.
     fn open_path(&self, uri: &Uri) -> Option<PathBuf> {
         let path = normalize(&crate::text::uri::uri_to_path(uri)?);
         self.docs.contains_key(&path).then_some(path)
-    }
-
-    /// A session for the package at `root`, made if it has none.
-    pub(crate) fn ensure_package(&mut self, root: &Path) {
-        if !self.packages.contains_key(root) {
-            self.packages
-                .insert(root.to_path_buf(), Package::new(root.to_path_buf()));
-        }
-    }
-
-    /// The order of the next edit.
-    fn next_stamp(&mut self) -> u64 {
-        self.stamp = self.stamp.saturating_add(1);
-        self.stamp
-    }
-
-    /// Records `stamp` as the package's newest edit.
-    fn touch(&mut self, root: &Path, stamp: u64) {
-        if let Some(package) = self.packages.get_mut(root) {
-            package.last_edit = stamp;
-        }
     }
 }

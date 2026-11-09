@@ -79,7 +79,7 @@ use cheby_mir::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, count_and_check_with,
     lower_entries, lower_items, lower_tests,
 };
-use cheby_package::{Manifest, ModulePath, Target, Targets};
+use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, Target, Targets};
 use cheby_resolve::repl::{Entered, SessionScope};
 use cheby_resolve::{
     Lookup, ModuleLookup, ResolveInput, ResolvedModule, StdCatalog, closest_name, collect_imports,
@@ -2855,16 +2855,36 @@ fn no_package(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Package, Error> {
-    const MANIFEST: &str = "name = \"repl\"\nversion = \"0.0.0\"\n";
-    let file = sources
-        .add_file("<repl>/cheby.toml".to_owned(), MANIFEST)
-        .map_err(|e| Error::new(e.to_string()))?;
-    let manifest = Manifest::parse(file, MANIFEST, diagnostics)
-        .ok_or_else(|| Error::new("internal compiler error: the REPL's manifest".to_owned()))?;
+    let manifest = synthetic_manifest("repl", sources, diagnostics)?;
     Ok(Package {
         root: dir.to_path_buf(),
         manifest,
         modules: Vec::new(),
+    })
+}
+
+/// The text of the manifest of a package named `name` that has no
+/// `cheby.toml`: the REPL's outside any package, and single-file mode's
+/// (D-1371).
+pub(crate) fn synthetic_manifest_text(name: &str) -> String {
+    format!("name = \"{name}\"\nversion = \"0.0.0\"\n")
+}
+
+/// The manifest of [`synthetic_manifest_text`], in `sources` as
+/// `<name>/cheby.toml`, which names no file.
+pub(crate) fn synthetic_manifest(
+    name: &str,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Manifest, Error> {
+    let text = synthetic_manifest_text(name);
+    let file = sources
+        .add_file(format!("<{name}>/{MANIFEST_FILE}"), text.as_str())
+        .map_err(|e| Error::new(e.to_string()))?;
+    Manifest::parse(file, &text, diagnostics).ok_or_else(|| {
+        Error::new(format!(
+            "internal compiler error: the synthetic manifest of `{name}`"
+        ))
     })
 }
 

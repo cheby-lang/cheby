@@ -13,6 +13,12 @@
 //! server does not know is skipped with a warning too. A bad setting never
 //! stops the server. A `null` value means no opinion, except for
 //! `analysis.target`, where it means no target.
+//!
+//! A `didChangeConfiguration` push is read from its `settings.cheby`
+//! ([`pushed`]). Only a push without that key makes the server ask with
+//! `workspace/configuration`: Zed sends the key to every Cheby server,
+//! also when nothing changed, so asking after each push would only double
+//! the traffic (CP1).
 
 use std::time::Duration;
 
@@ -206,6 +212,13 @@ fn target_name<S: serde::Serializer>(
         Some(target) => serializer.serialize_str(target.as_str()),
         None => serializer.serialize_none(),
     }
+}
+
+/// The `cheby` object of a `didChangeConfiguration` push,
+/// `params.settings.cheby` (D-1376). `None` when the push lacks the key,
+/// so the server asks for it instead.
+pub(crate) fn pushed(params: &Value) -> Option<&Value> {
+    params.get("settings")?.get("cheby")
 }
 
 impl Settings {
@@ -482,5 +495,32 @@ fn kind(value: &Value) -> &'static str {
         Value::String(_) => "a string",
         Value::Array(_) => "a list",
         Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// D-1376: the push's `settings.cheby` is the object itself; a push
+    /// without the key, or with a key of another server, gives `None`, so
+    /// the server pulls.
+    #[test]
+    fn pushed_reads_settings_cheby() {
+        let object = json!({ "analysis": { "debounceMs": 5 } });
+        let push = json!({ "settings": { "cheby": object.clone() } });
+        assert_eq!(pushed(&push), Some(&object));
+        let null = json!({ "settings": { "cheby": null } });
+        assert_eq!(pushed(&null), Some(&Value::Null));
+        for lacking in [
+            json!({}),
+            json!({ "settings": null }),
+            json!({ "settings": {} }),
+            json!({ "settings": { "rust-analyzer": {} } }),
+        ] {
+            assert_eq!(pushed(&lacking), None, "{lacking}");
+        }
     }
 }

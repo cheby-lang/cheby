@@ -43,7 +43,8 @@ use cheby_package::MANIFEST_FILE;
 use cheby_syntax::{SyntaxKind as K, SyntaxNode, SyntaxTree};
 
 use super::{
-    FileLocation, FileReport, Overlay, OverlayFile, Res, ResolvedModule, Session, SessionConfig,
+    FileLocation, FileReport, Overlay, OverlayFile, PackageKind, Res, ResolvedModule, Session,
+    SessionConfig,
 };
 
 const UI_MANIFEST: &str = "name = \"ui_test\"\nversion = \"0.1.0\"\n";
@@ -662,6 +663,7 @@ fn step(session: &mut Session, root: &Path, overlay: &Overlay, what: &str, tally
 fn new_session(root: &Path, globals: &Arc<Globals>) -> Session {
     Session::new(SessionConfig {
         root: root.to_path_buf(),
+        kind: PackageKind::Package,
         target: None,
         globals: Arc::clone(globals),
     })

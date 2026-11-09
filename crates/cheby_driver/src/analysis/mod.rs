@@ -14,7 +14,9 @@
 //!   immutable [`Snapshot`] for queries and [`FileReport`]s to publish.
 //!   It runs the two-track algorithm (D-1347): a [`Live`] that is not the
 //!   check carries a [`StrictPlan`], which [`Session::analyze_strict`]
-//!   runs as the D run.
+//!   runs as the D run. A session of [`PackageKind::SingleFile`] analyzes
+//!   one file that is no module of any package, under a synthetic manifest
+//!   (D-1371).
 //! - [`StdBase`]: every shipped std module checked once, with its plain
 //!   [`StdIndex`], and [`materialize_std`] for std's files on disk
 //!   (D-1369, D-1372).
@@ -34,6 +36,8 @@ mod std_base;
 mod symbol;
 mod verify;
 
+#[cfg(test)]
+mod single_tests;
 #[cfg(test)]
 mod std_base_tests;
 #[cfg(test)]
@@ -75,7 +79,7 @@ pub use plain::{
     InputsKey, NormMap, Placed, PlainDiagnostic, PlainEdit, PlainHelp, PlainLabel, exact_key,
     normalize, normalized_key, plain,
 };
-pub use session::{FileReport, Live, Report, Session, SessionConfig, StrictPlan};
+pub use session::{FileReport, Live, PackageKind, Report, Session, SessionConfig, StrictPlan};
 pub use snapshot::{
     AnalysisStatus, BaselineEntry, FileLocation, ModuleView, Snapshot, SnapshotId, SymbolTarget,
 };

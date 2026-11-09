@@ -6,8 +6,10 @@
 //!   failure and not a skipped line (A §3.7).
 //! - [`client`]: [`Client`], one `cheby lsp` child process spoken to over
 //!   pipes, with timeouts on every wait, automatic answers to the server's
-//!   own requests, and the deterministic wait for diagnostics: an open
-//!   document always gets a publish with its version (D-1373).
+//!   own requests, and the deterministic wait for diagnostics: each new
+//!   version of an open document gets a publish with that version, and so
+//!   does an opened document, even with an unchanged list (D-1373,
+//!   D-1442).
 //! - [`uri`]: `file:` URIs and paths, with the Windows rules testable on
 //!   every platform.
 //! - [`text`]: positions in the three encodings (D-1368), the compiler's
@@ -16,6 +18,8 @@
 //!   caret markers (`tests/lsp/README.md`).
 //! - [`parity`]: diagnostics as `cheby check` prints them and as the server
 //!   publishes them, reduced to one comparable key (D-1348).
+//! - [`outline`]: the outline a `documentSymbol` answer must give, read
+//!   from the parser's item list (`features.md` §5.1).
 //!
 //! `serde_json` is re-exported, so the harness, a test target of
 //! `cheby_cli`, needs no dependency of its own.
@@ -25,6 +29,7 @@ pub use serde_json;
 pub mod case;
 pub mod client;
 pub mod frame;
+pub mod outline;
 pub mod parity;
 pub mod text;
 pub mod uri;

@@ -1,0 +1,6 @@
+// @requests: formatting
+//! A file that does not parse is not formatted: the answer is null.
+
+fn main() {
+  let pair = (1,
+}

@@ -1,0 +1,13 @@
+// @client: empty
+// @requests: documentSymbol
+//! A client without hierarchical symbols gets a flat list, children named by their container.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  assert p.x == 1
+}

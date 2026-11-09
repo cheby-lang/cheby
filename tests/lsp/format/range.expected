@@ -1,0 +1,49 @@
+== diagnostics
+{}
+
+== src/main.cheby:6:11 rangeFormatting
+[
+  {
+    "newText": "  let a = [1, 2]\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 6
+      },
+      "start": {
+        "character": 0,
+        "line": 5
+      }
+    }
+  }
+]
+
+== src/main.cheby formatting
+[
+  {
+    "newText": "  let a = [1, 2]\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 6
+      },
+      "start": {
+        "character": 0,
+        "line": 5
+      }
+    }
+  },
+  {
+    "newText": "  let b = [3, 4]\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 8
+      },
+      "start": {
+        "character": 0,
+        "line": 7
+      }
+    }
+  }
+]

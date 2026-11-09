@@ -1,0 +1,76 @@
+== diagnostics
+{}
+
+== src/main.cheby documentSymbol
+[
+  {
+    "kind": 23,
+    "location": {
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 7
+        },
+        "start": {
+          "character": 0,
+          "line": 4
+        }
+      },
+      "uri": "src/main.cheby"
+    },
+    "name": "Point"
+  },
+  {
+    "containerName": "Point",
+    "kind": 8,
+    "location": {
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 5
+        },
+        "start": {
+          "character": 2,
+          "line": 5
+        }
+      },
+      "uri": "src/main.cheby"
+    },
+    "name": "x"
+  },
+  {
+    "containerName": "Point",
+    "kind": 8,
+    "location": {
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 6
+        },
+        "start": {
+          "character": 2,
+          "line": 6
+        }
+      },
+      "uri": "src/main.cheby"
+    },
+    "name": "y"
+  },
+  {
+    "kind": 12,
+    "location": {
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 12
+        },
+        "start": {
+          "character": 0,
+          "line": 9
+        }
+      },
+      "uri": "src/main.cheby"
+    },
+    "name": "main"
+  }
+]

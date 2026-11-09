@@ -2,6 +2,14 @@
 //! handshake's capabilities, the settings of plan §1.9 and the publishing
 //! rules of A §8.4. `analysis.debounceMs` is 0 where runs matter, so the
 //! published versions give the order and no clock is needed.
+//!
+//! The client and the packages here serve `session_tests` too. Since a
+//! publish that changes nothing is skipped (D-1442), a test that needs a
+//! job to have finished waits for a publish the job changes, such as the
+//! next version's after an edit, since a package's jobs run in order.
+//! `cheby/testSettings`, answered on the main loop, only orders it: the
+//! answer comes after every notification the main loop sent for the
+//! messages before it, and waits for no job.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -17,23 +25,25 @@ use crate::text::uri::path_to_uri;
 use crate::{ServerOptions, run_on};
 
 /// How long a test waits for one message: the first run checks std.
-const WAIT: Duration = Duration::from_secs(120);
+pub(super) const WAIT: Duration = Duration::from_secs(120);
 
 /// A client talking to a server on its own thread.
-struct Client {
+pub(super) struct Client {
     connection: Connection,
     server: Option<JoinHandle<Result<ExitCode, String>>>,
     next_id: i32,
     /// Answers to `workspace/configuration`, in order; `[null]` after.
     config_answers: VecDeque<Value>,
     /// Every notification received, in order.
-    notifications: Vec<Notification>,
+    pub(super) notifications: Vec<Notification>,
+    /// Every request of the server received, in order.
+    pub(super) requests: Vec<Request>,
 }
 
 impl Client {
     /// Starts a server and sends `initialize` with `params`, and
     /// `initialized`. Returns the client and the `initialize` result.
-    fn start(params: Value, config_answers: Vec<Value>) -> (Self, Value) {
+    pub(super) fn start(params: Value, config_answers: Vec<Value>) -> (Self, Value) {
         let (server_side, client_side) = Connection::memory();
         let options = ServerOptions {
             build: BuildId([0; 16]),
@@ -50,20 +60,21 @@ impl Client {
             next_id: 0,
             config_answers: config_answers.into(),
             notifications: Vec::new(),
+            requests: Vec::new(),
         };
         let result = client.request("initialize", params).unwrap();
         client.notify("initialized", json!({}));
         (client, result)
     }
 
-    fn notify(&self, method: &str, params: Value) {
+    pub(super) fn notify(&self, method: &str, params: Value) {
         let message = Notification::new(method.to_owned(), params);
         self.connection.sender.send(message.into()).unwrap();
     }
 
     /// Sends a request and waits for its answer, handling everything that
     /// arrives before it.
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, i32> {
+    pub(super) fn request(&mut self, method: &str, params: Value) -> Result<Value, i32> {
         self.next_id = self.next_id.checked_add(1).unwrap();
         let id = RequestId::from(self.next_id);
         let request = Request::new(id.clone(), method.to_owned(), params);
@@ -78,7 +89,7 @@ impl Client {
     }
 
     /// The next message, after answering a request of the server.
-    fn next(&mut self) -> Message {
+    pub(super) fn next(&mut self) -> Message {
         let message = self
             .connection
             .receiver
@@ -95,6 +106,7 @@ impl Client {
                 };
                 let response = Response::new_ok(request.id.clone(), result);
                 self.connection.sender.send(response.into()).unwrap();
+                self.requests.push(request.clone());
             }
             Message::Notification(notification) => self.notifications.push(notification.clone()),
             Message::Response(_) => {}
@@ -103,19 +115,30 @@ impl Client {
     }
 
     /// Waits for a server request of `method`, answering it.
-    fn wait_request(&mut self, method: &str) {
+    pub(super) fn wait_request(&mut self, method: &str) -> Request {
+        self.wait_request_that(method, |_| true)
+    }
+
+    /// Waits for a server request of `method` whose parameters `accept`
+    /// takes, answering every request on the way.
+    pub(super) fn wait_request_that(
+        &mut self,
+        method: &str,
+        accept: impl Fn(&Value) -> bool,
+    ) -> Request {
         loop {
             if let Message::Request(request) = self.next()
                 && request.method == method
+                && accept(&request.params)
             {
-                return;
+                return request;
             }
         }
     }
 
     /// The first `publishDiagnostics` of `path` that `accept` takes, among
     /// those received so far and then those to come.
-    fn wait_publish(&mut self, path: &Path, accept: impl Fn(&Value) -> bool) -> Value {
+    pub(super) fn wait_publish(&mut self, path: &Path, accept: impl Fn(&Value) -> bool) -> Value {
         let uri = uri(path);
         let deadline = Instant::now().checked_add(WAIT).unwrap();
         let mut seen = 0;
@@ -140,7 +163,7 @@ impl Client {
     }
 
     /// Every publish of `path` received so far.
-    fn publishes(&self, path: &Path) -> Vec<Value> {
+    pub(super) fn publishes(&self, path: &Path) -> Vec<Value> {
         let uri = uri(path);
         self.notifications
             .iter()
@@ -150,12 +173,12 @@ impl Client {
     }
 
     /// The settings in force.
-    fn settings(&mut self) -> Value {
+    pub(super) fn settings(&mut self) -> Value {
         self.request("cheby/testSettings", Value::Null).unwrap()
     }
 
     /// The `window/logMessage` texts received so far.
-    fn logs(&self) -> Vec<String> {
+    pub(super) fn logs(&self) -> Vec<String> {
         self.notifications
             .iter()
             .filter(|n| n.method == "window/logMessage")
@@ -164,7 +187,7 @@ impl Client {
     }
 
     /// `shutdown`, then `exit`: the server ends with status 0.
-    fn stop(mut self) {
+    pub(super) fn stop(mut self) {
         assert_eq!(self.request("shutdown", Value::Null), Ok(Value::Null));
         self.notify("exit", Value::Null);
         let code = self.server.take().unwrap().join().unwrap().unwrap();
@@ -173,12 +196,12 @@ impl Client {
 }
 
 /// The URI the server uses for `path`.
-fn uri(path: &Path) -> Value {
+pub(super) fn uri(path: &Path) -> Value {
     json!(path_to_uri(path).unwrap().as_str())
 }
 
 /// A package in a fresh temporary directory, removed on drop.
-struct Temp(PathBuf);
+pub(super) struct Temp(pub(super) PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
@@ -188,7 +211,7 @@ impl Drop for Temp {
 
 impl Temp {
     /// A package `name` with a manifest and these files.
-    fn package(name: &str, files: &[(&str, &str)]) -> Self {
+    pub(super) fn package(name: &str, files: &[(&str, &str)]) -> Self {
         let dir = std::env::temp_dir().join(format!("cheby_lsp_{}_{name}", std::process::id()));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
@@ -196,19 +219,21 @@ impl Temp {
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("cheby.toml"), MANIFEST).unwrap();
         for (path, text) in files {
-            std::fs::write(dir.join(path), text).unwrap();
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
         }
         Self(crate::text::uri::normalize(
             &std::path::absolute(dir).unwrap(),
         ))
     }
 
-    fn at(&self, file: &str) -> PathBuf {
+    pub(super) fn at(&self, file: &str) -> PathBuf {
         self.0.join(file)
     }
 
     /// `initialize` parameters with this package as the root.
-    fn params(&self, extra: &Value) -> Value {
+    pub(super) fn params(&self, extra: &Value) -> Value {
         let mut params = json!({
             "capabilities": {},
             "rootUri": uri(&self.0),
@@ -223,16 +248,16 @@ impl Temp {
     }
 }
 
-const MANIFEST: &str = "name = \"app\"\nversion = \"0.1.0\"\n";
-const MAIN: &str = "//! Root.\n\nfn main() {\n  let _ = 1\n}\n";
-const MAIN_BAD: &str = "//! Root.\n\nfn main() {\n  let x: Int = \"no\"\n}\n";
+pub(super) const MANIFEST: &str = "name = \"app\"\nversion = \"0.1.0\"\n";
+pub(super) const MAIN: &str = "//! Root.\n\nfn main() {\n  let _ = 1\n}\n";
+pub(super) const MAIN_BAD: &str = "//! Root.\n\nfn main() {\n  let x: Int = \"no\"\n}\n";
 /// A clean module.
-const B: &str = "//! B.\n\npub fn g() -> Int {\n  2\n}\n";
+pub(super) const B: &str = "//! B.\n\npub fn g() -> Int {\n  2\n}\n";
 /// A module with a type error.
-const BAD: &str = "//! Bad.\n\npub fn f() -> Int {\n  \"x\"\n}\n";
+pub(super) const BAD: &str = "//! Bad.\n\npub fn f() -> Int {\n  \"x\"\n}\n";
 
 /// The codes of a publish's diagnostics.
-fn codes(publish: &Value) -> Vec<String> {
+pub(super) fn codes(publish: &Value) -> Vec<String> {
     publish["diagnostics"]
         .as_array()
         .unwrap()
@@ -241,7 +266,7 @@ fn codes(publish: &Value) -> Vec<String> {
         .collect()
 }
 
-fn has_error(publish: &Value) -> bool {
+pub(super) fn has_error(publish: &Value) -> bool {
     publish["diagnostics"]
         .as_array()
         .unwrap()
@@ -249,11 +274,11 @@ fn has_error(publish: &Value) -> bool {
         .any(|d| d["severity"] == 1)
 }
 
-fn is_empty(publish: &Value) -> bool {
+pub(super) fn is_empty(publish: &Value) -> bool {
     publish["diagnostics"].as_array().is_some_and(Vec::is_empty)
 }
 
-fn open(client: &Client, path: &Path, text: &str, version: i32) {
+pub(super) fn open(client: &Client, path: &Path, text: &str, version: i32) {
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": {
@@ -263,7 +288,7 @@ fn open(client: &Client, path: &Path, text: &str, version: i32) {
 }
 
 /// Replaces the whole text of an open document.
-fn change(client: &Client, path: &Path, text: &str, version: i32) {
+pub(super) fn change(client: &Client, path: &Path, text: &str, version: i32) {
     client.notify(
         "textDocument/didChange",
         json!({
@@ -273,20 +298,34 @@ fn change(client: &Client, path: &Path, text: &str, version: i32) {
     );
 }
 
+/// The capabilities the server advertises with `encoding`, the same for
+/// every client (plan §1.10).
+fn advertised(encoding: &str) -> Value {
+    json!({
+        "positionEncoding": encoding,
+        "textDocumentSync": {
+            "openClose": true,
+            "change": 2,
+            "save": { "includeText": false },
+        },
+        "selectionRangeProvider": true,
+        "documentSymbolProvider": true,
+        "documentFormattingProvider": true,
+        "documentRangeFormattingProvider": true,
+        "foldingRangeProvider": true,
+        "workspace": {
+            "workspaceFolders": { "supported": true, "changeNotifications": true },
+        },
+    })
+}
+
 #[test]
 fn capabilities_with_empty_client() {
     let (client, result) = Client::start(json!({ "capabilities": {} }), Vec::new());
     assert_eq!(
         result,
         json!({
-            "capabilities": {
-                "positionEncoding": "utf-16",
-                "textDocumentSync": {
-                    "openClose": true,
-                    "change": 2,
-                    "save": { "includeText": false },
-                },
-            },
+            "capabilities": advertised("utf-16"),
             "serverInfo": { "name": "cheby", "version": env!("CARGO_PKG_VERSION") },
         })
     );
@@ -322,17 +361,7 @@ fn capabilities_with_full_client() {
         (json!(["utf-16"]), "utf-16"),
     ] {
         let (mut client, result) = Client::start(full(offered), Vec::new());
-        assert_eq!(
-            result["capabilities"],
-            json!({
-                "positionEncoding": chosen,
-                "textDocumentSync": {
-                    "openClose": true,
-                    "change": 2,
-                    "save": { "includeText": false },
-                },
-            })
-        );
+        assert_eq!(result["capabilities"], advertised(chosen));
         // A client that can register is asked for its settings changes.
         client.wait_request("client/registerCapability");
         client.stop();

@@ -13,13 +13,21 @@
 //!   `window/workDoneProgress/create` and the rest), or a request of the
 //!   client would deadlock behind them.
 //! - [`Client::diagnostics`] waits for a `publishDiagnostics` of one URI
-//!   with one version, which the server always sends for an open document
-//!   after its analysis, an empty list included (D-1373). So waits need no
+//!   with one version, which the server sends for each new version of an
+//!   open document after its analysis, an empty list included (D-1373),
+//!   and again after `didOpen` and `didClose`, which forget the last
+//!   publish (D-1442). A run that changes no version and no list sends
+//!   nothing (D-1442), so a trial never waits for a publish after
+//!   `didSave` or a settings change, and a request waits only for the text
+//!   it names (D-1367, D-1443), not for such a run. A trial that must know
+//!   the run finished sends an edit and waits for that version's publish,
+//!   since a package's jobs run in order. `cheby/idle` (D-1415), the
+//!   barrier D-1443 names for that, is not sent yet. So waits need no
 //!   sleep.
 //! - Dropping a client kills the process.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::io::{BufReader, Read as _};
+use std::io::{BufReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -196,7 +204,10 @@ fn text_document_capabilities() -> Value {
             "dataSupport": true,
         },
         "hover": { "contentFormat": ["markdown", "plaintext"] },
-        "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+        "documentSymbol": {
+            "hierarchicalDocumentSymbolSupport": true,
+            "tagSupport": { "valueSet": [1] },
+        },
         "completion": {
             "contextSupport": true,
             "completionItem": {
@@ -722,6 +733,23 @@ impl Client {
         self.send(&message(None, method, params))
     }
 
+    /// Writes `body` as one frame, whatever it holds, for tests of frames
+    /// that are not JSON-RPC (D-1430).
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the server's input is closed.
+    pub fn send_raw(&mut self, body: &[u8]) -> Result<(), String> {
+        let stdin = self.stdin.as_mut().ok_or("the server's input is closed")?;
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        stdin
+            .write_all(header.as_bytes())
+            .and_then(|()| stdin.write_all(body))
+            .and_then(|()| stdin.flush())
+            .map_err(|e| format!("cannot write to the server: {e}"))
+            .map_err(|e| self.fail(&e))
+    }
+
     /// Writes one raw message, for tests of malformed input.
     ///
     /// # Errors
@@ -830,15 +858,26 @@ impl Client {
     ///
     /// Returns a message if the server's input is closed.
     pub fn open_text(&mut self, uri: &str, text: &str) -> Result<(), String> {
+        self.open_version(uri, text, 1)
+    }
+
+    /// Opens `uri` with `text` as `version`. Zed starts again at 0 when it
+    /// reopens a path (CP1), so a version may be lower than the one the
+    /// path had before it was closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the server's input is closed.
+    pub fn open_version(&mut self, uri: &str, text: &str, version: i32) -> Result<(), String> {
         let toml = Path::new(uri)
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("toml"));
         let language = if toml { "toml" } else { "cheby" };
-        self.versions.insert(uri.to_owned(), 1);
+        self.versions.insert(uri.to_owned(), version);
         self.notify(
             "textDocument/didOpen",
             json!({ "textDocument": {
-                "uri": uri, "languageId": language, "version": 1, "text": text,
+                "uri": uri, "languageId": language, "version": version, "text": text,
             } }),
         )
     }
@@ -968,6 +1007,17 @@ impl Client {
     /// Returns a message if the process does not end in time.
     pub fn end_input(mut self) -> Result<Ended, String> {
         drop(self.stdin.take());
+        self.wait_end()
+    }
+
+    /// Waits for the session to end with its input still open, as after a
+    /// frame that ends the server (D-1430): the end is then the server's
+    /// own, not the end of input's.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the process does not end in time.
+    pub fn wait_end(mut self) -> Result<Ended, String> {
         let deadline = self.deadline();
         // Read the rest of the output, so `published` and `frames` are
         // complete.

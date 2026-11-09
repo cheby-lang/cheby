@@ -380,7 +380,7 @@ pub(crate) fn load(
 /// Adds one module's text to `sources` and parses it as [`parse_file`]
 /// does. A file that is not UTF-8 gets the tree of an empty text, so the
 /// front end has a tree for every module.
-fn load_module(
+pub(super) fn load_module(
     sources: &mut SourceMap,
     path: ModulePath,
     display: &str,

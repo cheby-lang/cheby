@@ -83,7 +83,7 @@ mod warm_keys;
 
 pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_package::Target;
-pub use cheby_package::{is_valid_name, suggest_name};
+pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
     TestResult, prepare_test, prepare_test_cached, test_std,

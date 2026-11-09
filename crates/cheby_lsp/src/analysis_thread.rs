@@ -1,16 +1,18 @@
 //! The one analysis thread, `cheby-analysis` (A §3.1, §3.2).
 //!
-//! It owns every [`Session`], one per package root, and runs one [`Job`]
-//! at a time: phase A and the Q run on the job's overlay, then the D run
-//! when the Q run plans one and no newer change superseded the job
-//! (D-1347). Each result goes back to the main loop as an [`Event`]. The
-//! main loop sends a package's next job only after that job's last event,
-//! so jobs of one package never overlap.
+//! It owns every [`Session`], one per package root or single-file
+//! document (D-1371), until the main loop drops it with [`Work::Drop`]
+//! (A §6.5). It runs one [`Job`] at a time: phase A and the Q run on the
+//! job's overlay, then the D run when the Q run plans one and no newer
+//! change superseded the job (D-1347). Each result goes back to the main
+//! loop as an [`Event`]. The main loop sends a package's next job only
+//! after that job's last event, so jobs of one package never overlap.
 //!
-//! A panic in a run is caught here, so it ends that run only (A §3.7). A
-//! `Session` changes its own state only at commit points after a run, so
-//! it stays usable after one. A panic while it forgets what changed on
-//! disk, before the run, is caught too, and that session is dropped.
+//! A panic in a run is caught here, so it ends that run only (A §3.7,
+//! D-1362). A `Session` changes its own state only at commit points after
+//! a run, so it stays usable after one. A panic while it forgets what
+//! changed on disk, before the run, is caught too, and that session is
+//! dropped (D-1431).
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -18,7 +20,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cheby_driver::analysis::{Globals, Live, Overlay, Report, Session, SessionConfig, Target};
+use cheby_driver::analysis::{
+    Globals, Live, Overlay, PackageKind, Report, Session, SessionConfig, Target,
+};
 use crossbeam_channel::{Receiver, Sender};
 
 /// The analysis thread's stack. The compiler recurses over trees, so it
@@ -50,8 +54,12 @@ impl Changed {
 /// One run of one package.
 #[derive(Debug)]
 pub(crate) struct Job {
-    /// The package root, which names its session.
+    /// The package root, which names its session, or the file of a
+    /// single-file session (D-1371).
     pub root: PathBuf,
+    /// A package, or single-file mode on the file at `root`: a session of
+    /// another kind is replaced.
+    pub kind: PackageKind,
     /// `analysis.target`: a session with another target is replaced.
     pub target: Option<Target>,
     /// The open documents of the package.
@@ -61,6 +69,19 @@ pub(crate) struct Job {
     /// Set by the main loop at the package's next change: the D run is
     /// then skipped, since a newer job follows.
     pub superseded: Arc<AtomicBool>,
+    /// A test makes this job's Q run panic after it ran, so that its
+    /// result is lost as a panic in the run would lose it (R-14).
+    #[cfg(test)]
+    pub panic: bool,
+}
+
+/// What the main loop sends the analysis thread.
+#[derive(Debug)]
+pub(crate) enum Work {
+    /// Run a job.
+    Run(Job),
+    /// The session of this package root ended: drop its `Session`.
+    Drop(PathBuf),
 }
 
 /// Why a run gave no result.
@@ -108,8 +129,8 @@ pub(crate) enum Event {
 /// # Errors
 ///
 /// The error of a thread that cannot be started.
-pub(crate) fn spawn(globals: Arc<Globals>) -> std::io::Result<(Sender<Job>, Receiver<Event>)> {
-    let (job_tx, job_rx) = crossbeam_channel::unbounded::<Job>();
+pub(crate) fn spawn(globals: Arc<Globals>) -> std::io::Result<(Sender<Work>, Receiver<Event>)> {
+    let (job_tx, job_rx) = crossbeam_channel::unbounded::<Work>();
     let (event_tx, event_rx) = crossbeam_channel::unbounded::<Event>();
     std::thread::Builder::new()
         .name("cheby-analysis".to_owned())
@@ -118,32 +139,45 @@ pub(crate) fn spawn(globals: Arc<Globals>) -> std::io::Result<(Sender<Job>, Rece
     Ok((job_tx, event_rx))
 }
 
-/// A session with the target it was made for.
+/// A session with the kind and the target it was made for.
 struct Entry {
     session: Session,
+    kind: PackageKind,
     target: Option<Target>,
 }
 
 /// The job loop.
-fn run(jobs: &Receiver<Job>, events: &Sender<Event>, globals: &Arc<Globals>) {
+fn run(work: &Receiver<Work>, events: &Sender<Event>, globals: &Arc<Globals>) {
     let mut sessions: BTreeMap<PathBuf, Entry> = BTreeMap::new();
-    for job in jobs {
+    for item in work {
+        let job = match item {
+            Work::Run(job) => job,
+            Work::Drop(root) => {
+                sessions.remove(&root);
+                continue;
+            }
+        };
         let fresh = || Entry {
             session: Session::new(SessionConfig {
+                // A single-file session roots itself at its file's
+                // directory (A §6.4).
                 root: job.root.clone(),
+                kind: job.kind.clone(),
                 target: job.target,
                 globals: Arc::clone(globals),
             }),
+            kind: job.kind.clone(),
             target: job.target,
         };
         let entry = sessions.entry(job.root.clone()).or_insert_with(fresh);
-        if entry.target != job.target {
+        if entry.target != job.target || entry.kind != job.kind {
             *entry = fresh();
         }
         let session = &mut entry.session;
         // Forgetting changes the session's state before any commit point,
         // so a panic there may leave it half changed: it is dropped, and
-        // the package's next job starts a fresh one.
+        // the package's next job starts a fresh one with a cold run
+        // (D-1431).
         let forgot = catch(|| {
             if !job.changed.paths.is_empty() {
                 session.invalidate(&job.changed.paths);
@@ -167,7 +201,12 @@ fn run(jobs: &Receiver<Job>, events: &Sender<Event>, globals: &Arc<Globals>) {
             }
             continue;
         }
-        let live = catch(|| session.analyze_live(&job.overlay));
+        let live = catch(|| {
+            let live = session.analyze_live(&job.overlay);
+            #[cfg(test)]
+            assert!(!job.panic, "a run panicked on purpose");
+            live
+        });
         let (result, plan) = match live {
             Ok(mut live) => {
                 let plan = live.plan.take();

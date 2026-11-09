@@ -8,7 +8,7 @@ use cheby_iface::Globals;
 use cheby_package::MANIFEST_FILE;
 
 use super::{
-    Overlay, OverlayFile, PlainEdit, Session, SessionConfig, Snapshot, VerifyOutcome,
+    Overlay, OverlayFile, PackageKind, PlainEdit, Session, SessionConfig, Snapshot, VerifyOutcome,
     VerifyRequest, verify,
 };
 
@@ -55,6 +55,7 @@ fn snapshot(root: &Path, open: &[(&str, &str)]) -> Arc<Snapshot> {
     };
     let mut session = Session::new(SessionConfig {
         root: root.to_path_buf(),
+        kind: PackageKind::Package,
         target: None,
         globals: Arc::new(Globals::new()),
     });
@@ -582,6 +583,7 @@ fn concurrent_runs_share_globals() {
     let globals = Arc::new(Globals::new());
     let config = |globals: &Arc<Globals>| SessionConfig {
         root: temp.0.clone(),
+        kind: PackageKind::Package,
         target: None,
         globals: Arc::clone(globals),
     };
