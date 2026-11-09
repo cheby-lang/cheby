@@ -25,8 +25,8 @@ pub(super) enum View<'a> {
     String(&'a [u8]),
     /// A `Bytes`.
     Bytes(&'a [u8]),
-    /// A tuple's elements.
-    Tuple(Vec<Word>),
+    /// A tuple's elements, read in place.
+    Tuple(TupleFields),
     /// A closure (a function value).
     Closure,
     /// A constructor value and its layout.
@@ -50,6 +50,62 @@ pub(super) enum View<'a> {
     /// A dictionary, which values never contain where equality, hashing or
     /// printing can reach them.
     Internal(&'static LayoutInfo),
+}
+
+/// The elements of a live tuple, read from the object when asked for, so
+/// classifying a tuple allocates nothing.
+#[derive(Clone, Copy)]
+pub(super) struct TupleFields {
+    obj: *const u8,
+    count: usize,
+    /// The offset of the first element: 8, or 16 when the count is
+    /// escaped.
+    first: usize,
+}
+
+impl TupleFields {
+    /// The number of elements.
+    pub(super) const fn len(self) -> usize {
+        self.count
+    }
+
+    /// The element at `index`, borrowed, which is below [`Self::len`].
+    pub(super) fn get(self, index: usize) -> Word {
+        debug_assert!(index < self.count);
+        // SAFETY: a live tuple, not changed while its view is used, and
+        // `index` is within it.
+        unsafe { read_field(self.obj, index.saturating_mul(8).saturating_add(self.first)) }
+    }
+}
+
+impl IntoIterator for TupleFields {
+    type Item = Word;
+    type IntoIter = TupleIter;
+
+    fn into_iter(self) -> TupleIter {
+        TupleIter {
+            fields: self,
+            next: 0,
+        }
+    }
+}
+
+/// The elements of a tuple, front to back.
+pub(super) struct TupleIter {
+    fields: TupleFields,
+    next: usize,
+}
+
+impl Iterator for TupleIter {
+    type Item = Word;
+
+    fn next(&mut self) -> Option<Word> {
+        (self.next < self.fields.count).then(|| {
+            let word = self.fields.get(self.next);
+            self.next = self.next.saturating_add(1);
+            word
+        })
+    }
 }
 
 /// Classifies a borrowed uniform word.
@@ -94,13 +150,11 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
             } else {
                 (i64::from(scan), 8)
             };
-            let fields = (0..usize::try_from(count).unwrap_or(0))
-                .map(|index| {
-                    // SAFETY: within the tuple.
-                    unsafe { read_field(obj, index.saturating_mul(8).saturating_add(first)) }
-                })
-                .collect();
-            View::Tuple(fields)
+            View::Tuple(TupleFields {
+                obj,
+                count: usize::try_from(count).unwrap_or(0),
+                first,
+            })
         }
         LayoutKind::Closure => View::Closure,
         LayoutKind::Ctor { .. } => View::Ctor(info),

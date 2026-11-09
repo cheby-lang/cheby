@@ -532,3 +532,52 @@ fn deep_values_compare_hash_and_print_on_an_entry_stack() {
 fn the_process_seed_is_drawn_once() {
     assert_eq!(process_seed(), process_seed());
 }
+
+/// The values whose hashes `hashes_of_scalar_prefixes_are_pinned` pins.
+fn scalar_prefix_values(shape: &Shape) -> Vec<Word> {
+    vec![
+        tuple(&[int_word(1), int_word(2)]),
+        tuple(&[int_word(1), string("a"), int_word(3)]),
+        tuple(&[string("a"), int_word(1)]),
+        some(int_word(7)),
+        shape.point(5, int_word(9)),
+        shape.point(5, string("s")),
+        tuple(&[some(int_word(1)), int_word(2)]),
+    ]
+}
+
+#[test]
+fn hashes_of_scalar_prefixes_are_pinned() {
+    // Writing leading scalars in place writes the bytes their own steps
+    // would, so these hashes are those of the walk without the shortcut.
+    let shape = Shape::register();
+    let values = scalar_prefix_values(&shape);
+    let hashes: Vec<u64> = values.iter().map(|&v| hashed(v).unwrap()).collect();
+    assert_eq!(hashes, PINNED_HASHES);
+    release(values);
+}
+
+/// Taken from the walk before leading scalars were written in place.
+const PINNED_HASHES: [u64; 7] = [
+    18_166_997_351_716_599_727,
+    11_773_596_670_975_594_256,
+    6_187_566_155_869_148_094,
+    6_881_860_921_955_261_542,
+    1_735_785_066_479_479_825,
+    4_088_700_674_636_143_781,
+    13_611_017_201_715_285_350,
+];
+
+#[test]
+fn a_function_before_a_differing_scalar_still_panics() {
+    // Equality walks left to right and stops at the first difference, so
+    // a function value met first is reached even when a later scalar
+    // differs (D-233).
+    let a = tuple(&[closure(&[]), int_word(1)]);
+    let b = tuple(&[closure(&[]), int_word(2)]);
+    assert!(matches!(eq(a, b), Err(Reached::Function)));
+    let c = tuple(&[int_word(1), closure(&[])]);
+    let d = tuple(&[int_word(2), closure(&[])]);
+    assert_eq!(eq(c, d), Ok(false));
+    release([a, b, c, d]);
+}

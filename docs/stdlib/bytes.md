@@ -16,7 +16,7 @@ Text becomes bytes with `bytes::from_string`, which always encodes UTF-8 (§3.5)
 
 Bytes are written as Base64 text by [`std::base64`](base64.md) and as hex text by [`std::hex`](hex.md), each with a strict decoder. They are modules of their own, so that `std::bytes` returns no `String` and each conversion lives with its encoding (D-308, D-1089).
 
-Every cost in this module is **required** (D-300). `n` is the length of the first argument in bytes, unless the entry says otherwise. A function that takes a callback, such as `fold`, is written in Cheby over the runtime's kernels, such as `get`, because only kernels that the stdlib requires to take a callback, which is `map::upsert` alone, call back into Cheby (D-484).
+Every cost in this module is **required** (D-300). `n` is the length of the first argument in bytes, unless the entry says otherwise. A function that takes a callback, such as `fold`, is written in Cheby over the runtime's kernels, such as `get`, because only kernels that the stdlib requires to take a callback, which are `map::upsert` and `list::sort_with`, call back into Cheby (D-484, D-1447).
 
 ## Creating
 
