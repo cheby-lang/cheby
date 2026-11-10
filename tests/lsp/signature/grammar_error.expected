@@ -1,0 +1,195 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`",
+      "range": {
+        "end": {
+          "character": 5,
+          "line": 20
+        },
+        "start": {
+          "character": 2,
+          "line": 20
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 18
+              },
+              "start": {
+                "character": 17,
+                "line": 18
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0015",
+      "message": "unclosed `(`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 28
+        },
+        "start": {
+          "character": 0,
+          "line": 28
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 26
+              },
+              "start": {
+                "character": 17,
+                "line": 26
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0015",
+      "message": "unclosed `(`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 31
+        },
+        "start": {
+          "character": 22,
+          "line": 31
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 31
+              },
+              "start": {
+                "character": 20,
+                "line": 31
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:19:22 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:21:23 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "label": "fn twice(n: Int, f: fn(Int) -> Int) -> Int",
+      "parameters": [
+        {
+          "label": "[9, 15] n: Int"
+        },
+        {
+          "label": "[17, 34] f: fn(Int) -> Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:27:22 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "```cheby\nfn(List<Int>, fn(Int) -> _) -> List<_>\n```\n\n---\n\nReturns the results of calling `f` on each element, in order."
+      },
+      "label": "fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+      "parameters": [
+        {
+          "label": "[13, 24] xs: List<T>"
+        },
+        {
+          "label": "[26, 39] f: fn(T) -> U"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:32:25 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}

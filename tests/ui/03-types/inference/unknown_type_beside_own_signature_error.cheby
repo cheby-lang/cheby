@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-1488, D-494, D-480
+//! The signature of `count` has an error (E0051), reported there. It is
+//! not an error of the body, so the empty list whose element type nothing
+//! fixes still gets its E0057 (D-1488). The read of `items.size` has the
+//! error type from the signature and reports nothing.
+
+pub fn count(items: List<Int, Int>) -> Int {
+  let _size = items.size
+  let _xs = []
+  1
+}

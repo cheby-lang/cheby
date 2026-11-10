@@ -1,0 +1,76 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `ma`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 8
+        },
+        "start": {
+          "character": 14,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 8
+              },
+              "start": {
+                "character": 11,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:17 completion map
+{
+  "count": 49,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the results of calling `f` on each element, in order."
+      },
+      "filterText": "map",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "map",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs, f)"
+      },
+      "sortText": "10map",
+      "textEdit": {
+        "newText": " |> list::map(_, ${1:f})$0",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 13,
+            "line": 8
+          }
+        }
+      }
+    }
+  ]
+}

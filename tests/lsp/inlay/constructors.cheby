@@ -1,0 +1,30 @@
+// @decisions: D-1483
+// @requests: inlayHint
+//! Only a `let` bound to a record literal of a non-generic type skips its
+//! hint, since the line names the type. A constructor call, a unit
+//! constructor and a variant with named fields do not name it, and a
+//! generic record does not name its arguments, so each keeps its hint
+//! (D-1483).
+
+type Point {
+  x: Int,
+}
+
+type Shape {
+  Circle(Float),
+  Rect { w: Int },
+  Dot,
+}
+
+type Box<T> {
+  value: T,
+}
+
+fn main() {
+  let p = Point { x: 1 }
+  let c = Circle(1.0)
+  let d = Dot
+  let r = Rect { w: 1 }
+  let b = Box { value: 1 }
+  assert p.x == 1 && c != d && r != d && b.value == 1
+}

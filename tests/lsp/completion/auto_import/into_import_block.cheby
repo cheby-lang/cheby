@@ -1,0 +1,12 @@
+// @decisions: D-1395, D-1148
+//! The import joins the first block, sorted by its path in byte order.
+
+import std::io
+import std::string
+
+fn main() {
+  let xs = ["a", "b"]
+  let pairs = enumer
+  //                ^ apply enumerate
+  io::println(string::join(["x"], ","))
+}

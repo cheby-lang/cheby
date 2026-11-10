@@ -272,6 +272,10 @@ pub struct BodyRes {
     /// Name references that are not `PATH` nodes: the root of an
     /// `INTERPOLATION` and a punned `FIELD_INIT`, keyed by that node.
     pub names: FxHashMap<NodeId, Res>,
+    /// Whether name resolution reported an error in the body, such as
+    /// E0042, E0044 or E0062. The type checker then reports no E0057 in
+    /// it (D-494).
+    pub errored: bool,
 }
 
 impl BodyRes {

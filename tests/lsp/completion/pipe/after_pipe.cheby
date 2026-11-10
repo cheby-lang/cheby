@@ -1,0 +1,12 @@
+// @decisions: D-244, D-245, D-1479
+//! `xs |> ` with nothing after it: functions whose parameter accepts the
+//! list, written with the hole (grammar error state).
+
+import std::list
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs |> 
+  //             ^ completion map length fold
+  //             ^ apply map
+}

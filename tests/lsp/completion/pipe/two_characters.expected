@@ -1,0 +1,93 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `un` in this scope",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:20 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "count(xs, predicate) | Function | pub fn count<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Int | (list) | `list::count(_, ${1:predicate})$0` | +1 edit",
+    "unique(xs) | Function | pub fn unique<T>(xs: List<T>) -> List<T> | (list) | `list::unique` | +1 edit"
+  ]
+}
+
+== src/main.cheby:8:20 apply unique
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::list\n\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        }
+      }
+    ],
+    "detail": "pub fn unique<T>(xs: List<T>) -> List<T>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns `xs` without repeated elements, keeping the first of each group of `==` elements.\nElements are hashed like `Set` elements (§3.13)."
+    },
+    "kind": 3,
+    "label": "unique",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs)"
+    },
+    "sortText": "10unique",
+    "textEdit": {
+      "newText": "list::unique",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1479",
+    "//! `xs |> un` in a file that does not import `std::list`: two characters",
+    "//! offer the functions whose name holds them, each with its import (type",
+    "//! error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let ys = xs |> list::unique",
+    "  //               ^ completion",
+    "  //               ^ apply unique",
+    "  assert ys == xs",
+    "}",
+    ""
+  ]
+}

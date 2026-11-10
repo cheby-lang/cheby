@@ -1,0 +1,169 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `ys`",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 8
+        },
+        "start": {
+          "character": 6,
+          "line": 8
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `ma`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 11
+        },
+        "start": {
+          "character": 4,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 3,
+                "line": 11
+              },
+              "start": {
+                "character": 11,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `n`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 13
+        },
+        "start": {
+          "character": 6,
+          "line": 13
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `le`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 15
+        },
+        "start": {
+          "character": 4,
+          "line": 15
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 3,
+                "line": 15
+              },
+              "start": {
+                "character": 14,
+                "line": 13
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:8 apply map
+{
+  "item": {
+    "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the results of calling `f` on each element, in order."
+    },
+    "filterText": ".map",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "map",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs, f)"
+    },
+    "sortText": "10map",
+    "textEdit": {
+      "newText": " |> list::map(_, ${1:f})$0",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 11
+        },
+        "start": {
+          "character": 3,
+          "line": 11
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394",
+    "//! A receiver on several lines: the pipe form replaces only `.ma`, so the",
+    "//! edit sits on one line. As an operand, no form keeps the meaning on one",
+    "//! line, so no function is offered.",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let ys = [",
+    "    1,",
+    "    2,",
+    "  ] |> list::map(_, f)",
+    "  //   ^ apply map",
+    "  let n = 1 + [",
+    "    1,",
+    "  ].le",
+    "  //   ^ completion length",
+    "}",
+    ""
+  ]
+}
+
+== src/main.cheby:16:8 completion length
+{
+  "absent": [
+    "length"
+  ],
+  "count": 0,
+  "isIncomplete": false,
+  "items": []
+}

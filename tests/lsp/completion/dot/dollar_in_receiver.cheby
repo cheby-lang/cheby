@@ -1,0 +1,11 @@
+// @decisions: D-1394
+//! The call form copies the receiver into a snippet, so its `$`, `}` and
+//! `\` are escaped.
+
+import std::string
+
+fn main() {
+  let n = 1 + "a$b}\\c".le
+  //                      ^ completion slice length
+  //                      ^ apply slice
+}

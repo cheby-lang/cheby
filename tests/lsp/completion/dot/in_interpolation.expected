@@ -1,0 +1,70 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0012",
+      "message": "unexpected `.` in string interpolation",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 10
+        },
+        "start": {
+          "character": 13,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:15 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "x | Field | Int",
+    "y | Field | Int"
+  ]
+}
+
+== src/main.cheby:11:15 apply y
+{
+  "item": {
+    "detail": "Int",
+    "kind": 5,
+    "label": "y",
+    "sortText": "050001y",
+    "textEdit": {
+      "newText": "y",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 10
+        },
+        "start": {
+          "character": 14,
+          "line": 10
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-071",
+    "//! `\"{p.}\"`: an interpolation holds a name, so only fields are offered.",
+    "",
+    "pub type Point {",
+    "  x: Int,",
+    "  y: Int,",
+    "}",
+    "",
+    "fn main() {",
+    "  let p = Point { x: 1, y: 2 }",
+    "  let s = \"{p.y}\"",
+    "  //          ^ completion",
+    "  //          ^ apply y",
+    "}",
+    ""
+  ]
+}

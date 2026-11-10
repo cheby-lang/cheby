@@ -1,0 +1,9 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "11:9 type `: List<Int>` edit 11:9-11:9 `: List<Int>`",
+  "11:31 type `: Int`",
+  "11:32 type ` -> Int`"
+]

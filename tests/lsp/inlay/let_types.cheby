@@ -1,0 +1,44 @@
+// @decisions: D-1353, D-1376, D-1483
+// @requests: inlayHint
+//! The `let` row: a hint after the name of each plain `let`, with an
+//! edit that writes it, unless the line already shows the type or the
+//! type needs an import (`features.md` §7.1).
+
+import std::base64
+
+type Circle {
+  radius: Float,
+}
+
+type Shape {
+  Dot,
+  Square(Float),
+}
+
+type Pair<T> {
+  Pair(T, T),
+}
+
+fn takes(b: U8) -> U8 {
+  b
+}
+
+fn main() {
+  let xs = [1, 2]
+  let n: Int = 2
+  let _ignored = xs
+  let i = 1
+  let f = 1.5
+  let s = "text {i}"
+  let r = r"raw"
+  let neg = -3
+  let byte = 7
+  let c = Circle { radius: f }
+  let sq = Square(f)
+  let dot = Dot
+  let p = Pair(n, neg)
+  let decoded = base64::decode(s)
+  let same = fn(x: Int) -> Int { x }
+  assert takes(byte) == 7 && c.radius == f && sq != dot && p == Pair(1, 2)
+  assert decoded != Err(Nil) && r != s && same(1) == 1 && xs != []
+}

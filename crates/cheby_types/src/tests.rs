@@ -445,6 +445,56 @@ fn argument_counts_are_e0048() {
     assert_eq!(errors("fn main() {\n  let x = Some(1, 2)\n}\n"), ["E0048"]);
 }
 
+// @decisions: D-1485, D-490
+#[test]
+fn a_call_with_the_wrong_argument_count_checks_its_arguments() {
+    // A given argument against the parameter at its position, an extra one
+    // on its own, too many and too few.
+    for src in [
+        "import std::int\n\nfn f() {\n  let s = int::add(\"a\", 1, 2)\n}\n",
+        "import std::int\n\nfn f() {\n  let s = int::add(\"a\")\n}\n",
+        "import std::int\n\nfn f() {\n  let s = int::add(1, 2, \"a\" + 1)\n}\n",
+        "import std::list\n\nfn f(xs: List<Int>) {\n  let s = list::map(xs, fn(x) { x + \"a\" }, 1)\n}\n",
+        "fn f() {\n  let g = int_add\n  let s = g(\"a\")\n}\n\nfn int_add(a: Int, b: Int) -> Int {\n  a + b\n}\n",
+        "type P {\n  P(Int),\n}\n\nfn f() {\n  let p = P(\"a\", 1)\n}\n",
+        "fn run(n: Int, next: fn(Int) -> Int) -> Int {\n  next(n)\n}\n\nfn f() -> Int {\n  use k <- run(\"a\", 2)\n  k\n}\n",
+    ] {
+        let b = check(src);
+        let codes = b.codes();
+        assert!(codes.contains(&"E0048".to_owned()), "{}", b.rendered());
+        assert!(
+            codes.iter().any(|c| c == "E0047" || c == "E0050"),
+            "{}",
+            b.rendered()
+        );
+    }
+    // Right arguments: E0048 alone, and the call's own uses are silent.
+    for src in [
+        "import std::int\n\nfn f() -> String {\n  int::add(1, 2, 3)\n}\n",
+        "import std::int\n\nfn f() -> String {\n  let s = int::add(1)\n  s\n}\n",
+        "import std::list\n\nfn f(xs: List<Int>) {\n  let s = list::map(xs, fn(x) { x + 1 }, 1)\n}\n",
+        "import std::list\n\nfn f(xs: List<Int>) {\n  let s = list::map(xs)\n}\n",
+    ] {
+        let b = check(src);
+        assert_eq!(b.codes(), ["E0048"], "{}", b.rendered());
+    }
+    // A `use` callback meets the last parameter, what is written the
+    // others by position.
+    let b = check(
+        "fn run(n: Int, next: fn(Int) -> Int) -> Int {\n  next(n)\n}\n\nfn f() -> Int {\n  use k <- run()\n  string_of(k)\n}\n\nfn string_of(s: String) -> Int {\n  1\n}\n",
+    );
+    assert_eq!(b.codes(), ["E0047", "E0048"], "{}", b.rendered());
+    // A capture lines its arguments up with the written positions.
+    let b = check("import std::list\n\nfn f() {\n  let g = list::zip(_, [1], \"a\")\n}\n");
+    assert_eq!(b.codes(), ["E0048"], "{}", b.rendered());
+    let b = check("import std::int\n\nfn f() {\n  let g = int::add(\"a\", _, 1)\n}\n");
+    assert_eq!(b.codes(), ["E0047", "E0048"], "{}", b.rendered());
+    // An erroneous signature's calls stay silent (D-490).
+    let b =
+        check("fn count(text: List) -> Int {\n  1\n}\n\nfn f() {\n  let n = count(\"x\", 1)\n}\n");
+    assert_eq!(b.codes(), ["E0051"], "{}", b.rendered());
+}
+
 #[test]
 fn calling_a_value_that_is_not_a_function_is_e0049() {
     let b = build(&[(
@@ -840,6 +890,26 @@ fn literals_must_fit_their_type() {
     );
 }
 
+// @decisions: D-1484, D-133
+#[test]
+fn a_literal_keeps_its_type_when_it_meets_an_error() {
+    // `k` meets the error type of an unknown callee, and is still
+    // `{integer}`: a later use that needs a `String` is reported.
+    let b = check(
+        "import std::string\n\nfn f() -> String {\n  let k = 1\n  let _ = k |> sh\n  string::show(k)\n}\n",
+    );
+    assert_eq!(b.codes(), ["E0042", "E0047"], "{}", b.rendered());
+    // Without another use, or with a use that fits, nothing more.
+    for src in [
+        "fn f() {\n  let k = 1\n  let _ = k |> sh\n}\n",
+        "fn f() {\n  let k = 1.5\n  let _ = sh(k)\n}\n",
+        "fn f() -> U8 {\n  let k = 1\n  let _ = k |> sh\n  k\n}\n",
+    ] {
+        let b = check(src);
+        assert_eq!(b.codes(), ["E0042"], "{}", b.rendered());
+    }
+}
+
 #[test]
 fn unknown_types_need_annotations() {
     // The spec's `unused` (§3.12.4): `a + b` is resolved at the end, and
@@ -908,6 +978,79 @@ fn a_field_needs_a_known_type_at_that_point() {
         "{POINT}fn main() {{\n  let origin = Point {{ x: 0, y: 0 }}\n  let get_x = fn(p: Point) {{ p.x }}\n  let x = get_x(origin)\n}}\n"
     );
     clean(&src);
+}
+
+// @decisions: D-494, D-1485, D-213, D-234
+#[test]
+fn e0057_is_dropped_in_a_body_with_another_error() {
+    // An unknown field base beside a wrong argument, before or after it,
+    // and beside an argument count.
+    for (src, code) in [
+        (
+            "fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn f() -> Int {\n  add(1, fn(p) { p.x })\n}\n",
+            "E0047",
+        ),
+        (
+            "import std::list\n\nfn f(ps: List<Point>) -> Int {\n  list::fold(ps, fn(acc, p) { acc + p.x })\n}\n",
+            "E0048",
+        ),
+        (
+            "fn f() {\n  let get_x = fn(p) { p.x }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+        (
+            "fn f() {\n  let s: String = 1\n  let get_x = fn(p) { p.x }\n}\n",
+            "E0047",
+        ),
+        // A record update of an unknown base.
+        (
+            "fn f() {\n  let move = fn(p) { Point { ..p, x: 1 } }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+        // An unknown type at the end of the body, with an error found
+        // after it there (E0071), or by the resolver (E0042).
+        (
+            "fn f() {\n  let add = fn(a, b) { a + b }\n  let n: U8 = 300\n}\n",
+            "E0071",
+        ),
+        (
+            "fn f() {\n  let get_x = fn(p) { p.x }\n  let y = nowhere\n}\n",
+            "E0042",
+        ),
+        // A local function counts as part of the top-level body (D-234).
+        (
+            "fn f() {\n  fn get_x(p) {\n    p.x\n  }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+        // So does a test body.
+        (
+            "test \"t\" {\n  let get_x = fn(p) { p.x }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+    ] {
+        let src = match src.split_once("\n\n") {
+            Some((import, rest)) if import.starts_with("import") => {
+                format!("{import}\n\n{POINT}{rest}")
+            }
+            _ => format!("{POINT}{src}"),
+        };
+        let b = check(&src);
+        assert_eq!(b.codes(), [code], "{src}\n{}", b.rendered());
+    }
+    // A field access that follows from the unknown one stays silent, so
+    // E0057 alone is kept.
+    let src = format!("{POINT}fn f() {{\n  let get_x = fn(p) {{ p.x.y }}\n}}\n");
+    assert_eq!(errors(&src), ["E0057"]);
+    let src = format!("{POINT}fn f() {{\n  let call = fn(p) {{ (p.x)(1) }}\n}}\n");
+    assert_eq!(errors(&src), ["E0057"]);
+    let src = format!("{POINT}fn f() {{\n  let move = fn(p) {{ Point {{ ..p, x: 1 }} }}\n}}\n");
+    assert_eq!(errors(&src), ["E0057"]);
+    // An error in another top-level body does not count.
+    let src = format!(
+        "{POINT}fn f() {{\n  let get_x = fn(p) {{ p.x }}\n}}\n\nfn g() {{\n  let s: String = 1\n}}\n"
+    );
+    let b = check(&src);
+    assert_eq!(b.codes(), ["E0047", "E0057"], "{}", b.rendered());
 }
 
 #[test]

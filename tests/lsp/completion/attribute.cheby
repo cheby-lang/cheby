@@ -1,0 +1,10 @@
+//! `@` before an item: the attributes of §4.8, with their arguments.
+
+@
+//> 3:2 completion
+//> 3:2 apply deprecated
+pub fn old() -> Int {
+  1
+}
+
+fn main() {}

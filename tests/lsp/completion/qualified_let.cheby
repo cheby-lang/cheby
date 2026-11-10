@@ -1,0 +1,12 @@
+// @decisions: D-1384
+//! `let a = order::`: the `::` is in an `ERROR` outside the `let`.
+
+import std::order
+
+fn main() {
+  let o = Less
+  let a = order::
+  //             ^ completion
+  //             ^ apply reverse
+  assert a == o
+}

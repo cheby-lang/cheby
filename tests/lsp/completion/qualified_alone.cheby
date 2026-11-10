@@ -1,0 +1,13 @@
+// @decisions: D-1384
+//! `order::` alone on a line: the path, then `::` in an `ERROR` (syntax
+//! map §2.2). Accepting a function writes the call.
+
+import std::order
+
+fn main() {
+  let o = Less
+  order::
+  //     ^ completion
+  //     ^ apply reverse
+  assert o == Less
+}

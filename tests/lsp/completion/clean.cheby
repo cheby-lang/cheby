@@ -1,0 +1,48 @@
+// @decisions: D-1376, D-1383, D-1384
+// @settings: {"completion": {"autoImport": false}}
+//! Completion on clean text, with the cursor inside a whole word: the
+//! item replaces the word. Each context of `features.md` §4.1 that whole
+//! text can hold.
+
+import std::order
+
+/// A shape.
+type Shape {
+  Circle { radius: Float },
+  Square(Float),
+  Dot,
+}
+
+/// A limit.
+const limit: Int = 10
+
+/// Twice `n`.
+fn twice(n: Int) -> Int {
+  n * 2
+}
+
+/// The area of `s`.
+fn area(s: Shape) -> Float {
+//            ^ completion
+  case s {
+    Circle { radius } => radius * radius
+    // ^ completion
+    Square(side) => side * side
+    Dot => 0.0
+  }
+}
+
+fn main() {
+  let count = 3
+  let doubled = twice(count)
+  //                     ^ completion
+  //                     ^ completion count twice `case {` absent_name
+  let label = "{doubled} of {limit}"
+  //               ^ completion
+  let flipped = order::reverse(Less)
+  //                      ^ completion
+  //                      ^ completion reverse
+  // a note
+//> 45:10 completion
+  assert label != "" && flipped == Greater && area(Dot) == 0.0
+}

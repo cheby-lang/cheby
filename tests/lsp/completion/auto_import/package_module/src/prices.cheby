@@ -1,0 +1,6 @@
+//! Prices.
+
+/// A price with its tax.
+pub fn with_tax(price: Int) -> Int {
+  price + price / 5
+}

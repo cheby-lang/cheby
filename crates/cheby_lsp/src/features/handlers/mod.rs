@@ -1,12 +1,15 @@
 //! Request handlers: protocol in, protocol out, over `features::ide`.
 
+pub(crate) mod completion;
 pub(crate) mod folding;
 pub(crate) mod format;
 pub(crate) mod hierarchy;
 pub(crate) mod hover;
+pub(crate) mod inlay;
 pub(crate) mod links;
 pub(crate) mod nav;
 pub(crate) mod selection;
+pub(crate) mod signature;
 pub(crate) mod symbols;
 pub(crate) mod tokens;
 pub(crate) mod workspace_symbol;

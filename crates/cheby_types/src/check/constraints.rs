@@ -10,7 +10,8 @@
 //! parameters and names are not overloaded, D-045, D-165), so the order
 //! only decides the order of diagnostics. A constraint whose type still
 //! contains an error or an unknown part is skipped: the error, or the
-//! E0057 of the unknown part, is already reported.
+//! E0057 of the unknown part, is already reported, and that E0057 is
+//! dropped in a body with another error (D-494).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefId, Ice, IndexVec, Ty};

@@ -14,6 +14,9 @@
 //!   every platform.
 //! - [`text`]: positions in the three encodings (D-1368), the compiler's
 //!   code-point columns (D-421), and applying text and workspace edits.
+//! - [`editing`]: completion, signature help and inlay hints: their
+//!   readable golden forms, applying a completion item and checking its
+//!   edit (D-1394), and where the examples group asks for them.
 //! - [`case`]: the golden tests under `tests/lsp/`, their header and their
 //!   caret markers (`tests/lsp/README.md`).
 //! - [`parity`]: diagnostics as `cheby check` prints them and as the server
@@ -30,6 +33,7 @@ pub use serde_json;
 
 pub mod case;
 pub mod client;
+pub mod editing;
 pub mod frame;
 pub mod outline;
 pub mod parity;

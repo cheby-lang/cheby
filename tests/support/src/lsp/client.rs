@@ -210,9 +210,13 @@ fn text_document_capabilities() -> Value {
         },
         "completion": {
             "contextSupport": true,
+            "completionItemKind": { "valueSet": (1..=25).collect::<Vec<u32>>() },
             "completionItem": {
                 "snippetSupport": true,
                 "labelDetailsSupport": true,
+                "documentationFormat": ["markdown", "plaintext"],
+                "deprecatedSupport": true,
+                "tagSupport": { "valueSet": [1] },
                 "resolveSupport": {
                     "properties": ["documentation", "detail", "additionalTextEdits"],
                 },

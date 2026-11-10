@@ -1,0 +1,9 @@
+// @decisions: D-1376
+// @settings: {"inlayHints": {"enable": false}}
+// @requests: inlayHint
+//! With `inlayHints.enable` off, the answer is `null` (D-1376).
+
+fn main() {
+  let xs = [1]
+  assert xs != []
+}

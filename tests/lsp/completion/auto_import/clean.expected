@@ -1,0 +1,72 @@
+== diagnostics
+{}
+
+== src/main.cheby:7:15 completion uniq unique
+{
+  "count": 18,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "Int",
+      "kind": 6,
+      "label": "uniq",
+      "sortText": "100000uniq",
+      "textEdit": {
+        "newText": "uniq",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 6
+          },
+          "start": {
+            "character": 10,
+            "line": 6
+          }
+        }
+      }
+    },
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::list\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 4
+            },
+            "start": {
+              "character": 0,
+              "line": 4
+            }
+          }
+        }
+      ],
+      "detail": "pub fn unique<T>(xs: List<T>) -> List<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns `xs` without repeated elements, keeping the first of each group of `==` elements.\nElements are hashed like `Set` elements (§3.13)."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "unique",
+      "labelDetails": {
+        "description": "std::list",
+        "detail": "(xs)"
+      },
+      "sortText": "60unique",
+      "textEdit": {
+        "newText": "list::unique(${1:xs})$0",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 6
+          },
+          "start": {
+            "character": 10,
+            "line": 6
+          }
+        }
+      }
+    }
+  ]
+}

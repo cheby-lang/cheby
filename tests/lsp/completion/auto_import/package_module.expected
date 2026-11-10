@@ -1,0 +1,171 @@
+== diagnostics
+{
+  "src/back.cheby": [
+    {
+      "code": "W0003",
+      "message": "unused import `shop`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 2
+        },
+        "start": {
+          "character": 0,
+          "line": 2
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ],
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `total`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 6
+        },
+        "start": {
+          "character": 6,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `with_` in this scope",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 6
+        },
+        "start": {
+          "character": 14,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:20 completion with_tax with_backlog
+{
+  "absent": [
+    "with_backlog"
+  ],
+  "count": 26,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import shop::prices\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 5
+            },
+            "start": {
+              "character": 0,
+              "line": 5
+            }
+          }
+        }
+      ],
+      "detail": "pub fn with_tax(price: Int) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A price with its tax."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "with_tax",
+      "labelDetails": {
+        "description": "shop::prices",
+        "detail": "(price)"
+      },
+      "sortText": "60with_tax",
+      "textEdit": {
+        "newText": "prices::with_tax(${1:price})$0",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 6
+          },
+          "start": {
+            "character": 14,
+            "line": 6
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:7:20 apply with_tax
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import shop::prices\n\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        }
+      }
+    ],
+    "detail": "pub fn with_tax(price: Int) -> Int",
+    "documentation": {
+      "kind": "markdown",
+      "value": "A price with its tax."
+    },
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "with_tax",
+    "labelDetails": {
+      "description": "shop::prices",
+      "detail": "(price)"
+    },
+    "sortText": "60with_tax",
+    "textEdit": {
+      "newText": "prices::with_tax(${1:price})$0",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 6
+        },
+        "start": {
+          "character": 14,
+          "line": 6
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1395",
+    "//! A module of the package that the file does not import: its function",
+    "//! is offered with `import shop::prices`. A module that imports this one",
+    "//! is not, since importing it back would close a cycle (E0040).",
+    "",
+    "import shop::prices",
+    "",
+    "fn main() {",
+    "  let total = prices::with_tax(price)",
+    "  //               ^ completion with_tax with_backlog",
+    "  //               ^ apply with_tax",
+    "}",
+    ""
+  ]
+}

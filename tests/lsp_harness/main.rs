@@ -19,9 +19,13 @@
 //! - `examples/<name>`: every example's sources are opened, and every
 //!   request the server advertises is sent at every identifier and type
 //!   name. Each must be answered in time, with no JSON-RPC error and no
-//!   exit of the server; `null` is an answer. Formatting must return no
-//!   edit, since every example is a `cheby fmt` fixed point. The group
-//!   tightens as the server advertises more (D-1379).
+//!   exit of the server; `null` is an answer. Completion goes to the end
+//!   of every identifier and after every `.` and `|>`, and every item's
+//!   edit must sit on one line and hold the position (D-1394); signature
+//!   help goes inside every argument list. Both are sampled within a
+//!   budget per example. Formatting must return no edit, since every
+//!   example is a `cheby fmt` fixed point. The group tightens as the server
+//!   advertises more (D-1379).
 //! - `navigation/<name>`: an answer followed into another file. In
 //!   `std_round_trip`, definition on `io::println` leads into std's
 //!   materialized sources, that file is opened, and hover in it answers
@@ -45,8 +49,12 @@
 //!   in `<name>.expected`. `CHEBY_BLESS=1` rewrites those goldens, and the
 //!   two protocol goldens, except for a test of a later milestone. It
 //!   ignores every trial that has no golden. Whatever the golden says, a
-//!   `formatting` answer must give `cheby fmt`'s text when applied, and a
-//!   `rangeFormatting` edit must touch the lines of its range.
+//!   `formatting` answer must give `cheby fmt`'s text when applied, a
+//!   `rangeFormatting` edit must touch the lines of its range, every
+//!   completion item's edit must sit on one line and hold the position
+//!   (D-1394), and the text after an `apply` marker's item must parse.
+//!   Completion, signature help and inlay hints are printed in a readable
+//!   form (`editing`).
 //!
 //! Waits (D-1442): a publish comes for each new version of an open
 //! document and after each `didOpen` and `didClose`, but not for a run
@@ -88,6 +96,7 @@ use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::example::{self, Example};
 use cheby_test_support::lsp::case::{self, Advertised, Layout, LspTest};
 use cheby_test_support::lsp::client::{self, codes};
+use cheby_test_support::lsp::editing;
 use cheby_test_support::lsp::outline;
 use cheby_test_support::lsp::parity::{self, Key};
 use cheby_test_support::lsp::quality::{self, Mutant};
@@ -1097,25 +1106,32 @@ fn example_trial(
     trial(name, milestone, expectation, verdicts, bless, move || {
         let scratch = Scratch::new(&trial_name)?;
         copy_dir(&ex.dir, scratch.path())?;
-        sweep_example(&env, scratch.path())
+        sweep_example(&env, scratch.path(), &trial_name)
     })
 }
 
 /// Opens every source and sends every advertised request at every
-/// identifier; each must be answered without an error.
-fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
+/// identifier; each must be answered without an error. Completion goes to
+/// the end of every identifier and after every `.` and `|>`, signature
+/// help inside every argument list, each within its budget per example
+/// ([`COMPLETION_BUDGET`], [`SIGNATURE_BUDGET`]).
+fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> {
     let files = sources(dir)?;
     let (mut client, init) = session(env, dir, ClientKind::Standard, None, None)?;
     let advertised = Advertised::of(init.get("capabilities").unwrap_or(&Value::Null))?;
     let uris = open_all(&mut client, &files)?;
     let encoding = client.encoding();
+    let mut texts = Vec::with_capacity(files.len());
+    for file in &files {
+        let path = dir.join(file);
+        texts.push(std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?);
+    }
+    let points = EditingPoints::new(trial_name, &texts, &advertised, encoding);
     // The queries of `workspace/symbol`: none, then every name once.
     let mut queries = BTreeSet::from([String::new()]);
-    for (file, uri) in files.iter().zip(&uris) {
-        let path = dir.join(file);
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let lines = Lines::new(&text, Bom::Counted);
+    for (index, ((file, uri), text)) in files.iter().zip(&uris).zip(&texts).enumerate() {
+        let text = text.as_str();
+        let lines = Lines::new(text, Bom::Counted);
         let diagnostics = client
             .published()
             .get(uri)
@@ -1123,7 +1139,7 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
             .unwrap_or_default();
         let mut requests = Vec::new();
         let mut renames = Vec::new();
-        for (start, end) in case::identifiers(&text) {
+        for (start, end) in case::identifiers(text) {
             if let Some(word) = text.get(start..end) {
                 queries.insert(word.to_owned());
             }
@@ -1132,6 +1148,10 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
                 lines.position(end, encoding),
             );
             for name in &advertised.position {
+                // These two have positions of their own, below.
+                if matches!(*name, "completion" | "signatureHelp") {
+                    continue;
+                }
                 let end = matches!(*name, "codeAction" | "rangeFormatting").then_some(b);
                 let (method, params) = case::position_params(name, uri, a, end, &[], &diagnostics)?;
                 requests.push((
@@ -1153,31 +1173,17 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
             let (method, params) = case::document_params(name, uri, last)?;
             requests.push((format!("{file} {name}"), method, params));
         }
+        let completions = points.requests(index, file, uri, text, &mut requests)?;
         let prepared = send_all(&mut client, requests)?;
         send_all(&mut client, hierarchy_calls(&prepared))?;
-        // A rename where `prepareRename` accepted the position.
+        sweep_completions(
+            &mut client,
+            &prepared,
+            &completions,
+            advertised.completion_resolve,
+        )?;
         if advertised.rename {
-            let mut rename_requests = Vec::new();
-            for (at, new_name) in renames {
-                let label = format!("{file}:{}:{} prepareRename", at.line, at.character);
-                let accepted = prepared.get(&label).is_some_and(|v| !v.is_null());
-                if accepted {
-                    let (method, params) = case::position_params(
-                        "rename",
-                        uri,
-                        at,
-                        None,
-                        &[new_name.to_owned()],
-                        &[],
-                    )?;
-                    rename_requests.push((
-                        format!("{file}:{}:{} rename", at.line, at.character),
-                        method,
-                        params,
-                    ));
-                }
-            }
-            send_all(&mut client, rename_requests)?;
+            send_renames(&mut client, file, uri, renames, &prepared)?;
         }
         if let Some(edits) = prepared.get(&format!("{file} formatting"))
             && edits.as_array().is_some_and(|e| !e.is_empty())
@@ -1198,6 +1204,33 @@ fn sweep_example(env: &Env, dir: &Path) -> Result<(), String> {
         send_all(&mut client, requests)?;
     }
     client.shutdown()?.expect(0)
+}
+
+/// A rename at each of `renames` where `prepareRename` accepted the
+/// position, as `prepared` holds its answers.
+fn send_renames(
+    client: &mut Client,
+    file: &str,
+    uri: &str,
+    renames: Vec<(Position, &str)>,
+    prepared: &BTreeMap<String, Value>,
+) -> Result<(), String> {
+    let mut requests = Vec::new();
+    for (at, new_name) in renames {
+        let label = format!("{file}:{}:{} prepareRename", at.line, at.character);
+        let accepted = prepared.get(&label).is_some_and(|v| !v.is_null());
+        if accepted {
+            let (method, params) =
+                case::position_params("rename", uri, at, None, &[new_name.to_owned()], &[])?;
+            requests.push((
+                format!("{file}:{}:{} rename", at.line, at.character),
+                method,
+                params,
+            ));
+        }
+    }
+    send_all(client, requests)?;
+    Ok(())
 }
 
 /// Both directions of each item that the `prepareCallHierarchy` answers
@@ -1242,6 +1275,135 @@ fn send_all(
         }
     }
     Ok(answers)
+}
+
+/// Completion points the examples group sends per example, at most. An
+/// answer can hold every name in scope, so each costs far more than a
+/// hover; beyond the budget a deterministic stride is kept and the trial
+/// says on standard error how many were dropped.
+const COMPLETION_BUDGET: usize = 600;
+/// Signature help points the examples group sends per example, at most.
+const SIGNATURE_BUDGET: usize = 600;
+
+/// Where one example's sweep asks for completion and signature help: byte
+/// offsets by file index, sampled within the budgets.
+struct EditingPoints {
+    completion: Vec<(usize, usize)>,
+    signature: Vec<(usize, usize)>,
+    /// The advertised trigger characters of completion.
+    triggers: Vec<String>,
+    encoding: Encoding,
+}
+
+impl EditingPoints {
+    /// The points of `texts`, the example's sources in order, for the
+    /// requests `advertised` holds, each kind sampled within its budget.
+    fn new(name: &str, texts: &[String], advertised: &Advertised, encoding: Encoding) -> Self {
+        let has = |request: &str| advertised.position.contains(&request);
+        let all = |points: fn(&str) -> Vec<usize>| -> Vec<(usize, usize)> {
+            texts
+                .iter()
+                .enumerate()
+                .flat_map(|(index, text)| points(text).into_iter().map(move |at| (index, at)))
+                .collect()
+        };
+        let pick = |request: &str, points: fn(&str) -> Vec<usize>, budget: usize| {
+            if !has(request) {
+                return Vec::new();
+            }
+            let all = all(points);
+            let (kept, dropped) = editing::sample(&all, budget);
+            if dropped > 0 {
+                eprintln!(
+                    "{name}: {request} at {} of {} points, {dropped} dropped by a fixed stride",
+                    kept.len(),
+                    all.len()
+                );
+            }
+            kept
+        };
+        Self {
+            completion: pick("completion", editing::completion_points, COMPLETION_BUDGET),
+            signature: pick("signatureHelp", editing::signature_points, SIGNATURE_BUDGET),
+            triggers: advertised.completion_triggers.clone(),
+            encoding,
+        }
+    }
+
+    /// Adds the completion and signature help requests of file `index` to
+    /// `requests`, and returns each completion's label and position.
+    fn requests(
+        &self,
+        index: usize,
+        file: &str,
+        uri: &str,
+        text: &str,
+        requests: &mut Vec<(String, &'static str, Value)>,
+    ) -> Result<Vec<(String, Position)>, String> {
+        let (lines, encoding) = (Lines::new(text, Bom::Counted), self.encoding);
+        let in_file = |points: &[(usize, usize)]| -> Vec<usize> {
+            points
+                .iter()
+                .filter(|(i, _)| *i == index)
+                .map(|&(_, at)| at)
+                .collect()
+        };
+        let mut completions = Vec::new();
+        for offset in in_file(&self.completion) {
+            let at = lines.position(offset, encoding);
+            let label = format!("{file}:{}:{} completion", at.line, at.character);
+            let (method, mut params) =
+                case::position_params("completion", uri, at, None, &[], &[])?;
+            if let Some(map) = params.as_object_mut() {
+                map.insert(
+                    "context".to_owned(),
+                    editing::completion_context(text, offset, &self.triggers),
+                );
+            }
+            requests.push((label.clone(), method, params));
+            completions.push((label, at));
+        }
+        for offset in in_file(&self.signature) {
+            let at = lines.position(offset, encoding);
+            let (method, params) = case::position_params("signatureHelp", uri, at, None, &[], &[])?;
+            requests.push((
+                format!("{file}:{}:{} signatureHelp", at.line, at.character),
+                method,
+                params,
+            ));
+        }
+        Ok(completions)
+    }
+}
+
+/// Checks every item of the sweep's completion answers (D-1394), then
+/// resolves the first item of each, when resolve is advertised, with no
+/// error.
+fn sweep_completions(
+    client: &mut Client,
+    answers: &BTreeMap<String, Value>,
+    completions: &[(String, Position)],
+    resolve: bool,
+) -> Result<(), String> {
+    let mut resolves = Vec::new();
+    for (label, at) in completions {
+        let Some(answer) = answers.get(label) else {
+            continue;
+        };
+        let list = editing::completions(answer).map_err(|e| format!("{label}: {e}"))?;
+        for item in &list.items {
+            editing::check_edit(item, *at).map_err(|e| format!("{label}: {e}"))?;
+        }
+        if resolve && let Some(first) = list.items.first() {
+            resolves.push((
+                format!("{label} resolve"),
+                "completionItem/resolve",
+                first.clone(),
+            ));
+        }
+    }
+    send_all(client, resolves)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -2031,58 +2193,88 @@ fn golden_trial(
 /// The golden text of a test: its diagnostics, then one block per marker
 /// and per document request, in file and line order.
 fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String, String> {
-    let (client, files) = golden_session(env, dir, header)?;
-    golden_blocks(env, dir, header, client, &files)
+    let (client, files, capabilities) = golden_session(env, dir, header)?;
+    golden_blocks(env, dir, header, client, &files, &capabilities)
 }
 
-/// A golden test's initialized server and its source files.
+/// A golden test's initialized server, its source files, and the
+/// server's `capabilities`.
 fn golden_session(
     env: &Env,
     dir: &Path,
     header: &case::Header,
-) -> Result<(Client, Vec<String>), String> {
-    if header.loose {
-        // As Zed opens a file outside its worktree: rooted at the file's
-        // directory, with no workspace folder (D-1371).
-        let files = loose_sources(dir)?;
-        let mut client = start(env, dir)?;
-        if let Some(settings) = &header.settings {
-            client.set_configuration(settings.clone());
-        }
-        let mut params = client.initialize_params(
-            &header.client.capabilities(header.encoding),
-            header.settings.clone(),
-        )?;
-        if let Some(map) = params.as_object_mut() {
+) -> Result<(Client, Vec<String>, Value), String> {
+    let files = if header.loose {
+        loose_sources(dir)?
+    } else {
+        sources(dir)?
+    };
+    let mut client = start(env, dir)?;
+    if let Some(settings) = &header.settings {
+        client.set_configuration(settings.clone());
+    }
+    let mut params = client.initialize_params(
+        &header.client.capabilities(header.encoding),
+        header.settings.clone(),
+    )?;
+    if let Some(map) = params.as_object_mut() {
+        if header.loose {
+            // As Zed opens a file outside its worktree: rooted at the
+            // file's directory, with no workspace folder (D-1371).
             map.insert("workspaceFolders".to_owned(), json!([]));
         }
-        client.initialize(params)?;
-        Ok((client, files))
-    } else {
-        let files = sources(dir)?;
-        let (client, _) = session(
-            env,
-            dir,
-            header.client,
-            header.encoding,
-            header.settings.clone(),
-        )?;
-        Ok((client, files))
+        if let Some(name) = &header.client_name {
+            map.insert("clientInfo".to_owned(), json!({ "name": name }));
+        }
     }
+    let init = client.initialize(params)?;
+    let capabilities = init.get("capabilities").cloned().unwrap_or(Value::Null);
+    Ok((client, files, capabilities))
+}
+
+/// The position of `marker` in the client's encoding, and the end of its
+/// range when it has one.
+fn marker_range(
+    lines: &Lines<'_>,
+    encoding: Encoding,
+    marker: &case::Marker,
+) -> (Position, Option<Position>) {
+    let at = |line_index: usize, column: usize| Position {
+        line: u32::try_from(line_index).unwrap_or(u32::MAX),
+        character: u32::try_from(
+            lines
+                .line(line_index)
+                .unwrap_or_default()
+                .chars()
+                .take(column)
+                .fold(0_usize, |n, c| n.saturating_add(encoding.units(c))),
+        )
+        .unwrap_or(u32::MAX),
+    };
+    let start = at(marker.line, marker.column);
+    let end = marker
+        .end
+        .map(|column| at(marker.end_line.unwrap_or(marker.line), column));
+    (start, end)
 }
 
 /// The blocks of [`golden_answers`], from a `client` that has not opened
-/// `files` yet.
+/// `files` yet, of a server that advertised `capabilities`.
 fn golden_blocks(
     env: &Env,
     dir: &Path,
     header: &case::Header,
     mut client: Client,
     files: &[String],
+    capabilities: &Value,
 ) -> Result<String, String> {
     let paths = client.paths().clone();
     let uris = open_all(&mut client, files)?;
     let encoding = client.encoding();
+    // An unknown provider fails the examples group; here only completion's
+    // trigger characters and resolve matter.
+    let advertised = Advertised::of(capabilities).unwrap_or_default();
+    let display = |uri: &str| paths.display(uri);
     let mut blocks = Vec::new();
     for (file, uri) in files.iter().zip(&uris) {
         let path = dir.join(file);
@@ -2095,38 +2287,54 @@ fn golden_blocks(
             .map(client::diagnostics_of)
             .unwrap_or_default();
         for marker in case::markers(&text).map_err(|e| format!("{file}: {e}"))? {
-            let line = lines.line(marker.line).unwrap_or_default();
-            let at = |column: usize| Position {
-                line: u32::try_from(marker.line).unwrap_or(u32::MAX),
-                character: u32::try_from(
-                    line.chars()
-                        .take(column)
-                        .fold(0_usize, |n, c| n.saturating_add(encoding.units(c))),
-                )
-                .unwrap_or(u32::MAX),
-            };
-            let (method, params) = case::position_params(
-                &marker.name,
-                uri,
-                at(marker.column),
-                marker.end.map(at),
-                &marker.args,
-                &diagnostics,
-            )?;
+            let (start, end) = marker_range(&lines, encoding, &marker);
+            let (method, mut params) =
+                case::position_params(&marker.name, uri, start, end, &marker.args, &diagnostics)?;
+            if matches!(marker.name.as_str(), "completion" | "apply")
+                && let Some(map) = params.as_object_mut()
+            {
+                let offset = lines.offset(start, encoding);
+                map.insert(
+                    "context".to_owned(),
+                    editing::completion_context(&text, offset, &advertised.completion_triggers),
+                );
+            }
             let mut answer = answer_value(&mut client, method, params, &marker.name)?;
             if let Some(follow_up) = case::hierarchy_follow_up(&marker.name) {
                 answer = follow_hierarchy(&mut client, follow_up, &answer, &marker.name)?;
             }
+            let label = marker.label(file);
+            answer = match marker.name.as_str() {
+                "completion" => {
+                    let words = editing::words(&marker.args)?;
+                    let resolve = advertised.completion_resolve;
+                    completion_block(&mut client, &answer, &words, start, resolve)
+                }
+                "apply" => {
+                    let words = editing::words(&marker.args)?;
+                    let resolve = advertised.completion_resolve;
+                    apply_block(&mut client, &answer, &words, &text, start, resolve)
+                }
+                "signatureHelp" if !is_error(&answer) => editing::signature_help(&answer, encoding),
+                "inlayHint" if !is_error(&answer) => {
+                    Ok(editing::inlay_hints(&answer, &text, encoding, &display))
+                }
+                _ => Ok(answer),
+            }
+            .map_err(|e| format!("{label}: {e}"))?;
             if marker.name == "rangeFormatting" {
                 check_range_formatting(&answer, &text, marker.line)
                     .map_err(|e| format!("{}: {e}", marker.label(file)))?;
             }
-            blocks.push(case::block(&marker.label(file), &paths.normalize(&answer)));
+            blocks.push(case::block(&label, &paths.normalize(&answer)));
         }
         let last = lines.position(text.len(), encoding);
         for name in &header.requests {
             let (method, params) = case::document_params(name, uri, last)?;
-            let answer = answer_value(&mut client, method, params, name)?;
+            let mut answer = answer_value(&mut client, method, params, name)?;
+            if name == "inlayHint" && !is_error(&answer) {
+                answer = editing::inlay_hints(&answer, &text, encoding, &display);
+            }
             if name == "formatting" {
                 check_formatting(env, dir, &text, &answer, encoding)
                     .map_err(|e| format!("{file} formatting: {e}"))?;
@@ -2176,6 +2384,135 @@ fn follow_hierarchy(
         )?);
     }
     Ok(Value::Array(answers))
+}
+
+/// Whether `answer` is a failed request as [`answer_value`] shows it.
+fn is_error(answer: &Value) -> bool {
+    answer
+        .as_object()
+        .is_some_and(|map| map.contains_key("error"))
+}
+
+/// `item` after `completionItem/resolve` when `resolve` is advertised, or
+/// the error it answered as [`answer_value`] shows one.
+fn resolved(client: &mut Client, item: &Value, resolve: bool) -> Result<Value, String> {
+    if !resolve {
+        return Ok(item.clone());
+    }
+    answer_value(client, "completionItem/resolve", item.clone(), "resolve")
+}
+
+/// The block of a `completion` marker at `at` (`tests/lsp/README.md`,
+/// "Editing features"): every item as one line when `words` is empty,
+/// else `count` and the whole of each item a word names, resolved, with
+/// the words that name none under `absent`. Every item's edit must sit on
+/// one line and hold `at` (D-1394).
+fn completion_block(
+    client: &mut Client,
+    answer: &Value,
+    words: &[String],
+    at: Position,
+    resolve: bool,
+) -> Result<Value, String> {
+    if is_error(answer) {
+        return Ok(answer.clone());
+    }
+    let list = editing::completions(answer)?;
+    for item in &list.items {
+        editing::check_edit(item, at)?;
+    }
+    if words.is_empty() {
+        let lines: Vec<String> = list.items.iter().map(editing::summary).collect();
+        return Ok(json!({ "isIncomplete": list.incomplete, "items": lines }));
+    }
+    let mut named = Vec::new();
+    for item in list
+        .items
+        .iter()
+        .filter(|item| words.iter().any(|w| editing::names(item, w)))
+    {
+        let item = resolved(client, item, resolve)?;
+        if !is_error(&item) {
+            editing::check_edit(&item, at)?;
+        }
+        named.push(editing::printed(&item));
+    }
+    let absent: Vec<&String> = words
+        .iter()
+        .filter(|w| !list.items.iter().any(|item| editing::names(item, w)))
+        .collect();
+    let mut block = json!({
+        "count": list.items.len(),
+        "isIncomplete": list.incomplete,
+        "items": named,
+    });
+    if !absent.is_empty()
+        && let Some(map) = block.as_object_mut()
+    {
+        map.insert("absent".to_owned(), json!(absent));
+    }
+    Ok(block)
+}
+
+/// The block of an `apply` marker at `at`: the one item its word names,
+/// resolved, and `text` after accepting it, which must parse with no
+/// syntax error (plan W8). A word that names no item or several, an error
+/// answer and a text that does not parse fail the trial.
+fn apply_block(
+    client: &mut Client,
+    answer: &Value,
+    words: &[String],
+    text: &str,
+    at: Position,
+    resolve: bool,
+) -> Result<Value, String> {
+    let [word] = words else {
+        return Err(format!("`apply` takes one label, not {words:?}"));
+    };
+    if is_error(answer) {
+        return Err(format!("completion answered {answer}"));
+    }
+    let list = editing::completions(answer)?;
+    for item in &list.items {
+        editing::check_edit(item, at)?;
+    }
+    let matching: Vec<&Value> = list
+        .items
+        .iter()
+        .filter(|item| editing::names(item, word))
+        .collect();
+    let item = match matching.as_slice() {
+        [item] => *item,
+        [] => {
+            let offered: Vec<String> = list.items.iter().map(editing::summary).collect();
+            return Err(format!(
+                "no item is named `{word}`; the items are:\n{}",
+                offered.join("\n")
+            ));
+        }
+        several => {
+            let offered: Vec<String> = several.iter().map(|i| editing::summary(i)).collect();
+            return Err(format!(
+                "{} items are named `{word}`; name one as `label@description`:\n{}",
+                several.len(),
+                offered.join("\n")
+            ));
+        }
+    };
+    let item = resolved(client, item, resolve)?;
+    if is_error(&item) {
+        return Err(format!("completionItem/resolve answered {item}"));
+    }
+    editing::check_edit(&item, at)?;
+    let applied = editing::apply_item(text, &item, at, client.encoding())?;
+    let errors = editing::syntax_errors(&applied);
+    if !errors.is_empty() {
+        return Err(format!(
+            "accepting `{word}` gives a text with syntax errors:\n{}\nThe text:\n{applied}",
+            errors.join("\n")
+        ));
+    }
+    Ok(json!({ "item": editing::printed(&item), "text": editing::text_lines(&applied) }))
 }
 
 /// `cheby fmt -`'s output for `text`, `None` when it refuses the text.

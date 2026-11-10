@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a type, found `)`",
+      "range": {
+        "end": {
+          "character": 29,
+          "line": 9
+        },
+        "start": {
+          "character": 28,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:29 completion
+{
+  "isIncomplete": true,
+  "items": [
+    "T | TypeParameter",
+    "Shape | Enum | type Shape {\n  Dot,\n}",
+    "order | Module | (std::order) | `order::`",
+    "Bool | Enum | pub exposed type Bool {\n  False,\n  True,\n}",
+    "F32 | Struct | type F32",
+    "Float | Struct | type Float",
+    "I16 | Struct | type I16",
+    "I32 | Struct | type I32",
+    "I64 | Struct | type I64",
+    "I8 | Struct | type I8",
+    "Int | Struct | type Int",
+    "List | Struct | type List<T>",
+    "Never | Struct | type Never",
+    "Nil | Struct | pub exposed type Nil {\n  Nil,\n}",
+    "Option | Enum | pub exposed type Option<T> {\n  Some(T),\n  None,\n}",
+    "Order | Enum | pub exposed type Order {\n  Less,\n  Equal,\n  Greater,\n}",
+    "Result | Enum | pub exposed type Result<T, E> {\n  Ok(T),\n  Err(E),\n}",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n}",
+    "String | Struct | type String",
+    "U16 | Struct | type U16",
+    "U32 | Struct | type U32",
+    "U64 | Struct | type U64",
+    "U8 | Struct | type U8",
+    "dyn | Keyword"
+  ]
+}
+
+== src/main.cheby:10:29 apply T
+{
+  "item": {
+    "kind": 25,
+    "label": "T",
+    "sortText": "10T",
+    "textEdit": {
+      "newText": "T",
+      "range": {
+        "end": {
+          "character": 28,
+          "line": 9
+        },
+        "start": {
+          "character": 28,
+          "line": 9
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1384",
+    "//! `fn f(x: ) -> Int {`: a type. The item's type parameters come first.",
+    "",
+    "import std::order",
+    "",
+    "type Shape {",
+    "  Dot,",
+    "}",
+    "",
+    "fn first<T>(xs: List<T>, x: T) -> Int {",
+    "//                          ^ completion",
+    "//                          ^ apply T",
+    "  0",
+    "}",
+    ""
+  ]
+}

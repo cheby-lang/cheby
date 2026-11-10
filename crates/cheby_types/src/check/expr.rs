@@ -239,7 +239,9 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         let item = self.input.item(self.own, def)?;
         match (&item.sig, item.kind) {
-            (ItemSig::Error, _) => self.error_expr(span),
+            // Reported with that item's signature, not in this body
+            // (D-494).
+            (ItemSig::Error, _) => self.propagated_error_expr(span),
             (ItemSig::Fn(sig), _) => {
                 let params = item_params(&sig.generics);
                 let Some(inst) = self.instance(def, &params, type_args, span)? else {

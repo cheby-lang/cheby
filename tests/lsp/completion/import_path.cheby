@@ -1,0 +1,9 @@
+// @decisions: D-1372
+//! `import std::`: the next segment of every std module, those the run did
+//! not load from std's index.
+
+import std::
+//          ^ completion order list json io
+//          ^ apply order
+
+fn main() {}

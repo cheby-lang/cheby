@@ -1,0 +1,13 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "27:9 type `: List<Int>` edit 27:9-27:9 `: List<Int>`",
+  "35:11 type `: U8` edit 35:11-35:11 `: U8`",
+  "37:9 type `: Shape` edit 37:9-37:9 `: Shape`",
+  "38:10 type `: Shape` edit 38:10-38:10 `: Shape`",
+  "39:8 type `: Pair<Int>` edit 39:8-39:8 `: Pair<Int>`",
+  "40:14 type `: Result<bytes::Bytes, Nil>`",
+  "41:11 type `: fn(Int) -> Int` edit 41:11-41:11 `: fn(Int) -> Int`"
+]

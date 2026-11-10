@@ -1,0 +1,13 @@
+// @decisions: D-1395
+//! `list::map(names, lengt)`: the parameter takes a function, so an item
+//! of a module the file does not import is written as the bare name
+//! `string::length`, with its import, not as a call (type error state).
+
+import std::list
+
+fn main() {
+  let names = ["a", "bc"]
+  let sizes = list::map(names, lengt)
+  //                                ^ apply length@std::string
+  assert sizes == [1, 2]
+}

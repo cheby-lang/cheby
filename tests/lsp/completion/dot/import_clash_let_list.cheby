@@ -1,0 +1,12 @@
+// @decisions: D-1394, D-1395, D-051
+//! `let list` takes the name `list`, so the import is aliased: a plain
+//! `import std::list` would be E0044.
+
+import std::io
+
+fn main() {
+  let list = [1, 2, 3]
+  let ys = list.rev
+  //               ^ apply reverse
+  io::println("{ys}")
+}

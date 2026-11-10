@@ -1,0 +1,88 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected an expression, found `}`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 10
+        },
+        "start": {
+          "character": 0,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:16 completion inc pair
+{
+  "absent": [
+    "pair"
+  ],
+  "count": 1,
+  "isIncomplete": true,
+  "items": [
+    {
+      "detail": "fn(Int) -> Int",
+      "kind": 6,
+      "label": "inc",
+      "sortText": "150001inc",
+      "textEdit": {
+        "newText": "inc",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 7
+          },
+          "start": {
+            "character": 15,
+            "line": 7
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:8:16 apply inc
+{
+  "item": {
+    "detail": "fn(Int) -> Int",
+    "kind": 6,
+    "label": "inc",
+    "sortText": "150001inc",
+    "textEdit": {
+      "newText": "inc",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 7
+        },
+        "start": {
+          "character": 15,
+          "line": 7
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-244, D-245, D-1479",
+    "//! A local of a one-parameter function type is written bare, at rank 15;",
+    "//! one of two parameters is not offered.",
+    "",
+    "fn main() {",
+    "  let inc = fn(x: Int) { x + 1 }",
+    "  let pair = fn(a: Int, b: Int) { a + b }",
+    "  let n = 1 |> inc",
+    "  //           ^ completion inc pair",
+    "  //           ^ apply inc",
+    "}",
+    ""
+  ]
+}

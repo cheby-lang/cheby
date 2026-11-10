@@ -1,0 +1,152 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `le`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 8
+        },
+        "start": {
+          "character": 17,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 16,
+                "line": 8
+              },
+              "start": {
+                "character": 14,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:20 completion length fold
+{
+  "count": 49,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn fold<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> A",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Combines the elements from front to back, starting from `initial`."
+      },
+      "filterText": "xs.fold",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "fold",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs, initial, f)"
+      },
+      "sortText": "10fold",
+      "textEdit": {
+        "newText": "list::fold(xs, ${1:initial}, ${2:f})$0",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 8
+          },
+          "start": {
+            "character": 14,
+            "line": 8
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn length<T>(xs: List<T>) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the number of elements in `xs` (D-301)."
+      },
+      "filterText": "xs.length",
+      "kind": 3,
+      "label": "length",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs)"
+      },
+      "sortText": "10length",
+      "textEdit": {
+        "newText": "list::length(xs)",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 8
+          },
+          "start": {
+            "character": 14,
+            "line": 8
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:9:20 apply length
+{
+  "item": {
+    "detail": "pub fn length<T>(xs: List<T>) -> Int",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the number of elements in `xs` (D-301)."
+    },
+    "filterText": "xs.length",
+    "kind": 3,
+    "label": "length",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs)"
+    },
+    "sortText": "10length",
+    "textEdit": {
+      "newText": "list::length(xs)",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 8
+        },
+        "start": {
+          "character": 14,
+          "line": 8
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394",
+    "//! `1 + xs.le`: a pipe would read `(1 + xs) |> …`, so the call form is",
+    "//! written, replacing the receiver too.",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let n = 1 + list::length(xs)",
+    "  //               ^ completion length fold",
+    "  //               ^ apply length",
+    "  assert n == 4",
+    "}",
+    ""
+  ]
+}

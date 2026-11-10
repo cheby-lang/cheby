@@ -15,8 +15,10 @@ use super::Server;
 use crate::features::handlers::nav::NavEnv;
 use crate::features::handlers::workspace_symbol::StdSymbols;
 use crate::features::handlers::{
-    folding, format, hierarchy, hover, links, nav, selection, symbols, tokens, workspace_symbol,
+    completion, folding, format, hierarchy, hover, inlay, links, nav, selection, signature,
+    symbols, tokens, workspace_symbol,
 };
+use crate::features::ide::completion::StdAccess;
 use crate::features::ide::hover::StdDocs;
 use crate::features::{Class, RequestCx, Route};
 
@@ -73,7 +75,8 @@ fn nav_env<'a>(cx: &RequestCx<'a>) -> NavEnv<'a> {
 /// The text requests read only the document's live text, so they never
 /// wait. A request that may answer with a place in another open document
 /// is `Package`, so that place is where the client sees it; `declaration`
-/// is `Doc`, as plan §1.10 has it.
+/// is `Doc`, as plan §1.10 has it. `completionItem/resolve` names no
+/// document, only the item's `data`, so it is `Workspace`.
 const QUERIES: &[Route] = &[
     Route {
         method: "textDocument/documentSymbol",
@@ -120,6 +123,54 @@ const QUERIES: &[Route] = &[
                 StdDocs::Service(cx.std),
             )
         }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/completion",
+        class: Class::Doc(|cx, analyzed, params| {
+            completion::completion(
+                cx,
+                analyzed,
+                params,
+                cx.caps.completion,
+                StdAccess::Service(cx.std),
+            )
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "completionItem/resolve",
+        class: Class::Workspace(|cx, packages, params| {
+            completion::resolve(
+                cx,
+                packages,
+                params,
+                cx.caps.completion,
+                StdAccess::Service(cx.std),
+            )
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/signatureHelp",
+        class: Class::Doc(|cx, analyzed, params| {
+            signature::signature_help(
+                cx,
+                analyzed,
+                params,
+                cx.caps.signature,
+                StdDocs::Service(cx.std),
+            )
+        }),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/inlayHint",
+        class: Class::Doc(inlay::inlay_hint),
         fallback: null,
         edits: false,
     },

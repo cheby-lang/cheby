@@ -1,0 +1,49 @@
+error[E0048]: this function takes 2 arguments but 1 argument was supplied
+  --> tests/ui/05-expressions/calls/argument_count_right_arguments.cheby:16:24
+   |
+10 | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+16 |   let one: String = add(1)
+   |                        ^^^ expected 2 arguments
+
+error[E0048]: this function takes 2 arguments but 3 arguments were supplied
+  --> tests/ui/05-expressions/calls/argument_count_right_arguments.cheby:17:18
+   |
+10 | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+17 |   let three = add(1, 2, fn(x: Int) { x + 1 })
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected 2 arguments
+
+error[E0048]: this function takes 2 arguments but 3 arguments were supplied
+  --> tests/ui/05-expressions/calls/argument_count_right_arguments.cheby:18:18
+   |
+10 | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+18 |   let named = add(1, 2, fn(x) { x.name })
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^ expected 2 arguments
+
+error[E0048]: this function takes 2 arguments but 3 arguments were supplied
+   --> tests/ui/05-expressions/calls/argument_count_right_arguments.cheby:19:27
+    |
+19  |   let _doubled = list::map(xs, fn(x) { x * 2 }, 3)
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^ expected 2 arguments
+    |
+   ::: std/list.cheby:429:8
+    |
+429 | pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> {
+    |        --- `map` is declared here
+
+error[E0048]: this function takes 2 arguments but 1 argument was supplied
+   --> tests/ui/05-expressions/calls/argument_count_right_arguments.cheby:20:24
+    |
+20  |   let _none = list::map(xs)
+    |                        ^^^^ expected 2 arguments
+    |
+   ::: std/list.cheby:429:8
+    |
+429 | pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> {
+    |        --- `map` is declared here
+

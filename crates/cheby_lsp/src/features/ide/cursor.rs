@@ -95,7 +95,6 @@ pub(crate) fn pick_ident(at: TokenAt<'_>) -> Option<SyntaxToken<'_>> {
 
 /// The nearest token before `token` that is neither trivia nor a line
 /// break.
-#[cfg_attr(not(test), expect(dead_code, reason = "completion uses it from W8"))]
 #[must_use]
 pub(crate) fn prev_significant(token: SyntaxToken<'_>) -> Option<SyntaxToken<'_>> {
     std::iter::successors(token.prev_token(), |t| t.prev_token()).find(|t| is_significant(t.kind()))

@@ -1,0 +1,120 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `xs`",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 7
+        },
+        "start": {
+          "character": 6,
+          "line": 7
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `pairs`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 8
+        },
+        "start": {
+          "character": 6,
+          "line": 8
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `enumer` in this scope",
+      "range": {
+        "end": {
+          "character": 20,
+          "line": 8
+        },
+        "start": {
+          "character": 14,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `n`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 10
+        },
+        "start": {
+          "character": 6,
+          "line": 10
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `e` in this scope",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 10
+        },
+        "start": {
+          "character": 10,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:21 completion enumerate
+{
+  "absent": [
+    "enumerate"
+  ],
+  "count": 17,
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:11:12 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "pairs | Variable",
+    "xs | Variable | List<String>",
+    "main() | Function | fn main() | `main()`",
+    "Equal | EnumMember | Equal\nof type Order",
+    "Err | EnumMember | Err(E)\nof type Result<T, E> | `Err($1)$0`",
+    "False | EnumMember | False\nof type Bool",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "Nil | Struct | Nil\nof type Nil",
+    "None | EnumMember | None\nof type Option<T>",
+    "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
+    "True | EnumMember | True\nof type Bool",
+    "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",
+    "case { | Snippet | `case {\n  ${1:condition} => $2\n  _ => $0\n}`",
+    "fn | Keyword",
+    "panic | Keyword",
+    "todo | Keyword"
+  ]
+}

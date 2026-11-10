@@ -1,0 +1,61 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a field name, found `}`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 10
+        },
+        "start": {
+          "character": 0,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:13 completion seconds nanoseconds to_seconds
+{
+  "absent": [
+    "seconds",
+    "nanoseconds"
+  ],
+  "count": 12,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn to_seconds(d: duration::Duration) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns `d` in whole seconds, truncated toward zero. It never panics."
+      },
+      "filterText": ".to_seconds",
+      "kind": 3,
+      "label": "to_seconds",
+      "labelDetails": {
+        "description": "duration",
+        "detail": "(d)"
+      },
+      "sortText": "10to_seconds",
+      "textEdit": {
+        "newText": " |> duration::to_seconds",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 8
+          },
+          "start": {
+            "character": 11,
+            "line": 8
+          }
+        }
+      }
+    }
+  ]
+}

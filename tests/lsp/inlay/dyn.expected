@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "19:26 type ` as dyn Shape`",
+  "19:50 type ` as dyn Shape`",
+  "23:46 type ` as dyn Shape`",
+  "24:11 type `: List<dyn Shape>` edit 24:11-24:11 `: List<dyn Shape>`"
+]

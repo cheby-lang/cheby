@@ -1,0 +1,11 @@
+// @decisions: D-1395
+//! `enumer`: `std::list` is loaded but not imported, so its item is
+//! written qualified, with the import as an additional edit (type error
+//! state).
+
+fn main() {
+  let xs = ["a", "b"]
+  let pairs = enumer
+  //                ^ completion enumerate
+  //                ^ apply enumerate
+}

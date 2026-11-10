@@ -1,0 +1,93 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected an expression, found `}`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 15
+        },
+        "start": {
+          "character": 0,
+          "line": 15
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:11 completion
+{
+  "isIncomplete": true,
+  "items": [
+    "wrong | Variable | String",
+    "count | Variable | Int",
+    "main() | Function | fn main() | `main()`",
+    "twice(n) | Function | fn twice(n: Int) -> Int | `twice(${1:n})$0`",
+    "Equal | EnumMember | Equal\nof type Order",
+    "Err | EnumMember | Err(E)\nof type Result<T, E> | `Err($1)$0`",
+    "False | EnumMember | False\nof type Bool",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "Nil | Struct | Nil\nof type Nil",
+    "None | EnumMember | None\nof type Option<T>",
+    "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
+    "True | EnumMember | True\nof type Bool",
+    "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",
+    "case { | Snippet | `case {\n  ${1:condition} => $2\n  _ => $0\n}`",
+    "fn | Keyword",
+    "panic | Keyword",
+    "todo | Keyword"
+  ]
+}
+
+== src/main.cheby:13:11 apply twice
+{
+  "item": {
+    "detail": "fn twice(n: Int) -> Int",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "twice",
+    "labelDetails": {
+      "detail": "(n)"
+    },
+    "sortText": "20twice",
+    "textEdit": {
+      "newText": "twice(${1:n})$0",
+      "range": {
+        "end": {
+          "character": 10,
+          "line": 12
+        },
+        "start": {
+          "character": 10,
+          "line": 12
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1376, D-1383",
+    "//! `let y = ` then `}`: an expression. The binding's own statement holds",
+    "//! the cursor, so `y` is not offered (D-1383). A type error elsewhere",
+    "//! changes nothing.",
+    "",
+    "fn twice(n: Int) -> Int {",
+    "  n * 2",
+    "}",
+    "",
+    "fn main() {",
+    "  let count = 3",
+    "  let wrong: String = count",
+    "  let y = twice(n)",
+    "  //      ^ completion",
+    "  //      ^ apply twice",
+    "}",
+    ""
+  ]
+}

@@ -1,0 +1,14 @@
+error[E0051]: `List` takes 1 type argument but 2 were given
+ --> tests/ui/03-types/inference/unknown_type_beside_own_signature_error.cheby:8:21
+  |
+8 | pub fn count(items: List<Int, Int>) -> Int {
+  |                     ^^^^^^^^^^^^^^ expected 1 type argument
+
+error[E0057]: type annotation needed
+  --> tests/ui/03-types/inference/unknown_type_beside_own_signature_error.cheby:10:13
+   |
+10 |   let _xs = []
+   |             ^^ the type of this is not known
+   |
+   = help: annotate the binding that holds it: `let name: <type> = …`
+

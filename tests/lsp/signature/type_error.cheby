@@ -1,0 +1,32 @@
+// @decisions: D-1380, D-1481, D-1482, D-1485
+//! Signature help in a file with type errors: a wrong argument, more
+//! arguments than parameters, where the index runs past the last one
+//! (D-1481), and a missing argument, with the declared label (D-1482).
+//! A generic call with an extra argument still has its instantiated form,
+//! since its arguments are checked against its parameters (D-1485).
+
+/// Adds two numbers.
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+/// The first of `xs`, or `fallback`.
+fn first_or<T>(xs: List<T>, fallback: T) -> T {
+  case xs {
+    [head, ..] => head
+    [] => fallback
+  }
+}
+
+fn main() {
+  let wrong = add("one", 2)
+  //                     ^ signatureHelp
+  let extra = add(1, 2, 3)
+  //                    ^ signatureHelp
+  let nums: List<Int> = [1, 2]
+  let partial = first_or(nums, )
+  //                           ^ signatureHelp
+  let over = first_or(nums, 0, 1)
+  //                           ^ signatureHelp
+  assert wrong + extra + partial + over > 0
+}

@@ -468,6 +468,52 @@ fn a_literal_gets_its_final_type() {
     });
 }
 
+// @decisions: D-1484, D-133
+#[test]
+fn a_literal_that_meets_an_error_keeps_its_type() {
+    for (items, ty) in [
+        ("fn f() {\n  let k = 1\n  let _ = k |> sh\n}\n", Ty::INT),
+        ("fn f() {\n  let k = 1.5\n  let _ = sh(k)\n}\n", Ty::FLOAT),
+        (
+            "fn f() -> U8 {\n  let k = 1\n  let _ = k |> sh\n  k\n}\n",
+            Ty::U8,
+        ),
+    ] {
+        recorded(items, |r| {
+            let pat = r.node(SyntaxKind::IDENT_PAT, "k = ");
+            assert_eq!(r.body("f").pat(pat), Some(ty), "{items}");
+        });
+    }
+}
+
+// @decisions: D-1485
+#[test]
+fn a_call_with_the_wrong_argument_count_types_its_arguments() {
+    let items = "fn pair<A>(a: A, b: A) -> A {\n  a\n}\n\n\
+                 fn f() -> Int {\n  let g = pair(1, 2, fn(x) { x })\n  pair(fn(x) { x + 1 })\n}\n";
+    recorded(items, |r| {
+        assert!(r.has_code("E0048"));
+        assert!(!r.has_code("E0047"));
+        // `1` and `2` meet `A`; the closure is extra and has its own type.
+        let call = r
+            .body("f")
+            .call(r.node(SyntaxKind::PATH_EXPR, "pair(1"))
+            .unwrap();
+        assert_eq!(r.show_all(&call.params), ["Int", "Int"]);
+        let lit = r.node(SyntaxKind::LITERAL, "2,");
+        assert_eq!(r.body("f").expr(lit).unwrap().ty, Ty::INT);
+        // A closure at a parameter's position gets that parameter's type.
+        let call = r
+            .body("f")
+            .call(r.node(SyntaxKind::PATH_EXPR, "pair(fn"))
+            .unwrap();
+        assert_eq!(
+            r.show_all(&call.params),
+            ["fn(Int) -> Int", "fn(Int) -> Int"]
+        );
+    });
+}
+
 #[test]
 fn a_parenthesis_has_the_inner_facts() {
     let items = format!(

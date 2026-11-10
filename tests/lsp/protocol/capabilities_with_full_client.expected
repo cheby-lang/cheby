@@ -2,6 +2,15 @@
 {
   "capabilities": {
     "callHierarchyProvider": true,
+    "completionProvider": {
+      "resolveProvider": true,
+      "triggerCharacters": [
+        ".",
+        ":",
+        "@",
+        ">"
+      ]
+    },
     "declarationProvider": true,
     "definitionProvider": true,
     "documentFormattingProvider": true,
@@ -13,6 +22,9 @@
     "documentSymbolProvider": true,
     "foldingRangeProvider": true,
     "hoverProvider": true,
+    "inlayHintProvider": {
+      "resolveProvider": false
+    },
     "positionEncoding": "utf-8",
     "referencesProvider": true,
     "selectionRangeProvider": true,
@@ -42,6 +54,12 @@
         ]
       },
       "range": true
+    },
+    "signatureHelpProvider": {
+      "triggerCharacters": [
+        "(",
+        ","
+      ]
     },
     "textDocumentSync": {
       "change": 2,

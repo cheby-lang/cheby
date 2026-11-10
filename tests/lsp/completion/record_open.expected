@@ -1,0 +1,64 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `{`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 12
+        },
+        "start": {
+          "character": 0,
+          "line": 12
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 9
+              },
+              "start": {
+                "character": 10,
+                "line": 9
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `{` is never closed"
+        },
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 17,
+                "line": 10
+              },
+              "start": {
+                "character": 16,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `{` may be the one missing its `}`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:25 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "y | Field | Int | `y: `",
+    "z | Field | Int | `z: `"
+  ]
+}

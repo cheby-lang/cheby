@@ -1,0 +1,202 @@
+== diagnostics
+{}
+
+== src/main.cheby:24:39 signatureHelp
+null
+
+== src/main.cheby:35:19 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "```cheby\nfn(S, Float) -> S\n```\n\n---\n\nGrows by `factor`."
+      },
+      "label": "fn scale(Self, Float) -> Self",
+      "parameters": [
+        {
+          "label": "[9, 13] Self"
+        },
+        {
+          "label": "[15, 20] Float"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:40:5 signatureHelp
+{
+  "activeParameter": 0,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "label": "fn(Int) -> Int",
+      "parameters": [
+        {
+          "label": "[3, 6] Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:52:19 signatureHelp
+{
+  "activeParameter": 0,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:52:28 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:52:31 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:56:40 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "```cheby\nfn(List<Int>, fn(Int) -> Int) -> List<Int>\n```\n\n---\n\nReturns the results of calling `f` on each element, in order."
+      },
+      "label": "fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+      "parameters": [
+        {
+          "label": "[13, 24] xs: List<T>"
+        },
+        {
+          "label": "[26, 39] f: fn(T) -> U"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:58:24 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:60:22 signatureHelp
+{
+  "activeParameter": 0,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "A circle by its radius."
+      },
+      "label": "Circle(Float)",
+      "parameters": [
+        {
+          "label": "[7, 12] Float"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:63:26 signatureHelp
+{
+  "activeParameter": 0,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "```cheby\nfn(Result<Int, String>, fn(Int) -> Result<Int, String>) -> Result<Int, String>\n```\n\n---\n\nThe rest of the block is passed as `next`.\n\n---\n\nCalls `next` with the value of an `Ok`, and returns an `Err` unchanged."
+      },
+      "label": "fn try<T, E, U>(r: Result<T, E>, next: fn(T) -> Result<U, E>) -> Result<U, E>",
+      "parameters": [
+        {
+          "label": "[16, 31] r: Result<T, E>"
+        },
+        {
+          "label": "[33, 60] next: fn(T) -> Result<U, E>"
+        }
+      ]
+    }
+  ]
+}

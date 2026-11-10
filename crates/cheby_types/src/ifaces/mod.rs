@@ -374,6 +374,22 @@ pub(crate) fn dyn_coerce(
 ///
 /// An [`Ice`] if a type parameter's index is out of range.
 pub fn accepts(types: &TyInterner, param: Ty, arg: Ty) -> Result<bool, Ice> {
+    Ok(accepts_binding(types, param, arg)?.is_some())
+}
+
+/// [`accepts`], with what the match bound: when `param` accepts `arg`,
+/// the type each of its function's type parameters stands for, by index,
+/// and `None` for one `param` does not mention. So a caller can test the
+/// bounds that [`accepts`] leaves out. `None` when it does not accept.
+///
+/// # Errors
+///
+/// An [`Ice`] if a type parameter's index is out of range.
+pub fn accepts_binding(
+    types: &TyInterner,
+    param: Ty,
+    arg: Ty,
+) -> Result<Option<Vec<Option<Ty>>>, Ice> {
     let top = tyutil::params_of(types, param)
         .iter()
         .map(|p| p.as_u32())
@@ -384,7 +400,8 @@ pub fn accepts(types: &TyInterner, param: Ty, arg: Ty) -> Result<bool, Ice> {
             .saturating_add(1),
         None => 0,
     };
-    tyutil::match_ty(types, param, arg, &mut vec![None; slots])
+    let mut bound = vec![None; slots];
+    Ok(tyutil::match_ty(types, param, arg, &mut bound)?.then_some(bound))
 }
 
 /// `Self` in interface signatures.

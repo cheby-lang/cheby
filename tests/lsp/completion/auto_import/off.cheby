@@ -1,0 +1,13 @@
+// @settings: {"completion": {"autoImport": false}}
+// @decisions: D-1486, D-1487
+//! `completion.autoImport` off: no item of a module the file does not
+//! import is offered, so no item carries an edit, and the list is
+//! complete at two characters and at one (type error state).
+
+fn main() {
+  let xs = ["a", "b"]
+  let pairs = enumer
+  //                ^ completion enumerate
+  let n = e
+  //       ^ completion
+}

@@ -1,0 +1,13 @@
+// @decisions: D-1383
+//! `Point { x: 1, ` then `}`: the fields not yet written.
+
+type Point {
+  x: Int,
+  y: Int,
+  z: Int,
+}
+
+fn main() {
+  let p = Point { x: 1, 
+  //                    ^ completion
+}

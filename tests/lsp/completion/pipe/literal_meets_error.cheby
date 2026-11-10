@@ -1,0 +1,11 @@
+// @decisions: D-1484
+//! `k |> sh` with `let k = 1`: the literal's type stays `Int` after it
+//! meets the unknown name's error type, so `show` is offered from the head
+//! type's module (type error state).
+
+fn main() {
+  let k = 1
+  let shown = k |> sh
+  //                 ^ completion show
+  assert shown == "1"
+}

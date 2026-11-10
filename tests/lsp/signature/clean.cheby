@@ -1,0 +1,72 @@
+// @decisions: D-1380, D-1384, D-1482
+//! Signature help on clean text: a function, nested calls, a pipe stage
+//! with its hole, a capture, `use`, a positional constructor, an
+//! interface function and function values.
+
+import std::list
+import std::result
+
+/// Something that can grow.
+interface Shape {
+  /// Grows by `factor`.
+  fn scale(Self, Float) -> Self
+}
+
+type Figure {
+  /// A circle by its radius.
+  Circle(Float),
+  Square { side: Float },
+}
+
+fn scale(f: Figure, factor: Float) -> Figure {
+  case f {
+    Circle(r) => Circle(r * factor)
+    Square { side } => Square { side: side * factor }
+    //                                ^ signatureHelp
+  }
+}
+
+/// Adds two numbers.
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn grow<S: Shape>(s: S) -> S {
+  Shape::scale(s, 2.0)
+  //              ^ signatureHelp
+}
+
+fn twice(n: Int, f: fn(Int) -> Int) -> Int {
+  f(f(n))
+  //^ signatureHelp
+}
+
+fn parse(s: String) -> Result<Int, String> {
+  case s {
+    "1" => Ok(1)
+    _ => Err("not one")
+  }
+}
+
+fn main() {
+  let total = add(1, add(2, 3))
+  //              ^ signatureHelp
+  //                       ^ signatureHelp
+  //                          ^ signatureHelp
+  let doubled = [1, 2] |> list::map(_, fn(n) { n * 2 })
+  //                                   ^ signatureHelp
+  let add_one = add(1, _)
+  //                   ^ signatureHelp
+  let shape = Circle(1.0)
+  //                 ^ signatureHelp
+  let r = {
+    use n <- result::try(parse("1"))
+    //                   ^ signatureHelp
+    Ok(n + 1)
+  }
+  assert total + add_one(1) + list::length(doubled) > 0
+  assert scale(shape, 2.0) != shape
+  assert r == Ok(2)
+  assert twice(1, fn(n) { n + 1 }) > 0
+  assert grow(shape) != shape
+}

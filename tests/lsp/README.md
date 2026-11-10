@@ -8,7 +8,7 @@
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `protocol/<name>`          | Handshake, `shutdown` and `exit`, end of input, a frame that is not JSON-RPC, error answers, `$/cancelRequest`, encodings, publishing, standard output holding frames only | two, in `tests/lsp/protocol/` |
 | `format/<name>`            | Formatting of a text no file here can hold, such as CRLF line ends                                                                                                         | none, `cheby fmt` runs        |
-| `examples/<name>`          | Every request the server advertises, at every identifier of every example, is answered with no JSON-RPC error. Formatting returns no edit                                  | none                          |
+| `examples/<name>`          | Every request the server advertises, at every identifier, call and `.` and `\|>` of every example, is answered with no JSON-RPC error. Formatting returns no edit          | none                          |
 | `navigation/<name>`        | An answer followed into another file: `std_round_trip` goes from `io::println` into std's sources, opens that file and hovers in it (R-17)                                 | none                          |
 | `quality/hover_on_mutants` | The quality gate of plan W7: hover on seeded body mutants of the examples, graded against the clean text. Same at or above 90%, key probe at or above 95%                  | none, the clean text's hovers |
 | `symbols/examples/<name>`  | The outline of every source file of an example equals its item list                                                                                                        | none, the parser's items      |
@@ -16,7 +16,7 @@
 | `parity/ui/<name>`         | The published diagnostics equal the `.stderr` golden of a UI check test                                                                                                    | the UI test's own             |
 | `golden/<name>`            | The exact answers of a test in this directory                                                                                                                              | `<name>.expected`             |
 
-The examples group sends only what the server's `capabilities` advertise, so it grows stricter as features land (D-1379). Position requests go to every identifier: hover, definition, declaration, typeDefinition, implementation, references, documentHighlight, completion, signatureHelp, codeAction, prepareCallHierarchy, selectionRange, rangeFormatting and prepareRename, then rename where prepareRename accepted. Each item a prepareCallHierarchy answer holds gets `callHierarchy/incomingCalls` and `callHierarchy/outgoingCalls`. Each file gets the document requests: documentSymbol, formatting, foldingRange, documentLink, codeLens, inlayHint, and `semanticTokens/full` and `semanticTokens/range` over the whole text, as the provider's `full` and `range` say. `workspace/symbol` is asked once with an empty query and once with every distinct name of the example. A `…Provider` the harness does not know fails the trial, so a new capability cannot go unswept.
+The examples group sends only what the server's `capabilities` advertise, so it grows stricter as features land (D-1379). Position requests go to the start of every identifier: hover, definition, declaration, typeDefinition, implementation, references, documentHighlight, codeAction, prepareCallHierarchy, selectionRange, rangeFormatting and prepareRename, then rename where prepareRename accepted. Completion goes to the end of every identifier and after every `.` and `|>`, with the context a typed trigger character sends, and every item of its answer must have an edit on one line that holds the position (D-1394). The first item of each answer is then sent to `completionItem/resolve`, if the server advertises it. Signature help goes inside every argument list: after its `(`, after each of its own commas, and at its `)`. Each of the two has a budget per example, 600 points: beyond it the trial keeps every n-th point, the same on every run, and says on standard error how many it dropped. Each item a prepareCallHierarchy answer holds gets `callHierarchy/incomingCalls` and `callHierarchy/outgoingCalls`. Each file gets the document requests: documentSymbol, formatting, foldingRange, documentLink, codeLens, inlayHint, and `semanticTokens/full` and `semanticTokens/range` over the whole text, as the provider's `full` and `range` say. `workspace/symbol` is asked once with an empty query and once with every distinct name of the example. A `…Provider` the harness does not know fails the trial, so a new capability cannot go unswept.
 
 ### The quality gate
 
@@ -49,17 +49,18 @@ The files here are test input, not examples. They need not be valid Cheby, need 
 
 The file, or a package's `src/main.cheby`, starts with `// @key: value` lines:
 
-| Key          | Value                                         | Default    |
-| ------------ | --------------------------------------------- | ---------- |
-| `@decisions` | the decisions the test pins, `D-NNN, …`       | none       |
-| `@milestone` | the milestone in which the test must pass     | `M1`       |
-| `@client`    | `empty`, `standard` or `full` capabilities    | `standard` |
-| `@encoding`  | the only position encoding the client offers  | none       |
-| `@settings`  | the `cheby` settings object, as JSON (D-1376) | none       |
-| `@requests`  | document requests sent for every source file  | none       |
-| `@package`   | `none`: the file is opened outside a package  | `lsp_test` |
+| Key           | Value                                         | Default             |
+| ------------- | --------------------------------------------- | ------------------- |
+| `@decisions`  | the decisions the test pins, `D-NNN, …`       | none                |
+| `@milestone`  | the milestone in which the test must pass     | `M1`                |
+| `@client`     | `empty`, `standard` or `full` capabilities    | `standard`          |
+| `@encoding`   | the only position encoding the client offers  | none                |
+| `@settings`   | the `cheby` settings object, as JSON (D-1376) | none                |
+| `@requests`   | document requests sent for every source file  | none                |
+| `@package`    | `none`: the file is opened outside a package  | `lsp_test`          |
+| `@clientInfo` | the `clientInfo.name` of `initialize`         | `cheby-lsp-harness` |
 
-The `standard` client announces every capability the server reads but no position encodings, so it runs on UTF-16 (D-1368). `full` adds all three encodings. `@settings` is sent as `initializationOptions` and as the answer to `workspace/configuration`. `@requests` takes `documentSymbol`, `formatting`, `foldingRange`, `documentLink`, `codeLens`, `semanticTokens` (`full`), `semanticTokensRange` (the whole text) and `inlayHint`.
+The `standard` client announces every capability the server reads but no position encodings, so it runs on UTF-16 (D-1368). `full` adds all three encodings. `@clientInfo: Zed` makes the client name itself as Zed does, for the one answer that depends on the name, `filterText` after `xs.` (`features.md` §4.2). `@settings` is sent as `initializationOptions` and as the answer to `workspace/configuration`. `@requests` takes `documentSymbol`, `formatting`, `foldingRange`, `documentLink`, `codeLens`, `semanticTokens` (`full`), `semanticTokensRange` (the whole text) and `inlayHint`.
 
 ### Markers
 
@@ -74,10 +75,10 @@ fn main() {
 ```
 
 - `^ name args` puts the position at the caret's column. `^~~~` makes a range from the caret to the end of the tildes.
-- `//> L:C name args` names the compiler's 1-based line and code-point column instead, for a column a caret cannot reach, such as column 1.
+- `//> L:C name args` names the compiler's 1-based line and code-point column instead, for a column a caret cannot reach, such as column 1. `//> L:C-L:C name args` names a range, its end exclusive, which may span lines.
 - Ordinary comments between a marker and its line are skipped.
 
-The names are `hover`, `definition`, `declaration`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `completion`, `signatureHelp`, `prepareRename`, `rename NEW_NAME`, `codeAction [KIND]`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`, `workspaceSymbol [QUERY]`, `selectionRange` and `rangeFormatting`. `references noDeclaration` leaves out the declaration. A code action gets the published diagnostics that touch its range. `incomingCalls` and `outgoingCalls` send `prepareCallHierarchy` at the marker, then the follow-up with each item it prepared: the block is a list of one answer per item, or the prepare answer itself when it prepared none. `workspaceSymbol` sends only its words, joined by spaces, as the query; its position means nothing.
+The names are `hover`, `definition`, `declaration`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `completion [LABEL…]`, `apply LABEL`, `signatureHelp`, `inlayHint`, `prepareRename`, `rename NEW_NAME`, `codeAction [KIND]`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`, `workspaceSymbol [QUERY]`, `selectionRange` and `rangeFormatting`. `references noDeclaration` leaves out the declaration. A code action gets the published diagnostics that touch its range. `incomingCalls` and `outgoingCalls` send `prepareCallHierarchy` at the marker, then the follow-up with each item it prepared: the block is a list of one answer per item, or the prepare answer itself when it prepared none. `workspaceSymbol` sends only its words, joined by spaces, as the query; its position means nothing.
 
 ### The `.expected` file
 
@@ -106,6 +107,41 @@ The goldens under `hover/`, `definition/`, `references/`, `highlight/`, `hierarc
 - `semanticTokens`: the raw `data` of the answer, five numbers per token, in the legend the server advertises.
 
 Paths are relative to the package, and materialized std files show as `<std>/…`, so goldens hold no absolute path (D-264). The server's version in `serverInfo` shows as `<version>`. Locations of `references` and the edits of `rename` are sorted by path, line and column.
+
+### Editing features
+
+The goldens under `completion/`, `signature/` and `inlay/` pin plan W8. Their answers are printed in a readable form, not as the raw JSON, and were written by hand.
+
+- `completion/`: one test for each broken form of `features.md` §4.1, such as `call_open`, `case_open` and `let_no_value`, plus `clean` and `type_error`. `dot/`, `pipe/` and `auto_import/` cover `xs.`, `|>` and auto-import, on clean text and with type and grammar errors. `dot/multi_line_receiver` and `dot/dollar_in_receiver` pin plan §1.11's edit rule.
+- `signature/`: `clean`, `type_error` and `grammar_error`. `clean` has markers for every kind of callee, nesting, a pipe's hole, a capture and `use`. `type_error` covers a wrong argument and wrong arity, and `grammar_error` recovery from calls that do not parse.
+- `inlay/`: one test for each row of `features.md` §7.1, such as `let_types` and `pipe_stages`, plus `type_error`, `settings`, `disabled` and `range_limit`.
+
+```cheby
+fn main() {
+  let xs = [1, 2]
+  let n = xs.le
+  //           ^ completion
+  //           ^ completion length `case`
+  //           ^ apply length
+  let m = list::fold(xs, 0, )
+  //                        ^ signatureHelp
+}
+//> 2:1-4:1 inlayHint
+```
+
+**The request.** `completion` and `apply` send `textDocument/completion` at the marker. When the character before the position is one of the trigger characters the server advertises, the context is `triggerKind` 2 with that character, as typing it would send. Otherwise it is `triggerKind` 1. `signatureHelp` sends no context. `inlayHint` sends the marker's range: a caret with tildes for a range on one line, `//> L:C-L:C` for one across lines, and a caret alone for an empty range. `@requests: inlayHint` asks over the whole file.
+
+**Completion items.** A `CompletionList` and a bare list of items print alike, as `isIncomplete` and `items`. The list's `itemDefaults` are merged into each item first, as a client merges them. Items are in the client's order: by `sortText`, or the label where there is none, and then as the server sent them.
+
+- `completion` with no words prints every item as one line. The parts are joined by ` | `: the label with `labelDetails.detail` after it, the kind's name (`-` for none), then, where present, `detail`, `labelDetails.description` in parentheses, the text the main edit writes in backticks when it differs from the label, `+N edits` for `additionalTextEdits`, and `deprecated`. So `` "length(xs) | Function | pub fn length<T>(xs: List<T>) -> Int | (list) | ` |> list::length`" ``.
+- `completion` with words prints `count`, the number of items, and the whole JSON of each item a word names, in the client's order. A word names the items whose label it is, or one item as `label@description`, with `labelDetails.description` after the `@`. A label with a space is written in backticks: `` `let guard` ``. When the server advertises `resolveProvider`, each named item is sent to `completionItem/resolve` and the resolved item is printed. `data` is left out, since it is the server's own. A word that names no item is listed under `absent`, which is how a test says an item must not be offered.
+- `apply LABEL` prints the item that `LABEL` names, resolved as above, and `text`: the file after its edits, one string per line. The main edit is the `textEdit`, or for an `InsertReplaceEdit` its `insert` range. A snippet is expanded as a client would expand it: `${1:f}` gives `f`, `${1|a,b|}` gives `a`, `$1` and `$0` give nothing, and `\$`, `\}` and `\\` give the character. Then `additionalTextEdits` apply to the same text. The result must parse with no syntax error, or the trial fails and names the errors. So a test of an item that completes its construct puts one broken construct in its file, and an item that does not complete one is tested with `completion LABEL`. A `LABEL` that names no item, or several, fails the trial. `cheby fmt`'s form is not required (plan W8, S-24).
+
+Whatever the golden says, every item of every completion answer must have an edit on one line that holds the position (D-1394, and the protocol's rule for `textEdit`). For an `InsertReplaceEdit` both ranges must, and `insert` must be a prefix of `replace`. Its `additionalTextEdits` must not overlap the main edit.
+
+**Signature help** prints the answer with each parameter's label as text: a label given as offsets prints as `"[start, end] text"`, the offsets in the negotiated encoding, and a label given as a string prints as it is. Offsets outside the signature's label fail the trial.
+
+**Inlay hints** print as a list of lines, sorted by position: the compiler's 1-based line and code-point column, the kind (`type`, `parameter` or `-`), and the label in backticks. A label of parts prints each part in backticks, joined by `+`, with a part's location after it as `@path:L:C`. Then, where set, `padding-left`, `padding-right`, `tooltip` and each of `textEdits` as `edit L:C-L:C` with its text in backticks. So `` "3:8 type `: List<Int>` edit 3:8-3:8 `: List<Int>`" ``.
 
 `CHEBY_BLESS=1 cargo test -p cheby_cli --test lsp` writes the goldens, and so does `cargo xtask bless`. Review a blessed change like code (D-292). A test of a later milestone is never blessed, and trials without a golden are ignored under blessing. A missing golden fails with the whole answer in the message, so it can also be written by hand.
 

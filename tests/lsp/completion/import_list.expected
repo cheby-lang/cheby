@@ -1,0 +1,51 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `{`",
+      "range": {
+        "end": {
+          "character": 2,
+          "line": 5
+        },
+        "start": {
+          "character": 0,
+          "line": 5
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 20,
+                "line": 2
+              },
+              "start": {
+                "character": 19,
+                "line": 2
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `{` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:3:21 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Order | Enum | pub exposed type Order {\n  Less,\n  Equal,\n  Greater,\n}",
+    "compare(a, b) | Function | pub fn compare(a: Order, b: Order) -> Order | (order)",
+    "reverse(o) | Function | pub fn reverse(o: Order) -> Order | (order)",
+    "show(o) | Function | pub fn show(o: Order) -> String | (order)",
+    "then(first, next) | Function | pub fn then(first: Order, next: fn() -> Order) -> Order | (order)"
+  ]
+}

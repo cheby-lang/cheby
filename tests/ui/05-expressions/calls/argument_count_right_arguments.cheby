@@ -1,0 +1,23 @@
+// @mode: check-fail
+// @decisions: D-1485, D-050, D-494
+//! A call with the wrong number of arguments whose given arguments fit
+//! reports the count alone: an extra argument is checked against the
+//! error type, so an unannotated extra closure reports nothing more, and
+//! the call's own uses report nothing more either (§5.5).
+
+import std::list
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn main() {
+  let xs = [1, 2]
+  let one: String = add(1)
+  let three = add(1, 2, fn(x: Int) { x + 1 })
+  let named = add(1, 2, fn(x) { x.name })
+  let _doubled = list::map(xs, fn(x) { x * 2 }, 3)
+  let _none = list::map(xs)
+  assert one == three
+  assert named == three
+}

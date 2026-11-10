@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "25:8 type `: Shape` edit 25:8-25:8 `: Shape`",
+  "26:8 type `: Shape` edit 26:8-26:8 `: Shape`",
+  "27:8 type `: Shape` edit 27:8-27:8 `: Shape`",
+  "28:8 type `: Box<Int>` edit 28:8-28:8 `: Box<Int>`"
+]

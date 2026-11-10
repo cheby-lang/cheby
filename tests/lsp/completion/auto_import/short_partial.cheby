@@ -1,0 +1,7 @@
+// @decisions: D-1395, D-1487
+//! One character is too few: nothing is imported, and the list is incomplete.
+
+fn main() {
+  let n = e
+  //       ^ completion enumerate
+}

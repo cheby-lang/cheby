@@ -1,0 +1,102 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `rev`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 8
+        },
+        "start": {
+          "character": 16,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 15,
+                "line": 8
+              },
+              "start": {
+                "character": 11,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:20 apply reverse
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::list as std_list\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        }
+      }
+    ],
+    "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the elements of `xs` in the opposite order."
+    },
+    "filterText": ".reverse",
+    "kind": 3,
+    "label": "reverse",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs)"
+    },
+    "sortText": "10reverse",
+    "textEdit": {
+      "newText": " |> std_list::reverse",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 8
+        },
+        "start": {
+          "character": 15,
+          "line": 8
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394, D-1395, D-051",
+    "//! `let list` takes the name `list`, so the import is aliased: a plain",
+    "//! `import std::list` would be E0044.",
+    "",
+    "import std::io",
+    "import std::list as std_list",
+    "",
+    "fn main() {",
+    "  let list = [1, 2, 3]",
+    "  let ys = list |> std_list::reverse",
+    "  //               ^ apply reverse",
+    "  io::println(\"{ys}\")",
+    "}",
+    ""
+  ]
+}

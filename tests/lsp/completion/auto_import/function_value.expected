@@ -1,0 +1,84 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `lengt` in this scope",
+      "range": {
+        "end": {
+          "character": 36,
+          "line": 9
+        },
+        "start": {
+          "character": 31,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:37 apply length@std::string
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::string\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 6
+          },
+          "start": {
+            "character": 0,
+            "line": 6
+          }
+        }
+      }
+    ],
+    "detail": "pub fn length(text: String) -> Int",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the number of code points in `text` (D-302)."
+    },
+    "kind": 3,
+    "label": "length",
+    "labelDetails": {
+      "description": "std::string",
+      "detail": "(text)"
+    },
+    "sortText": "60length",
+    "textEdit": {
+      "newText": "string::length",
+      "range": {
+        "end": {
+          "character": 36,
+          "line": 9
+        },
+        "start": {
+          "character": 31,
+          "line": 9
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1395",
+    "//! `list::map(names, lengt)`: the parameter takes a function, so an item",
+    "//! of a module the file does not import is written as the bare name",
+    "//! `string::length`, with its import, not as a call (type error state).",
+    "",
+    "import std::list",
+    "import std::string",
+    "",
+    "fn main() {",
+    "  let names = [\"a\", \"bc\"]",
+    "  let sizes = list::map(names, string::length)",
+    "  //                                ^ apply length@std::string",
+    "  assert sizes == [1, 2]",
+    "}",
+    ""
+  ]
+}

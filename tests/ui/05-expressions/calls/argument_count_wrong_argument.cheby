@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-1485, D-050
+//! A call with the wrong number of arguments still checks each argument
+//! against the parameter at its position, so a wrong argument type is
+//! reported next to the count (§5.5).
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn main() {
+  let one = add("1")
+  let three = add(1, "2", 3)
+  assert one == three
+}

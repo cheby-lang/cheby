@@ -1,0 +1,67 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `ma` in this scope",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:20 apply map
+{
+  "item": {
+    "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the results of calling `f` on each element, in order."
+    },
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "map",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs, f)"
+    },
+    "sortText": "10map",
+    "textEdit": {
+      "newText": "list::map(_, ${1:f})$0",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-244, D-245",
+    "//! `xs |> ma`: the partial name is replaced (type error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let ys = xs |> list::map(_, f)",
+    "  //               ^ apply map",
+    "  assert ys == xs",
+    "}",
+    ""
+  ]
+}

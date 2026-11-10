@@ -520,7 +520,10 @@ impl BodyCx<'_> {
         }
         let base_ty = self.ty_of(base_id)?;
         let Some(args) = self.update_base(base_id, ty_def, path_span)? else {
-            return self.update_fields_in_error(rec, span);
+            // An E0057 or E0047 of the base was reported, or its type is
+            // the error type, so the update follows from the base (D-494).
+            self.check_update_fields(rec)?;
+            return self.propagated_error_expr(span);
         };
         let mut fields: Vec<UpdateField> = Vec::new();
         let mut seen: Vec<(&str, Span)> = Vec::new();
@@ -578,12 +581,18 @@ impl BodyCx<'_> {
         rec: ast::RecordExpr<'_>,
         span: Span,
     ) -> Result<ExprId, Ice> {
+        self.check_update_fields(rec)?;
+        self.error_expr(span)
+    }
+
+    /// The field values of an update, checked without an expected type.
+    fn check_update_fields(&mut self, rec: ast::RecordExpr<'_>) -> Result<(), Ice> {
         for field in rec.fields() {
             if let Some(value) = field.value() {
                 self.check_expr(value, None)?;
             }
         }
-        self.error_expr(span)
+        Ok(())
     }
 
     /// The type arguments of `base`, whose type must be known here
@@ -664,8 +673,8 @@ impl BodyCx<'_> {
     ) -> Result<(), Ice> {
         match &self.input.item(self.own, def)?.sig {
             // Its declaration has the error (`sig.rs`), so one here would
-            // only repeat it.
-            ItemSig::Error => self.errored = true,
+            // only repeat it. It is not this body's error (D-494).
+            ItemSig::Error => self.propagated = true,
             _ => self.no_fields_to_update(path, span),
         }
         Ok(())
@@ -928,10 +937,10 @@ impl BodyCx<'_> {
             let hint = self.field_owner(text);
             let what = format!("read its field `{text}`");
             self.type_needed(base, base_span, &what, hint.as_deref())?;
-            return self.error_expr(span);
+            return self.propagated_error_expr(span);
         };
         if known == InferTy::ERROR {
-            return self.error_expr(span);
+            return self.propagated_error_expr(span);
         }
         let Some((ty_def, args)) = self.named_parts(&known)? else {
             self.no_fields(&known, text, name_span, base_span);

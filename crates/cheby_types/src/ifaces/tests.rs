@@ -2027,3 +2027,21 @@ fn accepts_binds_the_parameters_variables_one_way() {
         );
     }
 }
+
+#[test]
+fn accepts_binding_gives_what_each_variable_stands_for() {
+    let p = probe(PROBE);
+    let types = p.types();
+    let t = p.param(0);
+    let u = p.param(1);
+    assert_eq!(
+        accepts_binding(types, p.list(u), p.list(Ty::INT)),
+        Ok(Some(vec![None, Some(Ty::INT)]))
+    );
+    assert_eq!(
+        accepts_binding(types, p.tuple(&[t, u]), p.tuple(&[Ty::STRING, Ty::INT])),
+        Ok(Some(vec![Some(Ty::STRING), Some(Ty::INT)]))
+    );
+    assert_eq!(accepts_binding(types, Ty::INT, Ty::INT), Ok(Some(vec![])));
+    assert_eq!(accepts_binding(types, p.list(t), Ty::INT), Ok(None));
+}

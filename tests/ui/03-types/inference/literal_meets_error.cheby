@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-1484, D-133
+//! A number literal's type stays unsettled when it meets the error type
+//! of an unknown name, so a later use that needs another type is still
+//! reported (§3.3.4).
+
+import std::string
+
+pub fn main() {
+  let k = 1
+  let _shown = k |> sh
+  let size = string::length(k)
+  assert size == 1
+}

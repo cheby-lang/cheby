@@ -26,7 +26,7 @@ use cheby_driver::analysis::Target;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// Every setting, with the defaults of D-1376.
+/// Every setting, with the defaults of D-1376 and D-1480.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
@@ -79,9 +79,15 @@ pub(crate) struct CompletionSettings {
 )]
 pub(crate) struct InlaySettings {
     pub enable: bool,
+    /// A `let` whose pattern is one name (D-1480).
     pub let_types: bool,
+    /// Each name of a destructuring `let` (D-1480).
+    pub pattern_binders: bool,
     pub use_binders: bool,
+    /// A closure's parameters and result (D-1480).
     pub closure_types: bool,
+    /// A local function's parameters and result (D-1480).
+    pub local_fn_types: bool,
     pub pipe_stages: bool,
     #[serde(rename = "dyn")]
     pub dyn_: bool,
@@ -170,8 +176,10 @@ impl Default for Settings {
             inlay_hints: InlaySettings {
                 enable: true,
                 let_types: true,
+                pattern_binders: true,
                 use_binders: true,
                 closure_types: true,
+                local_fn_types: true,
                 pipe_stages: true,
                 dyn_: true,
                 parameter_names: false,
@@ -302,8 +310,10 @@ impl Settings {
                 let h = &mut self.inlay_hints;
                 r.bool("enable", &mut h.enable);
                 r.bool("letTypes", &mut h.let_types);
+                r.bool("patternBinders", &mut h.pattern_binders);
                 r.bool("useBinders", &mut h.use_binders);
                 r.bool("closureTypes", &mut h.closure_types);
+                r.bool("localFnTypes", &mut h.local_fn_types);
                 r.bool("pipeStages", &mut h.pipe_stages);
                 r.bool("dyn", &mut h.dyn_);
                 r.bool("parameterNames", &mut h.parameter_names);
@@ -522,5 +532,48 @@ mod tests {
         ] {
             assert_eq!(pushed(&lacking), None, "{lacking}");
         }
+    }
+
+    /// D-1480: `inlayHints.localFnTypes` and `inlayHints.patternBinders`
+    /// are on by default, serialize under their names, and are read like
+    /// the other inlay keys.
+    #[test]
+    fn local_fn_and_pattern_binder_switches() {
+        let (defaults, warnings) = Settings::from_layers([]);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!(defaults.inlay_hints.local_fn_types);
+        assert!(defaults.inlay_hints.pattern_binders);
+        let shown = serde_json::to_value(&defaults).expect("serializes");
+        assert_eq!(shown["inlayHints"]["localFnTypes"], true);
+        assert_eq!(shown["inlayHints"]["patternBinders"], true);
+        let off = json!({ "inlayHints": { "localFnTypes": false, "patternBinders": false } });
+        let (settings, warnings) = Settings::from_layers([&off]);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!(!settings.inlay_hints.local_fn_types);
+        assert!(!settings.inlay_hints.pattern_binders);
+        // The other rows keep their defaults.
+        assert!(settings.inlay_hints.let_types && settings.inlay_hints.closure_types);
+    }
+
+    /// D-1376, D-1480: a bad value of either key falls back per key, to
+    /// what the earlier layers gave it, with a warning naming the key.
+    #[test]
+    fn a_bad_inlay_value_falls_back_per_key() {
+        let first = json!({ "inlayHints": { "localFnTypes": false } });
+        let bad = json!({ "inlayHints": { "localFnTypes": "no", "patternBinders": 0 } });
+        let (settings, warnings) = Settings::from_layers([&first, &bad]);
+        assert!(!settings.inlay_hints.local_fn_types);
+        assert!(settings.inlay_hints.pattern_binders);
+        for key in ["inlayHints.localFnTypes", "inlayHints.patternBinders"] {
+            assert!(
+                warnings.iter().any(|w| w.contains(key)),
+                "no warning for {key}: {warnings:?}"
+            );
+        }
+        let null = json!({ "inlayHints": { "patternBinders": null } });
+        let (settings, warnings) =
+            Settings::from_layers([&json!({ "inlayHints": { "patternBinders": false } }), &null]);
+        assert!(!settings.inlay_hints.pattern_binders);
+        assert_eq!(warnings, Vec::<String>::new());
     }
 }

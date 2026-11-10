@@ -19,13 +19,17 @@
 //!   `initializationOptions` and as the answer to `workspace/configuration`
 //!   (D-1376);
 //! - `@requests: name, …`: document requests sent for each source file,
-//!   such as `documentSymbol` or `formatting`.
+//!   such as `documentSymbol` or `formatting`;
+//! - `@package: none`: the file is opened outside every package (D-1371);
+//! - `@clientInfo: name`: the `clientInfo.name` of `initialize`, such as
+//!   `Zed`, whose `filterText` after `xs.` differs (`features.md` §4.2).
 //!
 //! A marker is a comment line that points at the nearest line above it
 //! that is not a marker: `//   ^ hover` puts the position at the caret's
 //! column, and `^~~~` makes a range of the caret and the tildes. A marker
 //! `//> L:C name args` names the position by the compiler's 1-based line
-//! and code-point column instead, for a column that a caret cannot reach.
+//! and code-point column instead, for a column that a caret cannot reach,
+//! and `//> L:C-L:C name args` a range, which may span lines.
 //! Sources stay valid Cheby either way.
 
 use std::collections::BTreeSet;
@@ -65,6 +69,9 @@ pub struct Header {
     /// `cheby.toml` above it, so the server serves it in single-file mode
     /// (D-1371).
     pub loose: bool,
+    /// `@clientInfo`: the client's name in `initialize`, if not the
+    /// harness's own.
+    pub client_name: Option<String>,
 }
 
 impl Default for Header {
@@ -77,6 +84,7 @@ impl Default for Header {
             settings: None,
             requests: Vec::new(),
             loose: false,
+            client_name: None,
         }
     }
 }
@@ -138,10 +146,16 @@ impl Header {
                     }
                     header.loose = true;
                 }
+                "clientInfo" => {
+                    if value.is_empty() {
+                        return Err("@clientInfo: the name is empty".to_owned());
+                    }
+                    header.client_name = Some(value.to_owned());
+                }
                 other => {
                     return Err(format!(
                         "unknown directive `@{other}`; the keys are decisions, milestone, \
-                         client, encoding, settings, requests and package"
+                         client, encoding, settings, requests, package and clientInfo"
                     ));
                 }
             }
@@ -263,8 +277,11 @@ pub struct Marker {
     pub line: usize,
     /// The 0-based code-point column of the position.
     pub column: usize,
-    /// The end column of a range marker, `^~~`, exclusive.
+    /// The end column of a range marker, `^~~`, exclusive, on `line`.
     pub end: Option<usize>,
+    /// The 0-based end line of a `//> L:C-L:C` range, which may differ
+    /// from `line`; `None` for a range on one line or no range.
+    pub end_line: Option<usize>,
     /// The request's short name, such as `hover`.
     pub name: String,
     /// The words after the name, such as a rename's new name.
@@ -307,7 +324,7 @@ pub fn markers(text: &str) -> Result<Vec<Marker>, String> {
             target = Some(index);
             continue;
         };
-        let (position, rest) = if let Some(explicit) = comment.strip_prefix("> ") {
+        let (position, end_line, rest) = if let Some(explicit) = comment.strip_prefix("> ") {
             let (at, rest) = explicit
                 .trim_start()
                 .split_once(' ')
@@ -321,7 +338,25 @@ pub fn markers(text: &str) -> Result<Vec<Marker>, String> {
                     .and_then(|n| n.checked_sub(1))
                     .ok_or_else(|| format!("line {number}: `{at}` is not a 1-based L:C"))
             };
-            ((parse(l)?, parse(c)?, None), rest.to_owned())
+            // `L:C-L:C` names a range, its end exclusive.
+            let (c, end) = match c.split_once('-') {
+                Some((c, end)) => {
+                    let (el, ec) = end
+                        .split_once(':')
+                        .ok_or_else(|| format!("line {number}: `{at}` is not L:C-L:C"))?;
+                    (c, Some((parse(el)?, parse(ec)?)))
+                }
+                None => (c, None),
+            };
+            let (l, c) = (parse(l)?, parse(c)?);
+            if end.is_some_and(|e| e < (l, c)) {
+                return Err(format!("line {number}: `{at}` ends before it starts"));
+            }
+            match end {
+                Some((el, ec)) if el == l => ((l, c, Some(ec)), None, rest.to_owned()),
+                Some((el, ec)) => ((l, c, Some(ec)), Some(el), rest.to_owned()),
+                None => ((l, c, None), None, rest.to_owned()),
+            }
         } else if comment.trim_start().starts_with('^') {
             let Some(line_above) = target else {
                 return Err(format!("line {number}: a marker with no line above it"));
@@ -334,7 +369,7 @@ pub fn markers(text: &str) -> Result<Vec<Marker>, String> {
             let tildes = after.chars().take_while(|&c| c == '~').count();
             let end = (tildes > 0).then(|| caret.saturating_add(1).saturating_add(tildes));
             let rest: String = after.chars().skip(tildes).collect();
-            ((line_above, caret, end), rest)
+            ((line_above, caret, end), None, rest)
         } else {
             // An ordinary comment: a marker below it still points past it.
             continue;
@@ -349,6 +384,7 @@ pub fn markers(text: &str) -> Result<Vec<Marker>, String> {
             line,
             column,
             end,
+            end_line,
             name: name.to_owned(),
             args: words.map(str::to_owned).collect(),
         });
@@ -368,7 +404,8 @@ pub fn position_method(name: &str) -> Option<&'static str> {
         "implementation" => "textDocument/implementation",
         "references" => "textDocument/references",
         "documentHighlight" => "textDocument/documentHighlight",
-        "completion" => "textDocument/completion",
+        // `apply` asks for completion and applies the item it names.
+        "completion" | "apply" => "textDocument/completion",
         "signatureHelp" => "textDocument/signatureHelp",
         "prepareRename" => "textDocument/prepareRename",
         "rename" => "textDocument/rename",
@@ -382,6 +419,7 @@ pub fn position_method(name: &str) -> Option<&'static str> {
         "workspaceSymbol" => "workspace/symbol",
         "selectionRange" => "textDocument/selectionRange",
         "rangeFormatting" => "textDocument/rangeFormatting",
+        "inlayHint" => "textDocument/inlayHint",
         _ => return None,
     })
 }
@@ -447,6 +485,10 @@ pub struct Advertised {
     pub rename: bool,
     /// Whether `workspace/symbol` is advertised.
     pub workspace_symbol: bool,
+    /// `completionProvider.triggerCharacters`.
+    pub completion_triggers: Vec<String>,
+    /// Whether `completionProvider.resolveProvider` is `true`.
+    pub completion_resolve: bool,
 }
 
 impl Advertised {
@@ -539,11 +581,26 @@ impl Advertised {
         if tokens("range") {
             document.push("semanticTokensRange");
         }
+        let completion = capabilities.get("completionProvider");
+        let completion_triggers = completion
+            .and_then(|c| c.get("triggerCharacters"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        let completion_resolve = completion
+            .and_then(|c| c.get("resolveProvider"))
+            .and_then(Value::as_bool)
+            == Some(true);
         Ok(Self {
             position,
             document,
             rename,
             workspace_symbol: has("workspaceSymbolProvider"),
+            completion_triggers,
+            completion_resolve,
         })
     }
 }
@@ -601,11 +658,12 @@ pub fn position_params(
             "range": range,
             "options": formatting_options(),
         }),
-        "completion" => json!({
+        "completion" | "apply" => json!({
             "textDocument": document,
             "position": start.to_json(),
             "context": { "triggerKind": 1 },
         }),
+        "inlayHint" => json!({ "textDocument": document, "range": range }),
         _ => json!({ "textDocument": document, "position": start.to_json() }),
     };
     Ok((method, params))
@@ -749,6 +807,7 @@ mod tests {
                     line: 1,
                     column: 14,
                     end: None,
+                    end_line: None,
                     name: "hover".to_owned(),
                     args: vec![],
                 },
@@ -756,6 +815,7 @@ mod tests {
                     line: 1,
                     column: 8,
                     end: Some(12),
+                    end_line: None,
                     name: "codeAction".to_owned(),
                     args: vec!["quickfix".to_owned()],
                 },
@@ -775,6 +835,42 @@ mod tests {
         assert_eq!(found[0].args, ["start"]);
         assert!(markers("//> 0:1 hover\n").is_err());
         assert!(markers("//> 1 hover\n").is_err());
+        // A range, on one line or across lines.
+        let found = markers("a\nb\n//> 1:2-1:4 inlayHint\n//> 1:1-3:1 inlayHint\n").unwrap();
+        assert_eq!(
+            (found[0].line, found[0].column, found[0].end),
+            (0, 1, Some(3))
+        );
+        assert_eq!(found[0].end_line, None);
+        assert_eq!((found[1].end, found[1].end_line), (Some(0), Some(2)));
+        assert!(markers("//> 2:1-1:1 inlayHint\n").is_err());
+        assert!(markers("//> 1:1-2 inlayHint\n").is_err());
+    }
+
+    #[test]
+    fn editing_markers() {
+        let found = markers("x.\n//^ apply `let guard`\n// ^ inlayHint\n").unwrap();
+        assert_eq!(
+            position_method(&found[0].name),
+            Some("textDocument/completion")
+        );
+        let at = Position {
+            line: 0,
+            character: 2,
+        };
+        let end = Position {
+            line: 3,
+            character: 0,
+        };
+        let (method, params) =
+            position_params("inlayHint", "file:///a", at, Some(end), &[], &[]).unwrap();
+        assert_eq!(method, "textDocument/inlayHint");
+        assert_eq!(params["range"]["end"], json!({ "line": 3, "character": 0 }));
+        let (_, params) = position_params("apply", "file:///a", at, None, &[], &[]).unwrap();
+        assert_eq!(params["context"], json!({ "triggerKind": 1 }));
+        let header = Header::of("// @clientInfo: Zed\n").unwrap();
+        assert_eq!(header.client_name.as_deref(), Some("Zed"));
+        assert!(Header::of("// @clientInfo:\n").is_err());
     }
 
     #[test]
@@ -813,6 +909,13 @@ mod tests {
         // An unknown provider fails, unless it is not advertised.
         assert!(Advertised::of(&json!({ "monikerProvider": true })).is_err());
         assert!(Advertised::of(&json!({ "monikerProvider": false })).is_ok());
+        let completion = Advertised::of(&json!({
+            "completionProvider": { "triggerCharacters": [".", ">"], "resolveProvider": true },
+        }))
+        .unwrap();
+        assert_eq!(completion.position, ["completion"]);
+        assert_eq!(completion.completion_triggers, [".", ">"]);
+        assert!(completion.completion_resolve);
         let workspace = Advertised::of(&json!({ "workspaceSymbolProvider": true })).unwrap();
         assert!(workspace.workspace_symbol);
         let tokens =

@@ -17,7 +17,7 @@
 
 use cheby_iface::{DefId, Generics, Ice, ItemSig, ModuleInterface, ParamIdx, Ty, TyKind};
 
-pub use crate::ifaces::{OpFn, Reason, Unsatisfied, Want, accepts};
+pub use crate::ifaces::{OpFn, Reason, Unsatisfied, Want, accepts, accepts_binding};
 
 use crate::TypesInput;
 use crate::ifaces::{self, IfaceCx};

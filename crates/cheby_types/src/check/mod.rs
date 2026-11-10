@@ -669,9 +669,18 @@ pub(crate) struct BodyCx<'a> {
     /// them (§6.7).
     pub pat_path: Vec<LocalId>,
     pub diags: Vec<Diagnostic>,
-    /// Whether the body has an error, reported here or before (a silent
-    /// [`cheby_resolve::Res::Err`] or an erroneous signature).
+    /// Whether the body has an error other than E0057, reported here or
+    /// before (by name resolution, [`BodyRes::errored`], a silent
+    /// [`cheby_resolve::Res::Err`] or a syntax error). An E0057 is kept
+    /// only in a body without one (D-494), so it does not set this, nor
+    /// does an expression that only has the error type of its operand
+    /// ([`Self::propagated_error_expr`]), nor a use of an item whose
+    /// signature has an error, which is reported with that signature.
     pub errored: bool,
+    /// Whether the body has an expression that only has the error type of
+    /// its operand ([`Self::propagated_error_expr`]). Such a body is never
+    /// returned, but this alone does not drop an E0057 (D-494).
+    pub propagated: bool,
     /// The top-level item this body belongs to.
     pub item: DefIndex,
     /// What the hooks of `facts.rs` append: `None` unless recording.
@@ -709,7 +718,8 @@ impl<'a> BodyCx<'a> {
             const_deps: Vec::new(),
             pat_path: Vec::new(),
             diags: Vec::new(),
-            errored: false,
+            errored: res.errored,
+            propagated: false,
             item,
             facts: record.then(Box::default),
             facts_out: None,
@@ -805,12 +815,29 @@ impl<'a> BodyCx<'a> {
         self.push(ExprKind::Error, InferTy::ERROR, span)
     }
 
-    /// Records a diagnostic; an error marks the body as errored.
+    /// An error expression that follows from its operand: one of the error
+    /// type, or one whose unknown type is reported as E0057. The error it
+    /// follows from is already counted where it arose, and an E0057 may
+    /// still be dropped at the end of the body (D-494), so this sets
+    /// [`Self::propagated`], not [`Self::errored`].
+    pub fn propagated_error_expr(&mut self, span: Span) -> Result<ExprId, Ice> {
+        self.propagated = true;
+        self.push(ExprKind::Error, InferTy::ERROR, span)
+    }
+
+    /// Records a diagnostic; an error other than E0057 marks the body as
+    /// errored (D-494).
     pub fn report(&mut self, diag: Diagnostic) {
-        if diag.is_error() {
+        if diag.is_error() && diag.code != codes::TYPE_ANNOTATION_NEEDED {
             self.errored = true;
         }
         self.diags.push(diag);
+    }
+
+    /// Whether the body has an error of any kind so far, E0057 and the
+    /// error type of an erroneous signature included.
+    pub fn any_error(&self) -> bool {
+        self.errored || self.propagated || has_error(&self.diags)
     }
 
     /// The inference type of expression `id`.
@@ -828,7 +855,7 @@ impl<'a> BodyCx<'a> {
     pub fn local_ty(&self, local: LocalId) -> Result<InferTy, Ice> {
         match self.locals.try_get(local, "local")? {
             Some(ty) => Ok(ty.clone()),
-            None if self.errored => Ok(InferTy::ERROR),
+            None if self.any_error() => Ok(InferTy::ERROR),
             None => Err(Ice::new(format!(
                 "{local:?} is used before its binding is checked"
             ))),
@@ -976,12 +1003,14 @@ impl<'a> BodyCx<'a> {
         self.report_unresolved(unresolved)?;
         self.check_literals(&exprs);
         self.resolve_deferred(&mut exprs)?;
+        self.drop_unknown_beside_errors();
         self.extract_facts(&exprs, &pat_tys, &locals)?;
-        if self.errored || has_error(&self.diags) {
+        if self.any_error() {
             return Ok(None);
         }
-        // `error_expr` sets `errored`, so this cannot fire today. It guards
-        // a kept body, which `dropped_body`'s rule never sees.
+        // `error_expr` sets `errored` and `propagated_error_expr` sets
+        // `propagated`, so this cannot fire today. It guards a kept body,
+        // which `dropped_body`'s rule never sees.
         if exprs.iter().any(|e| matches!(e.kind, ExprKind::Error)) {
             return Err(Ice::new("an error expression in a body without errors"));
         }
@@ -1003,15 +1032,16 @@ impl<'a> BodyCx<'a> {
 
     /// E0057 for every type variable nothing determined, at the
     /// expression that introduced it, unless the body already has an
-    /// error, which such a type usually follows from
-    /// (D-494).
+    /// error, which such a type usually follows from (D-494). An E0057
+    /// reported while checking, such as at a field access with an unknown
+    /// base, counts here too: the variable stays unknown because of it.
     fn report_unresolved(&mut self, mut unresolved: Vec<TyVid>) -> Result<(), Ice> {
         if unresolved.is_empty() {
             return Ok(());
         }
         unresolved.sort_unstable();
         unresolved.dedup();
-        if self.errored {
+        if self.errored || has_error(&self.diags) {
             return Ok(());
         }
         let mut seen: Vec<Span> = Vec::new();
@@ -1033,8 +1063,23 @@ impl<'a> BodyCx<'a> {
             let diag = self.annotation_needed(span, note.as_ref());
             self.report(diag);
         }
-        self.errored = true;
         Ok(())
+    }
+
+    /// Drops every E0057 of a body that has another error at its end,
+    /// wherever it was found: an unknown type usually follows from that
+    /// error (D-494). The other diagnostics keep their order. Errors of
+    /// other top-level bodies do not count, since each body has its own
+    /// [`BodyCx`] (D-234).
+    fn drop_unknown_beside_errors(&mut self) {
+        let other = self
+            .diags
+            .iter()
+            .any(|d| d.is_error() && d.code != codes::TYPE_ANNOTATION_NEEDED);
+        if self.errored || other {
+            self.diags
+                .retain(|d| d.code != codes::TYPE_ANNOTATION_NEEDED);
+        }
     }
 
     /// E0057 for a type introduced at `span`.

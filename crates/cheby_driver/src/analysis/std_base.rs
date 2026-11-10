@@ -199,6 +199,9 @@ pub struct StdItem {
     /// The heads of a function's or a constructor's parameters, or an
     /// interface function's, in order. Empty for other items.
     pub params: Vec<TypeHead>,
+    /// The names of a function's parameters, in order, for a call written
+    /// with them as placeholders. Empty for other items.
+    pub param_names: Vec<String>,
     /// The head of a function's return type, a constant's type, or the
     /// type a constructor builds. [`TypeHead::Unknown`] for other items.
     pub ret: TypeHead,
@@ -501,6 +504,14 @@ impl Reader<'_> {
             file: home.file.clone(),
             name_range,
             params,
+            param_names: match &item.sig {
+                ItemSig::Fn(sig) => sig
+                    .params
+                    .iter()
+                    .map(|p| self.snapshot.globals().names.get(p.name).to_owned())
+                    .collect(),
+                _ => Vec::new(),
+            },
             ret,
             fields,
             initializer,

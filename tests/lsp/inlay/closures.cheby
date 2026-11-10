@@ -1,0 +1,23 @@
+// @decisions: D-1353, D-1376
+// @requests: inlayHint
+//! Closures and local functions: a hint after each parameter with no
+//! written type, and the result after `)` when none is written
+//! (`features.md` §7.1).
+
+import std::list
+
+fn main() {
+  let doubled = list::map([1, 2], fn(x) { x * 2 })
+  let typed = list::map(doubled, fn(x: Int) -> String { "{x}" })
+  let pairs = list::map(typed, fn(s) { (s, 1) })
+  fn step(acc, (k, _v)) {
+    acc + k
+  }
+  fn keep(n: Int) -> Int {
+    n
+  }
+  fn ignore(_n) {
+    Nil
+  }
+  assert step("", ("a", 1)) == "a" && keep(1) == 1 && pairs != [] && ignore(1) == Nil
+}

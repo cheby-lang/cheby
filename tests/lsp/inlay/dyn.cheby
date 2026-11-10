@@ -1,0 +1,26 @@
+// @decisions: D-1353, D-1376
+// @requests: inlayHint
+//! Implicit `dyn`: a hint after each value converted to `dyn`, written
+//! as the expected type names it (`features.md` §7.1).
+
+interface Shape {
+  fn area(Self) -> Float
+}
+
+type Circle {
+  radius: Float,
+}
+
+fn area(c: Circle) -> Float {
+  c.radius * c.radius * 3.0
+}
+
+fn shapes() -> List<dyn Shape> {
+  [Circle { radius: 1.0 }, Circle { radius: 2.0 }]
+}
+
+fn main() {
+  let one: dyn Shape = Circle { radius: 1.0 }
+  let many = shapes()
+  assert [one] != many
+}

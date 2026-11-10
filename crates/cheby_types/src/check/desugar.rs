@@ -293,7 +293,7 @@ impl BodyCx<'_> {
         let sig = self.value_callee(callee, 1, spans)?;
         let sig = self.note_call(rhs.syntax().id(), sig);
         if matches!(sig.target, Target::Error) {
-            return self.error_expr(span);
+            return self.propagated_error_expr(span);
         }
         let [param] = &sig.params[..] else {
             self.arity_error(None, sig.params.len(), 1, spans);

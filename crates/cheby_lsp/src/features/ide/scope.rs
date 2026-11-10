@@ -120,10 +120,6 @@ pub(crate) fn is_free(
 /// module scope but the prelude's, and no local of any body, has it. An
 /// import's name must be this, or the import needs an alias (D-1395).
 /// `view` is a module of `snapshot`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "W10's rename and W11's fixes check names")
-)]
 pub(crate) fn is_free_in_module(snapshot: &Snapshot, view: ModuleView<'_>, name: &str) -> bool {
     let Some(name) = snapshot.globals().names.lookup(name) else {
         return true;
@@ -167,10 +163,6 @@ pub(crate) fn fresh(
 
 /// Whether the module scope binds `name` as a value from one of the
 /// module's items or imports, which a local must not reuse (E0044).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "W10's rename and W11's fixes check names")
-)]
 fn in_module_scope(view: ModuleView<'_>, name: Name) -> bool {
     view.resolved()
         .and_then(|resolved| resolved.scope.get(Namespace::Value, name))

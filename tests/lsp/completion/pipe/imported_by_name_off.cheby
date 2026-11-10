@@ -1,0 +1,19 @@
+// @settings: {"completion": {"autoImport": false}}
+// @decisions: D-1479, D-1486
+//! `xs |> m`, `xs |> ma` and `xs.ma` with `map` imported by name and
+//! `completion.autoImport` off: `map` is offered as with the setting on,
+//! at the head type's rank, written bare, with no import edit (type error
+//! state).
+
+import std::list::{map}
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs |> m
+  //              ^ completion map
+  let zs = xs |> ma
+  //               ^ completion map
+  let ws = xs.ma
+  //            ^ completion map
+  assert ys == zs && zs == ws
+}

@@ -314,6 +314,12 @@ fn advertised(encoding: &str) -> Value {
         "documentRangeFormattingProvider": true,
         "foldingRangeProvider": true,
         "hoverProvider": true,
+        "completionProvider": {
+            "triggerCharacters": [".", ":", "@", ">"],
+            "resolveProvider": true,
+        },
+        "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
+        "inlayHintProvider": { "resolveProvider": false },
         "definitionProvider": true,
         "declarationProvider": true,
         "typeDefinitionProvider": true,
@@ -506,6 +512,24 @@ fn null_configuration_keeps_settings() {
         json!({ "settings": {} }),
     );
     assert_eq!(client.settings()["analysis"]["debounceMs"], 11);
+    client.stop();
+}
+
+#[test]
+fn inlay_settings_refresh_the_clients_hints() {
+    // A §12.3: a change of `inlayHints.*` asks a client that can take it
+    // for its hints again.
+    let (mut client, _) = Client::start(
+        json!({ "capabilities": { "workspace": { "inlayHint": { "refreshSupport": true } } } }),
+        Vec::new(),
+    );
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": { "inlayHints": { "enable": false } } } }),
+    );
+    let refresh = client.wait_request("workspace/inlayHint/refresh");
+    assert!(refresh.params.is_null(), "{refresh:?}");
+    assert_eq!(client.settings()["inlayHints"]["enable"], false);
     client.stop();
 }
 

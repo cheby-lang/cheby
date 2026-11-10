@@ -1,0 +1,6 @@
+error[E0051]: `List` takes 1 type argument but 0 were given
+ --> tests/ui/05-expressions/calls/argument_count_erroneous_signature.cheby:7:21
+  |
+7 | pub fn count(_text: List) -> Int {
+  |                     ^^^^ expected 1 type argument
+

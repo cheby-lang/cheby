@@ -68,8 +68,8 @@ pub use cheby_types::facts::{
     MissingPat, ModuleFacts, OpFact, ShowFact, UnsatisfiedFact,
 };
 pub use cheby_types::satisfaction::{
-    OpFn, QueryInput, Reason, Unsatisfied, Verdict, Want, accepts, implementors, interfaces_of,
-    reason_text, satisfies,
+    OpFn, QueryInput, Reason, Unsatisfied, Verdict, Want, accepts, accepts_binding, implementors,
+    interfaces_of, reason_text, satisfies,
 };
 pub use cheby_types::{ModuleRefs, TypesInput, infer, thir};
 

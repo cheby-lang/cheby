@@ -1,0 +1,15 @@
+// @decisions: D-1383
+//! `case s {` with no arms: the subject's constructors first, written
+//! with their fields, then `_`. A field whose name is taken is not
+//! punned (D-051).
+
+type Shape {
+  Circle { radius: Float },
+  Rect { width: Float, height: Float },
+  Dot,
+}
+
+fn area(s: Shape, width: Float) -> Float {
+  case s {
+  //      ^ completion
+}

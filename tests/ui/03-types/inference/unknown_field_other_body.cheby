@@ -1,0 +1,23 @@
+// @mode: check-fail
+// @decisions: D-494, D-213, D-234
+//! The rule of D-494 is per top-level body: the mismatch in `count` does
+//! not drop the E0057 of `name_of`, whose body has no other error.
+
+pub type Person {
+  name: String,
+  age: Int,
+}
+
+pub fn count() -> Int {
+  "one"
+}
+
+pub fn name_of() -> String {
+  let get = fn(p) { p.name }
+  get(Person { name: "Ada", age: 36 })
+}
+
+pub fn main() {
+  assert count() == 1
+  assert name_of() == "Ada"
+}

@@ -1,0 +1,105 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `n`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 6
+        },
+        "start": {
+          "character": 6,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0058",
+      "message": "`Option` has no field `ca`",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 6
+        },
+        "start": {
+          "character": 12,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:15 completion case
+{
+  "count": 10,
+  "isIncomplete": false,
+  "items": [
+    {
+      "filterText": "o.case",
+      "insertTextFormat": 2,
+      "kind": 15,
+      "label": "case",
+      "sortText": "50case",
+      "textEdit": {
+        "newText": "case o {\n    Some(_) => ${1:todo}\n    None => ${2:todo}\n  }$0",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 6
+          },
+          "start": {
+            "character": 10,
+            "line": 6
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:7:15 apply case
+{
+  "item": {
+    "filterText": "o.case",
+    "insertTextFormat": 2,
+    "kind": 15,
+    "label": "case",
+    "sortText": "50case",
+    "textEdit": {
+      "newText": "case o {\n    Some(_) => ${1:todo}\n    None => ${2:todo}\n  }$0",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 6
+        },
+        "start": {
+          "character": 10,
+          "line": 6
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394, D-1156",
+    "//! `o.ca` on an `Option`: a `case` with one arm per constructor, each",
+    "//! body a `todo` to fill.",
+    "",
+    "fn main() {",
+    "  let o = Some(1)",
+    "  let n = case o {",
+    "    Some(_) => todo",
+    "    None => todo",
+    "  }",
+    "  //          ^ completion case",
+    "  //          ^ apply case",
+    "}",
+    ""
+  ]
+}

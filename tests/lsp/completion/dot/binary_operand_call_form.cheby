@@ -1,0 +1,13 @@
+// @decisions: D-1394
+//! `1 + xs.le`: a pipe would read `(1 + xs) |> …`, so the call form is
+//! written, replacing the receiver too.
+
+import std::list
+
+fn main() {
+  let xs = [1, 2, 3]
+  let n = 1 + xs.le
+  //               ^ completion length fold
+  //               ^ apply length
+  assert n == 4
+}

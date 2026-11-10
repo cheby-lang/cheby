@@ -17,10 +17,6 @@ const MAX_VARIANTS: usize = 16;
 
 /// What [`Printer::type_source`] gives: a type as code, and the modules
 /// the code needs that the module does not import.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "W8 and W11 write types as code")
-)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TypeSource {
     /// The type, valid in the module once `imports` are imported.
@@ -95,10 +91,6 @@ impl<'s> Printer<'s> {
     /// `ty` as code the module can hold (X §1.5). `None` when it has an
     /// unknown part, or a type parameter that `generics` does not name, so
     /// the caller offers nothing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "W8 and W11 write types as code")
-    )]
     pub(crate) fn type_source(&self, ty: Ty, generics: Option<&Generics>) -> Option<TypeSource> {
         if !self.writable(ty, generics) {
             return None;
@@ -116,10 +108,6 @@ impl<'s> Printer<'s> {
 
     /// Whether every part of `ty` can be written: no unknown part, and
     /// every type parameter named by `generics`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "W8 and W11 write types as code")
-    )]
     fn writable(&self, ty: Ty, generics: Option<&Generics>) -> bool {
         match self.snapshot.globals().types.kind(ty) {
             TyKind::Error => false,

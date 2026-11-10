@@ -77,6 +77,7 @@ fn resolve_item(
         later_fns: Vec::new(),
         binding_params: None,
         visible_from: None,
+        body_from: 0,
     };
     let mut has_body = false;
     match item {
@@ -181,6 +182,15 @@ fn resolve_item(
     }
     let sig_paths = std::mem::take(&mut cx.sig_paths);
     let generics = std::mem::take(&mut cx.generics);
+    // Only an error a REPL entry keeps counts: E0044 against a session
+    // name is dropped there (D-193). In a module, every error of the body
+    // is kept, since its primary and secondary spans are in its file.
+    let file = input.tree.file();
+    cx.res.errored = cx
+        .diags
+        .iter()
+        .skip(cx.body_from)
+        .any(|d| d.is_error() && crate::repl::keep_entry_diagnostic(d, file));
     let body = has_body.then(|| std::mem::take(&mut cx.res));
     Ok(Outcome {
         sig_paths,
@@ -213,6 +223,9 @@ struct Cx<'a, 'd> {
     /// Where the names of the current `let`, `use` or `let guard` become
     /// visible. `None` elsewhere: a name is visible from its own end.
     visible_from: Option<TextSize>,
+    /// The number of diagnostics before the body: those after it are the
+    /// body's, for [`BodyRes::errored`] (D-494).
+    body_from: usize,
 }
 
 /// Where the scope of `block`'s names ends: at its `}`, or, with none,
@@ -318,6 +331,7 @@ impl Cx<'_, '_> {
     /// Ends the signature: what follows is the item's body.
     fn enter_body(&mut self) {
         self.in_sig = false;
+        self.body_from = self.diags.len();
     }
 
     fn generics(&mut self, list: Option<TypeParamList<'_>>) -> Result<(), Ice> {

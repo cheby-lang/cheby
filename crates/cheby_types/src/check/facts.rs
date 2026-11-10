@@ -19,7 +19,6 @@ use crate::facts::{
     BodyFacts, CallFact, CallLog, CaseFact, DynFact, ExprFact, ExprLog, FactLog, FieldFact,
     FieldLog, FieldSite, MismatchFact, OpFact, ShowFact, UnsatisfiedFact,
 };
-use crate::has_error;
 use crate::ifaces::Unsatisfied;
 use crate::infer::{InferTy, TyVid};
 use crate::thir::{self, Callee, Expr, ExprId, ExprKind, InterpPart, OpImpl, PatId};
@@ -300,7 +299,7 @@ impl BodyCx<'_> {
         unsatisfied.dedup_by_key(|u| u.span.range);
         self.facts_out = Some(BodyFacts {
             item: self.item,
-            errored: self.errored || has_error(&self.diags),
+            errored: self.any_error(),
             exprs: expr_facts.into(),
             pats: pats.into(),
             locals: locals.clone(),

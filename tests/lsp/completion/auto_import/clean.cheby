@@ -1,0 +1,10 @@
+// @decisions: D-1395
+//! A clean file: the name typed resolves to a local, and `std::list`'s
+//! `unique` matches it too, with its import.
+
+fn main() {
+  let uniq = 1
+  let n = uniq
+  //          ^ completion uniq unique
+  assert n == 1
+}

@@ -1,0 +1,47 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `n`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 4
+        },
+        "start": {
+          "character": 6,
+          "line": 4
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `e` in this scope",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 4
+        },
+        "start": {
+          "character": 10,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:12 completion enumerate
+{
+  "absent": [
+    "enumerate"
+  ],
+  "count": 16,
+  "isIncomplete": true,
+  "items": []
+}

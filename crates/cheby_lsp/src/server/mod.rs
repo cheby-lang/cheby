@@ -613,9 +613,14 @@ impl Server {
             }
         }
         let target_changed = settings.analysis.target != self.settings.analysis.target;
+        let inlays_changed = settings.inlay_hints != self.settings.inlay_hints;
         self.settings = Arc::new(settings);
         if target_changed {
             self.mark_all_dirty();
+        }
+        // The client asks again for the hints it shows (A §12.3).
+        if inlays_changed && self.caps.inlay_refresh {
+            self.request("workspace/inlayHint/refresh", Value::Null, Outgoing::Ignore);
         }
     }
 

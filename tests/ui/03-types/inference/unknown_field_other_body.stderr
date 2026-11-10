@@ -1,0 +1,19 @@
+error[E0047]: mismatched types
+  --> tests/ui/03-types/inference/unknown_field_other_body.cheby:12:3
+   |
+11 | pub fn count() -> Int {
+   |                   --- expected because of this return type
+12 |   "one"
+   |   ^^^^^ expected `Int`, found `String`
+
+error[E0057]: type annotation needed
+  --> tests/ui/03-types/inference/unknown_field_other_body.cheby:16:21
+   |
+16 |   let get = fn(p) { p.name }
+   |                -    ^ the type of `p` must be known here to read its field `name`
+   |                |
+   |                `p` is bound here
+   |
+   = note: field names are not unique across types, so the type must come from an annotation, a signature or a use checked earlier (D-213)
+   = help: annotate the parameter: `fn(p: Person)`
+

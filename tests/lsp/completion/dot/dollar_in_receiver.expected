@@ -1,0 +1,167 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `n`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 7
+        },
+        "start": {
+          "character": 6,
+          "line": 7
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0058",
+      "message": "`String` has no field `le`",
+      "range": {
+        "end": {
+          "character": 26,
+          "line": 7
+        },
+        "start": {
+          "character": 24,
+          "line": 7
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 23,
+                "line": 7
+              },
+              "start": {
+                "character": 14,
+                "line": 7
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `String`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:27 completion slice length
+{
+  "count": 30,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn length(text: String) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the number of code points in `text` (D-302)."
+      },
+      "filterText": "\"a$b}\\\\c\".length",
+      "kind": 3,
+      "label": "length",
+      "labelDetails": {
+        "description": "string",
+        "detail": "(text)"
+      },
+      "sortText": "10length",
+      "textEdit": {
+        "newText": "string::length(\"a$b}\\\\c\")",
+        "range": {
+          "end": {
+            "character": 26,
+            "line": 7
+          },
+          "start": {
+            "character": 14,
+            "line": 7
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn slice(text: String, start: Int, end: Int) -> String",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the code points of `text` from `start` up to but not including `end` (D-319)."
+      },
+      "filterText": "\"a$b}\\\\c\".slice",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "slice",
+      "labelDetails": {
+        "description": "string",
+        "detail": "(text, start, end)"
+      },
+      "sortText": "10slice",
+      "textEdit": {
+        "newText": "string::slice(\"a\\$b\\}\\\\\\\\c\", ${1:start}, ${2:end})$0",
+        "range": {
+          "end": {
+            "character": 26,
+            "line": 7
+          },
+          "start": {
+            "character": 14,
+            "line": 7
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:8:27 apply slice
+{
+  "item": {
+    "detail": "pub fn slice(text: String, start: Int, end: Int) -> String",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the code points of `text` from `start` up to but not including `end` (D-319)."
+    },
+    "filterText": "\"a$b}\\\\c\".slice",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "slice",
+    "labelDetails": {
+      "description": "string",
+      "detail": "(text, start, end)"
+    },
+    "sortText": "10slice",
+    "textEdit": {
+      "newText": "string::slice(\"a\\$b\\}\\\\\\\\c\", ${1:start}, ${2:end})$0",
+      "range": {
+        "end": {
+          "character": 26,
+          "line": 7
+        },
+        "start": {
+          "character": 14,
+          "line": 7
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394",
+    "//! The call form copies the receiver into a snippet, so its `$`, `}` and",
+    "//! `\\` are escaped.",
+    "",
+    "import std::string",
+    "",
+    "fn main() {",
+    "  let n = 1 + string::slice(\"a$b}\\\\c\", start, end)",
+    "  //                      ^ completion slice length",
+    "  //                      ^ apply slice",
+    "}",
+    ""
+  ]
+}

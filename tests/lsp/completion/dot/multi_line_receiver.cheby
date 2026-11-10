@@ -1,0 +1,18 @@
+// @decisions: D-1394
+//! A receiver on several lines: the pipe form replaces only `.ma`, so the
+//! edit sits on one line. As an operand, no form keeps the meaning on one
+//! line, so no function is offered.
+
+import std::list
+
+fn main() {
+  let ys = [
+    1,
+    2,
+  ].ma
+  //   ^ apply map
+  let n = 1 + [
+    1,
+  ].le
+  //   ^ completion length
+}

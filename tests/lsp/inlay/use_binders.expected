@@ -1,0 +1,8 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "18:8 type `: Int`",
+  "19:16 type `: String`"
+]

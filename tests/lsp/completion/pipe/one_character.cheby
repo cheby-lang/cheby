@@ -1,0 +1,11 @@
+// @decisions: D-1487
+//! `xs |> u` in a file that does not import `std::list`: one character
+//! offers no function that needs an import, and the list is incomplete,
+//! so the client asks again at the second (type error state).
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs |> u
+  //              ^ completion unique
+  assert ys == xs
+}

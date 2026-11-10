@@ -289,6 +289,13 @@ impl Snapshot {
         self.single_file
     }
 
+    /// The run's targets, after `--target` narrowed the manifest's: an item
+    /// the package names must exist on each of them (§12.5).
+    #[must_use]
+    pub const fn targets(&self) -> Targets {
+        self.targets
+    }
+
     /// The state of the run.
     #[must_use]
     pub const fn status(&self) -> &AnalysisStatus {
