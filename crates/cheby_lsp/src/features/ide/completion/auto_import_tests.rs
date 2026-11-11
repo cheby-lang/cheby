@@ -1,8 +1,8 @@
 //! Auto-import (X §4.4, D-1395): the two-character rule, the sources
 //! (package modules, loaded std, std's index), the import as an
 //! additional edit with an alias on a clash, the type namespace, and the
-//! cap. Each test runs the front end, so each carries the Windows ignore
-//! (D-545, D-641).
+//! cap. Each test runs only the front end, so it runs on Windows too
+//! (D-1516).
 
 use std::sync::{Arc, OnceLock};
 
@@ -43,7 +43,6 @@ fn imported(found: &Completions) -> Vec<(String, String)> {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn one_character_imports_nothing() {
     let (found, _) = at("fn main() {\n  let n = r‸\n}\n", &[]);
     assert_eq!(imported(&found), Vec::<(String, String)>::new());
@@ -55,7 +54,6 @@ fn one_character_imports_nothing() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_loaded_module_is_imported_by_an_additional_edit() {
     let main = "//! Main.\n\nfn main() {\n  let xs = [1]\n  let n = xs_rev‸\n}\n";
     let (found, _) = at(main, &[]);
@@ -87,7 +85,6 @@ fn slice(text: &str, range: TextRange) -> &str {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_taken_name_imports_with_an_alias() {
     let main = "fn main() {\n  let list = [1]\n  let n = revers‸\n}\n";
     let (found, _) = at(main, &[]);
@@ -104,7 +101,6 @@ fn a_taken_name_imports_with_an_alias() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn modules_the_run_did_not_load_come_from_the_index() {
     let main = "fn main() {\n  let n = url_enc‸\n}\n";
     let (found, text) = at(main, &[]);
@@ -120,7 +116,6 @@ fn modules_the_run_did_not_load_come_from_the_index() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn package_modules_are_offered_and_imported_modules_are_not() {
     let main = "fn main() {\n  let n = orig‸\n}\n";
     let (found, _) = at(main, &[]);
@@ -153,7 +148,6 @@ fn package_modules_are_offered_and_imported_modules_are_not() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_type_imports_its_module() {
     let main = "fn wait(d: Durat‸) {\n}\n";
     let (found, text) = at(main, &[]);
@@ -170,7 +164,6 @@ fn a_type_imports_its_module() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn the_list_is_capped_and_incomplete() {
     let (found, _) = at("fn main() {\n  let n = in‸\n}\n", &[]);
     let names = imported(&found);
@@ -185,7 +178,6 @@ fn the_list_is_capped_and_incomplete() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_function_value_is_written_bare() {
     // The parameter takes a function, so the item names it: no call, as
     // for the module's own items (X §4.1).

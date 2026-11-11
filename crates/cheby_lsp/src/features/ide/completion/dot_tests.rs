@@ -1,8 +1,8 @@
 //! Completion after `xs.` (X §4.2, D-1394, plan §1.11): fields, the pipe
 //! form that replaces only `.partial`, the call form where a pipe would
 //! change meaning, `filterText` by client, imports with an alias on a
-//! clash (D-1395), and the postfix `case`. Each test runs the front end,
-//! so each carries the Windows ignore (D-545, D-641).
+//! clash (D-1395), and the postfix `case`. Each test runs only the front end, so
+//! it runs on Windows too (D-1516).
 
 use cheby_driver::analysis::{ModuleView, TextRange};
 
@@ -134,7 +134,6 @@ const PLAIN: Options = Options {
 };
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_list_offers_its_module_in_the_pipe_form_with_an_import() {
     let main = "fn main() {\n  let xs = [1, 2]\n  let ys = xs.ma‸\n  assert ys == xs\n}\n";
     let (found, text) = at(main, IMPORTING);
@@ -160,7 +159,6 @@ fn a_list_offers_its_module_in_the_pipe_form_with_an_import() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn auto_import_off_offers_no_function_that_needs_an_import() {
     // `std::list` is the head's module, but the file does not import it
     // (D-1486).
@@ -179,7 +177,6 @@ fn auto_import_off_offers_no_function_that_needs_an_import() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_plain_client_gets_parameter_names() {
     let main = "import std::list\n\nfn main() {\n  let xs = [1, 2]\n  let ys = xs.‸\n}\n";
     let (found, text) = at(main, PLAIN);
@@ -191,7 +188,6 @@ fn a_plain_client_gets_parameter_names() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn zed_filters_on_the_name() {
     let main = "fn main() {\n  let xs = [1, 2]\n  let ys = xs.ma‸\n}\n";
     let zed = Options {
@@ -203,7 +199,6 @@ fn zed_filters_on_the_name() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_taken_module_name_imports_with_an_alias() {
     let main = "fn main() {\n  let list = [1]\n  let xs = [1, 2]\n  let ys = xs.ma‸\n}\n";
     let (found, _) = at(main, IMPORTING);
@@ -219,7 +214,6 @@ fn a_taken_module_name_imports_with_an_alias() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_operand_gets_the_call_form() {
     // `1 + xs |> f` would be `(1 + xs) |> f`... and `xs |> f + 1` would
     // pipe into `f + 1`: the call form keeps the meaning.
@@ -245,7 +239,6 @@ fn an_operand_gets_the_call_form() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_receiver_on_several_lines_keeps_the_edit_on_one_line() {
     let main = "import std::list\n\nfn main() {\n  let ys = [\n    1,\n    2,\n  ].ma‸\n}\n";
     let (found, text) = at(main, ON);
@@ -263,7 +256,6 @@ fn a_receiver_on_several_lines_keeps_the_edit_on_one_line() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_receiver_in_a_snippet_is_escaped() {
     let main = "import std::string\n\nfn main() {\n  let n = 1 + \"a$b}\\\\c\".le‸\n}\n";
     let (found, _) = at(main, ON);
@@ -279,7 +271,6 @@ fn a_receiver_in_a_snippet_is_escaped() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn fields_are_those_every_variant_has_with_one_type() {
     let shapes = (
         "shapes.cheby",
@@ -310,7 +301,6 @@ fn fields_are_those_every_variant_has_with_one_type() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_interpolation_offers_fields_only() {
     let main = "import app::geo\n\nfn main() {\n  let p = geo::origin\n  let s = \"{p.‸}\"\n}\n";
     let (found, text) = at(main, ON);
@@ -320,7 +310,6 @@ fn an_interpolation_offers_fields_only() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_unknown_receiver_offers_nothing() {
     let main = "fn main() {\n  let n = nowhere.‸\n}\n";
     let (found, _) = at(main, ON);
@@ -328,7 +317,6 @@ fn an_unknown_receiver_offers_nothing() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn type_driven_off_leaves_fields_only() {
     let main = "import app::geo\n\nfn main() {\n  let p = geo::origin\n  let n = p.‸\n}\n";
     let off = Options {
@@ -345,7 +333,6 @@ fn type_driven_off_leaves_fields_only() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_later_parameter_ranks_five_later() {
     let main = "fn put(n: Int, xs: List<Int>) -> List<Int> {\n  xs\n}\n\nfn main() {\n  let xs = [1, 2]\n  let ys = xs.p‸\n}\n";
     let (found, _) = at(main, ON);
@@ -355,7 +342,6 @@ fn a_later_parameter_ranks_five_later() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn postfix_case_writes_an_arm_per_constructor() {
     let main = "fn main() {\n  let o = Some(1)\n  let n = o.ca‸\n}\n";
     let (found, text) = at(main, ON);
@@ -379,7 +365,6 @@ fn postfix_case_writes_an_arm_per_constructor() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn functions_of_one_name_from_two_modules_both_stay() {
     let main = "import std::list\n\nfn length(xs: List<Int>, extra: Int) -> Int {\n  extra\n}\n\nfn main() {\n  let xs = [1]\n  let n = xs.le‸\n  n\n}\n";
     let (found, _) = at(main, ON);

@@ -1,6 +1,6 @@
 //! Tests of the type hints: each row of X §7.1 and its skip rules, on
-//! clean text and on a body with a type error. Each test runs the front
-//! end, so each carries the Windows ignore (D-545, D-641).
+//! clean text and on a body with a type error. Each test runs only the
+//! front end, so it runs on Windows too (D-1516).
 
 use cheby_driver::analysis::TextRange;
 
@@ -51,7 +51,6 @@ fn check(text: &str, expected: &str) {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn let_types_and_their_skips() {
     let text = r#"import std::base64
 
@@ -129,7 +128,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn pattern_binders_show_after_each_name_with_no_edit() {
     let text = r#"type Point { x: Int, y: Float }
 
@@ -163,7 +161,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn use_binders() {
     let text = r#"fn twice(f: fn(Int, String) -> Int) -> Int {
   f(1, "a") * 2
@@ -205,7 +202,6 @@ fn string_length(s: String) -> Int {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn closures_and_local_functions() {
     let text = r#"import std::list
 
@@ -249,7 +245,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn pipe_stages_on_multi_line_pipelines() {
     let text = r#"import std::list
 
@@ -295,7 +290,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn implicit_dyn_after_the_value() {
     let text = r"interface Shape {
   fn area(Self) -> Float
@@ -341,7 +335,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_type_error_keeps_types_and_skips_unknown_parts() {
     let text = r#"import std::list
 
@@ -371,7 +364,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn switches_turn_rows_off() {
     let text = r"import std::list
 
@@ -408,7 +400,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_range_limits_the_hints_but_not_the_rows() {
     let text = "fn main() {\n  let a = [1]\n  let b = [a]\n  let c = [b]\n  assert c != []\n}\n";
     let start = u32::try_from(text.find("let b").unwrap()).unwrap();
@@ -431,7 +422,6 @@ fn a_range_limits_the_hints_but_not_the_rows() {
 /// fields do not write their type's name, so they keep theirs, and a
 /// generic record keeps its hint.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn only_a_non_generic_record_literal_skips_its_let_hint() {
     let text = r"type Point { x: Int }
 
@@ -466,7 +456,6 @@ fn main() {
 /// `patternBinders` covers a destructuring `let` and `letTypes` only a
 /// `let` whose pattern is one name.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn local_functions_and_pattern_binders_have_their_own_switches() {
     let text = r"import std::list
 

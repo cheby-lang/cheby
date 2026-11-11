@@ -1,7 +1,7 @@
 //! Import plans: where a new import goes in the text (D-1030, D-1148,
 //! E0018), and the plan over a run: an existing binding, an alias on a
-//! clash (D-1395), and refusals. Tests that analyze carry the Windows
-//! ignore (D-545, D-641).
+//! clash (D-1395), and refusals. Tests that analyze run only the front
+//! end, so they run on Windows too (D-1516).
 
 use std::sync::Arc;
 
@@ -146,7 +146,6 @@ fn plan(main: &str, files: &[(&str, &str)], target: &str) -> Option<ImportPlan> 
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_imported_module_is_named_by_its_binding() {
     let main = "import std::list as l\n\nfn main() {\n  assert l::length([1]) == 1\n}\n";
     assert_eq!(
@@ -159,7 +158,6 @@ fn an_imported_module_is_named_by_its_binding() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_name_taken_anywhere_in_the_file_gets_an_alias() {
     // `let list` in another function still clashes: E0044 (D-1395).
     let main = "fn f() -> Int {\n  let list = 1\n  list\n}\n\nfn main() {\n  assert f() == 1\n}\n";
@@ -185,7 +183,6 @@ fn a_name_taken_anywhere_in_the_file_gets_an_alias() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn imports_that_would_be_errors_are_refused() {
     let main = "import app::util\n\nfn main() {\n  assert util::one() == 1\n}\n";
     // `util` imports `main`: importing it back closes a cycle (E0040).

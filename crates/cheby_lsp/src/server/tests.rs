@@ -675,7 +675,6 @@ fn second_initialize_is_invalid_request() {
 /// generation }`: the package root as a URI, and the generation of its
 /// newest snapshot, the one `cheby/status` names (D-1492).
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn idle_follows_the_first_job_and_status_lists_the_package() {
     let package = Temp::package("idle", &[("src/main.cheby", MAIN)]);
     let params = package.params(&json!({
@@ -715,7 +714,6 @@ fn idle_follows_the_first_job_and_status_lists_the_package() {
 /// snapshots number from 1 again, and the generation of `cheby/idle` and
 /// `cheby/status` still grows.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn idle_generation_grows_across_a_target_change() {
     let package = Temp::package("idle_target", &[("src/main.cheby", MAIN)]);
     let params = package.params(&json!({
@@ -793,7 +791,6 @@ fn a_swept_change_reruns_the_constants() {
 
 /// A client without `experimental.chebyIdle` never gets `cheby/idle`.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn no_idle_without_the_capability() {
     let package = Temp::package("no_idle", &[("src/main.cheby", MAIN)]);
     let (mut client, _) = Client::start(package.params(&json!({})), Vec::new());

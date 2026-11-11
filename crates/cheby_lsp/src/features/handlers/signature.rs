@@ -253,7 +253,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
     fn answers_a_call_and_null_elsewhere() {
         let text = "/// Adds.\nfn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn main() {\n  let total = add(1, 2)\n  assert total == 3\n}\n";
         let temp = Temp::package("signature", &[("main.cheby", text)]);
@@ -295,7 +294,6 @@ mod tests {
     /// documentation. The golden harness's clients cannot announce
     /// `noActiveParameterSupport`, so this test pins the `null`.
     #[test]
-    #[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
     fn extra_arguments_and_generic_callees() {
         let text = "fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn first_or<T>(xs: List<T>, fallback: T) -> T {\n  case xs {\n    [head, ..] => head\n    [] => fallback\n  }\n}\n\nfn main() {\n  let extra = add(1, 2, 3)\n  assert extra > 0\n}\n\nfn second() -> Int {\n  first_or([1], 0)\n}\n";
         let temp = Temp::package("signature_extra", &[("main.cheby", text)]);

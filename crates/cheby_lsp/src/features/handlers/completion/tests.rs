@@ -1,6 +1,6 @@
 //! The completion handlers: capabilities, the protocol form of items, the
-//! stray trigger, and resolve. Tests that analyze carry the Windows ignore
-//! (D-545, D-641).
+//! stray trigger, and resolve. Tests that analyze run only the front end,
+//! so they run on Windows too (D-1516).
 
 use serde_json::{Value, json};
 
@@ -113,7 +113,6 @@ fn capabilities_are_read_from_initialize() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn items_in_protocol_form() {
     let (_temp, analyzed, uri) = package();
     let answer = ask(&analyzed, &uri, (4, 10), None, CAPS);
@@ -168,7 +167,6 @@ fn items_in_protocol_form() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_postfix_case_is_taken_as_it_is() {
     // Its arms carry the line's indentation, so a client that lists
     // `asIs` must not indent them again; one that does not is not told.
@@ -198,7 +196,6 @@ fn a_postfix_case_is_taken_as_it_is() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn items_carry_their_key_and_deprecation() {
     let (_temp, analyzed, uri) = package_with(&MAIN.replace("let y = ", "let y = geo::"));
     let answer = ask(&analyzed, &uri, (4, 15), Some(":"), CAPS);
@@ -231,7 +228,6 @@ fn items_carry_their_key_and_deprecation() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_stray_trigger_answers_an_empty_list() {
     let (_temp, analyzed, uri) = package();
     // `let y = ` ends in a space, so neither `::` nor `|>` is completed.
@@ -252,7 +248,6 @@ fn a_stray_trigger_answers_an_empty_list() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn resolve_adds_the_docs() {
     let (_temp, analyzed, uri) = package();
     let packages = [&analyzed];

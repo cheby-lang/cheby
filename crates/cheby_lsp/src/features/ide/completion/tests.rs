@@ -1,7 +1,7 @@
 //! Completion items on whole and broken text: each context's sources, the
 //! ranks of X §4.1, keywords and snippets by context (X §4.6), and the L0
-//! failure rule. Each test runs the front end, so each carries the Windows
-//! ignore (D-545, D-641).
+//! failure rule. Each test runs only the front end, so it runs on Windows
+//! too (D-1516).
 
 use std::sync::Arc;
 
@@ -124,7 +124,6 @@ fn body(line: &str) -> String {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_expression_offers_locals_items_modules_the_prelude_and_keywords() {
     let found = at(&body("let y = |"), ALL);
     // Locals, nearest binding first.
@@ -165,7 +164,6 @@ fn an_expression_offers_locals_items_modules_the_prelude_and_keywords() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_statement_offers_statement_keywords_and_snippets() {
     let found = at(&body("|"), ALL);
     for snippet in ["case", "case {", "guard", "let guard", "use", "fn"] {
@@ -197,7 +195,6 @@ fn a_statement_offers_statement_keywords_and_snippets() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn the_expected_type_ranks_first() {
     // A call's parameter.
     let found = at(&body("need(|"), ALL);
@@ -223,7 +220,6 @@ fn the_expected_type_ranks_first() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_function_argument_is_a_value_and_a_written_paren_is_kept() {
     let found = at(&body("let f: fn(Int) -> Int = |"), ALL);
     assert_eq!(entry(&found, "need").insert.text, "need");
@@ -235,7 +231,6 @@ fn a_function_argument_is_a_value_and_a_written_paren_is_kept() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn qualified_names_of_a_module() {
     for line in ["geo::|", "let a = geo::|", "need(geo::|)"] {
         let found = at(&body(line), ALL);
@@ -267,7 +262,6 @@ fn qualified_names_of_a_module() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn qualified_names_of_a_std_module_and_of_an_interface() {
     let found = at(&body("list::|"), ALL);
     let map = entry(&found, "map");
@@ -281,7 +275,6 @@ fn qualified_names_of_a_std_module_and_of_an_interface() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_type_offers_types_parameters_modules_and_dyn() {
     let text = "import app::geo\n\nfn f<T>(x: |) {}\n";
     let found = at(text, ALL);
@@ -297,7 +290,6 @@ fn a_type_offers_types_parameters_modules_and_dyn() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_case_arm_offers_the_subjects_constructors_first() {
     let text =
         "import app::geo\n\nfn f(s: geo::Shape, radius: Int) -> Int {\n  case s {\n    |\n  }\n}\n";
@@ -331,7 +323,6 @@ fn a_case_arm_offers_the_subjects_constructors_first() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_record_offers_the_fields_not_written() {
     let found = at(&body("let p = geo::Point { x: 1, |"), ALL);
     assert_eq!(labels(&found), ["y"]);
@@ -342,14 +333,12 @@ fn a_record_offers_the_fields_not_written() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_interpolation_offers_locals_and_constants_only() {
     let found = at(&body("let s = \"{|}\""), ALL);
     assert_eq!(labels(&found), ["total", "words", "count", "limit"]);
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn import_paths_and_lists() {
     let found = at("import |\n\nfn main() {}\n", ALL);
     assert_eq!(labels(&found), ["app", "std"]);
@@ -371,7 +360,6 @@ fn import_paths_and_lists() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn attributes_and_items() {
     let found = at("@|\nfn main() {}\n", ALL);
     assert_eq!(
@@ -400,7 +388,6 @@ fn attributes_and_items() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn nothing_in_comments_strings_and_mid_line() {
     assert_eq!(at(&body("// a no|te"), ALL), Completions::default());
     assert_eq!(at(&body("let s = \"te|xt\""), ALL), Completions::default());
@@ -408,7 +395,6 @@ fn nothing_in_comments_strings_and_mid_line() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn grammar_and_type_errors_keep_the_items() {
     // A type error elsewhere.
     let found = at(&body("let bad: Int = \"a\"\n  let y = |"), ALL);
@@ -424,7 +410,6 @@ fn grammar_and_type_errors_keep_the_items() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn item_keywords_follow_import_placement_and_visibility() {
     // `import` only before the first item (D-143), and `exposed` only
     // after `pub` (D-150), before `type` alone (D-121).
@@ -443,7 +428,6 @@ fn item_keywords_follow_import_placement_and_visibility() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_file_with_no_module_gets_keywords_and_snippets() {
     // X §4.1's failure rule: with no resolution, the context's keywords
     // and snippets, and no names.
@@ -468,7 +452,6 @@ fn a_file_with_no_module_gets_keywords_and_snippets() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn std_modules_the_run_did_not_load_come_from_the_index() {
     let base = StdBase::build(Arc::new(Globals::new())).expect("std checks");
     let std = StdAccess::Index(base.index());
@@ -489,7 +472,6 @@ fn std_modules_the_run_did_not_load_come_from_the_index() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn what_follows_the_word_is_not_written_again() {
     use super::dot::tests::{applied, at as at_caret, parses};
     let cases = [
@@ -531,7 +513,6 @@ fn what_follows_the_word_is_not_written_again() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_arm_of_a_case_with_no_subject_is_an_expression() {
     let found = at(
         "fn main() {\n  let total = 3\n  let y = case {\n    tot| > 2 => 1\n    _ => 0\n  }\n  y\n}\n",
@@ -542,7 +523,6 @@ fn an_arm_of_a_case_with_no_subject_is_an_expression() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_qualified_function_where_a_function_is_expected_is_its_name() {
     let found = at(
         "import std::list\n\nfn main() {\n  let words = [\"a\"]\n  let n = list::map(words, list::len|)\n  n\n}\n",
@@ -557,7 +537,6 @@ fn a_qualified_function_where_a_function_is_expected_is_its_name() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_parameter_type_at_the_end_of_the_file_offers_type_parameters() {
     // X §4.1's `fn f(x: ` with nothing after it: the token at the cursor is
     // the file's trailing white space, outside the function.

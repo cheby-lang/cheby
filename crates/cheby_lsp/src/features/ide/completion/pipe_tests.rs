@@ -1,7 +1,7 @@
 //! Completion after `|>` (X §4.3): the hole at the accepting parameter,
 //! a one-parameter function bare (D-244, D-245), the ranks of each
-//! source, `xs |> m::`, and an unknown left side. Each test runs the
-//! front end, so each carries the Windows ignore (D-545, D-641).
+//! source, `xs |> m::`, and an unknown left side. Each test runs only the
+//! front end, so it runs on Windows too (D-1516).
 
 use std::sync::Arc;
 
@@ -41,7 +41,6 @@ fn calls_put_the_hole_at_the_accepting_parameter() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn after_a_pipe_functions_take_the_hole() {
     let main = "import std::list\n\nfn twice(f: fn(Int) -> Int) -> fn(Int) -> Int {\n  fn(x) { f(f(x)) }\n}\n\nfn main() {\n  let inc = fn(x: Int) { x + 1 }\n  let pair = fn(a: Int, b: Int) { a + b }\n  let n = 1 |> ‸\n}\n";
     let (found, _) = at(main, ON);
@@ -81,7 +80,6 @@ fn after_a_pipe_functions_take_the_hole() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_partial_name_is_replaced() {
     let main = "fn main() {\n  let xs = [1, 2]\n  let n = xs |> le‸\n}\n";
     let (found, text) = at(main, IMPORTING);
@@ -91,7 +89,6 @@ fn a_partial_name_is_replaced() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn other_loaded_modules_rank_forty_and_need_auto_import() {
     let main = "fn main() {\n  let xs = [1, 2]\n  let n = xs |> fr‸\n}\n";
     let with = super::super::Options {
@@ -134,7 +131,6 @@ fn other_loaded_modules_rank_forty_and_need_auto_import() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn imports_wait_for_two_characters_of_the_name() {
     let with = super::super::Options {
         auto_import: true,
@@ -257,7 +253,6 @@ fn the_cap_keeps_the_first_by_name_then_path() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn std_modules_the_run_did_not_load_rank_sixty() {
     let base = StdBase::build(Arc::new(Globals::new())).expect("std checks");
     let with = super::super::Options {
@@ -291,7 +286,6 @@ fn std_modules_the_run_did_not_load_rank_sixty() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_qualified_pipe_writes_the_function_part() {
     let main = "import std::list\n\nfn main() {\n  let xs = [1, 2]\n  let n = xs |> list::‸\n}\n";
     let (found, text) = at(main, ALL);
@@ -313,7 +307,6 @@ fn a_qualified_pipe_writes_the_function_part() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn an_unknown_left_side_offers_no_function() {
     let main =
         "import std::list\n\nfn main() {\n  let f = fn(x: Int) { x }\n  let n = nowhere |> ‸\n}\n";
@@ -322,7 +315,6 @@ fn an_unknown_left_side_offers_no_function() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn before_a_written_path_only_module_names_are_offered_bare() {
     let main = "import std::list\nimport std::string\n\nfn main() {\n  let xs = [\"a\"]\n  let n = xs |> st‸::length\n  n\n}\n";
     let (found, text) = at(main, ON);
@@ -333,7 +325,6 @@ fn before_a_written_path_only_module_names_are_offered_bare() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_parameter_whose_bound_fails_does_not_accept() {
     // `list::sum`'s `zero: T` needs `T: Add`, which `Option<Int>` lacks
     // (E0063), while `List<Int>` gives `T = Int`, which has it.

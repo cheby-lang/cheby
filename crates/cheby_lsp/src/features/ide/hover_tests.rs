@@ -1,6 +1,6 @@
 //! Tests of hover: each row of F §1.8 and X §2.1 on clean text, a type
-//! error and a grammar error. Each test runs the front end, so each
-//! carries the Windows ignore (D-545, D-641).
+//! error and a grammar error. Each test runs only the front end, so it
+//! runs on Windows too (D-1516).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -228,7 +228,6 @@ fn check_stable(main: &str) {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn rows_on_clean_text() {
     check_stable(MAIN);
     let rows: &[(&str, Option<String>)] = &[
@@ -312,7 +311,6 @@ fn rows_on_clean_text() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn rows_with_a_type_error() {
     let main = edited(
         "  let label = \"{sum}\"\n",
@@ -351,7 +349,6 @@ fn rows_with_a_type_error() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn rows_with_a_grammar_error() {
     let main = edited(
         "  assert total(1) == 0\n",
@@ -384,7 +381,6 @@ fn rows_with_a_grammar_error() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_name_in_an_error_node_falls_back_to_the_local() {
     // `(sum` never closes, so `sum` sits where nothing is resolved, and
     // the local in scope with its text answers (F §1.8).
@@ -400,7 +396,6 @@ fn a_name_in_an_error_node_falls_back_to_the_local() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_name_that_cannot_be_a_local_has_no_fallback() {
     // `q` has no known type, so its fields are unplaced, and so are the
     // later segments of paths that do not resolve. None of them can name
@@ -426,7 +421,6 @@ fn a_name_that_cannot_be_a_local_has_no_fallback() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn std_docs_come_from_the_std_index() {
     let base = StdBase::build(Arc::new(Globals::new())).expect("std checks");
     let got = hovers(
@@ -522,7 +516,6 @@ fn constant_hovers(
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_failed_constant_names_its_code() {
     // S-20: the diagnostic marks its own constant, and only that one. A
     // value reaching hover, and an older value marked stale, are
@@ -552,7 +545,6 @@ fn a_failed_constant_names_its_code() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn no_evaluation_yet_says_so_and_no_evaluation_says_nothing() {
     let values = ConstValues::default();
     let got = constant_hovers(&["const tw|ice"], Some(&values), None);
@@ -575,7 +567,6 @@ fn no_evaluation_yet_says_so_and_no_evaluation_says_nothing() {
 /// errors, a constant with no value says that saving gives it, not that
 /// the evaluation failed (D-1490).
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_run_skipped_for_errors_on_disk_says_so() {
     let values = ConstValues {
         stale: true,
@@ -596,7 +587,6 @@ fn a_run_skipped_for_errors_on_disk_says_so() {
 /// server started no run, a constant with no value says what it says
 /// after a run the child skipped (D-1497), not that a save computes it.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_run_the_server_never_started_for_errors_says_so() {
     let values = ConstValues {
         disk_errors: true,
@@ -650,7 +640,6 @@ fn a_long_initializer_is_cut_in_the_header() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_std_constant_shows_its_initializer() {
     // S-20, D-1413: never "not evaluated yet", whatever the package's
     // evaluation says.
@@ -672,7 +661,6 @@ fn a_std_constant_shows_its_initializer() {
 /// constant, which the child never evaluates (D-1491). Std with no index
 /// stands in for a dependency, which no run has before M5.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_dependency_constant_shows_its_initializer() {
     let values = ConstValues::default();
     let got = constant_hovers(&["int::max_v|alue"], Some(&values), None);

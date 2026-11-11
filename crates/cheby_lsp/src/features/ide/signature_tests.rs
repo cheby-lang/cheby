@@ -1,7 +1,7 @@
 //! Tests of signature help: the call at a cursor in the tree alone, then
 //! each row of X §4.7's table on clean text, a type error and a grammar
-//! error. Tests that analyze run the front end, so each carries the
-//! Windows ignore (D-545, D-641).
+//! error. Tests that analyze run only the front end, so they run on
+//! Windows too (D-1516).
 
 use std::path::Path;
 
@@ -223,7 +223,6 @@ fn main() {
 ";
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn clean_text_shows_each_kind_of_callee() {
     let temp = Temp::package("sig_clean", &[("main.cheby", CLEAN)]);
     let path = temp.src("main.cheby");
@@ -331,7 +330,6 @@ fn main() {
 "#;
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn use_keeps_the_callback_in_the_label_and_notes_it() {
     let temp = Temp::package("sig_use", &[("main.cheby", USE)]);
     let path = temp.src("main.cheby");
@@ -369,7 +367,6 @@ fn main() {
 "#;
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_type_error_keeps_the_signature() {
     let temp = Temp::package("sig_type_error", &[("main.cheby", TYPE_ERROR)]);
     let path = temp.src("main.cheby");
@@ -421,7 +418,6 @@ const GRAMMAR_ERROR: &str = concat!(
 );
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn a_grammar_error_still_answers() {
     let temp = Temp::package("sig_grammar_error", &[("main.cheby", GRAMMAR_ERROR)]);
     let path = temp.src("main.cheby");

@@ -101,7 +101,6 @@ mod tests {
     use crate::text::uri::path_to_uri;
 
     #[test]
-    #[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
     fn answers_markdown_or_plain_text_with_the_token_range() {
         let text = "fn main() {\n  let total = 1 + 2\n  assert total == 3\n}\n";
         let temp = Temp::package("handler", &[("main.cheby", text)]);

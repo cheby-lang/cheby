@@ -1,6 +1,6 @@
 //! Tests of the `textDocument/inlayHint` handler: the protocol shape, the
-//! range, and the settings. Each test runs the front end, so each carries
-//! the Windows ignore (D-545, D-641).
+//! range, and the settings. Each test runs only the front end, so it runs
+//! on Windows too (D-1516).
 
 use serde_json::{Value, json};
 
@@ -50,7 +50,6 @@ fn lines(from: u32, to: u32) -> Value {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn type_hints_with_an_edit_in_the_range() {
     let all = answer(&Settings::default(), &lines(0, 5));
     assert_eq!(
@@ -89,7 +88,6 @@ fn type_hints_with_an_edit_in_the_range() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn settings_turn_hints_off() {
     let mut settings = Settings::default();
     settings.inlay_hints.enable = false;
@@ -102,7 +100,6 @@ fn settings_turn_hints_off() {
 /// D-1480: `localFnTypes` and `patternBinders` reach their rows, and no
 /// other.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn local_fn_and_pattern_binder_settings() {
     let text =
         "fn main() {\n  let (a, b) = (1, 2)\n  fn id(n) {\n    n\n  }\n  assert id(a) == b\n}\n";
@@ -138,7 +135,6 @@ fn local_fn_and_pattern_binder_settings() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn malformed_parameters_and_unknown_documents() {
     let temp = Temp::package("inlay_bad", &[("main.cheby", TEXT)]);
     let path = temp.src("main.cheby");

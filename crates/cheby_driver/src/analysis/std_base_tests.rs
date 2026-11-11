@@ -337,7 +337,6 @@ fn base_fails_on_an_internal_error() {
 /// dependency's constant, which no child evaluates (D-1491). Std stands
 /// in for a dependency, the one other package a run has before M5.
 #[test]
-#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
 fn const_initializer_reads_dropped_trees() {
     let dir = std::env::temp_dir().join(format!("cheby_std_base_init_{}", std::process::id()));
     drop(std::fs::remove_dir_all(&dir));
