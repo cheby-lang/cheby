@@ -6,12 +6,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use std::collections::BTreeMap;
+
 use cheby_driver::analysis::{
-    Globals, Overlay, OverlayFile, PackageKind, Session, SessionConfig, StdBase, StdIndex,
+    Globals, ModulePath, Overlay, OverlayFile, PackageKind, Session, SessionConfig, StdBase,
+    StdIndex, Symbol, SymbolNs, codes,
 };
 
-use super::{HoverText, cheby_fences, hover, source};
+use super::{
+    HoverText, cheby_fences, hover, inline_code, show_initializer, source, written_initializer,
+};
 use crate::features::Analyzed;
+use crate::server::ConstValues;
 
 /// A package in a fresh temporary directory, removed on drop.
 pub(crate) struct Temp(pub PathBuf);
@@ -98,7 +104,7 @@ fn at(
 ) -> Option<HoverText> {
     let doc = source(&analyzed.snapshot, path).expect("the document");
     assert_eq!(doc.text, text);
-    hover(analyzed, &doc, offset_of(text, needle), std.into())
+    hover(analyzed, &doc, offset_of(text, needle), std.into(), None)
 }
 
 const GEO: &str = r#"//! Points on a plane.
@@ -472,4 +478,217 @@ fn plain_text_has_no_fences() {
         hover.render(true),
         "```cheby\nlet x: Int\n```\n```cheby\nInt\n```\n\n---\n\nA note.\n\n---\n\nDocs."
     );
+}
+
+/// A package whose root module declares the constants `limit`, `twice`
+/// and `broken`, and reads `int::max_value` from std.
+const CONSTANTS: &str = r"import std::int
+
+/// The most.
+const limit: Int = 20
+
+const twice: Int = limit * 2
+
+const broken: Int = limit / 0
+
+fn main() {
+  assert limit + twice + broken < int::max_value
+}
+";
+
+/// The symbol of the root module's value `name`.
+fn app_value(name: &str) -> Symbol {
+    Symbol::item(ModulePath::root("app"), SymbolNs::Value, name)
+}
+
+/// The rendered hovers at `needles` of [`CONSTANTS`], with `values` as
+/// what the last evaluation said.
+fn constant_hovers(
+    needles: &[&str],
+    values: Option<&ConstValues>,
+    std: Option<&StdIndex>,
+) -> Vec<Option<String>> {
+    let temp = Temp::package("constants", &[("main.cheby", CONSTANTS)]);
+    let path = temp.src("main.cheby");
+    let analyzed = analyze(&temp.0, &[(path.clone(), CONSTANTS)]);
+    let doc = source(&analyzed.snapshot, &path).expect("the document");
+    needles
+        .iter()
+        .map(|needle| {
+            let offset = offset_of(CONSTANTS, needle);
+            hover(&analyzed, &doc, offset, std.into(), values).map(|h| h.render(true))
+        })
+        .collect()
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn a_failed_constant_names_its_code() {
+    // S-20: the diagnostic marks its own constant, and only that one. A
+    // value reaching hover, and an older value marked stale, are
+    // `tests/lsp/constants/`'s, through the real child.
+    // A failed run marks every value stale (D-1413), and a constant with
+    // none says it is not evaluated, not that a save computes it (D-1490).
+    let values = ConstValues {
+        failed: BTreeMap::from([(app_value("broken"), codes::CONSTANT_PANICKED)]),
+        stale: true,
+        ..ConstValues::default()
+    };
+    let got = constant_hovers(&["const bro|ken", "assert li|mit +"], Some(&values), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst broken: Int\n```\n\n---\n\nEvaluation failed, see `E0075`.\n\n\
+             Defined in `app`."
+        )
+    );
+    assert_eq!(
+        got[1].as_deref(),
+        Some(
+            "```cheby\nconst limit: Int\n```\n\n---\n\nNot evaluated: the last evaluation failed \
+             or was cut short (see `cheby/status`).\n\nDefined in `app`.\n\n---\n\nThe most."
+        )
+    );
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn no_evaluation_yet_says_so_and_no_evaluation_says_nothing() {
+    let values = ConstValues::default();
+    let got = constant_hovers(&["const tw|ice"], Some(&values), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst twice: Int\n```\n\n---\n\nNot evaluated yet: values are computed on \
+             save.\n\nDefined in `app`."
+        )
+    );
+    // Single-file mode, Windows, or `constants.evaluate` off: no line.
+    let got = constant_hovers(&["const tw|ice"], None, None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some("```cheby\nconst twice: Int\n```\n\n---\n\nDefined in `app`.")
+    );
+}
+
+/// D-1497: after a run skipped because the saved files have front-end
+/// errors, a constant with no value says that saving gives it, not that
+/// the evaluation failed (D-1490).
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn a_run_skipped_for_errors_on_disk_says_so() {
+    let values = ConstValues {
+        stale: true,
+        front_errors: true,
+        ..ConstValues::default()
+    };
+    let got = constant_hovers(&["const tw|ice"], Some(&values), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst twice: Int\n```\n\n---\n\nNot evaluated yet: the saved files have \
+             errors; values are computed on save.\n\nDefined in `app`."
+        )
+    );
+}
+
+/// D-1501: after a save that left front-end errors on disk, so the
+/// server started no run, a constant with no value says what it says
+/// after a run the child skipped (D-1497), not that a save computes it.
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn a_run_the_server_never_started_for_errors_says_so() {
+    let values = ConstValues {
+        disk_errors: true,
+        ..ConstValues::default()
+    };
+    let got = constant_hovers(&["const tw|ice"], Some(&values), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst twice: Int\n```\n\n---\n\nNot evaluated yet: the saved files have \
+             errors; values are computed on save.\n\nDefined in `app`."
+        )
+    );
+}
+
+/// D-1496: a written initializer, std's or a dependency's, is cut at
+/// 4,096 characters with `…`, as the child cuts a value (D-1413). No std
+/// constant is that long and no run has a dependency before M5, so the
+/// cut is checked on the text hover joins to the header.
+#[test]
+fn a_long_written_initializer_is_cut() {
+    let short = "[1, 2, 3]".to_owned();
+    assert_eq!(written_initializer(short.clone()), short);
+    let exact = "é".repeat(4096);
+    assert_eq!(written_initializer(exact.clone()), exact);
+    let long = format!("[{}]", "1, ".repeat(2000));
+    let shown = written_initializer(long.clone());
+    assert_eq!(shown.chars().count(), 4097, "4,096 characters and the mark");
+    assert!(shown.ends_with('…'), "{shown}");
+    assert!(long.starts_with(shown.trim_end_matches('…')));
+    // Characters, not bytes, as the child counts them.
+    let wide = "é".repeat(5000);
+    assert_eq!(written_initializer(wide), format!("{}…", "é".repeat(4096)));
+}
+
+/// D-1496: the initializer hover joins to a std or dependency constant's
+/// header is the cut one.
+#[test]
+fn a_long_initializer_is_cut_in_the_header() {
+    let mut hover = HoverText {
+        code: vec!["const table: List(Int)".to_owned()],
+        ..HoverText::default()
+    };
+    let long = format!("[{}]", "1, ".repeat(2000));
+    show_initializer(&mut hover, long.clone());
+    let header = hover.code.first().unwrap();
+    let shown = header.strip_prefix("const table: List(Int) = ").unwrap();
+    assert_eq!(shown.chars().count(), 4097, "4,096 characters and the mark");
+    assert!(shown.ends_with('…'), "{shown}");
+    assert!(long.starts_with(shown.trim_end_matches('…')));
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn a_std_constant_shows_its_initializer() {
+    // S-20, D-1413: never "not evaluated yet", whatever the package's
+    // evaluation says.
+    let base = StdBase::build(Arc::new(Globals::new())).expect("std checks");
+    let values = ConstValues::default();
+    let got = constant_hovers(&["int::max_v|alue"], Some(&values), Some(base.index()));
+    let shown = got[0].as_deref().expect("a hover");
+    assert!(
+        shown.starts_with(&code(
+            "pub const max_value: Int = 9_223_372_036_854_775_807"
+        )),
+        "{shown}"
+    );
+    assert!(!shown.contains("Not evaluated yet"), "{shown}");
+}
+
+/// A constant of another package whose tree the run dropped, and that no
+/// index knows, shows its initializer read from its text: a dependency's
+/// constant, which the child never evaluates (D-1491). Std with no index
+/// stands in for a dependency, which no run has before M5.
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn a_dependency_constant_shows_its_initializer() {
+    let values = ConstValues::default();
+    let got = constant_hovers(&["int::max_v|alue"], Some(&values), None);
+    let shown = got[0].as_deref().expect("a hover");
+    assert!(
+        shown.starts_with(&code(
+            "pub const max_value: Int = 9_223_372_036_854_775_807"
+        )),
+        "{shown}"
+    );
+    assert!(!shown.contains("Not evaluated"), "{shown}");
+}
+
+#[test]
+fn inline_code_fences_backticks() {
+    assert_eq!(inline_code("20"), "`20`");
+    assert_eq!(inline_code("\"a`b\""), "``\"a`b\"``");
+    assert_eq!(inline_code("`x`"), "`` `x` ``");
 }

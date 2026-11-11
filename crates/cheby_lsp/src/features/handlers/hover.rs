@@ -76,7 +76,7 @@ fn answer(
     let doc = source(&analyzed.snapshot, path)?;
     let lines = LspLines::new(doc.text, doc.bom);
     let offset = lines.offset(doc.text, position, cx.encoding);
-    let found = hover_at(analyzed, &doc, offset, std)?;
+    let found = hover_at(analyzed, &doc, offset, std, cx.constants.as_deref())?;
     let kind = if caps.markdown {
         MarkupKind::Markdown
     } else {

@@ -37,6 +37,7 @@
 #![deny(clippy::print_stdout)]
 
 mod analysis_thread;
+pub mod child;
 // The one module that may name a generation handle's type (plan §1.4,
 // D-1366). The lint sees written type names only, so a value held through
 // inference elsewhere is review's job (R-10).

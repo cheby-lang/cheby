@@ -143,6 +143,7 @@ impl Case {
             encoding: PositionEncoding::Utf16,
             cancel: &cancel,
             std: &crate::features::stdlib::StdService::none(),
+            constants: None,
         };
         let env = NavEnv {
             links: LinkCaps {

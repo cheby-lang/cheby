@@ -39,7 +39,7 @@ use serde_json::Value;
 
 use self::stdlib::StdService;
 use crate::server::codes;
-use crate::server::{ClientCaps, Effect, Settings};
+use crate::server::{ClientCaps, ConstValues, Effect, Settings};
 use crate::text::lines::{Bom, LspLines, PositionEncoding};
 
 /// One snapshot as handlers read it, with its memos (D-1364). The main
@@ -184,6 +184,11 @@ pub(crate) struct RequestCx<'a> {
     pub cancel: &'a CancelToken,
     /// The std base and std's sources on disk.
     pub std: &'a StdService,
+    /// What the package's last constants evaluation said, for hover
+    /// (D-1413). `None` where constants are never evaluated: single-file
+    /// mode, Windows (D-1414), `constants.evaluate` off, or a request on
+    /// a std document.
+    pub constants: Option<Arc<ConstValues>>,
 }
 
 /// A document's live text and its own parse, never a snapshot (A §3.3).

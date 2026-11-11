@@ -195,6 +195,7 @@ pub(crate) mod tests {
             encoding: PositionEncoding::Utf16,
             cancel: &cancel,
             std: &crate::features::stdlib::StdService::none(),
+            constants: None,
         };
         f(&cx)
     }

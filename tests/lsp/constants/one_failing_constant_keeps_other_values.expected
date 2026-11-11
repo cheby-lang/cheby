@@ -1,0 +1,93 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0075",
+      "message": "evaluating the constant `ratio` panicked",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 8
+        },
+        "start": {
+          "character": 6,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst doubled: Int\n```\n\n---\n\n`40` when last saved.\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 13,
+      "line": 4
+    },
+    "start": {
+      "character": 6,
+      "line": 4
+    }
+  }
+}
+
+== src/main.cheby:5:30 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub const base: Int\n```\n\n---\n\n`20` when last saved.\n\nDefined in `app::values`.\n\n---\n\nThe base."
+  },
+  "range": {
+    "end": {
+      "character": 33,
+      "line": 4
+    },
+    "start": {
+      "character": 29,
+      "line": 4
+    }
+  }
+}
+
+== src/main.cheby:9:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst ratio: Int\n```\n\n---\n\nEvaluation failed, see `E0075`.\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 8
+    },
+    "start": {
+      "character": 6,
+      "line": 8
+    }
+  }
+}
+
+== src/values.cheby:5:11 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub const base: Int\n```\n\n---\n\n`20` when last saved.\n\nDefined in `app::values`.\n\n---\n\nThe base."
+  },
+  "range": {
+    "end": {
+      "character": 14,
+      "line": 4
+    },
+    "start": {
+      "character": 10,
+      "line": 4
+    }
+  }
+}

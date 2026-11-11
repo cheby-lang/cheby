@@ -24,9 +24,12 @@
 //! may (D-1366). The crate's `clippy.toml` enforces it.
 
 mod caps;
+mod child;
+mod child_loop;
 mod docs;
 mod effects;
 mod pool;
+mod progress;
 mod publish;
 #[cfg(test)]
 mod request_tests;
@@ -57,6 +60,8 @@ use serde_json::Value;
 
 pub(crate) use self::caps::ClientCaps;
 use self::caps::server_capabilities;
+use self::child::Children;
+pub(crate) use self::child::{ConstReading, ConstValues};
 pub(crate) use self::effects::Effect;
 use self::pool::{QueryDone, QueryPool};
 use self::schedule::{JobTexts, Parked, Served};
@@ -181,6 +186,16 @@ pub(crate) struct Server {
     /// The live text of open documents that text requests read, with the
     /// stamp it was made at.
     texts: BTreeMap<PathBuf, (u64, Arc<LiveText>)>,
+    /// Child processes and their results (D-1349, D-1410 to D-1415).
+    children: Children,
+    /// By package root, or a single-file session's file, the number of
+    /// snapshots it has had: the `generation` of `cheby/idle` and
+    /// `cheby/status`. It outlives the session, so a session rebuilt
+    /// after a change of `analysis.target`, whose snapshots number from 1
+    /// again, or ended and started again, never shows a smaller one
+    /// (D-1495). It lasts for the server's life, so 0 means only that the
+    /// root has had no snapshot since the server started (D-1499).
+    generations: BTreeMap<PathBuf, u64>,
     /// What tests switch on through `cheby/testHold`, `cheby/testPanicRun`
     /// and `cheby/testNoDebounce`.
     #[cfg(test)]
@@ -272,6 +287,8 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         served: BTreeMap::new(),
         in_flight: None,
         texts: BTreeMap::new(),
+        children: Children::new(),
+        generations: BTreeMap::new(),
         #[cfg(test)]
         test: TestSwitches::default(),
     };
@@ -359,13 +376,20 @@ impl Server {
             if self.closed {
                 return self.ended(false);
             }
-            let timer = self
-                .next_deadline()
-                .into_iter()
-                .chain(self.session_deadline())
-                .min()
-                .map_or_else(never, crossbeam_channel::at);
+            // After `shutdown` nothing is scheduled, so a deadline left
+            // behind, such as a debounce, must not wake the loop each turn.
+            let timer = if self.shutting_down {
+                never()
+            } else {
+                self.next_deadline()
+                    .into_iter()
+                    .chain(self.session_deadline())
+                    .chain(self.children.deadline())
+                    .min()
+                    .map_or_else(never, crossbeam_channel::at)
+            };
             let swept = self.watch.swept();
+            let child_done = self.children.done().clone();
             let events = if events_open {
                 self.events.clone()
             } else {
@@ -405,19 +429,29 @@ impl Server {
                         self.on_swept(found);
                     }
                 }
+                recv(child_done) -> done => {
+                    // `Children` holds a sender, so the channel never closes.
+                    if let Ok(done) = done {
+                        self.on_child_done(done);
+                    }
+                }
                 recv(timer) -> _ => {}
             }
             self.expire_parked();
             self.schedule();
             self.end_idle_sessions();
             self.sync_sweeps();
+            self.schedule_children();
+            self.send_idle();
         }
     }
 
-    /// The loop's end: the status follows `shutdown`.
-    const fn ended(&self, joinable: bool) -> Ended {
+    /// The loop's end: every child is killed, and the status follows
+    /// `shutdown`.
+    fn ended(&mut self, joinable: bool) -> Ended {
+        self.kill_children();
         Ended {
-            code: if self.shutting_down { 0 } else { 1 },
+            code: u8::from(!self.shutting_down),
             joinable,
         }
     }
@@ -622,6 +656,7 @@ impl Server {
         if inlays_changed && self.caps.inlay_refresh {
             self.request("workspace/inlayHint/refresh", Value::Null, Outgoing::Ignore);
         }
+        self.child_on_settings(target_changed);
     }
 
     /// A second `initialize`: the protocol allows one, so it is refused.
@@ -635,11 +670,13 @@ impl Server {
     }
 
     /// `shutdown`: answered `null`, after each parked request is answered
-    /// `RequestCancelled` (A §3.2). Every later request is refused.
+    /// `RequestCancelled` (A §3.2) and every child is killed (A §11.5).
+    /// Every later request is refused.
     #[expect(clippy::unnecessary_wraps, reason = "a request handler's signature")]
     fn on_shutdown(&mut self, _params: Value) -> Result<Value, lsp_server::ResponseError> {
         self.shutting_down = true;
         self.cancel_parked();
+        self.kill_children();
         Ok(Value::Null)
     }
 

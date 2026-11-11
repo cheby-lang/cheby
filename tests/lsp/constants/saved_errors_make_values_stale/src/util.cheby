@@ -1,0 +1,4 @@
+//! A module that no save changes.
+
+pub const base: Int = 2
+//        ^ hover

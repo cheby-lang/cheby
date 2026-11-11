@@ -1,0 +1,10 @@
+//! The saved text: `limit` is now 30.
+
+import app::other
+
+const limit: Int = 30
+//    ^ hover
+
+fn main() {
+  assert limit > other::base
+}

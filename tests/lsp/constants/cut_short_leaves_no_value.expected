@@ -1,0 +1,38 @@
+== diagnostics
+{}
+
+== src/main.cheby:9:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst a: Int\n```\n\n---\n\nNot evaluated: the last evaluation failed or was cut short (see `cheby/status`).\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 7,
+      "line": 8
+    },
+    "start": {
+      "character": 6,
+      "line": 8
+    }
+  }
+}
+
+== src/main.cheby:12:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst spin: Int\n```\n\n---\n\nNot evaluated: the last evaluation failed or was cut short (see `cheby/status`).\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 10,
+      "line": 11
+    },
+    "start": {
+      "character": 6,
+      "line": 11
+    }
+  }
+}

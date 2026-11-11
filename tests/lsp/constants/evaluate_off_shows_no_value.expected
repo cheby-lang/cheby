@@ -1,0 +1,20 @@
+== diagnostics
+{}
+
+== src/main.cheby:7:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst limit: Int\n```\n\n---\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 6
+    },
+    "start": {
+      "character": 6,
+      "line": 6
+    }
+  }
+}

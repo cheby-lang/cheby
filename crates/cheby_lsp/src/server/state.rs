@@ -35,6 +35,10 @@ pub(crate) struct Doc {
     /// A std document was edited, so its positions no longer match std's
     /// snapshot (A §6.3).
     pub diverged: bool,
+    /// Edited since it was opened or last saved, so its text may differ
+    /// from disk. An open text is taken to be the disk's, as editors open
+    /// files. The constants child reads disk (`child`).
+    pub dirty: bool,
 }
 
 impl Doc {

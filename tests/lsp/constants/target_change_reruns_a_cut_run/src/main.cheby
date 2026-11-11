@@ -1,0 +1,20 @@
+// @decisions: D-1490, D-1493, D-1498, D-1500
+// @settings: {"analysis": {"target": "native"}, "constants": {"childTimeoutSeconds": 1}}
+// @steps: idle, save same, quiet, settings js, started, idle
+//! A constant that never ends, cut short by a limit of 1 s. Saving
+//! unchanged text starts no run (D-1493). Changing `analysis.target` to
+//! `js` runs the constants again at once (`started`), although the text
+//! on disk has not changed since the cut, since under another target the
+//! run is other work (D-1498, D-1500). That run is cut short too, so hover
+//! says the evaluation was cut short (D-1490).
+
+const spin: Int = count_up(0)
+//    ^ hover
+
+fn count_up(n: Int) -> Int {
+  count_up(n + 1)
+}
+
+fn main() {
+  assert spin > 0
+}

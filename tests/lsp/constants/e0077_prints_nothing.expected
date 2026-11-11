@@ -1,0 +1,39 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0077",
+      "message": "evaluating the constant `greeting` reached an effect",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 8
+        },
+        "start": {
+          "character": 6,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst greeting: String\n```\n\n---\n\nEvaluation failed, see `E0077`.\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 14,
+      "line": 8
+    },
+    "start": {
+      "character": 6,
+      "line": 8
+    }
+  }
+}

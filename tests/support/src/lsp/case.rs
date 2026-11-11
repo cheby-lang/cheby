@@ -72,6 +72,64 @@ pub struct Header {
     /// `@clientInfo`: the client's name in `initialize`, if not the
     /// harness's own.
     pub client_name: Option<String>,
+    /// `@steps`: what the harness does after the opens, in order, before
+    /// it sends the markers' requests.
+    pub steps: Vec<Step>,
+    /// `@rewrite: bom`: every source file of the copy starts with a BOM.
+    pub bom: bool,
+    /// `@rewrite: crlf`: every source file of the copy ends its lines with
+    /// `\r\n`, which no file here can hold (`.gitattributes`).
+    pub crlf: bool,
+}
+
+/// One step of `@steps`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// `idle`: wait for a `cheby/idle` of the package sent after the last
+    /// message read, so nothing is running or due, the child included
+    /// (D-1415, D-1443).
+    Idle,
+    /// `started`: wait for the `$/progress` begin of a child run.
+    Started,
+    /// `quiet`: as `idle`, and the trial fails if a child run began since
+    /// the last `cheby/idle` the client read (D-1493).
+    Quiet,
+    /// `settings NAME`: the settings object in `NAME.json` at the
+    /// package's root is pushed with `workspace/didChangeConfiguration`,
+    /// and becomes the client's answer to `workspace/configuration`.
+    Settings(String),
+    /// `edit DIR`: each file under `DIR/` of the test becomes the text of
+    /// the open document at the same path below the package, which stays
+    /// unsaved, and its publish is waited for.
+    Edit(String),
+    /// `save DIR`: as `edit`, and the file is also written to disk and
+    /// saved with `didSave`.
+    Save(String),
+}
+
+impl Step {
+    /// Parses one step.
+    fn parse(text: &str) -> Result<Self, String> {
+        let mut words = text.split_whitespace();
+        let step = match (words.next(), words.next()) {
+            (Some("idle"), None) => Self::Idle,
+            (Some("started"), None) => Self::Started,
+            (Some("quiet"), None) => Self::Quiet,
+            (Some("edit"), Some(dir)) => Self::Edit(dir.to_owned()),
+            (Some("save"), Some(dir)) => Self::Save(dir.to_owned()),
+            (Some("settings"), Some(name)) => Self::Settings(name.to_owned()),
+            _ => {
+                return Err(format!(
+                    "@steps: `{text}` is not idle, started, quiet, edit DIR, save DIR or \
+                     settings NAME"
+                ));
+            }
+        };
+        match words.next() {
+            Some(extra) => Err(format!("@steps: `{extra}` after `{text}`")),
+            None => Ok(step),
+        }
+    }
 }
 
 impl Default for Header {
@@ -85,6 +143,9 @@ impl Default for Header {
             requests: Vec::new(),
             loose: false,
             client_name: None,
+            steps: Vec::new(),
+            bom: false,
+            crlf: false,
         }
     }
 }
@@ -152,10 +213,25 @@ impl Header {
                     }
                     header.client_name = Some(value.to_owned());
                 }
+                "steps" => {
+                    for step in value.split(',') {
+                        header.steps.push(Step::parse(step)?);
+                    }
+                }
+                "rewrite" => {
+                    for form in value.split(',').map(str::trim) {
+                        match form {
+                            "bom" => header.bom = true,
+                            "crlf" => header.crlf = true,
+                            _ => return Err(format!("@rewrite: `{form}` is not bom or crlf")),
+                        }
+                    }
+                }
                 other => {
                     return Err(format!(
                         "unknown directive `@{other}`; the keys are decisions, milestone, \
-                         client, encoding, settings, requests, package and clientInfo"
+                         client, encoding, settings, requests, package, clientInfo, steps and \
+                         rewrite"
                     ));
                 }
             }
@@ -782,7 +858,30 @@ mod tests {
         assert!(!header.loose);
         assert!(Header::of("// @package: none\n").unwrap().loose);
         assert_eq!(Header::of("fn main() {}\n").unwrap(), Header::default());
+        let steps = Header::of(
+            "// @steps: idle, edit dirty, save next, started, settings raise, quiet\n\
+                 // @rewrite: crlf\n",
+        )
+        .unwrap();
+        assert_eq!(
+            steps.steps,
+            [
+                Step::Idle,
+                Step::Edit("dirty".to_owned()),
+                Step::Save("next".to_owned()),
+                Step::Started,
+                Step::Settings("raise".to_owned()),
+                Step::Quiet,
+            ]
+        );
+        assert!(steps.crlf && !steps.bom);
         for bad in [
+            "// @steps: wait\n",
+            "// @steps: save\n",
+            "// @steps: idle now\n",
+            "// @steps: settings\n",
+            "// @steps: quiet now\n",
+            "// @rewrite: utf-16\n",
             "// @mode: check-pass\n",
             "// @client: odd\n",
             "// @encoding: utf-7\n",

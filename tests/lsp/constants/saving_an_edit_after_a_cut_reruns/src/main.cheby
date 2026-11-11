@@ -1,0 +1,18 @@
+// @decisions: D-1412, D-1493, D-1494
+// @settings: {"constants": {"childTimeoutSeconds": 1}}
+// @steps: idle, edit fixed, settings raise, started, idle, save fixed, started, idle
+//! A constant that never ends, cut short by a limit of 1 s. An unsaved
+//! edit fixes it, and raising the limit to 2 s runs it again over the
+//! saved text, which the child reads, so that run is cut short too.
+//! Saving the edit changes the text on disk, so it runs again, and the
+//! value reaches hover (D-1412, D-1493, D-1494).
+
+const spin: Int = count_up(0)
+
+fn count_up(n: Int) -> Int {
+  count_up(n + 1)
+}
+
+fn main() {
+  assert spin > 0
+}

@@ -1,0 +1,4 @@
+//! A module whose buffer stays unsaved.
+
+pub const base: Int = 3
+//        ^ hover

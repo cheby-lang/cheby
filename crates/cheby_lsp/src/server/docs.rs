@@ -72,6 +72,7 @@ impl Server {
                 root: root.clone(),
                 route,
                 diverged: false,
+                dirty: false,
             },
         );
         if let Some(root) = root {
@@ -105,6 +106,7 @@ impl Server {
         doc.version = params.text_document.version;
         doc.shared = None;
         doc.stamp = stamp;
+        doc.dirty = true;
         // An edited std file no longer matches std's snapshot, so its
         // snapshot requests get their fallback from now on (A §6.3).
         let diverged = doc.route == DocRoute::Std && !doc.diverged;
@@ -168,13 +170,19 @@ impl Server {
         let Some(path) = self.open_path(&params.text_document.uri) else {
             return;
         };
-        let root = self.docs.get(&path).and_then(|doc| doc.root.clone());
+        let root = self.docs.get_mut(&path).and_then(|doc| {
+            doc.dirty = false;
+            doc.root.clone()
+        });
         if let Some(root) = root {
             let changed = Changed {
                 sweep: true,
-                paths: vec![path],
+                paths: vec![path.clone()],
             };
             self.mark_dirty(&root, changed, Urgency::Flush);
+            // The constants child reads disk: a save that changed it kills
+            // the child and makes a run due (D-1411, D-1494).
+            self.child_on_save(&root, &[path]);
         }
         // A document outside every package rejoins one whose `cheby.toml`
         // appeared, even when no watcher reported it (A §8.2, §8.3).

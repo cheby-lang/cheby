@@ -244,3 +244,54 @@ fn stray_manifest_is_never_published() {
     assert_eq!(client.publishes(&stray), Vec::<Value>::new());
     client.stop();
 }
+
+/// D-1499: a root's generation counter lasts for the server's life. A
+/// single-file session ends when its file closes (D-1446), and the next
+/// session of the same file, whose snapshots number from 1 again, gets a
+/// `cheby/idle` generation above every earlier one (D-1495).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "builds JIT code paths; Windows waits for M6 (D-641)"
+)]
+fn idle_generation_grows_across_a_session_that_ends() {
+    let dir = loose("single_generation", &[]);
+    let file = dir.at("script.cheby");
+    let params = dir.params(&json!({
+        "capabilities": { "experimental": { "chebyIdle": true } },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    let root = uri(&file);
+    let generations = |client: &Client| -> Vec<u64> {
+        client
+            .notifications
+            .iter()
+            .filter(|n| n.method == "cheby/idle" && n.params["root"] == root)
+            .filter_map(|n| n.params["generation"].as_u64())
+            .collect()
+    };
+    open(&client, &file, MAIN, 1);
+    client.wait_publish(&file, |p| p["version"] == 1);
+    while generations(&client).is_empty() {
+        client.next();
+    }
+    close(&client, &file);
+    later(&mut client, &file, |_| true);
+    barrier(&mut client);
+    assert_eq!(sessions(&mut client), Vec::<String>::new(), "it ended");
+    let before = generations(&client);
+    let highest = before.iter().copied().max().unwrap();
+    assert!(highest >= 1, "the first session made a snapshot");
+    // Opened again: a new session, whose first snapshot is its own 1.
+    open(&client, &file, MAIN, 0);
+    later(&mut client, &file, |p| p["version"] == 0);
+    while generations(&client).len() == before.len() {
+        client.next();
+    }
+    let after = generations(&client)[before.len()];
+    assert!(after > highest, "{before:?} then {after}");
+    let status = client.request("cheby/status", Value::Null).unwrap();
+    let shown = status["packages"][0]["generation"].as_u64().unwrap();
+    assert!(shown >= after, "{status}");
+    client.stop();
+}

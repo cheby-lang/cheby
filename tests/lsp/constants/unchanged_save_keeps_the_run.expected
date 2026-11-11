@@ -1,0 +1,20 @@
+== diagnostics
+{}
+
+== src/main.cheby:9:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst slow: Int = 2000000000\n```\n\n---\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 10,
+      "line": 8
+    },
+    "start": {
+      "character": 6,
+      "line": 8
+    }
+  }
+}

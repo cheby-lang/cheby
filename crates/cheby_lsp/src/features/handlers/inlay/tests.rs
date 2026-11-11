@@ -35,6 +35,7 @@ fn answer_on(text: &str, settings: &Settings, range: &Value) -> Value {
         encoding: PositionEncoding::Utf16,
         cancel: &cancel,
         std: &crate::features::stdlib::StdService::none(),
+        constants: None,
     };
     let params = json!({ "textDocument": { "uri": uri.as_str() }, "range": range });
     inlay_hint(&cx, &analyzed, params).unwrap().value
@@ -151,6 +152,7 @@ fn malformed_parameters_and_unknown_documents() {
         encoding: PositionEncoding::Utf16,
         cancel: &cancel,
         std: &crate::features::stdlib::StdService::none(),
+        constants: None,
     };
     assert!(inlay_hint(&cx, &analyzed, json!(1)).is_err());
     let elsewhere = json!({

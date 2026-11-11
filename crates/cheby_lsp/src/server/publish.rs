@@ -14,13 +14,22 @@
 //! nested package's list is its own (A §6.5). Std is never published. A
 //! single-file session publishes its one document by the same rules
 //! (D-1371).
+//!
+//! A file's list is the front end's, then the constants child's, as
+//! `report_back_end` appends them in `cheby check` (A §11.6). A child
+//! diagnostic joins while the normalized hash of the published text is
+//! the one the child read (D-1412), and its ranges, in normalized text,
+//! are mapped onto the published text with `NormMap`. When the child's
+//! lists change and no report comes, the latest report's files are
+//! published again (`republish_child`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cheby_driver::analysis::{
-    FileReport, Hash128, Live, PackageKind, PlainDiagnostic, Report, Severity, TextOrigin,
+    FileReport, Hash128, Live, NormMap, PackageKind, PlainDiagnostic, Report, Severity, TextOrigin,
+    exact_key, normalized_key,
 };
 use lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, MessageType,
@@ -45,13 +54,25 @@ impl Server {
         match result {
             Ok(live) => {
                 if let Some(package) = self.packages.get_mut(root)
-                    && live.snapshot.is_some()
+                    && let Some(snapshot) = &live.snapshot
                 {
-                    package.snapshot.clone_from(&live.snapshot);
+                    let new = package
+                        .snapshot
+                        .as_ref()
+                        .is_none_or(|old| !Arc::ptr_eq(old, snapshot));
+                    if new {
+                        // Counted per root, not by the snapshot's own
+                        // generation, which a rebuilt session starts
+                        // again (D-1495).
+                        let generation = self.generations.entry(root.to_path_buf()).or_default();
+                        *generation = generation.saturating_add(1);
+                    }
+                    package.snapshot = Some(Arc::clone(snapshot));
                 }
                 if let Some(message) = &live.failed {
                     self.run_failed(root, message);
                 }
+                self.child_on_live(root, &live);
                 self.publish_files(root, &live.phase_a);
                 if let Some(report) = &live.report {
                     self.publish_report(root, report);
@@ -94,6 +115,7 @@ impl Server {
             .map(|(path, file)| (path.clone(), Arc::clone(file)))
             .collect();
         self.publish_files(root, &files);
+        self.child_on_report(root, report);
         let Some(package) = self.packages.get_mut(root) else {
             return;
         };
@@ -116,6 +138,29 @@ impl Server {
                 Current::Closed => None,
                 // A newer run follows and publishes this file.
                 Current::Stale => continue,
+            };
+            let diagnostics = self.convert(root, path, report, files);
+            self.publish(root, path, diagnostics, version);
+        }
+    }
+
+    /// Publishes `files`, the latest report's, again after the constants
+    /// child's lists changed and no report came. An open document is
+    /// published only while the client holds the report's text, with its
+    /// current version; otherwise a newer run publishes it.
+    pub(crate) fn republish_child(
+        &mut self,
+        root: &Path,
+        files: &BTreeMap<PathBuf, Arc<FileReport>>,
+    ) {
+        for (path, report) in files {
+            if !self.owns(root, path) {
+                continue;
+            }
+            let version = match self.docs.get(path) {
+                Some(doc) if exact_key(&doc.text) == report.hash => Some(doc.version),
+                Some(_) => continue,
+                None => None,
             };
             let diagnostics = self.convert(root, path, report, files);
             self.publish(root, path, diagnostics, version);
@@ -295,7 +340,8 @@ impl Server {
         report: &'a FileReport,
         files: &'a BTreeMap<PathBuf, Arc<FileReport>>,
     ) -> Vec<Diagnostic> {
-        let mut texts: Texts<'a> = BTreeMap::new();
+        let child = self.child_list(root, path, report, files);
+        let mut texts: Texts<'_> = BTreeMap::new();
         texts.insert(
             path,
             Some((
@@ -306,7 +352,61 @@ impl Server {
         report
             .diagnostics
             .iter()
+            .chain(&child)
             .map(|d| self.diagnostic(root, path, d, files, &mut texts))
+            .collect()
+    }
+
+    /// The constants child's diagnostics of `path`, while `report`'s text
+    /// is the one the child read (D-1412), with their ranges mapped from
+    /// normalized text onto the texts they are published against. A
+    /// related label whose file's text is not known, or whose range no
+    /// longer fits it, is dropped.
+    fn child_list(
+        &self,
+        root: &Path,
+        path: &Path,
+        report: &FileReport,
+        files: &BTreeMap<PathBuf, Arc<FileReport>>,
+    ) -> Vec<PlainDiagnostic> {
+        let list = self
+            .children
+            .diagnostics(root, path, normalized_key(&report.text));
+        if list.is_empty() {
+            return Vec::new();
+        }
+        let own = NormMap::new(&report.text);
+        let mut maps: BTreeMap<PathBuf, Option<NormMap>> = BTreeMap::new();
+        list.iter()
+            .map(|d| {
+                let mut d = d.clone();
+                d.range = d.range.and_then(|range| own.to_live_range(range));
+                d.related.retain_mut(|label| {
+                    let map = if label.path == path {
+                        Some(&own)
+                    } else {
+                        maps.entry(label.path.clone())
+                            .or_insert_with(|| {
+                                files
+                                    .get(&label.path)
+                                    .map(|file| &*file.text)
+                                    .or_else(|| {
+                                        self.docs.get(&label.path).map(|doc| doc.text.as_str())
+                                    })
+                                    .map(NormMap::new)
+                            })
+                            .as_ref()
+                    };
+                    match map.and_then(|map| map.to_live_range(label.range)) {
+                        Some(range) => {
+                            label.range = range;
+                            true
+                        }
+                        None => false,
+                    }
+                });
+                d
+            })
             .collect()
     }
 

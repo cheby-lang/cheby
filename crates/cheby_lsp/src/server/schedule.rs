@@ -473,7 +473,8 @@ impl Server {
             return;
         };
         let target = QueryTarget::Snapshot(Arc::clone(&served.analyzed));
-        self.start_query(parked.id, parked.route, parked.params, target, parked.env);
+        let env = self.with_constants(parked.env, &parked.root);
+        self.start_query(parked.id, parked.route, parked.params, target, env);
     }
 
     /// Answers each parked request whose wait ran out `RequestFailed`

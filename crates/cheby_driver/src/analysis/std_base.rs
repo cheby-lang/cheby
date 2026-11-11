@@ -34,7 +34,7 @@ use cheby_iface::{
 use cheby_package::{Manifest, ModulePath, Targets};
 use cheby_resolve::{ItemDef, field_docs, item_docs};
 use cheby_syntax::SyntaxTree;
-use cheby_syntax::ast::{AstNode, ConstDecl, SourceFile, module_doc_text};
+use cheby_syntax::ast::{AstNode, AstToken as _, ConstDecl, SourceFile, module_doc_text};
 
 use super::snapshot::{BaselineEntry, ModuleView, Parts, Snapshot, SnapshotId};
 use super::symbol::Symbol;
@@ -580,6 +580,11 @@ impl Reader<'_> {
 fn initializer(tree: &SyntaxTree, item: &ItemDef) -> Option<String> {
     let node = tree.node(item.node)?;
     let decl = node.descendants().find_map(ConstDecl::cast)?;
+    written_value(tree, decl)
+}
+
+/// The value of `decl`, a constant of `tree`, as written.
+fn written_value(tree: &SyntaxTree, decl: ConstDecl<'_>) -> Option<String> {
     let value = decl.value()?;
     value
         .significant_span()
@@ -594,6 +599,39 @@ fn with_text(text: String) -> Option<String> {
 }
 
 impl Snapshot {
+    /// The initializer of the constant `def` as written, from its module's
+    /// text in this run: what hover shows for a constant of a dependency
+    /// package, which no child evaluates, as [`StdItem::initializer`] is
+    /// for std (D-1491). The module's tree when the run kept it, else its
+    /// text parsed again, since a package run keeps local trees only
+    /// (D-1361). `None` for an item that is not a constant, and for one
+    /// with no source in this run.
+    #[must_use]
+    pub fn const_initializer(&self, def: DefId) -> Option<String> {
+        let view = self.module(def.module)?;
+        let item = view.interface()?.item(def.index)?;
+        if item.kind != DefKind::Const {
+            return None;
+        }
+        let span = item.span?;
+        let find = |tree: &SyntaxTree| {
+            let decl = tree
+                .root()
+                .descendants()
+                .filter_map(ConstDecl::cast)
+                .find(|decl| {
+                    decl.name()
+                        .is_some_and(|name| name.span().range == span.range)
+                })?;
+            written_value(tree, decl)
+        };
+        if let Some(tree) = view.tree().filter(|tree| tree.file() == span.file) {
+            return find(tree);
+        }
+        let text = self.source(span.file)?.text_arc();
+        find(cheby_syntax::parse(span.file, text).tree())
+    }
+
     /// The head of `ty`, for looking up in [`StdIndex`]. Read only with a
     /// type of this snapshot (A §1.5).
     #[must_use]

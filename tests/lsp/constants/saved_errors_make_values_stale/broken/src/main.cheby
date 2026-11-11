@@ -1,0 +1,10 @@
+//! The saved text: a type error.
+
+import app::util
+
+const limit: Int = 20
+
+fn main() {
+  let x: Int = "no"
+  assert limit > util::base + x
+}

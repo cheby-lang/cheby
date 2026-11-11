@@ -28,6 +28,7 @@
 //! edge to them. No phase function is re-exported (`resolve_module`,
 //! `check_bodies*`, `build_interface`): only the driver runs phases.
 
+mod backend_query;
 mod inputs;
 mod plain;
 mod session;
@@ -74,6 +75,10 @@ pub use cheby_types::satisfaction::{
 pub use cheby_types::{ModuleRefs, TypesInput, infer, thir};
 
 pub use crate::cache::Hash128;
+pub use backend_query::{
+    BackendError, BackendFile, BackendJob, BackendRequest, BackendResult, ConstDiagnostic,
+    ConstValue, ConstantsOut, FrontOutcome, Section, backend_query, cut_text,
+};
 pub use inputs::{Overlay, OverlayFile, TextOrigin};
 pub use plain::{
     InputsKey, NormMap, Placed, PlainDiagnostic, PlainEdit, PlainHelp, PlainLabel, exact_key,

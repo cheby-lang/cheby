@@ -1,0 +1,57 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types",
+      "range": {
+        "end": {
+          "character": 25,
+          "line": 8
+        },
+        "start": {
+          "character": 21,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 8
+              },
+              "start": {
+                "character": 17,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "the left operand of `+` has type `Int`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:4:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst limit: Int\n```\n\n---\n\nNot evaluated yet: the saved files have errors; values are computed on save.\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 3
+    },
+    "start": {
+      "character": 6,
+      "line": 3
+    }
+  }
+}

@@ -1,0 +1,57 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 15,
+          "line": 7
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 7
+              },
+              "start": {
+                "character": 9,
+                "line": 7
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/util.cheby:3:11 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub const base: Int\n```\n\n---\n\n`2` when last saved.\n\nDefined in `app::util`."
+  },
+  "range": {
+    "end": {
+      "character": 14,
+      "line": 2
+    },
+    "start": {
+      "character": 10,
+      "line": 2
+    }
+  }
+}

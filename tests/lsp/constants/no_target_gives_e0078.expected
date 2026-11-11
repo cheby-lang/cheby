@@ -1,0 +1,39 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0078",
+      "message": "the constant `big` holds an `Int` that JavaScript cannot represent exactly",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 7
+        },
+        "start": {
+          "character": 6,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst big: Int\n```\n\n---\n\nEvaluation failed, see `E0078`.\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 9,
+      "line": 7
+    },
+    "start": {
+      "character": 6,
+      "line": 7
+    }
+  }
+}

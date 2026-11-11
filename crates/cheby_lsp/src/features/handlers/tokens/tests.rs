@@ -93,6 +93,7 @@ fn ask(
         encoding,
         cancel: &cancel,
         std: &crate::features::stdlib::StdService::none(),
+        constants: None,
     };
     handler(&cx, analyzed, params).expect("an answer").value
 }

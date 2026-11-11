@@ -1,0 +1,26 @@
+// @decisions: D-1349, D-1413, D-1414
+// @steps: idle
+//! Values reach hover once the constants child has evaluated them: at a
+//! declaration and at a use, an `Int`, a `String` and a `List`, each in
+//! its debug text and joined to the header.
+
+import std::io
+import std::list
+
+/// The most.
+const limit: Int = 20
+//    ^ hover
+
+const twice: Int = limit * 2
+
+const name: String = "cheby"
+//    ^ hover
+
+const squares: List<Int> = list::map([1, 2, 3], fn(n) { n * n })
+//    ^ hover
+
+fn main() {
+  let count = list::length(squares)
+  io::println("{twice} {name} {count}")
+  //            ^ hover
+}

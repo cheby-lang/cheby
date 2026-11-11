@@ -9,19 +9,31 @@
 //!
 //! Items read through [`Printer`], so imported names are written as the
 //! module writes them (D-1384). Docs come from the declaring module's tree,
-//! or for std in a package run from [`StdIndex`] (D-1385). Constant values
-//! join with W9, and satisfaction with W12.
+//! or for std in a package run from [`StdIndex`] (D-1385). Satisfaction
+//! joins with W12.
+//!
+//! A constant's value follows X §2.1's constant value rule as plan §1.8
+//! amends it (D-1349, D-1413, D-1490, D-1491): a package constant reads
+//! what the last evaluation in the child process said, through
+//! [`ConstValues`], and a std constant shows its initializer as written
+//! (`StdItem::initializer`), so it never waits for an evaluation. A
+//! dependency's constant shows its initializer too, from
+//! `Snapshot::const_initializer`, since the child evaluates the package's
+//! own constants only. The child cuts a value at 4,096 characters, and
+//! hover shows what it gets. Hover cuts a written initializer at the same
+//! length, with the same `…` (D-1496).
 
 use std::path::Path;
 
 use cheby_driver::analysis::{
     BodyFacts, CtorFields, DefId, DefIndex, DefKind, FileId, FileLocation, Generics, ImportNames,
     ItemSig, LocalKind, ModuleId, ModuleView, Name, ParamIdx, Snapshot, StdIndex, Targets,
-    TextRange, TextSize, Ty, builtin, field_docs, item_docs,
+    TextRange, TextSize, Ty, builtin, cut_text, field_docs, item_docs, normalized_key,
 };
 use cheby_syntax::ast::{AstNode, CallExpr, SourceFile, module_doc_text};
 use cheby_syntax::{SyntaxKind as K, SyntaxNode, SyntaxToken};
 
+use crate::child::MAX_TEXT;
 use crate::features::Analyzed;
 use crate::features::ide::cursor::{TokenAt, pick_ident, token_at};
 use crate::features::ide::print::Printer;
@@ -30,6 +42,7 @@ use crate::features::index::{
     Classified, ImplicitKind, Meaning, ModuleIndex, Occurrence, Role, Unnamed,
 };
 use crate::features::stdlib::StdService;
+use crate::server::{ConstReading, ConstValues};
 use crate::text::lines::Bom;
 
 /// A document of a snapshot, as a request names it by path.
@@ -149,13 +162,17 @@ impl<'a> From<Option<&'a StdIndex>> for StdDocs<'a> {
 }
 
 /// The hover at `offset` of `source`, a document of `analyzed`'s snapshot.
-/// `std` serves docs of std items whose trees the snapshot does not keep.
-/// `None` where hover has nothing to say (X §1.4).
+/// `std` serves docs of std items whose trees the snapshot does not keep,
+/// and std constants' initializers. `constants` holds what the package's
+/// last evaluation said, `None` where constants are never evaluated, and
+/// a package constant then shows no value line. `None` where hover has
+/// nothing to say (X §1.4).
 pub(crate) fn hover(
     analyzed: &Analyzed,
     source: &Source<'_>,
     offset: TextSize,
     std: StdDocs<'_>,
+    constants: Option<&ConstValues>,
 ) -> Option<HoverText> {
     let snapshot = &*analyzed.snapshot;
     let view = snapshot.module_at(source.file)?;
@@ -170,6 +187,7 @@ pub(crate) fn hover(
             .map(|resolved| resolved.scope.import_names())
             .unwrap_or_default(),
         std,
+        constants,
     };
     let at = token_at(tree.root(), offset);
     if let Some(token) = pick_ident(at) {
@@ -228,6 +246,7 @@ struct Cx<'s> {
     printer: Printer<'s>,
     imports: ImportNames,
     std: StdDocs<'s>,
+    constants: Option<&'s ConstValues>,
 }
 
 impl<'s> Cx<'s> {
@@ -485,6 +504,9 @@ impl<'s> Cx<'s> {
             }
             self.use_notes(site, facts, generics, &mut hover);
         }
+        if item.kind == DefKind::Const {
+            self.constant_value(def, &mut hover);
+        }
         hover.notes.extend(self.origin(def));
         if item.targets != Targets::ALL {
             let on: Vec<String> = item.targets.iter().map(|t| format!("`{t}`")).collect();
@@ -524,6 +546,90 @@ impl<'s> Cx<'s> {
             (DefKind::Fn | DefKind::InterfaceFn | DefKind::Ctor, shown) => Some(shown),
             _ => None,
         }
+    }
+
+    /// The value line of the constant `def` (X §2.1's constant value rule,
+    /// plan §1.8, D-1413, D-1490, D-1491, D-1496, D-1497, D-1501, D-1503).
+    /// A current value joins the header, `const LIMIT: Int = 100`. A stale
+    /// one leaves the header alone and adds "`100` when last saved", also
+    /// every value while the server starts no run for errors on disk
+    /// (D-1503). A constant whose evaluation failed names the diagnostic's
+    /// code. One with no value says that values come on save, or, after a
+    /// run that failed or was cut short, that it is not evaluated, or,
+    /// after a run skipped because the saved files have errors or one the
+    /// server did not start for them, that saving gives the value (D-1497,
+    /// D-1501). A std
+    /// constant shows its initializer as written, cut as a value is
+    /// (D-1496), and never asks the child, and so does a constant of a
+    /// dependency, which the child does not evaluate. A package that never
+    /// evaluates (`constants` is `None`: Windows, single-file mode,
+    /// `constants.evaluate` off) shows no line.
+    fn constant_value(&self, def: DefId, hover: &mut HoverText) {
+        let Some(view) = self.snapshot.module(def.module) else {
+            return;
+        };
+        if !view.is_local() {
+            let initializer = self
+                .snapshot
+                .key_of(def)
+                .and_then(|key| self.std.get()?.get(&key)?.initializer.clone())
+                .or_else(|| self.snapshot.const_initializer(def));
+            if let Some(initializer) = initializer {
+                show_initializer(hover, initializer);
+            }
+            return;
+        }
+        let Some(values) = self.constants else {
+            return;
+        };
+        let Some(symbol) = self.snapshot.key_of(def) else {
+            return;
+        };
+        let Some(text) = view.file().and_then(|file| self.snapshot.source(file)) else {
+            return;
+        };
+        let line = match values.reading(&symbol, normalized_key(text.text())) {
+            ConstReading::Value {
+                text,
+                truncated,
+                stale: false,
+            } => {
+                if let Some(header) = hover.code.first_mut() {
+                    header.push_str(" = ");
+                    header.push_str(&text);
+                    if truncated {
+                        header.push('…');
+                    }
+                }
+                truncated.then(|| "The value is cut short.".to_owned())
+            }
+            ConstReading::Value {
+                text,
+                truncated,
+                stale: true,
+            } => {
+                let shown = if truncated {
+                    format!("{text}…")
+                } else {
+                    text
+                };
+                Some(format!("{} when last saved.", inline_code(&shown)))
+            }
+            ConstReading::Failed { code } => Some(format!("Evaluation failed, see `{code}`.")),
+            ConstReading::NotYet => {
+                Some("Not evaluated yet: values are computed on save.".to_owned())
+            }
+            ConstReading::SkippedForErrors => Some(
+                "Not evaluated yet: the saved files have errors; values are computed on save."
+                    .to_owned(),
+            ),
+            ConstReading::AfterFailure => Some(
+                "Not evaluated: the last evaluation failed or was cut short (see \
+                 `cheby/status`)."
+                    .to_owned(),
+            ),
+        };
+        hover.notes.extend(line);
     }
 
     /// Where `def` is declared: its module, or a builtin's home module.
@@ -785,6 +891,40 @@ fn may_be_local(token: SyntaxToken<'_>) -> bool {
         K::INTERPOLATION => idents().next() == Some(token),
         _ => false,
     }
+}
+
+/// Joins a written initializer, std's or a dependency's, to the header of
+/// `hover` after ` = `, cut as [`written_initializer`] cuts it (D-1413,
+/// D-1491, D-1496).
+fn show_initializer(hover: &mut HoverText, initializer: String) {
+    if let Some(header) = hover.code.first_mut() {
+        header.push_str(" = ");
+        header.push_str(&written_initializer(initializer));
+    }
+}
+
+/// A written initializer, std's or a dependency's, as hover shows it: cut
+/// at [`MAX_TEXT`] characters with `…`, the cut and the mark of a value
+/// the child computed (D-1413, D-1496).
+fn written_initializer(text: String) -> String {
+    match cut_text(text, MAX_TEXT) {
+        (text, false) => text,
+        (text, true) => format!("{text}…"),
+    }
+}
+
+/// `text` as Markdown inline code: fenced by a run of backticks longer
+/// than any in it, with a space inside when it starts or ends with one, so
+/// a value that holds backticks shows as it is.
+fn inline_code(text: &str) -> String {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.saturating_add(1));
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{pad}{text}{pad}{fence}")
 }
 
 /// `docs` with each bare opening fence marked as Cheby, since doc

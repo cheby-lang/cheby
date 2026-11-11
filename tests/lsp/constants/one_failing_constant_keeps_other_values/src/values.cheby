@@ -1,0 +1,6 @@
+//! A value another module reads. Its file never changes, so its value is
+//! stale only because the last evaluation failed.
+
+/// The base.
+pub const base: Int = 20
+//        ^ hover

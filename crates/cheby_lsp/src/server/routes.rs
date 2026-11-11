@@ -55,6 +55,7 @@ const NOTIFICATIONS: &[(&str, NotificationHandler)] = &[
 const REQUESTS: &[(&str, RequestHandler)] = &[
     ("initialize", Server::on_initialize_again),
     ("shutdown", Server::on_shutdown),
+    ("cheby/status", Server::on_status),
 ];
 
 /// The answer when a query has nothing to read, such as a document that is

@@ -39,12 +39,12 @@
 //!   diagnostics equal `cheby check`'s (D-1348), for an example by running
 //!   `cheby check`, for a UI check test by reading its `.stderr` golden.
 //!   Only the root module is opened, so the other files are published as
-//!   closed files. When a file has a phase-A error, only the files with
-//!   one and `cheby.toml` are compared (D-1347). UI tests with `@flags`
-//!   and run tests are not part of it, nor goldens with an error that has
-//!   no code. Goldens with a back-end code (`ui::BACK_END_CODES`) are
-//!   ignored until the server's constants child lands
-//!   ([`PARITY_SKIPS_BACK_END`], D-1349).
+//!   closed files. The published lists are taken after `cheby/idle`, so
+//!   the constants child's diagnostics, the back-end codes of
+//!   `ui::BACK_END_CODES`, are compared too (D-1349, D-1415). When a file
+//!   has a phase-A error, only the files with one and `cheby.toml` are
+//!   compared (D-1347). UI tests with `@flags` and run tests are not part
+//!   of it, nor goldens with an error that has no code.
 //! - `golden/<name>`: the tests under `tests/lsp/`, whose exact answers are
 //!   in `<name>.expected`. `CHEBY_BLESS=1` rewrites those goldens, and the
 //!   two protocol goldens, except for a test of a later milestone. It
@@ -54,7 +54,9 @@
 //!   completion item's edit must sit on one line and hold the position
 //!   (D-1394), and the text after an `apply` marker's item must parse.
 //!   Completion, signature help and inlay hints are printed in a readable
-//!   form (`editing`).
+//!   form (`editing`). A test's `@steps` run after the opens: waits for
+//!   `cheby/idle` and for a child run to start, and edits and saves of
+//!   files the test holds (`tests/lsp/constants/`).
 //!
 //! Waits (D-1442): a publish comes for each new version of an open
 //! document and after each `didOpen` and `didClose`, but not for a run
@@ -62,7 +64,10 @@
 //! publish after `didSave` or a settings change. A request does not wait
 //! for such a run either: it waits only for the text it names (D-1367). A
 //! trial that needs the server to have caught up sends an edit and waits
-//! for that version's publish, since a package's jobs run in order.
+//! for that version's publish, since a package's jobs run in order. A
+//! trial that needs a save's jobs, the constants child included, to have
+//! finished waits for `cheby/idle`, which every client of the harness
+//! asks for with `experimental.chebyIdle` (D-1415, D-1443).
 //!
 //! Milestones (D-1352, D-288, D-544): protocol trials and golden tests
 //! carry the header default, M1, so they are binding while
@@ -83,8 +88,10 @@
 //! then builds a JIT for the package's constants. That is every
 //! `parity/examples/*` trial. The UI parity trials whose golden holds no
 //! front-end error are ignored too, as their check tests are
-//! (`UiTest::builds_a_jit`). The server process never runs generated
-//! code (D-1349), so every other trial runs there.
+//! (`UiTest::builds_a_jit`). The server never evaluates constants there
+//! (D-1414), so a golden test whose `@steps` wait for the child is ignored
+//! too. The server process never runs generated code (D-1349), so every
+//! other trial runs there.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -94,7 +101,7 @@ use std::time::Duration;
 
 use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::example::{self, Example};
-use cheby_test_support::lsp::case::{self, Advertised, Layout, LspTest};
+use cheby_test_support::lsp::case::{self, Advertised, Layout, LspTest, Step};
 use cheby_test_support::lsp::client::{self, codes};
 use cheby_test_support::lsp::editing;
 use cheby_test_support::lsp::outline;
@@ -114,9 +121,11 @@ const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
 /// The deadline of each wait, before `CHEBY_HARNESS_SCALE` (D-722).
 const TIMEOUT: Duration = Duration::from_secs(60);
-/// Until the constants child of W9, the server reports no back-end code,
-/// so parity trials of goldens that hold one are ignored (D-1348, D-1349).
-const PARITY_SKIPS_BACK_END: bool = true;
+/// The server's notification that nothing is running or due for a
+/// package, the constants child included (D-1415).
+const IDLE: &str = "cheby/idle";
+/// The token prefix of a child run's `$/progress` (D-1415).
+const CHILD_PROGRESS: &str = "cheby/child/";
 /// Requests the examples group sends per batch.
 const BATCH: usize = 256;
 /// The package name a UI single-file test is copied into, as the UI
@@ -2028,17 +2037,12 @@ fn ui_parity_trial(
     if printed.iter().any(|p| p.code.is_none()) {
         return None;
     }
-    let back_end = printed.iter().any(|p| {
-        p.code
-            .as_deref()
-            .is_some_and(|c| ui::BACK_END_CODES.contains(&c))
-    });
     let name = format!("parity/ui/{}", test.name);
     let milestone = test.header.milestone;
     let expectation = current.expectation(milestone);
-    let ignored = (platform::runs_skipped() && test.builds_a_jit())
-        || bless
-        || (PARITY_SKIPS_BACK_END && back_end);
+    // A golden with a back-end code has no front-end error, so on Windows,
+    // where the server evaluates no constant (D-1414), it is ignored here.
+    let ignored = (platform::runs_skipped() && test.builds_a_jit()) || bless;
     let env = Arc::clone(env);
     let trial_name = name.clone();
     Some(trial(
@@ -2073,9 +2077,10 @@ fn ui_parity_trial(
     ))
 }
 
-/// Opens the root module of the package at `dir`, waits for its publish,
-/// and compares every published list with `printed`, whose paths `shown`
-/// maps to the package's own.
+/// Opens the root module of the package at `dir`, waits for its publish
+/// and then for `cheby/idle`, so the constants child's diagnostics are in
+/// (D-1415), and compares every published list with `printed`, whose
+/// paths `shown` maps to the package's own.
 fn compare_parity(
     env: &Env,
     dir: &Path,
@@ -2087,8 +2092,9 @@ fn compare_parity(
     let paths: Paths = client.paths().clone();
     let main = client.open(Path::new(ROOT_MODULE))?;
     client.diagnostics(&main, Some(1))?;
+    wait_idle(&mut client, "")?;
     // `shutdown` is answered on the main loop after the publishes of the
-    // run that published the root module, so every file of that run is in.
+    // idle package, so every file's list is in.
     let ended = client.shutdown()?;
     ended.expect(0)?;
 
@@ -2166,9 +2172,15 @@ fn golden_trial(
         Ok(header) => (header.milestone, current.expectation(header.milestone)),
         Err(_) => (Milestone::M1, Expectation::Pass),
     };
+    // D-545, D-1414: the server evaluates no constant on Windows until M6.
+    let ignored = platform::runs_skipped()
+        && test
+            .header
+            .as_ref()
+            .is_ok_and(|header| header.steps.iter().any(waits_for_child));
     let env = Arc::clone(env);
     let trial_name = name.clone();
-    trial(name, milestone, expectation, verdicts, false, move || {
+    trial(name, milestone, expectation, verdicts, ignored, move || {
         let bless = bless && expectation != Expectation::Fail;
         let header = test.header.clone()?;
         let scratch = Scratch::new(&trial_name)?;
@@ -2180,6 +2192,18 @@ fn golden_trial(
             (Layout::Package, false) => copy_dir(&test.path, scratch.path())?,
             (Layout::Package, true) => {
                 return Err("`@package: none` needs a test that is one file".to_owned());
+            }
+        }
+        if header.bom || header.crlf {
+            let files = if header.loose {
+                loose_sources(scratch.path())?
+            } else {
+                sources(scratch.path())?
+            };
+            for file in files {
+                let path = scratch.path().join(file);
+                let rewritten = read_rewritten(&path, &header)?;
+                std::fs::write(&path, rewritten).map_err(|e| format!("{}: {e}", path.display()))?;
             }
         }
         let answers = golden_answers(&env, scratch.path(), &header)?;
@@ -2269,7 +2293,10 @@ fn golden_blocks(
     capabilities: &Value,
 ) -> Result<String, String> {
     let paths = client.paths().clone();
-    let uris = open_all(&mut client, files)?;
+    let (uris, mut texts) = open_as_editor(&mut client, dir, header, files)?;
+    for step in &header.steps {
+        run_step(&mut client, dir, header, step, &mut texts)?;
+    }
     let encoding = client.encoding();
     // An unknown provider fails the examples group; here only completion's
     // trigger characters and resolve matter.
@@ -2277,9 +2304,7 @@ fn golden_blocks(
     let display = |uri: &str| paths.display(uri);
     let mut blocks = Vec::new();
     for (file, uri) in files.iter().zip(&uris) {
-        let path = dir.join(file);
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = texts.get(file).cloned().unwrap_or_default();
         let lines = Lines::new(&text, Bom::Counted);
         let diagnostics = client
             .published()
@@ -2360,6 +2385,223 @@ fn golden_blocks(
         text.push_str(&block);
     }
     Ok(text)
+}
+
+/// Whether `step` waits for the constants child, which never runs on
+/// Windows until M6 (D-1414).
+const fn waits_for_child(step: &Step) -> bool {
+    matches!(step, Step::Idle | Step::Started | Step::Quiet)
+}
+
+/// Opens each of `files` below `dir` as an editor holds it
+/// ([`editor_text`]) and waits for its first publish: their URIs, and
+/// their open texts by path.
+fn open_as_editor(
+    client: &mut Client,
+    dir: &Path,
+    header: &case::Header,
+    files: &[String],
+) -> Result<(Vec<String>, BTreeMap<String, String>), String> {
+    let mut texts: BTreeMap<String, String> = BTreeMap::new();
+    for file in files {
+        let path = dir.join(file);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        texts.insert(file.clone(), editor_text(&text, header));
+    }
+    if !(header.bom || header.crlf) {
+        return Ok((open_all(client, files)?, texts));
+    }
+    // As Zed opens such a file: no BOM and `\n` line ends, while disk
+    // keeps the rewritten form, so the child's hash of disk must be
+    // normalized to match the open text (D-1412).
+    let mut uris = Vec::with_capacity(files.len());
+    for file in files {
+        let uri = client.uri(Path::new(file))?;
+        let text = texts.get(file).map_or("", String::as_str);
+        client.open_text(&uri, text)?;
+        uris.push(uri);
+    }
+    for uri in &uris {
+        client.diagnostics(uri, Some(1))?;
+    }
+    Ok((uris, texts))
+}
+
+/// `text` as an editor holds a file of a test with `@rewrite`: no leading
+/// BOM and `\n` line ends. Any other test's text is unchanged.
+fn editor_text(text: &str, header: &case::Header) -> String {
+    if header.bom || header.crlf {
+        text.strip_prefix('\u{feff}')
+            .unwrap_or(text)
+            .replace("\r\n", "\n")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// The text of `path` in the form the test's `@rewrite` asks for: every
+/// line end `\r\n`, a leading BOM, or both.
+fn read_rewritten(path: &Path, header: &case::Header) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned();
+    if header.crlf {
+        text = text.replace("\r\n", "\n").replace('\n', "\r\n");
+    }
+    if header.bom {
+        text.insert(0, '\u{feff}');
+    }
+    Ok(text)
+}
+
+/// Waits for a `cheby/idle` of the session at `root`, a path below the
+/// client's root (empty for the package itself, the file's name in
+/// single-file mode), sent after the last message read (D-1415). Earlier
+/// ones are dropped, with every other notification not yet taken: they
+/// tell of a state before the edits and saves the client has sent, which a
+/// request does not wait for either (D-1443).
+fn wait_idle(client: &mut Client, root: &str) -> Result<(), String> {
+    drop(client.take_notifications());
+    next_idle(client, root).map(drop)
+}
+
+/// Waits for the next `cheby/idle` of the session at `root`, as
+/// [`wait_idle`] names it, and checks its payload: `root` and
+/// `generation`, the generation of the session's newest snapshot, 0 when
+/// the root has had none since the server started, as a package whose
+/// manifest gives none (D-1492, D-1499). The generation never goes back,
+/// not even when a change of `analysis.target` rebuilds the session
+/// (D-1495), so it is at least that of every `cheby/idle` of the session
+/// read before it.
+/// The notifications read before it are taken and returned, since they
+/// tell of a state that ended before it.
+fn next_idle(client: &mut Client, root: &str) -> Result<Vec<Value>, String> {
+    let paths = client.paths().clone();
+    let of_root = |m: &Value| {
+        m.get("method").and_then(Value::as_str) == Some(IDLE)
+            && client::params(m)
+                .get("root")
+                .and_then(Value::as_str)
+                .and_then(|uri| paths.relative(uri))
+                .is_some_and(|relative| relative == root)
+    };
+    let before = client
+        .received()
+        .iter()
+        .filter(|m| of_root(m))
+        .filter_map(|m| client::params(m).get("generation").and_then(Value::as_u64))
+        .max();
+    let idle = client.notification("`cheby/idle` of the package", of_root)?;
+    let params = client::params(&idle);
+    let mut keys: Vec<&str> = params
+        .as_object()
+        .map(|map| map.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    keys.sort_unstable();
+    let generation = params.get("generation").and_then(Value::as_u64);
+    if keys != ["generation", "root"] || generation.is_none() {
+        return Err(format!(
+            "`cheby/idle` carries {params}, not `root` and a `generation` (D-1492)"
+        ));
+    }
+    if let (Some(before), Some(now)) = (before, generation)
+        && now < before
+    {
+        return Err(format!(
+            "`cheby/idle` went back from generation {before} to {now} (D-1495)"
+        ));
+    }
+    Ok(client.take_notifications())
+}
+
+/// Whether `message` is the `$/progress` begin of a child run.
+fn child_began(message: &Value) -> bool {
+    let params = client::params(message);
+    message.get("method").and_then(Value::as_str) == Some("$/progress")
+        && params
+            .get("token")
+            .and_then(Value::as_str)
+            .is_some_and(|token| token.starts_with(CHILD_PROGRESS))
+        && params.pointer("/value/kind").and_then(Value::as_str) == Some("begin")
+}
+
+/// Runs one of a golden test's `@steps` in the package at `dir`, whose
+/// open documents' texts `texts` holds, by path below the package.
+fn run_step(
+    client: &mut Client,
+    dir: &Path,
+    header: &case::Header,
+    step: &Step,
+    texts: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    // A single-file session's root is its file (D-1492).
+    let root = if header.loose {
+        texts.keys().next().cloned().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let (from, save) = match step {
+        Step::Idle => return wait_idle(client, &root),
+        Step::Started => {
+            client.notification("the `$/progress` begin of a child run", child_began)?;
+            return Ok(());
+        }
+        Step::Quiet => {
+            let mut seen = client.take_notifications();
+            seen.extend(next_idle(client, &root)?);
+            return match seen.iter().find(|m| child_began(m)) {
+                Some(began) => Err(format!(
+                    "`quiet`: a child run began since the last `cheby/idle`: {began}"
+                )),
+                None => Ok(()),
+            };
+        }
+        Step::Settings(name) => {
+            let path = dir.join(format!("{name}.json"));
+            let text =
+                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let settings: Value =
+                serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+            client.set_configuration(settings.clone());
+            return client.notify(
+                "workspace/didChangeConfiguration",
+                json!({ "settings": { "cheby": settings } }),
+            );
+        }
+        Step::Edit(from) => (from, false),
+        Step::Save(from) => (from, true),
+    };
+    let base = dir.join(from);
+    let found = files_with_extension(&base, "cheby").map_err(|e| format!("{from}: {e}"))?;
+    if found.is_empty() {
+        return Err(format!("`@steps`: `{from}/` holds no `.cheby` file"));
+    }
+    let mut sent = Vec::new();
+    for path in found {
+        let file = cheby_test_support::display_relative(&path, &base);
+        if !texts.contains_key(&file) {
+            return Err(format!(
+                "`@steps`: `{from}/{file}` is not a source file of the test"
+            ));
+        }
+        let disk = read_rewritten(&path, header)?;
+        let text = editor_text(&disk, header);
+        let uri = client.uri(Path::new(&file))?;
+        if save {
+            let target = dir.join(&file);
+            std::fs::write(&target, &disk).map_err(|e| format!("{}: {e}", target.display()))?;
+        }
+        let version = client.change(&uri, &text)?;
+        if save {
+            client.save(&uri)?;
+        }
+        texts.insert(file, text);
+        sent.push((uri, version));
+    }
+    for (uri, version) in sent {
+        client.diagnostics(&uri, Some(version))?;
+    }
+    Ok(())
 }
 
 /// A call hierarchy marker's answer: `follow_up` sent with each item that

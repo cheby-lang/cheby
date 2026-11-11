@@ -1,0 +1,20 @@
+== diagnostics
+{}
+
+== src/main.cheby:11:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst spin: Int\n```\n\n---\n\nNot evaluated: the last evaluation failed or was cut short (see `cheby/status`).\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 10,
+      "line": 10
+    },
+    "start": {
+      "character": 6,
+      "line": 10
+    }
+  }
+}

@@ -209,9 +209,10 @@ impl Server {
         for (root, paths) in changed {
             let changed = Changed {
                 sweep: false,
-                paths,
+                paths: paths.clone(),
             };
             self.mark_dirty(&root, changed, Urgency::Debounce);
+            self.child_on_save(&root, &paths);
         }
         if manifests {
             self.reroute();
@@ -236,8 +237,10 @@ impl Server {
     }
 
     /// A sweep found changes under `root`: its session forgets them and
-    /// runs after the debounce. A manifest that came or went routes the
-    /// open documents again.
+    /// runs after the debounce, and the constants child treats them as a
+    /// watched change, since the sweep stands in for watchers (D-1374,
+    /// D-1494). A manifest that came or went routes the open documents
+    /// again.
     pub(crate) fn on_swept(&mut self, swept: Swept) {
         let Swept { root, paths } = swept;
         if !self.packages.contains_key(&root) {
@@ -248,9 +251,10 @@ impl Server {
             .any(|path| path.file_name().is_some_and(|name| name == MANIFEST));
         let changed = Changed {
             sweep: false,
-            paths,
+            paths: paths.clone(),
         };
         self.mark_dirty(&root, changed, Urgency::Debounce);
+        self.child_on_save(&root, &paths);
         if manifests {
             self.reroute();
         }

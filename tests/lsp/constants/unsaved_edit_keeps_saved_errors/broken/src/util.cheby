@@ -1,0 +1,10 @@
+//! The saved text: a new constant, and a type error.
+
+pub const base: Int = 2
+
+pub const fresh: Int = 3
+
+pub fn bad() -> Int {
+  let x: Int = "no"
+  x
+}

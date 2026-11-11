@@ -332,6 +332,63 @@ fn base_fails_on_an_internal_error() {
     assert!(StdBase::build_with(Arc::new(Globals::new()), "").is_ok());
 }
 
+/// A constant of a module whose tree a package run dropped shows its
+/// initializer as written, read again from its text: how hover shows a
+/// dependency's constant, which no child evaluates (D-1491). Std stands
+/// in for a dependency, the one other package a run has before M5.
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn const_initializer_reads_dropped_trees() {
+    let dir = std::env::temp_dir().join(format!("cheby_std_base_init_{}", std::process::id()));
+    drop(std::fs::remove_dir_all(&dir));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let root = std::path::absolute(&dir).unwrap();
+    std::fs::write(
+        root.join("cheby.toml"),
+        "name = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.cheby"),
+        "import std::int\n\npub const local: Int = 1 +\n  2\n\nfn main() {\n  assert \
+         int::max_safe > local\n}\n",
+    )
+    .unwrap();
+    let mut session = crate::analysis::Session::new(crate::analysis::SessionConfig {
+        root: root.clone(),
+        kind: crate::analysis::PackageKind::Package,
+        target: None,
+        globals: Arc::new(Globals::new()),
+    });
+    let live = session
+        .analyze_live(&crate::analysis::Overlay::default())
+        .unwrap();
+    let snapshot = live.snapshot.unwrap();
+    let item = |module: cheby_package::ModulePath, name: &str| match snapshot.find(&Symbol::item(
+        module,
+        SymbolNs::Value,
+        name,
+    )) {
+        Some(SymbolTarget::Item(def)) => def,
+        other => panic!("{name}: {other:?}"),
+    };
+    let max_safe = item(std_path("int"), "max_safe");
+    assert!(snapshot.module(max_safe.module).unwrap().tree().is_none());
+    assert_eq!(
+        snapshot.const_initializer(max_safe).as_deref(),
+        Some("9_007_199_254_740_991")
+    );
+    let app = cheby_package::ModulePath::root("app");
+    assert_eq!(
+        snapshot
+            .const_initializer(item(app.clone(), "local"))
+            .as_deref(),
+        Some("1 +\n  2")
+    );
+    assert_eq!(snapshot.const_initializer(item(app, "main")), None);
+    drop(std::fs::remove_dir_all(&dir));
+}
+
 #[test]
 fn materialized_std_is_read_only_and_kept() {
     struct Removed(PathBuf);

@@ -23,7 +23,7 @@ use serde_json::Value;
 use super::schedule::{Parked, Want};
 use super::sessions::DocRoute;
 use super::state::package_root;
-use super::{ClientCaps, Effect, Server, Settings, codes};
+use super::{ClientCaps, ConstValues, Effect, Server, Settings, codes};
 use crate::features::stdlib::StdService;
 use crate::features::{
     Analyzed, CancelToken, Class, HandlerOutput, LiveText, RequestCx, RequestError, Route,
@@ -37,7 +37,7 @@ const STACK_SIZE: usize = 256 << 20;
 
 /// What a request reads besides its target, as the main loop had it when
 /// the request arrived.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RequestEnv {
     /// The settings in force.
     pub settings: Arc<Settings>,
@@ -47,6 +47,9 @@ pub(crate) struct RequestEnv {
     pub encoding: PositionEncoding,
     /// Std's base and sources.
     pub std: Arc<StdService>,
+    /// The package's constant values, set when the request starts on a
+    /// snapshot of its package, so it reads the newest ones (D-1413).
+    pub constants: Option<Arc<ConstValues>>,
 }
 
 /// What a handler reads.
@@ -168,6 +171,7 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         encoding: env.encoding,
         cancel: &cancel,
         std: &env.std,
+        constants: env.constants.clone(),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| match (route.class, &target) {
         (Class::Text(handler), QueryTarget::Text(live)) => match live.doc_text() {
@@ -367,7 +371,15 @@ impl Server {
             caps: self.caps.clone(),
             encoding: self.encoding,
             std: Arc::clone(&self.std),
+            constants: None,
         })
+    }
+
+    /// `env` with the newest constant values of the package at `root`.
+    pub(crate) fn with_constants(&self, env: Arc<RequestEnv>, root: &Path) -> Arc<RequestEnv> {
+        let mut env = Arc::unwrap_or_clone(env);
+        env.constants = self.children.constants(root);
+        Arc::new(env)
     }
 
     /// Sends a request to the pool.

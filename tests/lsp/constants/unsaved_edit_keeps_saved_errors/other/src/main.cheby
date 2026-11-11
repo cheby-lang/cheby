@@ -1,0 +1,10 @@
+//! The saved text: a comment more.
+
+import app::util
+
+const limit: Int = 20
+
+fn main() {
+  // Saved.
+  assert limit > util::base
+}

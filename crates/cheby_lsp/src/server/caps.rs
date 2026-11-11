@@ -53,6 +53,11 @@ pub(crate) struct ClientCaps {
     /// `workspace.inlayHint.refreshSupport`: the client takes
     /// `workspace/inlayHint/refresh` (A §12.3).
     pub inlay_refresh: bool,
+    /// `window.workDoneProgress`: child runs show as `$/progress`
+    /// (D-1415).
+    pub work_done_progress: bool,
+    /// `experimental.chebyIdle`: the client takes `cheby/idle` (D-1415).
+    pub idle_notification: bool,
     /// `textDocument.documentSymbol`: what an outline may hold.
     pub symbols: SymbolCaps,
     /// `textDocument.foldingRange`: what a fold may be.
@@ -96,6 +101,8 @@ impl ClientCaps {
                 "/capabilities/textDocument/publishDiagnostics/relatedInformation",
             ),
             inlay_refresh: flag("/capabilities/workspace/inlayHint/refreshSupport"),
+            work_done_progress: flag("/capabilities/window/workDoneProgress"),
+            idle_notification: flag("/capabilities/experimental/chebyIdle"),
             symbols: SymbolCaps::from_params(params),
             folding: FoldingCaps::from_params(params),
             hover: HoverCaps::from_params(params),

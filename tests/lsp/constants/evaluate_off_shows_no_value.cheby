@@ -1,0 +1,12 @@
+// @decisions: D-1491
+// @settings: {"constants": {"evaluate": false}}
+// @steps: idle
+//! A package constant with `constants.evaluate` off. No child runs, so
+//! hover shows no value line, and not "not evaluated yet" (D-1491).
+
+const limit: Int = 20
+//    ^ hover
+
+fn main() {
+  assert limit > 0
+}

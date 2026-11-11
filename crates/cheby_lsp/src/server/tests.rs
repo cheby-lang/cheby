@@ -44,10 +44,19 @@ impl Client {
     /// Starts a server and sends `initialize` with `params`, and
     /// `initialized`. Returns the client and the `initialize` result.
     pub(super) fn start(params: Value, config_answers: Vec<Value>) -> (Self, Value) {
+        Self::start_with(params, config_answers, None)
+    }
+
+    /// [`Client::start`] with `child` as the executable of child jobs.
+    pub(super) fn start_with(
+        params: Value,
+        config_answers: Vec<Value>,
+        child: Option<PathBuf>,
+    ) -> (Self, Value) {
         let (server_side, client_side) = Connection::memory();
         let options = ServerOptions {
             build: BuildId([0; 16]),
-            child: None,
+            child,
         };
         let server = std::thread::Builder::new()
             .name("cheby-test-server".to_owned())
@@ -656,5 +665,148 @@ fn second_initialize_is_invalid_request() {
     let (mut client, _) = Client::start(json!({ "capabilities": {} }), Vec::new());
     let answer = client.request("initialize", json!({ "capabilities": {} }));
     assert_eq!(answer, Err(-32_600));
+    client.stop();
+}
+
+/// A client with `experimental.chebyIdle` gets `cheby/idle` once the
+/// package's first job is done, and `cheby/status` lists the package. In
+/// process no child runs (`ServerOptions::child` is `None`), so idle
+/// follows the analysis job alone (D-1415). The payload is `{ root,
+/// generation }`: the package root as a URI, and the generation of its
+/// newest snapshot, the one `cheby/status` names (D-1492).
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn idle_follows_the_first_job_and_status_lists_the_package() {
+    let package = Temp::package("idle", &[("src/main.cheby", MAIN)]);
+    let params = package.params(&json!({
+        "capabilities": { "experimental": { "chebyIdle": true } },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    let root = uri(&package.at(""));
+    let root = root.as_str().unwrap().trim_end_matches('/').to_owned();
+    let generation = loop {
+        if let Message::Notification(note) = client.next()
+            && note.method == "cheby/idle"
+        {
+            let mut keys: Vec<&String> = note.params.as_object().unwrap().keys().collect();
+            keys.sort();
+            assert_eq!(keys, ["generation", "root"], "{note:?}");
+            assert_eq!(note.params["root"], root.as_str(), "{note:?}");
+            break note.params["generation"].as_u64().unwrap();
+        }
+    };
+    assert!(generation >= 1, "the first job made a snapshot");
+    let status = client.request("cheby/status", Value::Null).unwrap();
+    assert_eq!(status["packages"][0]["generation"], generation, "{status}");
+    assert_eq!(status["idleNotification"], true, "{status}");
+    let packages = status["packages"].as_array().unwrap();
+    assert_eq!(packages.len(), 1, "{status}");
+    assert_eq!(packages[0]["kind"], "package", "{status}");
+    assert_eq!(packages[0]["run"], "idle", "{status}");
+    let only = client
+        .request("cheby/status", json!({ "root": root }))
+        .unwrap();
+    assert_eq!(only["packages"], status["packages"]);
+    assert_eq!(client.request("cheby/status", json!(3)), Err(-32_602));
+    client.stop();
+}
+
+/// D-1495: a change of `analysis.target` rebuilds the session, whose
+/// snapshots number from 1 again, and the generation of `cheby/idle` and
+/// `cheby/status` still grows.
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn idle_generation_grows_across_a_target_change() {
+    let package = Temp::package("idle_target", &[("src/main.cheby", MAIN)]);
+    let params = package.params(&json!({
+        "capabilities": { "experimental": { "chebyIdle": true } },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    let next_idle = |client: &mut Client| loop {
+        if let Message::Notification(note) = client.next()
+            && note.method == "cheby/idle"
+        {
+            break note.params["generation"].as_u64().unwrap();
+        }
+    };
+    let before = next_idle(&mut client);
+    assert!(before >= 1, "the first job made a snapshot");
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": { "analysis": { "target": "js" } } } }),
+    );
+    let after = next_idle(&mut client);
+    assert!(after > before, "{before} then {after}");
+    let status = client.request("cheby/status", Value::Null).unwrap();
+    assert_eq!(status["packages"][0]["generation"], after, "{status}");
+    client.stop();
+}
+
+/// D-1374, D-1494: for a client with no watcher, a sweep that finds a
+/// change on disk, here a new module, reruns the constants as a watched
+/// change does.
+#[test]
+#[cfg(unix)]
+#[cfg_attr(windows, ignore = "runs processes (D-545)")]
+fn a_swept_change_reruns_the_constants() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const SOURCE: &str =
+        "//! Root.\n\nconst limit: Int = 20\n\nfn main() {\n  assert limit > 0\n}\n";
+    let package = Temp::package("swept_rerun", &[("src/main.cheby", SOURCE)]);
+    let tools = Temp::package("swept_rerun_tools", &[]);
+    let runs = tools.at("runs.txt");
+    let exe = tools.at("fake-cheby");
+    std::fs::write(
+        &exe,
+        format!("#!/bin/sh\necho run >> '{}'\n", runs.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let count = || std::fs::read_to_string(&runs).map_or(0, |text| text.lines().count());
+    // No `didChangeWatchedFiles`: the server sweeps (D-1374).
+    let params = package.params(&json!({
+        "capabilities": { "experimental": { "chebyIdle": true } },
+    }));
+    let (mut client, _) = Client::start_with(params, Vec::new(), Some(exe));
+    open(&client, &package.at("src/main.cheby"), SOURCE, 1);
+    let next_idle = |client: &mut Client| loop {
+        if let Message::Notification(note) = client.next()
+            && note.method == "cheby/idle"
+        {
+            break note.params["generation"].as_u64().unwrap();
+        }
+    };
+    let mut first = next_idle(&mut client);
+    while count() == 0 {
+        first = next_idle(&mut client);
+    }
+    assert_eq!(count(), 1, "the first clean report's run");
+    std::fs::write(package.at("src/other.cheby"), "//! Other.\n").unwrap();
+    let mut after = next_idle(&mut client);
+    while after <= first {
+        after = next_idle(&mut client);
+    }
+    assert_eq!(count(), 2, "the sweep's change reran the constants");
+    client.stop();
+}
+
+/// A client without `experimental.chebyIdle` never gets `cheby/idle`.
+#[test]
+#[cfg_attr(windows, ignore = "runs the front end (D-545, D-641)")]
+fn no_idle_without_the_capability() {
+    let package = Temp::package("no_idle", &[("src/main.cheby", MAIN)]);
+    let (mut client, _) = Client::start(package.params(&json!({})), Vec::new());
+    client.wait_publish(&package.at("src/main.cheby"), |_| true);
+    // Answered after every notification sent before it.
+    client.settings();
+    assert!(
+        client
+            .notifications
+            .iter()
+            .all(|n| n.method != "cheby/idle"),
+        "{:?}",
+        client.notifications
+    );
     client.stop();
 }

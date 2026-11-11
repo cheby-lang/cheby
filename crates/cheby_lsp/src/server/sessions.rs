@@ -291,6 +291,7 @@ impl Server {
             return;
         };
         self.served.remove(root);
+        self.end_children(root);
         // A job of this root still on the thread runs first, since the
         // thread takes its work in order.
         let _ = self.jobs.send(Work::Drop(root.to_path_buf()));

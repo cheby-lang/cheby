@@ -1,0 +1,13 @@
+// @decisions: D-1411, D-1412
+// @steps: idle, edit dirty, save next, idle
+//! A save while another file's buffer is unsaved still evaluates the
+//! constants, from disk (S-27): the saved file's value is current, and
+//! the unsaved file's value, read from disk, is marked stale.
+
+import app::other
+
+const limit: Int = 20
+
+fn main() {
+  assert limit > other::base
+}

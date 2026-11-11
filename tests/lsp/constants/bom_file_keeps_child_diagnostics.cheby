@@ -1,0 +1,19 @@
+// @decisions: D-1412
+// @steps: idle
+// @rewrite: bom
+//! `panic_gives_e0075` in a file that starts with a BOM. The child's
+//! ranges are in normalized text (D-1412), so E0075 lands where it does
+//! without the BOM, and its hash still matches the open document's.
+
+import std::io
+
+const ratio: Int = 100 / parts()
+//    ^ hover
+
+fn parts() -> Int {
+  0
+}
+
+fn main() {
+  io::println("main ran: {ratio}")
+}

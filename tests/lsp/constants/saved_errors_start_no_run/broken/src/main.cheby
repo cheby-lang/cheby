@@ -1,0 +1,10 @@
+//! The saved text: the type error has moved, and the file still does not
+//! check.
+
+const limit: Int = 20
+//    ^ hover
+
+fn main() {
+  let x: Int = 1
+  assert limit > x + "no"
+}
