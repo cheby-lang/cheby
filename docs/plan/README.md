@@ -411,6 +411,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1389    | Rename and refactors verify their edits by a stateless tolerant run on a query thread               |
 | D-1410    | One hidden command, `cheby __backend`, with one job per process: `constants` or `ownership`         |
 | D-1416    | Memory facts stop before code generation, through `Roots::Analysis`                                 |
+| D-1517    | `lsp` merges into `main` after checkpoint 2's fixes; later waves follow in groups, one PR each      |
+| D-1518    | The Zed extension stays a dev extension, version 0.2.0 on its `main`, until W18                     |
 
 ## Open questions
 
