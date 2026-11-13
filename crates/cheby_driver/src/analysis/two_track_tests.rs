@@ -111,21 +111,24 @@ fn all_codes(
 ) -> BTreeMap<String, Vec<String>> {
     files
         .iter()
-        .map(|(path, report)| {
-            (
-                path.strip_prefix(&root.0).unwrap().display().to_string(),
-                codes_of(report),
-            )
-        })
+        .map(|(path, report)| (slashed(root, path), codes_of(report)))
         .collect()
 }
 
 /// The paths of `paths` relative to `root`.
 fn relative<'a>(root: &Temp, paths: impl IntoIterator<Item = &'a PathBuf>) -> BTreeSet<String> {
-    paths
-        .into_iter()
-        .map(|p| p.strip_prefix(&root.0).unwrap().display().to_string())
-        .collect()
+    paths.into_iter().map(|p| slashed(root, p)).collect()
+}
+
+/// `path` relative to `root`, its components joined with `/` on every platform, as the tests
+/// write them.
+fn slashed(root: &Temp, path: &Path) -> String {
+    let relative = path.strip_prefix(&root.0).unwrap();
+    let parts: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts.join("/")
 }
 
 /// `text`'s own phase-A diagnostics, as code and message: a parse of the
