@@ -1,0 +1,263 @@
+// @decisions: D-1543, D-1541, D-1532, D-1527, D-1526, D-605, D-078
+> { ( }
+error[E0015]: unclosed `(`
+ --> <repl:1>:1:5
+  |
+1 | { ( }
+  |   - ^ expected `)`
+  |   |
+  |   this `(` is never closed
+
+> let x = {
+.   let y = {
+.     1 ]
+error[E0013]: expected a line break or `}`, found `]`
+ --> <repl:2>:3:7
+  |
+3 |     1 ]
+  |       ^
+
+error[E0015]: unclosed `{`
+ --> <repl:2>:3:8
+  |
+2 |   let y = {
+  |           - this `{` is never closed
+3 |     1 ]
+  |        ^ expected `}`
+
+> [ { ] }
+error[E0015]: unclosed `{`
+ --> <repl:3>:1:5
+  |
+1 | [ { ] }
+  |   - ^ expected `}`
+  |   |
+  |   this `{` is never closed
+
+error[E0013]: expected a statement, found `}`
+ --> <repl:3>:1:7
+  |
+1 | [ { ] }
+  |       ^
+
+> list::length([1, { ) }])
+error[E0015]: unclosed `{`
+ --> <repl:4>:1:20
+  |
+1 | list::length([1, { ) }])
+  |                  - ^ expected `}`
+  |                  |
+  |                  this `{` is never closed
+
+error[E0013]: expected a statement, found `}`
+ --> <repl:4>:1:22
+  |
+1 | list::length([1, { ) }])
+  |                      ^
+
+> "{ ( }"
+error[E0012]: unexpected `(` in string interpolation
+ --> <repl:5>:1:4
+  |
+1 | "{ ( }"
+  |    ^
+  |
+  = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+
+> let s = "} ) ] // \{"
+> s
+"} ) ] // \{" : String
+> {
+.   // ) ] }
+.   "{s}"
+. }
+"} ) ] // \{" : String
+> "{{}" }
+error[E0012]: unexpected `{` in string interpolation
+ --> <repl:9>:1:3
+  |
+1 | "{{}" }
+  |   ^
+  |
+  = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+
+error[E0013]: expected a statement, found `}`
+ --> <repl:9>:1:7
+  |
+1 | "{{}" }
+  |       ^
+
+> list::length(["{ ) }",
+.   "b",
+. ])
+error[E0012]: unexpected `)` in string interpolation
+ --> <repl:10>:1:18
+  |
+1 | list::length(["{ ) }",
+  |                  ^
+  |
+  = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+
+> /* ( */ 3
+error[E0004]: block comments are not supported
+ --> <repl:11>:1:1
+  |
+1 | /* ( */ 3
+  | ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 4
+4 : Int
+> ( /* ) */ 5 )
+error[E0004]: block comments are not supported
+ --> <repl:13>:1:3
+  |
+1 | ( /* ) */ 5 )
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> /* ( */
+error[E0004]: block comments are not supported
+ --> <repl:14>:1:1
+  |
+1 | /* ( */
+  | ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> { /* } */ }
+error[E0004]: block comments are not supported
+ --> <repl:15>:1:3
+  |
+1 | { /* } */ }
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> [1, /* x
+.   */ 2]
+error[E0004]: block comments are not supported
+ --> <repl:16>:1:5
+  |
+1 | [1, /* x
+  |     ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 1 /* (
+error[E0004]: block comments are not supported
+ --> <repl:17>:1:3
+  |
+1 | 1 /* (
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 1 + 2
+3 : Int
+> {
+. /* note
+. }
+error[E0015]: unclosed `{`
+ --> <repl:19>:1:2
+  |
+1 | {
+  | -^ expected `}`
+  | |
+  | this `{` is never closed
+
+error[E0004]: block comments are not supported
+ --> <repl:19>:2:1
+  |
+2 | /* note
+  | ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 7
+7 : Int
+> (
+.   /* x
+. )
+error[E0015]: unclosed `(`
+ --> <repl:21>:1:2
+  |
+1 | (
+  | -^ expected `)`
+  | |
+  | this `(` is never closed
+
+error[E0004]: block comments are not supported
+ --> <repl:21>:2:3
+  |
+2 |   /* x
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> /* a ( */ 3
+error[E0004]: block comments are not supported
+ --> <repl:22>:1:1
+  |
+1 | /* a ( */ 3
+  | ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> {
+.   /* a
+. } */
+error[E0015]: unclosed `{`
+ --> <repl:23>:1:2
+  |
+1 | {
+  | -^ expected `}`
+  | |
+  | this `{` is never closed
+
+error[E0004]: block comments are not supported
+ --> <repl:23>:2:3
+  |
+2 |   /* a
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 8
+8 : Int
+> [
+.   /* a
+.   ( */ 1
+. ]
+error[E0004]: block comments are not supported
+ --> <repl:25>:2:3
+  |
+2 |   /* a
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> [1,
+.   /* two
+.   2]
+error[E0015]: unclosed `[`
+ --> <repl:26>:1:4
+  |
+1 | [1,
+  | -  ^ expected `]`
+  | |
+  | this `[` is never closed
+
+error[E0004]: block comments are not supported
+ --> <repl:26>:2:3
+  |
+2 |   /* two
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> :type 1
+1 : Int
+> :quit

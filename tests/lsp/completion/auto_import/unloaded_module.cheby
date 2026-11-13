@@ -1,0 +1,9 @@
+// @decisions: D-1372, D-1395
+//! `url_enc`: `std::base64` is not loaded by this file's run, so its item
+//! comes from std's index.
+
+fn main() {
+  let text = url_enc
+  //                ^ completion base64::url_encode
+  //                ^ apply base64::url_encode
+}

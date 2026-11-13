@@ -1,0 +1,16 @@
+//! Interfaces that embed `Show`.
+
+/// Names a value.
+interface Labeled: Show {
+  fn label(Self) -> String
+}
+
+/// Tags a value.
+interface Tagged: Show {
+  fn tag(Self) -> String
+}
+
+/// Marks a value.
+interface Marked: Show {
+  fn mark(Self) -> String
+}

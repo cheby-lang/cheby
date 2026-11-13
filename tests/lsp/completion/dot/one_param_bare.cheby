@@ -1,0 +1,11 @@
+// @decisions: D-1394, D-245
+//! `xs.` at a line's end: a one-parameter function is written bare,
+//! never `f(_)` (grammar error state).
+
+import std::list
+
+fn main() {
+  let xs = [1, 2, 3]
+  let n = xs.
+  //         ^ apply length
+}

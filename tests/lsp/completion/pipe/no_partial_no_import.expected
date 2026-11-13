@@ -1,0 +1,32 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected an expression, found `}`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 7
+        },
+        "start": {
+          "character": 15,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:18 completion list::map list::length
+{
+  "absent": [
+    "list::map",
+    "list::length"
+  ],
+  "count": 1,
+  "isIncomplete": true,
+  "items": []
+}

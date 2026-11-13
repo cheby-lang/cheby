@@ -1,0 +1,16 @@
+// @decisions: D-1489, D-1495, D-1498
+// @settings: {"analysis": {"target": "native"}}
+// @steps: idle, settings js, idle
+//! An `Int` outside the JS range in a package that targets `native` and
+//! `js`. With `analysis.target` set to `native` the constants child
+//! reports nothing. Changing the setting to `js` reruns the constants at
+//! once, with no save, so E0078 is published (D-1498). The change
+//! rebuilds the session, and the generation of `cheby/idle` still does
+//! not go back (D-1495).
+
+const big: Int = 9_007_199_254_740_991 * 2
+//    ^ hover
+
+fn main() {
+  assert big > 0
+}

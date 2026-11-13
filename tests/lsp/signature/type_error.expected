@@ -1,0 +1,233 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 21
+        },
+        "start": {
+          "character": 18,
+          "line": 21
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 17,
+                "line": 21
+              },
+              "start": {
+                "character": 14,
+                "line": 21
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "arguments to this function are incorrect"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0048",
+      "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
+      "range": {
+        "end": {
+          "character": 26,
+          "line": 23
+        },
+        "start": {
+          "character": 17,
+          "line": 23
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 8
+              },
+              "start": {
+                "character": 3,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`add` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0048",
+      "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
+      "range": {
+        "end": {
+          "character": 32,
+          "line": 26
+        },
+        "start": {
+          "character": 24,
+          "line": 26
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 13
+              },
+              "start": {
+                "character": 3,
+                "line": 13
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`first_or` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0048",
+      "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
+      "range": {
+        "end": {
+          "character": 33,
+          "line": 28
+        },
+        "start": {
+          "character": 21,
+          "line": 28
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 13
+              },
+              "start": {
+                "character": 3,
+                "line": 13
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`first_or` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:22:26 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:24:25 signatureHelp
+{
+  "activeParameter": 2,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "Adds two numbers."
+      },
+      "label": "fn add(a: Int, b: Int) -> Int",
+      "parameters": [
+        {
+          "label": "[7, 13] a: Int"
+        },
+        {
+          "label": "[15, 21] b: Int"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:27:32 signatureHelp
+{
+  "activeParameter": 1,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "```cheby\nfn(List<Int>, Int) -> Int\n```\n\n---\n\nThe first of `xs`, or `fallback`."
+      },
+      "label": "fn first_or<T>(xs: List<T>, fallback: T) -> T",
+      "parameters": [
+        {
+          "label": "[15, 26] xs: List<T>"
+        },
+        {
+          "label": "[28, 39] fallback: T"
+        }
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:29:32 signatureHelp
+{
+  "activeParameter": 2,
+  "activeSignature": 0,
+  "signatures": [
+    {
+      "documentation": {
+        "kind": "markdown",
+        "value": "```cheby\nfn(List<Int>, Int) -> Int\n```\n\n---\n\nThe first of `xs`, or `fallback`."
+      },
+      "label": "fn first_or<T>(xs: List<T>, fallback: T) -> T",
+      "parameters": [
+        {
+          "label": "[15, 26] xs: List<T>"
+        },
+        {
+          "label": "[28, 39] fallback: T"
+        }
+      ]
+    }
+  ]
+}

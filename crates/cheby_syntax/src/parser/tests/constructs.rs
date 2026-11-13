@@ -171,6 +171,68 @@ fn line_after_e0014_does_not_cascade() {
     assert_eq!(codes_of(&text), ["E0015"]);
 }
 
+/// Asserts that the first error of each text points at `at`.
+fn assert_first_error_at(cases: &[(&str, &str)]) {
+    for &(text, at) in cases {
+        let errors = errors_of(text);
+        let first = errors.lines().nth(1).unwrap_or_default();
+        assert!(first.ends_with(at), "{text:?}\n{errors}");
+    }
+}
+
+/// D-1513: an "expected" error at a `}` that closes an open `{`, or at the
+/// end of the file, after a skipped line break points right after the
+/// previous token.
+#[test]
+fn errors_before_a_closing_brace_or_the_end_point_at_the_line() {
+    assert_first_error_at(&[
+        // The half-typed last line of a block, with or without a comment
+        // line before the `}`.
+        ("fn f() {\n  let n: Int\n}\n", "test.cheby:2:13"),
+        (
+            "fn f() {\n  let n: Int\n  // later\n\n}\n",
+            "test.cheby:2:13",
+        ),
+        ("fn f() {\n  let e = 3 +\n}\n", "test.cheby:2:14"),
+        // A block inside a block (D-1519: the `}` closes an open `{`).
+        (
+            "fn f() {\n  let g = {\n    1 +\n  }\n  g\n}\n",
+            "test.cheby:3:8",
+        ),
+        // The end of the file.
+        ("const c: Int\n\n", "test.cheby:1:13"),
+        // A `}` on the same line keeps its position.
+        ("fn f() { let n: Int }", "test.cheby:1:21"),
+    ]);
+}
+
+/// D-1519: a `}` that closes no open `{` keeps the error on itself, and
+/// E0015's "expected `)`" stays on the token that ends the list.
+#[test]
+fn a_stray_closing_brace_keeps_its_error() {
+    assert_first_error_at(&[
+        // With no token before it.
+        ("// x\n}\n", "test.cheby:2:1"),
+        // Directly after an item.
+        ("fn a() {}\n}\n", "test.cheby:2:1"),
+        // Several lines below an item, with a comment between.
+        ("fn a() {}\n\n// c\n\n}\n", "test.cheby:5:1"),
+        // After the item's own `}` on the line of an extra one.
+        ("fn a() {\n  1\n}\n}\n", "test.cheby:4:1"),
+    ]);
+    for text in ["fn a() {}\n}\n", "fn a() {}\n\n// c\n\n}\n"] {
+        let errors = errors_of(text);
+        assert!(
+            errors.starts_with("error[E0013]: expected an item, found `}`"),
+            "{text:?}\n{errors}"
+        );
+    }
+    // An unclosed `(` before a `}` on the next line.
+    let text = "fn f() {\n  let x = add(1, 2\n}\n";
+    assert_eq!(codes_of(text), ["E0015"]);
+    assert_first_error_at(&[(text, "test.cheby:3:1")]);
+}
+
 #[test]
 fn files_need_no_final_line_break() {
     assert_ok("fn f() {}");

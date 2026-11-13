@@ -1,0 +1,19 @@
+// @decisions: D-1349, D-1410
+// @steps: idle
+//! A constant whose initializer reaches `io::println`. The child reports
+//! E0077 and the server publishes it, and the server's standard output
+//! holds frames only (D-1349): no text of the constant's.
+
+import std::io
+
+const greeting: String = announce("hello")
+//    ^ hover
+
+fn announce(text: String) -> String {
+  io::println(text)
+  text
+}
+
+fn main() {
+  io::println(greeting)
+}

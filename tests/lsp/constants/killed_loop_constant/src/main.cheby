@@ -1,0 +1,17 @@
+// @decisions: D-1411
+// @settings: {"constants": {"childTimeoutSeconds": 600}}
+// @steps: started, save next, idle
+//! A constant that never ends, under limits far above the harness's wait.
+//! A save while its child runs kills the child and starts another, so
+//! `cheby/idle` comes with no wait for a deadline, and the new value
+//! reaches hover (D-1411, A §11.5).
+
+const spin: Int = count_up(0)
+
+fn count_up(n: Int) -> Int {
+  count_up(n + 1)
+}
+
+fn main() {
+  assert spin > 0
+}

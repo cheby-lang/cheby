@@ -1,0 +1,8 @@
+error[E0047]: mismatched types
+  --> tests/ui/03-types/inference/unknown_field_beside_mismatch.cheby:17:18
+   |
+17 |   let n = add(1, fn(p) { p.name })
+   |           ---    ^^^^^^^^^^^^^^^^ expected `Int`, found `fn(_) -> _`
+   |           |
+   |           arguments to this function are incorrect
+

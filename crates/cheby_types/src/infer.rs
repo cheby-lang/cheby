@@ -7,7 +7,8 @@
 //! only types that contain variables are spelled out structurally.
 //!
 //! Unification has no subtyping (D-235). [`Ty::ERROR`] unifies with
-//! anything, so a reported error does not cascade. The `Never` conversion
+//! anything, so a reported error does not cascade. A numeric literal's
+//! variable that meets it stays unsettled (D-1484). The `Never` conversion
 //! happens in the checker, where an expression meets its expected type,
 //! never inside unification.
 
@@ -72,12 +73,14 @@ impl VarKind {
         }
     }
 
-    /// Whether a variable of this kind may become `ty`.
+    /// Whether a variable of this kind may become `ty`. A literal's
+    /// variable never becomes [`Ty::ERROR`]: it only unifies with it
+    /// (D-1484).
     fn admits(self, ty: Ty) -> bool {
         match self {
             Self::General => true,
-            Self::IntLit => is_integer(ty) || ty == Ty::ERROR,
-            Self::FloatLit => is_float(ty) || ty == Ty::ERROR,
+            Self::IntLit => is_integer(ty),
+            Self::FloatLit => is_float(ty),
         }
     }
 }
@@ -416,12 +419,17 @@ impl<'g> InferCtxt<'g> {
         Ok(Ok(()))
     }
 
-    /// Binds the unbound root `x` to the non-variable type `t`.
+    /// Binds the unbound root `x` to the non-variable type `t`. A
+    /// literal's variable unified with [`Ty::ERROR`] stays unbound, so it
+    /// is defaulted (D-133) or takes the type of a later use (D-1484).
     fn bind(&mut self, x: TyVid, t: &InferTy) -> Result<Result<(), Mismatch>, Ice> {
         let VarState::Unbound { kind, .. } = *self.state(x)? else {
             return Err(Ice::new("binding a bound type variable"));
         };
         if kind != VarKind::General {
+            if *t == InferTy::ERROR {
+                return Ok(Ok(()));
+            }
             let InferTy::Known(ty) = t else {
                 return Ok(Err(Mismatch::Types));
             };
@@ -436,15 +444,24 @@ impl<'g> InferCtxt<'g> {
         Ok(Ok(()))
     }
 
-    /// Binds every unbound variable inside `t` to [`Ty::ERROR`]: a type
-    /// unified with an error learns nothing, so whatever its variables
-    /// stand for is silent too (one error per root cause).
+    /// Binds every unbound general variable inside `t` to [`Ty::ERROR`]: a
+    /// type unified with an error learns nothing, so whatever its variables
+    /// stand for is silent too (one error per root cause). A numeric
+    /// literal's variable stays unbound: its type never depended on the
+    /// error, so it is defaulted (D-133) or settled by a later use
+    /// (D-1484).
     fn poison(&mut self, t: &InferTy) -> Result<(), Ice> {
         match self.shallow(t)? {
             InferTy::Known(_) => Ok(()),
             InferTy::Var(v) => {
                 let root = self.find(v)?;
-                self.write(root, VarState::Bound(InferTy::ERROR))
+                match self.state(root)? {
+                    VarState::Unbound {
+                        kind: VarKind::General,
+                        ..
+                    } => self.write(root, VarState::Bound(InferTy::ERROR)),
+                    _ => Ok(()),
+                }
             }
             InferTy::Named { args: parts, .. } | InferTy::Tuple(parts) => {
                 for part in &parts {
@@ -816,7 +833,42 @@ mod tests {
         };
         assert_eq!(cx.unify(&InferTy::ERROR, &shape).unwrap(), Ok(()));
         assert_eq!(cx.shallow(&a).unwrap(), InferTy::ERROR);
-        assert_eq!(cx.shallow(&b).unwrap(), InferTy::ERROR);
+        // A literal's variable inside the shape stays unsettled (D-1484).
+        assert_eq!(cx.var_kind(&b).unwrap(), Some(VarKind::IntLit));
+    }
+
+    // @decisions: D-1484, D-133
+    #[test]
+    fn a_literal_that_meets_an_error_stays_unsettled() {
+        let g = Globals::new();
+        let mut cx = InferCtxt::new(&g);
+        let int = cx.new_var(span(), VarKind::IntLit).unwrap();
+        let float = cx.new_var(span(), VarKind::FloatLit).unwrap();
+        assert_eq!(cx.unify(&int, &InferTy::ERROR).unwrap(), Ok(()));
+        assert_eq!(cx.unify(&InferTy::ERROR, &float).unwrap(), Ok(()));
+        assert_eq!(cx.var_kind(&int).unwrap(), Some(VarKind::IntLit));
+        assert_eq!(cx.var_kind(&float).unwrap(), Some(VarKind::FloatLit));
+        // A general variable joined with a literal one is a literal too.
+        let general = cx.new_var(span(), VarKind::General).unwrap();
+        assert_eq!(cx.unify(&general, &int).unwrap(), Ok(()));
+        assert_eq!(cx.unify(&general, &InferTy::ERROR).unwrap(), Ok(()));
+        assert_eq!(cx.var_kind(&general).unwrap(), Some(VarKind::IntLit));
+        // A later use still settles it, and a wrong one is a mismatch.
+        assert_eq!(
+            cx.unify(&int, &InferTy::STRING).unwrap(),
+            Err(Mismatch::Types)
+        );
+        assert_eq!(cx.unify(&int, &InferTy::Known(Ty::U8)).unwrap(), Ok(()));
+        // An unused one is defaulted.
+        cx.default_literals().unwrap();
+        let mut unresolved = Vec::new();
+        assert_eq!(cx.zonk(&general, &mut unresolved).unwrap(), Ty::U8);
+        assert_eq!(cx.zonk(&float, &mut unresolved).unwrap(), Ty::FLOAT);
+        assert_eq!(unresolved, []);
+        // A general variable still becomes the error type.
+        let other = cx.new_var(span(), VarKind::General).unwrap();
+        assert_eq!(cx.unify(&other, &InferTy::ERROR).unwrap(), Ok(()));
+        assert_eq!(cx.shallow(&other).unwrap(), InferTy::ERROR);
     }
 
     #[test]
@@ -964,6 +1016,7 @@ mod tests {
             own: None,
             deps: &deps,
             generics: None,
+            imports: None,
         };
         let mut cx = InferCtxt::new(&g);
         let v = cx.new_var(span(), VarKind::General).unwrap();

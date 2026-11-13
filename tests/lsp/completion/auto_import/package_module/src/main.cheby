@@ -1,0 +1,10 @@
+// @decisions: D-1395
+//! A module of the package that the file does not import: its function
+//! is offered with `import shop::prices`. A module that imports this one
+//! is not, since importing it back would close a cycle (E0040).
+
+fn main() {
+  let total = with_
+  //               ^ completion prices::with_tax back::with_backlog
+  //               ^ apply prices::with_tax
+}

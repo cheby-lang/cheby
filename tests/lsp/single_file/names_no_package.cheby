@@ -1,0 +1,23 @@
+// @decisions: D-1477
+// @package: none
+//! A single-file document names no package: hover has no "Defined in"
+//! line for its items, a call hierarchy item of it has no `detail`, and
+//! `workspace/symbol` gives its items no `containerName`. A std item
+//! keeps its module.
+
+import std::list
+
+/// Doubles `n`.
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let xs = list::map([1, 2], double)
+  //                         ^ hover
+  //             ^ hover
+  //                         ^ prepareCallHierarchy
+  assert list::length(xs) == 2
+  //> 15:4 outgoingCalls
+  //^ workspaceSymbol double
+}

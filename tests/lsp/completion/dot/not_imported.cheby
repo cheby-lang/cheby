@@ -1,0 +1,11 @@
+// @decisions: D-1394, D-1395
+//! `xs.ma` with `std::list` not imported: the item imports it, after the
+//! `//!` block and a blank line.
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs.ma
+  //            ^ completion map
+  //            ^ apply map
+  assert ys == xs
+}

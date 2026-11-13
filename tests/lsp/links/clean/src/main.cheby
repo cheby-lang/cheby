@@ -1,0 +1,10 @@
+// @decisions: D-1369, D-1379
+// @requests: documentLink
+//! Each import's module path links to its module's file.
+
+import links::util
+import std::io
+
+fn main() {
+  io::println(util::greeting())
+}

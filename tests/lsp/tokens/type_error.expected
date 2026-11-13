@@ -1,0 +1,146 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `String`, found `Int`",
+      "range": {
+        "end": {
+          "character": 26,
+          "line": 12
+        },
+        "start": {
+          "character": 18,
+          "line": 12
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 15,
+                "line": 12
+              },
+              "start": {
+                "character": 9,
+                "line": 12
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `missing` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 13
+        },
+        "start": {
+          "character": 10,
+          "line": 13
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby semanticTokens
+{
+  "data": [
+    5,
+    7,
+    3,
+    0,
+    0,
+    0,
+    5,
+    2,
+    0,
+    4,
+    2,
+    7,
+    5,
+    10,
+    1,
+    0,
+    6,
+    1,
+    6,
+    1,
+    0,
+    3,
+    3,
+    1,
+    4,
+    0,
+    8,
+    3,
+    1,
+    4,
+    1,
+    2,
+    1,
+    6,
+    0,
+    3,
+    3,
+    4,
+    10,
+    1,
+    1,
+    6,
+    1,
+    7,
+    1,
+    0,
+    3,
+    6,
+    1,
+    4,
+    0,
+    9,
+    5,
+    10,
+    0,
+    1,
+    6,
+    1,
+    7,
+    1,
+    0,
+    4,
+    7,
+    10,
+    0,
+    0,
+    8,
+    1,
+    7,
+    0,
+    1,
+    2,
+    2,
+    0,
+    4,
+    0,
+    4,
+    7,
+    10,
+    4,
+    0,
+    8,
+    1,
+    7,
+    0
+  ]
+}

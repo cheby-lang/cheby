@@ -4,7 +4,7 @@
 //!
 //! An example whose `test.toml` sets `skip-run` is only checked with
 //! `cheby check` (D-282). Its result is pending, never an unexpected
-//! pass, until its milestone (see [`check_only_expectation`]).
+//! pass, until its milestone (see `Example::check_only_expectation`).
 //! Expected-fail tracking follows `tests/milestone` (see
 //! `cheby_test_support::milestone`). With `CHEBY_BLESS=1`, set by
 //! `cargo xtask bless`, goldens of examples at or before the milestone in
@@ -384,7 +384,7 @@ fn check_executable(ex: &Example, variants: &[Variant], base: &Run) -> Result<()
 /// The trial that runs the example and compares its output with the
 /// goldens, or blesses them; or only checks a `skip-run` example.
 fn run_trial(ex: Example, current: Setting, verdicts: Verdicts, bless: bool, run: Run) -> Trial {
-    let expectation = check_only_expectation(&ex, current);
+    let expectation = ex.check_only_expectation(current);
     let name = run.variant.trial_name(&ex.name);
     Trial::test(name.clone(), move || {
         let result = if bless && expectation != Expectation::Fail {
@@ -399,20 +399,6 @@ fn run_trial(ex: Example, current: Setting, verdicts: Verdicts, bless: bool, run
     // D-545: a run is skipped where programs do not run, and so is a
     // `skip-run` example's check, which builds a JIT for its constants.
     .with_ignored_flag(platform::runs_skipped())
-}
-
-/// What the harness expects of `ex`. A `skip-run` example is only
-/// checked, and its milestone names when its fixture arrives, not when
-/// `cheby check` can handle it. So `cheby check` passing on it before that
-/// milestone is reported as pending, not as an unexpected pass (D-445).
-/// An example with dependencies, such as 030, has milestone M5, when
-/// dependencies resolve (D-446). That check is tolerated: a strict run
-/// does not require it before the milestone.
-fn check_only_expectation(ex: &Example, current: Setting) -> Expectation {
-    match current.expectation(ex.config.milestone) {
-        Expectation::Fail if ex.config.skip_run => Expectation::Tolerated,
-        other => other,
-    }
 }
 
 /// What the harness expects of the example's `test` blocks. An example

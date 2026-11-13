@@ -1,0 +1,15 @@
+// @settings: {"completion": {"autoImport": true}}
+// @decisions: D-1479, D-1546
+//! `Comp` in a file that does not import `std::ops`: with
+//! `completion.autoImport` on, the interface is offered as a function to
+//! import is, labelled `ops::Compare`, matched by `Compare`, written
+//! `ops::Compare::` and with the import as an edit. After `|>` it ranks as
+//! a function of a loaded module does there, 40 (type error state).
+
+fn order(a: Int, b: Int) -> Bool {
+  let c = Comp
+  //          ^ completion ops::Compare
+  let d = a |> Comp
+  //               ^ completion ops::Compare
+  c == d
+}

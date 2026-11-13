@@ -1,0 +1,47 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected `fn`, `type`, `const`, `interface` or `test`, found end of file",
+      "range": {
+        "end": {
+          "character": 3,
+          "line": 10
+        },
+        "start": {
+          "character": 2,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:1 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "const | Keyword",
+    "fn | Snippet | `fn ${1:name}($2) -> ${3:Nil} {\n  $0\n}`",
+    "interface | Keyword",
+    "priv | Keyword",
+    "pub | Keyword",
+    "test | Snippet | `test \"${1:name}\" {\n  assert $0\n}`",
+    "type | Snippet | `type ${1:Name} {\n  $0\n}`"
+  ]
+}
+
+== src/main.cheby:11:5 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "const | Keyword",
+    "exposed | Keyword",
+    "fn | Snippet | `fn ${1:name}($2) -> ${3:Nil} {\n  $0\n}`",
+    "interface | Keyword",
+    "type | Snippet | `type ${1:Name} {\n  $0\n}`"
+  ]
+}

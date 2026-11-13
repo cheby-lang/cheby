@@ -61,6 +61,9 @@ impl BodyCx<'_> {
             span: rest_span,
         };
         let Some(rhs) = u.value() else {
+            // Only a broken tree gets here: the rest of the block is still
+            // checked, for a tolerant run's facts.
+            self.callback(callback, Some(&Expected::plain(InferTy::ERROR)))?;
             return self.error_expr(span);
         };
         let call = match rhs {
@@ -170,7 +173,9 @@ impl BodyCx<'_> {
             },
             cb.use_stmt.significant_span(),
         )?;
-        self.coerce_expr(id, expected)
+        let out = self.coerce_expr(id, expected)?;
+        self.note_expr(cb.use_stmt.syntax().id(), id, out, expected);
+        Ok(out)
     }
 
     /// E0047 for a `use` with `given` binders whose callback must take
@@ -184,9 +189,10 @@ impl BodyCx<'_> {
         expected: &Expected,
     ) -> Result<ExprId, Ice> {
         let plural = |n: usize| if n == 1 { "" } else { "s" };
+        let span = cb.use_stmt.significant_span();
         let mut diag = Diagnostic::new(codes::TYPE_MISMATCH, "mismatched types")
             .with_primary(
-                cb.use_stmt.significant_span(),
+                span,
                 format!(
                     "this `use` has {given} binder{}, but the callback takes {wanted} parameter{}",
                     plural(given),
@@ -203,6 +209,10 @@ impl BodyCx<'_> {
         self.report(diag);
         let error = Expected::plain(InferTy::ERROR);
         let id = self.callback(cb, Some(&error))?;
+        if self.facts.is_some() {
+            let found = self.ty_of(id)?;
+            self.note_mismatch(span, &expected.ty, &found);
+        }
         self.set_ty(id, InferTy::ERROR)?;
         Ok(id)
     }
@@ -234,6 +244,11 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         let span = b.significant_span();
         let (Some(lhs), Some(rhs)) = (b.lhs(), b.rhs()) else {
+            // Only a broken tree gets here: `xs |> ` still checks `xs`, for
+            // a tolerant run's facts.
+            if let Some(lhs) = b.lhs() {
+                self.check_expr(lhs, None)?;
+            }
             return self.error_expr(span);
         };
         if let Expr::Call(c) = rhs
@@ -276,8 +291,9 @@ impl BodyCx<'_> {
         });
         let callee = self.check_expr(rhs, Some(&shape))?;
         let sig = self.value_callee(callee, 1, spans)?;
+        let sig = self.note_call(rhs.syntax().id(), sig);
         if matches!(sig.target, Target::Error) {
-            return self.error_expr(span);
+            return self.propagated_error_expr(span);
         }
         let [param] = &sig.params[..] else {
             self.arity_error(None, sig.params.len(), 1, spans);

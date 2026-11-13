@@ -1,0 +1,67 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `un` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 13
+        },
+        "start": {
+          "character": 17,
+          "line": 13
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `u` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 16
+        },
+        "start": {
+          "character": 17,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:14:20 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "same | Variable | fn(List<Int>) -> List<Int>",
+    "io | Module | (std::io) | `io::`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`"
+  ]
+}
+
+== src/main.cheby:14:20 completion list::unique
+{
+  "absent": [
+    "list::unique"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:17:19 completion list::unique
+{
+  "absent": [
+    "list::unique"
+  ],
+  "count": 3,
+  "isIncomplete": true,
+  "items": []
+}

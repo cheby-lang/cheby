@@ -20,7 +20,7 @@ Implementation:
 
 - `crates/`: the Cargo workspace, 21 `cheby_*` crates (D-270, D-284). [`docs/plan/architecture.md`](docs/plan/architecture.md) describes each crate and the compiler pipeline.
 - `std/`: the standard library's Cheby sources, with their `test` blocks next to the code (D-479).
-- `tests/`: the conformance, UI and REPL harnesses and their inputs, `tests/support` (shared harness code), `tests/milestone` and `tests/tree-sitter-cheby.rev`.
+- `tests/`: the conformance, UI, REPL and language server harnesses and their inputs, `tests/support` (shared harness code), `tests/milestone` and `tests/tree-sitter-cheby.rev`.
 - `xtask/`: developer commands, run as `cargo xtask <command>`.
 - `bench/gen`: the synthetic project generator for compile-speed budgets (D-291).
 - `fuzz/`: `cargo fuzz` targets. They need a nightly toolchain and are outside the workspace.
@@ -123,7 +123,7 @@ CI (`.github/workflows/ci.yml`) runs these commands, and a change must pass them
 cargo build --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked
 cargo fmt --all --check
-cargo test --workspace --locked   # includes the conformance, UI and REPL harnesses
+cargo test --workspace --locked   # includes the conformance, UI, REPL and LSP harnesses
 cargo xtask coverage              # decisions cited in the spec that no test names
 cargo xtask cross-check           # compiler parser against tree-sitter
 cargo xtask test-std              # std's own test blocks, one module at a time
@@ -133,7 +133,7 @@ cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' '
 cargo xtask check-determinism     # same outputs across thread counts and paths
 ```
 
-- The harnesses are test targets of `cheby_cli`: `conformance` (the examples), `ui` (`tests/ui/`) and `repl` (`tests/repl/`). Run one with `cargo test -p cheby_cli --test <name>`.
+- The harnesses are test targets of `cheby_cli`: `conformance` (the examples), `ui` (`tests/ui/`), `repl` (`tests/repl/`) and `lsp` (`cheby lsp` over stdio, with its tests in `tests/lsp/`). Run one with `cargo test -p cheby_cli --test <name>`. A UI check test's `.stderr` golden is also the expected output of an `lsp` parity trial, so a changed golden can fail both harnesses.
 - `tests/ui/` holds one rule per test, grouped by spec chapter. The header comment says whether the test must compile, fail or run. [`tests/ui/README.md`](tests/ui/README.md) documents every directive, and `// @decisions:` names the decisions a test pins, which `cargo xtask coverage` reads.
 - `cargo xtask bless [FILTER]` rewrites goldens from the current `cheby` (D-292). Review blessed changes like code.
 - The harnesses follow `tests/milestone` (D-288). Tests of earlier milestones must pass, those of the milestone in progress are pending, and those of later milestones must fail. `CHEBY_MILESTONE`, `CHEBY_PENDING=require` and `CHEBY_PENDING_ALLOW` make a stricter run, for example to check a milestone's exit (D-544, D-567).

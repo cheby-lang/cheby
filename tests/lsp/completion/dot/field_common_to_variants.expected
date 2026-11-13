@@ -1,0 +1,79 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a field name, found `}`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 18
+        },
+        "start": {
+          "character": 11,
+          "line": 18
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:19:13 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "name | Field | String",
+    "area(shape) | Function | fn area(shape: Shape) -> Float | ` |> area`",
+    "case | Snippet | `case s {\n  Circle { .. \\} => ${1:todo}\n  Square { .. \\} => ${2:todo}\n}$0`"
+  ]
+}
+
+== src/main.cheby:19:13 apply name
+{
+  "item": {
+    "detail": "String",
+    "kind": 5,
+    "label": "name",
+    "sortText": "050000name",
+    "textEdit": {
+      "newText": "name",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 18
+        },
+        "start": {
+          "character": 12,
+          "line": 18
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-071, D-1394",
+    "//! A field after `.` is one every variant has with one type: `name`, not",
+    "//! `radius` or `side`.",
+    "",
+    "pub type Shape {",
+    "  Circle { name: String, radius: Float },",
+    "  Square { name: String, side: Float },",
+    "}",
+    "",
+    "fn area(shape: Shape) -> Float {",
+    "  case shape {",
+    "    Circle { radius, .. } => radius * radius * 3.14",
+    "    Square { side, .. } => side * side",
+    "  }",
+    "}",
+    "",
+    "fn main() {",
+    "  let s = Circle { name: \"c\", radius: 1.0 }",
+    "  let n = s.name",
+    "  //        ^ completion",
+    "  //        ^ apply name",
+    "}",
+    ""
+  ]
+}

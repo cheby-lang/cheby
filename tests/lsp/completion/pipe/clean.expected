@@ -1,0 +1,37 @@
+== diagnostics
+{}
+
+== src/main.cheby:8:29 completion length
+{
+  "count": 52,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn length<T>(xs: List<T>) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the number of elements in `xs` (D-301)."
+      },
+      "kind": 3,
+      "label": "length",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs)"
+      },
+      "sortText": "20length",
+      "textEdit": {
+        "newText": "length",
+        "range": {
+          "end": {
+            "character": 28,
+            "line": 7
+          },
+          "start": {
+            "character": 22,
+            "line": 7
+          }
+        }
+      }
+    }
+  ]
+}

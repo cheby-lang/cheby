@@ -1,0 +1,39 @@
+== diagnostics
+{
+  "src/util.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 3
+        },
+        "start": {
+          "character": 2,
+          "line": 3
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 2
+              },
+              "start": {
+                "character": 19,
+                "line": 2
+              }
+            },
+            "uri": "src/util.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}

@@ -453,7 +453,7 @@ fn all_modules(front: &Frontend) -> Vec<ModuleId> {
 
 /// The interfaces of the whole build, through `view`, without recording:
 /// naming a fact reads nothing lowering did not (D-955).
-const fn build_defs<'a>(front: &'a Frontend, view: &'a DepView<'a>) -> Defs<'a> {
+fn build_defs<'a>(front: &'a Frontend, view: &'a DepView<'a>) -> Defs<'a> {
     Defs {
         own: None,
         deps: view,

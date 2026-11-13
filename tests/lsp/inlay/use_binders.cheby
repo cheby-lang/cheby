@@ -1,0 +1,25 @@
+// @decisions: D-1353, D-1376
+// @requests: inlayHint
+//! `use` binders: a hint after each binder with no written type, and no
+//! edit (`features.md` §7.1).
+
+fn twice(f: fn(Int, String) -> Int) -> Int {
+  f(1, "a") * 2
+}
+
+fn length(s: String) -> Int {
+  case s {
+    "" => 0
+    _ => 1
+  }
+}
+
+fn sum() -> Int {
+  use n, _label <- twice
+  use m: Int, s <- twice
+  n + m + length(s)
+}
+
+fn main() {
+  assert sum() > 0
+}

@@ -1,0 +1,17 @@
+// @decisions: D-1480
+// @settings: {"inlayHints": {"localFnTypes": false, "patternBinders": false}}
+// @requests: inlayHint
+//! With `localFnTypes` and `patternBinders` off, a local function and a
+//! destructuring `let` show nothing, while a plain `let` and a closure
+//! keep their hints: each row has its own key (D-1480).
+
+import std::list
+
+fn main() {
+  let ys = list::map([1], fn(x) { x + 1 })
+  let (a, b) = (1, 2.5)
+  fn step(n) {
+    n + a
+  }
+  assert step(1) == 2 && ys != [] && b == 2.5
+}

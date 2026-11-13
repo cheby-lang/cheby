@@ -1,0 +1,34 @@
+fn before_let(x: Int) -> Int {
+  let y = case x {
+    0 => 1
+    _ => 2
+  let z = y
+  z
+}
+
+fn before_assert(x: Int) -> Int {
+  case x {
+    0 => 1
+  assert x == 0
+  x
+}
+
+fn before_use(x: Int) -> Int {
+  case x {
+    _ => 1
+  use y <- f()
+  y
+}
+
+fn before_guard(x: Int) -> Int {
+  case x {
+    _ => 1
+  guard x > 0 else {
+    0
+  }
+  x
+}
+
+fn after_all() -> Int {
+  1
+}

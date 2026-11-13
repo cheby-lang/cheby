@@ -1,0 +1,115 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `String`, found `{integer}`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 9
+        },
+        "start": {
+          "character": 22,
+          "line": 9
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 9
+              },
+              "start": {
+                "character": 13,
+                "line": 9
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `{integer}`, found `String`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 10
+        },
+        "start": {
+          "character": 20,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 17,
+                "line": 10
+              },
+              "start": {
+                "character": 16,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "the left operand of `+` has type `{integer}`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `{integer}`, found `String`",
+      "range": {
+        "end": {
+          "character": 45,
+          "line": 11
+        },
+        "start": {
+          "character": 42,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 39,
+                "line": 11
+              },
+              "start": {
+                "character": 38,
+                "line": 11
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "the left operand of `+` has type `{integer}`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby inlayHint
+[
+  "12:35 type `: Int`",
+  "13:9 type `: List<Int>` edit 13:9-13:9 `: List<Int>`",
+  "13:31 type `: Int`",
+  "13:32 type ` -> Int`"
+]

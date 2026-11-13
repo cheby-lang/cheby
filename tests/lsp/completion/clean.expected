@@ -1,0 +1,217 @@
+== diagnostics
+{}
+
+== src/main.cheby:25:15 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Shape | Enum | type Shape {\n  Circle { radius: Float },\n  Square(Float),\n  Dot,\n}",
+    "order | Module | (std::order) | `order::`",
+    "Bool | Enum | pub exposed type Bool {\n  False,\n  True,\n}",
+    "F32 | Struct | type F32",
+    "Float | Struct | type Float",
+    "I16 | Struct | type I16",
+    "I32 | Struct | type I32",
+    "I64 | Struct | type I64",
+    "I8 | Struct | type I8",
+    "Int | Struct | type Int",
+    "List | Struct | type List<T>",
+    "Never | Struct | type Never",
+    "Nil | Struct | pub exposed type Nil {\n  Nil,\n}",
+    "Option | Enum | pub exposed type Option<T> {\n  Some(T),\n  None,\n}",
+    "Order | Enum | pub exposed type Order {\n  Less,\n  Equal,\n  Greater,\n}",
+    "Result | Enum | pub exposed type Result<T, E> {\n  Ok(T),\n  Err(E),\n}",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n}",
+    "String | Struct | type String",
+    "U16 | Struct | type U16",
+    "U32 | Struct | type U32",
+    "U64 | Struct | type U64",
+    "U8 | Struct | type U8",
+    "dyn | Keyword"
+  ]
+}
+
+== src/main.cheby:28:8 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Circle | EnumMember | Circle { radius: Float }\nof type Shape",
+    "Square | EnumMember | Square(Float)\nof type Shape | `Square(${1:_})`",
+    "Dot | EnumMember | Dot\nof type Shape",
+    "_ | Value"
+  ]
+}
+
+== src/main.cheby:37:26 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "count | Variable | Int",
+    "limit | Constant | const limit: Int",
+    "twice(n) | Function | fn twice(n: Int) -> Int | `twice(${1:n})$0`",
+    "Circle | EnumMember | Circle { radius: Float }\nof type Shape",
+    "Dot | EnumMember | Dot\nof type Shape",
+    "Square | EnumMember | Square(Float)\nof type Shape | `Square($1)$0`",
+    "area(s) | Function | fn area(s: Shape) -> Float | `area(${1:s})$0`",
+    "main() | Function | fn main() | `main()`",
+    "order | Module | (std::order) | `order::`",
+    "Equal | EnumMember | Equal\nof type Order",
+    "Err | EnumMember | Err(E)\nof type Result<T, E> | `Err($1)$0`",
+    "False | EnumMember | False\nof type Bool",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "Nil | Struct | Nil\nof type Nil",
+    "None | EnumMember | None\nof type Option<T>",
+    "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`",
+    "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
+    "True | EnumMember | True\nof type Bool",
+    "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",
+    "case { | Snippet | `case {\n  ${1:condition} => $2\n  _ => $0\n}`",
+    "fn | Keyword",
+    "panic | Keyword",
+    "todo | Keyword"
+  ]
+}
+
+== src/main.cheby:37:26 completion count twice `case {` absent_name
+{
+  "absent": [
+    "absent_name"
+  ],
+  "count": 25,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "Int",
+      "kind": 6,
+      "label": "count",
+      "sortText": "000000count",
+      "textEdit": {
+        "newText": "count",
+        "range": {
+          "end": {
+            "character": 27,
+            "line": 36
+          },
+          "start": {
+            "character": 22,
+            "line": 36
+          }
+        }
+      }
+    },
+    {
+      "detail": "fn twice(n: Int) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Twice `n`."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "twice",
+      "labelDetails": {
+        "detail": "(n)"
+      },
+      "sortText": "00twice",
+      "textEdit": {
+        "newText": "twice(${1:n})$0",
+        "range": {
+          "end": {
+            "character": 27,
+            "line": 36
+          },
+          "start": {
+            "character": 22,
+            "line": 36
+          }
+        }
+      }
+    },
+    {
+      "insertTextFormat": 2,
+      "insertTextMode": 2,
+      "kind": 15,
+      "label": "case {",
+      "sortText": "50case {",
+      "textEdit": {
+        "newText": "case {\n  ${1:condition} => $2\n  _ => $0\n}",
+        "range": {
+          "end": {
+            "character": 27,
+            "line": 36
+          },
+          "start": {
+            "character": 22,
+            "line": 36
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:40:20 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "doubled | Variable | Int",
+    "count | Variable | Int",
+    "limit | Constant | const limit: Int"
+  ]
+}
+
+== src/main.cheby:42:27 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Equal | EnumMember | Equal\nof type Order",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "compare(a, b) | Function | pub fn compare(a: Order, b: Order) -> Order | (order)",
+    "reverse(o) | Function | pub fn reverse(o: Order) -> Order | (order)",
+    "show(o) | Function | pub fn show(o: Order) -> String | (order)",
+    "then(first, next) | Function | pub fn then(first: Order, next: fn() -> Order) -> Order | (order)"
+  ]
+}
+
+== src/main.cheby:42:27 completion reverse
+{
+  "count": 7,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn reverse(o: Order) -> Order",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Swaps `Less` and `Greater`, and keeps `Equal`."
+      },
+      "kind": 3,
+      "label": "reverse",
+      "labelDetails": {
+        "description": "order",
+        "detail": "(o)"
+      },
+      "sortText": "20reverse",
+      "textEdit": {
+        "newText": "reverse",
+        "range": {
+          "end": {
+            "character": 30,
+            "line": 41
+          },
+          "start": {
+            "character": 23,
+            "line": 41
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:45:10 completion
+{
+  "isIncomplete": false,
+  "items": []
+}

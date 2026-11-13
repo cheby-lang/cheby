@@ -1,0 +1,13 @@
+// @decisions: D-1411, D-1497
+// @steps: edit fixed, idle
+//! A saved file with a type error, and a buffer that fixes it but stays
+//! unsaved. The buffer's report is the session's first clean one, so the
+//! constants run (D-1411), but the child reads the saved file and skips
+//! evaluation for its errors. Nothing failed, so hover says that saving
+//! gives the value (D-1497), not that the evaluation failed (D-1490).
+
+const limit: Int = "twenty"
+
+fn main() {
+  assert limit > 0
+}

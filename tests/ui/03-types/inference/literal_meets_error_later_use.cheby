@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-1484, D-133
+//! A number literal that meets the error type of an unknown name still
+//! takes its type from a later use, so `U8` causes no error of its own
+//! (§3.3.4).
+
+pub fn small() -> U8 {
+  let k = 1
+  let _shown = k |> sh
+  k
+}

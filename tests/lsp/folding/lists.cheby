@@ -1,0 +1,24 @@
+// @requests: foldingRange
+//! Multi-line lists, argument lists and pipelines fold as regions; one-line ones do not.
+
+import std::list
+
+fn sum(
+  first: Int,
+  second: Int,
+  third: Int,
+) -> Int {
+  first + second + third
+}
+
+fn main() {
+  let xs = [
+    1,
+    2,
+  ]
+  let total = xs
+    |> list::map(_, fn(n) { n * 2 })
+    |> list::fold(_, 0, fn(acc, n) { acc + n })
+  assert total == 6
+  assert sum(1, 2, 3) == 6
+}

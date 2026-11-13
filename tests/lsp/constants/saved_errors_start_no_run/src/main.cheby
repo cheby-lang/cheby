@@ -1,0 +1,17 @@
+// @decisions: D-1497, D-1501
+// @steps: save broken, idle
+//! A package whose saved file has a type error, then a save that leaves
+//! another one on disk. The first report is not clean, so no constants
+//! run starts, and the save's run does not start either, since the saved
+//! files do not check. Hover on a constant says that the saved files have
+//! errors, as after a run the child skips (D-1497), not that a save
+//! computes its value (D-1501). The hover comes after the save, so this
+//! test cannot show what a session opened over these files reads before
+//! it: `child_tests.rs` checks that.
+
+const limit: Int = 20
+
+fn main() {
+  let x: Int = "no"
+  assert limit > x
+}

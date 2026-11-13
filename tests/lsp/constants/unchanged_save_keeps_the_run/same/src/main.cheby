@@ -1,0 +1,21 @@
+// @decisions: D-1494
+// @settings: {"constants": {"childTimeoutSeconds": 600}}
+// @steps: started, save same, quiet
+//! A constant that takes some seconds. Saving unchanged text while its
+//! child runs, as an editor's echo of its own save does, leaves that
+//! child running, so no second run begins (`quiet`), and its value
+//! reaches hover (D-1494).
+
+const slow: Int = count_up(0, 2_000_000_000)
+//    ^ hover
+
+fn count_up(n: Int, limit: Int) -> Int {
+  case {
+    n >= limit => n
+    _ => count_up(n + 1, limit)
+  }
+}
+
+fn main() {
+  assert slow > 0
+}

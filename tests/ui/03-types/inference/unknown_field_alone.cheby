@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-494, D-213
+//! A body whose only error is a field access on an unknown type gets
+//! E0057.
+
+pub type Person {
+  name: String,
+  age: Int,
+}
+
+pub fn main() {
+  let name_of = fn(p) { p.name }
+  assert name_of(Person { name: "Ada", age: 36 }) == "Ada"
+}

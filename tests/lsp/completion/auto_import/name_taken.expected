@@ -1,0 +1,120 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `xs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_xs`",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 10
+        },
+        "start": {
+          "character": 6,
+          "line": 10
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `pairs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_pairs`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 11
+        },
+        "start": {
+          "character": 6,
+          "line": 11
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `enumer` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 20,
+          "line": 11
+        },
+        "start": {
+          "character": 14,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:21 apply std_list::enumerate
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::list as std_list\n\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 4
+          },
+          "start": {
+            "character": 0,
+            "line": 4
+          }
+        }
+      }
+    ],
+    "detail": "pub fn enumerate<T>(xs: List<T>) -> List<(Int, T)>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Pairs each element with its index, counting from 0 (D-380)."
+    },
+    "filterText": "enumerate",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "std_list::enumerate",
+    "labelDetails": {
+      "description": "std::list",
+      "detail": "(xs)"
+    },
+    "sortText": "60std_list::enumerate",
+    "textEdit": {
+      "newText": "std_list::enumerate(${1:xs})$0",
+      "range": {
+        "end": {
+          "character": 20,
+          "line": 11
+        },
+        "start": {
+          "character": 14,
+          "line": 11
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1395, D-051",
+    "//! A local named `list` anywhere in the file takes the name, so the",
+    "//! import is aliased: `import std::list as std_list`.",
+    "",
+    "import std::list as std_list",
+    "",
+    "fn first() -> Int {",
+    "  let list = 1",
+    "  list",
+    "}",
+    "",
+    "fn main() {",
+    "  let xs = [\"a\", \"b\"]",
+    "  let pairs = std_list::enumerate(xs)",
+    "  //                ^ apply std_list::enumerate",
+    "}",
+    ""
+  ]
+}

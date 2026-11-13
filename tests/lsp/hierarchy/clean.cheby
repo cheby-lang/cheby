@@ -1,0 +1,44 @@
+// @decisions: D-1379
+//! The call hierarchy prepares a function at a call, at an operator that
+//! calls one, and nothing at a local function.
+
+type V {
+  n: Int,
+}
+
+fn add(a: V, b: V) -> V {
+  V { n: a.n + b.n }
+}
+
+fn even(n: Int) -> Bool {
+  case n {
+    0 => True
+    _ => odd(n - 1)
+  }
+}
+
+fn odd(n: Int) -> Bool {
+  case n {
+    0 => False
+    _ => even(n - 1)
+    //   ^ prepareCallHierarchy
+  }
+}
+
+fn main() {
+  fn twice(x: Int) -> Int {
+    x * 2
+  }
+  let v = V { n: 1 } + V { n: 2 }
+  //                 ^ prepareCallHierarchy
+  assert even(twice(v.n))
+  //          ^ prepareCallHierarchy
+  let check = odd
+  assert check(3)
+  // Mutual recursion, an operator and a use as a value.
+  //> 23:10 incomingCalls
+  //> 23:10 outgoingCalls
+  //> 32:22 incomingCalls
+  //> 36:15 incomingCalls
+  //> 36:15 outgoingCalls
+}

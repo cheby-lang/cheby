@@ -1,0 +1,14 @@
+// @decisions: D-1376, D-1383
+//! `need(` with nothing after it: the argument list stays open, and a
+//! local of the parameter's type ranks first.
+
+fn need(n: Int, label: String) -> Int {
+  n
+}
+
+fn main() {
+  let count = 3
+  let name = "three"
+  need(
+  //   ^ completion
+}

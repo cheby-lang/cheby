@@ -18,6 +18,7 @@ use cheby_syntax::ast::{
 
 use super::BodyCx;
 use super::record::{CtorInfo, Structure, plural, quoted_list, unlisted};
+use crate::facts::FieldSite;
 use crate::infer::{InferTy, VarKind};
 use crate::thir::{self, Lit, PatKind};
 
@@ -111,6 +112,24 @@ impl BodyCx<'_> {
     }
 
     fn pat(&mut self, pat: ast::Pat<'_>, expected: &InferTy, cx: &PatCx) -> Result<thir::Pat, Ice> {
+        let out = self.pat_inner(pat, expected, cx)?;
+        self.note_pat(pat.syntax().id(), out.id);
+        // Only `_` is wild on purpose, and a parenthesis has its inner
+        // pattern's id. Every other `Wild` stands for a failure.
+        if matches!(out.kind, PatKind::Wild)
+            && !matches!(pat, ast::Pat::Wildcard(_) | ast::Pat::Paren(_))
+        {
+            self.note_failed_pat(out.id);
+        }
+        Ok(out)
+    }
+
+    fn pat_inner(
+        &mut self,
+        pat: ast::Pat<'_>,
+        expected: &InferTy,
+        cx: &PatCx,
+    ) -> Result<thir::Pat, Ice> {
         let span = pat.significant_span();
         let kind = match pat {
             ast::Pat::Paren(p) => {
@@ -181,12 +200,13 @@ impl BodyCx<'_> {
         ty: &InferTy,
         span: Span,
     ) -> Result<cheby_resolve::LocalId, Ice> {
-        let local = self
-            .res
-            .bindings
-            .get(&node)
-            .copied()
-            .ok_or_else(|| Ice::new("a pattern binding was not resolved"))?;
+        let Some(local) = self.res.bindings.get(&node).copied() else {
+            // Only a tree with a grammar error has a binding without a
+            // name, such as `p as`, which the resolver skips.
+            self.errored = true;
+            let name = self.synthetic_name("%unnamed");
+            return self.new_local(name, ty.clone(), span);
+        };
         if self.pat_path.contains(&local) {
             // Bound twice on one path through the pattern: E0044 from the
             // resolver, which gave both bindings one local. Their types
@@ -200,6 +220,7 @@ impl BodyCx<'_> {
             None => self.set_local(local, ty.clone())?,
             Some(previous) => {
                 if self.infcx.unify(&previous, ty)?.is_err() {
+                    self.note_mismatch(span, &previous, ty);
                     let decl = self.res.locals.try_get(local, "local")?;
                     let name = self.input.globals.names.get(decl.name);
                     let first = decl.span;
@@ -243,6 +264,7 @@ impl BodyCx<'_> {
         let Err(mismatch) = self.infcx.unify(expected, found)? else {
             return Ok(true);
         };
+        self.note_mismatch(span, expected, found);
         let label = format!(
             "expected `{}`, found `{}`",
             self.show(expected),
@@ -558,7 +580,10 @@ impl BodyCx<'_> {
                 self.errored = true;
                 continue;
             };
+            let label = (name.span(), name.text());
             let Some((index, ty)) = info.named_field(&self.input.globals.names, name.text()) else {
+                let (owner, ctor) = (info.ty_def, Some(info.def));
+                self.note_field_label(label, FieldSite::Pattern, owner, ctor, None);
                 let mut diag = Diagnostic::new(
                     codes::UNKNOWN_FIELD,
                     format!("`{}` has no field `{}`", info.name, name.text()),
@@ -589,6 +614,8 @@ impl BodyCx<'_> {
                 seen.push((index, name.span()));
             }
             let ty = self.field_ty(ty, args);
+            let (owner, ctor) = (info.ty_def, Some(info.def));
+            self.note_field_label(label, FieldSite::Pattern, owner, ctor, Some(&ty));
             fields.push((index, self.field_pat(field, &ty, cx)?));
         }
         if !rest {

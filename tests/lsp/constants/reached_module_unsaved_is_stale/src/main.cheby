@@ -1,0 +1,18 @@
+// @decisions: D-1510
+// @steps: idle, edit dirty
+//! A run gives both constants their values, then `util` is edited and
+//! left unsaved. `scaled` reaches `util` through `util::triple`, so its
+//! value shows as of the last save; `plain` reaches only this module, so
+//! its value stays current (D-1510).
+
+import app::util
+
+const plain: Int = 20
+//    ^ hover
+
+const scaled: Int = util::triple(plain)
+//    ^ hover
+
+fn main() {
+  assert scaled > plain
+}

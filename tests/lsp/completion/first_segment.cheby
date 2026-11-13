@@ -1,0 +1,26 @@
+// @decisions: D-173, D-1507, D-1521, D-1546
+//! An interface starts a path that names its functions, as in
+//! `Show::show(x)`, so an expression offers it written with the path's
+//! `::`, as a module is written `shape::`. `Show`, of the prelude, and the
+//! file's `Sized` are offered bare, as `Show::` and `Sized::`. For two
+//! characters, the imported `std::ops`'s `Compare` comes through its
+//! module, as `ops::Compare::`, and with one it waits for the second, so
+//! the list is incomplete. After `|>` the same holds (type error state).
+
+import std::ops
+
+interface Sized {
+  fn size(Self) -> Int
+}
+
+fn order(a: Int, b: Int) -> Bool {
+  let s = Sh
+  //        ^ completion Show Sized
+  let c = Co
+  //        ^ completion ops::Compare Compare
+  let d = C
+  //       ^ completion ops::Compare
+  let e = a |> Co
+  //             ^ completion ops::Compare Show
+  s == c && d == e
+}

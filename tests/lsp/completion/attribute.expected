@@ -1,0 +1,69 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0014",
+      "message": "unexpected line break\nexpected an attribute name\nnote: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 2
+        },
+        "start": {
+          "character": 0,
+          "line": 2
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:3:2 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "async | Keyword",
+    "blocking | Keyword",
+    "deprecated | Keyword | `deprecated(\"$1\")$0`",
+    "external | Keyword | `external($1)$0`",
+    "target | Keyword | `target($1)$0`"
+  ]
+}
+
+== src/main.cheby:3:2 apply deprecated
+{
+  "item": {
+    "insertTextFormat": 2,
+    "kind": 14,
+    "label": "deprecated",
+    "sortText": "50deprecated",
+    "textEdit": {
+      "newText": "deprecated(\"$1\")$0",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 2
+        },
+        "start": {
+          "character": 1,
+          "line": 2
+        }
+      }
+    }
+  },
+  "text": [
+    "//! `@` before an item: the attributes of §4.8, with their arguments.",
+    "",
+    "@deprecated(\"\")",
+    "//> 3:2 completion",
+    "//> 3:2 apply deprecated",
+    "pub fn old() -> Int {",
+    "  1",
+    "}",
+    "",
+    "fn main() {}",
+    ""
+  ]
+}

@@ -10,10 +10,11 @@
 # miri.yml, with its own limit, so that this one's conclusion can be read
 # (D-1322).
 #
-# - `fuzz`: a bounded run of each of the four `cargo fuzz` targets, with
+# - `fuzz`: a bounded run of each of the five `cargo fuzz` targets, with
 #   `rc_differential` run twice, as below
-#   (fuzz/fuzz_targets): `lex`, `parse` and `check` from seed corpora made
-#   of the examples and the UI tests, and `rc_differential`, naive
+#   (fuzz/fuzz_targets): `lex`, `parse`, `check` and `analysis`, the
+#   language server's analysis of an open file (plan W4), from seed corpora
+#   made of the examples and the UI tests, and `rc_differential`, naive
 #   reference counting against Perceus on generated programs (D-718),
 #   which runs a debug `cheby` copied aside first. It has two legs, side by
 #   side (D-1338): `plain` builds that `cheby` with the stable toolchain,
@@ -27,7 +28,8 @@
 #   appends to its own: the fiber switches that constant evaluation makes
 #   are told to the sanitizer, and so are the interners' entries, leaked
 #   on purpose, as in the sanitizer jobs (D-898). LeakSanitizer is off
-#   for `check` and for `rc_differential`'s `address` leg
+#   for `check`, for `analysis`, whose sessions keep their interners the
+#   same way, and for `rc_differential`'s `address` leg
 #   (`ASAN_OPTIONS=detect_leaks=0`, which cargo-fuzz merges with its own,
 #   which also covers the check at exit that libFuzzer's `-detect_leaks=0`
 #   leaves on, D-898, and which reaches the `cheby` that the leg starts,
@@ -151,6 +153,7 @@ jobs:
           - target: lex
           - target: parse
           - target: check
+          - target: analysis
           - target: rc_differential
             cheby: plain
           - target: rc_differential
@@ -200,7 +203,7 @@ jobs:
         working-directory: fuzz
         env:
           RUSTFLAGS: '--cfg cheby_sanitize="address"'
-          ASAN_OPTIONS: ${{ (matrix.target == 'check' || matrix.cheby == 'address') && 'detect_leaks=0' || '' }}
+          ASAN_OPTIONS: ${{ (matrix.target == 'check' || matrix.target == 'analysis' || matrix.cheby == 'address') && 'detect_leaks=0' || '' }}
         run: >-
           cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} --
           -max_total_time=${{ env.FUZZ_SECONDS }} -timeout=600

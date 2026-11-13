@@ -1,0 +1,17 @@
+// @decisions: D-1396
+// @requests: semanticTokens
+//! A file with a grammar error: names keep their kinds where the tree holds
+//! them, and a name inside the error gets no token, so tree-sitter's stands.
+
+pub type Shape {
+  Dot,
+  Circle(Float),
+}
+
+pub fn area(s: Shape) -> Float {
+  let r = s +
+}
+
+fn main() {
+  let a = area(Dot) Dot
+}

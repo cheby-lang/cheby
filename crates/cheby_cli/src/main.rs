@@ -20,6 +20,12 @@
 //!   given files, or standard input for `-` (D-1031).
 //! - `cheby new <name>` creates a package in the working directory
 //!   (D-1032, [`new`]).
+//! - `cheby lsp` serves the language server over stdio until `exit` or
+//!   the end of input (§13.11, [`cheby_lsp::run`]). It starts the worker
+//!   pool as the commands that build do, and passes this binary's build ID
+//!   and its own path, for the server's child jobs (D-1349). The status is
+//!   0 after `shutdown` and 1 before it (D-1377). A hidden `--stdio` flag
+//!   is accepted and ignored, since clients add it.
 //!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are `error:` lines
@@ -151,7 +157,11 @@ enum Command {
         paths: Vec<std::path::PathBuf>,
     },
     /// Run the language server over stdio (§13.11)
-    Lsp,
+    Lsp {
+        /// Accepted and ignored: clients that pass it mean this server's only transport
+        #[arg(long, hide = true)]
+        stdio: bool,
+    },
     /// Generate HTML documentation (§13.10)
     Doc,
     /// Add a dependency to the manifest and lockfile (§13.4)
@@ -165,6 +175,46 @@ enum Command {
         /// Diagnostic code, such as `E0012` or `W0003`
         code: String,
     },
+    // The language server's child process (D-1349, D-1410): back-end facts
+    // as one JSON document on stdout. Hidden, and not a stable interface:
+    // the server runs it from its own path (`cheby_lsp::child`).
+    #[command(name = "__backend", hide = true)]
+    Backend(BackendArgs),
+}
+
+/// The arguments of the hidden `__backend` command, as the language server
+/// passes them (`cheby_lsp::child`).
+#[derive(Debug, clap::Args)]
+struct BackendArgs {
+    #[arg(long)]
+    schema: u32,
+    #[arg(long)]
+    root: std::path::PathBuf,
+    #[arg(long, value_enum)]
+    target: Option<Target>,
+    #[arg(long)]
+    want: String,
+    #[arg(long, default_value_t = cheby_lsp::child::MAX_TEXT)]
+    max_text: usize,
+    #[arg(long, num_args = 2, value_names = ["MODULE", "ITEM"])]
+    mir: Option<Vec<String>>,
+}
+
+impl From<BackendArgs> for cheby_lsp::child::Args {
+    fn from(args: BackendArgs) -> Self {
+        Self {
+            schema: args.schema,
+            root: args.root,
+            target: args.target.map(Into::into),
+            want: args.want,
+            max_text: args.max_text,
+            // clap takes exactly two values.
+            mir: args
+                .mir
+                .and_then(|values| <[String; 2]>::try_from(values).ok())
+                .map(|[module, item]| (module, item)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -219,8 +269,9 @@ fn run_command() -> ExitCode {
         std::io::stderr().is_terminal(),
     );
     let out = Out { colors };
-    // The commands that build start the worker pool first (D-551). `-j`
-    // is global, and the commands that build nothing ignore it (D-622).
+    // The commands that build start the worker pool first (D-551), and so
+    // does the language server, whose analysis runs the front end on it.
+    // `-j` is global, and the commands that build nothing ignore it (D-622).
     let builds = matches!(
         cli.command,
         Command::Check { .. }
@@ -228,6 +279,8 @@ fn run_command() -> ExitCode {
             | Command::Run { .. }
             | Command::Repl { .. }
             | Command::Test { .. }
+            | Command::Lsp { .. }
+            | Command::Backend(_)
     );
     if builds && let Err(e) = cheby_driver::configure_jobs(cli.jobs) {
         return out.error(e.message());
@@ -292,12 +345,18 @@ fn run_command() -> ExitCode {
             },
         ),
         Command::Fmt { check, paths } => fmt(out, check, &paths),
-        Command::Lsp => out.not_yet("lsp", "M5"),
+        // The flag only names the one transport there is.
+        Command::Lsp { stdio: _ } => cheby_lsp::run(cheby_lsp::ServerOptions {
+            build: build_id::build_id(),
+            // Without its own path the server runs no child jobs.
+            child: std::env::current_exe().ok(),
+        }),
         Command::Doc => out.not_yet("doc", "M5"),
         Command::Add => out.not_yet("add", "M5"),
         Command::Update => out.not_yet("update", "M5"),
         Command::Fetch => out.not_yet("fetch", "M5"),
         Command::Explain { code } => explain(out, &code),
+        Command::Backend(args) => cheby_lsp::child::main(args.into()),
     }
 }
 
@@ -872,6 +931,74 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing command `{expected}`");
         }
+    }
+
+    /// The language server's child command parses as the server starts it
+    /// (plan §1.8, D-1410), and joins the global `-j`.
+    #[test]
+    fn parses_the_hidden_backend_command() {
+        let cli = Cli::try_parse_from([
+            "cheby",
+            "-j",
+            "2",
+            "__backend",
+            "--schema",
+            "1",
+            "--root",
+            "/pkg",
+            "--want",
+            "constants",
+        ])
+        .unwrap();
+        assert_eq!(cli.jobs.map(std::num::NonZeroUsize::get), Some(2));
+        let Command::Backend(args) = cli.command else {
+            panic!("not `__backend`: {:?}", cli.command);
+        };
+        let args = cheby_lsp::child::Args::from(args);
+        assert_eq!(args.schema, 1);
+        assert_eq!(args.root, std::path::Path::new("/pkg"));
+        assert_eq!(args.target, None);
+        assert_eq!(args.want, "constants");
+        assert_eq!(args.max_text, cheby_lsp::child::MAX_TEXT);
+        assert_eq!(args.mir, None);
+        let cli = Cli::try_parse_from([
+            "cheby",
+            "__backend",
+            "--schema",
+            "1",
+            "--root",
+            "/pkg",
+            "--want",
+            "ownership",
+            "--mir",
+            "app::shapes",
+            "area",
+            "--max-text",
+            "10",
+        ])
+        .unwrap();
+        let Command::Backend(args) = cli.command else {
+            panic!("not `__backend`: {:?}", cli.command);
+        };
+        let args = cheby_lsp::child::Args::from(args);
+        assert_eq!(args.max_text, 10);
+        assert_eq!(
+            args.mir,
+            Some(("app::shapes".to_owned(), "area".to_owned()))
+        );
+        assert!(
+            Cli::try_parse_from(["cheby", "__backend", "--root", "/pkg", "--want", "x"]).is_err(),
+            "`--schema` is required"
+        );
+    }
+
+    /// `__backend` is hidden: `--help` does not list it (D-1410).
+    #[test]
+    fn help_hides_the_backend_command() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("lsp"), "{help}");
+        assert!(!help.contains("__backend"), "{help}");
+        assert!(!help.contains("backend"), "{help}");
     }
 
     /// `--deny-warnings` on `check`, `run`, `test` and `repl` (D-549),

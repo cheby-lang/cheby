@@ -1,0 +1,33 @@
+// @decisions: D-1380, D-1381
+//! Signature help in a file that does not parse: a half-typed call
+//! followed by a `let`, a complete call after it, an open pipe stage,
+//! and an open call at the end of the file.
+
+import std::list
+
+/// Adds two numbers.
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn twice(n: Int, f: fn(Int) -> Int) -> Int {
+  f(f(n))
+}
+
+fn main() {
+  let inc = fn(n: Int) -> Int { n + 1 }
+  let total = add(1, 
+  //                 ^ signatureHelp
+  let more = twice(2, inc)
+  //                  ^ signatureHelp
+  assert total + more > 0
+}
+
+fn piped(xs: List<Int>) -> List<Int> {
+  xs |> list::map(_, 
+  //                 ^ signatureHelp
+}
+
+fn later() {
+  let k = add(1, add(2, 
+  //                    ^ signatureHelp

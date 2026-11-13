@@ -1,0 +1,74 @@
+== diagnostics
+{}
+
+== src/main.cheby:11:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst limit: Int = 20\n```\n\n---\n\nDefined in `lsp_test`.\n\n---\n\nThe most."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 10
+    },
+    "start": {
+      "character": 6,
+      "line": 10
+    }
+  }
+}
+
+== src/main.cheby:16:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst name: String = \"cheby\"\n```\n\n---\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 10,
+      "line": 15
+    },
+    "start": {
+      "character": 6,
+      "line": 15
+    }
+  }
+}
+
+== src/main.cheby:19:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst squares: List<Int> = [1, 4, 9]\n```\n\n---\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 13,
+      "line": 18
+    },
+    "start": {
+      "character": 6,
+      "line": 18
+    }
+  }
+}
+
+== src/main.cheby:24:17 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst twice: Int = 40\n```\n\n---\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 21,
+      "line": 23
+    },
+    "start": {
+      "character": 16,
+      "line": 23
+    }
+  }
+}

@@ -1,0 +1,15 @@
+// @decisions: D-1353, D-1380
+// @requests: inlayHint
+//! A body with a type error keeps its facts, so its types still show,
+//! and a type with an unknown part shows nothing (`features.md` §7.1).
+
+import std::list
+
+fn main() {
+  let n = 1
+  let wrong: String = n
+  let unknown = n + "x"
+  let partly = list::map([n], fn(x) { x + "s" })
+  let ys = list::map([n], fn(x) { x + 1 })
+  assert wrong == "" && unknown == partly && ys == []
+}

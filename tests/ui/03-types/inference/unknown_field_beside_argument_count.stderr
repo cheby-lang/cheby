@@ -1,0 +1,11 @@
+error[E0048]: this function takes 3 arguments but 2 arguments were supplied
+   --> tests/ui/03-types/inference/unknown_field_beside_argument_count.cheby:16:13
+    |
+16  |   list::fold(ps, fn(acc, p) { acc + p.name })
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected 3 arguments
+    |
+   ::: std/list.cheby:558:8
+    |
+558 | pub fn fold<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> A {
+    |        ---- `fold` is declared here
+

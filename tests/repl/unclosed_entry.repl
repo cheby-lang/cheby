@@ -1,0 +1,110 @@
+// @decisions: D-1540, D-1532, D-1527, D-605
+> let x = {
+.   1 ]
+error[E0013]: expected a line break or `}`, found `]`
+ --> <repl:1>:2:5
+  |
+2 |   1 ]
+  |     ^
+
+error[E0015]: unclosed `{`
+ --> <repl:1>:2:6
+  |
+1 | let x = {
+  |         - this `{` is never closed
+2 |   1 ]
+  |      ^ expected `}`
+
+> let y = {
+.   let n: Int ]
+error[E0013]: expected `=`, found `]`
+ --> <repl:2>:2:14
+  |
+2 |   let n: Int ]
+  |              ^
+
+error[E0015]: unclosed `{`
+ --> <repl:2>:2:15
+  |
+1 | let y = {
+  |         - this `{` is never closed
+2 |   let n: Int ]
+  |               ^ expected `}`
+
+> { ( ]
+error[E0015]: unclosed `(`
+ --> <repl:3>:1:5
+  |
+1 | { ( ]
+  |   - ^ expected `)`
+  |   |
+  |   this `(` is never closed
+
+error[E0015]: unclosed `{`
+ --> <repl:3>:1:6
+  |
+1 | { ( ]
+  | -    ^ expected `}`
+  | |
+  | this `{` is never closed
+
+> ( { ]
+error[E0013]: expected a statement, found `]`
+ --> <repl:4>:1:5
+  |
+1 | ( { ]
+  |     ^
+
+error[E0015]: unclosed `{`
+ --> <repl:4>:1:6
+  |
+1 | ( { ]
+  |   -  ^ expected `}`
+  |   |
+  |   this `{` is never closed
+
+> [ { )
+error[E0013]: expected a statement, found `)`
+ --> <repl:5>:1:5
+  |
+1 | [ { )
+  |     ^
+
+error[E0015]: unclosed `{`
+ --> <repl:5>:1:6
+  |
+1 | [ { )
+  |   -  ^ expected `}`
+  |   |
+  |   this `{` is never closed
+
+> { [1, 2 )
+error[E0015]: unclosed `[`
+ --> <repl:6>:1:9
+  |
+1 | { [1, 2 )
+  |   -     ^ expected `]`
+  |   |
+  |   this `[` is never closed
+
+error[E0015]: unclosed `{`
+ --> <repl:6>:1:10
+  |
+1 | { [1, 2 )
+  | -        ^ expected `}`
+  | |
+  | this `{` is never closed
+
+> let x = {
+.   let y = (
+.     [1, 2 }
+error[E0015]: unclosed `[`
+ --> <repl:7>:3:11
+  |
+3 |     [1, 2 }
+  |     -     ^ expected `]`
+  |     |
+  |     this `[` is never closed
+
+> 1
+1 : Int

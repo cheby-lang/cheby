@@ -59,16 +59,21 @@ use cheby_resolve::{
     collect_imports, cycle_diagnostic, resolve_import_targets, resolve_module,
 };
 use cheby_syntax::SyntaxTree;
-use cheby_types::{Tests, TypesInput, build_interface, check_bodies_with, thir};
+use cheby_types::{
+    Tests, TypesInput, build_interface, check_bodies_recording, check_bodies_with, thir,
+};
 
 use crate::cache::front::{self, External, FrontKey, FrontRecord, ImportKey};
 use crate::cache::replay::{self, SpanCx, StoredSpan};
 use crate::cache::{Hash128, Key};
 use crate::{Error, Package, parse_file, std_lib};
 
-/// The result of the front end over a package without phase-A errors.
+/// The result of the front end over a package without phase-A errors,
+/// or, from [`run_analysis`], one with phase-A errors.
 pub(crate) struct Frontend {
-    pub globals: Globals,
+    /// The run's interners: fresh for a batch command, shared by a
+    /// server's runs ([`RunExtras::globals`]).
+    pub globals: Arc<Globals>,
     pub modules: ModuleTable,
     pub set: InterfaceSet,
     /// Per module id: the module's checked bodies, if it was checked.
@@ -132,6 +137,24 @@ pub(crate) struct Frontend {
     /// [`Frontend::warm`]: a warm build that then fails starts again with
     /// every module checked ([`Frontend::wanted_body`]).
     pub wanted: std::sync::atomic::AtomicBool,
+    /// Per module id: its syntax tree, for the modules
+    /// [`Retain::trees`] covers (`None` for the others); empty under
+    /// [`Scope::None`].
+    pub trees: Vec<Option<SyntaxTree>>,
+    /// The imports a [`CutCycles`] run turned into failed imports: the
+    /// importing module and the import's span (D-1358, D-1427). Each cycle cuts
+    /// every import of one edge, so one entry per import cut; one cycle may
+    /// cut several.
+    pub cut_imports: Vec<(ModuleId, Span)>,
+    /// The modules a [`Retain::tolerant`] run lost to an internal error,
+    /// with the error, by module id (D-1362). Their slot of `checked` is
+    /// empty, as is that of each module that imports one, transitively,
+    /// when it failed before publishing its interface.
+    pub lost: Vec<(ModuleId, Ice)>,
+    /// Whether a [`Retain::tolerant`] run lost a body with no diagnostic
+    /// and no error in the whole package: what would end a batch run as an
+    /// internal error (D-464), a gate that tolerant runs skip (D-1362).
+    pub silent_drop: bool,
 }
 
 /// An `@external(native, "symbol")` binding of a symbol.
@@ -259,6 +282,12 @@ pub(crate) struct Checked {
         )
     )]
     pub warnings: Vec<Diagnostic>,
+    /// The module's resolution, kept when [`Retain::trees`] covers it.
+    pub resolved: Option<ResolvedModule>,
+    /// The facts of its bodies (D-1380), kept when [`Retain::facts`]
+    /// covers it. A run without [`Retain::tolerant`] fails when they hold
+    /// a loss, as a batch run does, so only a tolerant run's facts may.
+    pub facts: Option<cheby_types::facts::ModuleFacts>,
 }
 
 impl Frontend {
@@ -572,6 +601,101 @@ pub(crate) enum Mode {
     StdTests,
 }
 
+/// Which modules a [`Retain`] knob covers (D-1361).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// No module.
+    None,
+    /// The local package's modules.
+    Local,
+    /// Every module, std's included.
+    All,
+}
+
+impl Scope {
+    /// Whether the knob covers a module of `package`.
+    fn covers(self, package: PackageId) -> bool {
+        match self {
+            Self::None => false,
+            Self::Local => package == PackageId::LOCAL,
+            Self::All => true,
+        }
+    }
+}
+
+/// What a run keeps beyond what a build needs, and whether it survives an
+/// internal error (D-1361, D-1362).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Retain {
+    /// Trees and `ResolvedModule`s. Under [`Scope::Local`], std keeps its
+    /// interfaces only: its THIR is emptied at the end of the run.
+    pub trees: Scope,
+    /// `check_bodies_recording` for these modules.
+    pub facts: Scope,
+    /// Survive an `Ice` (one body, one pass or one module), and skip the
+    /// dropped-body gate.
+    pub tolerant: bool,
+}
+
+impl Retain {
+    /// A build: today's behaviour.
+    pub(crate) const BUILD: Self = Self {
+        trees: Scope::None,
+        facts: Scope::None,
+        tolerant: false,
+    };
+    /// Every Q run on live text.
+    pub(crate) const LIVE: Self = Self {
+        trees: Scope::Local,
+        facts: Scope::Local,
+        tolerant: true,
+    };
+    /// The run of `StdBase`: every module kept, with no containment.
+    pub(crate) const STD: Self = Self {
+        trees: Scope::All,
+        facts: Scope::All,
+        tolerant: false,
+    };
+    /// The run of `verify`: nothing kept, an `Ice` loses one module.
+    pub(crate) const VERIFY: Self = Self {
+        trees: Scope::None,
+        facts: Scope::None,
+        tolerant: true,
+    };
+}
+
+/// How a run treats import cycles (A §2.5, D-1358).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CutCycles {
+    /// The module most recently edited. An edge out of it is cut first.
+    pub prefer_from: Option<ModulePath>,
+}
+
+/// What a run takes beyond its package (D-1361).
+#[derive(Debug)]
+pub(crate) struct RunExtras {
+    /// The interners, shared between runs of one server (D-264 keeps
+    /// output independent of them).
+    pub globals: Arc<Globals>,
+    pub retain: Retain,
+    /// `Some`: every import of one edge per cycle becomes a failed import,
+    /// so no module is blocked (D-1358). `None`: E0040 blocks modules, as
+    /// today.
+    pub cut_cycles: Option<CutCycles>,
+}
+
+impl RunExtras {
+    /// What every batch command runs with: fresh `Globals`,
+    /// [`Retain::BUILD`], and no cycle cut.
+    pub(crate) fn batch() -> Self {
+        Self {
+            globals: Arc::new(Globals::new()),
+            retain: Retain::BUILD,
+            cut_cycles: None,
+        }
+    }
+}
+
 /// A module checked on top of a finished [`Frontend`] that is not part of
 /// the package: a REPL entry (plan §4.7).
 #[cfg_attr(
@@ -705,6 +829,8 @@ pub(crate) fn check_extra_module(
         drops: resolved.external_drops(),
         interface: Arc::new(iface),
         warnings: diags,
+        resolved: None,
+        facts: None,
     }))
 }
 
@@ -812,6 +938,8 @@ pub(crate) fn check_reloaded(
                 drops: resolved.external_drops(),
                 interface: iface,
                 warnings: Vec::new(),
+                resolved: None,
+                facts: None,
             });
         }
         if let Some(slot) = front.imports.get_mut(at) {
@@ -1037,6 +1165,8 @@ struct BuildInputs<'a> {
     /// to (D-955); `None` checks every module from source and writes
     /// nothing.
     cache: Option<FrontCx<'a>>,
+    /// What the run keeps, and whether it survives an internal error.
+    retain: Retain,
 }
 
 /// What the tasks of a front end fill as they run, by module id.
@@ -1616,6 +1746,8 @@ impl BuildInputs<'_> {
             },
         };
         let (resolved, mut early) = resolve_module(&input)?;
+        #[cfg(test)]
+        run_switches_for_test(&resolved, self.globals)?;
         let types = TypesInput {
             module: id,
             package: info.package,
@@ -1646,7 +1778,28 @@ impl BuildInputs<'_> {
         } else {
             Tests::SkipStd
         };
-        let (thir, late) = check_bodies_with(&types, &iface, tests)?;
+        // D-1380: a recording check gives the same THIR and diagnostics,
+        // and survives an `Ice` in one body or one pass (F §2.3, layers 1
+        // and 2). Only a tolerant run keeps that: any other run fails on
+        // the first loss, as `check_bodies_with` would have.
+        let (thir, late, facts) = if self.retain.facts.covers(info.package) {
+            let (thir, late, facts) = check_bodies_recording(&types, &iface, tests)?;
+            #[cfg(test)]
+            let (thir, facts) = body_ice_for_test(&types, thir, facts);
+            if !self.retain.tolerant
+                && let Some(ice) = first_loss(&facts)
+            {
+                return Err(Stop::Ice(ice));
+            }
+            (thir, late, Some(facts))
+        } else {
+            #[cfg(test)]
+            if let Some((_, ice)) = body_ice_named_for_test(&types) {
+                return Err(Stop::Ice(ice));
+            }
+            let (thir, late) = check_bodies_with(&types, &iface, tests)?;
+            (thir, late, None)
+        };
         #[cfg(test)]
         let thir = drop_for_test(&types, thir);
         let dropped = cheby_types::dropped_body(&types, &thir, tests);
@@ -1665,6 +1818,7 @@ impl BuildInputs<'_> {
         } else {
             None
         };
+        let drops = resolved.external_drops();
         Ok(ModuleOutput {
             syntax: late_syntax.map(<[Diagnostic]>::to_vec).unwrap_or_default(),
             early,
@@ -1675,9 +1829,11 @@ impl BuildInputs<'_> {
                 deps,
                 front_reads,
                 thir,
-                drops: resolved.external_drops(),
+                drops,
                 interface: iface,
                 warnings: Vec::new(),
+                resolved: self.retain.trees.covers(info.package).then_some(resolved),
+                facts,
             }),
             summaries,
             dropped,
@@ -2429,7 +2585,14 @@ pub(crate) fn run_cached(
         .native
         .clone()
         .map(|table| (package.root.clone(), package.manifest.name.clone(), table));
-    let mut front = match run_inner(package, mode, sources, diagnostics, cache) {
+    let mut front = match run_inner(
+        package,
+        mode,
+        sources,
+        diagnostics,
+        cache,
+        RunExtras::batch(),
+    ) {
         Ok(front) => front,
         Err(Stop::Restart) => return Ok(None),
         Err(Stop::Ice(ice)) => return Err(ice.into()),
@@ -2459,6 +2622,30 @@ pub(crate) fn run_cached(
         front.native = crate::native::prepare(&root, &name, &table, cache.map(|use_| use_.cache))?;
     }
     Ok(Some(front))
+}
+
+/// The analysis entry (D-1361): [`run_inner`] in [`Mode::Check`] with no
+/// cache and `extras`. It writes no interface dump, prepares no native
+/// code, and has no phase-A gate: `package` may hold trees with grammar
+/// errors. Diagnostics are pushed unsorted.
+///
+/// # Errors
+///
+/// An [`Error`] for an internal error the run does not contain: any, when
+/// [`Retain::tolerant`] is off, as in a batch run.
+pub(crate) fn run_analysis(
+    package: Package,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    extras: RunExtras,
+) -> Result<Frontend, Error> {
+    match run_inner(package, Mode::Check, sources, diagnostics, None, extras) {
+        Ok(front) => Ok(front),
+        Err(Stop::Restart) => {
+            Err(Ice::new("a front end without the cache asked to start again").into())
+        }
+        Err(Stop::Ice(ice)) => Err(ice.into()),
+    }
 }
 
 /// The front end's phases. With a cache, every package module is looked
@@ -2500,6 +2687,17 @@ pub(crate) fn run_cached(
 /// order, a hit's from its record (D-965). Debug toolchains compare a hit
 /// that is checked with its replayed diagnostics and interface hash
 /// (D-1131).
+///
+/// `extras` is the run contract (D-1361, D-1362). Batch commands pass
+/// [`RunExtras::batch`], which changes nothing above. A server's run, from
+/// [`run_analysis`], passes its shared `Globals`, so interned names and
+/// types carry across runs, and a [`Retain`]: `trees` keeps the trees and
+/// `ResolvedModule`s of the modules it covers, `facts` checks their bodies
+/// with `check_bodies_recording`, and `tolerant` contains an `Ice` to one
+/// body, one pass or one module, skips the dropped-body gate (recording
+/// [`Frontend::silent_drop`] instead) and, without a cache, skips the
+/// second check on fresh interfaces. [`RunExtras::cut_cycles`] cuts every
+/// import of one edge per import cycle, so no module is blocked by E0040.
 #[expect(
     clippy::too_many_lines,
     reason = "the front-end phases in order, each a few lines"
@@ -2510,8 +2708,13 @@ fn run_inner(
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
     cache: Option<CacheUse<'_>>,
+    extras: RunExtras,
 ) -> Result<Frontend, Stop> {
-    let globals = Globals::new();
+    let RunExtras {
+        globals,
+        retain,
+        cut_cycles,
+    } = extras;
     let mut modules = ModuleTable::new();
     let mut trees: Vec<Option<SyntaxTree>> = vec![None];
     let mut syntax: Vec<Option<Vec<Diagnostic>>> = vec![None];
@@ -2649,18 +2852,14 @@ fn run_inner(
     }
 
     // The graph and the order (G1).
-    let mut graph = Graph::new(modules.len());
-    for (from, list) in targets.iter().enumerate() {
-        let from = u32::try_from(from).map_err(|_| Ice::new("too many modules"))?;
-        for to in list.iter().filter_map(|t| t.module()) {
-            graph.add_edge(from, to.as_u32());
-        }
-    }
-    for (from, list) in implicit.iter().enumerate() {
-        let from = u32::try_from(from).map_err(|_| Ice::new("too many modules"))?;
-        for to in list {
-            graph.add_edge(from, to.as_u32());
-        }
+    let mut graph = import_graph(modules.len(), &targets, &implicit)?;
+    // D-1358, D-1427: a run that cuts cycles turns every import of one edge per
+    // cycle into a failed import, and what is left goes to the arm below
+    // as usual.
+    let mut cut_imports = Vec::new();
+    if let Some(cut) = &cut_cycles {
+        cut_imports =
+            cut_import_cycles(cut, &modules, &imports, &mut targets, &implicit, &mut graph)?;
     }
     let order = match topological_order(&graph) {
         Ok(order) => order,
@@ -2816,12 +3015,20 @@ fn run_inner(
             shared: &shared,
             counted: &counted,
             cache: front_cx(Pass::Warm),
+            retain,
         },
         &order,
     );
-    if let Some(stop) = first_failure(&mut outputs) {
-        return Err(stop);
-    }
+    // F §2.3, layer 3: a tolerant run loses the module that failed, and
+    // the modules that import it and never ran; any other run fails.
+    let lost = if retain.tolerant {
+        take_failures(&mut outputs)?
+    } else {
+        if let Some(stop) = first_failure(&mut outputs) {
+            return Err(stop);
+        }
+        Vec::new()
+    };
 
     // The results, in the topological order (D-264).
     let is_local = |id: ModuleId| {
@@ -2856,11 +3063,14 @@ fn run_inner(
             continue;
         }
         let at = index(id)?;
-        let output = outputs
-            .get_mut(at)
-            .and_then(Option::take)
-            .ok_or_else(|| Ice::new(format!("module {id:?} was never checked")))?
-            .map_err(|_| Ice::new(format!("module {id:?} failed")))?;
+        let output = outputs.get_mut(at).and_then(Option::take);
+        let output = match output {
+            // Lost, or behind a lost module (`take_failures`).
+            None if retain.tolerant => continue,
+            output => output
+                .ok_or_else(|| Ice::new(format!("module {id:?} was never checked")))?
+                .map_err(|_| Ice::new(format!("module {id:?} failed")))?,
+        };
         late_syntax.extend(output.syntax);
         let is_fresh = output.checked.as_ref().is_some_and(|c| {
             c.deps.iter().all(|&d| {
@@ -2939,7 +3149,14 @@ fn run_inner(
         for &dep in &c.deps {
             let d = index(dep)?;
             let std_hit = std_hits.contains_key(&dep);
-            if (std_hit || (is_local(dep) && !fresh.get(d).copied().unwrap_or(false)))
+            // A std hit counts as fresh, but a module that read one was not
+            // checked on fresh interfaces, and the check below would mix its
+            // defs with those of the std modules checked from source.
+            let dep_read_std_hit = get(&checked, dep)?
+                .as_ref()
+                .is_some_and(|c| c.deps.iter().any(|x| std_hits.contains_key(x)));
+            if (std_hit
+                || (is_local(dep) && (dep_read_std_hit || !fresh.get(d).copied().unwrap_or(false))))
                 && let Some(slot) = again.get_mut(d)
             {
                 if std_hit
@@ -2954,7 +3171,11 @@ fn run_inner(
             }
         }
     }
-    if again.iter().any(|&a| a) {
+    // Only a run with the cache checks a module against decoded
+    // interfaces, so without one `again` is empty, unless a tolerant run
+    // lost a module that a checked module reads (it is not fresh): such a
+    // run checks nothing again.
+    if again.iter().any(|&a| a) && !(retain.tolerant && cache.is_none()) {
         let mut fresh_set = InterfaceSet::new(builtin::interface(&globals));
         fresh_set.reserve_modules(len)?;
         for &id in &built {
@@ -2997,6 +3218,7 @@ fn run_inner(
                 shared: &recheck_shared,
                 counted: &counted,
                 cache: front_cx(Pass::Recheck),
+                retain,
             },
             &again_order,
         );
@@ -3077,10 +3299,16 @@ fn run_inner(
     // module, since a call to an item whose signature is in error drops the
     // caller and reports nothing there, so only the whole package can tell
     // (D-464). Module order keeps the message the same on any schedule.
+    // D-1362: a tolerant run notes the drop and goes on, since a broken tree
+    // can drop a body silently and its diagnostics are not the batch's.
+    let mut silent_drop = false;
     if !diagnostics.iter().any(Diagnostic::is_error)
         && let Some(ice) = dropped.iter_mut().find_map(Option::take)
     {
-        return Err(Stop::Ice(ice));
+        if !retain.tolerant {
+            return Err(Stop::Ice(ice));
+        }
+        silent_drop = true;
     }
     if mode == Mode::Check && every_local_built {
         diagnostics.extend(unused_package_items(&modules, &built, &uses)?);
@@ -3147,6 +3375,30 @@ fn run_inner(
             counted,
         )?;
     }
+    // D-1361: the trees the run keeps. Under `Scope::Local`, std keeps its
+    // interfaces only, so its THIR goes too: nothing lowers a front end
+    // that keeps trees.
+    let trees = match retain.trees {
+        Scope::None => Vec::new(),
+        Scope::All => trees,
+        Scope::Local => {
+            for (id, info) in modules.iter() {
+                if info.package == PackageId::LOCAL {
+                    continue;
+                }
+                let at = index(id)?;
+                if let Some(slot) = trees.get_mut(at) {
+                    *slot = None;
+                }
+                if let Some(Some(c)) = checked.get_mut(at) {
+                    c.thir.fns = Vec::new();
+                    c.thir.consts = Vec::new();
+                    c.thir.tests = Vec::new();
+                }
+            }
+            trees
+        }
+    };
     Ok(Frontend {
         globals,
         modules,
@@ -3171,6 +3423,10 @@ fn run_inner(
         warm_f2,
         warm,
         wanted: std::sync::atomic::AtomicBool::new(false),
+        trees,
+        cut_imports,
+        lost,
+        silent_drop,
     })
 }
 
@@ -3190,6 +3446,195 @@ fn drop_for_test(input: &TypesInput<'_>, mut thir: thir::Module) -> thir::Module
     thir.consts.retain(|c| !dropped(c.def.index));
     thir.tests.retain(|t| !dropped(t.def.index));
     thir
+}
+
+/// The import graph over `len` modules: each module's import targets, and
+/// its implicit dependencies on the home modules of prelude types.
+fn import_graph(
+    len: usize,
+    targets: &[Vec<ImportTarget>],
+    implicit: &[Vec<ModuleId>],
+) -> Result<Graph, Ice> {
+    let mut graph = Graph::new(len);
+    for (from, list) in targets.iter().enumerate() {
+        let from = u32::try_from(from).map_err(|_| Ice::new("too many modules"))?;
+        for to in list.iter().filter_map(|t| t.module()) {
+            graph.add_edge(from, to.as_u32());
+        }
+    }
+    for (from, list) in implicit.iter().enumerate() {
+        let from = u32::try_from(from).map_err(|_| Ice::new("too many modules"))?;
+        for to in list {
+            graph.add_edge(from, to.as_u32());
+        }
+    }
+    Ok(graph)
+}
+
+/// The cycle cut of a [`CutCycles`] run (A §2.5, D-1358, D-1427). While `graph`
+/// has a cycle, one edge of the first cycle that has an import edge is
+/// cut: the edge out of [`CutCycles::prefer_from`] if the cycle has one,
+/// else the largest `(from, to)`. Every import of `from` that targets `to`
+/// becomes [`ImportTarget::Failed`], which resolves to `Res::Err` like any
+/// failed import, and `graph` is built again. Each pass removes an edge,
+/// so the loop ends. A cycle with no import edge stays for E0040. Returns
+/// the cut imports, the importing module and the import's span, in the
+/// order they were cut.
+fn cut_import_cycles(
+    cut: &CutCycles,
+    modules: &ModuleTable,
+    imports: &[Vec<ImportRequest>],
+    targets: &mut [Vec<ImportTarget>],
+    implicit: &[Vec<ModuleId>],
+    graph: &mut Graph,
+) -> Result<Vec<(ModuleId, Span)>, Ice> {
+    let mut cut_imports = Vec::new();
+    while let Err(cycles) = topological_order(graph) {
+        let mut picked = None;
+        for cycle in &cycles {
+            let mut edges: Vec<(ModuleId, ModuleId)> = Vec::new();
+            for (n, &node) in cycle.nodes.iter().enumerate() {
+                let next = cycle
+                    .nodes
+                    .get(n.saturating_add(1))
+                    .or_else(|| cycle.nodes.first())
+                    .copied()
+                    .ok_or_else(|| Ice::new("an empty cycle"))?;
+                let (from, to) = (ModuleId::from_u32(node), ModuleId::from_u32(next));
+                if get(targets, from)?.iter().any(|t| t.module() == Some(to)) {
+                    edges.push((from, to));
+                }
+            }
+            let preferred = cut.prefer_from.as_ref().and_then(|path| {
+                edges
+                    .iter()
+                    .find(|(from, _)| modules.get(*from).is_some_and(|info| info.path == *path))
+            });
+            if let Some(&edge) = preferred.or_else(|| edges.iter().max()) {
+                picked = Some(edge);
+                break;
+            }
+        }
+        let Some((from, to)) = picked else {
+            break;
+        };
+        let written = get(imports, from)?;
+        let list = targets
+            .get_mut(index(from)?)
+            .ok_or_else(|| Ice::new("a module without import targets"))?;
+        for (k, target) in list.iter_mut().enumerate() {
+            if target.module() == Some(to) {
+                *target = ImportTarget::Failed;
+                let span = written
+                    .get(k)
+                    .ok_or_else(|| Ice::new("an import target without its request"))?
+                    .span;
+                cut_imports.push((from, span));
+            }
+        }
+        *graph = import_graph(graph.len(), targets, implicit)?;
+    }
+    Ok(cut_imports)
+}
+
+/// Test hook: the body named `ice_by_test`, with an [`Ice`], so the tests
+/// of containment have an `Ice` in one body (F §2.3, layer 1).
+/// `cheby_types`' hook of that name is built only for its own tests.
+#[cfg(test)]
+fn body_ice_named_for_test(input: &TypesInput<'_>) -> Option<(cheby_iface::DefIndex, Ice)> {
+    input
+        .resolved
+        .items
+        .iter_enumerated()
+        .find(|(_, item)| input.globals.names.get(item.name) == "ice_by_test")
+        .map(|(index, _)| (index, Ice::new("a body ended by a test")))
+}
+
+/// Test hook: what a recording check gives when the body named
+/// `ice_by_test` ends with an [`Ice`]: no THIR for it, and the loss in
+/// [`cheby_types::facts::ModuleFacts::lost`] with no facts of the body.
+#[cfg(test)]
+fn body_ice_for_test(
+    input: &TypesInput<'_>,
+    mut thir: thir::Module,
+    mut facts: cheby_types::facts::ModuleFacts,
+) -> (thir::Module, cheby_types::facts::ModuleFacts) {
+    if let Some((index, ice)) = body_ice_named_for_test(input) {
+        thir.fns.retain(|f| f.def.index != index);
+        thir.consts.retain(|c| c.def.index != index);
+        thir.tests.retain(|t| t.def.index != index);
+        facts.bodies.retain(|b| b.item != index);
+        facts.lost.push((index, ice));
+    }
+    (thir, facts)
+}
+
+/// Test hook, after resolution: a module with an item named
+/// `module_ice_by_test` fails with an [`Ice`] before it publishes its
+/// interface, as an `Ice` of resolution or of the interface does (F §2.3,
+/// layer 3), and one with an item named `panic_by_test` panics
+/// ([`panic_for_test`]), so the driver's tests see a run panic. The names
+/// are the switches, so tests that run in parallel share no state.
+#[cfg(test)]
+fn run_switches_for_test(resolved: &ResolvedModule, globals: &Globals) -> Result<(), Ice> {
+    panic_for_test(resolved, globals);
+    let named = resolved
+        .items
+        .iter()
+        .any(|item| globals.names.get(item.name) == "module_ice_by_test");
+    if named {
+        return Err(Ice::new("a module ended by a test"));
+    }
+    Ok(())
+}
+
+/// Test hook: panics in a module with an item named `panic_by_test`.
+#[cfg(test)]
+fn panic_for_test(resolved: &ResolvedModule, globals: &Globals) {
+    let named = resolved
+        .items
+        .iter()
+        .any(|item| globals.names.get(item.name) == "panic_by_test");
+    assert!(!named, "a run panicked by a test");
+}
+
+/// The first internal error a recording check contained (F §2.3): a lost
+/// body's in item order, else a lost pass's. The one a check without
+/// recording would have returned.
+fn first_loss(facts: &cheby_types::facts::ModuleFacts) -> Option<Ice> {
+    facts
+        .lost
+        .first()
+        .map(|(_, ice)| ice.clone())
+        .or_else(|| facts.lost_passes.first().cloned())
+}
+
+/// Under [`Retain::tolerant`] (F §2.3, layer 3): takes every module's
+/// internal error out of `outputs`, by module id, leaving its slot empty.
+///
+/// # Errors
+///
+/// A [`Stop::Restart`] in any slot, which a run without the cache never
+/// gives.
+fn take_failures(
+    outputs: &mut [Option<Result<ModuleOutput, Stop>>],
+) -> Result<Vec<(ModuleId, Ice)>, Stop> {
+    let mut lost = Vec::new();
+    for (at, slot) in outputs.iter_mut().enumerate() {
+        if !matches!(slot, Some(Err(_))) {
+            continue;
+        }
+        if let Some(Err(stop)) = slot.take() {
+            match stop {
+                Stop::Restart => return Err(Stop::Restart),
+                Stop::Ice(ice) => {
+                    let id = u32::try_from(at).map_err(|_| Ice::new("too many modules"))?;
+                    lost.push((ModuleId::from_u32(id), ice));
+                }
+            }
+        }
+    }
+    Ok(lost)
 }
 
 /// The first failure among a schedule's outputs: a [`Stop::Restart`] if
@@ -3784,5 +4229,288 @@ mod tests {
         }
         assert!(first.contains("W0005"), "{first}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Runs and their contract (D-1361, D-1362, D-1358): what a run keeps,
+    /// the cycle cut and containment.
+    mod runs {
+        use std::sync::Arc;
+
+        use cheby_iface::{Globals, ModuleId, PackageId};
+        use cheby_package::ModulePath;
+
+        use super::super::{CutCycles, Frontend, Retain, RunExtras, run_analysis};
+        use super::package;
+
+        /// Extras with `retain`, fresh `Globals` and the given cut.
+        fn extras(retain: Retain, cut: Option<CutCycles>) -> RunExtras {
+            RunExtras {
+                globals: Arc::new(Globals::new()),
+                retain,
+                cut_cycles: cut,
+            }
+        }
+
+        /// `run_analysis` over a package with these modules, and its
+        /// diagnostics as `code: message`.
+        fn analyze(
+            name: &str,
+            modules: &[(&str, &str)],
+            extras: RunExtras,
+        ) -> (Result<Frontend, crate::Error>, Vec<String>) {
+            /// Removes the package on drop, so a run that panics leaves
+            /// no directory behind.
+            struct Removed(std::path::PathBuf);
+            impl Drop for Removed {
+                fn drop(&mut self) {
+                    let _ = std::fs::remove_dir_all(&self.0);
+                }
+            }
+            let dir = Removed(package(name, modules));
+            let mut sources = cheby_diag::SourceMap::new();
+            let mut diagnostics = Vec::new();
+            let package = crate::load_package(&dir.0, &mut sources, &mut diagnostics)
+                .unwrap()
+                .unwrap();
+            let front = run_analysis(package, &mut sources, &mut diagnostics, extras);
+            drop(dir);
+            let codes = diagnostics
+                .iter()
+                .map(|d| format!("{}: {}", d.code, d.message))
+                .collect();
+            (front, codes)
+        }
+
+        /// The id of package module `module`; `main` is the root module.
+        fn id(front: &Frontend, module: &str) -> ModuleId {
+            let path = match module {
+                "main" => ModulePath::root("app"),
+                _ => ModulePath::root("app").child(module),
+            };
+            front.modules.find(&path).unwrap()
+        }
+
+        /// The names of the functions in `module`'s THIR.
+        fn fns(front: &Frontend, module: &str) -> Vec<String> {
+            let checked = front.checked_quiet(id(front, module)).unwrap();
+            checked
+                .thir
+                .fns
+                .iter()
+                .map(|f| {
+                    let item = front
+                        .set
+                        .get(f.def.module)
+                        .unwrap()
+                        .item(f.def.index)
+                        .unwrap();
+                    front.globals.names.get(item.name).to_owned()
+                })
+                .collect()
+        }
+
+        const A: &str = "//! A.\n\nimport app::b\n\npub type Pair {\n  Pair(Int, Int),\n}\n\n\
+                         pub fn f() -> Int {\n  1\n}\n\nfn uses_b() -> Int {\n  b::g()\n}\n";
+        const B: &str = "//! B.\n\nimport app::a\n\npub fn g() -> Int {\n  2\n}\n\n\
+                         fn uses_a() -> Int {\n  a::f()\n}\n";
+        const MAIN: &str = "//! Root.\n\nimport app::a\n\nfn main() {\n  let _ = a::f()\n}\n";
+
+        #[test]
+        fn batch_extras_are_todays_run() {
+            let batch = RunExtras::batch();
+            assert_eq!(batch.retain, Retain::BUILD);
+            assert!(batch.cut_cycles.is_none());
+            let (front, found) = analyze(
+                "batch_extras",
+                &[
+                    ("main.cheby", MAIN_UTIL),
+                    ("util.cheby", "//! U.\n\npub fn ok() -> Int {\n  1\n}\n"),
+                ],
+                RunExtras::batch(),
+            );
+            let front = front.unwrap();
+            assert!(found.iter().all(|d| !d.starts_with('E')), "{found:?}");
+            assert!(front.trees.is_empty());
+            assert!(front.cut_imports.is_empty() && front.lost.is_empty());
+            assert!(!front.silent_drop);
+            let main = front.checked_quiet(id(&front, "main")).unwrap();
+            assert!(main.resolved.is_none() && main.facts.is_none());
+        }
+
+        #[test]
+        fn a_cut_cycle_checks_every_module() {
+            let modules = [("a.cheby", A), ("b.cheby", B), ("main.cheby", MAIN)];
+            let (front, found) = analyze(
+                "cut",
+                &modules,
+                extras(Retain::LIVE, Some(CutCycles { prefer_from: None })),
+            );
+            let front = front.unwrap();
+            assert!(found.iter().all(|d| !d.starts_with("E0040")), "{found:?}");
+            // No preference: the largest `(from, to)`, here `b -> a`.
+            assert_eq!(front.cut_imports.len(), 1);
+            assert_eq!(front.cut_imports.first().unwrap().0, id(&front, "b"));
+            for module in ["a", "b", "main"] {
+                let checked = front.checked_quiet(id(&front, module)).unwrap();
+                assert!(
+                    checked.resolved.is_some() && checked.facts.is_some(),
+                    "{module}"
+                );
+                assert!(
+                    front
+                        .trees
+                        .get(usize::try_from(id(&front, module).as_u32()).unwrap())
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            // The module above the cycle keeps its types and its THIR.
+            assert_eq!(fns(&front, "main"), ["main"]);
+            assert!(fns(&front, "a").contains(&"uses_b".to_owned()));
+            // Std keeps its interfaces only (D-1361).
+            for (module, info) in front.modules.iter() {
+                if info.package == PackageId::STD
+                    && let Some(checked) = front.checked_quiet(module)
+                {
+                    assert!(checked.thir.fns.is_empty() && checked.resolved.is_none());
+                    assert!(checked.facts.is_none());
+                    let at = usize::try_from(module.as_u32()).unwrap();
+                    assert!(front.trees.get(at).unwrap().is_none());
+                }
+            }
+        }
+
+        #[test]
+        fn the_cut_prefers_the_newest_edit() {
+            let modules = [("a.cheby", A), ("b.cheby", B), ("main.cheby", MAIN)];
+            for module in ["a", "b"] {
+                let cut = CutCycles {
+                    prefer_from: Some(ModulePath::root("app").child(module)),
+                };
+                let (front, _) = analyze(
+                    &format!("prefer_{module}"),
+                    &modules,
+                    extras(Retain::LIVE, Some(cut)),
+                );
+                let front = front.unwrap();
+                assert_eq!(front.cut_imports.len(), 1);
+                assert_eq!(front.cut_imports.first().unwrap().0, id(&front, module));
+            }
+        }
+
+        #[test]
+        fn without_a_cut_a_cycle_blocks_its_modules() {
+            let modules = [("a.cheby", A), ("b.cheby", B), ("main.cheby", MAIN)];
+            let (front, found) = analyze("no_cut", &modules, extras(Retain::LIVE, None));
+            let front = front.unwrap();
+            assert!(found.iter().any(|d| d.starts_with("E0040")), "{found:?}");
+            assert_eq!(front.cut_imports, Vec::new());
+            for module in ["a", "b", "main"] {
+                assert!(
+                    front.checked_quiet(id(&front, module)).is_none(),
+                    "{module}"
+                );
+            }
+        }
+
+        const UTIL_ICE: &str = "//! Util.\n\npub fn ok() -> Int {\n  1\n}\n\n\
+                                pub fn ice_by_test() -> Int {\n  2\n}\n";
+        const MAIN_UTIL: &str =
+            "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::ok()\n}\n";
+
+        #[test]
+        fn an_ice_in_one_body_loses_that_body() {
+            let modules = [("main.cheby", MAIN_UTIL), ("util.cheby", UTIL_ICE)];
+            let (front, _) = analyze("body_ice", &modules, extras(Retain::LIVE, None));
+            let front = front.unwrap();
+            assert_eq!(front.lost, Vec::new());
+            let util = front.checked_quiet(id(&front, "util")).unwrap();
+            let facts = util.facts.as_ref().unwrap();
+            assert_eq!(facts.lost.len(), 1);
+            assert_eq!(facts.bodies.len(), 1);
+            assert_eq!(fns(&front, "util"), ["ok"]);
+            assert_eq!(fns(&front, "main"), ["main"]);
+            // The lost body has no diagnostic: the gate notes it.
+            assert!(front.silent_drop);
+            // Without tolerance the run fails, recording or not.
+            for retain in [Retain::BUILD, Retain::STD] {
+                let (front, _) = analyze("body_ice_strict", &modules, extras(retain, None));
+                let error = front.err().unwrap();
+                assert!(
+                    error.to_string().contains("a body ended by a test"),
+                    "{error}"
+                );
+            }
+        }
+
+        const UTIL_MODULE_ICE: &str = "//! Util.\n\npub fn ok() -> Int {\n  1\n}\n\n\
+                                       fn module_ice_by_test() -> Int {\n  2\n}\n";
+        const LONE: &str = "//! Lone.\n\npub fn lone() -> Int {\n  3\n}\n";
+
+        #[test]
+        fn an_ice_in_one_module_loses_it_and_its_importers() {
+            let modules = [
+                ("lone.cheby", LONE),
+                ("main.cheby", MAIN_UTIL),
+                ("util.cheby", UTIL_MODULE_ICE),
+            ];
+            for retain in [Retain::LIVE, Retain::VERIFY] {
+                let (front, _) = analyze("module_ice", &modules, extras(retain, None));
+                let front = front.unwrap();
+                assert_eq!(front.lost.len(), 1);
+                let (lost, ice) = front.lost.first().unwrap();
+                assert_eq!(*lost, id(&front, "util"));
+                assert!(
+                    ice.to_string().contains("a module ended by a test"),
+                    "{ice}"
+                );
+                assert!(front.checked_quiet(id(&front, "util")).is_none());
+                // `main` imports it, so it never ran; `lone` did.
+                assert!(front.checked_quiet(id(&front, "main")).is_none());
+                assert_eq!(fns(&front, "lone"), ["lone"]);
+                assert!(!front.order.contains(&id(&front, "main")));
+            }
+            for retain in [Retain::BUILD, Retain::STD] {
+                let (front, _) = analyze("module_ice_strict", &modules, extras(retain, None));
+                assert!(front.is_err());
+            }
+        }
+
+        #[test]
+        fn std_runs_keep_every_module() {
+            let modules = [
+                ("main.cheby", MAIN_UTIL),
+                ("util.cheby", "//! Util.\n\npub fn ok() -> Int {\n  1\n}\n"),
+            ];
+            let (front, found) = analyze("std_keeps", &modules, extras(Retain::STD, None));
+            let front = front.unwrap();
+            assert!(found.iter().all(|d| !d.starts_with('E')), "{found:?}");
+            let std_kept = front
+                .modules
+                .iter()
+                .filter(|(_, info)| info.package == PackageId::STD)
+                .all(|(module, _)| {
+                    front
+                        .checked_quiet(module)
+                        .is_none_or(|c| c.resolved.is_some() && c.facts.is_some())
+                });
+            assert!(std_kept);
+            assert!(front.trees.iter().skip(1).all(Option::is_some));
+        }
+
+        #[test]
+        fn a_panic_leaves_the_run() {
+            let lone = "//! Lone.\n\npub fn lone() -> Int {\n  3\n}\n\nfn panic_by_test() -> Int {\n  0\n}\n";
+            let modules = [
+                ("main.cheby", "//! Root.\n\nfn main() {\n  Nil\n}\n"),
+                ("lone.cheby", lone),
+            ];
+            let caught = std::panic::catch_unwind(|| {
+                analyze("panic", &modules, extras(Retain::LIVE, None))
+                    .0
+                    .is_ok()
+            });
+            assert!(caught.is_err());
+        }
     }
 }

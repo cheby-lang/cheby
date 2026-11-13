@@ -1,0 +1,8 @@
+// @decisions: D-1394
+//! A receiver of unknown type gives an empty list: guessing by name would
+//! be worse than nothing.
+
+fn main() {
+  let n = nowhere.
+  //              ^ completion
+}

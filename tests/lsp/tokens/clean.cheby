@@ -1,0 +1,39 @@
+// @decisions: D-1396
+// @requests: semanticTokens
+//! Each kind of name on clean text: what the index places.
+
+import std::io
+
+pub type Point {
+  x: Int,
+}
+
+pub type Shape {
+  Dot,
+  Circle(Float),
+}
+
+pub interface Named {
+  fn name(Self) -> String
+}
+
+pub fn area(s: Shape) -> Float {
+  case s {
+    Dot => 0.0
+    Circle(r) => r
+  }
+}
+
+pub fn pick<T>(a: T) -> T {
+  fn keep(v) {
+    v
+  }
+  keep(a)
+}
+
+fn main() {
+  let x = 1
+  let p = Point { x }
+  let a = area(Circle(1.0))
+  io::println("{p.x} {a}")
+}

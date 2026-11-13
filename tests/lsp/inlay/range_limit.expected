@@ -1,0 +1,21 @@
+== diagnostics
+{}
+
+== src/main.cheby:8:7 inlayHint
+[
+  "8:8 type `: List<List<Int>>` edit 8:8-8:8 `: List<List<Int>>`"
+]
+
+== src/main.cheby:8:9 inlayHint
+[]
+
+== src/main.cheby:11:8 inlayHint
+[
+  "11:8 type `: List<List<List<Int>>>` edit 11:8-11:8 `: List<List<List<Int>>>`"
+]
+
+== src/main.cheby:7:1 inlayHint
+[
+  "7:8 type `: List<Int>` edit 7:8-7:8 `: List<Int>`",
+  "8:8 type `: List<List<Int>>` edit 8:8-8:8 `: List<List<Int>>`"
+]

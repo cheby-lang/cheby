@@ -1,6 +1,7 @@
 # Fuzz targets for the syntax layer (docs/plan/testing.md §8, A2, A8), the
-# type checker (§8: no panics on any parsed input) and naive reference
-# counting against Perceus (D-718, D-781).
+# type checker (§8: no panics on any parsed input), the language server's
+# analysis (plan W4) and naive reference counting against Perceus (D-718,
+# D-781).
 #
 # Excluded from the workspace, because cargo-fuzz needs a nightly toolchain.
 # The scheduled workflow (.github/workflows/nightly.yml, D-781) pins the
@@ -15,12 +16,17 @@
 #   cargo +nightly-2026-10-01 fuzz run lex
 #   cargo +nightly-2026-10-01 fuzz run parse
 #   ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-10-01 fuzz run check -- -rss_limit_mb=6144
+#   ASAN_OPTIONS=detect_leaks=0 cargo +nightly-2026-10-01 fuzz run analysis -- -rss_limit_mb=6144
 #   CHEBY_DIFF_BIN=<copy of a debug cheby> cargo +nightly-2026-10-01 fuzz run rc_differential
 #
 # `lex` and `parse` check that lexing and parsing never panic, terminate,
 # and keep every byte of the input (the tree prints back the input
 # exactly). `check` runs the whole front end on a one-module package and
 # fails on an internal compiler error, a panic or a stack overflow.
+# `analysis` runs the module as an open document through a language-server
+# session, its live run and the strict run it plans, and fails on an
+# error, a failed run, a panic, a stack overflow or a published diagnostic
+# outside its own file.
 # `rc_differential` generates a program from the input
 # (`cheby_test_support::progen`) and runs it under `CHEBY_RC=naive` and
 # under the default with the `cheby` that `CHEBY_DIFF_BIN` names; the
@@ -65,6 +71,13 @@ bench = false
 [[bin]]
 name = "check"
 path = "fuzz_targets/check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "analysis"
+path = "fuzz_targets/analysis.rs"
 test = false
 doc = false
 bench = false

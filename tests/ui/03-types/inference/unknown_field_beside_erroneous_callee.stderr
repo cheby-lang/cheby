@@ -1,0 +1,17 @@
+error[E0051]: `List` takes 1 type argument but 2 were given
+  --> tests/ui/03-types/inference/unknown_field_beside_erroneous_callee.cheby:12:17
+   |
+12 | pub fn bad() -> List<Int, Int> {
+   |                 ^^^^^^^^^^^^^^ expected 1 type argument
+
+error[E0057]: type annotation needed
+  --> tests/ui/03-types/inference/unknown_field_beside_erroneous_callee.cheby:17:25
+   |
+17 |   let name_of = fn(p) { p.name }
+   |                    -    ^ the type of `p` must be known here to read its field `name`
+   |                    |
+   |                    `p` is bound here
+   |
+   = note: field names are not unique across types, so the type must come from an annotation, a signature or a use checked earlier (D-213)
+   = help: annotate the parameter: `fn(p: Person)`
+

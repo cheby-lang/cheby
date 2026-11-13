@@ -1,0 +1,14 @@
+error[E0042]: cannot find value `sh` in this scope
+  --> tests/ui/03-types/inference/literal_meets_error.cheby:11:21
+   |
+11 |   let _shown = k |> sh
+   |                     ^^ not found
+
+error[E0047]: mismatched types
+  --> tests/ui/03-types/inference/literal_meets_error.cheby:12:29
+   |
+12 |   let size = string::length(k)
+   |              -------------- ^ expected `String`, found `{integer}`
+   |              |
+   |              arguments to this function are incorrect
+

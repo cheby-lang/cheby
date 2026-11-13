@@ -1,0 +1,6 @@
+//! `import std::order::{` with the list open: the module's items.
+
+import std::order::{
+//                  ^ completion
+
+fn main() {}

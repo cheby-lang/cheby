@@ -1,0 +1,22 @@
+// @decisions: D-1521, D-1525, D-1530
+//! `st::length` in a file that imports `std::string`: where `::` follows
+//! the word, no item written through a module path is offered, of an
+//! imported module or to import, so `string::starts_with` cannot write
+//! `string::starts_with::length`. Only what a path starts with is: the
+//! module's name, written bare, and the interfaces, so not the local `n`.
+//! A partial of one character there does not mark the list incomplete.
+//! With no `::` after the word, the same item is offered (type error
+//! state).
+
+import std::string
+
+fn main() {
+  let n = st::length("ab")
+  //        ^ completion string Show string::starts_with main `let`
+  //        ^ apply string
+  let k = s::length("a")
+  //       ^ completion string n
+  let m = st
+  //        ^ completion string::starts_with
+  assert n == k + 1
+}

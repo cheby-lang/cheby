@@ -1,0 +1,38 @@
+== diagnostics
+{}
+
+== src/main.cheby:3:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst limit: Int\n```\n\n---\n\n`20` when last evaluated; the new save is being evaluated.\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 2
+    },
+    "start": {
+      "character": 6,
+      "line": 2
+    }
+  }
+}
+
+== src/main.cheby:6:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst spin: Int\n```\n\n---\n\nNot evaluated yet: the constants are being evaluated.\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 10,
+      "line": 5
+    },
+    "start": {
+      "character": 6,
+      "line": 5
+    }
+  }
+}

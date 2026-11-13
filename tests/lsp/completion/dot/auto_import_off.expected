@@ -1,0 +1,55 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `ma`\nunknown field",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 8
+        },
+        "start": {
+          "character": 14,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 8
+              },
+              "start": {
+                "character": 11,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:17 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:9:17 completion map
+{
+  "absent": [
+    "map"
+  ],
+  "count": 0,
+  "isIncomplete": false,
+  "items": []
+}

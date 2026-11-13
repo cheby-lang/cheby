@@ -1,0 +1,260 @@
+== diagnostics
+{}
+
+== src/main.cheby:11:7 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 10
+      },
+      "start": {
+        "character": 6,
+        "line": 10
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 24,
+        "line": 12
+      },
+      "start": {
+        "character": 23,
+        "line": 12
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 21,
+        "line": 13
+      },
+      "start": {
+        "character": 20,
+        "line": 13
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:14:17 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 12
+      },
+      "start": {
+        "character": 14,
+        "line": 12
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 17,
+        "line": 13
+      },
+      "start": {
+        "character": 16,
+        "line": 13
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:14:17 references noDeclaration
+[
+  {
+    "range": {
+      "end": {
+        "character": 17,
+        "line": 13
+      },
+      "start": {
+        "character": 16,
+        "line": 13
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/shapes.cheby:8:9 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 21,
+        "line": 10
+      },
+      "start": {
+        "character": 18,
+        "line": 10
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 29,
+        "line": 10
+      },
+      "start": {
+        "character": 28,
+        "line": 10
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 10,
+        "line": 7
+      },
+      "start": {
+        "character": 7,
+        "line": 7
+      }
+    },
+    "uri": "src/shapes.cheby"
+  }
+]
+
+== src/shapes.cheby:8:9 references noDeclaration
+[
+  {
+    "range": {
+      "end": {
+        "character": 21,
+        "line": 10
+      },
+      "start": {
+        "character": 18,
+        "line": 10
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 29,
+        "line": 10
+      },
+      "start": {
+        "character": 28,
+        "line": 10
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/shapes.cheby:11:11 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 19,
+        "line": 9
+      },
+      "start": {
+        "character": 18,
+        "line": 9
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 12
+      },
+      "start": {
+        "character": 14,
+        "line": 12
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 23,
+        "line": 13
+      },
+      "start": {
+        "character": 22,
+        "line": 13
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 3,
+        "line": 3
+      },
+      "start": {
+        "character": 2,
+        "line": 3
+      }
+    },
+    "uri": "src/shapes.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 11,
+        "line": 10
+      },
+      "start": {
+        "character": 10,
+        "line": 10
+      }
+    },
+    "uri": "src/shapes.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 16,
+        "line": 10
+      },
+      "start": {
+        "character": 15,
+        "line": 10
+      }
+    },
+    "uri": "src/shapes.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 22,
+        "line": 10
+      },
+      "start": {
+        "character": 21,
+        "line": 10
+      }
+    },
+    "uri": "src/shapes.cheby"
+  }
+]

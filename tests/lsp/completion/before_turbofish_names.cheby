@@ -1,0 +1,21 @@
+// @decisions: D-1536, D-1544
+//! Before `::<` in a type or a pattern, D-1525's names stay, with no
+//! `dyn` and no `_`, since only a name can come before type arguments. In
+//! an expression, a turbofish after the one segment that follows a
+//! path's `::` counts as a further segment, so `js::Value::<Int>(1)`
+//! offers only the modules: an interface's function takes no type
+//! arguments (grammar error state).
+
+import std::json
+
+fn first(v: json::Value) -> Int {
+  let w: Li::<Int> = [1]
+  //       ^ completion List dyn
+  let n = js::Value::<Int>(1)
+  //        ^ completion json Show
+  case v {
+    Arr::<Int>(xs) => n
+    // ^ completion json::Array _
+    _ => 0
+  }
+}

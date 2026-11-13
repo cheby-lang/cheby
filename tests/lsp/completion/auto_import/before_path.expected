@@ -1,0 +1,241 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "`st` is not imported\nnote: every module must be imported before use (§7.5)",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 13
+        },
+        "start": {
+          "character": 10,
+          "line": 13
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "`s` is not imported\nnote: every module must be imported before use (§7.5)",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 16
+        },
+        "start": {
+          "character": 10,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `m`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_m`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 18
+        },
+        "start": {
+          "character": 6,
+          "line": 18
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `st` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 18
+        },
+        "start": {
+          "character": 10,
+          "line": 18
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:14:13 completion string Show string::starts_with main `let`
+{
+  "absent": [
+    "string::starts_with",
+    "main",
+    "let"
+  ],
+  "count": 2,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "string",
+      "labelDetails": {
+        "description": "std::string"
+      },
+      "sortText": "30string",
+      "textEdit": {
+        "newText": "string",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 13
+          },
+          "start": {
+            "character": 10,
+            "line": 13
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 13
+          },
+          "start": {
+            "character": 10,
+            "line": 13
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:14:13 apply string
+{
+  "item": {
+    "kind": 9,
+    "label": "string",
+    "labelDetails": {
+      "description": "std::string"
+    },
+    "sortText": "30string",
+    "textEdit": {
+      "newText": "string",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 13
+        },
+        "start": {
+          "character": 10,
+          "line": 13
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1521, D-1525, D-1530",
+    "//! `st::length` in a file that imports `std::string`: where `::` follows",
+    "//! the word, no item written through a module path is offered, of an",
+    "//! imported module or to import, so `string::starts_with` cannot write",
+    "//! `string::starts_with::length`. Only what a path starts with is: the",
+    "//! module's name, written bare, and the interfaces, so not the local `n`.",
+    "//! A partial of one character there does not mark the list incomplete.",
+    "//! With no `::` after the word, the same item is offered (type error",
+    "//! state).",
+    "",
+    "import std::string",
+    "",
+    "fn main() {",
+    "  let n = string::length(\"ab\")",
+    "  //        ^ completion string Show string::starts_with main `let`",
+    "  //        ^ apply string",
+    "  let k = s::length(\"a\")",
+    "  //       ^ completion string n",
+    "  let m = st",
+    "  //        ^ completion string::starts_with",
+    "  assert n == k + 1",
+    "}",
+    ""
+  ]
+}
+
+== src/main.cheby:17:12 completion string n
+{
+  "absent": [
+    "n"
+  ],
+  "count": 2,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "string",
+      "labelDetails": {
+        "description": "std::string"
+      },
+      "sortText": "30string",
+      "textEdit": {
+        "newText": "string",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 16
+          },
+          "start": {
+            "character": 10,
+            "line": 16
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:19:13 completion string::starts_with
+{
+  "count": 127,
+  "isIncomplete": true,
+  "items": [
+    {
+      "detail": "pub fn starts_with(text: String, prefix: String) -> Bool",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Tells whether `text` begins with `prefix`."
+      },
+      "filterText": "starts_with",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "string::starts_with",
+      "labelDetails": {
+        "description": "std::string",
+        "detail": "(text, prefix)"
+      },
+      "sortText": "30string::starts_with",
+      "textEdit": {
+        "newText": "string::starts_with(${1:text}, ${2:prefix})$0",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 18
+          },
+          "start": {
+            "character": 10,
+            "line": 18
+          }
+        }
+      }
+    }
+  ]
+}

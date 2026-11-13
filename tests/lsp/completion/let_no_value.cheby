@@ -1,0 +1,16 @@
+// @decisions: D-1376, D-1383
+//! `let y = ` then `}`: an expression. The binding's own statement holds
+//! the cursor, so `y` is not offered (D-1383). A type error elsewhere
+//! changes nothing.
+
+fn twice(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let count = 3
+  let wrong: String = count
+  let y = 
+  //      ^ completion
+  //      ^ apply twice
+}

@@ -1,0 +1,16 @@
+// @decisions: D-1384
+//! `g(order::)`: the `::` is in an `ERROR` inside the argument list.
+
+import std::order
+
+fn g(o: Order) -> Order {
+  o
+}
+
+fn main() {
+  let o = Less
+  let a = g(order::)
+  //               ^ completion
+  //               ^ apply Greater
+  assert a == o
+}

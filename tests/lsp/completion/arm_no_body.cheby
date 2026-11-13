@@ -1,0 +1,15 @@
+// @decisions: D-1383
+//! `1 => ` with no body: an expression, and the `case`'s type ranks
+//! first.
+
+fn main() {
+  let count = 3
+  let name = "three"
+  let size = case count {
+    1 => 
+    //   ^ completion
+    //   ^ apply name
+    _ => "many"
+  }
+  assert size != ""
+}

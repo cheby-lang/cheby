@@ -51,12 +51,13 @@ pub(super) fn block_expr(p: &mut Parser<'_>) -> CompletedMarker {
 /// after it. It ends, unclosed (E0015), at the first line that starts with
 /// an item keyword that cannot start an entry ([`at_block_break`]), and at
 /// a `)` or `]` that closes an enclosing delimiter. A `case` body also ends
-/// at `fn name`, `pub` or `priv` at the start of a line, which can never
-/// start an arm. In a block or an interface body, `fn name` starts a local
-/// or interface function, so it ends the body only in column 1, where
-/// `cheby fmt` puts items, and only when no `}` later in the file can
-/// close the body. Valid code always has that `}`, so this never rejects
-/// a valid program.
+/// at `fn name`, `pub`, `priv` or a statement keyword at the start of a
+/// line, which can never start an arm, so the enclosing block goes on with
+/// that statement (D-1381). In a block or an interface body, `fn name`
+/// starts a local or interface function, so it ends the body only in
+/// column 1, where `cheby fmt` puts items, and only when no `}` later in
+/// the file can close the body. Valid code always has that `}`, so this
+/// never rejects a valid program.
 pub(super) fn line_body(
     p: &mut Parser<'_>,
     kind: SyntaxKind,
@@ -72,6 +73,7 @@ pub(super) fn line_body(
     let ends = |p: &Parser<'_>| {
         p.at(R_BRACE)
             || p.at(EOF)
+            || (kind == CASE_BODY && p.at_line_start() && p.at_ts(STMT_KEYWORDS))
             || (at_block_break(p) && !p.at_member_attr(first))
             || p.at_enclosing_closer()
             || (p.at_item_recovery()
@@ -124,6 +126,15 @@ pub(super) fn line_body(
         }
         if ends(p) {
             break;
+        }
+        // A failed entry that stopped at a statement at the start of a
+        // line stopped at the next entry, not at junk (D-1381).
+        if kind == BLOCK
+            && p.error_at_current()
+            && p.at_line_start()
+            && (p.at_ts(STMT_KEYWORDS) || at_local_fn(p))
+        {
+            continue;
         }
         p.expected("a line break or `}`");
         p.skip_until(STMT_STOP, true);

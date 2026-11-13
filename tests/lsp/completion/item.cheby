@@ -1,0 +1,12 @@
+// @decisions: D-143, D-150
+//! At the top level after an item: the item keywords and snippets, with no
+//! `import` (D-143) and no bare `exposed` (D-150). After `pub`, those that
+//! may follow it, `exposed` among them (grammar error state).
+
+fn main() {
+  assert True
+}
+
+//> 9:1 completion
+pub 
+//  ^ completion

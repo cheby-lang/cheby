@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-494, D-234, D-213
+//! The signature of `bad` has an error (E0051), reported there. A call
+//! of `bad` in `main` is not an error of `main`'s body, so `p.name` still
+//! gets its E0057 (D-494).
+
+pub type Person {
+  name: String,
+  age: Int,
+}
+
+pub fn bad() -> List<Int, Int> {
+  []
+}
+
+pub fn main() {
+  let name_of = fn(p) { p.name }
+  let xs = bad()
+  assert name_of(Person { name: "Ada", age: 36 }) == "Ada"
+  assert xs == []
+}

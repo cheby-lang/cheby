@@ -1,0 +1,271 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "message": "the interface `Twice` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 5
+        },
+        "start": {
+          "character": 10,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "W0009",
+      "message": "`todo` left in the code\nthis panics when it is reached\nhelp: write the missing code in place of the `todo`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 47
+        },
+        "start": {
+          "character": 2,
+          "line": 47
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:14 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nSelf\n```\n\n---\n\nThe type that satisfies `Twice`."
+  },
+  "range": {
+    "end": {
+      "character": 15,
+      "line": 6
+    },
+    "start": {
+      "character": 11,
+      "line": 6
+    }
+  }
+}
+
+== src/main.cheby:29:13 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nT\n```\n\n---\n\nType parameter of `first_or`."
+  },
+  "range": {
+    "end": {
+      "character": 13,
+      "line": 28
+    },
+    "start": {
+      "character": 12,
+      "line": 28
+    }
+  }
+}
+
+== src/main.cheby:29:16 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\n(parameter) xs: List<T>\n```"
+  },
+  "range": {
+    "end": {
+      "character": 17,
+      "line": 28
+    },
+    "start": {
+      "character": 15,
+      "line": 28
+    }
+  }
+}
+
+== src/main.cheby:48:4 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nInt\n```"
+  },
+  "range": {
+    "end": {
+      "character": 6,
+      "line": 47
+    },
+    "start": {
+      "character": 2,
+      "line": 47
+    }
+  }
+}
+
+== src/main.cheby:53:11 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nInt\n```"
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 52
+    },
+    "start": {
+      "character": 10,
+      "line": 52
+    }
+  }
+}
+
+== src/main.cheby:55:23 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nlet x: Int\n```\n\n---\n\nAlso the field `x` of `Point`."
+  },
+  "range": {
+    "end": {
+      "character": 23,
+      "line": 54
+    },
+    "start": {
+      "character": 22,
+      "line": 54
+    }
+  }
+}
+
+== src/main.cheby:57:19 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nfn add(a: Point, b: Point) -> Point\n```\n\n---\n\n`+` calls this function.\n\nDefined in `lsp_test`.\n\n---\n\nAdds two points."
+  },
+  "range": {
+    "end": {
+      "character": 19,
+      "line": 56
+    },
+    "start": {
+      "character": 18,
+      "line": 56
+    }
+  }
+}
+
+== src/main.cheby:59:16 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nfn show(p: Point) -> String\n```\n\n---\n\nThis interpolation calls this function.\n\nDefined in `lsp_test`.\n\n---\n\nShows a point."
+  },
+  "range": {
+    "end": {
+      "character": 16,
+      "line": 58
+    },
+    "start": {
+      "character": 15,
+      "line": 58
+    }
+  }
+}
+
+== src/main.cheby:59:18 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nlet sum: Point\n```"
+  },
+  "range": {
+    "end": {
+      "character": 19,
+      "line": 58
+    },
+    "start": {
+      "character": 16,
+      "line": 58
+    }
+  }
+}
+
+== src/main.cheby:62:30 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nInt\n```\n\n---\n\n`_` is filled with a value of this type."
+  },
+  "range": {
+    "end": {
+      "character": 30,
+      "line": 61
+    },
+    "start": {
+      "character": 29,
+      "line": 61
+    }
+  }
+}
+
+== src/main.cheby:64:21 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nfn first_or<T>(xs: List<T>, fallback: T) -> T\n```\n```cheby\nfn(List<Point>, Point) -> Point\n```\n\n---\n\nDefined in `lsp_test`.\n\n---\n\nThe first of `xs`, or `fallback`."
+  },
+  "range": {
+    "end": {
+      "character": 23,
+      "line": 63
+    },
+    "start": {
+      "character": 15,
+      "line": 63
+    }
+  }
+}
+
+== src/main.cheby:66:16 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "`==` is built in and compares structurally."
+  },
+  "range": {
+    "end": {
+      "character": 17,
+      "line": 65
+    },
+    "start": {
+      "character": 15,
+      "line": 65
+    }
+  }
+}
+
+== src/main.cheby:66:53 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nx: Int\n```\n\n---\n\nField of `Point`.\n\n---\n\nAcross."
+  },
+  "range": {
+    "end": {
+      "character": 53,
+      "line": 65
+    },
+    "start": {
+      "character": 52,
+      "line": 65
+    }
+  }
+}

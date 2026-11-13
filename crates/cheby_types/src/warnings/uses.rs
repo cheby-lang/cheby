@@ -5,13 +5,14 @@
 
 use cheby_diag::{Span, TextRange};
 use cheby_iface::{
-    DefId, DefIndex, DefKind, Ice, ModuleId, ModuleInterface, Name, Namespace, PackageId,
-    TypeDefKind,
+    DefId, DefIndex, DefKind, Generics, Ice, IfaceItem, ItemSig, ModuleId, ModuleInterface, Name,
+    Namespace, PackageId, Ty, TypeDefKind,
 };
 use cheby_resolve::Res;
 use cheby_syntax::NodeId;
 use cheby_syntax::ast::{AstNode, AstToken, FieldInit, Interpolation, PathNode};
 
+use crate::ifaces::{self, IfaceCx};
 use crate::thir::{self, Callee, Dict, ExprKind, InterpPart, OpImpl, PatKind};
 use crate::{Tests, TypesInput};
 
@@ -280,6 +281,104 @@ pub(super) fn thir_refs(thir: &thir::Module) -> Vec<ThirRef> {
         entry_refs(&t.entry, &mut push);
     }
     out
+}
+
+/// The uses of the dictionaries that interface calls on nominal types
+/// checked and then dropped (D-1552). A call `I::f(x)` with `x` of a
+/// nominal type calls the type's `f` directly, so THIR keeps only that
+/// function, but the type must satisfy the whole interface that declares
+/// `f` (§8.5), so the call uses every function of that interface's
+/// dictionary, those of the interfaces it embeds included. A call is
+/// found as the smallest call in the owner's THIR whose span holds the
+/// written path and whose callee has the function's name.
+///
+/// # Errors
+///
+/// An [`Ice`] if an interface or type cannot be read.
+pub(super) fn embedded_refs(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    thir: &thir::Module,
+    paths: &[PathUse],
+) -> Result<Vec<ThirRef>, Ice> {
+    let read = |def| input.item(own, def).ok();
+    // The written interface functions whose interface has other functions:
+    // the only calls with something more to use.
+    let mut calls: Vec<(DefIndex, Span, DefId, Name)> = Vec::new();
+    for path in paths {
+        let (Res::Def(f), Some(owner)) = (path.res, path.owner) else {
+            continue;
+        };
+        let Some(item) = read(f) else {
+            continue;
+        };
+        let (DefKind::InterfaceFn, Some(parent)) = (item.kind, item.parent) else {
+            continue;
+        };
+        if cheby_iface::interface_fns(DefId::new(f.module, parent), &read)?.len() > 1 {
+            calls.push((owner, path.span, f, item.name));
+        }
+    }
+    let mut out = Vec::new();
+    if calls.is_empty() {
+        return Ok(out);
+    }
+    let bodies = thir
+        .fns
+        .iter()
+        .filter_map(|f| Some((f.def.index, f.body.as_ref()?)))
+        .chain(thir.consts.iter().map(|c| (c.def.index, &c.body)))
+        .chain(thir.tests.iter().map(|t| (t.def.index, &t.body)));
+    let no_generics = Generics::empty();
+    for (owner, body) in bodies {
+        let generics = match own.item(owner).map(|item| &item.sig) {
+            Some(ItemSig::Fn(sig)) => &sig.generics,
+            _ => &no_generics,
+        };
+        let cx = IfaceCx {
+            input,
+            own,
+            generics,
+            query: true,
+        };
+        for &(_, span, f, name) in calls.iter().filter(|c| c.0 == owner) {
+            let Some(args) = called_args(body, span, name, &read) else {
+                continue;
+            };
+            let tys: Vec<Ty> = args
+                .iter()
+                .map(|&a| body.expr(a).map_or(Ty::ERROR, |e| e.ty))
+                .collect();
+            if let Some(dict) = ifaces::iface_call_dict(&cx, f, &tys)? {
+                dict_refs(&dict, &mut |def| out.push(ThirRef { owner, def }));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The arguments of the smallest direct call in `body` whose span holds
+/// `span` and whose callee is named `name`.
+fn called_args<'b, 'i>(
+    body: &'b thir::Body,
+    span: Span,
+    name: Name,
+    read: &dyn Fn(DefId) -> Option<&'i IfaceItem>,
+) -> Option<&'b [thir::ExprId]> {
+    body.exprs
+        .iter()
+        .filter(|e| e.span.file == span.file && e.span.range.contains_range(span.range))
+        .filter_map(|e| match &e.kind {
+            ExprKind::Call {
+                callee: Callee::Fn { def, .. },
+                args,
+            } if read(*def).is_some_and(|item| item.name == name) => {
+                Some((e.span.range.len(), &args[..]))
+            }
+            _ => None,
+        })
+        .min_by_key(|&(len, _)| len)
+        .map(|(_, args)| args)
 }
 
 fn entry_refs(entry: &thir::EntryInfo, push: &mut dyn FnMut(DefId)) {

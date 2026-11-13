@@ -1,0 +1,82 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a line break or `}`, found `::`",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 7
+        },
+        "start": {
+          "character": 15,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:18 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Equal | EnumMember | Equal\nof type Order",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "compare(a, b) | Function | pub fn compare(a: Order, b: Order) -> Order | (order) | `compare(${1:a}, ${2:b})$0`",
+    "reverse(o) | Function | pub fn reverse(o: Order) -> Order | (order) | `reverse(${1:o})$0`",
+    "show(o) | Function | pub fn show(o: Order) -> String | (order) | `show(${1:o})$0`",
+    "then(first, next) | Function | pub fn then(first: Order, next: fn() -> Order) -> Order | (order) | `then(${1:first}, ${2:next})$0`"
+  ]
+}
+
+== src/main.cheby:8:18 apply reverse
+{
+  "item": {
+    "detail": "pub fn reverse(o: Order) -> Order",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Swaps `Less` and `Greater`, and keeps `Equal`."
+    },
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "reverse",
+    "labelDetails": {
+      "description": "order",
+      "detail": "(o)"
+    },
+    "sortText": "20reverse",
+    "textEdit": {
+      "newText": "reverse(${1:o})$0",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1384",
+    "//! `let a = order::`: the `::` is in an `ERROR` outside the `let`.",
+    "",
+    "import std::order",
+    "",
+    "fn main() {",
+    "  let o = Less",
+    "  let a = order::reverse(o)",
+    "  //             ^ completion",
+    "  //             ^ apply reverse",
+    "  assert a == o",
+    "}",
+    ""
+  ]
+}

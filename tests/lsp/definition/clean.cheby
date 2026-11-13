@@ -1,0 +1,36 @@
+// @decisions: D-1353, D-1369
+//! Go to definition on clean text: a field, a local, an operator, a
+//! module, a function of std, the name and the braces of `{q}` and a
+//! field in them. Also the declaration of a satisfying function and the
+//! type of a local.
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn add(a: Point, b: Point) -> Point {
+  //> 14:4 declaration
+  Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn show(p: Point) -> String {
+  "({p.x}, {p.y})"
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  //              ^ definition
+  let q = p + p
+  //      ^ definition
+  //        ^ definition
+  //      ^ typeDefinition
+  io::println("{q} {q.x}")
+  //> 30:3 definition
+  //   ^ definition
+  //           ^ definition
+  //            ^ definition
+  //                  ^ definition
+}

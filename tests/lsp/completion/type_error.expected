@@ -1,0 +1,94 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 12
+        },
+        "start": {
+          "character": 19,
+          "line": 12
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 16,
+                "line": 12
+              },
+              "start": {
+                "character": 13,
+                "line": 12
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:22 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "count | Variable | Int",
+    "need(n) | Function | fn need(n: Int) -> Int | `need(${1:n})$0`",
+    "name | Variable | String",
+    "main() | Function | fn main() | `main()`",
+    "Equal | EnumMember | Equal\nof type Order",
+    "Err | EnumMember | Err(E)\nof type Result<T, E> | `Err($1)$0`",
+    "False | EnumMember | False\nof type Bool",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "Nil | Struct | Nil\nof type Nil",
+    "None | EnumMember | None\nof type Option<T>",
+    "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`",
+    "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
+    "True | EnumMember | True\nof type Bool",
+    "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",
+    "case { | Snippet | `case {\n  ${1:condition} => $2\n  _ => $0\n}`",
+    "fn | Keyword",
+    "panic | Keyword",
+    "todo | Keyword"
+  ]
+}
+
+== src/main.cheby:15:22 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "wrong | Variable | Int",
+    "count | Variable | Int",
+    "need(n) | Function | fn need(n: Int) -> Int | `need(${1:n})$0`",
+    "name | Variable | String",
+    "main() | Function | fn main() | `main()`",
+    "Equal | EnumMember | Equal\nof type Order",
+    "Err | EnumMember | Err(E)\nof type Result<T, E> | `Err($1)$0`",
+    "False | EnumMember | False\nof type Bool",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "Nil | Struct | Nil\nof type Nil",
+    "None | EnumMember | None\nof type Option<T>",
+    "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`",
+    "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
+    "True | EnumMember | True\nof type Bool",
+    "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",
+    "case { | Snippet | `case {\n  ${1:condition} => $2\n  _ => $0\n}`",
+    "fn | Keyword",
+    "panic | Keyword",
+    "todo | Keyword"
+  ]
+}

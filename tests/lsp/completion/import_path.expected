@@ -1,0 +1,140 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0014",
+      "message": "unexpected line break\nexpected a module name or `{`\nnote: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 4
+        },
+        "start": {
+          "character": 11,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:13 completion order list json io
+{
+  "count": 47,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "std::io",
+      "kind": 9,
+      "label": "io",
+      "sortText": "20io",
+      "textEdit": {
+        "newText": "io",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 4
+          },
+          "start": {
+            "character": 12,
+            "line": 4
+          }
+        }
+      }
+    },
+    {
+      "detail": "std::json",
+      "kind": 9,
+      "label": "json",
+      "sortText": "20json",
+      "textEdit": {
+        "newText": "json",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 4
+          },
+          "start": {
+            "character": 12,
+            "line": 4
+          }
+        }
+      }
+    },
+    {
+      "detail": "std::list",
+      "kind": 9,
+      "label": "list",
+      "sortText": "20list",
+      "textEdit": {
+        "newText": "list",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 4
+          },
+          "start": {
+            "character": 12,
+            "line": 4
+          }
+        }
+      }
+    },
+    {
+      "detail": "std::order",
+      "kind": 9,
+      "label": "order",
+      "sortText": "20order",
+      "textEdit": {
+        "newText": "order",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 4
+          },
+          "start": {
+            "character": 12,
+            "line": 4
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:5:13 apply order
+{
+  "item": {
+    "detail": "std::order",
+    "kind": 9,
+    "label": "order",
+    "sortText": "20order",
+    "textEdit": {
+      "newText": "order",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 4
+        },
+        "start": {
+          "character": 12,
+          "line": 4
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1372",
+    "//! `import std::`: the next segment of every std module, those the run did",
+    "//! not load from std's index.",
+    "",
+    "import std::order",
+    "//          ^ completion order list json io",
+    "//          ^ apply order",
+    "",
+    "fn main() {}",
+    ""
+  ]
+}

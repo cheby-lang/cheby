@@ -1,0 +1,30 @@
+//! A box of text that satisfies `Tagged`, and with it `Labeled` and
+//! `Show`.
+
+/// A box of text.
+type Box {
+  Box(String),
+}
+
+/// The box's tag.
+fn tag(b: Box) -> String {
+  let Box(text) = b
+  "#{text}"
+}
+
+/// The box's label, which `Box: Labeled` needs.
+fn label(b: Box) -> String {
+  let Box(text) = b
+  text
+}
+
+/// The box shown, which `Box: Show` needs.
+fn show(b: Box) -> String {
+  let Box(text) = b
+  "Box({text})"
+}
+
+/// A function that no interface needs and nothing calls.
+fn shout(b: Box) -> String {
+  label(b)
+}

@@ -1,0 +1,41 @@
+fn half_let() -> Int {
+  let y =
+  let z = 1
+  z
+}
+
+fn half_let_before_fn() -> Int {
+  let y =
+  fn g() { 1 }
+  g()
+}
+
+fn half_let_before_pub_fn() -> Int {
+  let y =
+  pub fn g() { 1 }
+  g()
+}
+
+fn half_let_before_use() -> Int {
+  let f =
+  use x <- f()
+  x
+}
+
+fn broken_value_then_guard(a: Bool) -> Int {
+  let y = (1 +
+  guard a else {
+    0
+  }
+  y
+}
+
+fn pipe_end(xs: List<Int>) -> List<Int> {
+  let ys = xs |>
+  let zs = ys
+  zs
+}
+
+fn after_all() -> Int {
+  1
+}

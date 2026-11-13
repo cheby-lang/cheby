@@ -17,11 +17,12 @@ Imports, item collection, scopes and name resolution (spec §7.5 to §7.7). Give
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `imports.rs` | Import requests, their targets and import cycles (§7.5, D-145)                                                   |
 | `items.rs`   | Item collection in `DefIndex` order, with duplicate names                                                        |
-| `scope.rs`   | `ModuleScope`: the module's items, its imports, the prelude and its hiding warning (D-146)                       |
+| `scope.rs`   | `ModuleScope`: the module's items, its imports, the prelude and its hiding warning (D-146), and `import_names`   |
 | `paths.rs`   | Resolving paths: unqualified names, `m::x` through an import, and visibility (`pub`, package, `priv`, `exposed`) |
 | `body.rs`    | Signatures and bodies: every path, binding and local, and the shadowing ban                                      |
 | `naming.rs`  | Case conventions and reserved words where names are bound or declared                                            |
 | `repl.rs`    | `SessionScope`: what a REPL entry sees of its session (§13.5, D-547)                                             |
+| `docs.rs`    | `item_docs` and `field_docs`: doc comments read from the module's tree (D-1385)                                  |
 
 ## Read more
 

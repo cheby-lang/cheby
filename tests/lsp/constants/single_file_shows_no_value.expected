@@ -1,0 +1,20 @@
+== diagnostics
+{}
+
+== single_file_shows_no_value.cheby:8:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst limit: Int\n```"
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 7
+    },
+    "start": {
+      "character": 6,
+      "line": 7
+    }
+  }
+}

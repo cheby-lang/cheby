@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-494, D-213
+//! A closure is checked against `Int` and fails (E0047). Its parameter's
+//! type stays unknown, so `p.name` would need an annotation, but that
+//! follows from the mismatch: a body with another error gets no E0057.
+
+pub type Person {
+  name: String,
+  age: Int,
+}
+
+pub fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+pub fn main() {
+  let n = add(1, fn(p) { p.name })
+  assert n == 1
+}

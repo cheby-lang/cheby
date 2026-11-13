@@ -102,6 +102,7 @@ impl BodyCx<'_> {
             let whole = Span::new(root_span.file, root_span.range.cover(field_span.range));
             value = self.read_field(value, field.text(), field_span, whole)?;
         }
+        self.note_expr(i.syntax().id(), value, value, None);
         Ok(value)
     }
 }

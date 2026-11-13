@@ -1,0 +1,23 @@
+// @decisions: D-1376
+// @settings: {"inlayHints": {"letTypes": false, "closureTypes": false}}
+// @requests: inlayHint
+//! Each row has its setting: with `let` and closure hints off, `use`
+//! binders and pipe stages still show, and the last stage shows too,
+//! since no `let` hint shows its type (D-1376).
+
+import std::list
+
+fn twice(f: fn(Int) -> Int) -> Int {
+  f(1)
+}
+
+fn sum() -> Int {
+  use n <- twice
+  let xs = list::map([n], fn(x) { x + 1 })
+    |> list::length
+  xs + n
+}
+
+fn main() {
+  assert sum() > 0
+}

@@ -1,0 +1,95 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `un` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:20 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "list::count(xs, predicate) | Function | pub fn count<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Int | (std::list) | `list::count(_, ${1:predicate})$0` | +1 edit",
+    "list::unique(xs) | Function | pub fn unique<T>(xs: List<T>) -> List<T> | (std::list) | +1 edit",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`"
+  ]
+}
+
+== src/main.cheby:8:20 apply list::unique
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::list\n\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        }
+      }
+    ],
+    "detail": "pub fn unique<T>(xs: List<T>) -> List<T>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns `xs` without repeated elements, keeping the first of each group of `==` elements.\nElements are hashed like `Set` elements (§3.13)."
+    },
+    "filterText": "unique",
+    "kind": 3,
+    "label": "list::unique",
+    "labelDetails": {
+      "description": "std::list",
+      "detail": "(xs)"
+    },
+    "sortText": "10list::unique",
+    "textEdit": {
+      "newText": "list::unique",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 17,
+          "line": 7
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1479",
+    "//! `xs |> un` in a file that does not import `std::list`: two characters",
+    "//! offer the functions whose name holds them, each with its import (type",
+    "//! error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let ys = xs |> list::unique",
+    "  //               ^ completion",
+    "  //               ^ apply list::unique",
+    "  assert ys == xs",
+    "}",
+    ""
+  ]
+}

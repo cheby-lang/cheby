@@ -60,15 +60,24 @@ pub(crate) struct Signature {
     pub ret: InferTy,
     /// The callee's name and declaration, for E0048.
     pub named: Option<(String, Option<Span>)>,
+    /// Its place in the fact log, when facts are recorded.
+    pub fact: Option<usize>,
 }
 
 impl Signature {
+    /// The signature of a callee in error. Whoever makes it has reported
+    /// the error or marked the body as errored, unless the callee only has
+    /// the error type of an earlier expression, so a call of it is a
+    /// [`BodyCx::propagated_error_expr`], or is an item whose signature
+    /// has the error, which marks the body as [`BodyCx::propagated`]
+    /// (D-494).
     const fn error() -> Self {
         Self {
             target: Target::Error,
             params: Vec::new(),
             ret: InferTy::ERROR,
             named: None,
+            fact: None,
         }
     }
 
@@ -103,7 +112,10 @@ impl ArgSrc<'_> {
 
 /// Expectations for the arguments of a call whose callee had an error:
 /// [`InferTy::ERROR`], which unifies with anything and gives a closure
-/// argument's parameters that type, so nothing more is reported.
+/// argument's parameters that type, so nothing more is reported (D-490).
+/// A call with the wrong number of arguments does not use them: its
+/// callee is known, so its arguments are checked against its parameters
+/// (D-1485).
 pub(crate) fn error_params(n: usize) -> Vec<InferTy> {
     vec![InferTy::ERROR; n]
 }
@@ -162,10 +174,11 @@ impl BodyCx<'_> {
             && let Res::Def(def) = self.path_res(path.syntax().id())?
             && let Some(sig) = self.def_callee(def, p, spans)?
         {
-            return Ok(sig);
+            return Ok(self.note_call(callee.syntax().id(), sig));
         }
         let id = self.check_expr(callee, None)?;
-        self.value_callee(id, arity, spans)
+        let sig = self.value_callee(id, arity, spans)?;
+        Ok(self.note_call(callee.syntax().id(), sig))
     }
 
     /// A path to an item as a callee: `None` for items that are called as
@@ -181,7 +194,9 @@ impl BodyCx<'_> {
         let types = &self.input.globals.types;
         Ok(Some(match &item.sig {
             ItemSig::Error => {
-                self.errored = true;
+                // Reported with that item's signature, not in this body
+                // (D-494).
+                self.propagated = true;
                 Signature::error()
             }
             ItemSig::Fn(sig) => {
@@ -204,6 +219,7 @@ impl BodyCx<'_> {
                         bounds,
                     },
                     named,
+                    fact: None,
                 }
             }
             ItemSig::Ctor(ctor) => match &ctor.fields {
@@ -223,6 +239,7 @@ impl BodyCx<'_> {
                         ret: ty,
                         target: Target::Ctor { def, args },
                         named,
+                        fact: None,
                     }
                 }
                 CtorFields::Unit => {
@@ -251,6 +268,7 @@ impl BodyCx<'_> {
                         self_ty,
                     },
                     named,
+                    fact: None,
                 }
             }
             _ => return Ok(None),
@@ -295,6 +313,7 @@ impl BodyCx<'_> {
             params,
             ret,
             named: None,
+            fact: None,
         })
     }
 
@@ -310,11 +329,35 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         if matches!(sig.target, Target::Error) {
             self.check_args(&error_params(args.len()), args, spans)?;
-            return self.error_expr(spans.call);
+            // The callee's error is counted where it arose (D-494).
+            return self.propagated_error_expr(spans.call);
         }
         if sig.params.len() != args.len() {
+            // Each argument with a parameter at its position is checked
+            // against it, an extra one against the error type; the call
+            // stays the error type, so its uses report nothing more
+            // (D-1485). A `use` callback is the last argument (§5.10), so
+            // it meets the last parameter, as the fact log pairs it.
             self.arity_error(sig.named.as_ref(), sig.params.len(), args.len(), spans);
-            self.check_args(&error_params(args.len()), args, spans)?;
+            let callback = matches!(args.last(), Some(ArgSrc::Callback(_)));
+            let ids = if callback && let Some((last, written)) = sig.params.split_last() {
+                let callback_at = args.len().saturating_sub(1);
+                self.check_args_with(
+                    args,
+                    spans,
+                    |n| {
+                        if n == callback_at {
+                            Some(last)
+                        } else {
+                            written.get(n)
+                        }
+                    },
+                    true,
+                )?
+            } else {
+                self.check_args_with(args, spans, |n| sig.params.get(n), true)?
+            };
+            self.note_call_args(sig.fact, ids, None, callback);
             return self.error_expr(spans.call);
         }
         self.expect_result(&sig, expected)?;
@@ -349,7 +392,18 @@ impl BodyCx<'_> {
         args: Vec<ExprId>,
         span: Span,
     ) -> Result<ExprId, Ice> {
-        let args: Box<[ExprId]> = args.into();
+        let fact = sig.fact;
+        let id = self.build_call_inner(sig, args.into(), span)?;
+        self.note_call_expr(fact, id);
+        Ok(id)
+    }
+
+    fn build_call_inner(
+        &mut self,
+        sig: Signature,
+        args: Box<[ExprId]>,
+        span: Span,
+    ) -> Result<ExprId, Ice> {
         match sig.target {
             Target::Fn {
                 def,
@@ -417,7 +471,7 @@ impl BodyCx<'_> {
                 sig.ret,
                 span,
             ),
-            Target::Error => self.error_expr(span),
+            Target::Error => self.propagated_error_expr(span),
         }
     }
 
@@ -431,6 +485,22 @@ impl BodyCx<'_> {
         args: &[ArgSrc<'_>],
         spans: CallSpans,
     ) -> Result<Vec<ExprId>, Ice> {
+        self.check_args_with(args, spans, |n| params.get(n), false)
+    }
+
+    /// [`Self::check_args`], with argument `n` checked against
+    /// `param_at(n)` when it has one, and on its own otherwise.
+    ///
+    /// After E0048 (`wrong_count`), an argument with no parameter is
+    /// checked against [`InferTy::ERROR`], so an extra closure's parameters
+    /// do not cascade into E0057 (D-1485, D-494).
+    fn check_args_with<'p>(
+        &mut self,
+        args: &[ArgSrc<'_>],
+        spans: CallSpans,
+        param_at: impl Fn(usize) -> Option<&'p InferTy>,
+        wrong_count: bool,
+    ) -> Result<Vec<ExprId>, Ice> {
         let mut out: Vec<Option<ExprId>> = vec![None; args.len()];
         let order = args
             .iter()
@@ -438,9 +508,13 @@ impl BodyCx<'_> {
             .filter(|(_, a)| !a.is_late())
             .chain(args.iter().enumerate().filter(|(_, a)| a.is_late()));
         for (n, &arg) in order {
-            let expected = params.get(n).map(|ty| {
+            let param = match param_at(n) {
+                None if wrong_count => Some(InferTy::ERROR),
+                param => param.cloned(),
+            };
+            let expected = param.map(|ty| {
                 Expected::new(
-                    ty.clone(),
+                    ty,
                     Some((
                         spans.callee,
                         "arguments to this function are incorrect".to_owned(),
@@ -484,11 +558,22 @@ impl BodyCx<'_> {
         let sig = self.callee(callee, written.len(), spans)?;
         if matches!(sig.target, Target::Error) {
             self.check_args(&error_params(others.len()), &others, spans)?;
-            return self.error_expr(spans.call);
+            return self.propagated_error_expr(spans.call);
         }
+        let other_params: Vec<InferTy> = sig
+            .params
+            .iter()
+            .enumerate()
+            .filter(|&(n, _)| n != hole)
+            .map(|(_, ty)| ty.clone())
+            .collect();
         if sig.params.len() != written.len() {
+            // As in a call (D-1485): the arguments with a parameter at their
+            // written position are the first of `others`, so they line up
+            // with `other_params`.
             self.arity_error(sig.named.as_ref(), sig.params.len(), written.len(), spans);
-            self.check_args(&error_params(others.len()), &others, spans)?;
+            let ids = self.check_args_with(&others, spans, |n| other_params.get(n), true)?;
+            self.note_call_args(sig.fact, ids, Some(hole), false);
             return self.error_expr(spans.call);
         }
         let hole_ty = sig
@@ -507,13 +592,6 @@ impl BodyCx<'_> {
                 let _ = self.infcx.unify(&sig.ret, &ret)?;
             }
         }
-        let other_params: Vec<InferTy> = sig
-            .params
-            .iter()
-            .enumerate()
-            .filter(|&(n, _)| n != hole)
-            .map(|(_, ty)| ty.clone())
-            .collect();
         let checked = self.check_args(&other_params, &others, spans)?;
         // Evaluate the callee and every argument once, in written order.
         let mut stmts = Vec::new();

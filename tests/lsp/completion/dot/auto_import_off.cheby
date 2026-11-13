@@ -1,0 +1,13 @@
+// @settings: {"completion": {"autoImport": false}}
+// @decisions: D-1486
+//! `xs.ma` with `completion.autoImport` off and `std::list` not imported:
+//! no function of the head type's module is offered, since each would
+//! need an import, so no item carries an edit (type error state).
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs.ma
+  //            ^ completion
+  //            ^ completion map
+  assert ys == xs
+}

@@ -1,0 +1,81 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected `,` or `)`, found `::`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 11
+        },
+        "start": {
+          "character": 17,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:20 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Equal | EnumMember | Equal\nof type Order",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "compare(a, b) | Function | pub fn compare(a: Order, b: Order) -> Order | (order) | `compare(${1:a}, ${2:b})$0`",
+    "reverse(o) | Function | pub fn reverse(o: Order) -> Order | (order) | `reverse(${1:o})$0`",
+    "show(o) | Function | pub fn show(o: Order) -> String | (order) | `show(${1:o})$0`",
+    "then(first, next) | Function | pub fn then(first: Order, next: fn() -> Order) -> Order | (order) | `then(${1:first}, ${2:next})$0`"
+  ]
+}
+
+== src/main.cheby:12:20 apply Greater
+{
+  "item": {
+    "detail": "Greater\nof type Order",
+    "documentation": {
+      "kind": "markdown",
+      "value": "The built-in `Order`, the result of every `compare` function: reversing\nand chaining comparisons, and the order and text of `Order` itself.\n\n`Order`, `Less`, `Equal` and `Greater` are builtin items whose home\nmodule is this one (D-447, D-353)."
+    },
+    "kind": 20,
+    "label": "Greater",
+    "sortText": "20Greater",
+    "textEdit": {
+      "newText": "Greater",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 11
+        },
+        "start": {
+          "character": 19,
+          "line": 11
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1384",
+    "//! `g(order::)`: the `::` is in an `ERROR` inside the argument list.",
+    "",
+    "import std::order",
+    "",
+    "fn g(o: Order) -> Order {",
+    "  o",
+    "}",
+    "",
+    "fn main() {",
+    "  let o = Less",
+    "  let a = g(order::Greater)",
+    "  //               ^ completion",
+    "  //               ^ apply Greater",
+    "  assert a == o",
+    "}",
+    ""
+  ]
+}

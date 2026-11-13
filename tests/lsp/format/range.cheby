@@ -1,0 +1,11 @@
+// @decisions: D-1399
+// @requests: formatting
+//! Range formatting keeps only the hunks that touch the range's lines.
+
+fn main() {
+  let a = [1,2]
+  //      ^~~~~ rangeFormatting
+  let b = [3,4]
+  assert a == [1, 2]
+  assert b == [3, 4]
+}

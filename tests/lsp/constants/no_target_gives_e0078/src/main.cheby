@@ -1,0 +1,13 @@
+// @decisions: D-1489
+// @steps: idle
+//! An `Int` outside the JS range in a package that targets `native` and
+//! `js`, with `analysis.target` unset. The constants child checks every
+//! target of the package, as `cheby check` does, so E0078 is published
+//! (D-1489, D-540). `target_native_skips_e0078` sets the target.
+
+const big: Int = 9_007_199_254_740_991 * 2
+//    ^ hover
+
+fn main() {
+  assert big > 0
+}

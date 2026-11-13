@@ -1,0 +1,150 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused parameter `d`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_d`",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 3
+        },
+        "start": {
+          "character": 8,
+          "line": 3
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find type `Durat` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 3
+        },
+        "start": {
+          "character": 11,
+          "line": 3
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:4:17 completion duration::Duration
+{
+  "count": 22,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::duration\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 3
+            },
+            "start": {
+              "character": 0,
+              "line": 3
+            }
+          }
+        }
+      ],
+      "detail": "pub type Duration",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A span of time, possibly negative, with a resolution of one\nnanosecond (D-650). A negative span has negative seconds and\nnon-negative nanoseconds."
+      },
+      "filterText": "Duration",
+      "kind": 13,
+      "label": "duration::Duration",
+      "labelDetails": {
+        "description": "std::duration"
+      },
+      "sortText": "60duration::Duration",
+      "textEdit": {
+        "newText": "duration::Duration",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 3
+          },
+          "start": {
+            "character": 11,
+            "line": 3
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:4:17 apply duration::Duration
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::duration\n\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 3
+          },
+          "start": {
+            "character": 0,
+            "line": 3
+          }
+        }
+      }
+    ],
+    "detail": "pub type Duration",
+    "documentation": {
+      "kind": "markdown",
+      "value": "A span of time, possibly negative, with a resolution of one\nnanosecond (D-650). A negative span has negative seconds and\nnon-negative nanoseconds."
+    },
+    "filterText": "Duration",
+    "kind": 13,
+    "label": "duration::Duration",
+    "labelDetails": {
+      "description": "std::duration"
+    },
+    "sortText": "60duration::Duration",
+    "textEdit": {
+      "newText": "duration::Duration",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 3
+        },
+        "start": {
+          "character": 11,
+          "line": 3
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1395",
+    "//! A type from a module the file does not import.",
+    "",
+    "import std::duration",
+    "",
+    "fn wait(d: duration::Duration) -> Int {",
+    "  //            ^ completion duration::Duration",
+    "  //            ^ apply duration::Duration",
+    "  1",
+    "}",
+    "",
+    "fn main() {",
+    "  assert 1 == 1",
+    "}",
+    ""
+  ]
+}

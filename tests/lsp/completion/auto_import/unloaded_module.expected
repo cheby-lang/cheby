@@ -1,0 +1,151 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `text`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_text`",
+      "range": {
+        "end": {
+          "character": 10,
+          "line": 5
+        },
+        "start": {
+          "character": 6,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `url_enc` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 20,
+          "line": 5
+        },
+        "start": {
+          "character": 13,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:21 completion base64::url_encode
+{
+  "count": 18,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::base64\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 4
+            },
+            "start": {
+              "character": 0,
+              "line": 4
+            }
+          }
+        }
+      ],
+      "detail": "pub fn url_encode(data: bytes::Bytes) -> String",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Encodes `data` with the URL-safe alphabet, where `-` and `_` stand for\n`+` and `/`, and with no padding (RFC 4648 §5)."
+      },
+      "filterText": "url_encode",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "base64::url_encode",
+      "labelDetails": {
+        "description": "std::base64",
+        "detail": "(data)"
+      },
+      "sortText": "60base64::url_encode",
+      "textEdit": {
+        "newText": "base64::url_encode(${1:data})$0",
+        "range": {
+          "end": {
+            "character": 20,
+            "line": 5
+          },
+          "start": {
+            "character": 13,
+            "line": 5
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:6:21 apply base64::url_encode
+{
+  "item": {
+    "additionalTextEdits": [
+      {
+        "newText": "import std::base64\n\n",
+        "range": {
+          "end": {
+            "character": 0,
+            "line": 4
+          },
+          "start": {
+            "character": 0,
+            "line": 4
+          }
+        }
+      }
+    ],
+    "detail": "pub fn url_encode(data: bytes::Bytes) -> String",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Encodes `data` with the URL-safe alphabet, where `-` and `_` stand for\n`+` and `/`, and with no padding (RFC 4648 §5)."
+    },
+    "filterText": "url_encode",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "base64::url_encode",
+    "labelDetails": {
+      "description": "std::base64",
+      "detail": "(data)"
+    },
+    "sortText": "60base64::url_encode",
+    "textEdit": {
+      "newText": "base64::url_encode(${1:data})$0",
+      "range": {
+        "end": {
+          "character": 20,
+          "line": 5
+        },
+        "start": {
+          "character": 13,
+          "line": 5
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1372, D-1395",
+    "//! `url_enc`: `std::base64` is not loaded by this file's run, so its item",
+    "//! comes from std's index.",
+    "",
+    "import std::base64",
+    "",
+    "fn main() {",
+    "  let text = base64::url_encode(data)",
+    "  //                ^ completion base64::url_encode",
+    "  //                ^ apply base64::url_encode",
+    "}",
+    ""
+  ]
+}

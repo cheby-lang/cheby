@@ -1,0 +1,10 @@
+// @decisions: D-1413
+//! A std constant shows its initializer as written, and never "not
+//! evaluated yet", since no child evaluates std (S-20).
+
+import std::int
+
+fn main() {
+  assert int::max_safe > 0
+  //          ^ hover
+}

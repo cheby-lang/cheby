@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-494, D-051, D-213
+//! Name resolution reports `n` bound twice (E0044). The body has that
+//! error, so `p.name` gets no E0057 (D-494).
+
+pub type Person {
+  name: String,
+  age: Int,
+}
+
+pub fn main() {
+  let n = 1
+  let n = 2
+  let name_of = fn(p) { p.name }
+  assert name_of(Person { name: "Ada", age: n }) == "Ada"
+}

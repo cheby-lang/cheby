@@ -20,7 +20,8 @@ The shared vocabulary of every phase after syntax: dense ids, interned names, cl
 | `name.rs`      | `Name`, `Interner` and `sym`: interned identifiers                                                       |
 | `ids.rs`       | `PackageId`, `ModuleId`, `DefId` and the `ModuleTable`                                                   |
 | `def.rs`       | `DefKind`, `Namespace` and `Vis`                                                                         |
-| `ty.rs`        | `Ty`, `TyKind`, generics and the per-process `TyInterner`, with `display`                                |
+| `ty.rs`        | `Ty`, `TyKind`, generics, the per-process `TyInterner`, `display`, `ImportNames` and `missing_imports`   |
+| `sigprint.rs`  | `item_signature` and `SigOpts`: how an item reads, for hover and docs (D-1384)                           |
 | `iface.rs`     | `ModuleInterface` and the item signatures it holds                                                       |
 | `hash.rs`      | The canonical encoding, `interface_hash` and `encoded_order`                                             |
 | `decode.rs`    | `decode_interface` and `apply_spans`: the encoding decoded (D-953)                                       |

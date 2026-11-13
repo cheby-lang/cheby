@@ -1,0 +1,25 @@
+// @decisions: D-173, D-1545, D-1548
+//! After `|>`, a path through an interface completes one segment at a
+//! time. `io::So` offers `Source` and `Sink` written `Source::`, then
+//! `io::Source::` offers its function in the pipe form, the hole at the
+//! first `Self`, as `read_bytes(_, …)`. `Show::show`, of one parameter,
+//! is written bare. Before a turbofish nothing is offered, since an
+//! interface's function takes no type arguments (type error state).
+
+import std::io
+import std::ops
+
+fn ready<S: io::Source>(src: S) -> Bool {
+  let a = src |> io::So
+  //                   ^ completion Source Sink
+  let b = src |> io::Source::re
+  //                           ^ completion read_bytes
+  let o = 1 |> ops::Compare::c
+  //                          ^ completion compare
+  let t = 1 |> Show::sh::<Int>
+  //                   ^ completion
+  let u = 1 |> Show::sh
+  //                   ^ completion show
+  //                   ^ apply show
+  a == b && o == t && u == "1"
+}

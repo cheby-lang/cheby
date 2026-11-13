@@ -1,0 +1,34 @@
+error[E0048]: this function takes 2 arguments but 1 argument was supplied
+  --> tests/ui/05-expressions/calls/argument_count_wrong_argument.cheby:12:16
+   |
+7  | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+12 |   let one = add("1")
+   |                ^^^^^ expected 2 arguments
+
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/calls/argument_count_wrong_argument.cheby:12:17
+   |
+12 |   let one = add("1")
+   |             --- ^^^ expected `Int`, found `String`
+   |             |
+   |             arguments to this function are incorrect
+
+error[E0048]: this function takes 2 arguments but 3 arguments were supplied
+  --> tests/ui/05-expressions/calls/argument_count_wrong_argument.cheby:13:18
+   |
+7  | pub fn add(a: Int, b: Int) -> Int {
+   |        --- `add` is declared here
+...
+13 |   let three = add(1, "2", 3)
+   |                  ^^^^^^^^^^^ expected 2 arguments
+
+error[E0047]: mismatched types
+  --> tests/ui/05-expressions/calls/argument_count_wrong_argument.cheby:13:22
+   |
+13 |   let three = add(1, "2", 3)
+   |               ---    ^^^ expected `Int`, found `String`
+   |               |
+   |               arguments to this function are incorrect
+

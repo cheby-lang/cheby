@@ -1,0 +1,11 @@
+// @decisions: D-071, D-048
+//! `Duration`'s structure is hidden from other packages, so its fields
+//! are not offered, while its module's functions are.
+
+import std::duration
+
+fn main() {
+  let d = duration::seconds(1)
+  let n = d.
+  //        ^ completion seconds nanoseconds to_seconds
+}

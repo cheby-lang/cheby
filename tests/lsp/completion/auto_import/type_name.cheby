@@ -1,0 +1,12 @@
+// @decisions: D-1395
+//! A type from a module the file does not import.
+
+fn wait(d: Durat) -> Int {
+  //            ^ completion duration::Duration
+  //            ^ apply duration::Duration
+  1
+}
+
+fn main() {
+  assert 1 == 1
+}

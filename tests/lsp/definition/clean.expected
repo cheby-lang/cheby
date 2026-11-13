@@ -1,0 +1,372 @@
+== diagnostics
+{}
+
+== src/main.cheby:14:4 declaration
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 6,
+        "line": 13
+      },
+      "start": {
+        "character": 3,
+        "line": 13
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 28,
+        "line": 9
+      },
+      "start": {
+        "character": 2,
+        "line": 9
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 8,
+        "line": 9
+      },
+      "start": {
+        "character": 5,
+        "line": 9
+      }
+    },
+    "targetUri": "<std>/std/ops.cheby"
+  }
+]
+
+== src/main.cheby:24:19 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 19,
+        "line": 23
+      },
+      "start": {
+        "character": 18,
+        "line": 23
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 8,
+        "line": 9
+      },
+      "start": {
+        "character": 2,
+        "line": 9
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 3,
+        "line": 9
+      },
+      "start": {
+        "character": 2,
+        "line": 9
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:26:11 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 11,
+        "line": 25
+      },
+      "start": {
+        "character": 10,
+        "line": 25
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 7,
+        "line": 23
+      },
+      "start": {
+        "character": 6,
+        "line": 23
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 23
+      },
+      "start": {
+        "character": 6,
+        "line": 23
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:26:13 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 13,
+        "line": 25
+      },
+      "start": {
+        "character": 12,
+        "line": 25
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 16
+      },
+      "start": {
+        "character": 0,
+        "line": 13
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 6,
+        "line": 13
+      },
+      "start": {
+        "character": 3,
+        "line": 13
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:26:11 typeDefinition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 11,
+        "line": 25
+      },
+      "start": {
+        "character": 10,
+        "line": 25
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 11
+      },
+      "start": {
+        "character": 0,
+        "line": 8
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 10,
+        "line": 8
+      },
+      "start": {
+        "character": 5,
+        "line": 8
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:30:3 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 4,
+        "line": 29
+      },
+      "start": {
+        "character": 2,
+        "line": 29
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 0,
+        "line": 0
+      },
+      "start": {
+        "character": 0,
+        "line": 0
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 0,
+        "line": 0
+      },
+      "start": {
+        "character": 0,
+        "line": 0
+      }
+    },
+    "targetUri": "<std>/std/io.cheby"
+  }
+]
+
+== src/main.cheby:30:8 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 13,
+        "line": 29
+      },
+      "start": {
+        "character": 6,
+        "line": 29
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 28,
+        "line": 119
+      },
+      "start": {
+        "character": 0,
+        "line": 116
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 14,
+        "line": 119
+      },
+      "start": {
+        "character": 7,
+        "line": 119
+      }
+    },
+    "targetUri": "<std>/std/io.cheby"
+  }
+]
+
+== src/main.cheby:30:16 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 18,
+        "line": 29
+      },
+      "start": {
+        "character": 15,
+        "line": 29
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 20
+      },
+      "start": {
+        "character": 0,
+        "line": 18
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 18
+      },
+      "start": {
+        "character": 3,
+        "line": 18
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:30:17 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 17,
+        "line": 29
+      },
+      "start": {
+        "character": 16,
+        "line": 29
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 7,
+        "line": 25
+      },
+      "start": {
+        "character": 6,
+        "line": 25
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 25
+      },
+      "start": {
+        "character": 6,
+        "line": 25
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:30:23 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 23,
+        "line": 29
+      },
+      "start": {
+        "character": 22,
+        "line": 29
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 8,
+        "line": 9
+      },
+      "start": {
+        "character": 2,
+        "line": 9
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 3,
+        "line": 9
+      },
+      "start": {
+        "character": 2,
+        "line": 9
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]

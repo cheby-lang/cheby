@@ -161,6 +161,12 @@ pub(crate) struct Built {
     /// The text of `--reuse-report` (D-717, [`crate::reuse_report`]),
     /// when the build was asked for it.
     pub reuse_report: Option<String>,
+    /// For [`Roots::Constants`], the modules that each reachable
+    /// constant's initializer reaches, as D-538's seed hashes them (D-593),
+    /// its own module included, sorted; empty for the other roots. The
+    /// language server's child reports them, so a value counts as current
+    /// only while those modules are unchanged (D-1510).
+    pub const_modules: BTreeMap<DefId, Vec<ModuleId>>,
 }
 
 /// The MIR options of a build, read from the environment once per build:
@@ -373,6 +379,7 @@ pub(crate) fn build_scoped(
                 jit: Jit::new().map_err(jit_ice)?,
                 rc_ops,
                 reuse_report,
+                const_modules: lowered.reach.const_modules(),
             }),
             Err(diagnostics) => Err(diagnostics),
         });
@@ -474,10 +481,16 @@ pub(crate) fn build_scoped(
             }
         }
     }
+    let const_modules = if check {
+        lowered.reach.const_modules()
+    } else {
+        BTreeMap::new()
+    };
     Ok(Ok(Built {
         jit,
         rc_ops,
         reuse_report,
+        const_modules,
     }))
 }
 

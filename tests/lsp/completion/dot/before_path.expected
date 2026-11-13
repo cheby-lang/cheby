@@ -1,0 +1,85 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a line break or `}`, found `::`",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 12
+        },
+        "start": {
+          "character": 15,
+          "line": 12
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "message": "expected a line break or `}`, found `::`",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 16
+        },
+        "start": {
+          "character": 15,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:16 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:15:16 completion length
+{
+  "count": 49,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn length<T>(xs: List<T>) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the number of elements in `xs` (D-301)."
+      },
+      "filterText": ".length",
+      "kind": 3,
+      "label": "length",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs)"
+      },
+      "sortText": "10length",
+      "textEdit": {
+        "newText": " |> list::length",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 14
+          },
+          "start": {
+            "character": 12,
+            "line": 14
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:17:16 completion
+{
+  "isIncomplete": false,
+  "items": []
+}

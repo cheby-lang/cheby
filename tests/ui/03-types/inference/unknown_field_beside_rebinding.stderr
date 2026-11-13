@@ -1,0 +1,18 @@
+warning[W0002]: unused binding `n`
+  --> tests/ui/03-types/inference/unknown_field_beside_rebinding.cheby:12:7
+   |
+12 |   let n = 1
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_n`
+
+error[E0044]: `n` is already bound
+  --> tests/ui/03-types/inference/unknown_field_beside_rebinding.cheby:13:7
+   |
+12 |   let n = 1
+   |       - first bound here
+13 |   let n = 2
+   |       ^ bound again here
+   |
+   = help: give this binding a new name, such as `n_2`; names cannot be shadowed (§5.2.3)
+

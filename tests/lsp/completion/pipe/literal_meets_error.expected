@@ -1,0 +1,72 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `sh` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 21,
+          "line": 7
+        },
+        "start": {
+          "character": 19,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:22 completion int::show
+{
+  "count": 4,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::int\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 5
+            },
+            "start": {
+              "character": 0,
+              "line": 5
+            }
+          }
+        }
+      ],
+      "detail": "pub fn show(n: Int) -> String",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns `n` in decimal. It makes `Int` satisfy `Show`."
+      },
+      "filterText": "show",
+      "kind": 3,
+      "label": "int::show",
+      "labelDetails": {
+        "description": "std::int",
+        "detail": "(n)"
+      },
+      "sortText": "10int::show",
+      "textEdit": {
+        "newText": "int::show",
+        "range": {
+          "end": {
+            "character": 21,
+            "line": 7
+          },
+          "start": {
+            "character": 19,
+            "line": 7
+          }
+        }
+      }
+    }
+  ]
+}

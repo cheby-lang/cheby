@@ -1,0 +1,10 @@
+// @decisions: D-1479, D-1487
+//! `xs |> ` with no partial word, in a file that does not import
+//! `std::list`: no function that needs an import is offered, and the list
+//! is incomplete (grammar error state).
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs |> 
+  //             ^ completion list::map list::length
+}

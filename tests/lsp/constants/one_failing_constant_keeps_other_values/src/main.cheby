@@ -1,0 +1,19 @@
+// @decisions: D-1413
+// @steps: idle, save next, idle
+//! Three constants evaluate. A save makes one of them panic: E0075 marks
+//! that one failed, and the others keep their values from the last
+//! evaluation, marked stale (S-20).
+
+import app::values
+
+const doubled: Int = values::base * 2
+
+const ratio: Int = 100 / divisor()
+
+fn divisor() -> Int {
+  4
+}
+
+fn main() {
+  assert doubled + ratio > 0
+}

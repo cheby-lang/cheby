@@ -1,0 +1,22 @@
+// @decisions: D-1353, D-1376
+// @requests: inlayHint
+//! Destructuring binders: a hint after each name, and no edit, since a
+//! pattern holds no type (`features.md` §7.1).
+
+type Point {
+  x: Int,
+  y: Float,
+}
+
+fn main() {
+  let (a, b) = (1, "two")
+  let Point { x, y: why } = Point { x: a, y: 1.5 }
+  let assert [first, ..rest] = [x, 2]
+  let (_skip, kept) as both = (b, why)
+  let guard Some(value) = Some(first) else {
+    Nil
+  }
+  let typed: (Int, Int) = (value, 1)
+  let (c, d): (Int, Int) = typed
+  assert rest == [] && kept == 1.5 && both == ("two", 1.5) && c + d == 2
+}

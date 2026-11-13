@@ -1,0 +1,16 @@
+// @decisions: D-1497, D-1501, D-1504
+// @steps: idle, save broken, idle, edit dirty, save other, idle
+//! A save that leaves a type error in `util` on disk starts no run. An
+//! unsaved edit of `util` that leaves it broken, then a save of this
+//! file: the report is unclean only through the `util` buffer, but the
+//! saved text of `util` is still the broken one, so the mark stays while
+//! the file is open with unsaved edits (D-1504), and hover on a new
+//! constant there still says that the saved files have errors (D-1501).
+
+import app::util
+
+const limit: Int = 20
+
+fn main() {
+  assert limit > util::base
+}

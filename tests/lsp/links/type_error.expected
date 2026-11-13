@@ -1,0 +1,74 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 8
+        },
+        "start": {
+          "character": 2,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 7
+              },
+              "start": {
+                "character": 15,
+                "line": 7
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby documentLink
+[
+  {
+    "range": {
+      "end": {
+        "character": 18,
+        "line": 4
+      },
+      "start": {
+        "character": 7,
+        "line": 4
+      }
+    },
+    "target": "src/util.cheby",
+    "tooltip": "links::util"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 14,
+        "line": 5
+      },
+      "start": {
+        "character": 7,
+        "line": 5
+      }
+    },
+    "target": "<std>/std/io.cheby",
+    "tooltip": "std::io"
+  }
+]
+
+== src/util.cheby documentLink
+[]

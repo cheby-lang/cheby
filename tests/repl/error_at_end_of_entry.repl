@@ -1,0 +1,77 @@
+// @decisions: D-1541, D-1533, D-1528, D-1527, D-1520, D-1513, D-605, D-078
+> 1 + // later
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:1>:1:4
+  |
+1 | 1 + // later
+  |    ^
+
+> 1 +
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:2>:1:4
+  |
+1 | 1 +
+  |    ^
+
+> 1 + /* c */
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:3>:1:4
+  |
+1 | 1 + /* c */
+  |    ^
+
+error[E0004]: block comments are not supported
+ --> <repl:3>:1:5
+  |
+1 | 1 + /* c */
+  |     ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 1 + /// d
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:4>:1:4
+  |
+1 | 1 + /// d
+  |    ^
+
+> 1 + /* a
+error[E0013]: expected an expression, found the end of the entry
+ --> <repl:5>:1:4
+  |
+1 | 1 + /* a
+  |    ^
+
+error[E0004]: block comments are not supported
+ --> <repl:5>:1:5
+  |
+1 | 1 + /* a
+  |     ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> 1 /* x
+error[E0004]: block comments are not supported
+ --> <repl:6>:1:3
+  |
+1 | 1 /* x
+  |   ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> let y = [1] /* z
+error[E0004]: block comments are not supported
+ --> <repl:7>:1:13
+  |
+1 | let y = [1] /* z
+  |             ^^ block comment starts here
+  |
+  = help: start each line of the comment with `//` (D-078)
+
+> const c: Int
+error[E0013]: expected `=`, found the end of the entry
+ --> <repl:8>:1:13
+  |
+1 | const c: Int
+  |             ^
+

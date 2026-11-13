@@ -1006,3 +1006,35 @@ fn accessors_never_panic_on_fragments() {
         touch_everything(&parse(&text));
     }
 }
+
+#[test]
+fn doc_text_drops_one_leading_space() {
+    let text = "/// One.\n///\n///   Two.\n///Three.\n/// ```\n/// x \n/// ```\nfn f() {}\n";
+    let parse = parse(text);
+    let Some(item) = parse.source_file().items().next() else {
+        panic!("no item in {text}");
+    };
+    assert_eq!(
+        doc_text(item.doc_comments()),
+        "One.\n\n  Two.\nThree.\n```\nx \n```"
+    );
+}
+
+#[test]
+fn doc_text_of_nothing_is_empty() {
+    let parse = parse("fn f() {}\n");
+    let Some(item) = parse.source_file().items().next() else {
+        panic!("no item");
+    };
+    assert_eq!(doc_text(item.doc_comments()), "");
+    assert_eq!(module_doc_text(parse.source_file().module_docs()), "");
+}
+
+#[test]
+fn module_doc_text_joins_its_lines() {
+    let parse = parse("//! One.\n//!\n//!  Two.\r\n\nfn f() {}\n");
+    assert_eq!(
+        module_doc_text(parse.source_file().module_docs()),
+        "One.\n\n Two."
+    );
+}

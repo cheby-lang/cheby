@@ -1,0 +1,57 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0075",
+      "message": "evaluating the constant `ratio` panicked\nits initializer panicked\nnote: panicked at src/main.cheby:11:20: division by zero",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 10
+        },
+        "start": {
+          "character": 6,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst a: Int\n```\n\n---\n\nNot evaluated: the last evaluation failed or was cut short (see `cheby/status`).\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 7,
+      "line": 7
+    },
+    "start": {
+      "character": 6,
+      "line": 7
+    }
+  }
+}
+
+== src/main.cheby:11:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst ratio: Int\n```\n\n---\n\nEvaluation failed, see `E0075`.\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 10
+    },
+    "start": {
+      "character": 6,
+      "line": 10
+    }
+  }
+}

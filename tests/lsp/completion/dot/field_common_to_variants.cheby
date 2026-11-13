@@ -1,0 +1,22 @@
+// @decisions: D-071, D-1394
+//! A field after `.` is one every variant has with one type: `name`, not
+//! `radius` or `side`.
+
+pub type Shape {
+  Circle { name: String, radius: Float },
+  Square { name: String, side: Float },
+}
+
+fn area(shape: Shape) -> Float {
+  case shape {
+    Circle { radius, .. } => radius * radius * 3.14
+    Square { side, .. } => side * side
+  }
+}
+
+fn main() {
+  let s = Circle { name: "c", radius: 1.0 }
+  let n = s.
+  //        ^ completion
+  //        ^ apply name
+}

@@ -331,6 +331,65 @@ fn satisfying_functions_are_used_through_dictionaries() {
     assert_eq!(with_code(&b, "W0004"), Vec::<String>::new());
 }
 
+/// A `priv` type `Box` with `label`, `show` and `extra`, and an interface
+/// `Labeled: Show`, then `body`.
+fn labeled(body: &str) -> Build {
+    one(&format!(
+        "priv interface Labeled: Show {{\n  fn label(Self) -> String\n}}\n\n\
+         priv type Box {{\n  Box(String),\n}}\n\n\
+         priv fn label(b: Box) -> String {{\n  let Box(s) = b\n  s\n}}\n\n\
+         priv fn show(b: Box) -> String {{\n  let Box(s) = b\n  s\n}}\n\n\
+         priv fn extra(b: Box) -> String {{\n  label(b)\n}}\n\n{body}"
+    ))
+}
+
+#[test]
+fn an_interface_call_uses_the_functions_of_embedded_interfaces() {
+    // `Box: Labeled` needs `show`, so a call of `label` through `Labeled`
+    // uses it, in every form of the call (D-1552). `extra` still warns.
+    for call in [
+        "Labeled::label(Box(\"a\"))",
+        "Box(\"a\") |> Labeled::label",
+        "let g = fn(b: Box) { Labeled::label(b) }\n  g(Box(\"a\"))",
+        "[Box(\"a\")] |> list_map(_, Labeled::label) |> first",
+    ] {
+        let b = labeled(&format!(
+            "priv fn list_map(xs: List<Box>, g: fn(Box) -> String) -> List<String> {{\n  \
+             case xs {{\n    [] => []\n    [x, ..rest] => [g(x), ..list_map(rest, g)]\n  }}\n}}\n\n\
+             priv fn first(xs: List<String>) -> String {{\n  \
+             case xs {{\n    [] => \"\"\n    [x, ..] => x\n  }}\n}}\n\n\
+             pub fn f() -> String {{\n  {call}\n}}\n"
+        ));
+        assert_eq!(errors(&b), Vec::<String>::new(), "{call}: {}", b.rendered());
+        let mut want =
+            vec!["the `priv` function `extra` is never used [\"never used in this module\"]"];
+        if !call.contains("list_map") {
+            want.push("the `priv` function `first` is never used [\"never used in this module\"]");
+            want.push(
+                "the `priv` function `list_map` is never used [\"never used in this module\"]",
+            );
+        }
+        want.sort_unstable();
+        assert_eq!(with_code(&b, "W0004"), want, "{call}");
+    }
+}
+
+#[test]
+fn a_direct_call_uses_no_dictionary() {
+    // `label(b)` names the function, not `Labeled`, so it uses neither the
+    // interface nor `show` (D-516, D-1552).
+    let b = labeled("pub fn f() -> String {\n  label(Box(\"a\"))\n}\n");
+    assert_eq!(errors(&b), Vec::<String>::new(), "{}", b.rendered());
+    assert_eq!(
+        with_code(&b, "W0004"),
+        [
+            "the `priv` function `extra` is never used [\"never used in this module\"]",
+            "the `priv` function `show` is never used [\"never used in this module\"]",
+            "the `priv` interface `Labeled` is never used [\"never used in this module\"]",
+        ]
+    );
+}
+
 #[test]
 fn package_and_pub_items_are_not_module_warnings() {
     let b = one(

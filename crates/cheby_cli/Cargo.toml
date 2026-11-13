@@ -61,5 +61,11 @@ name = "repl"
 path = "../../tests/repl_harness/main.rs"
 harness = false
 
+# The language server over stdio, with goldens under tests/lsp/ (D-1352).
+[[test]]
+name = "lsp"
+path = "../../tests/lsp_harness/main.rs"
+harness = false
+
 [lints]
 workspace = true

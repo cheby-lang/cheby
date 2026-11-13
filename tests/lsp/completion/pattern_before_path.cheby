@@ -1,0 +1,24 @@
+// @decisions: D-1525, D-1530
+//! `js::Int(n)` in an arm of a `case` on a `json::Value`: where `::`
+//! follows the word, no constructor written through a module path is
+//! offered, so `json::Int` cannot write `json::Int::Int(n)`. Only the
+//! modules are, as a pattern's path starts with one, so not `_` either.
+//! With no `::` after the word, the constructors are offered (grammar
+//! error state).
+
+import std::json
+
+fn size(v: json::Value) -> Int {
+  case v {
+    js::Int(n) => n
+    //^ completion json json::Int _
+    _ => 0
+  }
+}
+
+fn other(v: json::Value) -> Int {
+  case v {
+    js
+    //^ completion json::Int
+  }
+}

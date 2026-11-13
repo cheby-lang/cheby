@@ -1,0 +1,5 @@
+//! A module with a type error.
+
+pub fn answer() -> Int {
+  "forty-two"
+}

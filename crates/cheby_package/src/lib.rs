@@ -5,6 +5,8 @@
 //!   `E0036` diagnostics with a snippet of the manifest.
 //! - [`discover`] maps the files under `src/` to module paths (B2), and
 //!   reports invalid file and directory names as `E0037`.
+//!   [`module_file`] maps one file the other way, without a walk, for
+//!   the language server's unsaved buffers.
 //! - [`graph`] orders modules by their imports and finds import cycles
 //!   (B3, D-145).
 //!
@@ -19,7 +21,9 @@ mod names;
 
 use std::fmt;
 
-pub use discover::{EXTENSION, ModuleFile, ModulePath, ROOT_FILE, SOURCE_DIR, discover};
+pub use discover::{
+    EXTENSION, ModuleFile, ModulePath, ROOT_FILE, SOURCE_DIR, discover, module_file,
+};
 pub use manifest::{
     Dependency, GitReference, MANIFEST_FILE, Manifest, NativeTable, Target, Targets, Version,
 };

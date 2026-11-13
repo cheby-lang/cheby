@@ -1,0 +1,182 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "message": "`List<{integer}>` has no field `ma`\nunknown field",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 8
+        },
+        "start": {
+          "character": 14,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 8
+              },
+              "start": {
+                "character": 11,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<{integer}>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:17 completion map fold length
+{
+  "count": 49,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn fold<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> A",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Combines the elements from front to back, starting from `initial`."
+      },
+      "filterText": ".fold",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "fold",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs, initial, f)"
+      },
+      "sortText": "10fold",
+      "textEdit": {
+        "newText": " |> list::fold(_, ${1:initial}, ${2:f})$0",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 13,
+            "line": 8
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn length<T>(xs: List<T>) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the number of elements in `xs` (D-301)."
+      },
+      "filterText": ".length",
+      "kind": 3,
+      "label": "length",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs)"
+      },
+      "sortText": "10length",
+      "textEdit": {
+        "newText": " |> list::length",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 13,
+            "line": 8
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the results of calling `f` on each element, in order."
+      },
+      "filterText": ".map",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "map",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs, f)"
+      },
+      "sortText": "10map",
+      "textEdit": {
+        "newText": " |> list::map(_, ${1:f})$0",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 13,
+            "line": 8
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:9:17 apply map
+{
+  "item": {
+    "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the results of calling `f` on each element, in order."
+    },
+    "filterText": ".map",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "map",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs, f)"
+    },
+    "sortText": "10map",
+    "textEdit": {
+      "newText": " |> list::map(_, ${1:f})$0",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 8
+        },
+        "start": {
+          "character": 13,
+          "line": 8
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394, D-244, D-245",
+    "//! `xs.ma` on a `List`, with `std::list` imported: the pipe form replaces",
+    "//! only `.ma`, with the hole at the list's parameter (type error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let ys = xs |> list::map(_, f)",
+    "  //            ^ completion map fold length",
+    "  //            ^ apply map",
+    "  assert ys == xs",
+    "}",
+    ""
+  ]
+}

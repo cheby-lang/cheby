@@ -1,0 +1,44 @@
+// @decisions: D-1515, D-1524, D-1376
+// @settings: {"inlayHints": {"parameterNames": true, "letTypes": false}}
+// @requests: inlayHint
+//! With `inlayHints.parameterNames` on, each literal argument of a call to
+//! a function with named parameters shows the name of the parameter it
+//! fills, as a hint of kind `parameter` with no padding: a number, a
+//! string and a unit constructor. A variable, a constructor call, a call
+//! through a function value and the `_` hole show none (D-1515). An
+//! interpolated string counts as a string, a parameter named `_width`
+//! shows `_width: `, and a local function's call shows none (D-1524).
+
+import std::list
+
+type Figure {
+  Circle(Float),
+  Dot,
+}
+
+fn label(text: String, width: Int, bold: Bool, shape: Figure) -> String {
+  case bold, shape {
+    True, Dot => "{text} {width}"
+    _, _ => text
+  }
+}
+
+fn pad(text: String, _width: Int) -> String {
+  text
+}
+
+fn main() {
+  let width = 3
+  let show = label
+  let a = label("hi", -2, True, Dot)
+  let b = label("w", width, False, Circle(1.0))
+  let c = show("x", 1, True, Dot)
+  fn twice(word: String) -> String {
+    "{word}{word}"
+  }
+  let d = twice("hey")
+  let e = pad("{d}!", 2)
+  let xs = [1, 2]
+    |> list::take(_, 1)
+  assert a != b && c != a && d != e && xs != []
+}

@@ -1,0 +1,3 @@
+//! A module that a save breaks.
+
+pub const base: Int = 2

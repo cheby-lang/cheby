@@ -1,0 +1,10 @@
+// @requests: documentSymbol
+//! A file that does not parse still gets the items its tree holds.
+
+fn first() -> Int {
+  1
+}
+
+fn main() {
+  let pair = (1,
+}

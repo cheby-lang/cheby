@@ -1,0 +1,66 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 13
+        },
+        "start": {
+          "character": 0,
+          "line": 13
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 11
+              },
+              "start": {
+                "character": 6,
+                "line": 11
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:8 completion
+{
+  "isIncomplete": true,
+  "items": [
+    "count | Variable | Int",
+    "need(n, label) | Function | fn need(n: Int, label: String) -> Int | `need(${1:n}, ${2:label})$0`",
+    "name | Variable | String",
+    "main() | Function | fn main() | `main()`",
+    "Equal | EnumMember | Equal\nof type Order",
+    "Err | EnumMember | Err(E)\nof type Result<T, E> | `Err($1)$0`",
+    "False | EnumMember | False\nof type Bool",
+    "Greater | EnumMember | Greater\nof type Order",
+    "Less | EnumMember | Less\nof type Order",
+    "Nil | Struct | Nil\nof type Nil",
+    "None | EnumMember | None\nof type Option<T>",
+    "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`",
+    "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
+    "True | EnumMember | True\nof type Bool",
+    "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",
+    "case { | Snippet | `case {\n  ${1:condition} => $2\n  _ => $0\n}`",
+    "fn | Keyword",
+    "panic | Keyword",
+    "todo | Keyword"
+  ]
+}

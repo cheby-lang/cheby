@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-1485, D-490
+//! A call to a function whose signature has an error reports nothing
+//! more, even with the wrong number of arguments of the wrong types
+//! (§5.5).
+
+pub fn count(_text: List) -> Int {
+  1
+}
+
+pub fn main() {
+  let one = count(1, 2)
+  let none = count()
+  assert one == none
+}

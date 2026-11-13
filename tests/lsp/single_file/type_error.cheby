@@ -1,0 +1,11 @@
+// @decisions: D-1371
+// @package: none
+//! A file outside every package gets single-file mode: its type error is published.
+
+fn answer() -> Int {
+  "forty-two"
+}
+
+fn main() {
+  assert answer() == 42
+}

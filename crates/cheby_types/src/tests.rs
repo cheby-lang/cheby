@@ -5,9 +5,15 @@
 //! items and the end of a body.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use cheby_diag::{Diagnostic, SourceMap};
-use cheby_iface::{DefId, ItemSig, Ty, TyKind, builtin};
+use cheby_iface::{
+    DefId, DepView, Globals, InterfaceSet, ItemSig, ModuleInfo, ModuleTable, PackageId, Ty, TyKind,
+    builtin,
+};
+use cheby_package::ModulePath;
+use cheby_resolve::{ResolveInput, StdCatalog, resolve_module};
 
 use crate::test_support::quiet::{build, build_package, build_with_std};
 use crate::test_support::{Build, has_syntax_errors};
@@ -439,6 +445,56 @@ fn argument_counts_are_e0048() {
     assert_eq!(errors("fn main() {\n  let x = Some(1, 2)\n}\n"), ["E0048"]);
 }
 
+// @decisions: D-1485, D-490
+#[test]
+fn a_call_with_the_wrong_argument_count_checks_its_arguments() {
+    // A given argument against the parameter at its position, an extra one
+    // on its own, too many and too few.
+    for src in [
+        "import std::int\n\nfn f() {\n  let s = int::add(\"a\", 1, 2)\n}\n",
+        "import std::int\n\nfn f() {\n  let s = int::add(\"a\")\n}\n",
+        "import std::int\n\nfn f() {\n  let s = int::add(1, 2, \"a\" + 1)\n}\n",
+        "import std::list\n\nfn f(xs: List<Int>) {\n  let s = list::map(xs, fn(x) { x + \"a\" }, 1)\n}\n",
+        "fn f() {\n  let g = int_add\n  let s = g(\"a\")\n}\n\nfn int_add(a: Int, b: Int) -> Int {\n  a + b\n}\n",
+        "type P {\n  P(Int),\n}\n\nfn f() {\n  let p = P(\"a\", 1)\n}\n",
+        "fn run(n: Int, next: fn(Int) -> Int) -> Int {\n  next(n)\n}\n\nfn f() -> Int {\n  use k <- run(\"a\", 2)\n  k\n}\n",
+    ] {
+        let b = check(src);
+        let codes = b.codes();
+        assert!(codes.contains(&"E0048".to_owned()), "{}", b.rendered());
+        assert!(
+            codes.iter().any(|c| c == "E0047" || c == "E0050"),
+            "{}",
+            b.rendered()
+        );
+    }
+    // Right arguments: E0048 alone, and the call's own uses are silent.
+    for src in [
+        "import std::int\n\nfn f() -> String {\n  int::add(1, 2, 3)\n}\n",
+        "import std::int\n\nfn f() -> String {\n  let s = int::add(1)\n  s\n}\n",
+        "import std::list\n\nfn f(xs: List<Int>) {\n  let s = list::map(xs, fn(x) { x + 1 }, 1)\n}\n",
+        "import std::list\n\nfn f(xs: List<Int>) {\n  let s = list::map(xs)\n}\n",
+    ] {
+        let b = check(src);
+        assert_eq!(b.codes(), ["E0048"], "{}", b.rendered());
+    }
+    // A `use` callback meets the last parameter, what is written the
+    // others by position.
+    let b = check(
+        "fn run(n: Int, next: fn(Int) -> Int) -> Int {\n  next(n)\n}\n\nfn f() -> Int {\n  use k <- run()\n  string_of(k)\n}\n\nfn string_of(s: String) -> Int {\n  1\n}\n",
+    );
+    assert_eq!(b.codes(), ["E0047", "E0048"], "{}", b.rendered());
+    // A capture lines its arguments up with the written positions.
+    let b = check("import std::list\n\nfn f() {\n  let g = list::zip(_, [1], \"a\")\n}\n");
+    assert_eq!(b.codes(), ["E0048"], "{}", b.rendered());
+    let b = check("import std::int\n\nfn f() {\n  let g = int::add(\"a\", _, 1)\n}\n");
+    assert_eq!(b.codes(), ["E0047", "E0048"], "{}", b.rendered());
+    // An erroneous signature's calls stay silent (D-490).
+    let b =
+        check("fn count(text: List) -> Int {\n  1\n}\n\nfn f() {\n  let n = count(\"x\", 1)\n}\n");
+    assert_eq!(b.codes(), ["E0051"], "{}", b.rendered());
+}
+
 #[test]
 fn calling_a_value_that_is_not_a_function_is_e0049() {
     let b = build(&[(
@@ -834,6 +890,26 @@ fn literals_must_fit_their_type() {
     );
 }
 
+// @decisions: D-1484, D-133
+#[test]
+fn a_literal_keeps_its_type_when_it_meets_an_error() {
+    // `k` meets the error type of an unknown callee, and is still
+    // `{integer}`: a later use that needs a `String` is reported.
+    let b = check(
+        "import std::string\n\nfn f() -> String {\n  let k = 1\n  let _ = k |> sh\n  string::show(k)\n}\n",
+    );
+    assert_eq!(b.codes(), ["E0042", "E0047"], "{}", b.rendered());
+    // Without another use, or with a use that fits, nothing more.
+    for src in [
+        "fn f() {\n  let k = 1\n  let _ = k |> sh\n}\n",
+        "fn f() {\n  let k = 1.5\n  let _ = sh(k)\n}\n",
+        "fn f() -> U8 {\n  let k = 1\n  let _ = k |> sh\n  k\n}\n",
+    ] {
+        let b = check(src);
+        assert_eq!(b.codes(), ["E0042"], "{}", b.rendered());
+    }
+}
+
 #[test]
 fn unknown_types_need_annotations() {
     // The spec's `unused` (§3.12.4): `a + b` is resolved at the end, and
@@ -902,6 +978,79 @@ fn a_field_needs_a_known_type_at_that_point() {
         "{POINT}fn main() {{\n  let origin = Point {{ x: 0, y: 0 }}\n  let get_x = fn(p: Point) {{ p.x }}\n  let x = get_x(origin)\n}}\n"
     );
     clean(&src);
+}
+
+// @decisions: D-494, D-1485, D-213, D-234
+#[test]
+fn e0057_is_dropped_in_a_body_with_another_error() {
+    // An unknown field base beside a wrong argument, before or after it,
+    // and beside an argument count.
+    for (src, code) in [
+        (
+            "fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn f() -> Int {\n  add(1, fn(p) { p.x })\n}\n",
+            "E0047",
+        ),
+        (
+            "import std::list\n\nfn f(ps: List<Point>) -> Int {\n  list::fold(ps, fn(acc, p) { acc + p.x })\n}\n",
+            "E0048",
+        ),
+        (
+            "fn f() {\n  let get_x = fn(p) { p.x }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+        (
+            "fn f() {\n  let s: String = 1\n  let get_x = fn(p) { p.x }\n}\n",
+            "E0047",
+        ),
+        // A record update of an unknown base.
+        (
+            "fn f() {\n  let move = fn(p) { Point { ..p, x: 1 } }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+        // An unknown type at the end of the body, with an error found
+        // after it there (E0071), or by the resolver (E0042).
+        (
+            "fn f() {\n  let add = fn(a, b) { a + b }\n  let n: U8 = 300\n}\n",
+            "E0071",
+        ),
+        (
+            "fn f() {\n  let get_x = fn(p) { p.x }\n  let y = nowhere\n}\n",
+            "E0042",
+        ),
+        // A local function counts as part of the top-level body (D-234).
+        (
+            "fn f() {\n  fn get_x(p) {\n    p.x\n  }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+        // So does a test body.
+        (
+            "test \"t\" {\n  let get_x = fn(p) { p.x }\n  let s: String = 1\n}\n",
+            "E0047",
+        ),
+    ] {
+        let src = match src.split_once("\n\n") {
+            Some((import, rest)) if import.starts_with("import") => {
+                format!("{import}\n\n{POINT}{rest}")
+            }
+            _ => format!("{POINT}{src}"),
+        };
+        let b = check(&src);
+        assert_eq!(b.codes(), [code], "{src}\n{}", b.rendered());
+    }
+    // A field access that follows from the unknown one stays silent, so
+    // E0057 alone is kept.
+    let src = format!("{POINT}fn f() {{\n  let get_x = fn(p) {{ p.x.y }}\n}}\n");
+    assert_eq!(errors(&src), ["E0057"]);
+    let src = format!("{POINT}fn f() {{\n  let call = fn(p) {{ (p.x)(1) }}\n}}\n");
+    assert_eq!(errors(&src), ["E0057"]);
+    let src = format!("{POINT}fn f() {{\n  let move = fn(p) {{ Point {{ ..p, x: 1 }} }}\n}}\n");
+    assert_eq!(errors(&src), ["E0057"]);
+    // An error in another top-level body does not count.
+    let src = format!(
+        "{POINT}fn f() {{\n  let get_x = fn(p) {{ p.x }}\n}}\n\nfn g() {{\n  let s: String = 1\n}}\n"
+    );
+    let b = check(&src);
+    assert_eq!(b.codes(), ["E0047", "E0057"], "{}", b.rendered());
 }
 
 #[test]
@@ -1733,4 +1882,123 @@ fn long_list_patterns_check_on_default_worker_stacks() {
         "pub fn first_run(xs: List<Int>) -> Int {{\n  case xs {{\n    [{}] => 1\n    _ => 0\n  }}\n}}\n",
         elements.join(", ")
     ));
+}
+
+// ---- broken trees ----------------------------------------------------------
+
+/// A root module that phase A rejects, run past phase A as a tolerant run
+/// does: resolution, the interface and the bodies, over a tree with errors.
+/// An `Ice` at any step fails the test. Gives each checked function's name
+/// and the codes of the errors after phase A, sorted.
+fn tolerant(text: &str) -> (Vec<String>, Vec<String>) {
+    assert!(has_syntax_errors(text), "phase A accepts this:\n{text}");
+    let globals = Globals::new();
+    let mut modules = ModuleTable::new();
+    let mut sources = SourceMap::new();
+    let file = sources.add_file("src/main.cheby", text).unwrap();
+    let module = modules
+        .add(ModuleInfo {
+            path: ModulePath::root("app"),
+            package: PackageId::LOCAL,
+            file: Some(file),
+        })
+        .unwrap();
+    let (tree, _) = cheby_syntax::parse(file, Arc::from(text)).into_parts();
+    let set = InterfaceSet::new(builtin::interface(&globals));
+    let (resolved, mut diags) = resolve_module(&ResolveInput {
+        module,
+        package: PackageId::LOCAL,
+        tree: &tree,
+        imports: &[],
+        targets: &[],
+        deps: DepView::new(&set, &[]),
+        modules: &modules,
+        globals: &globals,
+        std: StdCatalog { known: &[] },
+        package_targets: cheby_package::Targets::ALL,
+    })
+    .unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));
+    let input = crate::TypesInput {
+        module,
+        package: PackageId::LOCAL,
+        tree: &tree,
+        resolved: &resolved,
+        deps: DepView::new(&set, &[]),
+        modules: &modules,
+        globals: &globals,
+    };
+    let (iface, more) =
+        crate::build_interface(&input).unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));
+    diags.extend(more);
+    let (thir, more) = crate::check_bodies_with(&input, &iface, crate::Tests::All)
+        .unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));
+    diags.extend(more);
+    let checked = thir
+        .fns
+        .iter()
+        .map(|f| {
+            let item = iface.item(f.def.index).unwrap();
+            globals.names.get(item.name).to_owned()
+        })
+        .collect();
+    let mut codes: Vec<String> = diags
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.code.to_string())
+        .collect();
+    codes.sort();
+    (checked, codes)
+}
+
+#[test]
+fn a_pattern_parameter_keeps_its_position_in_a_tolerant_run() {
+    // `check/mod.rs`: every parameter of the signature has a local (F §2.1).
+    let (checked, codes) = tolerant(
+        "fn sum((a, b): (Int, Int), c: Int) -> Int {\n  c\n}\n\nfn other() -> Int {\n  0\n}\n",
+    );
+    assert_eq!(checked, ["sum", "other"], "{codes:?}");
+    assert_eq!(codes, Vec::<String>::new());
+}
+
+#[test]
+fn an_as_pattern_without_a_name_is_a_silent_error_in_a_tolerant_run() {
+    // `check/pat.rs`: the resolver binds no local for `p as` (F §2.2).
+    for pattern in ["p as", "(p as)", "(p as, _)", "p as | q as", "0 as"] {
+        let (checked, codes) = tolerant(&format!(
+            "fn f(n: Int) -> Int {{\n  case n {{\n    {pattern} => 0\n    _ => 1\n  }}\n}}\n\n\
+             fn other() -> Int {{\n  0\n}}\n"
+        ));
+        assert_eq!(checked, ["other"], "{pattern}: {codes:?}");
+    }
+}
+
+#[test]
+fn the_left_of_an_unfinished_pipe_is_checked() {
+    let (checked, codes) = tolerant("fn f() {\n  (True && 1) |> \n}\n");
+    assert_eq!(codes, ["E0047"]);
+    assert_eq!(checked, Vec::<String>::new());
+}
+
+#[test]
+fn the_left_of_an_unfinished_operator_is_checked() {
+    let (checked, codes) = tolerant("fn f() -> Int {\n  (True && 1) + \n}\n");
+    assert_eq!(codes, ["E0047"]);
+    assert_eq!(checked, Vec::<String>::new());
+}
+
+#[test]
+fn the_rest_of_the_block_after_an_unfinished_use_is_checked() {
+    let (checked, codes) =
+        tolerant("fn f() -> Int {\n  use x <- \n  let y: Int = x\n  True && 1\n}\n");
+    assert_eq!(codes, ["E0047"]);
+    assert_eq!(checked, Vec::<String>::new());
+}
+
+#[test]
+fn an_unfinished_use_at_the_end_of_a_block_is_a_silent_error() {
+    for binders in ["x", "", "(a, b)", "x: Int, y"] {
+        let (checked, codes) = tolerant(&format!("fn f() -> Int {{\n  use {binders} <- \n}}\n"));
+        assert_eq!(codes, Vec::<String>::new(), "{binders}");
+        assert_eq!(checked, Vec::<String>::new(), "{binders}");
+    }
 }

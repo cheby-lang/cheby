@@ -54,7 +54,11 @@ impl BodyCx<'_> {
             Expr::Tuple(t) => self.tuple(t, expected)?,
             // No THIR node: the inner expression in its place.
             Expr::Paren(p) => match p.inner() {
-                Some(inner) => return self.check_expr(inner, expected),
+                Some(inner) => {
+                    let id = self.check_expr(inner, expected)?;
+                    self.note_expr(p.syntax().id(), id, id, expected);
+                    return Ok(id);
+                }
                 None => self.error_expr(span)?,
             },
             Expr::List(l) => self.list(l, expected)?,
@@ -67,7 +71,10 @@ impl BodyCx<'_> {
             // A `_` outside an argument list is E0025 (phase A).
             Expr::Hole(_) => self.error_expr(span)?,
         };
-        self.coerce_expr(id, expected)
+        let node = expr.syntax().id();
+        let out = self.coerce_expr(id, expected)?;
+        self.note_expr(node, id, out, expected);
+        Ok(out)
     }
 
     /// `expected` without a `dyn` type, which the caller converts to.
@@ -232,7 +239,9 @@ impl BodyCx<'_> {
     ) -> Result<ExprId, Ice> {
         let item = self.input.item(self.own, def)?;
         match (&item.sig, item.kind) {
-            (ItemSig::Error, _) => self.error_expr(span),
+            // Reported with that item's signature, not in this body
+            // (D-494).
+            (ItemSig::Error, _) => self.propagated_error_expr(span),
             (ItemSig::Fn(sig), _) => {
                 let params = item_params(&sig.generics);
                 let Some(inst) = self.instance(def, &params, type_args, span)? else {
@@ -592,6 +601,11 @@ impl BodyCx<'_> {
             BinOp::Rem => BinOpKind::Rem,
         };
         let (Some(lhs), Some(rhs)) = (b.lhs(), b.rhs()) else {
+            // Only a broken tree gets here: the operand that is there is
+            // still checked, for a tolerant run's facts.
+            if let Some(operand) = b.lhs().or_else(|| b.rhs()) {
+                self.check_expr(operand, None)?;
+            }
             return self.error_expr(span);
         };
         if matches!(op, BinOpKind::And | BinOpKind::Or) {

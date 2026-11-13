@@ -1,0 +1,15 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "10:12 type `: Int` edit 10:12-10:12 `: Int`",
+  "11:49 type `: List<Int>`",
+  "12:53 type `: List<Int>`",
+  "15:52 type `: List<String>`",
+  "17:12 type `: Int` edit 17:12-17:12 `: Int`",
+  "19:50 type `: List<Float>`",
+  "20:20 type `: Int`",
+  "21:12 type `: Int` edit 21:12-21:12 `: Int`",
+  "23:12 type `: List<Int>` edit 23:12-23:12 `: List<Int>`"
+]

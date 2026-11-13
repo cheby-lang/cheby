@@ -80,7 +80,8 @@ pub(crate) fn module_warnings(
     let mut out = Vec::new();
     out.extend(locals::unused_locals(input)?);
     if uses::thir_is_complete(input, thir) {
-        let thir_refs = uses::thir_refs(thir);
+        let mut thir_refs = uses::thir_refs(thir);
+        thir_refs.extend(uses::embedded_refs(input, own, thir, &paths)?);
         let hooks = uses::hook_refs(own, input.module);
         out.extend(imports::unused_imports(input, own, &paths, &thir_refs));
         let refs = items::item_refs(input, &paths, &thir_refs, &hooks);
@@ -120,7 +121,8 @@ pub fn package_warnings(modules: &[PackageModule<'_>]) -> Result<Vec<Diagnostic>
         .par_iter()
         .map(|m| {
             let paths = uses::path_uses(&m.input)?;
-            let thir_refs = uses::thir_refs(m.thir);
+            let mut thir_refs = uses::thir_refs(m.thir);
+            thir_refs.extend(uses::embedded_refs(&m.input, m.own, m.thir, &paths)?);
             let hooks = uses::hook_refs(m.own, m.input.module);
             Ok(items::item_refs(&m.input, &paths, &thir_refs, &hooks))
         })
@@ -217,7 +219,11 @@ pub fn module_refs(
     let paths = uses::path_uses(input)?;
     let thir_refs = uses::thir_refs(thir);
     let hooks = uses::hook_refs(own, input.module);
-    let refs = items::item_refs(input, &paths, &thir_refs, &hooks);
+    // The dictionaries that interface calls dropped are uses (D-1552), but
+    // not mentions: THIR never calls their functions there.
+    let mut implicit = thir_refs.clone();
+    implicit.extend(uses::embedded_refs(input, own, thir, &paths)?);
+    let refs = items::item_refs(input, &paths, &implicit, &hooks);
     Ok(ModuleRefs {
         mentions: thir_refs.iter().map(|r| (r.owner, r.def)).collect(),
         hooks: hooks.iter().map(|r| (r.owner, r.def)).collect(),

@@ -1,0 +1,67 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a field name, found `}`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 8
+        },
+        "start": {
+          "character": 12,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:14 apply length
+{
+  "item": {
+    "detail": "pub fn length<T>(xs: List<T>) -> Int",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the number of elements in `xs` (D-301)."
+    },
+    "filterText": ".length",
+    "kind": 3,
+    "label": "length",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs)"
+    },
+    "sortText": "10length",
+    "textEdit": {
+      "newText": " |> list::length",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 8
+        },
+        "start": {
+          "character": 12,
+          "line": 8
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1394, D-245",
+    "//! `xs.` at a line's end: a one-parameter function is written bare,",
+    "//! never `f(_)` (grammar error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let n = xs |> list::length",
+    "  //         ^ apply length",
+    "}",
+    ""
+  ]
+}

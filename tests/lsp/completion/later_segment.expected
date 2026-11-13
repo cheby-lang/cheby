@@ -1,0 +1,363 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `a`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_a`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 12
+        },
+        "start": {
+          "character": 6,
+          "line": 12
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `So` in module `std::io`\nnot found",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 12
+        },
+        "start": {
+          "character": 14,
+          "line": 12
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 12
+              },
+              "start": {
+                "character": 10,
+                "line": 12
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::io`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no type `So` in module `std::io`\nnot found",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 14
+        },
+        "start": {
+          "character": 14,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 14
+              },
+              "start": {
+                "character": 10,
+                "line": 14
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::io`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `c`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_c`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 17
+        },
+        "start": {
+          "character": 6,
+          "line": 17
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "`i` is not imported\nnote: every module must be imported before use (§7.5)",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 17
+        },
+        "start": {
+          "character": 10,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:17 completion Source Sink copy
+{
+  "count": 30,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub interface Sink {\n  fn write_bytes(Self, bytes::Bytes) -> Result<Nil, io::Error>\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A stream that bytes are written to. `write_bytes(sink, data)` writes all of `data`.\n`file::File`, `net::Connection` and the standard-stream handles satisfy it through their\nmodules' `write_bytes` (D-1062, D-1071)."
+      },
+      "kind": 8,
+      "label": "Sink",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20Sink",
+      "textEdit": {
+        "newText": "Sink::",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 12
+          },
+          "start": {
+            "character": 14,
+            "line": 12
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Source {\n  fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, io::Error>\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the\nstream, at most `limit` of them, or `Ok(None)` at its end. `file::File`, `net::Connection` and\nthe standard-stream handles satisfy it through their modules' `read_bytes` (D-1062, D-1071)."
+      },
+      "kind": 8,
+      "label": "Source",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20Source",
+      "textEdit": {
+        "newText": "Source::",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 12
+          },
+          "start": {
+            "character": 14,
+            "line": 12
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn copy<S: io::Source, K: io::Sink>(source: S, sink: K) -> Result<Int, io::Error>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Reads blocks of at most 64 KiB from `source` until its end, writes each one to `sink`, and\nreturns the number of bytes copied (D-1072). It stops at the first `Err` of either side and\nreturns it; what was written before stays written."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "copy",
+      "labelDetails": {
+        "description": "io",
+        "detail": "(source, sink)"
+      },
+      "sortText": "20copy",
+      "textEdit": {
+        "newText": "copy(${1:source}, ${2:sink})$0",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 12
+          },
+          "start": {
+            "character": 14,
+            "line": 12
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:15:17 completion Source Sink copy print
+{
+  "absent": [
+    "copy",
+    "print"
+  ],
+  "count": 2,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub interface Sink {\n  fn write_bytes(Self, bytes::Bytes) -> Result<Nil, io::Error>\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A stream that bytes are written to. `write_bytes(sink, data)` writes all of `data`.\n`file::File`, `net::Connection` and the standard-stream handles satisfy it through their\nmodules' `write_bytes` (D-1062, D-1071)."
+      },
+      "kind": 8,
+      "label": "Sink",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20Sink",
+      "textEdit": {
+        "newText": "Sink",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 14
+          },
+          "start": {
+            "character": 14,
+            "line": 14
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Source {\n  fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, io::Error>\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the\nstream, at most `limit` of them, or `Ok(None)` at its end. `file::File`, `net::Connection` and\nthe standard-stream handles satisfy it through their modules' `read_bytes` (D-1062, D-1071)."
+      },
+      "kind": 8,
+      "label": "Source",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20Source",
+      "textEdit": {
+        "newText": "Source",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 14
+          },
+          "start": {
+            "character": 14,
+            "line": 14
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:15:17 apply Source
+{
+  "item": {
+    "detail": "pub interface Source {\n  fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, io::Error>\n}",
+    "documentation": {
+      "kind": "markdown",
+      "value": "A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the\nstream, at most `limit` of them, or `Ok(None)` at its end. `file::File`, `net::Connection` and\nthe standard-stream handles satisfy it through their modules' `read_bytes` (D-1062, D-1071)."
+    },
+    "kind": 8,
+    "label": "Source",
+    "labelDetails": {
+      "description": "io"
+    },
+    "sortText": "20Source",
+    "textEdit": {
+      "newText": "Source",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 14
+        },
+        "start": {
+          "character": 14,
+          "line": 14
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-173, D-1538, D-1539, D-1548",
+    "//! `io::Source::read_bytes(src, 4)` completed a segment at a time. After",
+    "//! `io::`, the module's interfaces come with its functions, written",
+    "//! `Source::`, so the list of its functions opens next. Where a path's",
+    "//! `::` follows the segment, only the interfaces do, written `Source`, so",
+    "//! `io::So::read_bytes` offers `Source` and `Sink`, and no function.",
+    "//! Before the first `::`, two segments follow, so only the modules are",
+    "//! offered (type error state).",
+    "",
+    "import std::io",
+    "",
+    "fn ready<S: io::Source>(src: S) -> Bool {",
+    "  let a = io::So",
+    "  //            ^ completion Source Sink copy",
+    "  let b = io::Source::read_bytes(src, 4)",
+    "  //            ^ completion Source Sink copy print",
+    "  //            ^ apply Source",
+    "  let c = i::Source::read_bytes(src, 4)",
+    "  //       ^ completion io Show io::Source",
+    "  case b {",
+    "    Ok(_) => True",
+    "    Err(_) => False",
+    "  }",
+    "}",
+    ""
+  ]
+}
+
+== src/main.cheby:18:12 completion io Show io::Source
+{
+  "absent": [
+    "Show",
+    "io::Source"
+  ],
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "io",
+      "labelDetails": {
+        "description": "std::io"
+      },
+      "sortText": "30io",
+      "textEdit": {
+        "newText": "io",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 17
+          },
+          "start": {
+            "character": 10,
+            "line": 17
+          }
+        }
+      }
+    }
+  ]
+}

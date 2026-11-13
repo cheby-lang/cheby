@@ -1,0 +1,27 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a field name, found `}`",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 5
+        },
+        "start": {
+          "character": 17,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:19 completion
+{
+  "isIncomplete": false,
+  "items": []
+}

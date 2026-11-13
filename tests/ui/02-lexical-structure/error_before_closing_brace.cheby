@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1513, D-426
+//! A half-typed last line of a block is reported at the end of that
+//! line, not at the `}` that closes the block.
+
+fn main() {
+  let n: Int
+}

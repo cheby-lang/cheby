@@ -1,0 +1,16 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "33:17 parameter `text: `",
+  "33:23 parameter `width: `",
+  "33:27 parameter `bold: `",
+  "33:33 parameter `shape: `",
+  "34:17 parameter `text: `",
+  "34:29 parameter `bold: `",
+  "40:15 parameter `text: `",
+  "40:23 parameter `_width: `",
+  "42:22 parameter `count: `",
+  "42:24 type `: List<Int>`"
+]

@@ -1,0 +1,7 @@
+// @requests: formatting
+//! Lines with characters outside ASCII are replaced whole.
+
+fn main() {
+  let greeting   =   "héllo 🙂"
+  assert greeting == "héllo 🙂"
+}

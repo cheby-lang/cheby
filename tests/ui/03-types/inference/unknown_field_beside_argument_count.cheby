@@ -1,0 +1,21 @@
+// @mode: check-fail
+// @decisions: D-494, D-1485, D-213
+//! The initial value of `list::fold` is missing (E0048). The callback
+//! meets the parameter at its position, the initial value, so `p` stays
+//! unknown and `p.name` would need an annotation. That follows from the
+//! missing argument: a body with another error gets no E0057.
+
+import std::list
+
+pub type Person {
+  name: String,
+  age: Int,
+}
+
+pub fn names(ps: List<Person>) -> String {
+  list::fold(ps, fn(acc, p) { acc + p.name })
+}
+
+pub fn main() {
+  assert names([]) == ""
+}

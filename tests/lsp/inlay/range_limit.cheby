@@ -1,0 +1,16 @@
+// @decisions: D-1353
+//! Hints are limited to the request's range, ends included: a range on
+//! one line, an empty range at a hint and one beside it, and a range
+//! across lines (`features.md` §7.1).
+
+fn main() {
+  let a = [1]
+  let b = [a]
+  //  ^~~~~~~ inlayHint
+  //    ^ inlayHint
+  let c = [b]
+  //   ^ inlayHint
+  let d = [c]
+  assert d != []
+}
+//> 7:1-9:1 inlayHint

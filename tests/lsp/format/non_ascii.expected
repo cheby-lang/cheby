@@ -1,0 +1,19 @@
+== diagnostics
+{}
+
+== src/main.cheby formatting
+[
+  {
+    "newText": "  let greeting = \"héllo 🙂\"\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 5
+      },
+      "start": {
+        "character": 0,
+        "line": 4
+      }
+    }
+  }
+]

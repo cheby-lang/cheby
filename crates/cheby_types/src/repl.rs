@@ -4,11 +4,13 @@
 //! An entry is a module of its own (`<repl:N>`, plan §8.3). Its source is
 //! either declarations and imports ([`EntryShape::Decls`]), checked as a
 //! module, or statements ([`EntryShape::Body`]): the driver parses those
-//! inside the wrapper `test "<repl>" {` … `Nil }`, and [`ReplSession`]
-//! turns the checked test into the entry's body, which returns the tuple
-//! `(shown, b1, …, bk)`: the value of a final expression statement (`Nil`
-//! when there is none), then every name the entry's top-level `let` and
-//! `let assert` statements bind. Those names become session values: items
+//! inside the wrapper `test "<repl>" {` … `}`, which is checked as the body
+//! of a block that ends with them, not as a test (D-1535), and
+//! [`ReplSession`] turns the checked test into the entry's body, which
+//! returns the tuple `(shown, b1, …, bk)`: the block's value, that of a
+//! final expression statement, a `use` or a guard (`Nil` when there is
+//! none), then every name the entry's top-level `let` and `let assert`
+//! statements bind. Those names become session values: items
 //! appended to the entry's interface as constants ([`ReplBinding`]), whose
 //! slots the session fills after the entry ran (D-547).
 //!
@@ -51,6 +53,7 @@ use cheby_iface::{
 };
 use cheby_resolve::repl::{SessionBinding, SessionScope, keep_entry_diagnostic};
 use cheby_resolve::{ImportRequest, ImportTarget, Res, ResolveInput, ResolvedModule};
+use cheby_syntax::ast::{self, AstNode, TestDecl};
 use rustc_hash::FxHashMap;
 
 use crate::thir::{self, ExprId, ExprKind, Stmt};
@@ -64,7 +67,7 @@ pub const BODY_TEST_NAME: &str = "<repl>";
 pub enum EntryShape {
     /// Declarations and imports, parsed as a module.
     Decls,
-    /// Statements, parsed inside the wrapper `test "<repl>" {` … `Nil }`.
+    /// Statements, parsed inside the wrapper `test "<repl>" {` … `}`.
     /// The user's text starts at byte `shift` of the parsed file; spans
     /// there move to the same text at offset 0 of file `display`.
     Body { display: FileId, shift: u32 },
@@ -619,7 +622,13 @@ impl ReplSession {
         };
         let (mut iface, found) = build_interface(&types)?;
         diags.extend(found);
-        let (mut thir, found) = check_bodies_with(&types, &iface, Tests::All)?;
+        // A statements entry's wrapper is checked as a block, not as a
+        // test (D-1535).
+        let tests = match shape {
+            EntryShape::Body { .. } => Tests::ReplEntry,
+            EntryShape::Decls | EntryShape::Again { .. } => Tests::All,
+        };
+        let (mut thir, found) = check_bodies_with(&types, &iface, tests)?;
         diags.extend(found);
         let file = input.tree.file();
         diags.retain(|d| keep_entry_diagnostic(d, file));
@@ -628,7 +637,7 @@ impl ReplSession {
         // so these diagnostics are all that can explain a body that was
         // dropped (D-464).
         if !diags.iter().any(Diagnostic::is_error)
-            && let Some(ice) = dropped_body(&types, &thir, Tests::All)
+            && let Some(ice) = dropped_body(&types, &thir, tests)
         {
             return Err(ice);
         }
@@ -637,8 +646,7 @@ impl ReplSession {
             && !diags.iter().any(Diagnostic::is_error)
         {
             let made = make_body(&types, &mut iface, &mut thir)?;
-            // The bindings are used by later entries, and the final
-            // expression is shown, not discarded.
+            // The bindings are used by later entries.
             diags.retain(|d| !made.quiet(d));
             body = Some(made.body);
         } else if let EntryShape::Body { .. } = shape {
@@ -1416,28 +1424,29 @@ fn declaration_sources(input: &ResolveInput<'_>, resolved: &ResolvedModule) -> V
 /// What [`make_body`] made, with what its warnings must not report.
 struct MadeBody {
     body: ReplBody,
-    /// The spans of the bindings (W0002) and of the shown expression
-    /// (W0006).
+    /// The spans of the bindings (W0002).
     bindings: Vec<Span>,
-    shown: Option<Span>,
 }
 
 impl MadeBody {
     /// Whether `diag` is a warning the REPL's reading of the entry makes
-    /// wrong: an unused session value, or a shown `Result`.
+    /// wrong: an unused session value. A shown `Result` is the block's
+    /// value, not a statement, so it is never W0006 (D-605, D-1535).
     fn quiet(&self, diag: &Diagnostic) -> bool {
         let Some(span) = diag.primary_span() else {
             return false;
         };
-        (diag.code == codes::UNUSED_BINDING && self.bindings.contains(&span))
-            || (diag.code == codes::DISCARDED_RESULT && self.shown == Some(span))
+        diag.code == codes::UNUSED_BINDING && self.bindings.contains(&span)
     }
 }
 
-/// Turns the checked wrapper test of a statements entry into its body:
-/// the block's final expression statement becomes the first element of
-/// the tuple it returns, followed by the names its top-level `let`s bind,
-/// which are appended to the interface as session values.
+/// Turns the checked wrapper test of a statements entry into its body.
+/// The wrapper is checked as a block that ends with the entry's
+/// statements (D-1535), so its value is that of a final expression
+/// statement, a `use` or a guard, or `Nil`. That value becomes the first
+/// element of the tuple the body returns, unless its type is `Never`,
+/// followed by the names its top-level `let`s bind, which are appended to
+/// the interface as session values.
 fn make_body(
     input: &TypesInput<'_>,
     iface: &mut ModuleInterface,
@@ -1458,34 +1467,42 @@ fn make_body(
         }) => (stmts.to_vec(), *tail, *span),
         _ => return Err(Ice::new("a REPL entry's body is not a block")),
     };
-    let nil = tail.ok_or_else(|| Ice::new("a REPL entry's body without its `Nil`"))?;
     let mut stmts = stmts;
-    let mut shown = None;
-    let last_ty = match stmts.last() {
-        Some(&Stmt::Expr(last)) => Some(expr_ty(body, last)?),
+    // `:type` takes an expression, so a value that a `use` or a guard
+    // gives is not one (§13.5.3).
+    let last_ty = match tail {
+        Some(tail) if ends_with_expression(input, def.index)? => Some(expr_ty(body, tail)?),
         _ => None,
     };
-    if let Some(&Stmt::Expr(last)) = stmts.last()
-        && expr_ty(body, last)? != Ty::NEVER
-    {
-        shown = Some(last);
-        stmts.pop();
+    let mut shown = None;
+    if let Some(tail) = tail {
+        if expr_ty(body, tail)? == Ty::NEVER {
+            stmts.push(Stmt::Expr(tail));
+        } else {
+            shown = Some(tail);
+        }
     }
-    let shown_id = shown.unwrap_or(nil);
-    let shown_ty = expr_ty(body, shown_id)?;
-    let mut elems: Vec<ExprId> = vec![shown_id];
-    let bindings = bind_values(input, iface, body, &stmts, &mut elems)?;
-    if elems.len() < 2 {
-        // A fresh `Nil`: `shown_id` may be a `use` or a guard, which the
-        // tuple must not run twice (D-1344).
-        elems.push(body.exprs.push(thir::Expr {
+    let fresh_nil = |body: &mut thir::Body| {
+        body.exprs.push(thir::Expr {
             kind: ExprKind::Block {
                 stmts: Box::new([]),
                 tail: None,
             },
             ty: Ty::NIL,
             span,
-        })?);
+        })
+    };
+    let shown_id = match shown {
+        Some(id) => id,
+        None => fresh_nil(body)?,
+    };
+    let shown_ty = expr_ty(body, shown_id)?;
+    let mut elems: Vec<ExprId> = vec![shown_id];
+    let bindings = bind_values(input, iface, body, &stmts, &mut elems)?;
+    if elems.len() < 2 {
+        // A fresh `Nil`: `shown_id` may be a `use` or a guard, which the
+        // tuple must not run twice (D-1344).
+        elems.push(fresh_nil(body)?);
     }
     let tys = elems
         .iter()
@@ -1507,14 +1524,6 @@ fn make_body(
     };
     block_expr.ty = tuple_ty;
     body.ret = tuple_ty;
-    let shown_span = match shown {
-        Some(id) => Some(
-            body.expr(id)
-                .ok_or_else(|| Ice::new("a missing expression"))?
-                .span,
-        ),
-        None => None,
-    };
     iface.set_sig(
         def.index,
         ItemSig::Fn(FnSig {
@@ -1526,7 +1535,6 @@ fn make_body(
     )?;
     Ok(MadeBody {
         bindings: bindings.iter().map(|b| b.span).collect(),
-        shown: shown_span,
         body: ReplBody {
             def,
             shown: shown_ty,
@@ -1534,6 +1542,22 @@ fn make_body(
             last: last_ty,
         },
     })
+}
+
+/// Whether the last statement of the wrapper test `index` is an
+/// expression statement, not a `use`, a guard, a `let` or an `assert`.
+fn ends_with_expression(input: &TypesInput<'_>, index: DefIndex) -> Result<bool, Ice> {
+    let item = input
+        .resolved
+        .item(index)
+        .ok_or_else(|| Ice::new("a REPL entry's body is not an item"))?;
+    let block = input
+        .tree
+        .node(item.node)
+        .and_then(TestDecl::cast)
+        .and_then(TestDecl::body)
+        .ok_or_else(|| Ice::new("a REPL entry's body is not a test block"))?;
+    Ok(matches!(block.stmts().last(), Some(ast::Stmt::Expr(_))))
 }
 
 /// Appends a read of every name the top-level `let` and `let assert`
@@ -1794,6 +1818,7 @@ mod tests {
                 "interface ",
                 "const ",
                 "import ",
+                "test ",
             ]
             .iter()
             .any(|k| text.starts_with(k));
@@ -1801,7 +1826,7 @@ mod tests {
             let (file, parsed, shape) = if decls {
                 (display, text.to_owned(), EntryShape::Decls)
             } else {
-                let wrapped = format!("{PREFIX}{text}\nNil\n}}\n");
+                let wrapped = format!("{PREFIX}{text}\n}}\n");
                 let file = self
                     .b
                     .sources
@@ -1914,6 +1939,7 @@ mod tests {
                 own: Some(&entry.iface),
                 deps: &view,
                 generics: None,
+                imports: None,
             };
             let ty = entry.body.as_ref().unwrap().shown;
             // Named types of earlier entries need their interfaces.
@@ -2071,6 +2097,52 @@ mod tests {
             assert_eq!(s.repl.dependents(&changed).len(), 0);
             assert_eq!(s.repl.current(Namespace::Value, s.name("f")), Some(f));
         }
+    }
+
+    #[test]
+    fn a_statements_entry_is_checked_as_a_block() {
+        let mut s = Session::new(&[("", "")]);
+        // A guard ends its entry: the block it ends has the `else` block's
+        // type, and the rest is empty, so one E0047 at the guard, none at
+        // the wrapper and no E0073 (D-1535).
+        assert_eq!(
+            s.fails("guard False else {\n  1\n}"),
+            ["E0047 mismatched types at <repl:1>:1:1"]
+        );
+        assert_eq!(
+            s.labels,
+            [
+                "expected `{integer}`, found `Nil`",
+                "the block has the type of this `else` block"
+            ]
+        );
+        assert_eq!(
+            s.fails("let guard Some(x) = None::<Int> else {\n  \"no\"\n}"),
+            ["E0047 mismatched types at <repl:2>:1:1"]
+        );
+        // A `use` whose block's value is not `Nil` is shown, but it is not
+        // an expression for `:type` (§13.5.3).
+        s.ok("fn apply(f: fn(Int) -> Nil) -> Int {\n  f(1)\n  2\n}\n");
+        let used = s.ok("use _ <- apply");
+        assert_eq!(s.shown(&used), "Int");
+        assert_eq!(used.body.as_ref().unwrap().last, None);
+        // A value of type `Never` runs as a statement and shows nothing.
+        let never = s.ok("panic as \"no\"");
+        let body = never.body.as_ref().unwrap();
+        assert_eq!((body.shown, body.last), (Ty::NIL, Some(Ty::NEVER)));
+        // A shown `Result` is the block's value, never W0006.
+        let result = s.ok("Ok::<Int, String>(1)");
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let body = result.body.as_ref().unwrap();
+        assert_eq!(body.last, Some(body.shown));
+        // A `test` in a declarations entry is still a test (E0073).
+        assert_eq!(
+            s.fails("test \"t\" {\n  1\n}\n")
+                .iter()
+                .map(|e| e.split(' ').next().unwrap())
+                .collect::<Vec<_>>(),
+            ["E0073"]
+        );
     }
 
     #[test]

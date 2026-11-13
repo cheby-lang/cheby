@@ -1,0 +1,113 @@
+== diagnostics
+{}
+
+== src/main.cheby:12:4 declaration
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 14
+      },
+      "start": {
+        "character": 0,
+        "line": 10
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:19:14 declaration
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 17,
+        "line": 18
+      },
+      "start": {
+        "character": 13,
+        "line": 18
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 14
+      },
+      "start": {
+        "character": 0,
+        "line": 10
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:21:11 declaration
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 13,
+        "line": 20
+      },
+      "start": {
+        "character": 10,
+        "line": 20
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 14
+      },
+      "start": {
+        "character": 0,
+        "line": 10
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]

@@ -1,0 +1,66 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `{`\nexpected `}`\nnote: the `}` that closes it is indented differently from the line of the `{`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 14
+        },
+        "start": {
+          "character": 0,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 42,
+                "line": 11
+              },
+              "start": {
+                "character": 41,
+                "line": 11
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `{` is never closed"
+        },
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 12
+              },
+              "start": {
+                "character": 9,
+                "line": 12
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `{` may be the one missing its `}`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:11 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Circle | EnumMember | Circle { radius: Float }\nof type Shape | `Circle { radius }`",
+    "Rect | EnumMember | Rect { width: Float, height: Float }\nof type Shape | `Rect { width: _, height }`",
+    "Dot | EnumMember | Dot\nof type Shape",
+    "_ | Value"
+  ]
+}

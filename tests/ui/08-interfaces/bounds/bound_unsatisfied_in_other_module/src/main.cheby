@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-447, D-1136
+//! A call's type argument must satisfy the bound of a function declared in
+//! another module, here a bound on an interface of a third module. `Int`
+//! gets its functions from `std::int`, which has no `to_json` (§8.2, §8.4).
+//! The error makes `cheby check` check this module again on fresh
+//! interfaces, and `box` with it, since `box` read a decoded one (D-1136).
+
+import std::io
+import std::json
+import ui_test::box
+
+fn main() {
+  io::println(json::to_string(box::to_json(box::of(1))))
+}

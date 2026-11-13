@@ -63,6 +63,7 @@ use cheby_runtime::RunConfig;
 use cheby_runtime::entry::AtExit;
 use cheby_syntax::SyntaxTree;
 
+pub mod analysis;
 mod aot;
 mod backend;
 mod borrowing;
@@ -82,7 +83,7 @@ mod warm_keys;
 
 pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_package::Target;
-pub use cheby_package::{is_valid_name, suggest_name};
+pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
     TestResult, prepare_test, prepare_test_cached, test_std,
@@ -1321,6 +1322,8 @@ pub fn parse_file(
 
 #[cfg(test)]
 mod alone_tests;
+#[cfg(test)]
+mod analysis_tests;
 #[cfg(test)]
 mod aot_tests;
 #[cfg(test)]

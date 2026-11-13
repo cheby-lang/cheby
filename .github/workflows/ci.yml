@@ -1,7 +1,8 @@
 # CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
 #
-# - `test`: build, clippy and every test, including the conformance, UI and
-#   REPL harnesses, on every platform of D-074 and D-892. The macOS job
+# - `test`: build, clippy and every test, including the conformance, UI,
+#   REPL and language server (`--test lsp`, D-1352) harnesses, on every
+#   platform of D-074 and D-892. The macOS job
 #   runs them at `CHEBY_HARNESS_SCALE=5`, because the hosted macOS VMs
 #   stretch 10 ms waits to 30 to 90 ms, past the runtime's preemption
 #   bounds (D-872, D-892). M1 is judged on Linux and macOS (D-545).
@@ -15,7 +16,11 @@
 #   its constants with the JIT. So the harnesses ignore the UI run tests,
 #   the UI check tests whose golden has no front-end error, every
 #   conformance trial and the REPL suite, and the `cheby run` end-to-end
-#   tests are not built there.
+#   tests are not built there. The language server never runs generated
+#   code (D-1349), so its harness ignores only the trials that run
+#   `cheby check` on a package that may pass the front end, the
+#   `parity/examples/*` group, and the UI parity trials whose golden has no
+#   front-end error, as their check tests are.
 #   From M2 the rule extends to the runtime (D-714): `Runtime::new` returns
 #   `Unsupported` on Windows until M6, so the runtime's unit tests that
 #   switch stacks or run a `Runtime`, the blocking pool's tests and the

@@ -1,0 +1,219 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "`li` is not imported\nnote: every module must be imported before use (§7.5)",
+      "range": {
+        "end": {
+          "character": 24,
+          "line": 13
+        },
+        "start": {
+          "character": 22,
+          "line": 13
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find type `Opt` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 24,
+          "line": 17
+        },
+        "start": {
+          "character": 21,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:37 completion o Some `case`
+{
+  "count": 20,
+  "isIncomplete": true,
+  "items": [
+    {
+      "detail": "Option<Int>",
+      "kind": 6,
+      "label": "o",
+      "sortText": "000000o",
+      "textEdit": {
+        "newText": "o",
+        "range": {
+          "end": {
+            "character": 36,
+            "line": 9
+          },
+          "start": {
+            "character": 35,
+            "line": 9
+          }
+        }
+      }
+    },
+    {
+      "detail": "Some(T)\nof type Option<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Helpers for the built-in `Option` type (D-317): chaining, defaults,\ntests, lists of options and conversions.\n\n`Option`, `Some` and `None` are builtin items whose home module is this\none (D-447). Everything here is written in Cheby."
+      },
+      "insertTextFormat": 2,
+      "kind": 20,
+      "label": "Some",
+      "sortText": "00Some",
+      "textEdit": {
+        "newText": "Some($1)$0",
+        "range": {
+          "end": {
+            "character": 36,
+            "line": 9
+          },
+          "start": {
+            "character": 35,
+            "line": 9
+          }
+        }
+      }
+    },
+    {
+      "insertTextFormat": 2,
+      "insertTextMode": 2,
+      "kind": 15,
+      "label": "case",
+      "sortText": "50case",
+      "textEdit": {
+        "newText": "case ${1:subject} {\n  ${2:pattern} => $0\n}",
+        "range": {
+          "end": {
+            "character": 36,
+            "line": 9
+          },
+          "start": {
+            "character": 35,
+            "line": 9
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:14:25 completion list Show xs `case` head
+{
+  "absent": [
+    "xs",
+    "case",
+    "head"
+  ],
+  "count": 2,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "list",
+      "labelDetails": {
+        "description": "std::list"
+      },
+      "sortText": "30list",
+      "textEdit": {
+        "newText": "list",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 13
+          },
+          "start": {
+            "character": 22,
+            "line": 13
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 13
+          },
+          "start": {
+            "character": 22,
+            "line": 13
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:18:25 completion Option Int `case` xs
+{
+  "absent": [
+    "case",
+    "xs"
+  ],
+  "count": 22,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "type Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "The built-in `Int`, a signed 64-bit integer: constants, conversions,\nparsing and text, comparison, and checked, floored and wrapping arithmetic.\n\n`Int` itself is a builtin item whose home module is this one (D-447).\nThe functions on operators exist to be passed as values and to satisfy\n`Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg`."
+      },
+      "kind": 22,
+      "label": "Int",
+      "sortText": "40Int",
+      "textEdit": {
+        "newText": "Int",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 17
+          },
+          "start": {
+            "character": 21,
+            "line": 17
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub exposed type Option<T> {\n  Some(T),\n  None,\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Helpers for the built-in `Option` type (D-317): chaining, defaults,\ntests, lists of options and conversions.\n\n`Option`, `Some` and `None` are builtin items whose home module is this\none (D-447). Everything here is written in Cheby."
+      },
+      "kind": 13,
+      "label": "Option",
+      "sortText": "40Option",
+      "textEdit": {
+        "newText": "Option",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 17
+          },
+          "start": {
+            "character": 21,
+            "line": 17
+          }
+        }
+      }
+    }
+  ]
+}

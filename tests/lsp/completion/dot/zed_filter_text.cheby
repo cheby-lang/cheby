@@ -1,0 +1,12 @@
+// @decisions: D-1394
+// @clientInfo: Zed
+//! Zed filters on `filterText` against the word, so it is the name.
+
+import std::list
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs.ma
+  //            ^ completion map
+  assert ys == xs
+}

@@ -1,0 +1,26 @@
+// @decisions: D-1275, D-1353, D-1376
+// @requests: inlayHint
+//! Pipe stages: on a pipeline over several lines, a hint at the end of
+//! each line's last stage. The last stage is skipped when its `let`
+//! shows the same type (`features.md` §7.1).
+
+import std::list
+
+fn main() {
+  let total = [1, 2]
+    |> list::map(_, fn(x: Int) -> Int { x * 2 })
+    |> list::filter(_, fn(x: Int) -> Bool { x > 1 })
+    |> list::length
+  let count: Int = [1]
+    |> list::map(_, fn(x: Int) -> String { "{x}" })
+    |> list::length
+  let names = [1] |> list::map(_, fn(x: Int) -> String { "{x}" }) |> list::length
+  let _shown = [1, 2]
+    |> list::map(_, fn(_x: Int) -> Float { 1.5 })
+    |> list::length
+  let mixed = [3]
+    |> list::reverse |> list::length
+  let sizes = [[1], [2, 3]]
+    |> list::map(_, list::length)
+  assert total + count + names + mixed + _shown == list::length(sizes)
+}

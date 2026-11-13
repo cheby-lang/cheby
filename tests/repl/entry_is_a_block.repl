@@ -1,0 +1,73 @@
+// @decisions: D-1535, D-605, D-1344
+> import std::io
+> import std::list
+> import std::result
+> guard False else {
+.   1
+. }
+error[E0047]: mismatched types
+ --> <repl:4>:1:1
+  |
+1 |     guard False else {
+  |  ___^
+  | |  __________________-
+2 | | |   1
+3 | | | }
+  | | |_- the block has the type of this `else` block
+  | |___^ expected `{integer}`, found `Nil`
+
+> let guard Some(x) = None::<Int> else {
+.   "no"
+. }
+error[E0047]: mismatched types
+ --> <repl:5>:1:1
+  |
+1 |     let guard Some(x) = None::<Int> else {
+  |  ___^
+  | |  ______________________________________-
+2 | | |   "no"
+3 | | | }
+  | | |_- the block has the type of this `else` block
+  | |___^ expected `String`, found `Nil`
+
+> use x <- list::map([1, 2])
+warning[W0002]: unused binding `x`
+ --> <repl:6>:1:5
+  |
+1 | use x <- list::map([1, 2])
+  |     ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_x`
+
+[Nil, Nil] : List<Nil>
+> fn each(next: fn(Int) -> Nil) -> Int {
+.   io::println("called")
+.   next(1)
+.   2
+. }
+> use _ <- each
+called
+2 : Int
+> use _ <- list::each([1, 2])
+> use x <- result::try(Ok::<Int, String>(1))
+error[E0047]: mismatched types
+ --> <repl:10>:1:1
+  |
+1 | use x <- result::try(Ok::<Int, String>(1))
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<_, String>`, found `Nil`
+
+> use x <- result::map(Ok::<Int, String>(1))
+warning[W0002]: unused binding `x`
+ --> <repl:11>:1:5
+  |
+1 | use x <- result::map(Ok::<Int, String>(1))
+  |     ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_x`
+
+Ok(Nil) : Result<Nil, String>
+> guard True else {
+.   io::println("never")
+. }
+> 1 + 2
+3 : Int

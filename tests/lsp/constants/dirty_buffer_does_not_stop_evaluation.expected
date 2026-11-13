@@ -1,0 +1,38 @@
+== diagnostics
+{}
+
+== src/main.cheby:5:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst limit: Int = 30\n```\n\n---\n\nDefined in `app`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 4
+    },
+    "start": {
+      "character": 6,
+      "line": 4
+    }
+  }
+}
+
+== src/other.cheby:3:11 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub const base: Int\n```\n\n---\n\n`2` when last saved.\n\nDefined in `app::other`."
+  },
+  "range": {
+    "end": {
+      "character": 14,
+      "line": 2
+    },
+    "start": {
+      "character": 10,
+      "line": 2
+    }
+  }
+}

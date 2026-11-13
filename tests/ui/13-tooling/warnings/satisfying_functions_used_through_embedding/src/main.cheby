@@ -1,0 +1,22 @@
+// @mode: check-pass
+// @decisions: D-1552, D-516
+//! A call through an interface uses the satisfying functions of every
+//! interface it embeds, transitively, since the type must satisfy them
+//! all. Only `tag` is called here, yet `label` and `show` are used. A
+//! function that nothing uses still warns.
+
+import app::boxes::{Box}
+
+/// Names a value.
+interface Labeled: Show {
+  fn label(Self) -> String
+}
+
+/// Tags a value.
+interface Tagged: Labeled {
+  fn tag(Self) -> String
+}
+
+fn main() -> Nil {
+  assert Tagged::tag(Box("a")) == "#a"
+}

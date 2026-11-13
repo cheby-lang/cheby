@@ -1,0 +1,21 @@
+// @settings: {"completion": {"autoImport": false}}
+// @decisions: D-1486, D-1487, D-1521, D-1546
+//! `xs |> un` and `xs |> u` with `completion.autoImport` off and
+//! `std::list` not imported: no function that needs an import is offered,
+//! the head type's module included, so no item carries an edit. The list
+//! is complete at two characters. At one it is not, since the interfaces
+//! of the imported `std::io` come at the second (type error state).
+
+import std::io
+
+fn main() {
+  let xs = [1, 2, 3]
+  let same = fn(ys: List<Int>) { ys }
+  let ys = xs |> un
+  //               ^ completion
+  //               ^ completion list::unique
+  let zs = xs |> u
+  //              ^ completion list::unique
+  assert same(ys) == zs
+  io::println("done")
+}

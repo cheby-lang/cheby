@@ -1,0 +1,8 @@
+//! The unsaved buffer: the type error is fixed.
+
+const limit: Int = 20
+//    ^ hover
+
+fn main() {
+  assert limit > 0
+}

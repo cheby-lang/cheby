@@ -1,0 +1,13 @@
+// @decisions: D-1371, D-1491, D-1492
+// @package: none
+// @steps: idle
+//! A constant of a file outside every package. Single-file mode evaluates
+//! no constant, so hover shows no value line (D-1371, D-1491), and
+//! `cheby/idle` names the file as the session's root (D-1492).
+
+const limit: Int = 20
+//    ^ hover
+
+fn main() {
+  assert limit > 0
+}

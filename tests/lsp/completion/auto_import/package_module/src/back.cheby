@@ -1,0 +1,8 @@
+//! A module that imports the root.
+
+import shop
+
+/// Leads back to the root.
+pub fn with_backlog() -> Int {
+  1
+}

@@ -1,0 +1,10 @@
+// @decisions: D-1373
+//! A type error is published for the open file, with its code and range.
+
+fn answer() -> Int {
+  "forty-two"
+}
+
+fn main() {
+  assert answer() == 42
+}

@@ -1,0 +1,15 @@
+//! The saved text: `slow` now counts to two billion.
+
+const slow: Int = count_up(0, 2_000_000_000)
+//    ^ hover
+
+fn count_up(n: Int, limit: Int) -> Int {
+  case {
+    n >= limit => n
+    _ => count_up(n + 1, limit)
+  }
+}
+
+fn main() {
+  assert slow > 0
+}

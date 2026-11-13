@@ -1,0 +1,10 @@
+// @decisions: D-1487
+//! An expression with no partial word: nothing is imported yet, and the
+//! list is incomplete, so the client asks again as the word grows
+//! (grammar error state).
+
+fn main() {
+  let xs = ["a", "b"]
+  let pairs = 
+  //          ^ completion list::enumerate
+}

@@ -1,0 +1,99 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `Int`, found `Point`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 14
+        },
+        "start": {
+          "character": 15,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 14
+              },
+              "start": {
+                "character": 9,
+                "line": 14
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:16:7 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 15
+      },
+      "start": {
+        "character": 6,
+        "line": 15
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 10,
+        "line": 17
+      },
+      "start": {
+        "character": 9,
+        "line": 17
+      }
+    }
+  }
+]
+
+== src/main.cheby:18:17 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 14
+      },
+      "start": {
+        "character": 6,
+        "line": 14
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 17,
+        "line": 17
+      },
+      "start": {
+        "character": 16,
+        "line": 17
+      }
+    }
+  }
+]

@@ -1,0 +1,8 @@
+//! The edit: the constant no longer loops.
+
+const spin: Int = 7
+//    ^ hover
+
+fn main() {
+  assert spin > 0
+}

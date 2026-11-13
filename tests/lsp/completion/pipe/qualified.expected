@@ -1,0 +1,163 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a line break or `}`, found `::`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 9
+        },
+        "start": {
+          "character": 21,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:24 completion map length range new
+{
+  "absent": [
+    "new"
+  ],
+  "count": 52,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn length<T>(xs: List<T>) -> Int",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the number of elements in `xs` (D-301)."
+      },
+      "kind": 3,
+      "label": "length",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs)"
+      },
+      "sortText": "20length",
+      "textEdit": {
+        "newText": "length",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 9
+          },
+          "start": {
+            "character": 23,
+            "line": 9
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the results of calling `f` on each element, in order."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "map",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(xs, f)"
+      },
+      "sortText": "20map",
+      "textEdit": {
+        "newText": "map(_, ${1:f})$0",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 9
+          },
+          "start": {
+            "character": 23,
+            "line": 9
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn range(start: Int, end: Int) -> List<Int>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the integers from `start` up to but not including `end` (D-319)."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "range",
+      "labelDetails": {
+        "description": "list",
+        "detail": "(start, end)"
+      },
+      "sortText": "70range",
+      "textEdit": {
+        "newText": "range(_, ${1:end})$0",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 9
+          },
+          "start": {
+            "character": 23,
+            "line": 9
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:10:24 apply map
+{
+  "item": {
+    "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the results of calling `f` on each element, in order."
+    },
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "map",
+    "labelDetails": {
+      "description": "list",
+      "detail": "(xs, f)"
+    },
+    "sortText": "20map",
+    "textEdit": {
+      "newText": "map(_, ${1:f})$0",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 9
+        },
+        "start": {
+          "character": 23,
+          "line": 9
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-244, D-245",
+    "//! `xs |> list::`: only the function's part is written. A function that",
+    "//! does not accept the list stays at rank 70, with the hole first; one",
+    "//! with no parameter is left out (grammar error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2, 3]",
+    "  let ys = xs |> list::map(_, f)",
+    "  //                   ^ completion map length range new",
+    "  //                   ^ apply map",
+    "}",
+    ""
+  ]
+}

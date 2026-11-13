@@ -1,0 +1,12 @@
+//! The unsaved buffer: the type error has moved, and the file still
+//! does not check.
+
+pub const base: Int = 2
+
+pub const fresh: Int = 3
+//        ^ hover
+
+pub fn bad() -> Int {
+  let x: Int = 1
+  x + "no"
+}

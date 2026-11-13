@@ -1,0 +1,14 @@
+// @decisions: D-071
+//! `"{p.}"`: an interpolation holds a name, so only fields are offered.
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let s = "{p.}"
+  //          ^ completion
+  //          ^ apply y
+}

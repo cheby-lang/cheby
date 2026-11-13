@@ -1,0 +1,112 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 19
+        },
+        "start": {
+          "character": 0,
+          "line": 19
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 18
+              },
+              "start": {
+                "character": 13,
+                "line": 18
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:15:7 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 7,
+        "line": 14
+      },
+      "start": {
+        "character": 6,
+        "line": 14
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 11,
+        "line": 16
+      },
+      "start": {
+        "character": 10,
+        "line": 16
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 15,
+        "line": 16
+      },
+      "start": {
+        "character": 14,
+        "line": 16
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:17:13 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 6,
+        "line": 9
+      },
+      "start": {
+        "character": 3,
+        "line": 9
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 13,
+        "line": 16
+      },
+      "start": {
+        "character": 12,
+        "line": 16
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]

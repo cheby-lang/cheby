@@ -1,0 +1,261 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 36
+        },
+        "start": {
+          "character": 0,
+          "line": 36
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 35
+              },
+              "start": {
+                "character": 13,
+                "line": 35
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:22:10 prepareCallHierarchy
+[
+  {
+    "data": {
+      "module": "lsp_test",
+      "name": "even",
+      "ns": "value",
+      "origin": "src/main.cheby"
+    },
+    "detail": "lsp_test",
+    "kind": 12,
+    "name": "even",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 16
+      },
+      "start": {
+        "character": 0,
+        "line": 11
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:28:5 prepareCallHierarchy
+[
+  {
+    "data": {
+      "module": "lsp_test",
+      "name": "even",
+      "ns": "value",
+      "origin": "src/main.cheby"
+    },
+    "detail": "lsp_test",
+    "kind": 12,
+    "name": "even",
+    "range": {
+      "end": {
+        "character": 1,
+        "line": 16
+      },
+      "start": {
+        "character": 0,
+        "line": 11
+      }
+    },
+    "selectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:22:10 incomingCalls
+[
+  [
+    {
+      "from": {
+        "data": {
+          "module": "lsp_test",
+          "name": "odd",
+          "ns": "value",
+          "origin": "src/main.cheby"
+        },
+        "detail": "lsp_test",
+        "kind": 12,
+        "name": "odd",
+        "range": {
+          "end": {
+            "character": 1,
+            "line": 24
+          },
+          "start": {
+            "character": 0,
+            "line": 18
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 6,
+            "line": 18
+          },
+          "start": {
+            "character": 3,
+            "line": 18
+          }
+        },
+        "uri": "src/main.cheby"
+      },
+      "fromRanges": [
+        {
+          "end": {
+            "character": 13,
+            "line": 21
+          },
+          "start": {
+            "character": 9,
+            "line": 21
+          }
+        }
+      ]
+    },
+    {
+      "from": {
+        "data": {
+          "module": "lsp_test",
+          "name": "first",
+          "ns": "value",
+          "origin": "src/main.cheby"
+        },
+        "detail": "lsp_test",
+        "kind": 12,
+        "name": "first",
+        "range": {
+          "end": {
+            "character": 1,
+            "line": 31
+          },
+          "start": {
+            "character": 0,
+            "line": 26
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 8,
+            "line": 26
+          },
+          "start": {
+            "character": 3,
+            "line": 26
+          }
+        },
+        "uri": "src/main.cheby"
+      },
+      "fromRanges": [
+        {
+          "end": {
+            "character": 6,
+            "line": 27
+          },
+          "start": {
+            "character": 2,
+            "line": 27
+          }
+        }
+      ]
+    }
+  ]
+]
+
+== src/main.cheby:28:3 outgoingCalls
+[
+  [
+    {
+      "fromRanges": [
+        {
+          "end": {
+            "character": 12,
+            "line": 14
+          },
+          "start": {
+            "character": 9,
+            "line": 14
+          }
+        }
+      ],
+      "to": {
+        "data": {
+          "module": "lsp_test",
+          "name": "odd",
+          "ns": "value",
+          "origin": "src/main.cheby"
+        },
+        "detail": "lsp_test",
+        "kind": 12,
+        "name": "odd",
+        "range": {
+          "end": {
+            "character": 1,
+            "line": 24
+          },
+          "start": {
+            "character": 0,
+            "line": 18
+          }
+        },
+        "selectionRange": {
+          "end": {
+            "character": 6,
+            "line": 18
+          },
+          "start": {
+            "character": 3,
+            "line": 18
+          }
+        },
+        "uri": "src/main.cheby"
+      }
+    }
+  ]
+]

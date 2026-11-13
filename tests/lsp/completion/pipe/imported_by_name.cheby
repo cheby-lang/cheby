@@ -1,0 +1,18 @@
+// @decisions: D-1479, D-1486, D-1487
+//! `xs |> m`, `xs |> ma` and `xs.ma` with `map` imported by name and
+//! `completion.autoImport` on: `map` keeps the head type's rank and is
+//! written bare, with no import edit, so a short partial still offers it
+//! (type error state).
+
+import std::list::{map}
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs |> m
+  //              ^ completion map
+  let zs = xs |> ma
+  //               ^ completion map
+  let ws = xs.ma
+  //            ^ completion map
+  assert ys == zs && zs == ws
+}

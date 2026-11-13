@@ -1,0 +1,147 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find constructor `In` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 9
+        },
+        "start": {
+          "character": 12,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find constructor `Fl` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 13
+        },
+        "start": {
+          "character": 13,
+          "line": 13
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find constructor `St` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 15
+        },
+        "start": {
+          "character": 6,
+          "line": 15
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:15 completion json::Int `case` size
+{
+  "absent": [
+    "case",
+    "size"
+  ],
+  "count": 8,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "Int(Int)\nof type json::Value",
+      "kind": 20,
+      "label": "json::Int",
+      "labelDetails": {
+        "description": "json"
+      },
+      "sortText": "000002json::Int",
+      "textEdit": {
+        "newText": "json::Int",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 9
+          },
+          "start": {
+            "character": 12,
+            "line": 9
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:14:16 completion json::Float
+{
+  "count": 8,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "Float(Float)\nof type json::Value",
+      "kind": 20,
+      "label": "json::Float",
+      "labelDetails": {
+        "description": "json"
+      },
+      "sortText": "000003json::Float",
+      "textEdit": {
+        "newText": "json::Float",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 13
+          },
+          "start": {
+            "character": 13,
+            "line": 13
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:16:9 completion json::String
+{
+  "count": 8,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "String(String)\nof type json::Value",
+      "kind": 20,
+      "label": "json::String",
+      "labelDetails": {
+        "description": "json"
+      },
+      "sortText": "000004json::String",
+      "textEdit": {
+        "newText": "json::String",
+        "range": {
+          "end": {
+            "character": 8,
+            "line": 15
+          },
+          "start": {
+            "character": 6,
+            "line": 15
+          }
+        }
+      }
+    }
+  ]
+}

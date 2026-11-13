@@ -1,0 +1,113 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected an expression, found `}`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 11
+        },
+        "start": {
+          "character": 12,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "message": "expected a line break or `}`, found type name",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 15
+        },
+        "start": {
+          "character": 20,
+          "line": 15
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby semanticTokens
+{
+  "data": [
+    5,
+    9,
+    5,
+    2,
+    1,
+    1,
+    2,
+    3,
+    9,
+    1,
+    1,
+    2,
+    6,
+    9,
+    1,
+    0,
+    7,
+    5,
+    1,
+    4,
+    3,
+    7,
+    4,
+    10,
+    1,
+    0,
+    5,
+    1,
+    6,
+    1,
+    0,
+    3,
+    5,
+    2,
+    0,
+    0,
+    10,
+    5,
+    1,
+    4,
+    1,
+    6,
+    1,
+    7,
+    1,
+    0,
+    4,
+    1,
+    6,
+    0,
+    3,
+    3,
+    4,
+    10,
+    1,
+    1,
+    6,
+    1,
+    7,
+    1,
+    0,
+    4,
+    4,
+    10,
+    0,
+    0,
+    5,
+    3,
+    9,
+    0
+  ]
+}

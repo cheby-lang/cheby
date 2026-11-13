@@ -1,0 +1,14 @@
+// @decisions: D-1384
+//! `fn f(x: ) -> Int {`: a type. The item's type parameters come first.
+
+import std::order
+
+type Shape {
+  Dot,
+}
+
+fn first<T>(xs: List<T>, x: ) -> Int {
+//                          ^ completion
+//                          ^ apply T
+  0
+}

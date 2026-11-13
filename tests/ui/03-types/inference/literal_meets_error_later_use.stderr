@@ -1,0 +1,6 @@
+error[E0042]: cannot find value `sh` in this scope
+ --> tests/ui/03-types/inference/literal_meets_error_later_use.cheby:9:21
+  |
+9 |   let _shown = k |> sh
+  |                     ^^ not found
+

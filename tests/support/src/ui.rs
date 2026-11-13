@@ -356,7 +356,12 @@ impl UiTest {
 /// and the constant-evaluation errors. `cheby check` reports them after it
 /// has built a JIT for the package's constants. E0069 is also a front-end
 /// code; counting it here only ignores a few more tests on Windows.
-const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
+/// `cheby check` never reports E0053 (D-532). The language server reports
+/// E0069 from evaluation and E0075 to E0078 from its constants child, so
+/// its parity trials compare them after `cheby/idle`, and ignore them on
+/// Windows, where the server evaluates no constant until M6 (D-1348,
+/// D-1349, D-1414).
+pub const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
 
 /// The extensions of the input files of a run test (D-543), and its
 /// environment file (D-1043).

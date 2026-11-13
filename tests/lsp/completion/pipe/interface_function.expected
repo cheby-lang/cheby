@@ -1,0 +1,227 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0023",
+      "message": "an interface function takes no type arguments\nnote: interface functions are not generic (D-165)\nhelp: remove the type arguments",
+      "range": {
+        "end": {
+          "character": 30,
+          "line": 18
+        },
+        "start": {
+          "character": 23,
+          "line": 18
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:24 completion Source Sink
+{
+  "count": 28,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub interface Sink {\n  fn write_bytes(Self, bytes::Bytes) -> Result<Nil, io::Error>\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A stream that bytes are written to. `write_bytes(sink, data)` writes all of `data`.\n`file::File`, `net::Connection` and the standard-stream handles satisfy it through their\nmodules' `write_bytes` (D-1062, D-1071)."
+      },
+      "kind": 8,
+      "label": "Sink",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20Sink",
+      "textEdit": {
+        "newText": "Sink::",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 12
+          },
+          "start": {
+            "character": 21,
+            "line": 12
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Source {\n  fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, io::Error>\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "A stream that bytes are read from. `read_bytes(source, limit)` returns the next bytes of the\nstream, at most `limit` of them, or `Ok(None)` at its end. `file::File`, `net::Connection` and\nthe standard-stream handles satisfy it through their modules' `read_bytes` (D-1062, D-1071)."
+      },
+      "kind": 8,
+      "label": "Source",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20Source",
+      "textEdit": {
+        "newText": "Source::",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 12
+          },
+          "start": {
+            "character": 21,
+            "line": 12
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:15:32 completion read_bytes
+{
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "fn read_bytes(Self, Int) -> Result<Option<bytes::Bytes>, io::Error>\nof interface io::Source",
+      "insertTextFormat": 2,
+      "kind": 2,
+      "label": "read_bytes",
+      "labelDetails": {
+        "description": "io"
+      },
+      "sortText": "20read_bytes",
+      "textEdit": {
+        "newText": "read_bytes(_, $1)$0",
+        "range": {
+          "end": {
+            "character": 31,
+            "line": 14
+          },
+          "start": {
+            "character": 29,
+            "line": 14
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:17:31 completion compare
+{
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "fn compare(Self, Self) -> Order\nof interface ops::Compare",
+      "insertTextFormat": 2,
+      "kind": 2,
+      "label": "compare",
+      "labelDetails": {
+        "description": "ops"
+      },
+      "sortText": "20compare",
+      "textEdit": {
+        "newText": "compare(_, $1)$0",
+        "range": {
+          "end": {
+            "character": 30,
+            "line": 16
+          },
+          "start": {
+            "character": 29,
+            "line": 16
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:19:24 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:21:24 completion show
+{
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "fn show(Self) -> String\nof interface Show",
+      "kind": 2,
+      "label": "show",
+      "sortText": "20show",
+      "textEdit": {
+        "newText": "show",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 20
+          },
+          "start": {
+            "character": 21,
+            "line": 20
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:21:24 apply show
+{
+  "item": {
+    "detail": "fn show(Self) -> String\nof interface Show",
+    "kind": 2,
+    "label": "show",
+    "sortText": "20show",
+    "textEdit": {
+      "newText": "show",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 20
+        },
+        "start": {
+          "character": 21,
+          "line": 20
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-173, D-1545, D-1548",
+    "//! After `|>`, a path through an interface completes one segment at a",
+    "//! time. `io::So` offers `Source` and `Sink` written `Source::`, then",
+    "//! `io::Source::` offers its function in the pipe form, the hole at the",
+    "//! first `Self`, as `read_bytes(_, …)`. `Show::show`, of one parameter,",
+    "//! is written bare. Before a turbofish nothing is offered, since an",
+    "//! interface's function takes no type arguments (type error state).",
+    "",
+    "import std::io",
+    "import std::ops",
+    "",
+    "fn ready<S: io::Source>(src: S) -> Bool {",
+    "  let a = src |> io::So",
+    "  //                   ^ completion Source Sink",
+    "  let b = src |> io::Source::re",
+    "  //                           ^ completion read_bytes",
+    "  let o = 1 |> ops::Compare::c",
+    "  //                          ^ completion compare",
+    "  let t = 1 |> Show::sh::<Int>",
+    "  //                   ^ completion",
+    "  let u = 1 |> Show::show",
+    "  //                   ^ completion show",
+    "  //                   ^ apply show",
+    "  a == b && o == t && u == \"1\"",
+    "}",
+    ""
+  ]
+}

@@ -1,0 +1,113 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 1,
+          "line": 21
+        },
+        "start": {
+          "character": 0,
+          "line": 21
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 20
+              },
+              "start": {
+                "character": 13,
+                "line": 20
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:4 declaration
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 14
+      },
+      "start": {
+        "character": 0,
+        "line": 10
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:19:14 declaration
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 17,
+        "line": 18
+      },
+      "start": {
+        "character": 13,
+        "line": 18
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 1,
+        "line": 14
+      },
+      "start": {
+        "character": 0,
+        "line": 10
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 7,
+        "line": 11
+      },
+      "start": {
+        "character": 3,
+        "line": 11
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]

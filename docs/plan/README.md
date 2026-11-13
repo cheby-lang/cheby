@@ -399,6 +399,20 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1338    | `rc_differential` runs twice, with a plain and a sanitized `cheby`                                  |
 | D-1339    | MemorySanitizer is not used                                                                         |
 | D-1346    | `bench-compile` gets an AOT table, read through the `cheby` binary                                  |
+| D-1347    | Two tracks: last good text makes diagnostics, live text answers queries (ADR-0076)                  |
+| D-1348    | The server's diagnostics match `cheby check`, not `cheby build`; M5's exit sentence changes         |
+| D-1349    | Constants run in a child at the first clean report, then on save, never in the server (ADR-0077)    |
+| D-1350    | `cheby_lsp` reaches the phases through `cheby_driver::analysis` re-exports, with no new edge        |
+| D-1351    | `lsp-server` 0.10 and `lsp-types` 0.97, synchronous; `cheby_driver` gains no external crate         |
+| D-1352    | `cheby_cli` gets a fourth harness, `lsp`, binding from day one under the M1 default tag             |
+| D-1353    | The server's scope: §13.11, the common requests, four groups and a Perceus reuse lens               |
+| D-1354    | The server is built in multi-agent waves on `lsp`, with three Zed checkpoints                       |
+| D-1363    | The server and its children neither read nor write the build cache                                  |
+| D-1389    | Rename and refactors verify their edits by a stateless tolerant run on a query thread               |
+| D-1410    | One hidden command, `cheby __backend`, with one job per process: `constants` or `ownership`         |
+| D-1416    | Memory facts stop before code generation, through `Roots::Analysis`                                 |
+| D-1517    | `lsp` merges into `main` after checkpoint 2's fixes; later waves follow in groups, one PR each      |
+| D-1518    | The Zed extension stays a dev extension, version 0.2.0 on its `main`, until W18                     |
 
 ## Open questions
 

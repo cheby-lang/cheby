@@ -1,0 +1,12 @@
+// @decisions: D-1479
+//! `xs |> un` in a file that does not import `std::list`: two characters
+//! offer the functions whose name holds them, each with its import (type
+//! error state).
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs |> un
+  //               ^ completion
+  //               ^ apply list::unique
+  assert ys == xs
+}

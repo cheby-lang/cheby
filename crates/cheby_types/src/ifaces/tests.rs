@@ -22,6 +22,9 @@ use cheby_resolve::{
 use cheby_syntax::SyntaxTree;
 
 use super::*;
+use crate::satisfaction::{
+    QueryInput, Verdict, implementors, interfaces_of, reason_text, satisfies,
+};
 use crate::test_support::Build;
 use crate::test_support::quiet::build_with_std;
 use crate::thir::{BinOpKind, Callee, Dict, DictFn, OpImpl};
@@ -409,6 +412,7 @@ impl Probe {
             input: &input,
             own: &self.own,
             generics,
+            query: false,
         };
         f(&cx)
     }
@@ -1598,4 +1602,446 @@ fn main() {
             &compare_of("std::string", Ty::STRING)
         ]
     );
+}
+
+// Satisfaction queries (D-1386).
+
+const QUEUE: &str = r#"//! A generic type whose `show` needs a bound, and whose `compare` needs none.
+
+pub type Queue<T> {
+  Queue(List<T>),
+}
+
+pub fn show<T: Show>(q: Queue<T>) -> String {
+  "queue"
+}
+
+pub fn compare<T>(a: Queue<T>, b: Queue<T>) -> Order {
+  Equal
+}
+"#;
+
+const TREE: &str = r#"//! A closed type: `show` needs no bound.
+
+pub type Tree {
+  Leaf,
+  Node(Tree, Tree),
+}
+
+pub fn show(t: Tree) -> String {
+  "tree"
+}
+"#;
+
+const NINE: &str = r#"//! A `show` with more bounds than a query's rounds.
+
+interface A1 {
+  fn a1(Self) -> Int
+}
+
+interface A2 {
+  fn a2(Self) -> Int
+}
+
+interface A3 {
+  fn a3(Self) -> Int
+}
+
+interface A4 {
+  fn a4(Self) -> Int
+}
+
+interface A5 {
+  fn a5(Self) -> Int
+}
+
+interface A6 {
+  fn a6(Self) -> Int
+}
+
+interface A7 {
+  fn a7(Self) -> Int
+}
+
+interface A8 {
+  fn a8(Self) -> Int
+}
+
+pub type Wide<T> {
+  Wide(T),
+}
+
+pub fn show<T: A1 + A2 + A3 + A4 + A5 + A6 + A7 + A8>(w: Wide<T>) -> String {
+  "wide"
+}
+"#;
+
+impl Probe {
+    /// The probe's query input, over the modules it reads.
+    fn query<R>(&self, f: impl FnOnce(&QueryInput<'_>) -> R) -> R {
+        f(&QueryInput {
+            input: self.input(),
+            own: &self.own,
+        })
+    }
+
+    /// Whether `ty` satisfies `iface`, as a query with `generics`.
+    fn verdict(&self, generics: &Generics, ty: Ty, iface: DefId) -> Verdict {
+        satisfies(&self.input(), &self.own, generics, ty, iface).unwrap()
+    }
+
+    /// The reason of `verdict`, which must be a no, as a line of text.
+    fn reason(&self, generics: &Generics, verdict: &Verdict) -> String {
+        let Verdict::No(err) = verdict else {
+            panic!("a yes: {verdict:?}");
+        };
+        self.query(|cx| reason_text(cx, generics, err))
+    }
+}
+
+/// `T`, the first type parameter.
+fn first_param() -> ParamIdx {
+    ParamIdx::from_u32(0)
+}
+
+#[test]
+fn queue_show_is_conditional() {
+    let p = probe(QUEUE);
+    let generics = p.generics(&[&[]]);
+    let queue = p.named("probe", "Queue", &[p.param(0)]);
+    let show = DefId::new(
+        p.module,
+        p.own
+            .lookup(Namespace::Value, p.b.globals.names.intern("show"))
+            .unwrap(),
+    );
+    assert_eq!(
+        p.verdict(&generics, queue, builtin::SHOW),
+        Verdict::Yes {
+            fns: vec![show],
+            when: vec![(first_param(), builtin::SHOW)],
+        }
+    );
+}
+
+#[test]
+fn a_bound_already_declared_is_no_condition() {
+    let p = probe(QUEUE);
+    let generics = p.generics(&[&[builtin::SHOW]]);
+    let queue = p.named("probe", "Queue", &[p.param(0)]);
+    let Verdict::Yes { when, .. } = p.verdict(&generics, queue, builtin::SHOW) else {
+        panic!("`Queue<T>` with `T: Show` satisfies `Show`");
+    };
+    assert_eq!(when, []);
+}
+
+#[test]
+fn tree_show_is_unconditional() {
+    let p = probe(TREE);
+    let tree = p.named("probe", "Tree", &[]);
+    let Verdict::Yes { fns, when } = p.verdict(&no_generics(), tree, builtin::SHOW) else {
+        panic!("`Tree` satisfies `Show`");
+    };
+    assert_eq!(fns.len(), 1);
+    assert_eq!(when, []);
+}
+
+/// E0065 is about passing a dictionary, so a query never reports it.
+#[test]
+fn a_query_needs_no_descriptor() {
+    let p = probe(QUEUE);
+    let generics = p.generics(&[&[]]);
+    let queue = p.named("probe", "Queue", &[p.param(0)]);
+    let compare = p.type_def("std::ops", "Compare");
+    let checked = p.with(&generics, |cx| satisfy(cx, queue, compare).unwrap());
+    assert!(matches!(
+        checked,
+        Err(Unsatisfied {
+            reason: Reason::Descriptor { .. },
+            ..
+        })
+    ));
+    let Verdict::Yes { fns, when } = p.verdict(&generics, queue, compare) else {
+        panic!("`Queue<T>` has `compare`");
+    };
+    assert_eq!(fns.len(), 1);
+    assert_eq!(when, []);
+}
+
+/// Builtin types answer from their home modules (D-447).
+#[test]
+fn builtin_types_are_conditional_through_their_home() {
+    let p = probe(PROBE);
+    let generics = p.generics(&[&[]]);
+    let Verdict::Yes { fns, when } = p.verdict(&generics, p.list(p.param(0)), builtin::SHOW) else {
+        panic!("`List<T>` satisfies `Show` when `T` does");
+    };
+    assert_eq!(fns, [p.func("std::list", "show")]);
+    assert_eq!(when, [(first_param(), builtin::SHOW)]);
+}
+
+#[test]
+fn a_nested_parameter_is_a_condition_through_elements_and_bounds() {
+    let p = probe(PROBE);
+    let generics = p.generics(&[&[]]);
+    let ty = p.tuple(&[Ty::INT, p.list(p.param(0))]);
+    assert_eq!(
+        p.verdict(&generics, ty, builtin::SHOW),
+        Verdict::Yes {
+            fns: vec![],
+            when: vec![(first_param(), builtin::SHOW)],
+        }
+    );
+}
+
+#[test]
+fn a_condition_can_lead_to_a_no() {
+    let p = probe(PROBE);
+    let generics = p.generics(&[&[]]);
+    let ty = p.tuple(&[p.param(0), p.named("pair", "Right", &[])]);
+    let verdict = p.verdict(&generics, ty, builtin::SHOW);
+    assert_eq!(
+        p.reason(&generics, &verdict),
+        "element 2 of `(T, pair::Right)`: `pair::show` has the signature \
+         `show(pair::Left) -> String`, not `show(pair::Right) -> String`"
+    );
+}
+
+#[test]
+fn a_query_stops_after_its_rounds() {
+    let p = probe(NINE);
+    let generics = p.generics(&[&[]]);
+    let wide = p.named("probe", "Wide", &[p.param(0)]);
+    let verdict = p.verdict(&generics, wide, builtin::SHOW);
+    assert!(
+        matches!(&verdict, Verdict::No(err) if matches!(err.reason, Reason::Bound { .. })),
+        "{verdict:?}"
+    );
+}
+
+#[test]
+fn a_less_visible_function_is_a_near_miss() {
+    let p = probe(PROBE);
+    let angle = p.named("geometry::angle", "Angle", &[]);
+    let verdict = p.verdict(&no_generics(), angle, builtin::SHOW);
+    assert!(
+        matches!(&verdict, Verdict::No(err) if matches!(err.reason, Reason::LessVisible { .. })),
+        "{verdict:?}"
+    );
+    assert_eq!(
+        p.reason(&no_generics(), &verdict),
+        "`angle::show` is less visible than `angle::Angle`"
+    );
+}
+
+#[test]
+fn reason_text_is_one_line_per_kind_of_reason() {
+    let p = probe(PROBE);
+    let generics = p.generics(&[&[]]);
+    let shape = p.type_def("shapes", "Shape");
+    let cases = [
+        (
+            p.named("bad", "Bad", &[]),
+            builtin::SHOW,
+            "`bad::show` has the signature `show(bad::Bad, Int) -> String`, not \
+             `show(bad::Bad) -> String`",
+        ),
+        (
+            p.named("geometry::point", "Point", &[]),
+            shape,
+            "`app::geometry::point` has no function `area(point::Point) -> Float`",
+        ),
+        (
+            p.dyn_of(shape),
+            builtin::SHOW,
+            "`dyn shapes::Shape` satisfies only `shapes::Shape` and the interfaces it embeds (§8.6)",
+        ),
+        (
+            p.types().func([Ty::INT], Ty::INT),
+            builtin::SHOW,
+            "function types satisfy only empty interfaces (§8.2, D-166)",
+        ),
+    ];
+    for (ty, iface, text) in cases {
+        let verdict = p.verdict(&generics, ty, iface);
+        assert_eq!(p.reason(&generics, &verdict), text);
+    }
+    // These are built by hand: `Descriptor` needs a dictionary, which no query
+    // builds, and the others need fixtures this text does not depend on.
+    let t = p.param(0);
+    let list_show = p.func("std::list", "show");
+    let unsatisfied = |ty, reason| Unsatisfied {
+        ty,
+        want: Want::Iface(shape),
+        reason,
+    };
+    let param = Reason::Param {
+        param: first_param(),
+    };
+    let reasons = [
+        (
+            unsatisfied(t, param.clone()),
+            "the type parameter `T` has no bound `shapes::Shape`".to_owned(),
+        ),
+        (
+            unsatisfied(
+                p.list(t),
+                Reason::Bound {
+                    found: list_show,
+                    param: first_param(),
+                    inner: Box::new(unsatisfied(t, param)),
+                },
+            ),
+            "`list::show` requires `T: shapes::Shape`: the type parameter `T` has no bound \
+             `shapes::Shape`"
+                .to_owned(),
+        ),
+        (
+            unsatisfied(
+                t,
+                Reason::Undetermined {
+                    found: list_show,
+                    param: first_param(),
+                    actual: Ty::INT,
+                },
+            ),
+            "nothing determines the type parameter `T` of `list::show`".to_owned(),
+        ),
+        (
+            unsatisfied(
+                t,
+                Reason::Descriptor {
+                    param: first_param(),
+                },
+            ),
+            "the type parameter `T` has no bound".to_owned(),
+        ),
+        (
+            unsatisfied(t, Reason::TooDeep),
+            format!(
+                "the requirement nests more than {} levels deep",
+                super::solve::DEPTH_LIMIT
+            ),
+        ),
+    ];
+    for (err, text) in reasons {
+        assert_eq!(p.reason(&generics, &Verdict::No(err)), text);
+    }
+}
+
+#[test]
+fn a_home_module_outside_the_view_is_not_loaded() {
+    let p = probe_with(PackageId::LOCAL, Some(&["std::int"]), PROBE);
+    let verdict = p.verdict(&no_generics(), p.list(Ty::INT), builtin::SHOW);
+    assert_eq!(
+        p.reason(&no_generics(), &verdict),
+        "`std::list` is not loaded"
+    );
+}
+
+#[test]
+fn interfaces_of_leaves_out_empty_interfaces() {
+    let p = probe(TREE);
+    let any = p.type_def("shapes", "Any");
+    let shape = p.type_def("shapes", "Shape");
+    let tree = p.named("probe", "Tree", &[]);
+    let listed = p
+        .query(|cx| interfaces_of(cx, &no_generics(), tree, &[any, builtin::SHOW, shape]).unwrap());
+    let ifaces: Vec<DefId> = listed.iter().map(|(iface, _)| *iface).collect();
+    assert_eq!(ifaces, [builtin::SHOW, shape]);
+    assert!(matches!(listed.first(), Some((_, Verdict::Yes { .. }))));
+    assert!(matches!(listed.get(1), Some((_, Verdict::No(_)))));
+}
+
+/// `Ty::ERROR` satisfies everything in a check, which says nothing here.
+#[test]
+fn interfaces_of_has_no_answer_for_an_error_type() {
+    let p = probe(PROBE);
+    let ty = p.list(Ty::ERROR);
+    let listed = p.query(|cx| interfaces_of(cx, &no_generics(), ty, &[builtin::SHOW]).unwrap());
+    assert_eq!(listed, []);
+}
+
+#[test]
+fn implementors_lists_the_conditional_and_drops_the_rest() {
+    let p = probe(PROBE);
+    let point = p.type_def("geometry::point", "Point");
+    let boxed = p.type_def("boxed", "Box");
+    let angle = p.type_def("geometry::angle", "Angle");
+    let bad = p.type_def("bad", "Bad");
+    let listed =
+        p.query(|cx| implementors(cx, builtin::SHOW, &[point, angle, boxed, bad]).unwrap());
+    let found: Vec<(DefId, usize)> = listed
+        .iter()
+        .map(|(def, verdict)| match verdict {
+            Verdict::Yes { when, .. } => (*def, when.len()),
+            Verdict::No(err) => panic!("a no: {err:?}"),
+        })
+        .collect();
+    assert_eq!(found, [(point, 0), (boxed, 1)]);
+}
+
+#[test]
+fn an_empty_interface_has_no_implementors() {
+    let p = probe(PROBE);
+    let any = p.type_def("shapes", "Any");
+    let point = p.type_def("geometry::point", "Point");
+    assert_eq!(p.query(|cx| implementors(cx, any, &[point]).unwrap()), []);
+}
+
+#[test]
+fn implementors_skips_what_is_not_a_type() {
+    let p = probe(PROBE);
+    let show = p.func("geometry::point", "show");
+    let listed = p.query(|cx| implementors(cx, builtin::SHOW, &[show]).unwrap());
+    assert_eq!(listed, []);
+}
+
+#[test]
+fn accepts_binds_the_parameters_variables_one_way() {
+    let p = probe(PROBE);
+    let types = p.types();
+    let t = p.param(0);
+    let u = p.param(1);
+    let pair = p.tuple(&[t, t]);
+    let cases = [
+        (t, Ty::INT, true),
+        (Ty::INT, Ty::INT, true),
+        (Ty::INT, Ty::STRING, false),
+        (p.list(t), p.list(Ty::INT), true),
+        (p.list(t), Ty::INT, false),
+        (p.list(Ty::INT), p.list(t), false),
+        (pair, p.tuple(&[Ty::INT, Ty::INT]), true),
+        (pair, p.tuple(&[Ty::INT, Ty::STRING]), false),
+        // Only `U` is mentioned, whose index is past any other.
+        (p.list(u), p.list(Ty::STRING), true),
+        // The argument's own parameters are rigid.
+        (Ty::INT, t, false),
+        (pair, p.tuple(&[u, t]), false),
+    ];
+    for (param, arg, expected) in cases {
+        assert_eq!(
+            accepts(types, param, arg),
+            Ok(expected),
+            "{param:?} {arg:?}"
+        );
+    }
+}
+
+#[test]
+fn accepts_binding_gives_what_each_variable_stands_for() {
+    let p = probe(PROBE);
+    let types = p.types();
+    let t = p.param(0);
+    let u = p.param(1);
+    assert_eq!(
+        accepts_binding(types, p.list(u), p.list(Ty::INT)),
+        Ok(Some(vec![None, Some(Ty::INT)]))
+    );
+    assert_eq!(
+        accepts_binding(types, p.tuple(&[t, u]), p.tuple(&[Ty::STRING, Ty::INT])),
+        Ok(Some(vec![Some(Ty::STRING), Some(Ty::INT)]))
+    );
+    assert_eq!(accepts_binding(types, Ty::INT, Ty::INT), Ok(Some(vec![])));
+    assert_eq!(accepts_binding(types, p.list(t), Ty::INT), Ok(None));
 }

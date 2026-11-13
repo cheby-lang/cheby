@@ -1,0 +1,20 @@
+== diagnostics
+{}
+
+== src/main.cheby:8:15 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub const max_safe: Int = 9_007_199_254_740_991\n```\n\n---\n\nDefined in `std::int`.\n\n---\n\nThe largest `Int` that works on every target, 2^53-1 (D-037)."
+  },
+  "range": {
+    "end": {
+      "character": 22,
+      "line": 7
+    },
+    "start": {
+      "character": 14,
+      "line": 7
+    }
+  }
+}

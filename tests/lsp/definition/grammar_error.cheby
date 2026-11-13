@@ -1,0 +1,22 @@
+// @decisions: D-1353
+//! Go to definition in a file that does not parse: the names its tree
+//! still holds lead to their declarations.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn add(a: Point, b: Point) -> Point {
+  Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  let q = p + p
+  //      ^ definition
+  //        ^ definition
+  let pair = (q.x,
+  //          ^ definition
+  //            ^ definition
+}

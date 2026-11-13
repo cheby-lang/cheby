@@ -1,0 +1,15 @@
+//! The saved text: `limit` is now 30, and `spin` never ends.
+
+const limit: Int = 30
+//    ^ hover
+
+const spin: Int = count_up(0)
+//    ^ hover
+
+fn count_up(n: Int) -> Int {
+  count_up(n + 1)
+}
+
+fn main() {
+  assert limit + spin > 0
+}

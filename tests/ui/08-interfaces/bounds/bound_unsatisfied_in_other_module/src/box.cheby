@@ -1,0 +1,15 @@
+//! A generic box whose encoder has a bound on an interface of `std::json`.
+
+import std::json
+
+pub type Box<T> {
+  value: T,
+}
+
+pub fn of<T>(value: T) -> Box<T> {
+  Box { value }
+}
+
+pub fn to_json<T: json::ToJson>(box: Box<T>) -> json::Value {
+  json::ToJson::to_json(box.value)
+}
