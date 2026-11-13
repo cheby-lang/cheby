@@ -1,0 +1,6 @@
+error[E0013]: expected `=`, found `}`
+ --> tests/ui/02-lexical-structure/error_before_closing_brace.cheby:7:13
+  |
+7 |   let n: Int
+  |             ^
+

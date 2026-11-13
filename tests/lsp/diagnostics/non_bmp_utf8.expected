@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `nope` in this scope",
+      "message": "cannot find value `nope` in this scope\nnot found",
       "range": {
         "end": {
           "character": 31,

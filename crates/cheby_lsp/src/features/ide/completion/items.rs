@@ -126,9 +126,6 @@ pub(crate) struct Entry {
     pub deprecated: bool,
     /// The item, for `completionItem/resolve` (D-1365).
     pub key: Option<Symbol>,
-    /// The edit writes the indentation of its later lines itself, as the
-    /// postfix `case` does, so a client must not add the line's again.
-    pub indented: bool,
 }
 
 impl Entry {
@@ -147,7 +144,6 @@ impl Entry {
             filter_text: None,
             deprecated: false,
             key: None,
-            indented: false,
         }
     }
 
@@ -266,6 +262,14 @@ const STD_ATTRIBUTES: &[(&str, &str)] = &[
 
 /// Pushes the items of `cx`'s context into `out`.
 pub(crate) fn collect(cx: &CompletionCx<'_>, out: &mut Items) {
+    // Before a path's `::`, only what a path starts with fits (D-1530).
+    if cx.before_path() && path_starts(cx, out) {
+        return;
+    }
+    // After `xs.`, nothing fits before a turbofish (D-1537).
+    if cx.before_turbofish() && matches!(cx.found.context, Context::Dot { .. }) {
+        return;
+    }
     match &cx.found.context {
         Context::None => {}
         Context::ImportPath { prefix } => import_paths(cx, prefix, out),
@@ -293,6 +297,97 @@ pub(crate) fn collect(cx: &CompletionCx<'_>, out: &mut Items) {
         Context::Interpolation => interpolation(cx, out),
         Context::Expr { statement, site } => expr(cx, *statement, *site, out),
         Context::Item { after_visibility } => item_keywords(cx, *after_visibility, out),
+    }
+}
+
+/// Pushes what a path may start with where a path's `::` follows the
+/// word, not a turbofish's, and says whether the context is one this
+/// rule covers (D-1530). In an expression and after `|>`, the modules
+/// and the interfaces, bare or through an imported module, as `Compare`
+/// and `shape::Shape` (D-173), the interfaces only when one segment
+/// follows the `::`, as in `Comp‸::compare(a, b)`, not in
+/// `sha‸::Shape::area(x)` (D-1539). In a type or a pattern, the modules.
+/// After `xs.`, nothing. Each is written as the file binds it, with no
+/// `::` added, since the user typed it. Nothing is imported, so nothing
+/// waits for a second character and the list is complete (D-1525).
+fn path_starts(cx: &CompletionCx<'_>, out: &mut Items) -> bool {
+    let interfaces = match &cx.found.context {
+        Context::Expr { .. } | Context::Pipe { .. } => !cx.next.more_segments,
+        Context::Type | Context::Pattern { .. } => false,
+        Context::Dot { .. } => return true,
+        _ => return false,
+    };
+    modules(cx, out);
+    if interfaces {
+        scope_interfaces(cx, out);
+        auto_import::imported_interfaces(cx, out);
+    }
+    true
+}
+
+/// Whether an item of `kind` is a value an expression may name: a
+/// function, a constant or a constructor. Before a turbofish only a
+/// function or a constructor, since a constant takes no type arguments
+/// (D-1536).
+pub(crate) fn value_fits(cx: &CompletionCx<'_>, kind: DefKind) -> bool {
+    match kind {
+        DefKind::Fn | DefKind::Ctor => true,
+        DefKind::Const => !cx.before_turbofish(),
+        DefKind::Type
+        | DefKind::Alias
+        | DefKind::Interface
+        | DefKind::InterfaceFn
+        | DefKind::Test => false,
+    }
+}
+
+/// Pushes the modules the module scope binds, aliases included, at rank
+/// 30: written `list::`, so a path can follow, or `list` where a path's
+/// `::` follows (D-1530). None before a turbofish (D-1525).
+fn modules(cx: &CompletionCx<'_>, out: &mut Items) {
+    let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) else {
+        return;
+    };
+    for (name, entry) in resolved.scope.iter(Namespace::Value) {
+        let Res::Module(module) = entry.res else {
+            continue;
+        };
+        let label = cx.name_text(name);
+        let Some(text) = cx.module_text(label) else {
+            continue;
+        };
+        let mut item = Entry::new(label, EntryKind::Module, rank::IMPORTED, cx.insert(text));
+        let info = cx.snapshot.table().get(module);
+        item.description = info.map(|i| i.path.to_string());
+        item.key = info.map(|i| Symbol::of_module(i.path.clone()));
+        out.push(item);
+    }
+}
+
+/// Pushes the interfaces the module scope binds, a path's first segment
+/// that names their functions (D-173): the module's own, those imported
+/// by name and the prelude's, bare, ranked by where they come from. Each
+/// is written with the `::` of its path, as `Show::`, the way a module is
+/// written `shape::` (D-1546), or bare, as `Show`, where a path's `::`
+/// follows (D-1530). The interfaces of the modules the file imports,
+/// through the import's binding, come from [`auto_import`] (D-1507).
+pub(crate) fn scope_interfaces(cx: &CompletionCx<'_>, out: &mut Items) {
+    let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) else {
+        return;
+    };
+    for (name, entry) in resolved.scope.iter(Namespace::Type) {
+        let Res::Def(def) = entry.res else { continue };
+        if cx
+            .item(def)
+            .is_none_or(|item| item.kind != DefKind::Interface)
+        {
+            continue;
+        }
+        let label = cx.name_text(name);
+        if let Some(mut built) = cx.def_entry(def, label, source_rank(entry.source)) {
+            built.insert = cx.insert(cx.interface_text(label));
+            out.push(built);
+        }
     }
 }
 
@@ -337,10 +432,25 @@ impl<'s> CompletionCx<'s> {
         matches!(self.next.adjacent, Some(K::L_PAREN | K::COLON2))
     }
 
-    /// Whether the token right after the partial word is `::`, so a
-    /// module name is written bare.
-    pub(crate) fn before_colon2(&self) -> bool {
-        self.next.adjacent == Some(K::COLON2)
+    /// Whether the token right after the partial word is a `::` that
+    /// goes on with a path, as in `st‸::length`, not a turbofish's
+    /// (D-1529): the word starts a path, so only a module or an interface
+    /// fits, written bare (D-1521, D-1525, D-1530), an interface only when
+    /// one segment follows (D-1539). After `m::`, only `m`'s interfaces
+    /// fit (D-1538). A `::` after white space does not count, since
+    /// `cheby fmt` never writes one.
+    pub(crate) fn before_path(&self) -> bool {
+        self.next.adjacent == Some(K::COLON2) && !self.next.turbofish
+    }
+
+    /// Whether the token right after the partial word is the `::` of a
+    /// turbofish, as in `re‸::<Int>(xs)`: an item fits as with no `::`
+    /// after it, but no module name, since `list::<Int>` is no path
+    /// (E0042, D-1525), and only a name that takes type arguments: a
+    /// function, a constructor or a local, no keyword, snippet or
+    /// constant (D-1536).
+    pub(crate) fn before_turbofish(&self) -> bool {
+        self.next.adjacent == Some(K::COLON2) && self.next.turbofish
     }
 
     /// Whether the next token on the line is `kind`, as `:` after a field
@@ -349,13 +459,29 @@ impl<'s> CompletionCx<'s> {
         self.next.on_line == Some(kind)
     }
 
-    /// The text a module named `label` writes: `label::`, or `label` where
-    /// a `::` follows.
-    pub(crate) fn module_text(&self, label: &str) -> String {
-        if self.before_colon2() {
+    /// The text an interface named `label` writes as a path's segment:
+    /// `label::`, so the list of its functions opens next, as after a
+    /// module, or `label` where a path's `::` follows (D-1530, D-1538,
+    /// D-1546, D-1548). No interface is offered before a turbofish
+    /// (D-1536).
+    pub(crate) fn interface_text(&self, label: &str) -> String {
+        if self.before_path() {
             label.to_owned()
         } else {
             format!("{label}::")
+        }
+    }
+
+    /// The text a module named `label` writes: `label::`, or `label` where
+    /// a path's `::` follows. `None` before a turbofish, where no module
+    /// name fits (D-1525).
+    pub(crate) fn module_text(&self, label: &str) -> Option<String> {
+        if self.before_turbofish() {
+            None
+        } else if self.before_path() {
+            Some(label.to_owned())
+        } else {
+            Some(format!("{label}::"))
         }
     }
 
@@ -722,7 +848,9 @@ fn keywords_and_snippets(
 }
 
 /// An expression (X §4.1): locals, module values, imported values and
-/// modules, the prelude, keywords and snippets, and names to import.
+/// modules, the interfaces in scope, written `Show::` (D-1546), the
+/// prelude, keywords and snippets, the items of imported modules
+/// (D-1507), and names to import, interfaces among them (D-1546).
 fn expr(cx: &CompletionCx<'_>, statement: bool, site: ExprSite<'_>, out: &mut Items) {
     let site = match site {
         ExprSite::Unknown => partial_path(cx).map_or(site, ExprSite::Path),
@@ -736,17 +864,22 @@ fn expr(cx: &CompletionCx<'_>, statement: bool, site: ExprSite<'_>, out: &mut It
     let as_value = expected.is_some_and(|ty| is_fn(cx, ty));
     locals(cx, expected, false, out);
     scope_values(cx, expected, as_value, out);
-    let (keywords, snippets) = if statement {
-        (STATEMENT_KEYWORDS, STATEMENT_SNIPPETS)
-    } else {
-        (EXPRESSION_KEYWORDS, EXPRESSION_SNIPPETS)
-    };
-    keywords_and_snippets(cx, keywords, snippets, out);
-    if cx.options.auto_import {
-        // The rule `scope_values` writes by: a function's name where a
-        // function is expected, so an imported name is no call either.
-        auto_import::complete(cx, Namespace::Value, as_value, out);
+    // Before a turbofish only names fit, so no keyword, snippet or
+    // interface, and `scope_values` and `auto_import::complete` give no
+    // constant, no module and no interface (D-1536, D-1546).
+    if !cx.before_turbofish() {
+        scope_interfaces(cx, out);
+        let (keywords, snippets) = if statement {
+            (STATEMENT_KEYWORDS, STATEMENT_SNIPPETS)
+        } else {
+            (EXPRESSION_KEYWORDS, EXPRESSION_SNIPPETS)
+        };
+        keywords_and_snippets(cx, keywords, snippets, out);
     }
+    // The items of other modules (D-1507, X §4.4), by the rule
+    // `scope_values` writes by: a function's name where a function is
+    // expected, so an imported name is no call either.
+    auto_import::complete(cx, Namespace::Value, as_value, out);
 }
 
 /// Whether `ty` is a function type, so a position that expects it takes a
@@ -850,8 +983,9 @@ fn source_rank(source: ScopeSource) -> u8 {
 }
 
 /// The values of the module scope: the module's functions, constants and
-/// constructors, imported values and modules, and the prelude's. A
-/// function writes a call unless `as_value` or a `(` follows.
+/// constructors, imported values and modules, and the prelude's. Before a
+/// turbofish, no constant and no module (D-1536). A function writes a
+/// call unless `as_value` or a `(` follows.
 fn scope_values(cx: &CompletionCx<'_>, expected: Option<Ty>, as_value: bool, out: &mut Items) {
     let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) else {
         return;
@@ -859,24 +993,9 @@ fn scope_values(cx: &CompletionCx<'_>, expected: Option<Ty>, as_value: bool, out
     for (name, entry) in resolved.scope.iter(Namespace::Value) {
         let label = cx.name_text(name);
         match entry.res {
-            Res::Module(module) => {
-                let mut item = Entry::new(
-                    label,
-                    EntryKind::Module,
-                    rank::IMPORTED,
-                    cx.insert(cx.module_text(label)),
-                );
-                item.description = cx.snapshot.table().get(module).map(|i| i.path.to_string());
-                item.key = cx
-                    .snapshot
-                    .table()
-                    .get(module)
-                    .map(|i| Symbol::of_module(i.path.clone()));
-                out.push(item);
-            }
             Res::Def(def) => {
                 let Some(item) = cx.item(def) else { continue };
-                if !matches!(item.kind, DefKind::Fn | DefKind::Const | DefKind::Ctor) {
+                if !value_fits(cx, item.kind) {
                     continue;
                 }
                 let fits = cx.fits(expected, cx.value_ty(def)) || cx.ctor_fits(def, expected);
@@ -891,9 +1010,10 @@ fn scope_values(cx: &CompletionCx<'_>, expected: Option<Ty>, as_value: bool, out
                 built.insert = value_insert(cx, label, item, as_value);
                 out.push(built);
             }
-            Res::Local(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => {}
+            Res::Module(_) | Res::Local(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => {}
         }
     }
+    modules(cx, out);
 }
 
 /// What a value item writes in an expression: a function a call (X §4.1),
@@ -919,7 +1039,10 @@ fn value_insert(cx: &CompletionCx<'_>, label: &str, item: &IfaceItem, as_value: 
 }
 
 /// A type (X §4.1): type parameters and `Self` in scope, the module
-/// scope's types, modules for `m::`, `dyn`, and names to import.
+/// scope's types, modules for `m::`, `dyn`, the types of imported modules
+/// (D-1507), and names to import. Before a turbofish, which no type takes,
+/// the names stay as D-1525 has them, with no module and no `dyn`
+/// (D-1536, D-1544).
 fn types(cx: &CompletionCx<'_>, out: &mut Items) {
     type_params(cx, out);
     if let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) {
@@ -935,25 +1058,24 @@ fn types(cx: &CompletionCx<'_>, out: &mut Items) {
                 continue;
             };
             let label = cx.name_text(name);
-            let mut item = Entry::new(
-                label,
-                EntryKind::Module,
-                rank::IMPORTED,
-                cx.insert(cx.module_text(label)),
-            );
+            let Some(text) = cx.module_text(label) else {
+                continue;
+            };
+            let mut item = Entry::new(label, EntryKind::Module, rank::IMPORTED, cx.insert(text));
             item.description = cx.snapshot.table().get(module).map(|i| i.path.to_string());
             out.push(item);
         }
     }
-    out.push(Entry::new(
-        "dyn",
-        EntryKind::Keyword,
-        rank::KEYWORD,
-        cx.insert("dyn"),
-    ));
-    if cx.options.auto_import {
-        auto_import::complete(cx, Namespace::Type, false, out);
+    // Before a turbofish no keyword fits, so no `dyn` (D-1536, D-1544).
+    if !cx.before_turbofish() {
+        out.push(Entry::new(
+            "dyn",
+            EntryKind::Keyword,
+            rank::KEYWORD,
+            cx.insert("dyn"),
+        ));
     }
+    auto_import::complete(cx, Namespace::Type, false, out);
 }
 
 /// The type parameters of the items around the cursor, read from the
@@ -999,7 +1121,7 @@ fn type_params(cx: &CompletionCx<'_>, out: &mut Items) {
 
 /// A pattern (X §4.1): with a known subject, its constructors first,
 /// written with their fields, then `_`. Otherwise the constructors in
-/// scope and `_`.
+/// scope and `_`. Before a turbofish, no `_` (D-1536, D-1544).
 fn patterns(cx: &CompletionCx<'_>, subject: Subject<'_>, out: &mut Items) {
     let subject_ty = match subject {
         Subject::Case(case) => {
@@ -1012,7 +1134,7 @@ fn patterns(cx: &CompletionCx<'_>, subject: Subject<'_>, out: &mut Items) {
                 _ => None,
             }
         }
-        Subject::Let(stmt) => stmt.children().nth(1).and_then(|value| cx.expr_ty(value)),
+        Subject::Let(stmt) => let_value(stmt).and_then(|value| cx.expr_ty(value)),
         Subject::Unknown => None,
     };
     let ctors = subject_ty
@@ -1034,12 +1156,25 @@ fn patterns(cx: &CompletionCx<'_>, subject: Subject<'_>, out: &mut Items) {
             out.push(entry);
         }
     }
-    out.push(Entry::new(
-        "_",
-        EntryKind::Value,
-        rank::KEYWORD,
-        cx.insert("_"),
-    ));
+    // Before a turbofish only a name fits, and `_` is none (D-1536,
+    // D-1544).
+    if !cx.before_turbofish() {
+        out.push(Entry::new(
+            "_",
+            EntryKind::Value,
+            rank::KEYWORD,
+            cx.insert("_"),
+        ));
+    }
+}
+
+/// The value of `stmt`, a `LET_STMT`: the node after its `=`, so `v` in
+/// `let p: T = v`, not the annotation `T`, and in `let guard p = v else
+/// { … }` and `let assert p = v` (D-1531).
+fn let_value(stmt: SyntaxNode<'_>) -> Option<SyntaxNode<'_>> {
+    let eq = stmt.first_token_of_kind(K::EQ)?.text_range().end();
+    stmt.children()
+        .find(|child| child.text_range().start() >= eq)
 }
 
 /// The constructors of the type `head` the module may use, in
@@ -1250,19 +1385,54 @@ fn interpolation(cx: &CompletionCx<'_>, out: &mut Items) {
 /// A name after `m::`, `I::` or `m::I::` (X §4.1): the visible items of
 /// the module in the path's namespace, with the builtin items homed there,
 /// or the functions of the interface. A module the run did not load reads
-/// std's index.
+/// std's index. In an expression, a module's interfaces come too, written
+/// `Shape::`, so `shape::Shape::area(x)` (D-173) completes one segment at
+/// a time (D-1548), and they alone, written `Shape`, where a path's `::`
+/// follows (D-1538). In a type or a pattern nothing is offered there,
+/// since a type's or a constructor's path has one qualifier (E0013,
+/// D-1547). Before a turbofish, an expression gets only a module's
+/// functions and constructors, and an interface's functions are not
+/// offered, since they take no type arguments (E0023, D-1536). A type and
+/// a pattern keep their items there, as D-1525 has it.
 fn qualified(cx: &CompletionCx<'_>, qualifier: &[String], ns: PathNs, out: &mut Items) {
-    let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) else {
+    // A third segment never follows in a type or a pattern (D-1547).
+    if ns != PathNs::Value && cx.before_path() {
+        return;
+    }
+    if let Some(def) = path_interface(cx, qualifier) {
+        // An interface's function takes no type arguments (E0023, D-1536).
+        if cx.before_turbofish() {
+            return;
+        }
+        return interface_items(cx, def, false, out);
+    }
+    let [one] = qualifier else { return };
+    let Some(module) = qualified_module(cx, one) else {
         return;
     };
+    module_items(cx, module, ns, out);
+}
+
+/// The module the module scope binds to `text`, as the first segment of a
+/// path.
+pub(crate) fn qualified_module(cx: &CompletionCx<'_>, text: &str) -> Option<ModuleId> {
+    let resolved = cx.resolved_view().and_then(ModuleView::resolved)?;
+    let name = cx.snapshot.globals().names.lookup(text)?;
+    match resolved.scope.get(Namespace::Value, name)?.res {
+        Res::Module(module) => Some(module),
+        _ => None,
+    }
+}
+
+/// The interface `qualifier` names, `I` or `m::I`, if it names one: the
+/// segments before the partial word of `I::‸` or `m::I::‸` (D-173).
+pub(crate) fn path_interface(cx: &CompletionCx<'_>, qualifier: &[String]) -> Option<DefId> {
+    let resolved = cx.resolved_view().and_then(ModuleView::resolved)?;
     let lookup = |ns: Namespace, text: &str| {
         let name = cx.snapshot.globals().names.lookup(text)?;
         resolved.scope.get(ns, name).map(|e| e.res)
     };
-    let module_of = |text: &str| match lookup(Namespace::Value, text) {
-        Some(Res::Module(m)) => Some(m),
-        _ => None,
-    };
+    let module_of = |text: &str| qualified_module(cx, text);
     let interface = match qualifier {
         [one] if one.starts_with(|c: char| c.is_ascii_uppercase()) => {
             match lookup(Namespace::Type, one) {
@@ -1280,52 +1450,107 @@ fn qualified(cx: &CompletionCx<'_>, qualifier: &[String], ns: PathNs, out: &mut 
             Some(DefId::new(m, index))
         }),
         _ => None,
-    };
-    if let Some(def) = interface {
-        return interface_items(cx, def, out);
-    }
-    let [one] = qualifier else { return };
-    let Some(module) = module_of(one) else { return };
-    module_items(cx, module, ns, out);
+    }?;
+    cx.item(interface)
+        .is_some_and(|item| item.kind == DefKind::Interface)
+        .then_some(interface)
 }
 
-/// The functions of the interface `def`, embedded ones included.
-fn interface_items(cx: &CompletionCx<'_>, def: DefId, out: &mut Items) {
-    if cx
-        .item(def)
-        .is_none_or(|item| item.kind != DefKind::Interface)
-    {
-        return;
-    }
+/// The functions of the interface `def`, embedded ones included. With
+/// `piped`, as after `xs |> Show::`, each is written in the pipe form,
+/// with the hole `_` at its first parameter of type `Self`, which the
+/// left side fills (D-173), and bare when that is its only parameter
+/// (D-244, D-245), as a module's functions are written there; one with
+/// no `Self` parameter takes no pipe and is left out. One whose `Self`
+/// comes later ranks five later (X §4.3, D-1545). Where a function value
+/// is expected, as in `list::map(xs, Show::‸)`, each is written bare, as
+/// a module's functions are, since `I::f` is a value there (X §4.1,
+/// D-500).
+pub(crate) fn interface_items(cx: &CompletionCx<'_>, def: DefId, piped: bool, out: &mut Items) {
+    let as_value = !piped && qualified_as_value(cx);
     let set = cx.snapshot.interfaces();
     let Ok(fns) = interface_fns(def, &|d| set.get(d.module)?.item(d.index)) else {
         return;
     };
+    let types = &cx.snapshot.globals().types;
     for func in fns {
         let Some(item) = cx.item(func) else { continue };
-        let label = cx.name_text(item.name);
-        let Some(mut entry) = cx.def_entry(func, label, rank::MODULE) else {
+        let ItemSig::InterfaceFn(sig) = &item.sig else {
             continue;
         };
-        if let ItemSig::InterfaceFn(sig) = &item.sig {
-            let params: Vec<String> = (1..=sig.params.len()).map(|n| format!("${n}")).collect();
-            entry.insert = if cx.before_paren() {
-                cx.insert(label)
-            } else {
-                cx.snippet(format!("{label}({})$0", params.join(", ")), label)
-            };
-        }
+        let label = cx.name_text(item.name);
+        // `Self` is the one type parameter an interface function's
+        // signature names (`InterfaceFnSig` has no generics of its own).
+        let hole = sig
+            .params
+            .iter()
+            .position(|&param| matches!(types.kind(param), TyKind::Param(_)));
+        let rank = match (piped, hole) {
+            (false, _) | (true, Some(0)) => rank::MODULE,
+            (true, Some(_)) => rank::MODULE.saturating_add(pipe::ranks::LATER),
+            (true, None) => continue,
+        };
+        let Some(mut entry) = cx.def_entry(func, label, rank) else {
+            continue;
+        };
+        entry.insert = if cx.before_paren() || as_value || (piped && sig.params.len() == 1) {
+            cx.insert(label)
+        } else {
+            let mut stop = 0_usize;
+            let args: Vec<String> = (0..sig.params.len())
+                .map(|k| {
+                    if piped && Some(k) == hole {
+                        "_".to_owned()
+                    } else {
+                        stop = stop.saturating_add(1);
+                        format!("${stop}")
+                    }
+                })
+                .collect();
+            cx.snippet(format!("{label}({})$0", args.join(", ")), label)
+        };
         out.push(entry);
     }
 }
 
-/// The items of `module` that the cursor's module may name in `ns`.
+/// The items of `module` that the cursor's module may name in `ns`. In an
+/// expression, its interfaces too, which name their functions, written
+/// `Shape::` (D-1548), and only they, written `Shape`, where a path's
+/// `::` follows (D-1538). Before a turbofish, no interface and no
+/// constant (D-1536).
 fn module_items(cx: &CompletionCx<'_>, module: ModuleId, ns: PathNs, out: &mut Items) {
     let fits = |kind: DefKind| match ns {
-        PathNs::Value => matches!(kind, DefKind::Fn | DefKind::Const | DefKind::Ctor),
+        PathNs::Value if cx.before_path() => kind == DefKind::Interface,
+        PathNs::Value => {
+            value_fits(cx, kind) || (kind == DefKind::Interface && !cx.before_turbofish())
+        }
         PathNs::Type => matches!(kind, DefKind::Type | DefKind::Alias | DefKind::Interface),
         PathNs::Pattern => kind == DefKind::Ctor,
     };
+    module_defs(cx, module, ns, &fits, out);
+}
+
+/// Pushes the interfaces of `module` after `xs |> shape::`, written
+/// `Shape::` (D-1548), or `Shape` where a path's `::` follows (D-1538).
+pub(crate) fn module_interfaces(cx: &CompletionCx<'_>, module: ModuleId, out: &mut Items) {
+    module_defs(
+        cx,
+        module,
+        PathNs::Value,
+        &|kind| kind == DefKind::Interface,
+        out,
+    );
+}
+
+/// Pushes the items of `module` of the kinds `fits` takes that the
+/// cursor's module may name, written as `ns` writes them.
+fn module_defs(
+    cx: &CompletionCx<'_>,
+    module: ModuleId,
+    ns: PathNs,
+    fits: &dyn Fn(DefKind) -> bool,
+    out: &mut Items,
+) {
     let Some(path) = cx.snapshot.table().get(module).map(|i| i.path.clone()) else {
         return;
     };
@@ -1380,6 +1605,9 @@ fn module_items(cx: &CompletionCx<'_>, module: ModuleId, ns: PathNs, out: &mut I
         };
         entry.insert = match ns {
             PathNs::Pattern => pattern_insert(cx, def, label),
+            // An interface names its functions, so a path follows it
+            // (D-1548).
+            PathNs::Value if item.kind == DefKind::Interface => cx.insert(cx.interface_text(label)),
             PathNs::Value => value_insert(cx, label, item, as_value),
             PathNs::Type => cx.insert(label),
         };

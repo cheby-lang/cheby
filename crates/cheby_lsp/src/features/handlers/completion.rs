@@ -57,9 +57,9 @@ pub(crate) struct CompletionCaps {
     /// `clientInfo.name` is Zed's, which filters on `filterText` against
     /// the word (X §4.2).
     pub zed: bool,
-    /// `completionItem.insertTextModeSupport` lists `asIs`, so an item
-    /// that writes its own indentation can say so.
-    pub as_is: bool,
+    /// `completionItem.insertTextModeSupport` lists `adjustIndentation`,
+    /// so an item whose text spans lines can ask for it (D-1506).
+    pub adjust_indentation: bool,
 }
 
 impl CompletionCaps {
@@ -92,7 +92,7 @@ impl CompletionCaps {
             deprecated_flag: flag("deprecatedSupport"),
             markdown: lists("/documentationFormat", &Value::from("markdown")),
             zed,
-            as_is: lists("/insertTextModeSupport/valueSet", &Value::from(1)),
+            adjust_indentation: lists("/insertTextModeSupport/valueSet", &Value::from(2)),
         }
     }
 }
@@ -222,9 +222,11 @@ impl Conv<'_> {
             sort_text: Some(entry.sort_text()),
             filter_text: entry.filter_text.clone(),
             insert_text_format: entry.insert.snippet.then_some(InsertTextFormat::SNIPPET),
-            // An edit that writes its own indentation is taken as it is,
-            // not indented again by a client whose default adjusts it.
-            insert_text_mode: (entry.indented && self.caps.as_is).then_some(InsertTextMode::AS_IS),
+            // Text on several lines is written relative to its first line,
+            // for the client to indent as the line it starts on. `asIs` is
+            // never sent: Zed indents again even then (D-1506).
+            insert_text_mode: (self.caps.adjust_indentation && entry.insert.text.contains('\n'))
+                .then_some(InsertTextMode::ADJUST_INDENTATION),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range,
                 new_text: entry.insert.text.clone(),

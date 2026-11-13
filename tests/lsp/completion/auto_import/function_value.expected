@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `lengt` in this scope",
+      "message": "cannot find value `lengt` in this scope\nnot found",
       "range": {
         "end": {
           "character": 36,
@@ -20,7 +20,7 @@
   ]
 }
 
-== src/main.cheby:10:37 apply length@std::string
+== src/main.cheby:10:37 apply string::length
 {
   "item": {
     "additionalTextEdits": [
@@ -43,13 +43,14 @@
       "kind": "markdown",
       "value": "Returns the number of code points in `text` (D-302)."
     },
+    "filterText": "length",
     "kind": 3,
-    "label": "length",
+    "label": "string::length",
     "labelDetails": {
       "description": "std::string",
       "detail": "(text)"
     },
-    "sortText": "60length",
+    "sortText": "60string::length",
     "textEdit": {
       "newText": "string::length",
       "range": {
@@ -76,7 +77,7 @@
     "fn main() {",
     "  let names = [\"a\", \"bc\"]",
     "  let sizes = list::map(names, string::length)",
-    "  //                                ^ apply length@std::string",
+    "  //                                ^ apply string::length",
     "  assert sizes == [1, 2]",
     "}",
     ""

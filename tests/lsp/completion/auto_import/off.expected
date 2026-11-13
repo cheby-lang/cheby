@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `xs`",
+      "message": "unused binding `xs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_xs`",
       "range": {
         "end": {
           "character": 8,
@@ -19,7 +19,7 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `pairs`",
+      "message": "unused binding `pairs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_pairs`",
       "range": {
         "end": {
           "character": 11,
@@ -35,7 +35,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `enumer` in this scope",
+      "message": "cannot find value `enumer` in this scope\nnot found",
       "range": {
         "end": {
           "character": 20,
@@ -51,7 +51,7 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `n`",
+      "message": "unused binding `n`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_n`",
       "range": {
         "end": {
           "character": 7,
@@ -67,7 +67,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `e` in this scope",
+      "message": "cannot find value `e` in this scope\nnot found",
       "range": {
         "end": {
           "character": 11,
@@ -84,12 +84,12 @@
   ]
 }
 
-== src/main.cheby:9:21 completion enumerate
+== src/main.cheby:9:21 completion list::enumerate
 {
   "absent": [
-    "enumerate"
+    "list::enumerate"
   ],
-  "count": 17,
+  "count": 18,
   "isIncomplete": false,
   "items": []
 }
@@ -109,6 +109,7 @@
     "Nil | Struct | Nil\nof type Nil",
     "None | EnumMember | None\nof type Option<T>",
     "Ok | EnumMember | Ok(T)\nof type Result<T, E> | `Ok($1)$0`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`",
     "Some | EnumMember | Some(T)\nof type Option<T> | `Some($1)$0`",
     "True | EnumMember | True\nof type Bool",
     "case | Snippet | `case ${1:subject} {\n  ${2:pattern} => $0\n}`",

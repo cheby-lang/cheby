@@ -46,7 +46,7 @@ fn after_a_pipe_functions_take_the_hole() {
     let (found, _) = at(main, ON);
     // `std::int` is the head's module, but the file does not import it, so
     // its functions wait for two characters (D-1479).
-    assert!(!found.items.iter().any(|e| e.label == "show"));
+    assert!(!found.items.iter().any(|e| e.label == "int::show"));
     // A local of a one-parameter function type is bare, rank 15; one of
     // two parameters is not offered.
     let inc = entry(&found, "inc");
@@ -69,7 +69,7 @@ fn after_a_pipe_functions_take_the_hole() {
     let length = found
         .items
         .iter()
-        .find(|e| e.label == "length" && !e.additional.is_empty())
+        .find(|e| e.label == "string::length" && !e.additional.is_empty())
         .unwrap_or_else(|| panic!("{:?}", labels(&found)));
     assert_eq!(length.rank, rank::LOCAL);
     assert_eq!(length.insert.text, "string::length");
@@ -83,7 +83,7 @@ fn after_a_pipe_functions_take_the_hole() {
 fn a_partial_name_is_replaced() {
     let main = "fn main() {\n  let xs = [1, 2]\n  let n = xs |> le‸\n}\n";
     let (found, text) = at(main, IMPORTING);
-    let length = entry(&found, "length");
+    let length = entry(&found, "list::length");
     assert_eq!(slice(&text, length.insert.range), "le");
     assert_eq!(length.insert.text, "list::length");
 }
@@ -101,7 +101,7 @@ fn other_loaded_modules_rank_forty_and_need_auto_import() {
     let from_list = found
         .items
         .iter()
-        .find(|e| e.label == "from_list" && e.description.as_deref() == Some("set"))
+        .find(|e| e.label == "set::from_list" && e.description.as_deref() == Some("std::set"))
         .unwrap_or_else(|| panic!("{:?}", labels(&found)));
     assert_eq!(from_list.rank, rank::PRELUDE);
     assert_eq!(from_list.insert.text, "set::from_list");
@@ -113,20 +113,20 @@ fn other_loaded_modules_rank_forty_and_need_auto_import() {
             .items
             .iter()
             .filter(|e| e.rank == rank::PRELUDE)
-            .all(|e| e.label != "debug"),
+            .all(|e| e.filter_text.as_deref() != Some("debug")),
         "{:?}",
         labels(&found)
     );
     // Without auto-import, nothing that needs an import, the head's module
     // included (D-1486).
     let (found, _) = at(main, ON);
-    assert!(!found.items.iter().any(|e| e.label == "from_list"));
+    assert!(!found.items.iter().any(|e| e.label == "set::from_list"));
     assert!(
         found.items.iter().all(|e| e.additional.is_empty()),
         "{:?}",
         labels(&found)
     );
-    assert!(!found.items.iter().any(|e| e.label == "length"));
+    assert!(!found.items.iter().any(|e| e.label == "list::length"));
     assert!(!found.incomplete);
 }
 
@@ -145,7 +145,7 @@ fn imports_wait_for_two_characters_of_the_name() {
         "{:?}",
         labels(&found)
     );
-    assert!(found.items.iter().any(|e| e.label == "map"));
+    assert!(found.items.iter().any(|e| e.label == "list::map"));
     // The imports start at the second character, so the list is
     // incomplete (D-1487).
     assert!(found.incomplete);
@@ -164,7 +164,7 @@ fn imports_wait_for_two_characters_of_the_name() {
         .items
         .iter()
         .filter(|e| !e.additional.is_empty())
-        .map(|e| e.label.as_str())
+        .filter_map(|e| e.filter_text.as_deref())
         .collect();
     assert!(imported.contains(&"from_list"), "{imported:?}");
     assert!(
@@ -173,7 +173,7 @@ fn imports_wait_for_two_characters_of_the_name() {
             .all(|name| super::super::auto_import::admits("fl", name)),
         "{imported:?}"
     );
-    assert!(found.items.iter().any(|e| e.label == "map"));
+    assert!(found.items.iter().any(|e| e.label == "list::map"));
 }
 
 #[test]
@@ -277,9 +277,16 @@ fn std_modules_the_run_did_not_load_rank_sixty() {
             .collect();
         seen |= !unloaded.is_empty();
         for item in unloaded {
-            assert!(super::super::auto_import::admits(partial, &item.label));
+            let name = item.filter_text.as_deref().unwrap_or_default();
+            assert!(super::super::auto_import::admits(partial, name));
             assert_eq!(item.additional.len(), 1, "{}", item.label);
-            assert!(parses(&applied(&text, item)), "{}", item.label);
+            // An interface starts a path, so it writes its `::` and the
+            // text parses once a function follows (D-1546).
+            if item.kind == EntryKind::Interface {
+                assert_eq!(item.insert.text, format!("{}::", item.label));
+            } else {
+                assert!(parses(&applied(&text, item)), "{}", item.label);
+            }
         }
     }
     assert!(seen, "some unloaded std function takes a `String`");
@@ -311,17 +318,70 @@ fn an_unknown_left_side_offers_no_function() {
     let main =
         "import std::list\n\nfn main() {\n  let f = fn(x: Int) { x }\n  let n = nowhere |> ‸\n}\n";
     let (found, _) = at(main, ON);
-    assert_eq!(labels(&found), ["f", "list"]);
+    // The prelude's interface starts a path, as a module does (D-1546).
+    assert_eq!(labels(&found), ["f", "list", "Show"]);
+    assert_eq!(entry(&found, "Show").insert.text, "Show::");
 }
 
 #[test]
-fn before_a_written_path_only_module_names_are_offered_bare() {
+fn before_a_written_path_only_modules_and_interfaces_are_offered_bare() {
+    // D-1521, D-1530: no function is offered where a path's `::` follows
+    // the word, of an imported module or to import, only what a path
+    // starts with: the modules and the interfaces, as the prelude's `Show`.
     let main = "import std::list\nimport std::string\n\nfn main() {\n  let xs = [\"a\"]\n  let n = xs |> st‸::length\n  n\n}\n";
     let (found, text) = at(main, ON);
-    assert_eq!(labels(&found), ["list", "string"]);
+    assert_eq!(labels(&found), ["list", "string", "Show"]);
     let string = entry(&found, "string");
     assert_eq!(string.insert.text, "string");
     assert!(parses(&applied(&text, string)));
+    // With `completion.autoImport` on, nothing to import either.
+    let (found, _) = at(main, IMPORTING);
+    assert_eq!(labels(&found), ["list", "string", "Show"]);
+    // The same word with no `::` after it offers both kinds.
+    let bare = main.replace("st‸::length", "st‸");
+    let (found, _) = at(&bare, IMPORTING);
+    let through = |importing: bool| {
+        found
+            .items
+            .iter()
+            .any(|e| e.label.contains("::") && e.additional.is_empty() != importing)
+    };
+    assert!(through(false), "{:?}", labels(&found));
+    assert!(through(true), "{:?}", labels(&found));
+    // A short partial gets no incomplete mark there, since nothing to
+    // import fits (D-1525, D-1530).
+    let short = main.replace("st‸::length", "s‸::length");
+    let (found, _) = at(&short, IMPORTING);
+    assert_eq!(labels(&found), ["list", "string", "Show"]);
+    assert!(!found.incomplete);
+}
+
+#[test]
+fn before_a_turbofish_functions_are_offered_and_module_names_are_not() {
+    // D-1525: `xs |> list::reverse::<Int>` is a valid stage, so before
+    // `::<` the functions are offered as with no `::`, written as paths
+    // only, and no module name, since `list::<Int>` is no path (E0042).
+    let main =
+        "import std::list\n\nfn main() {\n  let xs = [1, 2]\n  let n = xs |> re‸::<Int>\n  n\n}\n";
+    let (found, text) = at(main, ON);
+    let reverse = entry(&found, "list::reverse");
+    assert_eq!(reverse.insert.text, "list::reverse");
+    assert!(parses(&applied(&text, reverse)));
+    assert!(
+        found.items.iter().all(|e| e.kind != EntryKind::Module),
+        "{:?}",
+        labels(&found)
+    );
+    // With `completion.autoImport` on, a short partial waits for the
+    // imports, so the list is incomplete, as with no `::` (D-1487).
+    let short = main.replace("re‸", "r‸");
+    let (found, _) = at(&short, IMPORTING);
+    assert!(found.incomplete);
+    assert!(
+        found.items.iter().all(|e| e.kind != EntryKind::Module),
+        "{:?}",
+        labels(&found)
+    );
 }
 
 #[test]
@@ -337,4 +397,37 @@ fn a_parameter_whose_bound_fails_does_not_accept() {
         entry(&found, "sum").insert.text,
         " |> list::sum(_, ${1:zero})$0"
     );
+}
+
+#[test]
+fn a_function_written_through_its_module_is_labelled_by_the_path() {
+    // D-1508: after `|>`, the label is the qualified name, `filterText` the
+    // bare one, and the description the module's whole path. A function of
+    // the module itself keeps its name.
+    let main = "import std::list\n\nfn twice(xs: List<Int>) -> List<Int> {\n  xs\n}\n\nfn main() {\n  let xs = [1, 2]\n  let n = xs |> ‸\n}\n";
+    let (found, _) = at(main, ON);
+    let map = entry(&found, "list::map");
+    assert_eq!(map.filter_text.as_deref(), Some("map"));
+    assert_eq!(map.description.as_deref(), Some("std::list"));
+    assert_eq!(map.insert.text, "list::map(_, ${1:f})$0");
+    let twice = entry(&found, "twice");
+    assert_eq!(twice.filter_text, None);
+    assert!(!labels(&found).contains(&"map"));
+    // One that needs an import, of a loaded module or of std's index.
+    let base = StdBase::build(Arc::new(Globals::new())).expect("std checks");
+    let main = "fn main() {\n  let s = \"a\"\n  let n = s |> en‸\n}\n";
+    let (found, _) = run(main, &[], IMPORTING, StdAccess::Index(base.index()));
+    let qualified: Vec<_> = found
+        .items
+        .iter()
+        .filter(|e| !e.additional.is_empty())
+        .collect();
+    assert!(!qualified.is_empty(), "{:?}", labels(&found));
+    for item in qualified {
+        let name = item.filter_text.as_deref().expect("a filterText");
+        let module = item.description.as_deref().expect("a description");
+        assert!(module.starts_with("std::"), "{module}");
+        let last = module.rsplit("::").next().unwrap();
+        assert_eq!(item.label, format!("{last}::{name}"));
+    }
 }

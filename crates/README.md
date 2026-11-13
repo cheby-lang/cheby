@@ -92,11 +92,11 @@ Three rules shape the graph:
 | [`cheby_link`](cheby_link/README.md)                 | M3        | Objects from code records, the program object, and the link of `cheby build`     |
 | [`cheby_js`](cheby_js/README.md)                     | M4        | JavaScript emitter and suspension analysis (skeleton)                            |
 | [`cheby_fmt`](cheby_fmt/README.md)                   | M3, M5    | Formatter (`cheby fmt`); its later parts land beside M3 (D-1029)                 |
-| [`cheby_lsp`](cheby_lsp/README.md)                   | M5        | Language server: the protocol, open documents and published diagnostics          |
+| [`cheby_lsp`](cheby_lsp/README.md)                   | M5        | Language server: diagnostics, navigation, completion, inlays, constant values    |
 | [`cheby_doc`](cheby_doc/README.md)                   | M5        | Documentation generator (skeleton)                                               |
 | [`cheby_pkg`](cheby_pkg/README.md)                   | M5        | Dependency resolution, lockfile and fetching (skeleton)                          |
 
-The milestone column names the milestone that gives the crate its first real contents. Milestones are described in [`docs/plan/README.md`](../docs/plan/README.md). M1 to M3 are done, and M4 is next. `cheby_rt_exe`, `cheby_fmt` and `cheby_link` have their first contents, and `cheby build` links executables, which needs the runtime archive next to `cheby` (`cargo build -p cheby_rt_exe`, D-929). `cheby_lsp` has its first contents ahead of M5, on the `lsp` branch: `cheby lsp` publishes diagnostics and answers no other request yet (D-1354). The other crates of M4 and M5 are still three-line skeletons that exist so the workspace's shape is fixed from the start (D-284).
+The milestone column names the milestone that gives the crate its first real contents. Milestones are described in [`docs/plan/README.md`](../docs/plan/README.md). M1 to M3 are done, and M4 is next. `cheby_rt_exe`, `cheby_fmt` and `cheby_link` have their first contents, and `cheby build` links executables, which needs the runtime archive next to `cheby` (`cargo build -p cheby_rt_exe`, D-929). `cheby_lsp` has its contents ahead of M5: `cheby lsp` publishes diagnostics and serves hover, navigation, completion, signature help, inlay hints, semantic tokens, formatting and the values of constants, and its remaining waves, from rename on, follow (D-1354, D-1517). The other crates of M4 and M5 are still three-line skeletons that exist so the workspace's shape is fixed from the start (D-284).
 
 ## Outside `crates/`
 

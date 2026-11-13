@@ -6,6 +6,6 @@ import std::list
 fn main() {
   let xs = [1, 2, 3]
   let ys = xs |> ma
-  //               ^ apply map
+  //               ^ apply list::map
   assert ys == xs
 }

@@ -6,8 +6,11 @@
 //! An item is used when another item, tests included, refers to it:
 //! through a path or a name in a signature or a body, or through THIR,
 //! which also holds the implicit references of operators, interpolation,
-//! `dyn` conversions and dictionaries (satisfying functions). An item's
-//! uses of itself, such as recursion, do not count.
+//! `dyn` conversions and dictionaries (satisfying functions). An interface
+//! call on a nominal type calls one function, but it uses every function
+//! of the dictionary it was checked with, those of the interfaces its
+//! interface embeds included (D-1552). An item's uses of itself, such as
+//! recursion, do not count.
 //!
 //! A type counts as used when its name or any of its constructors is
 //! used, in an expression or a pattern, and an interface when its name or
@@ -24,7 +27,9 @@
 //! items are reported like others (D-516).
 
 use cheby_diag::{Diagnostic, Span, codes};
-use cheby_iface::{DefIndex, DefKind, ItemSig, ModuleId, ModuleInterface, PackageId, Vis};
+use cheby_iface::{
+    DefIndex, DefKind, ItemSig, ModuleId, ModuleInterface, Namespace, PackageId, Vis,
+};
 use cheby_resolve::Res;
 use rustc_hash::FxHashSet;
 
@@ -56,6 +61,15 @@ pub(super) fn item_refs(
                 owner: path.owner,
                 def,
             });
+            // `I::f` names `I` also when `f` is declared by an interface
+            // that `I` embeds (§8.3), so it uses `I` (D-516).
+            if let Some(iface) = qualifier_interface(input, path, def) {
+                out.push(ItemRef {
+                    from,
+                    owner: path.owner,
+                    def: iface,
+                });
+            }
         }
     }
     for r in thir.iter().chain(hooks) {
@@ -66,6 +80,55 @@ pub(super) fn item_refs(
         });
     }
     out
+}
+
+/// The interface that the qualifier of `path` names, `I` in `I::f` or
+/// `m::I::f`, when `path` resolved to `def`, an interface function
+/// (D-173). The resolution of `path` is the function of the interface
+/// that declares it, which is another one when `I` embeds it (§8.3).
+fn qualifier_interface(
+    input: &TypesInput<'_>,
+    path: &PathUse,
+    def: cheby_iface::DefId,
+) -> Option<cheby_iface::DefId> {
+    let kind = if def.module == input.module {
+        input.resolved.item(def.index).map(|item| item.kind)
+    } else {
+        input.deps.item(def).map(|item| item.kind)
+    };
+    if kind != Some(DefKind::InterfaceFn) {
+        return None;
+    }
+    let segments: Vec<&str> = path.text.split("::").collect();
+    let name = |text: &str| input.globals.names.lookup(text);
+    let iface = match segments.as_slice() {
+        [iface, _] => match input.resolved.scope.get(Namespace::Type, name(iface)?)?.res {
+            Res::Def(iface) => iface,
+            _ => return None,
+        },
+        [module, iface, _] => {
+            let Res::Module(module) = input
+                .resolved
+                .scope
+                .get(Namespace::Value, name(module)?)?
+                .res
+            else {
+                return None;
+            };
+            let index = input
+                .deps
+                .get(module)?
+                .lookup(Namespace::Type, name(iface)?)?;
+            cheby_iface::DefId::new(module, index)
+        }
+        _ => return None,
+    };
+    let kind = if iface.module == input.module {
+        input.resolved.item(iface.index).map(|item| item.kind)
+    } else {
+        input.deps.item(iface).map(|item| item.kind)
+    };
+    (kind == Some(DefKind::Interface)).then_some(iface)
 }
 
 /// The top-level items of module `input.module` that something other than

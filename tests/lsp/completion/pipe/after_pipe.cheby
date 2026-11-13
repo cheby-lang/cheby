@@ -7,6 +7,6 @@ import std::list
 fn main() {
   let xs = [1, 2, 3]
   let ys = xs |> 
-  //             ^ completion map length fold
-  //             ^ apply map
+  //             ^ completion list::map list::length list::fold
+  //             ^ apply list::map
 }

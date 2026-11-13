@@ -21,7 +21,9 @@
 //!    diagnostics (E0069 from evaluation, E0075 to E0078) and no values,
 //!    since `build` gives none on `Err` (D-1413). On `Ok`, every local
 //!    constant's text from `cheby_consteval::debug_texts`, cut at
-//!    [`BackendRequest::max_text`] characters (D-1413's 4,096).
+//!    [`BackendRequest::max_text`] characters (D-1413's 4,096), with the
+//!    package's module files its initializer reaches, as D-538's seed
+//!    computes them (D-1510).
 //! 4. Every diagnostic is mapped to the [`Symbol`] of the constant whose
 //!    initializer holds its primary span, so the server marks that one
 //!    constant failed and keeps the others (D-1413, S-20).
@@ -40,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cheby_diag::{Diagnostic, FileId, SourceMap, TextRange};
-use cheby_iface::{DefId, DefKind, PackageId};
+use cheby_iface::{DefId, DefKind, ModuleId, PackageId};
 use cheby_package::{MANIFEST_FILE, Target};
 
 use super::plain::{NormMap, Placed, PlainDiagnostic, normalized_key, plain};
@@ -149,6 +151,11 @@ pub struct ConstValue {
     pub text: String,
     /// The text was cut.
     pub truncated: bool,
+    /// The package's module files that its initializer reaches through
+    /// functions, constants and constructors, as D-538's seed computes
+    /// them (D-593), its own included, in path order (D-1510). `None` when
+    /// the build named none for it: every module then counts.
+    pub modules: Option<Vec<PathBuf>>,
 }
 
 /// Why [`backend_query`] has no result: the wire's `status` other than
@@ -265,10 +272,15 @@ fn constants(
                 .zip(texts)
                 .filter_map(|(c, text)| {
                     let (text, truncated) = cut_text(text?, max_text);
+                    let modules = built
+                        .const_modules
+                        .get(&c.def)
+                        .map(|modules| files.module_paths(front, modules));
                     Some(ConstValue {
                         symbol: c.symbol.clone(),
                         text,
                         truncated,
+                        modules,
                     })
                 })
                 .collect();
@@ -434,6 +446,22 @@ impl Files {
             .collect();
         listed.sort_by(|a, b| a.path.cmp(&b.path));
         listed
+    }
+
+    /// The paths of the package's module files among `modules`, sorted:
+    /// std's and other packages' modules are left out, as
+    /// [`BackendResult::files`] leaves them out (D-1510).
+    fn module_paths(&self, front: &Frontend, modules: &[ModuleId]) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = modules
+            .iter()
+            .filter_map(|&module| front.modules.get(module)?.file)
+            .filter_map(|file| self.by_id.get(&file))
+            .filter(|file| file.module)
+            .map(|file| file.path.clone())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     /// `diag` as plain data in normalized text, filed under its primary

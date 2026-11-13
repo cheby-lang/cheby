@@ -9,10 +9,10 @@
 //! then the latest configuration answer, each key of a later layer winning
 //! over the same key of an earlier one. Reading is lenient per key: a value
 //! of the wrong type is skipped with a warning, so the key keeps what the
-//! earlier layers gave it, its default at the bottom. A key or group this
-//! server does not know is skipped with a warning too. A bad setting never
-//! stops the server. A `null` value means no opinion, except for
-//! `analysis.target`, where it means no target.
+//! earlier layers gave it, its default at the bottom (D-1514). A key or
+//! group this server does not know is skipped with a warning too. A bad
+//! setting never stops the server. A `null` value means no opinion, except
+//! for `analysis.target`, where it means no target.
 //!
 //! A `didChangeConfiguration` push is read from its `settings.cheby`
 //! ([`pushed`]). Only a push without that key makes the server ask with
@@ -575,5 +575,44 @@ mod tests {
             Settings::from_layers([&json!({ "inlayHints": { "patternBinders": false } }), &null]);
         assert!(!settings.inlay_hints.pattern_binders);
         assert_eq!(warnings, Vec::<String>::new());
+    }
+
+    /// D-1514: a value of the wrong type in the configuration answer keeps
+    /// what `initializationOptions` gave the key, not the default, for every
+    /// kind of key; a key the answer leaves out keeps it too.
+    #[test]
+    fn a_bad_configuration_value_keeps_the_init_value() {
+        let init = json!({
+            "analysis": { "target": "js", "debounceMs": 5, "requestWaitMs": 200 },
+            "completion": { "autoImport": false },
+            "ownership": { "lens": "all" },
+            "clientCommands": ["cheby.run"],
+        });
+        let config = json!({
+            "analysis": { "target": 7, "debounceMs": "fast" },
+            "completion": { "autoImport": "no" },
+            "ownership": { "lens": "sometimes" },
+            "clientCommands": "cheby.run",
+        });
+        let (settings, warnings) = Settings::from_layers([&init, &config]);
+        assert_eq!(settings.analysis.target, Some(Target::Js));
+        assert_eq!(settings.analysis.debounce_ms, 5);
+        assert_eq!(settings.analysis.request_wait_ms, 200);
+        assert!(!settings.completion.auto_import);
+        assert_eq!(settings.ownership.lens, Lens::All);
+        assert_eq!(settings.client_commands, ["cheby.run"]);
+        for key in [
+            "analysis.target",
+            "analysis.debounceMs",
+            "completion.autoImport",
+            "ownership.lens",
+            "`clientCommands`",
+        ] {
+            let found = warnings.iter().filter(|w| w.contains(key)).count();
+            assert_eq!(found, 1, "one warning for {key}: {warnings:?}");
+        }
+        // The same answer over the defaults alone keeps the defaults.
+        let (settings, _) = Settings::from_layers([&config]);
+        assert_eq!(settings, Settings::default());
     }
 }

@@ -1,0 +1,255 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `re` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 16
+        },
+        "start": {
+          "character": 11,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `re` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 19
+        },
+        "start": {
+          "character": 17,
+          "line": 19
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `re` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 22
+        },
+        "start": {
+          "character": 4,
+          "line": 22
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:17:14 completion list::reverse xs list two `case` todo
+{
+  "absent": [
+    "list",
+    "two",
+    "case",
+    "todo"
+  ],
+  "count": 120,
+  "isIncomplete": true,
+  "items": [
+    {
+      "detail": "List<Int>",
+      "kind": 6,
+      "label": "xs",
+      "sortText": "100000xs",
+      "textEdit": {
+        "newText": "xs",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 16
+          },
+          "start": {
+            "character": 11,
+            "line": 16
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the elements of `xs` in the opposite order."
+      },
+      "filterText": "reverse",
+      "kind": 3,
+      "label": "list::reverse",
+      "labelDetails": {
+        "description": "std::list",
+        "detail": "(xs)"
+      },
+      "sortText": "30list::reverse",
+      "textEdit": {
+        "newText": "list::reverse",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 16
+          },
+          "start": {
+            "character": 11,
+            "line": 16
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:17:14 apply list::reverse
+{
+  "item": {
+    "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the elements of `xs` in the opposite order."
+    },
+    "filterText": "reverse",
+    "kind": 3,
+    "label": "list::reverse",
+    "labelDetails": {
+      "description": "std::list",
+      "detail": "(xs)"
+    },
+    "sortText": "30list::reverse",
+    "textEdit": {
+      "newText": "list::reverse",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 16
+        },
+        "start": {
+          "character": 11,
+          "line": 16
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1525, D-1529, D-1530, D-1536",
+    "//! `re::<Int>(xs)` in a file that imports `std::list`: before a",
+    "//! turbofish, `list::reverse` is offered as with no `::` after the word,",
+    "//! written as its path, since `list::reverse::<Int>` is a valid path. No",
+    "//! module name is offered, since `list::<Int>` is not one, and D-1530's",
+    "//! rule for a path's `::` does not apply. Only names that take type",
+    "//! arguments are offered: the local `xs`, but no constant, keyword or",
+    "//! snippet (D-1536). So after `|>`, and inside `(`, where the parser",
+    "//! finds the `<` past a line break and a comment (type error state).",
+    "",
+    "import std::list",
+    "",
+    "const two: Int = 2",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2]",
+    "  let ys = list::reverse::<Int>(xs)",
+    "  //         ^ completion list::reverse xs list two `case` todo",
+    "  //         ^ apply list::reverse",
+    "  let zs = xs |> re::<Int>",
+    "  //               ^ completion list::reverse list",
+    "  let k = list::length(",
+    "    re::",
+    "    //^ completion list::reverse list",
+    "      <Int>(xs),",
+    "  )",
+    "  assert ys == zs && k == two",
+    "}",
+    ""
+  ]
+}
+
+== src/main.cheby:20:20 completion list::reverse list
+{
+  "absent": [
+    "list"
+  ],
+  "count": 51,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the elements of `xs` in the opposite order."
+      },
+      "filterText": "reverse",
+      "kind": 3,
+      "label": "list::reverse",
+      "labelDetails": {
+        "description": "std::list",
+        "detail": "(xs)"
+      },
+      "sortText": "10list::reverse",
+      "textEdit": {
+        "newText": "list::reverse",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 19
+          },
+          "start": {
+            "character": 17,
+            "line": 19
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:23:7 completion list::reverse list
+{
+  "absent": [
+    "list"
+  ],
+  "count": 122,
+  "isIncomplete": true,
+  "items": [
+    {
+      "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the elements of `xs` in the opposite order."
+      },
+      "filterText": "reverse",
+      "kind": 3,
+      "label": "list::reverse",
+      "labelDetails": {
+        "description": "std::list",
+        "detail": "(xs)"
+      },
+      "sortText": "30list::reverse",
+      "textEdit": {
+        "newText": "list::reverse",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 22
+          },
+          "start": {
+            "character": 4,
+            "line": 22
+          }
+        }
+      }
+    }
+  ]
+}

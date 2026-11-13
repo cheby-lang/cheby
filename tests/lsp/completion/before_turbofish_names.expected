@@ -1,0 +1,136 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected `=`, found `::`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 11
+        },
+        "start": {
+          "character": 11,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "message": "expected `=>`, found `::`",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 16
+        },
+        "start": {
+          "character": 7,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:12 completion List dyn
+{
+  "absent": [
+    "dyn"
+  ],
+  "count": 24,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "type List<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Functions for the built-in `List<T>`, a persistent RRB-tree vector\n(§3.8, D-039, ADR-0018).\n\n`List` is a builtin item whose home module is this one (D-447). The\nkernels, the functions that build, read or cut the tree, are runtime\nfunctions with required costs (D-274, D-300). Every other function is\nwritten in Cheby over the kernels and over list patterns, whose `..rest`\nshares structure with the list (D-053). Each of them is tail-recursive,\nso none grows the stack with the length of a list (D-094), and none of\nthe kernels calls back into Cheby."
+      },
+      "kind": 22,
+      "label": "List",
+      "sortText": "40List",
+      "textEdit": {
+        "newText": "List",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 11
+          },
+          "start": {
+            "character": 9,
+            "line": 11
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:14:13 completion json Show
+{
+  "absent": [
+    "Show"
+  ],
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "json",
+      "labelDetails": {
+        "description": "std::json"
+      },
+      "sortText": "30json",
+      "textEdit": {
+        "newText": "json",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 13
+          },
+          "start": {
+            "character": 10,
+            "line": 13
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:17:8 completion json::Array _
+{
+  "absent": [
+    "_"
+  ],
+  "count": 7,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "Array(List<json::Value>)\nof type json::Value",
+      "kind": 20,
+      "label": "json::Array",
+      "labelDetails": {
+        "description": "json"
+      },
+      "sortText": "000005json::Array",
+      "textEdit": {
+        "newText": "json::Array",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 16
+          },
+          "start": {
+            "character": 4,
+            "line": 16
+          }
+        }
+      }
+    }
+  ]
+}

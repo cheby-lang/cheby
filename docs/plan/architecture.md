@@ -29,7 +29,7 @@ cheby/
     cheby_consteval/      compile-time evaluation of constants
     cheby_repl/           REPL session
     cheby_fmt/            formatter (M5)
-    cheby_lsp/            language server: protocol, open documents, diagnostics (M5)
+    cheby_lsp/            language server: diagnostics, navigation, completion, constant values (M5)
     cheby_doc/            documentation generator (M5)
     cheby_pkg/            dependency resolution and fetching (M5)
     cheby_cli/            the `cheby` binary, whose build script computes the build ID (M3)
@@ -42,7 +42,7 @@ cheby/
     lsp/                  language server tests and goldens, run over stdio (D-1352)
     support/              cheby_test_support: shared harness code, and from M2 the program generator (D-809)
   bench/                  synthetic project generator and runtime benchmarks
-  fuzz/                   cargo-fuzz targets: lex, parse, check, and naive-versus-Perceus RC (M2)
+  fuzz/                   cargo-fuzz targets: lex, parse, check, the server's analysis, and naive-versus-Perceus RC (M2)
   xtask/                  developer commands: bless, gen-bench, check-determinism, test-std, bench-compile, bench-run (M2)
   docs/                   spec, ADRs, decision log, examples, plan, stdlib spec
 ```
@@ -436,8 +436,8 @@ A panicking or cancelled fiber unwinds its stack and releases each frame's refer
 - **Publishing:** every package file and `cheby.toml` are published, open or closed. An open document gets a publish with its version when it opens, even an empty list, and again whenever its version or list changes. A closed file is published when its list changes, and a file that leaves the package gets one empty publish (D-1373, D-1442). A request waits only for the edits it names, so a client that waits for a job to finish waits for `cheby/idle` (D-1443, D-1415). The published diagnostics for a package are `cheby check`'s, the back end's included (D-1348).
 - **Child process:** the server never runs generated code. A hidden subcommand of its own executable evaluates a package's constants and prints one JSON document, reading the saved files under `Mode::Check`, so it compiles no C and loads no library (D-1349, D-1410). It runs at the first clean report of a session and after each save or watched change, one at a time in the process, only while the report is clean and the package declares a constant. A new save, `constants.childTimeoutSeconds`, 64 MiB of output, the session's end and `shutdown` kill it, and it exits by itself when its stdin closes (D-1411). Its diagnostics are published after a file's own while the file's normalized text hashes as the text it read, and their ranges are mapped onto the published text with `NormMap` (D-1412). A failed evaluation keeps the old values for hover, marked stale (D-1413). Windows starts no child until M6 (D-1414).
 - **Visible state:** a child run shows as `$/progress`, and a run cut short gives one `window/showMessage` per session. `cheby/status` reports each package's state, and `cheby/idle`, for a client with `experimental.chebyIdle`, says that nothing is running or due for a package, its child included (D-1415).
-- **Settings:** one `cheby` object, read from `initializationOptions`, `workspace/configuration` and `didChangeConfiguration`, in layers over the defaults. A bad value is skipped with a warning (D-1376).
-- **Handles:** the driver's generation handles stay out of the server's state. The crate's `clippy.toml` bans their types, and only request handlers, from a later wave, will read a snapshot (D-1366).
+- **Settings:** one `cheby` object, read from `initializationOptions`, `workspace/configuration` and `didChangeConfiguration`, in layers over the defaults. A value of the wrong type is skipped with a warning, and the key keeps what the earlier layers gave it (D-1376, D-1514).
+- **Handles:** the driver's generation handles stay out of the server's state. The crate's `clippy.toml` bans their types, and only the request handlers, in the `features` module, read a snapshot (D-1366).
 - **Capabilities:** the server advertises only what it serves, and a test checks that the advertised requests are exactly the routed ones (D-1379). Today that is `positionEncoding`, `textDocumentSync`, `documentSymbol`, `foldingRange`, `selectionRange`, `formatting`, `rangeFormatting`, `hover`, completion on `.`, `:`, `@` and `>` with resolve, signature help on `(` and `,`, `definition`, `declaration`, `typeDefinition`, `references`, `documentHighlight`, call hierarchy, `documentLink`, `workspace/symbol`, semantic tokens `full` and `range`, inlay hints without resolve, and `workspace.workspaceFolders`. File watchers are registered dynamically when the client allows it.
 
 The harness `cargo test -p cheby_cli --test lsp` runs the built server as an editor would ([testing.md](testing.md#10-language-server-tests)).

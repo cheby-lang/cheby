@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0077",
-      "message": "evaluating the constant `greeting` reached an effect",
+      "message": "evaluating the constant `greeting` reached an effect\nthis constant is computed at compile time\nnote: it reached the external function `cheby_io_println`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time",
       "range": {
         "end": {
           "character": 14,

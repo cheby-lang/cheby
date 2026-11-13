@@ -7,7 +7,7 @@
 fn main() {
   let xs = ["a", "b"]
   let pairs = enumer
-  //                ^ completion enumerate
+  //                ^ completion list::enumerate
   let n = e
   //       ^ completion
 }

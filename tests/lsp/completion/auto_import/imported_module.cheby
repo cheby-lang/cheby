@@ -1,0 +1,14 @@
+// @decisions: D-1507, D-1508
+//! `revers` in a file that imports `std::list`: the module's item is
+//! written through the import's name with no import edit, labelled
+//! `list::reverse` and matched by its name (type error state).
+
+import std::list
+
+fn main() {
+  let xs = [1, 2]
+  let ys = revers
+  //             ^ completion list::reverse
+  //             ^ apply list::reverse
+  assert ys == xs
+}

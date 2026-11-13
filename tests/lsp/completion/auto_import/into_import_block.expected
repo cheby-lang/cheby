@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `xs`",
+      "message": "unused binding `xs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_xs`",
       "range": {
         "end": {
           "character": 8,
@@ -19,7 +19,7 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `pairs`",
+      "message": "unused binding `pairs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_pairs`",
       "range": {
         "end": {
           "character": 11,
@@ -35,7 +35,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `enumer` in this scope",
+      "message": "cannot find value `enumer` in this scope\nnot found",
       "range": {
         "end": {
           "character": 20,
@@ -52,7 +52,7 @@
   ]
 }
 
-== src/main.cheby:9:21 apply enumerate
+== src/main.cheby:9:21 apply list::enumerate
 {
   "item": {
     "additionalTextEdits": [
@@ -75,14 +75,15 @@
       "kind": "markdown",
       "value": "Pairs each element with its index, counting from 0 (D-380)."
     },
+    "filterText": "enumerate",
     "insertTextFormat": 2,
     "kind": 3,
-    "label": "enumerate",
+    "label": "list::enumerate",
     "labelDetails": {
       "description": "std::list",
       "detail": "(xs)"
     },
-    "sortText": "60enumerate",
+    "sortText": "60list::enumerate",
     "textEdit": {
       "newText": "list::enumerate(${1:xs})$0",
       "range": {
@@ -108,7 +109,7 @@
     "fn main() {",
     "  let xs = [\"a\", \"b\"]",
     "  let pairs = list::enumerate(xs)",
-    "  //                ^ apply enumerate",
+    "  //                ^ apply list::enumerate",
     "  io::println(string::join([\"x\"], \",\"))",
     "}",
     ""

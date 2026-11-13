@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0047",
-      "message": "mismatched types",
+      "message": "mismatched types\nexpected `String`, found `Int`",
       "range": {
         "end": {
           "character": 26,
@@ -37,7 +37,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `missing` in this scope",
+      "message": "cannot find value `missing` in this scope\nnot found",
       "range": {
         "end": {
           "character": 17,

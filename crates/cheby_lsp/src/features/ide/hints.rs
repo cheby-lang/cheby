@@ -1,7 +1,8 @@
-//! Inlay hints of types (X §7.1, plan W8): the type of a `let` binding and
-//! of each name a destructuring `let` binds, of a `use` binder, of a
-//! closure's or local function's parameters and result, of each stage of a
-//! multi-line pipeline, and the implicit conversions to `dyn`.
+//! Inlay hints (X §7.1, plan W8): the type of a `let` binding and of each
+//! name a destructuring `let` binds, of a `use` binder, of a closure's or
+//! local function's parameters and result, of each stage of a multi-line
+//! pipeline, and the implicit conversions to `dyn`; and the names of the
+//! parameters that literal arguments fill (D-1515).
 //!
 //! Types come from the body's facts (D-1380), which exist for an errored
 //! body too, so hints stay while a body has a type error. A type with an
@@ -10,19 +11,19 @@
 //!
 //! Every hint is computed over whole bodies and only then limited to the
 //! request's range, so a range never changes which hints exist, only which
-//! are sent. Parameter names (`inlayHints.parameterNames`), constant values
-//! (W9) and the memory and tail rows (X §7.3) are not here.
+//! are sent. Constant values (W9) and the memory and tail rows (X §7.3) are
+//! not here.
 
 use cheby_driver::analysis::{
-    BodyFacts, BodyRes, DefId, DefIndex, DefKind, FileLocation, Generics, ItemSig, ModuleView, Res,
-    Snapshot, TextRange, TextSize, Ty, TyKind,
+    BodyFacts, BodyRes, CtorFields, DefId, DefIndex, DefKind, FileLocation, Generics, ItemSig,
+    ModuleView, ParamSig, Res, Snapshot, TextRange, TextSize, Ty, TyKind,
 };
 use cheby_syntax::SyntaxKind as K;
-use cheby_syntax::SyntaxNode;
 use cheby_syntax::ast::{
-    AstNode, BinExpr, BinOp, Closure, Expr, GuardStmt, LetStmt, Literal, LiteralKind, LocalFn,
-    Param, UseBinder,
+    AstNode, BinExpr, BinOp, CallExpr, Closure, Expr, GuardStmt, LetStmt, Literal, LiteralKind,
+    LocalFn, Param, UseBinder,
 };
+use cheby_syntax::{SyntaxElement, SyntaxNode};
 
 use crate::features::ide::print::Printer;
 use crate::features::{CancelToken, RequestError};
@@ -52,12 +53,15 @@ pub(crate) struct Switches {
     pub pipe_stages: bool,
     /// `inlayHints.dyn`: implicit conversions to `dyn`.
     pub dyn_: bool,
+    /// `inlayHints.parameterNames`: the parameter a literal argument fills
+    /// (D-1515).
+    pub parameter_names: bool,
 }
 
 impl Switches {
-    /// Every row on, as D-1376's defaults have them.
+    /// D-1376's defaults: every type row on, parameter names off.
     #[cfg(test)]
-    pub(crate) const ALL: Self = Self {
+    pub(crate) const DEFAULTS: Self = Self {
         let_types: true,
         pattern_binders: true,
         use_binders: true,
@@ -65,16 +69,29 @@ impl Switches {
         local_fn_types: true,
         pipe_stages: true,
         dyn_: true,
+        parameter_names: false,
     };
 }
 
-/// One hint of a type (`InlayHintKind::Type`): a label at an offset of the
-/// document's text.
+/// What a hint shows, which the handler sends as its `InlayHintKind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HintKind {
+    /// A type: `: Int`, ` -> Int`, ` as dyn Shape`.
+    Type,
+    /// A parameter's name before an argument: `width: ` (D-1515).
+    Parameter,
+}
+
+/// One hint: a label at an offset of the document's text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Hint {
-    /// Where the label shows: the end of what it describes.
+    /// Where the label shows: the end of the expression a type describes,
+    /// the start of the argument a parameter's name precedes.
     pub offset: TextSize,
-    /// The label, with its separator: `: Int`, ` -> Int`, ` as dyn Shape`.
+    /// What the hint shows.
+    pub kind: HintKind,
+    /// The label, with its separator: `: Int`, ` -> Int`, ` as dyn Shape`,
+    /// `width: `.
     pub label: String,
     /// The text that writes the hint into the code at `offset`, when it
     /// would compile as written (X §7.1): `let` bindings only.
@@ -181,6 +198,9 @@ impl Cx<'_> {
                 K::CLOSURE => out.extend(self.closure_result(body, n)),
                 K::LOCAL_FN => out.extend(self.local_fn_result(body, n)),
                 K::BIN_EXPR => self.pipeline(body, n, out),
+                K::CALL_EXPR if self.switches.parameter_names => {
+                    self.parameter_names(body, n, out);
+                }
                 _ => {}
             }
         }
@@ -277,6 +297,7 @@ impl Cx<'_> {
             .map(|source| format!(": {}", source.text));
         Some(Hint {
             offset: decl.span.range.end(),
+            kind: HintKind::Type,
             label: format!(": {label}"),
             edit,
         })
@@ -311,6 +332,7 @@ impl Cx<'_> {
         let ret = self.shown(self.result_of(ty)?, body)?;
         Some(Hint {
             offset,
+            kind: HintKind::Type,
             label: format!(" -> {ret}"),
             edit: None,
         })
@@ -362,6 +384,7 @@ impl Cx<'_> {
             if let Some(shown) = self.shown(ty, body) {
                 out.push(Hint {
                     offset: end,
+                    kind: HintKind::Type,
                     label: format!(": {shown}"),
                     edit: None,
                 });
@@ -407,9 +430,116 @@ impl Cx<'_> {
         let shown = self.shown(expected, body)?;
         Some(Hint {
             offset: node_significant(value).end(),
+            kind: HintKind::Type,
             label: format!(" as {shown}"),
             edit: None,
         })
+    }
+
+    /// `name: ` before each literal argument of the call `node` whose
+    /// callee is a function with named parameters (D-1515). A literal is
+    /// a number, a string, or a unit constructor such as `True` or `None`.
+    /// Skipped: a call through a function value or an interface function,
+    /// whose parameters have no names; a `_` hole; an argument whose text
+    /// is the parameter's name; and a stage of a pipeline with no hole,
+    /// which is an error (D-244). An argument fills the parameter at its
+    /// position in the list, its commas counted as signature help counts
+    /// them (X §4.7): a hole is a position, and the piped value and a
+    /// `use`'s callback are not written in the list, so no argument
+    /// shifts. A second argument at one position, where a comma is
+    /// missing, ends the names: which parameter it and those after it
+    /// fill is not known.
+    fn parameter_names(&self, body: &Body<'_>, node: SyntaxNode<'_>, out: &mut Vec<Hint>) {
+        let Some(call) = CallExpr::cast(node) else {
+            return;
+        };
+        let (Some(callee), Some(list)) = (call.callee(), call.arg_list()) else {
+            return;
+        };
+        if is_pipe_stage(node) && list.holes().next().is_none() {
+            return;
+        }
+        let Some(params) = self.named_params(body, callee.syntax()) else {
+            return;
+        };
+        let names = &self.snapshot.globals().names;
+        let text = node.tree().text();
+        let mut position = 0_usize;
+        let mut filled = None;
+        for element in list.syntax().children_with_tokens() {
+            let arg = match element {
+                SyntaxElement::Token(token) => {
+                    if token.kind() == K::COMMA {
+                        position = position.saturating_add(1);
+                    }
+                    continue;
+                }
+                SyntaxElement::Node(arg) => arg,
+            };
+            if filled.replace(position) == Some(position) {
+                return;
+            }
+            let Some(param) = params.get(position) else {
+                return;
+            };
+            let name = names.get(param.name);
+            if name == "_" || !self.is_literal(body, arg) {
+                continue;
+            }
+            let range = node_significant(arg);
+            if range.slice(text) == Some(name) {
+                continue;
+            }
+            out.push(Hint {
+                offset: range.start(),
+                kind: HintKind::Parameter,
+                label: format!("{name}: "),
+                edit: None,
+            });
+        }
+    }
+
+    /// The parameters of the function the call with the callee `callee`
+    /// calls: a top-level function, of this package or of a dependency.
+    /// `None` for a value of function type, a local function, a
+    /// constructor and an interface function, whose parameters have no
+    /// names to show.
+    fn named_params(&self, body: &Body<'_>, callee: SyntaxNode<'_>) -> Option<&[ParamSig]> {
+        let def = body.facts.call(callee.id())?.def?;
+        let iface = self.snapshot.interfaces().get(def.module)?;
+        match &iface.item(def.index)?.sig {
+            ItemSig::Fn(f) => Some(&f.params),
+            _ => None,
+        }
+    }
+
+    /// Whether the argument `arg` is a literal (D-1515): a number, with
+    /// its `-`, a string, raw or not, or a unit constructor, which covers
+    /// `True` and `False`.
+    fn is_literal(&self, body: &Body<'_>, arg: SyntaxNode<'_>) -> bool {
+        match Expr::cast(arg) {
+            Some(Expr::Literal(_) | Expr::String(_)) => true,
+            Some(Expr::Prefix(prefix)) => prefix.negative_literal().is_some(),
+            Some(Expr::Path(path)) => path
+                .path()
+                .and_then(|path| body.res.paths.get(&path.syntax().id()))
+                .is_some_and(|res| self.is_unit_ctor(res)),
+            _ => false,
+        }
+    }
+
+    /// Whether `res` is a constructor with no fields.
+    fn is_unit_ctor(&self, res: &Res) -> bool {
+        let Res::Def(def) = *res else {
+            return false;
+        };
+        self.snapshot
+            .interfaces()
+            .get(def.module)
+            .and_then(|iface| iface.item(def.index))
+            .is_some_and(|item| {
+                matches!(&item.sig, ItemSig::Ctor(ctor) if matches!(ctor.fields, CtorFields::Unit))
+            })
     }
 }
 
@@ -477,6 +607,16 @@ fn param_owner(param: Param<'_>) -> Option<K> {
 /// Whether `node` is a `|>` expression.
 fn is_pipe(node: SyntaxNode<'_>) -> bool {
     BinExpr::cast(node).and_then(BinExpr::op) == Some(BinOp::Pipe)
+}
+
+/// Whether `node` is the right side of a `|>`, a stage that the piped
+/// value is passed to.
+fn is_pipe_stage(node: SyntaxNode<'_>) -> bool {
+    node.parent()
+        .filter(|&parent| is_pipe(parent))
+        .and_then(BinExpr::cast)
+        .and_then(BinExpr::rhs)
+        .is_some_and(|rhs| rhs.syntax() == node)
 }
 
 /// Whether `node` is the left side of a `|>`, a stage of a longer

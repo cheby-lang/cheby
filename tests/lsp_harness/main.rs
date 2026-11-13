@@ -2569,8 +2569,9 @@ fn run_step(
             );
         }
         Step::Edit(from) => (from, false),
-        Step::Save(from) => (from, true),
+        Step::Save(from) | Step::ZedSave(from) => (from, true),
     };
+    let zed = matches!(step, Step::ZedSave(_));
     let base = dir.join(from);
     let found = files_with_extension(&base, "cheby").map_err(|e| format!("{from}: {e}"))?;
     if found.is_empty() {
@@ -2592,7 +2593,17 @@ fn run_step(
             std::fs::write(&target, &disk).map_err(|e| format!("{}: {e}", target.display()))?;
         }
         let version = client.change(&uri, &text)?;
-        if save {
+        if zed {
+            // Zed's order (CP2's R3): the watched change of its own write,
+            // then `didSave` a few milliseconds later, and an echo of it.
+            client.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({ "changes": [{ "uri": uri, "type": 2 }] }),
+            )?;
+            std::thread::sleep(Duration::from_millis(5));
+            client.save(&uri)?;
+            client.save(&uri)?;
+        } else if save {
             client.save(&uri)?;
         }
         texts.insert(file, text);

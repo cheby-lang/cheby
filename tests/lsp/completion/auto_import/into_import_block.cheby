@@ -7,6 +7,6 @@ import std::string
 fn main() {
   let xs = ["a", "b"]
   let pairs = enumer
-  //                ^ apply enumerate
+  //                ^ apply list::enumerate
   io::println(string::join(["x"], ","))
 }

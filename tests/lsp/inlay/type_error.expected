@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0047",
-      "message": "mismatched types",
+      "message": "mismatched types\nexpected `String`, found `{integer}`",
       "range": {
         "end": {
           "character": 23,
@@ -37,7 +37,7 @@
     },
     {
       "code": "E0047",
-      "message": "mismatched types",
+      "message": "mismatched types\nexpected `{integer}`, found `String`",
       "range": {
         "end": {
           "character": 23,
@@ -71,7 +71,7 @@
     },
     {
       "code": "E0047",
-      "message": "mismatched types",
+      "message": "mismatched types\nexpected `{integer}`, found `String`",
       "range": {
         "end": {
           "character": 45,

@@ -1,0 +1,110 @@
+// @decisions: D-1534, D-1532, D-1526, D-1519, D-605
+> )
+error[E0013]: expected a statement, found `)`
+ --> <repl:1>:1:1
+  |
+1 | )
+  | ^
+
+> }
+error[E0013]: expected a statement, found `}`
+ --> <repl:2>:1:1
+  |
+1 | }
+  | ^
+
+> 1 + }
+error[E0013]: expected an expression, found `}`
+ --> <repl:3>:1:5
+  |
+1 | 1 + }
+  |     ^
+
+> [1,
+.   2,
+. }
+error[E0015]: unclosed `[`
+ --> <repl:4>:3:1
+  |
+1 | [1,
+  | - this `[` is never closed
+2 |   2,
+3 | }
+  | ^ expected `]`
+
+> (1 +
+. }
+error[E0013]: expected an expression, found `}`
+ --> <repl:5>:2:1
+  |
+2 | }
+  | ^
+
+> let a = 1
+> }
+error[E0013]: expected a statement, found `}`
+ --> <repl:7>:1:1
+  |
+1 | }
+  | ^
+
+> a
+1 : Int
+> 1 } 2
+error[E0013]: expected a statement, found `}`
+ --> <repl:9>:1:3
+  |
+1 | 1 } 2
+  |   ^
+
+> f(1, }
+error[E0015]: unclosed `(`
+ --> <repl:10>:1:6
+  |
+1 | f(1, }
+  |  -   ^ expected `)`
+  |  |
+  |  this `(` is never closed
+
+> :type 1 + }
+error[E0013]: expected an expression, found `}`
+ --> <repl:11>:1:5
+  |
+1 | 1 + }
+  |     ^
+
+> [ { ] }
+error[E0015]: unclosed `{`
+ --> <repl:12>:1:5
+  |
+1 | [ { ] }
+  |   - ^ expected `}`
+  |   |
+  |   this `{` is never closed
+
+error[E0013]: expected a statement, found `}`
+ --> <repl:12>:1:7
+  |
+1 | [ { ] }
+  |       ^
+
+> let x = [
+.   {
+.     1
+.   ]
+error[E0015]: unclosed `{`
+ --> <repl:13>:4:3
+  |
+2 |   {
+  |   - this `{` is never closed
+3 |     1
+4 |   ]
+  |   ^ expected `}`
+
+> }
+error[E0013]: expected a statement, found `}`
+ --> <repl:14>:1:1
+  |
+1 | }
+  | ^
+

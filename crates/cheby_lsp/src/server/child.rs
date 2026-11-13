@@ -76,9 +76,16 @@
 //! when its run starts (D-1504). A package with no constants gets no
 //! mark. A failed constant still reads as failed. Results are plain
 //! data keyed by root, path and [`Symbol`], so they cross generations. A
-//! value also carries the hash of the file that declares it, found by the
-//! module's file of §7.2 (D-162), so hover marks a value stale once that
-//! file changed.
+//! value also carries, for each of the package's module files that its
+//! initializer reaches, as the child reports them, and for the file that
+//! declares it, found by the module's file of §7.2 (D-162), the
+//! normalized hash of the text the run read. It is current only while
+//! the editor holds that text in each of them, so hover and `cheby/status`
+//! mark a value stale once a module it reaches changed, saved or not
+//! (D-1510). A value the child names no modules for reaches every module
+//! file, a module added since included. A run that is due or running
+//! sets [`ConstValues::evaluating`], kept in step with [`ChildState`],
+//! and hover then says that the constants are being evaluated (D-1511).
 //!
 //! The logic is on [`Children`], which reads the server only through a
 //! [`ChildEnv`] and answers with an [`Outbox`], so its tests need no
@@ -101,8 +108,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cheby_driver::analysis::{
-    Code, FileReport, Hash128, InputsKey, PlainDiagnostic, PlainEdit, PlainHelp, PlainLabel,
-    Report, Severity, Symbol, Target, TextRange, normalized_key,
+    Code, FileLocation, FileReport, Hash128, InputsKey, ModuleView, PlainDiagnostic, PlainEdit,
+    PlainHelp, PlainLabel, Report, Severity, Snapshot, Symbol, Target, TextRange, normalized_key,
 };
 use crossbeam_channel::{Receiver, Sender};
 use lsp_types::MessageType;
@@ -354,6 +361,15 @@ pub(crate) struct PackageChild {
 }
 
 impl PackageChild {
+    /// Sets [`ConstValues::evaluating`] from [`PackageChild::constants`]:
+    /// a run is due (`Waiting`) or running (D-1511).
+    fn sync_evaluating(&mut self) {
+        let evaluating = !matches!(self.constants, ChildState::Idle);
+        if self.values.evaluating != evaluating {
+            Arc::make_mut(&mut self.values).evaluating = evaluating;
+        }
+    }
+
     /// Sets [`PackageChild::unstarted`] to `files`, and
     /// [`ConstValues::disk_errors`] with it (D-1501).
     fn set_unstarted(&mut self, files: Option<BTreeMap<PathBuf, Hash128>>) {
@@ -593,7 +609,7 @@ impl Children {
     /// session's first clean report, or a clean one after a save that
     /// found the report unclean through unsaved buffers only, a run comes
     /// due at once (D-1411).
-    pub(crate) fn on_report(
+    fn on_report_unsynced(
         &mut self,
         root: &Path,
         facts: ReportFacts,
@@ -666,7 +682,7 @@ impl Children {
     /// run's when none runs, kills the child and makes a run due after
     /// [`COALESCE`] (D-1411, D-1494). Unchanged text leaves a running
     /// child and a due run as they are. Ownership is the W15 wave's.
-    pub(crate) fn on_save(
+    fn on_save_unsynced(
         &mut self,
         root: &Path,
         saved: &[PathBuf],
@@ -733,7 +749,7 @@ impl Children {
     /// limit, and a run cut short by a lower limit than the new one comes
     /// due again, since the message about it says to raise the setting
     /// (A §11.5). Idempotent, so every settings refresh may call it.
-    pub(crate) fn on_settings(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
+    fn on_settings_unsynced(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
         if self.closed {
             return;
         }
@@ -792,7 +808,7 @@ impl Children {
     /// killed run does not count as the last run (D-1502). A package
     /// whose report is not clean waits for the next clean report, as
     /// [`Children::on_settings`] has it.
-    pub(crate) fn on_target(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
+    fn on_target_unsynced(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
         if self.closed || !self.can_run(env) {
             return;
         }
@@ -824,7 +840,7 @@ impl Children {
 
     /// Kills what passed its time limit, then starts the earliest due run
     /// when no constants child runs in the process (A §11.4, §11.5).
-    pub(crate) fn schedule(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
+    fn schedule_unsynced(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
         let expired: Vec<PathBuf> = self
             .packages
             .iter()
@@ -963,7 +979,7 @@ impl Children {
     }
 
     /// A child's output ended. Output of a run that was killed is dropped.
-    pub(crate) fn on_done(&mut self, done: ChildDone, now: Instant, out: &mut Outbox) {
+    fn on_done_unsynced(&mut self, done: ChildDone, now: Instant, out: &mut Outbox) {
         if done.job != ChildJob::Constants {
             return;
         }
@@ -1126,6 +1142,7 @@ impl Children {
                 }
             }
         }
+        self.sync_evaluating();
     }
 
     /// The session at `root` ended: kill its children, end their
@@ -1143,10 +1160,13 @@ impl Children {
 
     /// The `child` part of `cheby/status` for `root`, a package or, when
     /// `is_package` is false, a single-file session (D-1415, A §11.7).
+    /// `editor` is the package's newest snapshot, which `stale` compares
+    /// the values' modules against (D-1510).
     pub(crate) fn status(
         &self,
         root: &Path,
         is_package: bool,
+        editor: Option<&dyn EditorText>,
         env: &ChildEnv<'_>,
         now: Instant,
     ) -> Value {
@@ -1199,13 +1219,12 @@ impl Children {
             );
             map.insert("values".to_owned(), json!(package.values.values.len()));
             map.insert("failed".to_owned(), json!(package.values.failed.len()));
-            // Stale as hover shows it: after a run that failed, was cut
-            // short or was skipped, and while a save has left errors on
-            // disk so that no run started (D-1503, D-1505).
-            map.insert(
-                "stale".to_owned(),
-                json!(package.values.stale || package.values.disk_errors),
-            );
+            // Stale as hover shows it: when any value reads stale, after a
+            // run that failed, was cut short or was skipped, while a save
+            // has left errors on disk so that no run started (D-1503,
+            // D-1505), and while a module a value reaches has other text
+            // in `editor`, the newest snapshot (D-1510).
+            map.insert("stale".to_owned(), json!(package.values.any_stale(editor)));
             // Skipped by the child (D-1497) or never started by the
             // server (D-1501).
             map.insert(
@@ -1229,6 +1248,70 @@ impl Children {
             "ownership": state(&package.ownership),
             "notEvaluated": why_not,
         })
+    }
+}
+
+/// The entry points that change [`ChildState`]: each takes its step,
+/// then keeps every package's [`ConstValues::evaluating`] in step with its
+/// constants state, so hover reads whether a run is due or running
+/// (D-1511).
+impl Children {
+    /// [`Children::on_report_unsynced`], then the evaluating marks.
+    pub(crate) fn on_report(
+        &mut self,
+        root: &Path,
+        facts: ReportFacts,
+        report: &Report,
+        env: &ChildEnv<'_>,
+        now: Instant,
+    ) {
+        self.on_report_unsynced(root, facts, report, env, now);
+        self.sync_evaluating();
+    }
+
+    /// [`Children::on_save_unsynced`], then the evaluating marks.
+    pub(crate) fn on_save(
+        &mut self,
+        root: &Path,
+        saved: &[PathBuf],
+        env: &ChildEnv<'_>,
+        now: Instant,
+        out: &mut Outbox,
+    ) {
+        self.on_save_unsynced(root, saved, env, now, out);
+        self.sync_evaluating();
+    }
+
+    /// [`Children::on_settings_unsynced`], then the evaluating marks.
+    pub(crate) fn on_settings(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
+        self.on_settings_unsynced(env, now, out);
+        self.sync_evaluating();
+    }
+
+    /// [`Children::on_target_unsynced`], then the evaluating marks.
+    pub(crate) fn on_target(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
+        self.on_target_unsynced(env, now, out);
+        self.sync_evaluating();
+    }
+
+    /// [`Children::schedule_unsynced`], then the evaluating marks.
+    pub(crate) fn schedule(&mut self, env: &ChildEnv<'_>, now: Instant, out: &mut Outbox) {
+        self.schedule_unsynced(env, now, out);
+        self.sync_evaluating();
+    }
+
+    /// [`Children::on_done_unsynced`], then the evaluating marks.
+    pub(crate) fn on_done(&mut self, done: ChildDone, now: Instant, out: &mut Outbox) {
+        self.on_done_unsynced(done, now, out);
+        self.sync_evaluating();
+    }
+
+    /// Sets each package's [`ConstValues::evaluating`] from its
+    /// constants state (D-1511).
+    fn sync_evaluating(&mut self) {
+        for package in self.packages.values_mut() {
+            package.sync_evaluating();
+        }
     }
 }
 
@@ -1588,6 +1671,7 @@ fn apply_envelope(
             stale: false,
             front_errors: false,
             disk_errors: false,
+            evaluating: package.values.evaluating,
         }
     } else {
         // `backend::build` gives no values on `Err`: the old ones stay,
@@ -1599,6 +1683,7 @@ fn apply_envelope(
             stale: true,
             front_errors: false,
             disk_errors: false,
+            evaluating: package.values.evaluating,
         }
     };
     package.values = Arc::new(values);
@@ -1665,41 +1750,60 @@ fn child_diagnostics<'s>(
     (files, failed, unplaced)
 }
 
-/// The section's values by [`Symbol`], each with the hash of its module's
-/// file (§7.2, D-162).
+/// The section's values by [`Symbol`], each with the module files it
+/// depends on and the hash its run read each with (D-1510): those its
+/// `modules` name, or every module file of the run for a value with
+/// none, and its declaring file, found by the module's file of §7.2
+/// (D-162).
 fn const_entries(
     root: &Path,
     section: &ConstantsSection,
     hashes: &BTreeMap<String, Hash128>,
 ) -> BTreeMap<Symbol, ConstEntry> {
-    let mut by_module: BTreeMap<(String, Vec<String>), Hash128> = BTreeMap::new();
+    // The run's module files, `cheby.toml` left out.
+    let read: BTreeMap<PathBuf, Hash128> = hashes
+        .iter()
+        .filter(|(path, _)| path.as_str() != super::MANIFEST)
+        .map(|(path, &hash)| (absolute(root, path), hash))
+        .collect();
+    // By package name, each module's file and its hash.
+    let mut by_module: BTreeMap<String, BTreeMap<Vec<String>, (PathBuf, Hash128)>> =
+        BTreeMap::new();
     let mut entries = BTreeMap::new();
     for value in &section.values {
         let Some(symbol) = value.symbol.to_symbol() else {
             continue;
         };
         let package = symbol.module.package().to_owned();
-        if !by_module.keys().any(|(name, _)| *name == package) {
-            for (path, &hash) in hashes {
-                if let Some(file) = cheby_driver::module_file(root, &package, Path::new(path)) {
-                    by_module.insert((package.clone(), file.path.segments().to_vec()), hash);
-                }
-            }
-            // Marks the package as looked at, even with no module file.
-            by_module
-                .entry((package.clone(), Vec::new()))
-                .or_insert(Hash128([0; 16]));
+        let files = by_module.entry(package.clone()).or_insert_with(|| {
+            hashes
+                .iter()
+                .filter_map(|(path, &hash)| {
+                    let file = cheby_driver::module_file(root, &package, Path::new(path))?;
+                    Some((file.path.segments().to_vec(), (absolute(root, path), hash)))
+                })
+                .collect()
+        });
+        let mut reached: BTreeMap<PathBuf, Hash128> = match &value.modules {
+            Some(modules) => modules
+                .iter()
+                .map(|path| {
+                    let hash = hashes.get(path.as_str()).copied().unwrap_or(UNREAD);
+                    (absolute(root, path), hash)
+                })
+                .collect(),
+            None => read.clone(),
+        };
+        if let Some((path, hash)) = files.get(symbol.module.segments()) {
+            reached.entry(path.clone()).or_insert(*hash);
         }
-        let hash = by_module
-            .get(&(package, symbol.module.segments().to_vec()))
-            .copied()
-            .unwrap_or(Hash128([0; 16]));
         entries.insert(
             symbol,
             ConstEntry {
                 text: value.text.clone(),
                 truncated: value.truncated,
-                hash,
+                reached,
+                whole: value.modules.is_none(),
             },
         );
     }
@@ -1751,6 +1855,10 @@ fn plain_of(root: &Path, d: &WireDiagnostic) -> Option<PlainDiagnostic> {
 /// (A §11.6, D-1413). Plain data keyed by [`Symbol`], so it outlives the
 /// snapshot it came with.
 #[derive(Clone, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about one package's last run and its state"
+)]
 pub(crate) struct ConstValues {
     /// Each evaluated constant's value.
     pub values: BTreeMap<Symbol, ConstEntry>,
@@ -1770,6 +1878,11 @@ pub(crate) struct ConstValues {
     /// with `front_errors`, every value as stale, as after a skipped run
     /// (D-1503), and a failed constant as failed.
     pub disk_errors: bool,
+    /// A constants run is due or running for the package: its
+    /// [`PackageChild::constants`] is `Waiting` or `Running`. A constant
+    /// with no value then reads as [`ConstReading::Evaluating`], and a
+    /// stale value says that the new save is being evaluated (D-1511).
+    pub evaluating: bool,
 }
 
 /// One constant's value and where it came from.
@@ -1779,8 +1892,78 @@ pub(crate) struct ConstEntry {
     pub text: String,
     /// The text was cut.
     pub truncated: bool,
-    /// The normalized hash of the declaring file when it was evaluated.
-    pub hash: Hash128,
+    /// The package's module files the value depends on, by absolute path,
+    /// each with the normalized hash (D-1412) of the text its run read:
+    /// those its initializer reaches, as the child reports them, and the
+    /// declaring file (D-1510). A file the run listed with no hash has
+    /// [`UNREAD`], which no text matches.
+    pub reached: BTreeMap<PathBuf, Hash128>,
+    /// The child named no modules for the value, so `reached` holds every
+    /// module file the run read, and a module file added since counts too
+    /// (D-1510).
+    pub whole: bool,
+}
+
+impl ConstEntry {
+    /// Whether `editor` holds, in each module file the value depends on,
+    /// the text its run read, and, for a value that reaches every module,
+    /// no module file the run did not read (D-1510).
+    fn current(&self, editor: &dyn EditorText) -> bool {
+        self.reached
+            .iter()
+            .all(|(path, &hash)| editor.hash(path) == Some(hash))
+            && (!self.whole
+                || editor
+                    .modules()
+                    .iter()
+                    .all(|path| self.reached.contains_key(path)))
+    }
+}
+
+/// The hash of a module file whose text a run did not report: no text
+/// has it, so a value that depends on that file is never current.
+const UNREAD: Hash128 = Hash128([0; 16]);
+
+/// The package's text as the editor holds it, which a value's reading
+/// compares with the text its run read (D-1412, D-1510). Hover and
+/// `cheby/status` read it from the newest [`Snapshot`].
+pub(crate) trait EditorText {
+    /// The normalized hash (D-1412) of the package's module file at the
+    /// absolute `path`, `None` when the package has no module there.
+    fn hash(&self, path: &Path) -> Option<Hash128>;
+
+    /// The package's module files, by absolute path.
+    fn modules(&self) -> BTreeSet<PathBuf>;
+}
+
+impl EditorText for Snapshot {
+    fn hash(&self, path: &Path) -> Option<Hash128> {
+        let file = self.file_of(path)?;
+        self.module_at(file).filter(|module| module.is_local())?;
+        Some(normalized_key(self.source(file)?.text()))
+    }
+
+    fn modules(&self) -> BTreeSet<PathBuf> {
+        self.local_modules()
+            .filter_map(ModuleView::file)
+            .filter_map(|file| match self.location(file)? {
+                FileLocation::Package(path) => Some(path.clone()),
+                FileLocation::Std(_) | FileLocation::Synthetic => None,
+            })
+            .collect()
+    }
+}
+
+/// Module files by absolute path with their normalized hashes: the
+/// editor's text in tests.
+impl EditorText for BTreeMap<PathBuf, Hash128> {
+    fn hash(&self, path: &Path) -> Option<Hash128> {
+        self.get(path).copied()
+    }
+
+    fn modules(&self) -> BTreeSet<PathBuf> {
+        self.keys().cloned().collect()
+    }
 }
 
 /// What hover shows for one constant of a package (X §2.1's constant
@@ -1792,9 +1975,10 @@ pub(crate) struct ConstEntry {
 /// `features` names no new crate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ConstReading {
-    /// A value. `stale` when the last evaluation failed or was skipped,
-    /// the declaring file changed since, or the server starts no run for
-    /// errors on disk (D-1503): hover then says "when last saved".
+    /// A value. `stale` when the last evaluation failed or was skipped, a
+    /// module file it depends on changed since (D-1510), or the server
+    /// starts no run for errors on disk (D-1503): hover then says "when
+    /// last saved", or, while `evaluating`, "when last evaluated" (D-1511).
     Value {
         /// The value's text.
         text: String,
@@ -1802,7 +1986,13 @@ pub(crate) enum ConstReading {
         truncated: bool,
         /// From an older evaluation or older text.
         stale: bool,
+        /// A run is due or running for the package (D-1511).
+        evaluating: bool,
     },
+    /// No value, while a run is due or running for the package (D-1511).
+    /// It comes before [`ConstReading::AfterFailure`],
+    /// [`ConstReading::SkippedForErrors`] and [`ConstReading::NotYet`].
+    Evaluating,
     /// Evaluation failed at this constant, with the diagnostic's code.
     Failed {
         /// Such as E0075.
@@ -1832,18 +2022,19 @@ impl ConstValues {
         self.disk_errors = false;
     }
 
-    /// The reading of `symbol`, whose declaring file's normalized hash is
-    /// `current` in the snapshot hover reads. A constant the last run
-    /// marked failed reads as failed; any other value is stale when that
-    /// run failed or its file changed since (D-1413), or while the server
-    /// starts no run for errors on disk, since the value may depend on a
-    /// broken file (D-1503). A constant with no
-    /// value is [`ConstReading::SkippedForErrors`] when the last run was
-    /// skipped because the saved files have front-end errors (D-1497), or
-    /// when the server started none for them (D-1501),
+    /// The reading of `symbol` while `editor` holds the package's text. A
+    /// constant the last run marked failed reads as failed; any other
+    /// value is stale when that run failed (D-1413), when a module file it
+    /// depends on no longer has the text the run read (D-1510), or while
+    /// the server starts no run for errors on disk, since the value may
+    /// depend on a broken file (D-1503). A constant with no value is
+    /// [`ConstReading::Evaluating`] while a run is due or running
+    /// (D-1511); else [`ConstReading::SkippedForErrors`] when the last run
+    /// was skipped because the saved files have front-end errors
+    /// (D-1497), or when the server started none for them (D-1501),
     /// [`ConstReading::AfterFailure`] when it failed or was cut short,
     /// else [`ConstReading::NotYet`] (D-1490).
-    pub(crate) fn reading(&self, symbol: &Symbol, current: Hash128) -> ConstReading {
+    pub(crate) fn reading(&self, symbol: &Symbol, editor: &dyn EditorText) -> ConstReading {
         if let Some(&code) = self.failed.get(symbol) {
             return ConstReading::Failed { code };
         }
@@ -1851,12 +2042,50 @@ impl ConstValues {
             Some(entry) => ConstReading::Value {
                 text: entry.text.clone(),
                 truncated: entry.truncated,
-                stale: self.stale || self.disk_errors || entry.hash != current,
+                stale: self.stale || self.disk_errors || !entry.current(editor),
+                evaluating: self.evaluating,
             },
+            None if self.evaluating => ConstReading::Evaluating,
             None if self.front_errors || self.disk_errors => ConstReading::SkippedForErrors,
             None if self.stale => ConstReading::AfterFailure,
             None => ConstReading::NotYet,
         }
+    }
+
+    /// Adds `symbol`'s value `text`, from a run that read each file of
+    /// `reached` with its hash (D-1510): what a test of hover needs from
+    /// a run.
+    #[cfg(test)]
+    pub(crate) fn insert_value(
+        &mut self,
+        symbol: Symbol,
+        text: &str,
+        truncated: bool,
+        reached: BTreeMap<PathBuf, Hash128>,
+    ) {
+        self.values.insert(
+            symbol,
+            ConstEntry {
+                text: text.to_owned(),
+                truncated,
+                reached,
+                whole: false,
+            },
+        );
+    }
+
+    /// Whether any value reads stale ([`ConstValues::reading`]) while
+    /// `editor`, if known, holds the package's text: `cheby/status`'s
+    /// `stale` (D-1505, D-1510). With no editor text, only the run's own
+    /// marks count.
+    pub(crate) fn any_stale(&self, editor: Option<&dyn EditorText>) -> bool {
+        self.stale
+            || self.disk_errors
+            || editor.is_some_and(|editor| {
+                self.values.iter().any(|(symbol, entry)| {
+                    !self.failed.contains_key(symbol) && !entry.current(editor)
+                })
+            })
     }
 }
 

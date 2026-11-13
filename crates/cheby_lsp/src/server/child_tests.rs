@@ -58,6 +58,7 @@ fn value(name: &str, text: &str) -> WireValue {
         symbol: SymbolData::from(&symbol(name)),
         text: text.to_owned(),
         truncated: false,
+        modules: None,
     }
 }
 
@@ -121,6 +122,8 @@ fn env(analyzing: &BTreeSet<PathBuf>) -> ChildEnv<'_> {
     }
 }
 
+/// The `window/showMessage` notifications in `out`. Only the process tests use it.
+#[cfg(unix)]
 fn shows(out: &Outbox) -> usize {
     out.effects
         .iter()
@@ -134,6 +137,13 @@ fn shows(out: &Outbox) -> usize {
             )
         })
         .count()
+}
+
+/// The editor's text of the package at `root`, as hover reads it from a
+/// snapshot: `src/main.cheby` alone, with the normalized hash `hash`
+/// (D-1510).
+fn editor(root: &Path, hash: Hash128) -> BTreeMap<PathBuf, Hash128> {
+    BTreeMap::from([(main_path(root), hash)])
 }
 
 fn main_path(root: &Path) -> PathBuf {
@@ -187,7 +197,7 @@ fn first_clean_report_runs_and_keeps_results() {
     // An error marks evaluation failed: no values came (D-1413).
     let values = children.constants(&root).unwrap();
     assert_eq!(
-        values.reading(&symbol("boom"), normalized_key(MAIN)),
+        values.reading(&symbol("boom"), &editor(&root, normalized_key(MAIN))),
         ConstReading::Failed {
             code: Code::parse("E0075").unwrap()
         }
@@ -195,7 +205,7 @@ fn first_clean_report_runs_and_keeps_results() {
     // A constant with no value after a failed run says so, not that a
     // save computes it (D-1490).
     assert_eq!(
-        values.reading(&symbol("limit"), normalized_key(MAIN)),
+        values.reading(&symbol("limit"), &editor(&root, normalized_key(MAIN))),
         ConstReading::AfterFailure
     );
     // A later clean report with no save runs nothing.
@@ -233,20 +243,22 @@ fn one_failing_constant_keeps_other_values() {
     let current = normalized_key(MAIN);
     let first = children.constants(&root).unwrap();
     assert_eq!(
-        first.reading(&symbol("limit"), current),
+        first.reading(&symbol("limit"), &editor(&root, current)),
         ConstReading::Value {
             text: "20".to_owned(),
             truncated: false,
             stale: false,
+            evaluating: false,
         }
     );
     // A value from text that changed since is stale.
     assert_eq!(
-        first.reading(&symbol("limit"), Hash128([1; 16])),
+        first.reading(&symbol("limit"), &editor(&root, Hash128([1; 16]))),
         ConstReading::Value {
             text: "20".to_owned(),
             truncated: false,
             stale: true,
+            evaluating: false,
         }
     );
     let mut out = Outbox::default();
@@ -261,15 +273,16 @@ fn one_failing_constant_keeps_other_values() {
     assert!(!children.busy(&root));
     let second = children.constants(&root).unwrap();
     assert_eq!(
-        second.reading(&symbol("limit"), current),
+        second.reading(&symbol("limit"), &editor(&root, current)),
         ConstReading::Value {
             text: "20".to_owned(),
             truncated: false,
             stale: true,
+            evaluating: false,
         }
     );
     assert_eq!(
-        second.reading(&symbol("boom"), current),
+        second.reading(&symbol("boom"), &editor(&root, current)),
         ConstReading::Failed {
             code: Code::parse("E0075").unwrap()
         }
@@ -385,7 +398,7 @@ fn unclean_report_defers_the_run() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol("limit"), normalized_key(MAIN)),
+            .reading(&symbol("limit"), &editor(&root, normalized_key(MAIN))),
         ConstReading::NotYet
     );
     children.on_report(
@@ -401,7 +414,7 @@ fn unclean_report_defers_the_run() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol("limit"), normalized_key(MAIN)),
+            .reading(&symbol("limit"), &editor(&root, normalized_key(MAIN))),
         ConstReading::Value { .. }
     ));
 }
@@ -613,11 +626,11 @@ fn package_with_no_constants_starts_no_child() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol("boom"), normalized_key(MAIN)),
+            .reading(&symbol("boom"), &editor(&root, normalized_key(MAIN))),
         ConstReading::NotYet
     );
     assert_eq!(
-        children.status(&root, true, &env(&none), t1)["notEvaluated"],
+        children.status(&root, true, None, &env(&none), t1)["notEvaluated"],
         "the package has no constants"
     );
 }
@@ -889,10 +902,10 @@ fn status_names_the_state_and_why_not() {
         &env(&none),
         now,
     );
-    let status = children.status(&root, true, &env(&none), now);
+    let status = children.status(&root, true, None, &env(&none), now);
     assert_eq!(status["constants"]["state"], "waiting");
     children.schedule(&env(&none), now, &mut Outbox::default());
-    let status = children.status(&root, true, &env(&none), now);
+    let status = children.status(&root, true, None, &env(&none), now);
     assert_eq!(status["constants"]["state"], "idle");
     assert_eq!(status["constants"]["values"], 1);
     assert!(
@@ -907,12 +920,260 @@ fn status_names_the_state_and_why_not() {
         ..env(&none)
     };
     assert_eq!(
-        children.status(&root, true, &off, now)["notEvaluated"],
+        children.status(&root, true, None, &off, now)["notEvaluated"],
         "`constants.evaluate` is off"
     );
     assert_eq!(
-        children.status(&root, false, &env(&none), now)["notEvaluated"],
+        children.status(&root, false, None, &env(&none), now)["notEvaluated"],
         "single-file mode evaluates no constants (D-1371)"
+    );
+}
+
+/// The text of `src/util.cheby` in [`two_modules`].
+const UTIL: &str = "pub const base: Int = 2\n";
+
+/// An `ok` document over [`MAIN`] and `src/util.cheby` holding [`UTIL`],
+/// with `values`.
+fn two_modules(values: Vec<WireValue>) -> Envelope {
+    let mut document = document(Vec::new(), values);
+    document.files.push(FileHash {
+        path: "src/util.cheby".to_owned(),
+        hash: WireHash(normalized_key(UTIL)),
+    });
+    document
+}
+
+/// `name`'s value `text`, from a run that says its initializer reaches
+/// the module files `modules` (D-1510).
+fn reaching(name: &str, text: &str, modules: &[&str]) -> WireValue {
+    WireValue {
+        modules: Some(modules.iter().map(|path| (*path).to_owned()).collect()),
+        ..value(name, text)
+    }
+}
+
+/// Whether `name`'s value reads stale in `children`'s package at `root`
+/// while the editor holds `editor`.
+fn reads_stale(
+    children: &Children,
+    root: &Path,
+    name: &str,
+    editor: &BTreeMap<PathBuf, Hash128>,
+) -> bool {
+    match children
+        .constants(root)
+        .unwrap()
+        .reading(&symbol(name), editor)
+    {
+        ConstReading::Value { stale, .. } => stale,
+        other => panic!("`{name}` has no value: {other:?}"),
+    }
+}
+
+/// D-1510: a value is current only while each module file its
+/// initializer reaches has, in the editor, the text its run read, saved
+/// or not. Another module it reaches, edited, makes it stale; a module
+/// it does not reach, edited or added, does not. A module it reaches
+/// that is gone makes it stale too, and so does its own file. The
+/// `stale` of `cheby/status` follows (D-1505).
+#[test]
+fn a_value_is_current_only_while_the_modules_it_reaches_are() {
+    let root = package("reached");
+    let fixture = write_fixture(
+        &root,
+        &[two_modules(vec![
+            reaching("limit", "20", &["src/main.cheby", "src/util.cheby"]),
+            reaching("boom", "1", &["src/main.cheby"]),
+        ])],
+    );
+    let mut children = with_fixture(fixture);
+    let none = BTreeSet::new();
+    let now = Instant::now();
+    children.on_report(
+        &root,
+        ReportFacts::PACKAGE,
+        &report(&root, true, 1),
+        &env(&none),
+        now,
+    );
+    children.schedule(&env(&none), now, &mut Outbox::default());
+    let util = root.join("src").join("util.cheby");
+    let saved = BTreeMap::from([
+        (main_path(&root), normalized_key(MAIN)),
+        (util.clone(), normalized_key(UTIL)),
+    ]);
+    assert!(!reads_stale(&children, &root, "limit", &saved));
+    assert!(!reads_stale(&children, &root, "boom", &saved));
+    let stale_status = |editor: &BTreeMap<PathBuf, Hash128>| {
+        children.status(&root, true, Some(editor), &env(&none), now)["constants"]["stale"].clone()
+    };
+    assert_eq!(stale_status(&saved), Value::Bool(false));
+    // `util` edited and unsaved: `limit` reaches it, `boom` does not.
+    let mut edited = saved.clone();
+    edited.insert(util.clone(), normalized_key("pub const base: Int = 3\n"));
+    assert!(reads_stale(&children, &root, "limit", &edited));
+    assert!(!reads_stale(&children, &root, "boom", &edited));
+    assert_eq!(stale_status(&edited), Value::Bool(true));
+    // `util` gone.
+    let mut removed = saved.clone();
+    removed.remove(&util);
+    assert!(reads_stale(&children, &root, "limit", &removed));
+    assert!(!reads_stale(&children, &root, "boom", &removed));
+    // A new module, which no value's run read, reaches neither.
+    let mut added = saved.clone();
+    added.insert(root.join("src").join("extra.cheby"), Hash128([5; 16]));
+    assert!(!reads_stale(&children, &root, "limit", &added));
+    assert!(!reads_stale(&children, &root, "boom", &added));
+    assert_eq!(stale_status(&added), Value::Bool(false));
+    // The declaring file edited.
+    let mut own = saved.clone();
+    own.insert(main_path(&root), Hash128([6; 16]));
+    assert!(reads_stale(&children, &root, "boom", &own));
+}
+
+/// D-1510: a value that comes with no module list, as an older child
+/// writes it, reaches every module of the package: any module edited,
+/// gone or added makes it stale.
+#[test]
+fn a_value_with_no_modules_reaches_every_module() {
+    let root = package("reached_all");
+    let fixture = write_fixture(&root, &[two_modules(vec![value("boom", "1")])]);
+    let mut children = with_fixture(fixture);
+    let none = BTreeSet::new();
+    let now = Instant::now();
+    children.on_report(
+        &root,
+        ReportFacts::PACKAGE,
+        &report(&root, true, 1),
+        &env(&none),
+        now,
+    );
+    children.schedule(&env(&none), now, &mut Outbox::default());
+    let util = root.join("src").join("util.cheby");
+    let saved = BTreeMap::from([
+        (main_path(&root), normalized_key(MAIN)),
+        (util.clone(), normalized_key(UTIL)),
+    ]);
+    assert!(!reads_stale(&children, &root, "boom", &saved));
+    let mut edited = saved.clone();
+    edited.insert(util.clone(), Hash128([3; 16]));
+    assert!(reads_stale(&children, &root, "boom", &edited));
+    let mut removed = saved.clone();
+    removed.remove(&util);
+    assert!(reads_stale(&children, &root, "boom", &removed));
+    let mut added = saved.clone();
+    added.insert(root.join("src").join("extra.cheby"), Hash128([5; 16]));
+    assert!(reads_stale(&children, &root, "boom", &added));
+}
+
+/// D-1511: the evaluating mark follows the constants state: set while a
+/// run is due, from the first clean report and from a save, and cleared
+/// when the run ends, when evaluation is turned off, and with the session.
+/// Meanwhile a constant with no value reads as being evaluated, and a
+/// stale value says so.
+#[test]
+fn the_evaluating_mark_follows_the_constants_state() {
+    let root = package("evaluating");
+    let fixture = write_fixture(&root, &[document(Vec::new(), vec![value("limit", "20")])]);
+    let mut children = with_fixture(fixture);
+    let none = BTreeSet::new();
+    let t0 = Instant::now();
+    let saved = editor(&root, normalized_key(MAIN));
+    let evaluating = |children: &Children| children.packages[&root].values.evaluating;
+    write_main(&root, MAIN);
+    children.on_report(
+        &root,
+        ReportFacts::PACKAGE,
+        &report(&root, true, 1),
+        &env(&none),
+        t0,
+    );
+    assert!(evaluating(&children), "the first run is due");
+    let values = children.constants(&root).unwrap();
+    assert_eq!(
+        values.reading(&symbol("limit"), &saved),
+        ConstReading::Evaluating
+    );
+    children.schedule(&env(&none), t0, &mut Outbox::default());
+    assert!(!evaluating(&children), "the run ended");
+    let values = children.constants(&root).unwrap();
+    assert_eq!(
+        values.reading(&symbol("boom"), &saved),
+        ConstReading::NotYet
+    );
+    // A save of new text: due, and the value read from the old text says
+    // that the new save is being evaluated.
+    let next = format!("{MAIN}// next\n");
+    write_main(&root, &next);
+    let mut out = Outbox::default();
+    children.on_save(&root, &[main_path(&root)], &env(&none), t0, &mut out);
+    assert!(evaluating(&children));
+    let values = children.constants(&root).unwrap();
+    assert_eq!(
+        values.reading(&symbol("limit"), &editor(&root, normalized_key(&next))),
+        ConstReading::Value {
+            text: "20".to_owned(),
+            truncated: false,
+            stale: true,
+            evaluating: true,
+        }
+    );
+    assert_eq!(
+        values.reading(&symbol("boom"), &saved),
+        ConstReading::Evaluating
+    );
+    // Turning evaluation off cancels the due run.
+    let off = ChildEnv {
+        evaluate: false,
+        ..env(&none)
+    };
+    children.on_settings(&off, t0, &mut out);
+    assert!(!evaluating(&children));
+    children.on_settings(&env(&none), t0, &mut out);
+    assert!(evaluating(&children), "turned on, a run is due again");
+    children.end(&root, &mut out);
+    assert!(children.constants(&root).is_none(), "the session ended");
+}
+
+/// D-1511: the mark comes before the texts of a constant with no value
+/// after a failed or skipped run, or a run the server did not start;
+/// a failed constant still reads as failed.
+#[test]
+fn evaluating_comes_before_the_texts_of_no_value() {
+    let current = BTreeMap::new();
+    for values in [
+        ConstValues {
+            stale: true,
+            evaluating: true,
+            ..ConstValues::default()
+        },
+        ConstValues {
+            stale: true,
+            front_errors: true,
+            evaluating: true,
+            ..ConstValues::default()
+        },
+        ConstValues {
+            disk_errors: true,
+            evaluating: true,
+            ..ConstValues::default()
+        },
+    ] {
+        assert_eq!(
+            values.reading(&symbol("limit"), &current),
+            ConstReading::Evaluating
+        );
+    }
+    let failed = ConstValues {
+        failed: BTreeMap::from([(symbol("boom"), Code::parse("E0075").unwrap())]),
+        evaluating: true,
+        ..ConstValues::default()
+    };
+    assert_eq!(
+        failed.reading(&symbol("boom"), &current),
+        ConstReading::Failed {
+            code: Code::parse("E0075").unwrap()
+        }
     );
 }
 
@@ -1021,7 +1282,7 @@ mod processes {
             children
                 .constants(&root)
                 .unwrap()
-                .reading(&symbol("limit"), normalized_key(MAIN)),
+                .reading(&symbol("limit"), &editor(&root, normalized_key(MAIN))),
             ConstReading::Value { .. }
         ));
         let args = std::fs::read_to_string(root.join("args.txt")).unwrap();
@@ -1367,7 +1628,7 @@ mod processes {
             children
                 .constants(&root)
                 .unwrap()
-                .reading(&symbol("limit"), normalized_key(MAIN)),
+                .reading(&symbol("limit"), &editor(&root, normalized_key(MAIN))),
             ConstReading::AfterFailure,
             "a run cut short leaves no value (D-1490)"
         );
@@ -1470,10 +1731,10 @@ mod processes {
             children
                 .constants(&root)
                 .unwrap()
-                .reading(&symbol("fresh"), normalized_key(MAIN))
+                .reading(&symbol("fresh"), &editor(&root, normalized_key(MAIN)))
         };
         let skipped = |children: &Children| {
-            children.status(&root, true, &exe_env, Instant::now())["constants"]["skippedForErrors"]
+            children.status(&root, true, None, &exe_env, Instant::now())["constants"]["skippedForErrors"]
                 .as_bool()
                 .unwrap()
         };
@@ -1526,12 +1787,15 @@ mod processes {
             &mut Outbox::default(),
         );
         assert!(children.busy(&root), "the run waits");
-        assert_eq!(fresh(&children), ConstReading::SkippedForErrors);
+        // The mark stays, but a due run says so first (D-1511).
+        assert_eq!(fresh(&children), ConstReading::Evaluating);
         assert!(skipped(&children));
         now = now.checked_add(COALESCE).unwrap();
         children.schedule(&exe_env, now, &mut Outbox::default());
         let pid = running_pid(&children, &root);
-        assert_eq!(fresh(&children), ConstReading::NotYet);
+        // The mark is gone, and the running child is what hover names
+        // (D-1511).
+        assert_eq!(fresh(&children), ConstReading::Evaluating);
         assert!(!skipped(&children));
         children.end(&root, &mut Outbox::default());
         assert!(!alive(pid));
@@ -1620,11 +1884,12 @@ mod processes {
             children
                 .constants(&root)
                 .unwrap()
-                .reading(&symbol("limit"), normalized_key(MAIN)),
+                .reading(&symbol("limit"), &editor(&root, normalized_key(MAIN))),
             ConstReading::Value {
                 text: "20".to_owned(),
                 truncated: false,
                 stale: false,
+                evaluating: false,
             }
         );
     }
@@ -1732,6 +1997,56 @@ mod processes {
         drop(children);
         assert!(!alive(pid));
     }
+
+    /// D-1511: the evaluating mark holds while a child runs, through a
+    /// save that kills it and makes a new run due, and goes when a run
+    /// is cut short by its time limit.
+    #[test]
+    #[cfg_attr(windows, ignore = "runs processes (D-545)")]
+    fn evaluating_holds_while_a_child_runs() {
+        let root = package("proc_evaluating");
+        let exe = fake_cheby(&root, "exec sleep 600");
+        let mut children = bare();
+        let none = BTreeSet::new();
+        let t0 = Instant::now();
+        let evaluating = |children: &Children| children.packages[&root].values.evaluating;
+        write_main(&root, MAIN);
+        children.on_report(
+            &root,
+            ReportFacts::PACKAGE,
+            &report(&root, true, 1),
+            &with_exe(&exe, &none),
+            t0,
+        );
+        children.schedule(&with_exe(&exe, &none), t0, &mut Outbox::default());
+        let first = running_pid(&children, &root);
+        assert!(evaluating(&children), "running");
+        write_main(&root, &format!("{MAIN}// next\n"));
+        let mut out = Outbox::default();
+        children.on_save(
+            &root,
+            &[main_path(&root)],
+            &with_exe(&exe, &none),
+            t0,
+            &mut out,
+        );
+        assert!(!alive(first), "the save killed the child");
+        assert!(evaluating(&children), "and a run is due");
+        let t1 = t0.checked_add(COALESCE).unwrap();
+        children.schedule(&with_exe(&exe, &none), t1, &mut out);
+        let second = running_pid(&children, &root);
+        assert!(evaluating(&children), "running again");
+        let late = t1.checked_add(Duration::from_secs(61)).unwrap();
+        children.schedule(&with_exe(&exe, &none), late, &mut out);
+        assert!(!alive(second), "cut short");
+        assert!(!evaluating(&children), "nothing runs or is due");
+        // The killed runs' output is dropped.
+        for _ in 0..2 {
+            let done = next_done(&children);
+            children.on_done(done, Instant::now(), &mut out);
+        }
+        assert!(!evaluating(&children));
+    }
 }
 
 #[test]
@@ -1809,7 +2124,7 @@ fn a_run_skipped_for_errors_on_disk_reads_as_not_yet() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol(name), normalized_key(MAIN))
+            .reading(&symbol(name), &editor(&root, normalized_key(MAIN)))
     };
     assert_eq!(reading(&children, "limit"), ConstReading::SkippedForErrors);
     let expected = [
@@ -1819,6 +2134,7 @@ fn a_run_skipped_for_errors_on_disk_reads_as_not_yet() {
             text: "20".to_owned(),
             truncated: false,
             stale: false,
+            evaluating: false,
         },
     ];
     for (n, want) in expected.into_iter().enumerate() {
@@ -1928,10 +2244,10 @@ fn a_save_that_leaves_errors_on_disk_reads_as_skipped() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol(name), normalized_key(MAIN))
+            .reading(&symbol(name), &editor(&root, normalized_key(MAIN)))
     };
     let skipped = |children: &Children| {
-        children.status(&root, true, &env(&none), Instant::now())["constants"]["skippedForErrors"]
+        children.status(&root, true, None, &env(&none), Instant::now())["constants"]["skippedForErrors"]
             .as_bool()
             .unwrap()
     };
@@ -2020,6 +2336,7 @@ fn a_save_that_leaves_errors_on_disk_reads_as_skipped() {
             text: "20".to_owned(),
             truncated: false,
             stale: false,
+            evaluating: false,
         }
     );
     assert!(!skipped(&children));
@@ -2041,15 +2358,17 @@ fn values_read_as_stale_while_errors_on_disk_start_no_run() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol("limit"), normalized_key(MAIN))
+            .reading(&symbol("limit"), &editor(&root, normalized_key(MAIN)))
     };
     let current = |stale| ConstReading::Value {
         text: "20".to_owned(),
         truncated: false,
         stale,
+        evaluating: false,
     };
     let status_stale = |children: &Children| {
-        children.status(&root, true, &env(&none), Instant::now())["constants"]["stale"].clone()
+        children.status(&root, true, None, &env(&none), Instant::now())["constants"]["stale"]
+            .clone()
     };
     let util = root.join("src").join("util.cheby");
     let mut now = Instant::now();
@@ -2133,10 +2452,10 @@ fn a_broken_file_with_unsaved_edits_keeps_the_mark() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol("fresh"), normalized_key(MAIN))
+            .reading(&symbol("fresh"), &editor(&root, normalized_key(MAIN)))
     };
     let skipped = |children: &Children| {
-        children.status(&root, true, &env(&none), Instant::now())["constants"]["skippedForErrors"]
+        children.status(&root, true, None, &env(&none), Instant::now())["constants"]["skippedForErrors"]
             .as_bool()
             .unwrap()
     };
@@ -2229,7 +2548,7 @@ fn an_echo_of_a_second_broken_save_keeps_the_mark() {
         children
             .constants(&root)
             .unwrap()
-            .reading(&symbol("fresh"), normalized_key(MAIN))
+            .reading(&symbol("fresh"), &editor(&root, normalized_key(MAIN)))
     };
     let mut now = Instant::now();
     write_main(&root, MAIN);
@@ -2278,7 +2597,8 @@ fn an_echo_of_a_second_broken_save_keeps_the_mark() {
         &mut Outbox::default(),
     );
     assert!(children.busy(&root), "the run waits");
-    assert_eq!(fresh(&children), ConstReading::SkippedForErrors);
+    // A due run says so before the mark does (D-1511).
+    assert_eq!(fresh(&children), ConstReading::Evaluating);
     now = now.checked_add(COALESCE).unwrap();
     children.schedule(&env(&none), now, &mut Outbox::default());
     assert_eq!(children.next_run, 1, "no run");
@@ -2324,7 +2644,7 @@ fn a_package_with_no_constants_gets_no_mark() {
     );
     now = now.checked_add(COALESCE).unwrap();
     children.schedule(&env(&none), now, &mut Outbox::default());
-    let status = children.status(&root, true, &env(&none), now);
+    let status = children.status(&root, true, None, &env(&none), now);
     assert_eq!(status["notEvaluated"], "the package has no constants");
     assert_eq!(status["constants"]["skippedForErrors"], false);
     assert!(!children.packages[&root].values.disk_errors);

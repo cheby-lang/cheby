@@ -6,5 +6,5 @@
 fn main() {
   let xs = ["a", "b"]
   let pairs = 
-  //          ^ completion enumerate
+  //          ^ completion list::enumerate
 }

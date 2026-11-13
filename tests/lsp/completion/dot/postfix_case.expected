@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `n`",
+      "message": "unused binding `n`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_n`",
       "range": {
         "end": {
           "character": 7,
@@ -19,7 +19,7 @@
     },
     {
       "code": "E0058",
-      "message": "`Option` has no field `ca`",
+      "message": "`Option` has no field `ca`\nunknown field\nnote: `Option` has no named fields; positional fields are read with a pattern (D-241)",
       "range": {
         "end": {
           "character": 14,
@@ -44,11 +44,12 @@
     {
       "filterText": "o.case",
       "insertTextFormat": 2,
+      "insertTextMode": 2,
       "kind": 15,
       "label": "case",
       "sortText": "50case",
       "textEdit": {
-        "newText": "case o {\n    Some(_) => ${1:todo}\n    None => ${2:todo}\n  }$0",
+        "newText": "case o {\n  Some(_) => ${1:todo}\n  None => ${2:todo}\n}$0",
         "range": {
           "end": {
             "character": 14,
@@ -69,11 +70,12 @@
   "item": {
     "filterText": "o.case",
     "insertTextFormat": 2,
+    "insertTextMode": 2,
     "kind": 15,
     "label": "case",
     "sortText": "50case",
     "textEdit": {
-      "newText": "case o {\n    Some(_) => ${1:todo}\n    None => ${2:todo}\n  }$0",
+      "newText": "case o {\n  Some(_) => ${1:todo}\n  None => ${2:todo}\n}$0",
       "range": {
         "end": {
           "character": 14,
@@ -87,7 +89,7 @@
     }
   },
   "text": [
-    "// @decisions: D-1394, D-1156",
+    "// @decisions: D-1394, D-1156, D-1506",
     "//! `o.ca` on an `Option`: a `case` with one arm per constructor, each",
     "//! body a `todo` to fill.",
     "",

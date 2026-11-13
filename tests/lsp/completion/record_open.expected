@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0015",
-      "message": "unclosed `{`",
+      "message": "unclosed `{`\nexpected `}`\nnote: the `}` that closes it is indented differently from the line of the `{`",
       "range": {
         "end": {
           "character": 1,

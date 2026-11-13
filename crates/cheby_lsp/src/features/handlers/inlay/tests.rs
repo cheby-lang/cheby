@@ -160,3 +160,33 @@ fn malformed_parameters_and_unknown_documents() {
         Value::Null
     );
 }
+
+/// D-1515, D-1376: `parameterNames` is off by default, and on it sends
+/// each name as a hint of kind `Parameter` whose label carries its own
+/// space, so it sets no padding, as the type hints set none.
+#[test]
+fn parameter_names_are_off_by_default_and_of_kind_parameter() {
+    let text =
+        "fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn main() {\n  assert add(1, 2) == 3\n}\n";
+    assert_eq!(
+        answer_on(text, &Settings::default(), &lines(0, 7)),
+        json!([])
+    );
+    let mut settings = Settings::default();
+    settings.inlay_hints.parameter_names = true;
+    assert_eq!(
+        answer_on(text, &settings, &lines(0, 7)),
+        json!([
+            {
+                "position": { "line": 5, "character": 13 },
+                "label": "a: ",
+                "kind": 2,
+            },
+            {
+                "position": { "line": 5, "character": 16 },
+                "label": "b: ",
+                "kind": 2,
+            },
+        ])
+    );
+}

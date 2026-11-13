@@ -1,0 +1,12 @@
+// @decisions: D-1509
+//! A type error's message carries its primary label after the header, as
+//! `cheby check` prints it, and its other label stays in
+//! `relatedInformation`.
+
+fn answer() -> Int {
+  "forty-two"
+}
+
+fn main() {
+  assert answer() == 42
+}

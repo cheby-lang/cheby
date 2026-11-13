@@ -18,7 +18,8 @@
 //!     "constants": {
 //!       "status": "ok",
 //!       "diagnostics": [{ "code": "E0075", "path": "src/main.cheby", "range": [120, 131], … }],
-//!       "values": [{ "symbol": { … }, "text": "20", "truncated": false }]
+//!       "values": [{ "symbol": { … }, "text": "20", "truncated": false,
+//!                    "modules": ["src/main.cheby"] }]
 //!     }
 //!   }
 //! }
@@ -32,6 +33,10 @@
 //! - Paths are relative to the package root and use `/`.
 //! - A section's `status` is `ok`, `skipped` with a `reason`, or `failed`
 //!   with a `message`.
+//! - A value's `modules` are the package's module files its initializer
+//!   reaches, its own included (D-1510). A reader takes a value without
+//!   them, as an older child writes it, as reaching every module, so the
+//!   field needs no new `schema`.
 //!
 //! Symbols travel as [`SymbolData`], the serde mirror of the driver's
 //! `Symbol` (plan §1.3), which has no serde.
@@ -219,6 +224,11 @@ pub struct WireValue {
     /// The text was cut.
     #[serde(default)]
     pub truncated: bool,
+    /// The package's module files that the initializer reaches, its own
+    /// included, relative to the root with `/` (D-1510). `None`, as an
+    /// older child writes it, means every module of the package counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modules: Option<Vec<String>>,
 }
 
 /// One diagnostic of the child, as `PlainDiagnostic` with paths.
@@ -597,6 +607,10 @@ mod tests {
                         symbol: constant("limit"),
                         text: "20".to_owned(),
                         truncated: false,
+                        modules: Some(vec![
+                            "src/limits.cheby".to_owned(),
+                            "src/main.cheby".to_owned(),
+                        ]),
                     }],
                 })),
                 ownership: None,
@@ -673,7 +687,23 @@ mod tests {
         assert_eq!(constants["diagnostics"][0]["severity"], "error");
         assert_eq!(constants["values"][0]["symbol"]["ns"], "value");
         assert_eq!(constants["values"][0]["symbol"]["member"]["kind"], "none");
+        assert_eq!(
+            constants["values"][0]["modules"],
+            serde_json::json!(["src/limits.cheby", "src/main.cheby"])
+        );
         assert!(value["sections"].get("ownership").is_none());
+    }
+
+    /// D-1510: a value with no `modules`, as a child of an older build
+    /// writes it, still reads under the same schema, and reaches every
+    /// module; one with no modules writes no key.
+    #[test]
+    fn a_value_without_modules_reads_as_none() {
+        let text = r#"{"symbol":{"module":["app"],"ns":"value","name":"limit"},"text":"20"}"#;
+        let value: WireValue = serde_json::from_str(text).expect("parses");
+        assert_eq!(value.modules, None);
+        let written = serde_json::to_value(&value).expect("serializes");
+        assert!(written.get("modules").is_none(), "{written}");
     }
 
     #[test]

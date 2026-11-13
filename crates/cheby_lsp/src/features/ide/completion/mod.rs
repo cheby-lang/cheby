@@ -116,7 +116,11 @@ pub(crate) struct CompletionCx<'s> {
 }
 
 /// The tokens after the partial word, which decide what an edit may
-/// write: no call where a `(` follows, no `::` where one follows.
+/// write: no call where a `(` follows, only what a path starts with where
+/// a path's `::` follows (D-1530), and no interface there when more than
+/// one segment follows it (D-1539, D-1544), only names before a
+/// turbofish (D-1525, D-1536), and a module or an interface written with
+/// its `::` where none follows (D-1546, D-1548).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Next {
     /// The kind of the token that starts where the partial word ends.
@@ -124,10 +128,24 @@ pub(crate) struct Next {
     /// The kind of the first token after the partial word on its line,
     /// past white space and comments. `None` at the end of the line.
     pub on_line: Option<SyntaxKind>,
+    /// The adjacent token is the `::` of a turbofish: the first token
+    /// after it is `<`, past what the parser skips there, as it reads
+    /// `f::<Int>` (§5.17, D-1525, D-1529): white space, comments, block
+    /// comments the lexer reported (E0004), and line breaks when the
+    /// innermost open bracket is `(`, `[` or a type `<` (§2.8).
+    pub turbofish: bool,
+    /// The adjacent token is a path's `::`, and the segment after it is
+    /// followed by another `::`, past what the parser skips as for
+    /// `turbofish`: more than one segment follows, as in
+    /// `sha‸::Shape::area(x)`, not in `Comp‸::compare(a, b)` (D-1539). A
+    /// turbofish after that segment counts too, since an interface's
+    /// function takes no type arguments (E0023, D-1544).
+    pub more_segments: bool,
 }
 
 impl Next {
-    /// What follows `partial` in the tree under `root`.
+    /// What follows `partial` in the tree under `root`. The turbofish's
+    /// `<` is looked for as the parser looks for it (D-1529).
     fn after(root: SyntaxNode<'_>, partial: TextRange) -> Self {
         let end = partial.end();
         let first = token_at(root, end)
@@ -136,12 +154,96 @@ impl Next {
         let adjacent = first
             .filter(|t| t.text_range().start() == end)
             .map(SyntaxToken::kind);
-        let on_line = std::iter::successors(first, |t| t.next_token())
-            .find(|t| !t.kind().is_trivia() && !t.text_range().is_empty())
-            .map(SyntaxToken::kind)
-            .filter(|&k| k != SyntaxKind::NEWLINE);
-        Self { adjacent, on_line }
+        let significant = |from: Option<SyntaxToken<'_>>| {
+            std::iter::successors(from, |t| t.next_token())
+                .find(|t| !t.kind().is_trivia() && !t.text_range().is_empty())
+                .map(SyntaxToken::kind)
+        };
+        let on_line = significant(first).filter(|&k| k != SyntaxKind::NEWLINE);
+        let colons =
+            first.filter(|t| t.text_range().start() == end && t.kind() == SyntaxKind::COLON2);
+        // The tokens the parser reads after the `::`: the first is a
+        // turbofish's `<` or a segment, and a second `::` after a segment
+        // means more segments follow (D-1529, D-1539).
+        let read = colons.map(|colons| {
+            let breaks = newlines_skipped(colons);
+            let mut tokens = std::iter::successors(colons.next_token(), |t| t.next_token())
+                .filter(move |t| {
+                    !(t.text_range().is_empty()
+                        || parser_skips(*t)
+                        || (breaks && t.kind() == SyntaxKind::NEWLINE))
+                })
+                .map(SyntaxToken::kind);
+            (tokens.next(), tokens.next())
+        });
+        let turbofish = read.is_some_and(|(next, _)| next == Some(SyntaxKind::LT));
+        let more_segments = read.is_some_and(|(next, then)| {
+            matches!(
+                next,
+                Some(SyntaxKind::LOWER_IDENT | SyntaxKind::UPPER_IDENT)
+            ) && then == Some(SyntaxKind::COLON2)
+        });
+        Self {
+            adjacent,
+            on_line,
+            turbofish,
+            more_segments,
+        }
     }
+}
+
+/// Whether the parser skips `token` like white space wherever it is:
+/// trivia, and the error token of a block comment, which the lexer
+/// reported (E0004, D-1529).
+fn parser_skips(token: SyntaxToken<'_>) -> bool {
+    token.kind().is_trivia()
+        || (token.kind() == SyntaxKind::ERROR_TOKEN && token.text().starts_with("/*"))
+}
+
+/// Whether the parser skips the line breaks after `token`, which no
+/// trailing continuation token is: the innermost delimiter the grammar
+/// opened around it is `(`, `[` or a type `<`, not `{` (§2.8, D-1529).
+/// Outside those, and in a `{` inside them, a line break ends the path.
+/// That delimiter's opener is a token of the node the parser was
+/// building, so it is the first ancestor of `token` with an opener before
+/// it that no closer among its tokens matches.
+fn newlines_skipped(token: SyntaxToken<'_>) -> bool {
+    use SyntaxKind as K;
+    let at = token.text_range().start();
+    for node in token.parent().into_iter().flat_map(SyntaxNode::ancestors) {
+        let angle = matches!(node.kind(), K::TYPE_ARG_LIST | K::TYPE_PARAM_LIST);
+        let mut open: Vec<SyntaxKind> = Vec::new();
+        for child in node.children_with_tokens() {
+            if child.text_range().start() >= at {
+                break;
+            }
+            let Some(child) = child.as_token() else {
+                continue;
+            };
+            let opener = match child.kind() {
+                kind @ (K::L_PAREN | K::L_BRACK | K::L_BRACE) => {
+                    open.push(kind);
+                    continue;
+                }
+                K::LT if angle => {
+                    open.push(K::LT);
+                    continue;
+                }
+                K::R_PAREN => K::L_PAREN,
+                K::R_BRACK => K::L_BRACK,
+                K::R_BRACE => K::L_BRACE,
+                K::GT if angle => K::LT,
+                _ => continue,
+            };
+            if let Some(at) = open.iter().rposition(|&o| o == opener) {
+                open.truncate(at);
+            }
+        }
+        if let Some(&innermost) = open.last() {
+            return innermost != K::L_BRACE;
+        }
+    }
+    false
 }
 
 impl std::fmt::Debug for CompletionCx<'_> {
@@ -240,3 +342,11 @@ pub(crate) fn complete<'s>(
 #[cfg(test)]
 #[path = "tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "before_path_tests.rs"]
+mod before_path_tests;
+
+#[cfg(test)]
+#[path = "interface_tests.rs"]
+mod interface_tests;

@@ -1,0 +1,9 @@
+warning[W0005]: the interface `Marked` is never used in this package
+  --> tests/ui/13-tooling/warnings/interface_used_through_embedding/src/labels.cheby:14:11
+   |
+14 | interface Marked: Show {
+   |           ^^^^^^ no module of the package uses it
+   |
+   = note: without `pub`, only modules of this package can use the interface
+   = help: remove the interface, use it, or make it `pub` if other packages should use it
+

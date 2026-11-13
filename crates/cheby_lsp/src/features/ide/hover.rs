@@ -21,15 +21,24 @@
 //! `Snapshot::const_initializer`, since the child evaluates the package's
 //! own constants only. The child cuts a value at 4,096 characters, and
 //! hover shows what it gets. Hover cuts a written initializer at the same
-//! length, with the same `…` (D-1496).
+//! length, with the same `…` (D-1496). A value is current only while each
+//! module file it reaches has, in the snapshot, the text its run read
+//! (D-1510), and while a run is due or running hover says so (D-1511). A
+//! value that would take the header past [`VALUE_WIDTH`] columns gets a
+//! block of its own, broken by its brackets as `cheby fmt` breaks a
+//! literal (D-1512).
+
+use std::iter::Peekable;
+use std::str::Chars;
 
 use std::path::Path;
 
 use cheby_driver::analysis::{
     BodyFacts, CtorFields, DefId, DefIndex, DefKind, FileId, FileLocation, Generics, ImportNames,
     ItemSig, LocalKind, ModuleId, ModuleView, Name, ParamIdx, Snapshot, StdIndex, Targets,
-    TextRange, TextSize, Ty, builtin, cut_text, field_docs, item_docs, normalized_key,
+    TextRange, TextSize, Ty, builtin, cut_text, field_docs, item_docs,
 };
+use cheby_fmt::doc::{Doc, print};
 use cheby_syntax::ast::{AstNode, CallExpr, SourceFile, module_doc_text};
 use cheby_syntax::{SyntaxKind as K, SyntaxNode, SyntaxToken};
 
@@ -106,22 +115,34 @@ impl HoverText {
 
     /// The hover as Markdown: fenced code blocks, then the notes, then the
     /// docs, the three parts separated by `---` (X §2.1). With `markdown`
-    /// false, the same text without fences.
+    /// false, the same text without fences, those of the blocks a note
+    /// holds (D-1512) included.
     pub(crate) fn render(&self, markdown: bool) -> String {
         let code: Vec<String> = self
             .code
             .iter()
             .map(|block| {
                 if markdown {
-                    format!("```cheby\n{block}\n```")
+                    fenced(block)
                 } else {
                     block.clone()
                 }
             })
             .collect();
+        let notes: Vec<String> = self
+            .notes
+            .iter()
+            .map(|note| {
+                if markdown {
+                    note.clone()
+                } else {
+                    unfenced(note)
+                }
+            })
+            .collect();
         let parts: Vec<String> = [
             (!code.is_empty()).then(|| code.join("\n")),
-            (!self.notes.is_empty()).then(|| self.notes.join("\n\n")),
+            (!notes.is_empty()).then(|| notes.join("\n\n")),
             self.docs.clone(),
         ]
         .into_iter()
@@ -549,20 +570,26 @@ impl<'s> Cx<'s> {
     }
 
     /// The value line of the constant `def` (X §2.1's constant value rule,
-    /// plan §1.8, D-1413, D-1490, D-1491, D-1496, D-1497, D-1501, D-1503).
-    /// A current value joins the header, `const LIMIT: Int = 100`. A stale
-    /// one leaves the header alone and adds "`100` when last saved", also
-    /// every value while the server starts no run for errors on disk
-    /// (D-1503). A constant whose evaluation failed names the diagnostic's
-    /// code. One with no value says that values come on save, or, after a
-    /// run that failed or was cut short, that it is not evaluated, or,
-    /// after a run skipped because the saved files have errors or one the
-    /// server did not start for them, that saving gives the value (D-1497,
-    /// D-1501). A std
-    /// constant shows its initializer as written, cut as a value is
-    /// (D-1496), and never asks the child, and so does a constant of a
-    /// dependency, which the child does not evaluate. A package that never
-    /// evaluates (`constants` is `None`: Windows, single-file mode,
+    /// plan §1.8, D-1413, D-1490, D-1491, D-1496, D-1497, D-1501, D-1503,
+    /// D-1510 to D-1512). A current value joins the header, `const LIMIT:
+    /// Int = 100`, or, when the two would pass [`VALUE_WIDTH`] columns,
+    /// follows it in a block of its own (D-1512). A stale one leaves the
+    /// header alone and adds "`100` when last saved", or, while a run is
+    /// due or running, "`100` when last evaluated; the new save is being
+    /// evaluated." (D-1511), with the same block for a long value. A value
+    /// is stale when a module file it reaches has other text in the
+    /// snapshot than its run read (D-1510), and every value is while the
+    /// server starts no run for errors on disk (D-1503). A constant whose
+    /// evaluation failed names the diagnostic's code. One with no value
+    /// says that the constants are being evaluated while a run is due or
+    /// running (D-1511); else that values come on save, or, after a run
+    /// that failed or was cut short, that it is not evaluated, or, after a
+    /// run skipped because the saved files have errors or one the server
+    /// did not start for them, that saving gives the value (D-1497,
+    /// D-1501). A std constant shows its initializer as written, cut as a
+    /// value is (D-1496), and never asks the child, and so does a constant
+    /// of a dependency, which the child does not evaluate. A package that
+    /// never evaluates (`constants` is `None`: Windows, single-file mode,
     /// `constants.evaluate` off) shows no line.
     fn constant_value(&self, def: DefId, hover: &mut HoverText) {
         let Some(view) = self.snapshot.module(def.module) else {
@@ -585,21 +612,22 @@ impl<'s> Cx<'s> {
         let Some(symbol) = self.snapshot.key_of(def) else {
             return;
         };
-        let Some(text) = view.file().and_then(|file| self.snapshot.source(file)) else {
-            return;
-        };
-        let line = match values.reading(&symbol, normalized_key(text.text())) {
+        let header = hover.code.first().cloned().unwrap_or_default();
+        let line = match values.reading(&symbol, self.snapshot) {
             ConstReading::Value {
                 text,
                 truncated,
                 stale: false,
+                ..
             } => {
-                if let Some(header) = hover.code.first_mut() {
-                    header.push_str(" = ");
-                    header.push_str(&text);
-                    if truncated {
-                        header.push('…');
+                let shown = shown_value(text, truncated);
+                if fits_header(&header, &shown) {
+                    if let Some(header) = hover.code.first_mut() {
+                        header.push_str(" = ");
+                        header.push_str(&shown);
                     }
+                } else {
+                    hover.code.push(value_block(&shown));
                 }
                 truncated.then(|| "The value is cut short.".to_owned())
             }
@@ -607,15 +635,24 @@ impl<'s> Cx<'s> {
                 text,
                 truncated,
                 stale: true,
+                evaluating,
             } => {
-                let shown = if truncated {
-                    format!("{text}…")
+                let shown = shown_value(text, truncated);
+                let value = if fits_header(&header, &shown) {
+                    format!("{} ", inline_code(&shown))
                 } else {
-                    text
+                    format!("{}\n", fenced(&value_block(&shown)))
                 };
-                Some(format!("{} when last saved.", inline_code(&shown)))
+                Some(if evaluating {
+                    format!("{value}when last evaluated; the new save is being evaluated.")
+                } else {
+                    format!("{value}when last saved.")
+                })
             }
             ConstReading::Failed { code } => Some(format!("Evaluation failed, see `{code}`.")),
+            ConstReading::Evaluating => {
+                Some("Not evaluated yet: the constants are being evaluated.".to_owned())
+            }
             ConstReading::NotYet => {
                 Some("Not evaluated yet: values are computed on save.".to_owned())
             }
@@ -913,12 +950,293 @@ fn written_initializer(text: String) -> String {
     }
 }
 
+/// A constant's value as hover shows it: its text, with `…` when the
+/// child cut it (D-1413).
+fn shown_value(text: String, truncated: bool) -> String {
+    if truncated {
+        format!("{text}…")
+    } else {
+        text
+    }
+}
+
+/// The columns past which a constant's header and value no longer share
+/// a line, and the width its block is broken to (D-1512).
+const VALUE_WIDTH: usize = 80;
+
+/// Whether `header`, a constant's declaration, and `shown`, its value,
+/// fit on one line as `header = shown` in [`VALUE_WIDTH`] columns
+/// (D-1512).
+fn fits_header(header: &str, shown: &str) -> bool {
+    let last = header.rsplit('\n').next().unwrap_or(header);
+    last.chars()
+        .count()
+        .saturating_add(3)
+        .saturating_add(shown.chars().count())
+        <= VALUE_WIDTH
+}
+
+/// `shown`, a value's debug text (§3.13), broken by its brackets as
+/// `cheby fmt` breaks a literal, in [`VALUE_WIDTH`] columns (D-1512): a
+/// group that fits stays on its line; one that does not puts each element
+/// or field on a line of its own, two spaces deeper, with a trailing
+/// comma, and a call's last argument that can break by itself, a list, a
+/// record or such a call, hugs its parentheses, as in
+/// `map::from_list([`. A string is never split, and its escapes do not
+/// count as brackets. A value cut at 4,096 characters leaves its open
+/// groups open, and its `…` stays at its end.
+fn value_block(shown: &str) -> String {
+    let (mut elems, _) = elements(&mut shown.chars().peekable(), None);
+    let pieces = elems.pop().unwrap_or_default();
+    print(&pieces_doc(&pieces), VALUE_WIDTH)
+}
+
+/// A piece of a value's debug text: text with no bracket, or a group in
+/// brackets.
+#[derive(Debug)]
+enum Piece {
+    Text(String),
+    Group(Group),
+}
+
+/// A bracketed group of a value's debug text: a list, a record's fields,
+/// a call's arguments or a tuple.
+#[derive(Debug)]
+struct Group {
+    /// `(`, `[` or `{`.
+    open: char,
+    /// The closing bracket, `None` when the value was cut inside the group.
+    close: Option<char>,
+    /// The elements between its commas, trimmed.
+    elems: Vec<Vec<Piece>>,
+    /// The text has a comma after the last element, as a one-element tuple
+    /// has.
+    kept_comma: bool,
+    /// The group follows a name: a call's arguments, or a record's fields.
+    named: bool,
+}
+
+/// The closing bracket of `open`.
+const fn closing(open: char) -> char {
+    match open {
+        '(' => ')',
+        '[' => ']',
+        _ => '}',
+    }
+}
+
+/// Reads `chars` up to `close`, or to the end: the elements between its
+/// top-level commas, each as its pieces, and whether `close` came. With
+/// `close` `None`, the whole text is one element and a comma is text.
+fn elements(chars: &mut Peekable<Chars<'_>>, close: Option<char>) -> (Vec<Vec<Piece>>, bool) {
+    let mut elems = Vec::new();
+    let mut elem: Vec<Piece> = Vec::new();
+    let mut text = String::new();
+    let flush = |text: &mut String, elem: &mut Vec<Piece>| {
+        if !text.is_empty() {
+            elem.push(Piece::Text(std::mem::take(text)));
+        }
+    };
+    let closed = loop {
+        let Some(c) = chars.next() else {
+            break false;
+        };
+        match c {
+            '"' => {
+                text.push(c);
+                string_rest(chars, &mut text);
+            }
+            '(' | '[' | '{' => {
+                // After a name, `Some(` or `Point {`, not after `, ` or
+                // `x: `.
+                let named = text
+                    .trim_end()
+                    .chars()
+                    .last()
+                    .is_some_and(|last| last.is_alphanumeric() || last == '_');
+                flush(&mut text, &mut elem);
+                let shut = closing(c);
+                let (inner, closed) = elements(chars, Some(shut));
+                elem.push(Piece::Group(Group::new(
+                    c,
+                    closed.then_some(shut),
+                    inner,
+                    named,
+                )));
+            }
+            ',' if close.is_some() => {
+                flush(&mut text, &mut elem);
+                elems.push(std::mem::take(&mut elem));
+            }
+            c if Some(c) == close => break true,
+            c => text.push(c),
+        }
+    };
+    flush(&mut text, &mut elem);
+    elems.push(elem);
+    (elems, closed)
+}
+
+/// Reads the rest of a string literal into `text`, its closing quote
+/// included: a backslash takes the character after it, so `\"` does not
+/// end it (§3.13). A value cut inside the string ends it.
+fn string_rest(chars: &mut Peekable<Chars<'_>>, text: &mut String) {
+    while let Some(c) = chars.next() {
+        text.push(c);
+        match c {
+            '\\' => text.extend(chars.next()),
+            '"' => return,
+            _ => {}
+        }
+    }
+}
+
+impl Group {
+    /// The group of `open`, closed by `close`, with its raw elements
+    /// trimmed: the space at each element's ends goes, and an empty last
+    /// element after a comma is a kept comma.
+    fn new(open: char, close: Option<char>, mut elems: Vec<Vec<Piece>>, named: bool) -> Self {
+        for elem in &mut elems {
+            if let Some(Piece::Text(text)) = elem.first_mut() {
+                *text = text.trim_start().to_owned();
+            }
+            if let Some(Piece::Text(text)) = elem.last_mut() {
+                *text = text.trim_end().to_owned();
+            }
+            elem.retain(|piece| !matches!(piece, Piece::Text(text) if text.is_empty()));
+        }
+        let kept_comma = elems.len() > 1 && elems.last().is_some_and(Vec::is_empty);
+        if kept_comma || (elems.len() == 1 && elems.first().is_some_and(Vec::is_empty)) {
+            elems.pop();
+        }
+        Self {
+            open,
+            close,
+            elems,
+            kept_comma,
+            named,
+        }
+    }
+
+    /// Whether the group, coming last in a call's arguments, can break by
+    /// itself and hug the call's parentheses, as `cheby fmt`'s `hugs`
+    /// says: a list, a record, or a call whose own last argument does.
+    fn hugs(&self) -> bool {
+        match self.open {
+            '[' => true,
+            '{' => self.named,
+            _ => self.named && self.elems.last().is_some_and(|last| element_hugs(last)),
+        }
+    }
+
+    /// The group as a document (`cheby fmt`'s list layout).
+    fn doc(&self) -> Doc {
+        let open = Doc::text(&self.open.to_string());
+        let close = self.close.map(|c| Doc::text(&c.to_string()));
+        if self.elems.is_empty() && !self.kept_comma {
+            return Doc::concat(vec![open, close.unwrap_or(Doc::Nil)]);
+        }
+        // A record's fields have a space inside their braces.
+        let edge = || {
+            if self.open == '{' {
+                Doc::line()
+            } else {
+                Doc::softline()
+            }
+        };
+        let elems: Vec<Doc> = self.elems.iter().map(|elem| pieces_doc(elem)).collect();
+        let mut body = vec![edge()];
+        for (i, elem) in elems.iter().enumerate() {
+            if i > 0 {
+                body.push(Doc::text(","));
+                body.push(Doc::line());
+            }
+            body.push(elem.clone());
+        }
+        if self.kept_comma {
+            body.push(Doc::text(","));
+        } else if close.is_some() {
+            body.push(Doc::if_break(Doc::text(","), Doc::Nil));
+        }
+        let mut parts = vec![open.clone(), Doc::nest(2, Doc::concat(body))];
+        if let Some(close) = &close {
+            parts.push(edge());
+            parts.push(close.clone());
+        }
+        let normal = Doc::group(Doc::concat(parts));
+        let hug_last = self.open == '(' && self.named && !self.kept_comma;
+        match self.elems.last().zip(elems.split_last()) {
+            Some((last, (last_doc, firsts))) if hug_last && element_hugs(last) => {
+                let mut flat = Vec::new();
+                for elem in firsts {
+                    flat.push(elem.clone());
+                    flat.push(Doc::text(", "));
+                }
+                let mut hug = vec![open, Doc::flat(Doc::concat(flat)), last_doc.expand_last()];
+                hug.extend(close);
+                Doc::choice(
+                    Doc::flat(normal.clone()),
+                    Doc::choice(Doc::concat(hug), normal),
+                )
+            }
+            _ => normal,
+        }
+    }
+}
+
+/// Whether an element can hug its call's parentheses when it comes last:
+/// a group, after a name or nothing, that [`Group::hugs`].
+fn element_hugs(pieces: &[Piece]) -> bool {
+    match pieces {
+        [Piece::Group(group)] | [Piece::Text(_), Piece::Group(group)] => group.hugs(),
+        _ => false,
+    }
+}
+
+/// An element's pieces as one document.
+fn pieces_doc(pieces: &[Piece]) -> Doc {
+    Doc::concat(
+        pieces
+            .iter()
+            .map(|piece| match piece {
+                Piece::Text(text) => Doc::text(text),
+                Piece::Group(group) => group.doc(),
+            })
+            .collect(),
+    )
+}
+
+/// `block` as a Markdown code block of Cheby: fenced by a run of at least
+/// three backticks, longer than any in it, so a value that holds three
+/// backticks does not close the block early.
+fn fenced(block: &str) -> String {
+    let fence = "`".repeat(longest_backticks(block).saturating_add(1).max(3));
+    format!("{fence}cheby\n{block}\n{fence}")
+}
+
+/// `note` without the lines of the fences [`fenced`] put in it, for a
+/// client that takes no Markdown. A note's own lines never consist of
+/// backticks alone: a value's strings are quoted.
+fn unfenced(note: &str) -> String {
+    note.split('\n')
+        .filter(|line| {
+            let text = line.strip_suffix("cheby").unwrap_or(line);
+            !(text.len() >= 3 && text.chars().all(|c| c == '`'))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The length of the longest run of backticks in `text`.
+fn longest_backticks(text: &str) -> usize {
+    text.split(|c| c != '`').map(str::len).max().unwrap_or(0)
+}
+
 /// `text` as Markdown inline code: fenced by a run of backticks longer
 /// than any in it, with a space inside when it starts or ends with one, so
 /// a value that holds backticks shows as it is.
 fn inline_code(text: &str) -> String {
-    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest.saturating_add(1));
+    let fence = "`".repeat(longest_backticks(text).saturating_add(1));
     let pad = if text.starts_with('`') || text.ends_with('`') {
         " "
     } else {

@@ -563,6 +563,25 @@ impl<'a> Parser<'a> {
         Span::new(self.file, range)
     }
 
+    /// The span an "expected …" error at the current token points at: as
+    /// [`Self::error_span`], except that a `}` after a skipped line break
+    /// that closes an open `{` gets an empty span after the previous token,
+    /// on the line being written rather than on the `}` (D-1513). The end of
+    /// the file already gets one.
+    ///
+    /// A `}` closes an open `{` when [`Self::open_delims`] holds one: every
+    /// `{` the grammar reads goes through [`Self::open_delim`], and a `}`
+    /// closes the innermost open `{`, leaving any `(`, `[` or `<` inside it
+    /// unclosed (E0015). A `}` that closes nothing, such as a stray one at
+    /// the top level, keeps the error on itself (D-1519).
+    fn expected_span(&self) -> Span {
+        let current = self.input.current();
+        if current.kind == R_BRACE && current.line_start && self.open_delims.contains(&L_BRACE) {
+            return Span::new(self.file, TextRange::empty(self.prev_end));
+        }
+        self.error_span()
+    }
+
     /// Records `diag` unless an error was already reported at this token,
     /// or the token is an error token the lexer reported (unless `always`).
     fn push_error(&mut self, diag: Diagnostic, always: bool) {
@@ -615,7 +634,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Reports "expected `what`, found …" at the current token. A line
-    /// break gets E0014 with the continuation rules (§2.8).
+    /// break gets E0014 with the continuation rules (§2.8). A `}` that
+    /// closes an open `{`, or the end of the file, after a line break is
+    /// reported at the end of the line before it (D-1513, D-1519).
     pub(crate) fn expected(&mut self, what: &str) {
         let found = self.current();
         let diag = if found == NEWLINE {
@@ -631,7 +652,7 @@ impl<'a> Parser<'a> {
                 codes::SYNTAX_ERROR,
                 format!("expected {what}, found {}", found.describe()),
             )
-            .with_primary(self.error_span(), "")
+            .with_primary(self.expected_span(), "")
         };
         self.push_error(diag, false);
     }

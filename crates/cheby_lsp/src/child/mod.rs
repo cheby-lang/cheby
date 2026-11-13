@@ -236,6 +236,10 @@ fn constants_section(section: &analysis::Section<ConstantsOut>) -> Section<Const
                     symbol: SymbolData::from(&value.symbol),
                     text: value.text.clone(),
                     truncated: value.truncated,
+                    modules: value
+                        .modules
+                        .as_ref()
+                        .map(|paths| paths.iter().map(|path| wire::path_text(path)).collect()),
                 })
                 .collect(),
         }),
@@ -381,7 +385,7 @@ mod tests {
             front: FrontOutcome::Clean,
             constants: Some(analysis::Section::Ok(ConstantsOut {
                 diagnostics: vec![ConstDiagnostic {
-                    path,
+                    path: path.clone(),
                     diagnostic: diagnostic.clone(),
                     symbol: Some(constant("boom")),
                 }],
@@ -389,6 +393,7 @@ mod tests {
                     symbol: constant("limit"),
                     text: "20".to_owned(),
                     truncated: true,
+                    modules: Some(vec![path]),
                 }],
             })),
         };
@@ -416,6 +421,8 @@ mod tests {
         assert_eq!(value.symbol.to_symbol(), Some(constant("limit")));
         assert_eq!(value.text, "20");
         assert!(value.truncated);
+        // The reached modules travel as `/` paths (D-1510).
+        assert_eq!(value.modules, Some(vec!["src/main.cheby".to_owned()]));
         assert_eq!(back.sections.ownership, None);
     }
 

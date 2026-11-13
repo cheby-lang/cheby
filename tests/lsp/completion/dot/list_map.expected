@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0058",
-      "message": "`List<{integer}>` has no field `ma`",
+      "message": "`List<{integer}>` has no field `ma`\nunknown field",
       "range": {
         "end": {
           "character": 16,

@@ -300,6 +300,26 @@ pub(crate) fn iface_call(
     cx.iface_call(iface_fn, self_ty)
 }
 
+/// The dictionary behind a call of the interface function `iface_fn` whose
+/// arguments have the types `args`, when `Self` is a nominal type: the one
+/// [`iface_call`] built to check that the type satisfies the whole
+/// interface before it kept only the called function (§8.5). The warnings
+/// pass counts its functions as used (D-1552). `None` for any other `Self`,
+/// whose callee holds its dictionary, and when the type does not satisfy
+/// the interface.
+///
+/// # Errors
+///
+/// An [`Ice`] if `iface_fn` is not an interface function, or an interface
+/// or type cannot be read.
+pub(crate) fn iface_call_dict(
+    cx: &IfaceCx<'_>,
+    iface_fn: DefId,
+    args: &[Ty],
+) -> Result<Option<Dict>, Ice> {
+    cx.iface_call_dict(iface_fn, args)
+}
+
 /// How the binary operator `op` is implemented on operands of type `ty`
 /// (§5.4, §8.7): [`OpImpl::Builtin`] on the built-in numeric types, else a
 /// call of the type's `add`, `sub`, `mul`, `div` or `compare`, found by

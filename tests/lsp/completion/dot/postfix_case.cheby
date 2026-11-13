@@ -1,4 +1,4 @@
-// @decisions: D-1394, D-1156
+// @decisions: D-1394, D-1156, D-1506
 //! `o.ca` on an `Option`: a `case` with one arm per constructor, each
 //! body a `todo` to fill.
 

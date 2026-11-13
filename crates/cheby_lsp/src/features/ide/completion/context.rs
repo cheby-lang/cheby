@@ -78,7 +78,8 @@ pub(crate) enum Context<'t> {
     },
     /// A type.
     Type,
-    /// A pattern: a `case` arm's head, after `let`, `use` or `fn(`.
+    /// A pattern: a `case` arm's head, after `let`, `let guard`,
+    /// `let assert`, `use` or `fn(` (D-1531).
     Pattern {
         /// What the pattern matches, when the tree says.
         subject: Subject<'t>,
@@ -139,7 +140,9 @@ pub(crate) enum Receiver<'t> {
 pub(crate) enum Subject<'t> {
     /// An arm of this `CASE_EXPR`.
     Case(SyntaxNode<'t>),
-    /// The pattern of this `LET_STMT`.
+    /// The pattern of this `LET_STMT`, of `let`, `let guard` or
+    /// `let assert`, whose value after `=` is the subject, also with a
+    /// type annotation (D-1531).
     Let(SyntaxNode<'t>),
     /// Not known from the tree.
     Unknown,
@@ -157,7 +160,8 @@ pub(crate) enum ExprSite<'t> {
         /// The argument's position: commas before the cursor (X §4.7).
         index: usize,
     },
-    /// The value of this `LET_STMT`.
+    /// The value of this `LET_STMT`, or of this `GUARD_STMT` of a
+    /// `let guard` (D-1531).
     LetValue(SyntaxNode<'t>),
     /// The body of this `CASE_ARM` or `COND_ARM`.
     ArmBody(SyntaxNode<'t>),
@@ -457,6 +461,8 @@ fn open_anchor<'t>(anchor: SyntaxToken<'t>, at: TextSize) -> Option<Context<'t>>
             K::PARAM | K::LET_STMT | K::RECORD_FIELD | K::CONST_DECL | K::TYPE_PARAM => {
                 Some(Context::Type)
             }
+            // The annotation of `let guard p: T = v`, as of `let` (D-1531).
+            K::GUARD_STMT if is_let_guard(parent) => Some(Context::Type),
             K::FIELD_INIT => expr(false, ExprSite::FieldValue(parent)),
             K::FIELD_PAT => pattern(Subject::Unknown),
             _ => Some(Context::None),
@@ -466,6 +472,10 @@ fn open_anchor<'t>(anchor: SyntaxToken<'t>, at: TextSize) -> Option<Context<'t>>
         }
         K::EQ => match p {
             K::LET_STMT => expr(false, ExprSite::LetValue(parent)),
+            // The value of `let guard p = v else { … }`, as of `let`, so a
+            // `: T` ranks its items and a path's `::` keeps only what a
+            // path starts with (D-1530, D-1531).
+            K::GUARD_STMT if is_let_guard(parent) => expr(false, ExprSite::LetValue(parent)),
             K::CONST_DECL => expr(false, ExprSite::Unknown),
             K::ALIAS_DECL => Some(Context::Type),
             _ => Some(Context::None),
@@ -483,6 +493,14 @@ fn open_anchor<'t>(anchor: SyntaxToken<'t>, at: TextSize) -> Option<Context<'t>>
             expr(false, ExprSite::Unknown)
         }
         K::LET_KW => pattern(Subject::Let(parent)),
+        // `let assert p = e` and `let guard p = e else { … }` bind a
+        // pattern, as `let` does, with `e` as the subject; `assert e` and
+        // `guard e else` take an expression (D-1531).
+        K::ASSERT_KW | K::GUARD_KW
+            if prev_significant(anchor).is_some_and(|t| t.kind() == K::LET_KW) =>
+        {
+            pattern(Subject::Let(parent))
+        }
         K::USE_KW => pattern(Subject::Unknown),
         K::CASE_KW | K::ASSERT_KW | K::GUARD_KW | K::WHEN_KW | K::PANIC_KW => {
             expr(false, ExprSite::Unknown)
@@ -505,6 +523,12 @@ fn open_anchor<'t>(anchor: SyntaxToken<'t>, at: TextSize) -> Option<Context<'t>>
     }
 }
 
+/// Whether `stmt`, a `GUARD_STMT`, is a `let guard`, which binds a
+/// pattern and has a value after `=`, not a `guard` with a condition.
+fn is_let_guard(stmt: SyntaxNode<'_>) -> bool {
+    stmt.first_token_of_kind(K::LET_KW).is_some()
+}
+
 /// The context after `::`: a qualified path, broken or whole, or a module
 /// path of an import.
 fn colon2<'t>(colon2: SyntaxToken<'t>, parent: SyntaxNode<'t>) -> Option<Context<'t>> {
@@ -513,6 +537,19 @@ fn colon2<'t>(colon2: SyntaxToken<'t>, parent: SyntaxNode<'t>) -> Option<Context
         // map §2.2): the path is the token before.
         K::ERROR => {
             let last = prev_significant(colon2)?;
+            // In a pattern, `shape::` parses as the binding `shape`, then
+            // `::` in an `ERROR`: the module's constructors, as after
+            // `shape::S` (X §4.1's `x::`).
+            if let Some(binding) = last.parent().filter(|p| p.kind() == K::IDENT_PAT) {
+                if binding.last_token() != Some(last) || last.kind() != K::LOWER_IDENT {
+                    return Some(Context::None);
+                }
+                return Some(Context::Qualified {
+                    qualifier: vec![last.text().to_owned()],
+                    ns: PathNs::Pattern,
+                    piped: None,
+                });
+            }
             let path = last.parent().filter(|p| p.kind() == K::PATH)?;
             if path.last_token() != Some(last) {
                 return Some(Context::None);

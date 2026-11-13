@@ -9,12 +9,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::collections::BTreeMap;
 
 use cheby_driver::analysis::{
-    Globals, ModulePath, Overlay, OverlayFile, PackageKind, Session, SessionConfig, StdBase,
-    StdIndex, Symbol, SymbolNs, codes,
+    Globals, Hash128, ModulePath, Overlay, OverlayFile, PackageKind, Session, SessionConfig,
+    StdBase, StdIndex, Symbol, SymbolNs, codes, normalized_key,
 };
 
 use super::{
-    HoverText, cheby_fences, hover, inline_code, show_initializer, source, written_initializer,
+    HoverText, cheby_fences, fenced, fits_header, hover, inline_code, show_initializer, source,
+    unfenced, value_block, written_initializer,
 };
 use crate::features::Analyzed;
 use crate::server::ConstValues;
@@ -502,17 +503,379 @@ fn constant_hovers(
     values: Option<&ConstValues>,
     std: Option<&StdIndex>,
 ) -> Vec<Option<String>> {
+    constant_hovers_with(needles, |_| values.cloned(), std)
+}
+
+/// [`constant_hovers`] with the values that `values` makes from the
+/// absolute path of [`CONSTANTS`]'s file, which a value's modules name
+/// (D-1510).
+fn constant_hovers_with(
+    needles: &[&str],
+    values: impl FnOnce(&Path) -> Option<ConstValues>,
+    std: Option<&StdIndex>,
+) -> Vec<Option<String>> {
+    constant_hover_texts(needles, values, std)
+        .into_iter()
+        .map(|h| h.map(|h| h.render(true)))
+        .collect()
+}
+
+/// [`constant_hovers_with`] before rendering.
+fn constant_hover_texts(
+    needles: &[&str],
+    values: impl FnOnce(&Path) -> Option<ConstValues>,
+    std: Option<&StdIndex>,
+) -> Vec<Option<HoverText>> {
     let temp = Temp::package("constants", &[("main.cheby", CONSTANTS)]);
     let path = temp.src("main.cheby");
     let analyzed = analyze(&temp.0, &[(path.clone(), CONSTANTS)]);
     let doc = source(&analyzed.snapshot, &path).expect("the document");
+    let values = values(&path);
     needles
         .iter()
         .map(|needle| {
             let offset = offset_of(CONSTANTS, needle);
-            hover(&analyzed, &doc, offset, std.into(), values).map(|h| h.render(true))
+            hover(&analyzed, &doc, offset, std.into(), values.as_ref())
         })
         .collect()
+}
+
+/// Values of [`CONSTANTS`] from one run: `limit`'s `20` from a run that
+/// read `main` with the hash `read`, `evaluating` as given (D-1510,
+/// D-1511).
+fn limit_from(main: &Path, read: Hash128, evaluating: bool) -> ConstValues {
+    let mut values = ConstValues {
+        evaluating,
+        ..ConstValues::default()
+    };
+    values.insert_value(
+        app_value("limit"),
+        "20",
+        false,
+        BTreeMap::from([(main.to_path_buf(), read)]),
+    );
+    values
+}
+
+/// D-1511: while the first run is due or running, a constant with no
+/// value says that the constants are being evaluated, not that a save
+/// computes them.
+#[test]
+fn the_first_run_says_the_constants_are_being_evaluated() {
+    let values = ConstValues {
+        evaluating: true,
+        ..ConstValues::default()
+    };
+    let got = constant_hovers(&["const tw|ice"], Some(&values), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst twice: Int\n```\n\n---\n\nNot evaluated yet: the constants are \
+             being evaluated.\n\nDefined in `app`."
+        )
+    );
+}
+
+/// D-1511: the evaluating text comes before D-1490's, D-1497's and
+/// D-1501's, and a failed constant still names its code.
+#[test]
+fn being_evaluated_comes_before_the_other_texts_of_no_value() {
+    let evaluating = "```cheby\nconst twice: Int\n```\n\n---\n\nNot evaluated yet: the \
+                      constants are being evaluated.\n\nDefined in `app`.";
+    for values in [
+        ConstValues {
+            stale: true,
+            evaluating: true,
+            ..ConstValues::default()
+        },
+        ConstValues {
+            stale: true,
+            front_errors: true,
+            evaluating: true,
+            ..ConstValues::default()
+        },
+        ConstValues {
+            disk_errors: true,
+            evaluating: true,
+            ..ConstValues::default()
+        },
+    ] {
+        let got = constant_hovers(&["const tw|ice"], Some(&values), None);
+        assert_eq!(got[0].as_deref(), Some(evaluating), "{values:?}");
+    }
+    let values = ConstValues {
+        failed: BTreeMap::from([(app_value("broken"), codes::CONSTANT_PANICKED)]),
+        stale: true,
+        evaluating: true,
+        ..ConstValues::default()
+    };
+    let got = constant_hovers(&["const bro|ken"], Some(&values), None);
+    assert!(
+        got[0]
+            .as_deref()
+            .is_some_and(|h| h.contains("Evaluation failed, see `E0075`.")),
+        "{got:?}"
+    );
+}
+
+/// D-1510, D-1511: a value whose module has other text than its run read
+/// is stale, and while the new save is due or being evaluated it says so;
+/// one whose modules are unchanged stays current, run or no run.
+#[test]
+fn a_stale_value_while_a_run_is_due_says_the_save_is_being_evaluated() {
+    let got = constant_hovers_with(
+        &["const li|mit"],
+        |main| Some(limit_from(main, Hash128([9; 16]), true)),
+        None,
+    );
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst limit: Int\n```\n\n---\n\n`20` when last evaluated; the new save \
+             is being evaluated.\n\nDefined in `app`.\n\n---\n\nThe most."
+        )
+    );
+    let got = constant_hovers_with(
+        &["const li|mit"],
+        |main| Some(limit_from(main, Hash128([9; 16]), false)),
+        None,
+    );
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            "```cheby\nconst limit: Int\n```\n\n---\n\n`20` when last saved.\n\nDefined in \
+             `app`.\n\n---\n\nThe most."
+        )
+    );
+    let current = "```cheby\nconst limit: Int = 20\n```\n\n---\n\nDefined in `app`.\n\n---\n\n\
+                   The most.";
+    for evaluating in [false, true] {
+        let got = constant_hovers_with(
+            &["const li|mit"],
+            |main| Some(limit_from(main, normalized_key(CONSTANTS), evaluating)),
+            None,
+        );
+        assert_eq!(got[0].as_deref(), Some(current), "evaluating: {evaluating}");
+    }
+}
+
+/// A list of records past 80 columns with its header.
+const POINTS: &str = "[Circle { label: \"sun\", origin: Point { x: 8.0, y: 2.0 } }, \
+                      Circle { label: \"moon\", origin: Point { x: 1.0, y: 9.0 } }]";
+
+/// [`POINTS`] as hover breaks it.
+const POINTS_BLOCK: &str = "[\n  Circle { label: \"sun\", origin: Point { x: 8.0, y: 2.0 } },\n  \
+                            Circle { label: \"moon\", origin: Point { x: 1.0, y: 9.0 } },\n]";
+
+/// D-1512: a value that takes the header past 80 columns gets a block of
+/// its own below the header, current or stale, and a short one stays on
+/// the header line.
+#[test]
+fn a_long_value_is_shown_as_a_block() {
+    let with = |text: &'static str, read: Option<Hash128>, truncated: bool| {
+        move |main: &Path| {
+            let mut values = ConstValues::default();
+            values.insert_value(
+                app_value("twice"),
+                text,
+                truncated,
+                BTreeMap::from([(
+                    main.to_path_buf(),
+                    read.unwrap_or_else(|| normalized_key(CONSTANTS)),
+                )]),
+            );
+            Some(values)
+        }
+    };
+    let got = constant_hovers_with(&["const tw|ice"], with(POINTS, None, false), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            format!(
+                "```cheby\nconst twice: Int\n```\n```cheby\n{POINTS_BLOCK}\n```\n\n---\n\n\
+                 Defined in `app`."
+            )
+            .as_str()
+        )
+    );
+    let got = constant_hovers_with(
+        &["const tw|ice"],
+        with(POINTS, Some(Hash128([9; 16])), false),
+        None,
+    );
+    assert_eq!(
+        got[0].as_deref(),
+        Some(
+            format!(
+                "```cheby\nconst twice: Int\n```\n\n---\n\n```cheby\n{POINTS_BLOCK}\n```\n\
+                 when last saved.\n\nDefined in `app`."
+            )
+            .as_str()
+        )
+    );
+    // A value cut at 4,096 characters keeps its `…`, in the block too.
+    let got = constant_hovers_with(&["const tw|ice"], with(POINTS, None, true), None);
+    let shown = got[0].as_deref().expect("a hover");
+    assert!(
+        shown.contains(&format!("```cheby\n{POINTS_BLOCK}…\n```")),
+        "{shown}"
+    );
+    assert!(shown.contains("The value is cut short."), "{shown}");
+    let got = constant_hovers_with(&["const tw|ice"], with("[1, 2, 3]", None, false), None);
+    assert_eq!(
+        got[0].as_deref(),
+        Some("```cheby\nconst twice: Int = [1, 2, 3]\n```\n\n---\n\nDefined in `app`.")
+    );
+}
+
+/// A list past 80 columns with its header whose first string holds three
+/// backticks.
+const TICKS: &str = "[\"```\", \"a long string to pass the eighty column limit of hover\"]";
+
+/// D-1512: a value's block is fenced by more backticks than the value
+/// holds, current or stale, and a client that takes no Markdown gets the
+/// stale block with no fence.
+#[test]
+fn a_value_block_with_backticks_keeps_its_fence() {
+    let with = |read: Option<Hash128>| {
+        move |main: &Path| {
+            let mut values = ConstValues::default();
+            values.insert_value(
+                app_value("twice"),
+                TICKS,
+                false,
+                BTreeMap::from([(
+                    main.to_path_buf(),
+                    read.unwrap_or_else(|| normalized_key(CONSTANTS)),
+                )]),
+            );
+            Some(values)
+        }
+    };
+    let block = TICKS;
+    let current = constant_hover_texts(&["const tw|ice"], with(None), None);
+    let current = current[0].as_ref().expect("a hover");
+    assert_eq!(
+        current.render(true),
+        format!(
+            "```cheby\nconst twice: Int\n```\n````cheby\n{block}\n````\n\n---\n\nDefined in `app`."
+        )
+    );
+    let stale = constant_hover_texts(&["const tw|ice"], with(Some(Hash128([9; 16]))), None);
+    let stale = stale[0].as_ref().expect("a hover");
+    assert_eq!(
+        stale.render(true),
+        format!(
+            "```cheby\nconst twice: Int\n```\n\n---\n\n````cheby\n{block}\n````\nwhen last \
+             saved.\n\nDefined in `app`."
+        )
+    );
+    assert_eq!(
+        stale.render(false),
+        format!("const twice: Int\n\n---\n\n{block}\nwhen last saved.\n\nDefined in `app`.")
+    );
+}
+
+/// D-1512: a code block's fence is longer than any run of backticks in
+/// it, and a plain-text note loses only the fence lines.
+#[test]
+fn fences_are_longer_than_the_backticks_inside() {
+    assert_eq!(fenced("1"), "```cheby\n1\n```");
+    assert_eq!(fenced("\"``\""), "```cheby\n\"``\"\n```");
+    assert_eq!(fenced("\"````\""), "`````cheby\n\"````\"\n`````");
+    assert_eq!(unfenced(&fenced("\"````\"")), "\"````\"");
+    assert_eq!(unfenced("`20` when last saved."), "`20` when last saved.");
+}
+
+/// D-1512: the header and the value share a line up to 80 columns.
+#[test]
+fn a_value_joins_its_header_up_to_80_columns() {
+    let header = "const twice: Int";
+    assert!(fits_header(header, &"1".repeat(61)));
+    assert!(!fits_header(header, &"1".repeat(62)));
+    assert!(
+        fits_header(header, &"é".repeat(61)),
+        "characters, not bytes"
+    );
+}
+
+/// D-1512: a value breaks by its brackets as `cheby fmt` breaks a
+/// literal: a group that fits stays on its line, one that does not puts
+/// each element or field on its own line, two spaces deeper, with a
+/// trailing comma.
+#[test]
+fn a_value_block_breaks_by_brackets() {
+    assert_eq!(value_block("[1, 2]"), "[1, 2]");
+    assert_eq!(value_block(POINTS), POINTS_BLOCK);
+    let tuple = "([\"alpha\", \"beta\", \"gamma\", \"delta\"], \
+                 [\"epsilon\", \"zeta\", \"eta\", \"theta\", \"iota\"])";
+    assert_eq!(
+        value_block(tuple),
+        "(\n  [\"alpha\", \"beta\", \"gamma\", \"delta\"],\n  \
+         [\"epsilon\", \"zeta\", \"eta\", \"theta\", \"iota\"],\n)"
+    );
+    let deep = "[Shape { name: \"triangle\", points: [Point { x: 0.0, y: 0.0 }, \
+                Point { x: 4.0, y: 0.0 }, Point { x: 0.0, y: 3.0 }] }]";
+    assert_eq!(
+        value_block(deep),
+        "[\n  Shape {\n    name: \"triangle\",\n    points: [\n      Point { x: 0.0, y: 0.0 },\n      \
+         Point { x: 4.0, y: 0.0 },\n      Point { x: 0.0, y: 3.0 },\n    ],\n  },\n]"
+    );
+}
+
+/// D-1512: a call's last argument that is a list, a record or such a
+/// call hugs its parentheses, as `cheby fmt` hugs it.
+#[test]
+fn a_value_block_hugs_a_last_argument() {
+    let map = r#"map::from_list([("alpha", [1, 2, 3]), ("beta", [4, 5, 6]), ("gamma", [7, 8, 9]), ("delta", [10, 11, 12])])"#;
+    assert_eq!(
+        value_block(map),
+        "map::from_list([\n  (\"alpha\", [1, 2, 3]),\n  (\"beta\", [4, 5, 6]),\n  \
+         (\"gamma\", [7, 8, 9]),\n  (\"delta\", [10, 11, 12]),\n])"
+    );
+    let some = r#"Some(Config { name: "server", port: 8080, hosts: ["alpha", "beta", "gamma"], verbose: True })"#;
+    assert_eq!(
+        value_block(some),
+        "Some(Config {\n  name: \"server\",\n  port: 8080,\n  \
+         hosts: [\"alpha\", \"beta\", \"gamma\"],\n  verbose: True,\n})"
+    );
+}
+
+/// D-1512: a string is never split, and the brackets, commas and escaped
+/// quotes inside it are its text.
+#[test]
+fn a_value_block_never_splits_a_string() {
+    let strings = r#"["a long string with, commas and [brackets] and {braces} inside it", "and \"quoted\" (one), here\\"]"#;
+    assert_eq!(
+        value_block(strings),
+        "[\n  \"a long string with, commas and [brackets] and {braces} inside it\",\n  \
+         \"and \\\"quoted\\\" (one), here\\\\\",\n]"
+    );
+    // A string longer than the line stays whole on its own line.
+    let long = format!("[\"{}\", 1]", "x".repeat(90));
+    assert_eq!(
+        value_block(&long),
+        format!("[\n  \"{}\",\n  1,\n]", "x".repeat(90))
+    );
+}
+
+/// D-1512, D-1413: a value cut at 4,096 characters leaves the groups it
+/// was cut in open, with no trailing comma, and ends in its `…`, also
+/// inside a string.
+#[test]
+fn a_cut_value_block_keeps_its_mark() {
+    let cut = "[Point { x: 1.0, y: 2.0 }, Point { x: 3.0, y: 4.0 }, \
+               Point { x: 5.0, y: 6.0 }, Point { x: 7.0, y…";
+    assert_eq!(
+        value_block(cut),
+        "[\n  Point { x: 1.0, y: 2.0 },\n  Point { x: 3.0, y: 4.0 },\n  \
+         Point { x: 5.0, y: 6.0 },\n  Point { x: 7.0, y…"
+    );
+    let in_string = format!("[\"{}\", \"open, [string…", "x".repeat(80));
+    assert_eq!(
+        value_block(&in_string),
+        format!("[\n  \"{}\",\n  \"open, [string…", "x".repeat(80))
+    );
 }
 
 #[test]

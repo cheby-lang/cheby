@@ -39,6 +39,41 @@
 //! With `completion.autoImport` off, no function that needs an import is
 //! offered, after `|>` or after `xs.`, the head type's module included
 //! when the file does not import it (D-1486).
+//!
+//! After `|>`, a function written through a module path, `list::map`, has
+//! that path as its label, the bare name as `filterText` and the module's
+//! whole path as `labelDetails.description` (D-1508). One the module
+//! calls by its own name keeps that name as its label.
+//!
+//! Where a path's `::` follows the word after `|>`, as
+//! `xs |> st‸::length`, [`complete`] is not called: only what a path
+//! starts with is offered, the modules and the interfaces, written bare,
+//! since a function written through a module path would write a second
+//! path (D-1521, D-1530), the interfaces only when one segment follows
+//! the `::` (D-1539). The list is complete there (D-1525). Before a
+//! turbofish, as `xs |> re‸::<Int>`, the functions and the local
+//! functions are offered as with no `::` after the word, and no module
+//! name, since `list::<Int>` is no path, only names taking type arguments
+//! there (D-1525, D-1529, D-1536).
+//!
+//! After `xs |> shape::`, the module's interfaces are offered with its
+//! functions, written `Shape::` (D-1548), and they alone, written
+//! `Shape`, where a path's `::` follows the segment (D-1538). After
+//! `xs |> I::` and `xs |> m::I::`, the interface's functions come in the
+//! pipe form, the hole at the first parameter of type `Self`, bare when
+//! that is the only one, at rank 20, or 25 when `Self` comes later
+//! (D-1545). A function whose `Self` is only inside a parameter's type
+//! has no such parameter and is not offered.
+//!
+//! The interfaces start a path after `|>` as the modules do, whatever
+//! the left side's type: those in scope bare, `Show::`, those of
+//! imported modules through the module, `ops::Compare::`, from the
+//! second character, and with `completion.autoImport` on those to
+//! import, capped with the functions to import (D-1546). One the file
+//! imports by name comes only by that name, `Compare::`, as a function
+//! does (D-1550). With a one-character partial, an imported module's
+//! interface makes the list incomplete, as it comes at the second
+//! (D-1521).
 
 use std::collections::BTreeMap;
 
@@ -49,9 +84,12 @@ use cheby_driver::analysis::{
 };
 use cheby_syntax::SyntaxNode;
 
-use super::auto_import::{admits, may_import, push_capped};
+use super::auto_import::{admits, imports_an_interface, may_import, pipe_interfaces, push_capped};
 use super::context::PathNs;
-use super::items::{Entry, EntryKind, Insert, escape, rank};
+use super::items::{
+    Entry, EntryKind, Insert, escape, interface_items, module_interfaces, path_interface,
+    qualified_module, rank, scope_interfaces,
+};
 use super::{CompletionCx, Items};
 use crate::features::ide::imports::{ImportPlan, import_plan, parse_path, path_text};
 use crate::features::ide::scope;
@@ -397,26 +435,37 @@ pub(crate) fn complete(
     out: &mut Items,
 ) {
     let _ = pipe;
-    // Before `::` only a module name fits: `xs |> se‸::from_list`.
-    if cx.before_colon2() {
-        module_names(cx, out);
-        return;
-    }
+    // Before a path's `::` this is not called (D-1530). Before a
+    // turbofish's, as `xs |> re‸::<Int>`, the functions are offered as
+    // with no `::` after the word, and no module name: only names that
+    // take type arguments (D-1525, D-1536).
     let partial = cx.partial_text();
     // A function that needs an import follows auto-import's rule: two
     // characters, a subsequence of its name, and the cap (D-1479).
     let importing = may_import(partial);
-    if cx.options.auto_import && !importing {
-        // The imports start at the second character, so the client must
-        // ask again (D-1487).
+    if !importing && (cx.options.auto_import || imports_an_interface(cx)) {
+        // The imports, and the interfaces of imported modules, start at
+        // the second character, so the client must ask again (D-1487,
+        // D-1521, D-1546).
         out.incomplete = true;
     }
     let left = left_ty(cx, lhs);
     local_functions(cx, left, out);
     module_names(cx, out);
-    let Some(left) = left else { return };
-    let range = cx.partial();
+    // The interfaces start a path that names their functions, as
+    // `xs |> Show::show`, so they come as the modules do, whatever the
+    // left side's type, those to import capped with the functions
+    // (D-1479, D-1546). Before a turbofish none fits (D-1536).
     let mut needs_import: Vec<(String, String, Entry)> = Vec::new();
+    if !cx.before_turbofish() {
+        scope_interfaces(cx, out);
+        needs_import = pipe_interfaces(cx, out);
+    }
+    let Some(left) = left else {
+        push_capped(needs_import, out, |_, _, entry| Some(entry));
+        return;
+    };
+    let range = cx.partial();
     for candidate in candidates(cx, left, cx.options.auto_import && importing) {
         let name = cx
             .item(candidate.def)
@@ -424,9 +473,21 @@ pub(crate) fn complete(
         if candidate.import.is_some() && !admits(partial, name) {
             continue;
         }
-        let Some(mut entry) = cx.def_entry(candidate.def, name, candidate.rank) else {
+        // A function written through a module path is labelled by that
+        // path and matched by its name (D-1508).
+        let Some(mut entry) = cx.def_entry(candidate.def, &candidate.path, candidate.rank) else {
             continue;
         };
+        let path = cx
+            .snapshot
+            .table()
+            .get(candidate.def.module)
+            .map(|info| path_text(&info.path))
+            .unwrap_or_default();
+        if candidate.path.contains("::") {
+            entry.filter_text = Some(name.to_owned());
+            entry.description = Some(path.clone());
+        }
         entry.insert = if cx.before_paren() {
             cx.insert(candidate.path.clone())
         } else {
@@ -440,12 +501,6 @@ pub(crate) fn complete(
         match candidate.import {
             Some(import) => {
                 entry.additional = vec![import];
-                let path = cx
-                    .snapshot
-                    .table()
-                    .get(candidate.def.module)
-                    .map(|info| path_text(&info.path))
-                    .unwrap_or_default();
                 needs_import.push((name.to_owned(), path, entry));
             }
             None => out.push(entry),
@@ -504,7 +559,8 @@ fn unloaded(
 }
 
 /// The entry of `item`, a function of std's index, piped at `hole` and
-/// qualified as `plan` says.
+/// qualified as `plan` says: labelled by that path, matched by its name
+/// (D-1508), with the module's whole path as auto-import has it.
 fn std_call(
     cx: &CompletionCx<'_>,
     item: &StdItem,
@@ -515,8 +571,10 @@ fn std_call(
     let mut entry = cx.std_entry(item, rank);
     let params: Vec<&str> = item.param_names.iter().map(String::as_str).collect();
     entry.label_detail = Some(format!("({})", params.join(", ")));
-    entry.description = item.module.rsplit("::").next().map(str::to_owned);
+    entry.description = Some(item.module.clone());
     let path = format!("{}::{}", plan.name, item.key.text());
+    entry.label.clone_from(&path);
+    entry.filter_text = Some(item.key.text().to_owned());
     entry.insert = if cx.before_paren() {
         cx.insert(path)
     } else {
@@ -579,7 +637,7 @@ fn is_plain_name(name: &str) -> bool {
 }
 
 /// The names of the imported modules, written `list::`, so a qualified
-/// function can follow (rank 30), or bare where a `::` follows.
+/// function can follow (rank 30). None before a turbofish (D-1525).
 fn module_names(cx: &CompletionCx<'_>, out: &mut Items) {
     let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) else {
         return;
@@ -589,12 +647,10 @@ fn module_names(cx: &CompletionCx<'_>, out: &mut Items) {
             continue;
         };
         let label = cx.name_text(name);
-        let mut item = Entry::new(
-            label,
-            EntryKind::Module,
-            rank::IMPORTED,
-            cx.insert(cx.module_text(label)),
-        );
+        let Some(text) = cx.module_text(label) else {
+            continue;
+        };
+        let mut item = Entry::new(label, EntryKind::Module, rank::IMPORTED, cx.insert(text));
         item.description = cx.snapshot.table().get(module).map(|i| i.path.to_string());
         out.push(item);
     }
@@ -604,7 +660,16 @@ fn module_names(cx: &CompletionCx<'_>, out: &mut Items) {
 /// and `qualifier` the segments before the partial word, read in `ns`.
 /// Only the function's part is written: `map(_, ${1:f})$0`. A function
 /// that accepts the left side ranks 20, 25 at a later parameter; one that
-/// does not stays at rank 70, with the hole first (X §4.3).
+/// does not stays at rank 70, with the hole first (X §4.3). The module's
+/// interfaces come too, written `Shape::`, as `xs |> shape::Shape::`
+/// starts `shape::Shape::area` (D-173, D-1548), and they alone, written
+/// `Shape`, where a path's `::` follows, as in `xs |> shape::Sh‸::area`
+/// (D-1538). Before a turbofish, only the functions (D-1536).
+///
+/// After `xs |> I::` or `xs |> m::I::`, the interface's functions come in
+/// the pipe form, the hole at the first `Self` (D-1545). None fits before
+/// a path's `::` or a turbofish, which no interface function takes
+/// (E0023, D-1536).
 pub(crate) fn qualified(
     cx: &CompletionCx<'_>,
     lhs: SyntaxNode<'_>,
@@ -615,24 +680,25 @@ pub(crate) fn qualified(
     if ns != PathNs::Value {
         return;
     }
+    if let Some(def) = path_interface(cx, qualifier) {
+        if !cx.before_path() && !cx.before_turbofish() {
+            interface_items(cx, def, true, out);
+        }
+        return;
+    }
     let [one] = qualifier else { return };
     let Some(view) = cx.resolved_view() else {
         return;
     };
-    let Some(resolved) = view.resolved() else {
+    let Some(module) = qualified_module(cx, one) else {
         return;
     };
-    let module = cx
-        .snapshot
-        .globals()
-        .names
-        .lookup(one)
-        .and_then(|name| resolved.scope.get(Namespace::Value, name))
-        .and_then(|entry| match entry.res {
-            Res::Module(module) => Some(module),
-            _ => None,
-        });
-    let Some(module) = module else { return };
+    if !cx.before_turbofish() {
+        module_interfaces(cx, module, out);
+    }
+    if cx.before_path() {
+        return;
+    }
     let left = left_ty(cx, lhs);
     for def in functions_of(cx, view, module) {
         let Some(sig) = fn_sig(cx, def) else { continue };

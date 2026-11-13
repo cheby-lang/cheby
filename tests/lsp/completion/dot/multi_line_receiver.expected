@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `ys`",
+      "message": "unused binding `ys`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_ys`",
       "range": {
         "end": {
           "character": 8,
@@ -19,7 +19,7 @@
     },
     {
       "code": "E0058",
-      "message": "`List<{integer}>` has no field `ma`",
+      "message": "`List<{integer}>` has no field `ma`\nunknown field",
       "range": {
         "end": {
           "character": 6,
@@ -53,7 +53,7 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `n`",
+      "message": "unused binding `n`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_n`",
       "range": {
         "end": {
           "character": 7,
@@ -69,7 +69,7 @@
     },
     {
       "code": "E0058",
-      "message": "`List<{integer}>` has no field `le`",
+      "message": "`List<{integer}>` has no field `le`\nunknown field",
       "range": {
         "end": {
           "character": 6,

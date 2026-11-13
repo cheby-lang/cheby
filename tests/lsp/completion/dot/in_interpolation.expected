@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0012",
-      "message": "unexpected `.` in string interpolation",
+      "message": "unexpected `.` in string interpolation\nhelp: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first",
       "range": {
         "end": {
           "character": 14,

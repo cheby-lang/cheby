@@ -1,0 +1,97 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `gu` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 10
+        },
+        "start": {
+          "character": 6,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:9 completion guard
+{
+  "count": 58,
+  "isIncomplete": false,
+  "items": [
+    {
+      "insertTextFormat": 2,
+      "insertTextMode": 2,
+      "kind": 15,
+      "label": "guard",
+      "sortText": "50guard",
+      "textEdit": {
+        "newText": "guard ${1:condition} else {\n  $0\n}",
+        "range": {
+          "end": {
+            "character": 8,
+            "line": 10
+          },
+          "start": {
+            "character": 6,
+            "line": 10
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:11:9 apply guard
+{
+  "item": {
+    "insertTextFormat": 2,
+    "insertTextMode": 2,
+    "kind": 15,
+    "label": "guard",
+    "sortText": "50guard",
+    "textEdit": {
+      "newText": "guard ${1:condition} else {\n  $0\n}",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 10
+        },
+        "start": {
+          "character": 6,
+          "line": 10
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1506",
+    "//! `gu` as a statement in a block nested in a `case` arm: the `guard`",
+    "//! snippet's later lines are written relative to its first, so the",
+    "//! client indents them as that line and the `else` block's `}` lines up",
+    "//! under `guard`.",
+    "",
+    "fn main() {",
+    "  let n = 1",
+    "  let m = case n {",
+    "    1 => {",
+    "      guard condition else {",
+    "        ",
+    "      }",
+    "      //^ completion guard",
+    "      //^ apply guard",
+    "      n",
+    "    }",
+    "    _ => 0",
+    "  }",
+    "  assert m == 1",
+    "}",
+    ""
+  ]
+}

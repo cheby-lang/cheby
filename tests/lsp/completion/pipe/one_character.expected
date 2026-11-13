@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `u` in this scope",
+      "message": "cannot find value `u` in this scope\nnot found",
       "range": {
         "end": {
           "character": 18,
@@ -20,12 +20,12 @@
   ]
 }
 
-== src/main.cheby:8:19 completion unique
+== src/main.cheby:8:19 completion list::unique
 {
   "absent": [
-    "unique"
+    "list::unique"
   ],
-  "count": 0,
+  "count": 1,
   "isIncomplete": true,
   "items": []
 }

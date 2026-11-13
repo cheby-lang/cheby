@@ -1,0 +1,85 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected `=>`, found `}`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 20
+        },
+        "start": {
+          "character": 5,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:7 completion json json::Int _
+{
+  "absent": [
+    "json::Int",
+    "_"
+  ],
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "json",
+      "labelDetails": {
+        "description": "std::json"
+      },
+      "sortText": "30json",
+      "textEdit": {
+        "newText": "json",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 12
+          },
+          "start": {
+            "character": 4,
+            "line": 12
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:21:7 completion json::Int
+{
+  "count": 8,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "Int(Int)\nof type json::Value",
+      "insertTextFormat": 2,
+      "kind": 20,
+      "label": "json::Int",
+      "labelDetails": {
+        "description": "json"
+      },
+      "sortText": "000002json::Int",
+      "textEdit": {
+        "newText": "json::Int(${1:_})",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 20
+          },
+          "start": {
+            "character": 4,
+            "line": 20
+          }
+        }
+      }
+    }
+  ]
+}

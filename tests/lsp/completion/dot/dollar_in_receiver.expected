@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `n`",
+      "message": "unused binding `n`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_n`",
       "range": {
         "end": {
           "character": 7,
@@ -19,7 +19,7 @@
     },
     {
       "code": "E0058",
-      "message": "`String` has no field `le`",
+      "message": "`String` has no field `le`\nunknown field",
       "range": {
         "end": {
           "character": 26,

@@ -6,12 +6,12 @@
       "message": "expected an expression, found `}`",
       "range": {
         "end": {
-          "character": 1,
-          "line": 10
+          "character": 14,
+          "line": 7
         },
         "start": {
-          "character": 0,
-          "line": 10
+          "character": 13,
+          "line": 7
         }
       },
       "severity": 1,
@@ -25,7 +25,7 @@
   "absent": [
     "pair"
   ],
-  "count": 1,
+  "count": 2,
   "isIncomplete": true,
   "items": [
     {

@@ -1,0 +1,83 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "a path has at most one module qualifier\nhelp: import the inner module and qualify with its last name, such as `ops::Add`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 9
+        },
+        "start": {
+          "character": 17,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "message": "a path has at most one module qualifier\nhelp: import the inner module and qualify with its last name, such as `ops::Add`",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 14
+        },
+        "start": {
+          "character": 12,
+          "line": 14
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:18 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:12:18 completion Value
+{
+  "count": 4,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub exposed type Value {\n  Null,\n  Bool(Bool),\n  Int(Int),\n  Float(Float),\n  String(String),\n  Array(List<json::Value>),\n  Object(List<(String, json::Value)>),\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Any JSON document (D-321, ADR-0052). An `Object` keeps its members in the\norder written, repeated keys included (D-218, D-223)."
+      },
+      "kind": 13,
+      "label": "Value",
+      "labelDetails": {
+        "description": "json"
+      },
+      "sortText": "20Value",
+      "textEdit": {
+        "newText": "Value",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 11
+          },
+          "start": {
+            "character": 15,
+            "line": 11
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:15:13 completion
+{
+  "isIncomplete": false,
+  "items": []
+}

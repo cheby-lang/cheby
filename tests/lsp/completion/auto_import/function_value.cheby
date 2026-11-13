@@ -8,6 +8,6 @@ import std::list
 fn main() {
   let names = ["a", "bc"]
   let sizes = list::map(names, lengt)
-  //                                ^ apply length@std::string
+  //                                ^ apply string::length
   assert sizes == [1, 2]
 }

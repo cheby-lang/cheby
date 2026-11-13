@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `ma` in this scope",
+      "message": "cannot find value `ma` in this scope\nnot found",
       "range": {
         "end": {
           "character": 19,
@@ -20,7 +20,7 @@
   ]
 }
 
-== src/main.cheby:8:20 apply map
+== src/main.cheby:8:20 apply list::map
 {
   "item": {
     "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
@@ -28,14 +28,15 @@
       "kind": "markdown",
       "value": "Returns the results of calling `f` on each element, in order."
     },
+    "filterText": "map",
     "insertTextFormat": 2,
     "kind": 3,
-    "label": "map",
+    "label": "list::map",
     "labelDetails": {
-      "description": "list",
+      "description": "std::list",
       "detail": "(xs, f)"
     },
-    "sortText": "10map",
+    "sortText": "10list::map",
     "textEdit": {
       "newText": "list::map(_, ${1:f})$0",
       "range": {
@@ -59,7 +60,7 @@
     "fn main() {",
     "  let xs = [1, 2, 3]",
     "  let ys = xs |> list::map(_, f)",
-    "  //               ^ apply map",
+    "  //               ^ apply list::map",
     "  assert ys == xs",
     "}",
     ""

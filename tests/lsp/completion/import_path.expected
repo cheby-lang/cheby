@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0014",
-      "message": "unexpected line break",
+      "message": "unexpected line break\nexpected a module name or `{`\nnote: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`",
       "range": {
         "end": {
           "character": 12,

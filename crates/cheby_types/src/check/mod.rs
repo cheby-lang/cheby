@@ -86,6 +86,11 @@ pub enum Tests {
     /// checked nor in the THIR, because only testing std runs them. The
     /// module's other passes see no tests either (D-479).
     SkipStd,
+    /// A REPL statements entry (D-605): every test, as with
+    /// [`Tests::All`], but the module's test is the wrapper the REPL puts
+    /// around the entry's statements, so its body is checked as a block
+    /// that ends with them, with no expected type and no E0073 (D-1535).
+    ReplEntry,
 }
 
 /// [`check_bodies`], with the `test` blocks chosen by `tests`.
@@ -152,7 +157,7 @@ fn check_bodies_inner(
     // so the result never depends on the schedule.
     let checked_items: Vec<_> = bodies
         .par_iter()
-        .map(|&index| (index, check_item_inner(input, own, index, record)))
+        .map(|&index| (index, check_item_inner(input, own, index, tests, record)))
         .collect();
     let mut facts = ModuleFacts::default();
     for (index, result) in checked_items {
@@ -254,7 +259,7 @@ pub fn check_item(
     own: &ModuleInterface,
     def: DefIndex,
 ) -> Result<(Option<thir::Item>, Vec<Diagnostic>), Ice> {
-    let (item, diags, _) = check_item_inner(input, own, def, false)?;
+    let (item, diags, _) = check_item_inner(input, own, def, Tests::All, false)?;
     Ok((item, diags))
 }
 
@@ -266,6 +271,7 @@ fn check_item_inner(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
     def: DefIndex,
+    tests: Tests,
     record: bool,
 ) -> Result<CheckedItem, Ice> {
     #[cfg(test)]
@@ -280,7 +286,7 @@ fn check_item_inner(
     let (checked, diags, mut facts) = match item.kind {
         DefKind::Fn => check_fn(input, own, def, item, iface_item, record)?,
         DefKind::Const => check_const(input, own, def, item, iface_item, record)?,
-        DefKind::Test => check_test(input, own, def, item, record)?,
+        DefKind::Test => check_test(input, own, def, item, tests, record)?,
         // Other kinds have no body.
         _ => (None, Vec::new(), None),
     };
@@ -533,12 +539,14 @@ fn check_const(
 }
 
 /// A `test` body (§4.7, C15): of type `Nil` or `Result<Nil, E>` (D-140),
-/// else E0073.
+/// else E0073. Under [`Tests::ReplEntry`] the test is a REPL entry's
+/// wrapper, whose body is a block of any type (D-1535).
 fn check_test(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
     index: DefIndex,
     item: &ItemDef,
+    tests: Tests,
     record: bool,
 ) -> Result<CheckedItem, Ice> {
     let decl = input
@@ -554,7 +562,14 @@ fn check_test(
     let name_text = name.plain_value().unwrap_or_default();
     let mut cx = BodyCx::new(input, own, res, index, Generics::empty(), record)?;
     let value = cx.block(block, None)?;
-    let kind = cx.test_result(value)?;
+    // A REPL statements entry is checked as the body of a block that ends
+    // with its statements, so its value is not a test's result: the REPL
+    // shows it (D-1535).
+    let kind = if tests == Tests::ReplEntry {
+        Some(EntryKind::Nil)
+    } else {
+        cx.test_result(value)?
+    };
     let body = cx.finish(value, Ty::NIL)?;
     let diags = std::mem::take(&mut cx.diags);
     let facts = cx.facts_out.take();

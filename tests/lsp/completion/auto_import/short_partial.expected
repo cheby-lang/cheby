@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `n`",
+      "message": "unused binding `n`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_n`",
       "range": {
         "end": {
           "character": 7,
@@ -19,7 +19,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `e` in this scope",
+      "message": "cannot find value `e` in this scope\nnot found",
       "range": {
         "end": {
           "character": 11,
@@ -36,12 +36,12 @@
   ]
 }
 
-== src/main.cheby:5:12 completion enumerate
+== src/main.cheby:5:12 completion list::enumerate
 {
   "absent": [
-    "enumerate"
+    "list::enumerate"
   ],
-  "count": 16,
+  "count": 17,
   "isIncomplete": true,
   "items": []
 }

@@ -5,6 +5,6 @@
 fn main() {
   let uniq = 1
   let n = uniq
-  //          ^ completion uniq unique
+  //          ^ completion uniq list::unique
   assert n == 1
 }

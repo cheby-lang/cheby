@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `sh` in this scope",
+      "message": "cannot find value `sh` in this scope\nnot found",
       "range": {
         "end": {
           "character": 21,
@@ -20,9 +20,9 @@
   ]
 }
 
-== src/main.cheby:8:22 completion show
+== src/main.cheby:8:22 completion int::show
 {
-  "count": 3,
+  "count": 4,
   "isIncomplete": false,
   "items": [
     {
@@ -46,13 +46,14 @@
         "kind": "markdown",
         "value": "Returns `n` in decimal. It makes `Int` satisfy `Show`."
       },
+      "filterText": "show",
       "kind": 3,
-      "label": "show",
+      "label": "int::show",
       "labelDetails": {
-        "description": "int",
+        "description": "std::int",
         "detail": "(n)"
       },
-      "sortText": "10show",
+      "sortText": "10int::show",
       "textEdit": {
         "newText": "int::show",
         "range": {

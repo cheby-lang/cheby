@@ -102,7 +102,9 @@ pub(crate) fn expand(snippet: &str) -> String {
 }
 
 /// `text` with `entry`'s main edit and its additional edits applied, its
-/// snippet expanded as a client would.
+/// snippet expanded and its later lines indented as the line it starts
+/// on, as a client with `adjustIndentation` writes it. The server never
+/// sends `asIs` (D-1506).
 pub(crate) fn applied(text: &str, entry: &Entry) -> String {
     let mut edits: Vec<(TextRange, String)> = entry.additional.clone();
     let main = if entry.insert.snippet {
@@ -110,6 +112,16 @@ pub(crate) fn applied(text: &str, entry: &Entry) -> String {
     } else {
         entry.insert.text.clone()
     };
+    let start = usize::try_from(entry.insert.range.start()).unwrap();
+    let line = text
+        .get(..start)
+        .and_then(|before| before.rsplit('\n').next())
+        .unwrap_or("");
+    let indent: String = line
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let main = main.replace('\n', &format!("\n{indent}"));
     edits.push((entry.insert.range, main));
     edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start()));
     let mut out = text.to_owned();
@@ -348,9 +360,11 @@ fn postfix_case_writes_an_arm_per_constructor() {
     let case = entry(&found, "case");
     assert_eq!(case.kind, EntryKind::Snippet);
     assert_eq!(slice(&text, case.insert.range), "o.ca");
+    // Written relative to its first line, for the client to indent
+    // (D-1506).
     assert_eq!(
         case.insert.text,
-        "case o {\n    Some(_) => ${1:todo}\n    None => ${2:todo}\n  }$0"
+        "case o {\n  Some(_) => ${1:todo}\n  None => ${2:todo}\n}$0"
     );
     assert_eq!(case.filter_text.as_deref(), Some("o.case"));
     let done = applied(&text, case);

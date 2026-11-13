@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0047",
-      "message": "mismatched types",
+      "message": "mismatched types\nexpected `Int`, found `String`",
       "range": {
         "end": {
           "character": 23,
@@ -37,7 +37,7 @@
     },
     {
       "code": "E0048",
-      "message": "this function takes 2 arguments but 3 arguments were supplied",
+      "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
       "range": {
         "end": {
           "character": 26,
@@ -71,7 +71,7 @@
     },
     {
       "code": "E0048",
-      "message": "this function takes 2 arguments but 1 argument was supplied",
+      "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
       "range": {
         "end": {
           "character": 32,
@@ -105,7 +105,7 @@
     },
     {
       "code": "E0048",
-      "message": "this function takes 2 arguments but 3 arguments were supplied",
+      "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
       "range": {
         "end": {
           "character": 33,

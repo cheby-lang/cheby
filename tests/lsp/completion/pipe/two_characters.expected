@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `un` in this scope",
+      "message": "cannot find value `un` in this scope\nnot found",
       "range": {
         "end": {
           "character": 19,
@@ -24,12 +24,13 @@
 {
   "isIncomplete": false,
   "items": [
-    "count(xs, predicate) | Function | pub fn count<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Int | (list) | `list::count(_, ${1:predicate})$0` | +1 edit",
-    "unique(xs) | Function | pub fn unique<T>(xs: List<T>) -> List<T> | (list) | `list::unique` | +1 edit"
+    "list::count(xs, predicate) | Function | pub fn count<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Int | (std::list) | `list::count(_, ${1:predicate})$0` | +1 edit",
+    "list::unique(xs) | Function | pub fn unique<T>(xs: List<T>) -> List<T> | (std::list) | +1 edit",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`"
   ]
 }
 
-== src/main.cheby:8:20 apply unique
+== src/main.cheby:8:20 apply list::unique
 {
   "item": {
     "additionalTextEdits": [
@@ -52,13 +53,14 @@
       "kind": "markdown",
       "value": "Returns `xs` without repeated elements, keeping the first of each group of `==` elements.\nElements are hashed like `Set` elements (§3.13)."
     },
+    "filterText": "unique",
     "kind": 3,
-    "label": "unique",
+    "label": "list::unique",
     "labelDetails": {
-      "description": "list",
+      "description": "std::list",
       "detail": "(xs)"
     },
-    "sortText": "10unique",
+    "sortText": "10list::unique",
     "textEdit": {
       "newText": "list::unique",
       "range": {
@@ -85,7 +87,7 @@
     "  let xs = [1, 2, 3]",
     "  let ys = xs |> list::unique",
     "  //               ^ completion",
-    "  //               ^ apply unique",
+    "  //               ^ apply list::unique",
     "  assert ys == xs",
     "}",
     ""

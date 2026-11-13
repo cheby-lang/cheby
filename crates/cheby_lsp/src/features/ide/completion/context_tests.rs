@@ -130,6 +130,23 @@ fn qualified_paths_broken_and_whole() {
             Shape::Qualified(vec!["shapes"], PathNs::Pattern, false),
             "Ci",
         ),
+        // In a pattern, `shapes::` alone is the binding `shapes`, then
+        // `::` in an `ERROR`.
+        (
+            "fn f() {\n  case x {\n    shapes::‸ => 1\n  }\n}\n",
+            Shape::Qualified(vec!["shapes"], PathNs::Pattern, false),
+            "",
+        ),
+        (
+            "fn f() {\n  case x {\n    Some(shapes::‸) => 1\n  }\n}\n",
+            Shape::Qualified(vec!["shapes"], PathNs::Pattern, false),
+            "",
+        ),
+        (
+            "fn f() {\n  let shapes::‸(r) = x\n}\n",
+            Shape::Qualified(vec!["shapes"], PathNs::Pattern, false),
+            "",
+        ),
     ]);
 }
 
@@ -285,11 +302,78 @@ fn patterns_after_let_use_and_fn() {
     check(&[
         ("fn f() {\n  let ‸\n}\n", Shape::Pattern("let"), ""),
         ("fn f() {\n  let So‸ = x\n}\n", Shape::Pattern("let"), "So"),
+        // `let assert` and `let guard` bind a pattern too, also with a
+        // type annotation; `assert` and `guard` alone take an expression
+        // (D-1531).
+        (
+            "fn f() {\n  let guard Sh‸: T = p else {\n    1\n  }\n}\n",
+            Shape::Pattern("let"),
+            "Sh",
+        ),
+        (
+            "fn f() {\n  let assert So‸: T = x\n}\n",
+            Shape::Pattern("let"),
+            "So",
+        ),
+        (
+            "fn f() {\n  let guard Sh‸ = p else {\n    1\n  }\n}\n",
+            Shape::Pattern("let"),
+            "Sh",
+        ),
+        ("fn f() {\n  let guard ‸\n}\n", Shape::Pattern("let"), ""),
+        (
+            "fn f() {\n  let assert So‸ = x\n}\n",
+            Shape::Pattern("let"),
+            "So",
+        ),
+        (
+            "fn f() {\n  guard o‸ else {\n    1\n  }\n}\n",
+            Shape::Expr(false, "unknown"),
+            "o",
+        ),
+        (
+            "fn f() {\n  assert o‸\n}\n",
+            Shape::Expr(false, "unknown"),
+            "o",
+        ),
         ("fn f() {\n  use ‸\n}\n", Shape::Pattern("unknown"), ""),
         (
             "fn f() {\n  let g = fn(‸\n}\n",
             Shape::Pattern("unknown"),
             "",
+        ),
+    ]);
+}
+
+#[test]
+fn let_guard_value_and_annotation() {
+    // The value of `let guard` is an expression and its annotation a
+    // type, as for `let` and `let assert` (D-1531).
+    check(&[
+        (
+            "fn f() {\n  let guard Some(x) = o‸ else {\n    1\n  }\n}\n",
+            Shape::Expr(false, "let"),
+            "o",
+        ),
+        (
+            "fn f() {\n  let guard Some(x): T = ‸ else {\n    1\n  }\n}\n",
+            Shape::Expr(false, "let"),
+            "",
+        ),
+        (
+            "fn f() {\n  let guard x = o‸\n}\n",
+            Shape::Expr(false, "let"),
+            "o",
+        ),
+        (
+            "fn f() {\n  let guard Some(x): Op‸ = o else {\n    1\n  }\n}\n",
+            Shape::Type,
+            "Op",
+        ),
+        (
+            "fn f() {\n  let assert Some(x) = o‸\n}\n",
+            Shape::Expr(false, "let"),
+            "o",
         ),
     ]);
 }
@@ -417,4 +501,34 @@ fn the_partial_is_the_whole_word() {
         found.anchor.map(cheby_syntax::SyntaxToken::kind),
         Some(K::EQ)
     );
+}
+
+#[test]
+fn before_a_paths_colons_the_context_is_the_words() {
+    // D-1530 reads what a path starts with by the context of the word
+    // before `::`: an expression, a pipe's stage, a type, a pattern, or a
+    // field after `.`, where nothing starts a path.
+    check(&[
+        (
+            "fn f() {\n  let n = st‸::length(s)\n}\n",
+            Shape::Expr(false, "let"),
+            "st",
+        ),
+        (
+            "fn f() {\n  let n = xs |> st‸::length\n}\n",
+            Shape::Pipe("xs"),
+            "st",
+        ),
+        ("fn f(s: sh‸::Shape) {}\n", Shape::Type, "sh"),
+        (
+            "fn f() {\n  case s {\n    ge‸::Square(_) => 1\n  }\n}\n",
+            Shape::Pattern("case"),
+            "ge",
+        ),
+        (
+            "fn f() {\n  let k = xs.le‸::length\n}\n",
+            Shape::Dot("xs"),
+            "le",
+        ),
+    ]);
 }

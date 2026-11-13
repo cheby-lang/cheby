@@ -196,10 +196,10 @@ error[E0013]: expected `,` or `}`, found identifier
   |                        ^
 
 error[E0013]: expected an expression, found `}`
- --> err/recovery_stmts.cheby:8:1
+ --> err/recovery_stmts.cheby:7:14
   |
-8 | }
-  | ^
+7 |   let e = 3 +
+  |              ^
 
 error[E0015]: unclosed `(`
   --> err/recovery_stmts.cheby:11:1

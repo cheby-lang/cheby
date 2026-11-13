@@ -203,6 +203,62 @@ fn one_failing_constant_marks_only_itself() {
     assert_eq!(symbols, [app("broken"), app("label"), app("limit")]);
 }
 
+const REACHES: &str = "//! Constants that reach other modules.\n\n\
+                       import app::shape\nimport app::table\nimport app::unused\n\n\
+                       const plain: Int = 20\n\n\
+                       const scaled: Int = shape::scale(2)\n\n\
+                       const indirect: Int = table::size + 1\n\n\
+                       fn main() {\n  assert plain + scaled + indirect > unused::zero()\n}\n";
+
+/// Each value names the package's module files its initializer reaches,
+/// as D-538's seed computes them: its own, those of the functions it
+/// calls and, through the initializers of the constants it reads, theirs,
+/// with std's left out (D-593, D-1510).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs generated code, which Windows does not until M6 (D-545)"
+)]
+fn values_name_the_modules_they_reach() {
+    let dir = Temp::package("reaches", REACHES);
+    let modules = [
+        (
+            "shape",
+            "//! Scaling.\n\npub fn scale(n: Int) -> Int {\n  n * 3\n}\n",
+        ),
+        (
+            "table",
+            "//! A table size.\n\nimport app::shape\n\npub const size: Int = shape::scale(4)\n",
+        ),
+        (
+            "unused",
+            "//! Read by `main` only.\n\npub fn zero() -> Int {\n  0\n}\n",
+        ),
+    ];
+    for (name, text) in modules {
+        std::fs::write(dir.0.join(format!("src/{name}.cheby")), text).unwrap();
+    }
+    let result = backend_query(&request(&dir.0)).unwrap();
+    let out = section(&result);
+    assert_eq!(out.diagnostics, []);
+    let reached = |name: &str| -> Vec<String> {
+        let value = out.values.iter().find(|v| v.symbol == app(name)).unwrap();
+        value
+            .modules
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .collect()
+    };
+    assert_eq!(reached("plain"), ["src/main.cheby"]);
+    assert_eq!(reached("scaled"), ["src/main.cheby", "src/shape.cheby"]);
+    assert_eq!(
+        reached("indirect"),
+        ["src/main.cheby", "src/shape.cheby", "src/table.cheby"]
+    );
+}
+
 /// Ranges and hashes are over normalized text: a BOM and `\r\n` do not
 /// move them (D-1412).
 fn normalized(name: &str, text: &str) {

@@ -1,0 +1,23 @@
+// @decisions: D-1531, D-1530
+//! The value of `let guard` after `=` is an expression, as the value of
+//! `let` is, so the annotation's type ranks the value's items and only
+//! modules and interfaces come before a path's `::`. Its annotation after
+//! `:` is a type (type error state).
+
+import std::list
+
+fn head(xs: List<Int>, o: Option<Int>) -> Int {
+  let guard Some(x): Option<Int> = o else {
+    //                              ^ completion o Some `case`
+    0
+  }
+  let guard Some(y) = li::first(xs) else {
+    //                  ^ completion list Show xs `case` head
+    0
+  }
+  let guard Some(z): Opt = o else {
+    //                  ^ completion Option Int `case` xs
+    0
+  }
+  x + y + z
+}

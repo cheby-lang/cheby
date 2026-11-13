@@ -1,0 +1,21 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0075",
+      "message": "evaluating the constant `base` panicked\nits initializer panicked\nnote: panicked at src/main.cheby:9:19: division by zero",
+      "range": {
+        "end": {
+          "character": 10,
+          "line": 8
+        },
+        "start": {
+          "character": 6,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}

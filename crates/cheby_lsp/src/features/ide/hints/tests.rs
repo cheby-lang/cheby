@@ -39,12 +39,12 @@ fn render(text: &str, switches: Switches, within: Option<TextRange>) -> String {
     out
 }
 
-/// [`render`] with every row on and no range.
+/// [`render`] with D-1376's defaults and no range.
 fn all(text: &str) -> String {
-    render(text, Switches::ALL, None)
+    render(text, Switches::DEFAULTS, None)
 }
 
-/// Asserts that `text` renders as `expected` with every row on.
+/// Asserts that `text` renders as `expected` with D-1376's defaults.
 #[track_caller]
 fn check(text: &str, expected: &str) {
     assert_eq!(all(text), expected);
@@ -386,6 +386,7 @@ fn main() {
         local_fn_types: false,
         pipe_stages: false,
         dyn_: false,
+        parameter_names: false,
     };
     assert_eq!(render(text, off, None), text);
     let pipes_only = Switches {
@@ -406,13 +407,13 @@ fn a_range_limits_the_hints_but_not_the_rows() {
     let end = u32::try_from(text.find("let c").unwrap()).unwrap();
     let within = Some(TextRange::new(start, end));
     assert_eq!(
-        render(text, Switches::ALL, within),
+        render(text, Switches::DEFAULTS, within),
         text.replace("let b", "let b«: List<List<Int>>»{: List<List<Int>>}")
     );
     // A range's ends count.
     let at = u32::try_from(text.find(" = [a]").unwrap()).unwrap();
     assert_eq!(
-        render(text, Switches::ALL, Some(TextRange::empty(at))),
+        render(text, Switches::DEFAULTS, Some(TextRange::empty(at))),
         text.replace("let b", "let b«: List<List<Int>>»{: List<List<Int>>}")
     );
 }
@@ -479,7 +480,7 @@ fn main() {
     assert_eq!(all(text), with(&[let_hint, closure, binders, local_fn]));
     let no_local_fn = Switches {
         local_fn_types: false,
-        ..Switches::ALL
+        ..Switches::DEFAULTS
     };
     assert_eq!(
         render(text, no_local_fn, None),
@@ -487,7 +488,7 @@ fn main() {
     );
     let no_closures = Switches {
         closure_types: false,
-        ..Switches::ALL
+        ..Switches::DEFAULTS
     };
     assert_eq!(
         render(text, no_closures, None),
@@ -495,7 +496,7 @@ fn main() {
     );
     let no_binders = Switches {
         pattern_binders: false,
-        ..Switches::ALL
+        ..Switches::DEFAULTS
     };
     assert_eq!(
         render(text, no_binders, None),
@@ -503,10 +504,183 @@ fn main() {
     );
     let no_lets = Switches {
         let_types: false,
-        ..Switches::ALL
+        ..Switches::DEFAULTS
     };
     assert_eq!(
         render(text, no_lets, None),
         with(&[closure, binders, local_fn])
+    );
+}
+
+/// [`render`] with D-1376's defaults and `inlayHints.parameterNames` on.
+fn with_names(text: &str) -> String {
+    let switches = Switches {
+        parameter_names: true,
+        ..Switches::DEFAULTS
+    };
+    render(text, switches, None)
+}
+
+/// The type rows off, so that only the parameter names show.
+const NAMES_ONLY: Switches = Switches {
+    let_types: false,
+    pattern_binders: false,
+    use_binders: false,
+    closure_types: false,
+    local_fn_types: false,
+    pipe_stages: false,
+    dyn_: false,
+    parameter_names: true,
+};
+
+/// The text of [`names_and_their_skips`].
+const CALLS: &str = r#"import std::list
+
+interface Shape {
+  fn scale(Self, Float) -> Self
+}
+
+type Figure {
+  Circle(Float),
+  Dot,
+}
+
+fn scale(f: Figure, factor: Float) -> Figure {
+  case f {
+    Circle(r) => Circle(r * factor)
+    Dot => Dot
+  }
+}
+
+fn label(text: String, width: Int, bold: Bool, shape: Figure) -> String {
+  case bold, shape {
+    True, Dot => "{text} {width}"
+    _, _ => text
+  }
+}
+
+fn sum((a, b): (Int, Int), c: Int) -> Int {
+  a + b + c
+}
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn twice(start: Int, next: fn(Int) -> Int) -> Int {
+  next(start * 2)
+}
+
+fn main() {
+  let width = 3
+  let show = label
+  let a = label("hi", -2, True, Dot)
+  let b = label(r"raw", width, False, Circle(1.0))
+  let c = label("w {width}", width + 1, !True, Dot)
+  let d = show("x", 1, True, Dot)
+  let e = Shape::scale(Dot, 2.0)
+  let g = scale(Circle(1.0), 2.0)
+  let h = sum((1, 2), 3)
+  let plus = add(1, _)
+  fn local(n: Int) -> Int {
+    n
+  }
+  let xs = [1, 2]
+    |> list::take(_, 1)
+  use n <- twice(4)
+  assert a != b && c != d && e != g && h + plus(local(5)) + n == 0 && xs != []
+}
+"#;
+
+/// D-1515: `name: ` before a number, a negative number, a string, raw or
+/// interpolated, and a unit constructor such as `True` and `Dot`, of a call
+/// to a function with named parameters, including a capture, a pipe stage
+/// with a hole and the call of a `use`. Skipped: an argument that is not a
+/// literal, a call through a function value, a local function and an
+/// interface function, a constructor, a parameter with no name, and the
+/// `_` hole.
+#[test]
+fn names_and_their_skips() {
+    let expected = CALLS
+        .replace(
+            r#"label("hi", -2, True, Dot)"#,
+            r#"label(«text: »"hi", «width: »-2, «bold: »True, «shape: »Dot)"#,
+        )
+        .replace(
+            r#"label(r"raw", width, False, Circle(1.0))"#,
+            r#"label(«text: »r"raw", width, «bold: »False, Circle(1.0))"#,
+        )
+        .replace(
+            r#"label("w {width}", width + 1, !True, Dot)"#,
+            r#"label(«text: »"w {width}", width + 1, !True, «shape: »Dot)"#,
+        )
+        .replace(
+            "scale(Circle(1.0), 2.0)",
+            "scale(Circle(1.0), «factor: »2.0)",
+        )
+        .replace("sum((1, 2), 3)", "sum((1, 2), «c: »3)")
+        .replace("add(1, _)", "add(«a: »1, _)")
+        .replace("list::take(_, 1)", "list::take(_, «count: »1)")
+        .replace("twice(4)", "twice(«start: »4)");
+    assert_eq!(render(CALLS, NAMES_ONLY, None), expected);
+}
+
+/// D-1515, D-1376: the row is off by default, and its switch adds the
+/// names to the type rows without changing them.
+#[test]
+fn names_are_off_by_default() {
+    let text = "fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn main() {\n  let n = add(1, 2)\n  assert n == 3\n}\n";
+    assert_eq!(all(text), text.replace("let n =", "let n«: Int»{: Int} ="));
+    assert_eq!(
+        with_names(text),
+        text.replace("let n =", "let n«: Int»{: Int} =")
+            .replace("add(1, 2)", "add(«a: »1, «b: »2)")
+    );
+}
+
+/// D-1515, D-244: a pipe stage with no hole is an error, and its
+/// arguments get no names, since none of them is known to fill the
+/// parameter at its position; a body with that error keeps the names of
+/// its other calls.
+#[test]
+fn a_pipe_stage_with_no_hole_gets_no_names() {
+    let text = r"import std::list
+
+fn main() {
+  let xs = [1, 2]
+    |> list::take(1)
+  let ys = list::take([3], 1)
+  assert xs == ys
+}
+";
+    assert_eq!(
+        render(text, NAMES_ONLY, None),
+        text.replace("list::take([3], 1)", "list::take([3], «count: »1)")
+    );
+}
+
+/// D-1515: where a comma is missing, two arguments share a position, so
+/// the names stop before the second: neither it nor a later argument is
+/// known to fill the parameter its commas count to.
+#[test]
+fn a_missing_comma_ends_the_names() {
+    let text = "fn pair(left: String, right: String, count: Int) -> Int {\n  count\n}\n\nfn \
+                main() {\n  assert pair(\"x\" \"y\", 3) == 3\n}\n";
+    assert_eq!(
+        render(text, NAMES_ONLY, None),
+        text.replace(r#"pair("x" "y", 3)"#, r#"pair(«left: »"x" "y", 3)"#)
+    );
+}
+
+/// D-1515: an argument whose text is the parameter's name gets no hint.
+/// Only a literal gets one, and no literal is written as a parameter's
+/// name, so a name-like argument is skipped as not a literal too: this
+/// pins that a variable named after its parameter shows nothing.
+#[test]
+fn an_argument_named_as_its_parameter_gets_none() {
+    let text = "fn add(a: Int, b: Int) -> Int {\n  a + b\n}\n\nfn main() {\n  let a = 1\n  assert add(a, 2) == 3\n}\n";
+    assert_eq!(
+        render(text, NAMES_ONLY, None),
+        text.replace("add(a, 2)", "add(a, «b: »2)")
     );
 }

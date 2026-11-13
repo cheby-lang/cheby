@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0015",
-      "message": "unclosed `{`",
+      "message": "unclosed `{`\nexpected `}`",
       "range": {
         "end": {
           "character": 2,

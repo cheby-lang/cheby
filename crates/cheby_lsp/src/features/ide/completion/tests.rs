@@ -259,6 +259,21 @@ fn qualified_names_of_a_module() {
     assert_eq!(labels(&found), ["Circle", "Dot", "Point", "Square"]);
     assert_eq!(entry(&found, "Circle").insert.text, "Circle { radius }");
     assert_eq!(entry(&found, "Point").insert.text, "Point { x, y }");
+    // With nothing typed after `geo::` too, though a pattern holds it as
+    // the binding `geo`, then `::` in an `ERROR` (X §4.1's `x::`).
+    for line in [
+        "case geo::Dot {\n    geo::| => 1\n    _ => 2\n  }",
+        "case geo::Dot {\n    geo::|(r) => 1\n    _ => 2\n  }",
+        "case Some(geo::Dot) {\n    Some(geo::|) => 1\n    _ => 2\n  }",
+        "let geo::| = geo::Dot",
+    ] {
+        let found = at(&body(line), ALL);
+        assert_eq!(
+            labels(&found),
+            ["Circle", "Dot", "Point", "Square"],
+            "{line}"
+        );
+    }
 }
 
 #[test]
@@ -287,6 +302,58 @@ fn a_type_offers_types_parameters_modules_and_dyn() {
     assert!(!has(&found, "Some") && !has(&found, "f"));
     let found = at("interface Twice {\n  fn twice(Self) -> |\n}\n", ALL);
     assert_eq!(entry(&found, "Self").kind, EntryKind::TypeParameter);
+}
+
+#[test]
+fn before_a_written_path_a_pattern_offers_no_constructor() {
+    // D-1525: accepting `geo::Circle` at `ge|::Circle` would write
+    // `geo::Circle::Circle`, and D-1530 leaves only the modules there, so
+    // no constructor is offered, nor `_`.
+    for arm in ["ge|::Square(_) => 1", "ge|::Circle { radius } => 1"] {
+        let text = format!(
+            "import app::geo\n\nfn f(s: geo::Shape) -> Int {{\n  case s {{\n    {arm}\n    _ => 0\n  }}\n}}\n"
+        );
+        let found = at(&text, ALL);
+        assert_eq!(labels(&found), ["geo"], "{arm}");
+    }
+    // A constructor the module names bare is not offered either, since
+    // `Square::Square(_)` is no path (D-1530).
+    let text = "import app::geo::{Square}\n\nfn f(s: geo::Shape) -> Int {\n  case s {\n    Sq|::Square(_) => 1\n    _ => 0\n  }\n}\n";
+    let found = at(text, ALL);
+    assert_eq!(labels(&found), Vec::<&str>::new());
+    // With no `::` after the word, they are offered.
+    let text = "import app::geo\n\nfn f(s: geo::Shape) -> Int {\n  case s {\n    ge|\n    _ => 0\n  }\n}\n";
+    let found = at(text, ALL);
+    assert!(has(&found, "geo::Circle"), "{:?}", labels(&found));
+    // `::` after white space does not count.
+    let text = "import app::geo\n\nfn f(s: geo::Shape) -> Int {\n  case s {\n    ge| ::Square(_) => 1\n    _ => 0\n  }\n}\n";
+    let found = at(text, ALL);
+    assert!(has(&found, "geo::Square"), "{:?}", labels(&found));
+}
+
+#[test]
+fn let_guard_and_let_assert_complete_a_pattern() {
+    // D-1531: the pattern of `let guard` and `let assert` is completed as
+    // that of `let`: the value's constructors and `_`, and no expression
+    // items.
+    let text = "import app::geo\n\nfn f(s: geo::Shape) -> Int {\n  let guard ge| = s else {\n    0\n  }\n  1\n}\n";
+    let found = at(text, ALL);
+    assert_eq!(
+        labels(&found),
+        ["geo::Circle", "geo::Square", "geo::Dot", "_"]
+    );
+    let text = "import app::geo\n\nfn f(s: geo::Shape) -> Int {\n  let assert ge| = s\n  1\n}\n";
+    let found = at(text, ALL);
+    assert!(has(&found, "geo::Square"), "{:?}", labels(&found));
+    assert!(
+        !has(&found, "f") && !has(&found, "case"),
+        "{:?}",
+        labels(&found)
+    );
+    // So the rule before `::` covers them: only modules (D-1525, D-1530).
+    let text = "import app::geo\n\nfn f(s: geo::Shape) -> Int {\n  let guard ge|::Square(x) = s else {\n    0\n  }\n  1\n}\n";
+    let found = at(text, ALL);
+    assert_eq!(labels(&found), ["geo"]);
 }
 
 #[test]

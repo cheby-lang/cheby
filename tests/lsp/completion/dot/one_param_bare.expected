@@ -6,12 +6,12 @@
       "message": "expected a field name, found `}`",
       "range": {
         "end": {
-          "character": 1,
-          "line": 10
+          "character": 13,
+          "line": 8
         },
         "start": {
-          "character": 0,
-          "line": 10
+          "character": 12,
+          "line": 8
         }
       },
       "severity": 1,

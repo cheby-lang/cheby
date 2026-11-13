@@ -307,8 +307,9 @@ fn functions(
 /// with one arm per constructor of its type, each body a `todo`
 /// placeholder. Offered to a client that takes snippets, for a type whose
 /// structure the module sees, where the receiver is on one line and no
-/// operator binds it. Its arms carry the receiver line's indentation, so
-/// the item is `indented`.
+/// operator binds it. Its later lines are written relative to its first:
+/// the arms at two spaces, the `}` at none, for the client to indent as
+/// the line it starts on (D-1506).
 fn postfix_case(cx: &CompletionCx<'_>, node: SyntaxNode<'_>, ty: Ty, out: &mut Items) {
     if !cx.options.snippets {
         return;
@@ -336,23 +337,15 @@ fn postfix_case(cx: &CompletionCx<'_>, node: SyntaxNode<'_>, ty: Ty, out: &mut I
     if ctors.is_empty() || !structure_seen(cx, head) {
         return;
     }
-    let indent = line_indent(cx.text, node.text_range().start());
     let mut arms: Vec<String> = Vec::new();
     for (&ctor, stop) in ctors.iter().zip(1_u32..) {
         let def = DefId::new(head.module, ctor);
         let Some(pattern) = arm_pattern(cx, def) else {
             return;
         };
-        arms.push(format!(
-            "{indent}  {} => ${{{stop}:todo}}",
-            escape(&pattern)
-        ));
+        arms.push(format!("  {} => ${{{stop}:todo}}", escape(&pattern)));
     }
-    let text = format!(
-        "case {} {{\n{}\n{indent}}}$0",
-        escape(receiver),
-        arms.join("\n")
-    );
+    let text = format!("case {} {{\n{}\n}}$0", escape(receiver), arms.join("\n"));
     let mut entry = Entry::new(
         "case",
         EntryKind::Snippet,
@@ -364,7 +357,6 @@ fn postfix_case(cx: &CompletionCx<'_>, node: SyntaxNode<'_>, ty: Ty, out: &mut I
         },
     );
     entry.filter_text = Some(filter_text(cx, range, "case"));
-    entry.indented = true;
     out.push(entry);
 }
 
@@ -383,19 +375,6 @@ fn arm_pattern(cx: &CompletionCx<'_>, def: DefId) -> Option<String> {
         }
         CtorFields::Named(_) => format!("{name} {{ .. }}"),
     })
-}
-
-/// The white space that starts the line holding `offset`.
-fn line_indent(text: &str, offset: u32) -> String {
-    let at = usize::try_from(offset).unwrap_or(0);
-    let before = text.get(..at).unwrap_or("");
-    let start = before.rfind('\n').map_or(0, |n| n.saturating_add(1));
-    before
-        .get(start..)
-        .unwrap_or("")
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect()
 }
 
 #[cfg(test)]

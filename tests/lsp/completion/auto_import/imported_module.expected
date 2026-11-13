@@ -1,0 +1,108 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `revers` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 9
+        },
+        "start": {
+          "character": 11,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:18 completion list::reverse
+{
+  "count": 22,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the elements of `xs` in the opposite order."
+      },
+      "filterText": "reverse",
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "list::reverse",
+      "labelDetails": {
+        "description": "std::list",
+        "detail": "(xs)"
+      },
+      "sortText": "30list::reverse",
+      "textEdit": {
+        "newText": "list::reverse(${1:xs})$0",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 9
+          },
+          "start": {
+            "character": 11,
+            "line": 9
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:10:18 apply list::reverse
+{
+  "item": {
+    "detail": "pub fn reverse<T>(xs: List<T>) -> List<T>",
+    "documentation": {
+      "kind": "markdown",
+      "value": "Returns the elements of `xs` in the opposite order."
+    },
+    "filterText": "reverse",
+    "insertTextFormat": 2,
+    "kind": 3,
+    "label": "list::reverse",
+    "labelDetails": {
+      "description": "std::list",
+      "detail": "(xs)"
+    },
+    "sortText": "30list::reverse",
+    "textEdit": {
+      "newText": "list::reverse(${1:xs})$0",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 9
+        },
+        "start": {
+          "character": 11,
+          "line": 9
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-1507, D-1508",
+    "//! `revers` in a file that imports `std::list`: the module's item is",
+    "//! written through the import's name with no import edit, labelled",
+    "//! `list::reverse` and matched by its name (type error state).",
+    "",
+    "import std::list",
+    "",
+    "fn main() {",
+    "  let xs = [1, 2]",
+    "  let ys = list::reverse(xs)",
+    "  //             ^ completion list::reverse",
+    "  //             ^ apply list::reverse",
+    "  assert ys == xs",
+    "}",
+    ""
+  ]
+}

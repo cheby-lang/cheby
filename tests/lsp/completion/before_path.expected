@@ -1,0 +1,570 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find interface `Comp` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 14
+        },
+        "start": {
+          "character": 2,
+          "line": 14
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "`op` is not imported\nnote: every module must be imported before use (§7.5)",
+      "range": {
+        "end": {
+          "character": 4,
+          "line": 20
+        },
+        "start": {
+          "character": 2,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused parameter `v`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_v`",
+      "range": {
+        "end": {
+          "character": 10,
+          "line": 33
+        },
+        "start": {
+          "character": 9,
+          "line": 33
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "`js` is not imported\nnote: every module must be imported before use (§7.5)",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 33
+        },
+        "start": {
+          "character": 12,
+          "line": 33
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:15:7 completion ops::Compare Show l order a `case`
+{
+  "absent": [
+    "order",
+    "a",
+    "case"
+  ],
+  "count": 11,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "l",
+      "labelDetails": {
+        "description": "std::list"
+      },
+      "sortText": "30l",
+      "textEdit": {
+        "newText": "l",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 14
+          },
+          "start": {
+            "character": 2,
+            "line": 14
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+      },
+      "filterText": "Compare",
+      "kind": 8,
+      "label": "ops::Compare",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops::Compare",
+      "textEdit": {
+        "newText": "ops::Compare",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 14
+          },
+          "start": {
+            "character": 2,
+            "line": 14
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 14
+          },
+          "start": {
+            "character": 2,
+            "line": 14
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:15:7 apply ops::Compare
+{
+  "item": {
+    "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+    "documentation": {
+      "kind": "markdown",
+      "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+    },
+    "filterText": "Compare",
+    "kind": 8,
+    "label": "ops::Compare",
+    "labelDetails": {
+      "description": "std::ops"
+    },
+    "sortText": "30ops::Compare",
+    "textEdit": {
+      "newText": "ops::Compare",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 14
+        },
+        "start": {
+          "character": 2,
+          "line": 14
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-173, D-1525, D-1530, D-1539",
+    "//! Before a path's `::`, only what a path starts with is offered, as the",
+    "//! file binds it and with no `::` added. In an expression and after `|>`:",
+    "//! the modules, an alias among them, and the interfaces, bare as `Show`",
+    "//! or through their module as `ops::Compare`. The file's functions, the",
+    "//! locals, the keywords and the snippets are not. Where two segments",
+    "//! follow the `::`, as in `op::Compare::compare(a, b)`, only the modules.",
+    "//! In a type: the modules only. The list is complete (type error state).",
+    "",
+    "import std::json",
+    "import std::list as l",
+    "import std::ops",
+    "",
+    "fn order(a: Int, b: Int) -> Order {",
+    "  ops::Compare::compare(a, b)",
+    "  //  ^ completion ops::Compare Show l order a `case`",
+    "  //  ^ apply ops::Compare",
+    "}",
+    "",
+    "fn rank(a: Int, b: Int) -> Order {",
+    "  op::Compare::compare(a, b)",
+    "  //^ completion ops l ops::Compare Show",
+    "  //^ apply ops",
+    "}",
+    "",
+    "fn size(xs: List<Int>) -> Int {",
+    "  let n = l::length(xs)",
+    "  //       ^ completion l json ops size xs `let`",
+    "  let m = xs |> l::length",
+    "  //             ^ completion l Show ops::Compare length l::length",
+    "  n + m",
+    "}",
+    "",
+    "fn first(v: js::Value) -> Int {",
+    "  //          ^ completion json l ops Value Int dyn",
+    "  0",
+    "}",
+    ""
+  ]
+}
+
+== src/main.cheby:21:5 completion ops l ops::Compare Show
+{
+  "absent": [
+    "ops::Compare",
+    "Show"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "l",
+      "labelDetails": {
+        "description": "std::list"
+      },
+      "sortText": "30l",
+      "textEdit": {
+        "newText": "l",
+        "range": {
+          "end": {
+            "character": 4,
+            "line": 20
+          },
+          "start": {
+            "character": 2,
+            "line": 20
+          }
+        }
+      }
+    },
+    {
+      "kind": 9,
+      "label": "ops",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops",
+      "textEdit": {
+        "newText": "ops",
+        "range": {
+          "end": {
+            "character": 4,
+            "line": 20
+          },
+          "start": {
+            "character": 2,
+            "line": 20
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:21:5 apply ops
+{
+  "item": {
+    "kind": 9,
+    "label": "ops",
+    "labelDetails": {
+      "description": "std::ops"
+    },
+    "sortText": "30ops",
+    "textEdit": {
+      "newText": "ops",
+      "range": {
+        "end": {
+          "character": 4,
+          "line": 20
+        },
+        "start": {
+          "character": 2,
+          "line": 20
+        }
+      }
+    }
+  },
+  "text": [
+    "// @decisions: D-173, D-1525, D-1530, D-1539",
+    "//! Before a path's `::`, only what a path starts with is offered, as the",
+    "//! file binds it and with no `::` added. In an expression and after `|>`:",
+    "//! the modules, an alias among them, and the interfaces, bare as `Show`",
+    "//! or through their module as `ops::Compare`. The file's functions, the",
+    "//! locals, the keywords and the snippets are not. Where two segments",
+    "//! follow the `::`, as in `op::Compare::compare(a, b)`, only the modules.",
+    "//! In a type: the modules only. The list is complete (type error state).",
+    "",
+    "import std::json",
+    "import std::list as l",
+    "import std::ops",
+    "",
+    "fn order(a: Int, b: Int) -> Order {",
+    "  Comp::compare(a, b)",
+    "  //  ^ completion ops::Compare Show l order a `case`",
+    "  //  ^ apply ops::Compare",
+    "}",
+    "",
+    "fn rank(a: Int, b: Int) -> Order {",
+    "  ops::Compare::compare(a, b)",
+    "  //^ completion ops l ops::Compare Show",
+    "  //^ apply ops",
+    "}",
+    "",
+    "fn size(xs: List<Int>) -> Int {",
+    "  let n = l::length(xs)",
+    "  //       ^ completion l json ops size xs `let`",
+    "  let m = xs |> l::length",
+    "  //             ^ completion l Show ops::Compare length l::length",
+    "  n + m",
+    "}",
+    "",
+    "fn first(v: js::Value) -> Int {",
+    "  //          ^ completion json l ops Value Int dyn",
+    "  0",
+    "}",
+    ""
+  ]
+}
+
+== src/main.cheby:27:12 completion l json ops size xs `let`
+{
+  "absent": [
+    "size",
+    "xs",
+    "let"
+  ],
+  "count": 11,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "json",
+      "labelDetails": {
+        "description": "std::json"
+      },
+      "sortText": "30json",
+      "textEdit": {
+        "newText": "json",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 26
+          },
+          "start": {
+            "character": 10,
+            "line": 26
+          }
+        }
+      }
+    },
+    {
+      "kind": 9,
+      "label": "l",
+      "labelDetails": {
+        "description": "std::list"
+      },
+      "sortText": "30l",
+      "textEdit": {
+        "newText": "l",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 26
+          },
+          "start": {
+            "character": 10,
+            "line": 26
+          }
+        }
+      }
+    },
+    {
+      "kind": 9,
+      "label": "ops",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops",
+      "textEdit": {
+        "newText": "ops",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 26
+          },
+          "start": {
+            "character": 10,
+            "line": 26
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:29:18 completion l Show ops::Compare length l::length
+{
+  "absent": [
+    "length",
+    "l::length"
+  ],
+  "count": 11,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "l",
+      "labelDetails": {
+        "description": "std::list"
+      },
+      "sortText": "30l",
+      "textEdit": {
+        "newText": "l",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 28
+          },
+          "start": {
+            "character": 16,
+            "line": 28
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+      },
+      "filterText": "Compare",
+      "kind": 8,
+      "label": "ops::Compare",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops::Compare",
+      "textEdit": {
+        "newText": "ops::Compare",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 28
+          },
+          "start": {
+            "character": 16,
+            "line": 28
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 28
+          },
+          "start": {
+            "character": 16,
+            "line": 28
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:34:15 completion json l ops Value Int dyn
+{
+  "absent": [
+    "Value",
+    "Int",
+    "dyn"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": [
+    {
+      "kind": 9,
+      "label": "json",
+      "labelDetails": {
+        "description": "std::json"
+      },
+      "sortText": "30json",
+      "textEdit": {
+        "newText": "json",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 33
+          },
+          "start": {
+            "character": 12,
+            "line": 33
+          }
+        }
+      }
+    },
+    {
+      "kind": 9,
+      "label": "l",
+      "labelDetails": {
+        "description": "std::list"
+      },
+      "sortText": "30l",
+      "textEdit": {
+        "newText": "l",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 33
+          },
+          "start": {
+            "character": 12,
+            "line": 33
+          }
+        }
+      }
+    },
+    {
+      "kind": 9,
+      "label": "ops",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops",
+      "textEdit": {
+        "newText": "ops",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 33
+          },
+          "start": {
+            "character": 12,
+            "line": 33
+          }
+        }
+      }
+    }
+  ]
+}

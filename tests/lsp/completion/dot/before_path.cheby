@@ -1,0 +1,20 @@
+// @decisions: D-1530, D-1537
+//! `xs.le::length`: after `xs.`, nothing is offered where a path's `::`
+//! follows the word, since nothing after `.` starts a path, and a function
+//! in the pipe form would write `xs |> list::length::length`. Nor where a
+//! turbofish's `::<` follows, since `xs.ma::<Int>` would write
+//! `xs |> list::map(_, f)::<Int>` (D-1537). With no `::` after the word,
+//! `length` is offered (grammar error state).
+
+import std::list
+
+fn main() {
+  let xs = [1, 2]
+  let n = xs.le::length
+  //           ^ completion
+  let m = xs.le
+  //           ^ completion length
+  let r = xs.re::<Int>
+  //           ^ completion
+  assert n == m
+}

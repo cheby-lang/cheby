@@ -3,9 +3,9 @@
 // @steps: idle, settings lower, quiet, save same, quiet, settings raise, started, save next, idle
 //! A constant that never ends, cut short by a limit of 2 s. Lowering the
 //! limit to 1 s starts no run, and nor does saving unchanged text, so a
-//! run cut short does not loop. Raising the limit to 3 s, above the one
-//! that cut it short, runs it again at once (D-1493). A save then gives a
-//! constant that ends, and its value reaches hover.
+//! run cut short does not loop. Raising the limit to 600 s, above the
+//! one that cut it short, runs it again at once (D-1493). A save then
+//! gives a constant that ends, and its value reaches hover.
 
 const spin: Int = count_up(0)
 

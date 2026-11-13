@@ -1,0 +1,9 @@
+warning[W0005]: the function `shout` is never used in this package
+  --> tests/ui/13-tooling/warnings/satisfying_functions_used_through_embedding/src/boxes.cheby:28:4
+   |
+28 | fn shout(b: Box) -> String {
+   |    ^^^^^ no module of the package uses it
+   |
+   = note: without `pub`, only modules of this package can use the function
+   = help: remove the function, use it, or make it `pub` if other packages should use it
+

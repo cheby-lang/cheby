@@ -206,6 +206,54 @@ fn grammar_error_gives_front_errors() {
     );
 }
 
+/// D-1510: each value names, as `/` paths, the package's module files its
+/// initializer reaches: its own and, through a function, `util`'s, but
+/// not a module it does not reach.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "the child evaluates no constant on Windows until M6 (D-545, D-1414)"
+)]
+fn values_name_the_modules_they_reach() {
+    let root = package(
+        "reaches",
+        "//! Constants that reach `util` or not.\n\nimport reaches::util\nimport reaches::other\n\n\
+         const plain: Int = 20\n\nconst tripled: Int = util::triple(plain)\n\n\
+         fn main() {\n  assert tripled > other::zero()\n}\n",
+        "",
+    );
+    std::fs::write(
+        root.join("src/util.cheby"),
+        "//! Arithmetic.\n\npub fn triple(n: Int) -> Int {\n  n * 3\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/other.cheby"),
+        "//! Read by `main` only.\n\npub fn zero() -> Int {\n  0\n}\n",
+    )
+    .unwrap();
+    let root = root.to_str().expect("a UTF-8 path");
+    let document = answer(&["--schema", "1", "--root", root, "--want", "constants"]);
+    let Some(Section::Ok(constants)) = document.sections.constants else {
+        panic!("an ok section: {document:?}");
+    };
+    let modules = |name: &str| {
+        constants
+            .values
+            .iter()
+            .find(|value| value.symbol.name == name)
+            .and_then(|value| value.modules.clone())
+    };
+    assert_eq!(modules("plain"), Some(vec!["src/main.cheby".to_owned()]));
+    assert_eq!(
+        modules("tripled"),
+        Some(vec![
+            "src/main.cheby".to_owned(),
+            "src/util.cheby".to_owned()
+        ])
+    );
+}
+
 /// D-1410, A §11.5: a child busy in a constant exits soon after its stdin
 /// closes, with the watchdog's status and nothing on stdout, so a child
 /// whose server died does not linger.

@@ -10,5 +10,5 @@ fn first() -> Int {
 fn main() {
   let xs = ["a", "b"]
   let pairs = enumer
-  //                ^ apply enumerate
+  //                ^ apply std_list::enumerate
 }

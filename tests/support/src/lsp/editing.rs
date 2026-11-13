@@ -53,6 +53,9 @@ const COMPLETION_KINDS: [&str; 25] = [
 /// The protocol's `insertTextFormat` of a snippet.
 const SNIPPET: u64 = 2;
 
+/// The protocol's `insertTextMode` `asIs`.
+const AS_IS: u64 = 1;
+
 /// The name of `CompletionItemKind` `kind`, `-` for none or an unknown
 /// number.
 #[must_use]
@@ -519,7 +522,10 @@ fn skip_while(chars: &[char], mut at: usize, keep: impl Fn(char) -> bool) -> usi
 /// the `textEdit` or an `InsertReplaceEdit`'s `insert` range, with a
 /// snippet expanded ([`expand_snippet`]), then the `additionalTextEdits`
 /// on the same text. An item with no `textEdit` replaces the word before
-/// `at` with its `insertText` or label, as clients do.
+/// `at` with its `insertText` or label, as clients do. Each later line of
+/// the main edit's text gets the indentation of the cursor's line, up to
+/// the cursor, as `insertTextMode` `adjustIndentation` and Zed's default
+/// do, unless the item says `asIs` (D-1506).
 ///
 /// # Errors
 ///
@@ -566,6 +572,24 @@ pub fn apply_item(
         expand_snippet(&new_text)
     } else {
         new_text
+    };
+    let new_text = if item.get("insertTextMode").and_then(Value::as_u64) == Some(AS_IS) {
+        new_text
+    } else {
+        // The protocol takes the indentation only up to the cursor. A
+        // blank or tab is one unit in every encoding, so the cursor's
+        // column counts characters up to the first one that is not.
+        let line = usize::try_from(at.line)
+            .ok()
+            .and_then(|n| lines.line(n))
+            .unwrap_or_default();
+        let cursor = usize::try_from(at.character).unwrap_or(usize::MAX);
+        let indent: String = line
+            .chars()
+            .take(cursor)
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        new_text.replace('\n', &format!("\n{indent}"))
     };
     let mut edits = vec![json!({ "range": range, "newText": new_text })];
     edits.extend(additional(item).iter().cloned());
@@ -1061,6 +1085,45 @@ mod tests {
         let plain = json!({ "label": "length" });
         let applied = apply_item("f(le)", &plain, at(0, 4), Encoding::Utf16).unwrap();
         assert_eq!(applied, "f(length)");
+        // Later lines are indented as the edit's first line, with no mode
+        // or `adjustIndentation`, unless the item says `asIs` (D-1506).
+        let text = "fn main() {\n  case x {\n    _ => gu\n  }\n}\n";
+        let guard = json!({
+            "label": "guard",
+            "insertTextFormat": 2,
+            "textEdit": {
+                "range": range((2, 9), (2, 11)),
+                "newText": "guard ${1:c} else {\n  $0\n}",
+            },
+        });
+        let applied = apply_item(text, &guard, at(2, 11), Encoding::Utf16).unwrap();
+        assert_eq!(
+            applied,
+            "fn main() {\n  case x {\n    _ => guard c else {\n      \n    }\n  }\n}\n"
+        );
+        // `adjustIndentation`, which the server sends, is the same.
+        let mut adjust = guard.clone();
+        adjust["insertTextMode"] = json!(2);
+        assert_eq!(
+            apply_item(text, &adjust, at(2, 11), Encoding::Utf16).unwrap(),
+            applied
+        );
+        let mut as_is = guard;
+        as_is["insertTextMode"] = json!(1);
+        let applied = apply_item(text, &as_is, at(2, 11), Encoding::Utf16).unwrap();
+        assert_eq!(
+            applied,
+            "fn main() {\n  case x {\n    _ => guard c else {\n  \n}\n  }\n}\n"
+        );
+        // Only the indentation up to the cursor counts, as the protocol
+        // says: `<2 blanks><cursor><2 blanks>x` indents by two.
+        let text = "    x\n";
+        let item = json!({
+            "label": "ab",
+            "textEdit": { "range": range((0, 2), (0, 2)), "newText": "a\nb" },
+        });
+        let applied = apply_item(text, &item, at(0, 2), Encoding::Utf16).unwrap();
+        assert_eq!(applied, "  a\n  b  x\n");
     }
 
     #[test]

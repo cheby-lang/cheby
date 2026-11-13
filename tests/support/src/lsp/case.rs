@@ -105,6 +105,10 @@ pub enum Step {
     /// `save DIR`: as `edit`, and the file is also written to disk and
     /// saved with `didSave`.
     Save(String),
+    /// `zed-save DIR`: as `save`, in the order Zed 1.27 sends a save
+    /// (CP2's R3, D-1494): the file is written, then a watched change of
+    /// it, `didSave` a few milliseconds later, and `didSave` again.
+    ZedSave(String),
 }
 
 impl Step {
@@ -117,11 +121,12 @@ impl Step {
             (Some("quiet"), None) => Self::Quiet,
             (Some("edit"), Some(dir)) => Self::Edit(dir.to_owned()),
             (Some("save"), Some(dir)) => Self::Save(dir.to_owned()),
+            (Some("zed-save"), Some(dir)) => Self::ZedSave(dir.to_owned()),
             (Some("settings"), Some(name)) => Self::Settings(name.to_owned()),
             _ => {
                 return Err(format!(
-                    "@steps: `{text}` is not idle, started, quiet, edit DIR, save DIR or \
-                     settings NAME"
+                    "@steps: `{text}` is not idle, started, quiet, edit DIR, save DIR, \
+                     zed-save DIR or settings NAME"
                 ));
             }
         };
@@ -859,7 +864,7 @@ mod tests {
         assert!(Header::of("// @package: none\n").unwrap().loose);
         assert_eq!(Header::of("fn main() {}\n").unwrap(), Header::default());
         let steps = Header::of(
-            "// @steps: idle, edit dirty, save next, started, settings raise, quiet\n\
+            "// @steps: idle, edit dirty, save next, started, settings raise, quiet, zed-save z\n\
                  // @rewrite: crlf\n",
         )
         .unwrap();
@@ -872,6 +877,7 @@ mod tests {
                 Step::Started,
                 Step::Settings("raise".to_owned()),
                 Step::Quiet,
+                Step::ZedSave("z".to_owned()),
             ]
         );
         assert!(steps.crlf && !steps.bom);

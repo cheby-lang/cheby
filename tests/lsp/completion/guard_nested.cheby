@@ -1,0 +1,19 @@
+// @decisions: D-1506
+//! `gu` as a statement in a block nested in a `case` arm: the `guard`
+//! snippet's later lines are written relative to its first, so the
+//! client indents them as that line and the `else` block's `}` lines up
+//! under `guard`.
+
+fn main() {
+  let n = 1
+  let m = case n {
+    1 => {
+      gu
+      //^ completion guard
+      //^ apply guard
+      n
+    }
+    _ => 0
+  }
+  assert m == 1
+}

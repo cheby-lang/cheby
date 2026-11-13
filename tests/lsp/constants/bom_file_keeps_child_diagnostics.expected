@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0075",
-      "message": "evaluating the constant `ratio` panicked",
+      "message": "evaluating the constant `ratio` panicked\nits initializer panicked\nnote: panicked at src/main.cheby:10:20: division by zero",
       "range": {
         "end": {
           "character": 11,

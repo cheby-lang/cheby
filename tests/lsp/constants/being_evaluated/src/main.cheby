@@ -1,0 +1,13 @@
+// @decisions: D-1511
+// @settings: {"constants": {"childTimeoutSeconds": 600}}
+// @steps: idle, save next, started
+//! A run gives `limit` its value, then a save adds a constant that never
+//! ends, so the new run is still going when hover asks. `limit` changed
+//! since, so it shows the value last evaluated, and `spin` has none yet:
+//! both say that the new save is being evaluated (D-1511).
+
+const limit: Int = 20
+
+fn main() {
+  assert limit > 0
+}

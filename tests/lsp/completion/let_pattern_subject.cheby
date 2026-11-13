@@ -1,0 +1,19 @@
+// @decisions: D-1531
+//! The pattern of `let`, `let guard` and `let assert` is completed with
+//! the value after `=` as its subject, also with a type annotation, so
+//! the value's constructors rank first and no expression item is offered
+//! (type error state).
+
+import std::json
+
+fn size(v: json::Value) -> Int {
+  let guard In(n): json::Value = v else {
+    //        ^ completion json::Int `case` size
+    0
+  }
+  let assert Fl(x): json::Value = v
+  //           ^ completion json::Float
+  let St(s): json::Value = v
+  //    ^ completion json::String
+  n + x + s
+}

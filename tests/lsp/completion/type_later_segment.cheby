@@ -1,0 +1,19 @@
+// @decisions: D-1547
+//! In a type and in a pattern a path has one qualifier, so at a later
+//! segment followed by `::`, as in `json::Va::X`, nothing is offered,
+//! since every item there wrote E0013. With no `::` after it, as in
+//! `json::Va`, the module's types are offered (grammar error state).
+
+import std::json
+
+fn first(v: json::Value) -> Int {
+  let w: json::Va::X = v
+  //             ^ completion
+  let x: json::Va = w
+  //             ^ completion Value
+  case x {
+    json::In::X(n) => n
+    //      ^ completion
+    _ => 0
+  }
+}

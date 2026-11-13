@@ -1,0 +1,31 @@
+// @mode: check-pass
+// @decisions: D-173, D-516
+//! A call through an interface uses that interface, also when the
+//! function it calls is declared by an interface it embeds (§8.3), in
+//! both forms of the path. An interface that nothing names still warns.
+
+import app::labels
+import app::labels::{Tagged}
+
+type Box {
+  Box(Int),
+}
+
+fn label(b: Box) -> String {
+  let Box(n) = b
+  "box {n}"
+}
+
+fn tag(b: Box) -> String {
+  label(b)
+}
+
+fn show(b: Box) -> String {
+  tag(b)
+}
+
+fn main() -> Nil {
+  let b = Box(1)
+  assert labels::Labeled::show(b) == "box 1"
+  assert Tagged::show(b) == "box 1"
+}

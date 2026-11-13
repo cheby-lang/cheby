@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `m` in this scope",
+      "message": "cannot find value `m` in this scope\nnot found",
       "range": {
         "end": {
           "character": 18,
@@ -19,7 +19,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `ma` in this scope",
+      "message": "cannot find value `ma` in this scope\nnot found",
       "range": {
         "end": {
           "character": 19,
@@ -35,7 +35,7 @@
     },
     {
       "code": "E0058",
-      "message": "`List<{integer}>` has no field `ma`",
+      "message": "`List<{integer}>` has no field `ma`\nunknown field",
       "range": {
         "end": {
           "character": 16,
@@ -72,7 +72,7 @@
 
 == src/main.cheby:11:19 completion map
 {
-  "count": 1,
+  "count": 2,
   "isIncomplete": true,
   "items": [
     {
@@ -108,7 +108,7 @@
 
 == src/main.cheby:13:20 completion map
 {
-  "count": 10,
+  "count": 12,
   "isIncomplete": false,
   "items": [
     {

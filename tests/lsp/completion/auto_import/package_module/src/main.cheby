@@ -5,6 +5,6 @@
 
 fn main() {
   let total = with_
-  //               ^ completion with_tax with_backlog
-  //               ^ apply with_tax
+  //               ^ completion prices::with_tax back::with_backlog
+  //               ^ apply prices::with_tax
 }

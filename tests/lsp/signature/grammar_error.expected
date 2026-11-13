@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0015",
-      "message": "unclosed `(`",
+      "message": "unclosed `(`\nexpected `)`",
       "range": {
         "end": {
           "character": 5,
@@ -37,7 +37,7 @@
     },
     {
       "code": "E0015",
-      "message": "unclosed `(`",
+      "message": "unclosed `(`\nexpected `)`",
       "range": {
         "end": {
           "character": 1,
@@ -71,7 +71,7 @@
     },
     {
       "code": "E0015",
-      "message": "unclosed `(`",
+      "message": "unclosed `(`\nexpected `)`",
       "range": {
         "end": {
           "character": 23,

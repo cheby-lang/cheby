@@ -405,8 +405,11 @@ fn capabilities_with_full_client() {
     }
 }
 
+/// D-1376, D-1514: a value of the wrong type keeps what the earlier layers
+/// gave the key: the default under `initializationOptions`, and the
+/// `initializationOptions` value under a configuration push.
 #[test]
-fn bad_setting_keeps_default() {
+fn bad_setting_keeps_earlier_layers() {
     let options = json!({
         "analysis": { "debounceMs": "fast", "requestWaitMs": 5000 },
         "inlayHints": { "enable": 3 },
@@ -435,6 +438,19 @@ fn bad_setting_keeps_default() {
             "no warning for {key}: {logs:?}"
         );
     }
+    let pushed = json!({ "analysis": { "debounceMs": 9, "requestWaitMs": "slow" } });
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": pushed } }),
+    );
+    let settings = client.settings();
+    assert_eq!(settings["analysis"]["debounceMs"], 9);
+    assert_eq!(settings["analysis"]["requestWaitMs"], 5000);
+    let logs = client.logs();
+    assert!(
+        logs.iter().any(|l| l.contains("analysis.requestWaitMs")),
+        "no warning for analysis.requestWaitMs: {logs:?}"
+    );
     client.stop();
 }
 
@@ -745,7 +761,6 @@ fn idle_generation_grows_across_a_target_change() {
 /// change does.
 #[test]
 #[cfg(unix)]
-#[cfg_attr(windows, ignore = "runs processes (D-545)")]
 fn a_swept_change_reruns_the_constants() {
     use std::os::unix::fs::PermissionsExt as _;
 

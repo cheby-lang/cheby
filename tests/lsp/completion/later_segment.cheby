@@ -1,0 +1,24 @@
+// @decisions: D-173, D-1538, D-1539, D-1548
+//! `io::Source::read_bytes(src, 4)` completed a segment at a time. After
+//! `io::`, the module's interfaces come with its functions, written
+//! `Source::`, so the list of its functions opens next. Where a path's
+//! `::` follows the segment, only the interfaces do, written `Source`, so
+//! `io::So::read_bytes` offers `Source` and `Sink`, and no function.
+//! Before the first `::`, two segments follow, so only the modules are
+//! offered (type error state).
+
+import std::io
+
+fn ready<S: io::Source>(src: S) -> Bool {
+  let a = io::So
+  //            ^ completion Source Sink copy
+  let b = io::So::read_bytes(src, 4)
+  //            ^ completion Source Sink copy print
+  //            ^ apply Source
+  let c = i::Source::read_bytes(src, 4)
+  //       ^ completion io Show io::Source
+  case b {
+    Ok(_) => True
+    Err(_) => False
+  }
+}

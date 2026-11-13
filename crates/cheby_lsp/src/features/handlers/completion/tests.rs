@@ -20,7 +20,7 @@ const CAPS: CompletionCaps = CompletionCaps {
     deprecated_flag: true,
     markdown: true,
     zed: false,
-    as_is: true,
+    adjust_indentation: true,
 };
 
 const MAIN: &str = "import app::geo\n\nfn main() {\n  let é = 1\n  let y = \n}\n";
@@ -94,9 +94,16 @@ fn capabilities_are_read_from_initialize() {
             deprecated_flag: false,
             markdown: true,
             zed: true,
-            as_is: true,
+            adjust_indentation: true,
         }
     );
+    // `asIs` alone is not `adjustIndentation` (D-1506).
+    let as_is = CompletionCaps::from_params(&json!({
+        "capabilities": { "textDocument": { "completion": { "completionItem": {
+            "insertTextModeSupport": { "valueSet": [1] },
+        } } } },
+    }));
+    assert!(!as_is.adjust_indentation);
     // Every release channel of Zed is Zed.
     for name in ["Zed Preview", "Zed Nightly", "Zed Dev", "zed"] {
         let caps = CompletionCaps::from_params(&json!({ "clientInfo": { "name": name } }));
@@ -162,36 +169,55 @@ fn items_in_protocol_form() {
     assert!(item(&plain, "main").get("labelDetails").is_none());
     assert_eq!(item(&plain, "case")["kind"], json!(14));
     assert!(item(&plain, "case").get("insertTextFormat").is_none());
-    // A keyword snippet writes no indentation, so the client's mode stays.
-    assert!(case.get("insertTextMode").is_none());
+    // A keyword snippet spans lines, so it asks the client to indent them
+    // as its first (D-1506).
+    assert_eq!(case["insertTextMode"], json!(2));
+    // One line needs no mode.
+    assert!(local.get("insertTextMode").is_none());
 }
 
 #[test]
-fn a_postfix_case_is_taken_as_it_is() {
-    // Its arms carry the line's indentation, so a client that lists
-    // `asIs` must not indent them again; one that does not is not told.
+fn text_on_several_lines_asks_for_adjusted_indentation() {
+    // D-1506: the postfix `case` is written relative to its first line,
+    // and a client that lists `adjustIndentation` is told to indent its
+    // later lines as that one. `asIs` is never sent.
     let main = "fn main() {\n  let o = Some(1)\n  let y = o.\n}\n";
     let (_temp, analyzed, uri) = package_with(main);
     let answer = ask(&analyzed, &uri, (2, 12), Some("."), CAPS);
     let case = item(&answer, "case");
-    assert_eq!(case["insertTextMode"], json!(1));
-    assert!(
-        case["textEdit"]["newText"]
-            .as_str()
-            .unwrap()
-            .contains("\n    Some(_) => ${1:todo}\n"),
-        "{case}"
+    assert_eq!(case["insertTextMode"], json!(2));
+    assert_eq!(
+        case["textEdit"]["newText"],
+        json!("case o {\n  Some(_) => ${1:todo}\n  None => ${2:todo}\n}$0")
     );
+    let items = answer["items"].as_array().unwrap();
+    assert!(
+        items.iter().all(|i| i["insertTextMode"] != json!(1)),
+        "{answer}"
+    );
+    // A client that does not list `adjustIndentation` gets no mode.
     let answer = ask(
         &analyzed,
         &uri,
         (2, 12),
         Some("."),
         CompletionCaps {
-            as_is: false,
+            adjust_indentation: false,
             ..CAPS
         },
     );
+    let items = answer["items"].as_array().unwrap();
+    assert!(
+        items.iter().all(|i| i.get("insertTextMode").is_none()),
+        "{answer}"
+    );
+    // Nor do keyword snippets.
+    let (_temp, analyzed, uri) = package();
+    let caps = CompletionCaps {
+        adjust_indentation: false,
+        ..CAPS
+    };
+    let answer = ask(&analyzed, &uri, (4, 10), None, caps);
     assert!(item(&answer, "case").get("insertTextMode").is_none());
 }
 

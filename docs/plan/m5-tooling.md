@@ -38,8 +38,18 @@ The formatter core, the LSP core and `cheby new` were placed with M2 and did not
 
 ## Status
 
-In progress. The formatter core and `cheby new` landed with M3. `cheby lsp` serves the protocol and publishes diagnostics (W5 of the `lsp` branch); `cheby doc`, `add`, `update` and `fetch` are still stubs, and doc examples are not run as tests.
+In progress. The formatter core and `cheby new` landed with M3. `cheby doc`, `add`, `update` and `fetch` are still stubs, and doc examples are not run as tests.
+
+`cheby lsp` has waves W0 to W9 and W9f, which fixed checkpoint 2's findings (D-1506 to D-1515). That covers the slices LSP core, LSP constant evaluation and LSP type-driven editing, and all of LSP navigation but rename:
+
+- the protocol, the published diagnostics of `cheby check`, back-end codes included, single-file mode, file watching and the settings (W5, W6);
+- outline, folding, selection ranges and formatting (W6);
+- hover, go to definition, declaration and type definition, references, document highlights, call hierarchy, document links, workspace symbols and semantic tokens (W7);
+- completion, signature help and inlay hints, parameter names included (W8, W9f);
+- constants evaluated in a child process and shown in hover (W9).
+
+Still to come: rename (W10), quick fixes and imports (W11), structural insight and type lenses (W12), refactors and run lenses (W13), the JSON code action (W14), the memory marks (W15, W16), the further features (W17), the Zed integration (W18), and the exit run and final documents (W19). The settings `diagnostics.explainLinks`, `inlayHints.constants`, `lenses.*`, `ownership.*` and `clientCommands` are accepted but not served yet. The top-level [README](../../README.md#language-server) says how to use the server.
 
 The language server's design is logged: D-1347 to D-1426 in the [language server](../decisions/LOG.md#2026-11-07-the-language-server) session, ADRs 0076 to 0078, and §13.8, §13.11 and §13.11.1 of the spec. That session is the design step of D-1029, and D-1353 and D-1426 set the scope that the slices above list. The exit criterion on the server's diagnostics is D-1348's, which names `cheby check`, not `cheby build`.
 
-The server is built in waves on the `lsp` branch, one commit per wave (D-1354). The first wave is this text and changes no code. The user reviews three checkpoints, each with a recorded session in Zed: after the protocol skeleton, after constant evaluation and after the memory marks. `tests/milestone` stays `M4` throughout, and the LSP harness fails CI from the day its tests land (D-1352).
+The server is built in waves on the `lsp` branch, one commit per wave (D-1354). The first wave is this text and changes no code. The user reviews three checkpoints, each with a recorded session in Zed: after the protocol skeleton, after constant evaluation and after the memory marks. `lsp` merges into `main` after W9f, and the later waves reach `main` in groups, one pull request each: W10 and W11, W12 and W13, W15 and W16 after checkpoint 3, then W14, W17, W18 and W19 (D-1517). `tests/milestone` stays `M4` throughout, and the LSP harness fails CI from the day its tests land (D-1352).

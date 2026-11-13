@@ -1,6 +1,6 @@
 # cheby_repl
 
-The interactive session of `cheby repl` (spec §13.5). `run` starts a `Session` in the current directory and reads entries until the end of input or `:quit`. Inside a package the package's modules can be imported. The prompt is `> `, and `. ` while a bracket, a block or a string is open, so the lines read so far form one entry.
+The interactive session of `cheby repl` (spec §13.5). `run` starts a `Session` in the current directory and reads entries until the end of input or `:quit`. Inside a package the package's modules can be imported. The prompt is `> `, and `. ` while a bracket, a block or a string is open, so the lines read so far form one entry (D-605). Brackets are matched as the parser matches them (D-1532), and those it skips, inside an interpolation or after a `/*`, do not count (D-1541). A `/*` with no `*/` on its line skips only the rest of that line, so `{`, `/* note`, `}` ends at the `}` (D-1543).
 
 ## Place in the pipeline
 

@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1513, D-426
+//! A half-typed last line of a file is reported at the end of that line,
+//! not at the end of the file after it.
+
+fn main() {}
+
+const limit: Int
+

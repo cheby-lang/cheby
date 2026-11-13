@@ -1,0 +1,28 @@
+// @decisions: D-1525, D-1529, D-1530, D-1536
+//! `re::<Int>(xs)` in a file that imports `std::list`: before a
+//! turbofish, `list::reverse` is offered as with no `::` after the word,
+//! written as its path, since `list::reverse::<Int>` is a valid path. No
+//! module name is offered, since `list::<Int>` is not one, and D-1530's
+//! rule for a path's `::` does not apply. Only names that take type
+//! arguments are offered: the local `xs`, but no constant, keyword or
+//! snippet (D-1536). So after `|>`, and inside `(`, where the parser
+//! finds the `<` past a line break and a comment (type error state).
+
+import std::list
+
+const two: Int = 2
+
+fn main() {
+  let xs = [1, 2]
+  let ys = re::<Int>(xs)
+  //         ^ completion list::reverse xs list two `case` todo
+  //         ^ apply list::reverse
+  let zs = xs |> re::<Int>
+  //               ^ completion list::reverse list
+  let k = list::length(
+    re::
+    //^ completion list::reverse list
+      <Int>(xs),
+  )
+  assert ys == zs && k == two
+}

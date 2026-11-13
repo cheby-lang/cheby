@@ -1,0 +1,6 @@
+error[E0013]: expected `=`, found end of file
+ --> tests/ui/02-lexical-structure/error_at_end_of_file.cheby:8:17
+  |
+8 | const limit: Int
+  |                 ^
+

@@ -1,0 +1,6 @@
+error[E0013]: expected an item, found `}`
+  --> tests/ui/02-lexical-structure/stray_closing_brace.cheby:12:1
+   |
+12 | }
+   | ^
+

@@ -588,6 +588,37 @@ impl<'a> IfaceCx<'a> {
         }
     }
 
+    /// See [`super::iface_call_dict`]. `Self` comes from the argument in
+    /// the first parameter that mentions it, as for the call itself.
+    pub(super) fn iface_call_dict(
+        &self,
+        iface_fn: DefId,
+        args: &[Ty],
+    ) -> Result<Option<Dict>, Ice> {
+        let types = &self.input.globals.types;
+        let ItemSig::InterfaceFn(sig) = &self.item(iface_fn)?.sig else {
+            return Ok(None);
+        };
+        let iface = self.parent_iface(iface_fn)?;
+        let Some(k) = sig.params.iter().position(|&p| mentions(types, p, SELF)) else {
+            return Ok(None);
+        };
+        let (Some(&pattern), Some(&arg)) = (sig.params.get(k), args.get(k)) else {
+            return Ok(None);
+        };
+        let mut bound = [None];
+        if !match_ty(types, pattern, arg, &mut bound)? {
+            return Ok(None);
+        }
+        let [Some(self_ty)] = bound else {
+            return Ok(None);
+        };
+        if contains_error(types, self_ty) || !matches!(types.kind(self_ty), TyKind::Named { .. }) {
+            return Ok(None);
+        }
+        Ok(self.satisfy_ty(self_ty, iface, 0)?.ok())
+    }
+
     /// See [`super::operator`] and [`super::negation`].
     pub(super) fn op_impl(&self, op: OpFn, ty: Ty) -> Result<Result<OpImpl, Unsatisfied>, Ice> {
         let types = &self.input.globals.types;

@@ -7,10 +7,12 @@
 //!
 //! 1. Its text becomes the source file `<repl:N>`. Declarations and
 //!    imports are parsed as a module; statements inside the wrapper
-//!    `test "<repl>" {` … `Nil }` (`cheby_types::repl`), whose spans move
+//!    `test "<repl>" {` … `}` (`cheby_types::repl`), whose spans move
 //!    back to the entry's own text.
 //! 2. It is checked as the module `<repl:N>` against the package, std and
-//!    the session's names, reading only interfaces (D-246).
+//!    the session's names, reading only interfaces (D-246). The wrapper of
+//!    statements is checked as the body of a block that ends with them,
+//!    not as a test, so no diagnostic is about the wrapper (D-1535).
 //! 3. What it reaches and nothing compiled yet is lowered and compiled in
 //!    one JIT batch, all or nothing: its items, the items of the package
 //!    and std it reaches for the first time, its body and its thunk
@@ -25,8 +27,9 @@
 //!    its pads release what its frames held (D-712, D-733). No leak check
 //!    runs (D-458). Where fibers are not supported (Windows until M6,
 //!    D-714), the body runs isolated on its own thread instead.
-//! 5. The value of a final expression prints as `<debug text> : <type>`,
-//!    nothing for `Nil` (D-546); what the entry returned is marked shared
+//! 5. The value of a final expression, or of a `use` that ends the entry,
+//!    prints as `<debug text> : <type>`, nothing for `Nil` (D-546,
+//!    D-1535); what the entry returned is marked shared
 //!    (D-705, D-712), and the values of the entry's `let`s go in their
 //!    slots with release stores (D-547). Only then is the entry committed:
 //!    its names join the session. An entry rejected after its code
@@ -67,7 +70,9 @@ use std::sync::Arc;
 
 use cheby_codegen_clif::SessionName;
 use cheby_consteval::{ConstEvalConfig, ConstInfo, ConstMode};
-use cheby_diag::{Colors, Diagnostic, FileId, SourceMap, Span, TextRange, codes};
+use cheby_diag::{
+    Colors, Diagnostic, FileId, LabelStyle, SourceMap, Span, TextRange, TextSize, codes,
+};
 use cheby_iface::{
     DefId, DefIndex, DepView, DisplayCx, Ice, InterfaceSet, ItemSig, ModuleId, ModuleInfo,
     ModuleInterface, Name, Namespace, PackageId, Vis,
@@ -88,8 +93,9 @@ use cheby_resolve::{
 use cheby_runtime::{
     DetachedGroup, EntryConfig, EntryMode, EntryOutcome, Runtime, RuntimeConfig, RuntimeError,
 };
-use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, SourceFile};
+use cheby_syntax::lexer::Lexed;
+use cheby_syntax::{SyntaxKind, SyntaxTree};
 use cheby_types::repl::{
     CheckedEntry, EntryShape, Redefinition, ReplSession, SatisfactionPlan, SessionItem,
     forwarder_fn,
@@ -104,11 +110,10 @@ use crate::{
 /// The wrapper's text before a statements entry (`cheby_types::repl`).
 const BODY_PREFIX: &str = "test \"<repl>\" {\n";
 
-/// The wrapper's text after a statements entry.
-const BODY_SUFFIX: &str = "\nNil\n}\n";
-
-/// The wrapper's text after a statements entry with grammar errors.
-const BODY_CLOSE: &str = "\n}\n";
+/// The wrapper's text after a statements entry. It adds no `Nil`: the
+/// wrapper is checked as the body of a block that ends with the entry's
+/// statements (D-1535).
+const BODY_SUFFIX: &str = "\n}\n";
 
 /// The display path of the session's own source: the module that imports
 /// every shipped std module, and the target of synthetic imports.
@@ -592,6 +597,7 @@ impl Session {
         }
         diagnostics.retain(Diagnostic::is_error);
         if !diagnostics.is_empty() {
+            self.hide_wrapper(read.shape, read.parsed.file, &mut diagnostics);
             self.report(&mut diagnostics, out);
             return Ok(());
         }
@@ -728,16 +734,7 @@ impl Session {
         let (parsed_text, shape) = if decls {
             (text.to_owned(), None)
         } else {
-            // The wrapper's `Nil` must not complete what the entry left
-            // unfinished (`1 +`): an entry with grammar errors is parsed
-            // without it, so they are reported as they are.
-            let closed = format!("{BODY_PREFIX}{text}{BODY_CLOSE}");
-            let probe = cheby_syntax::parse(FileId::new(0), Arc::from(closed.as_str()));
-            if probe.errors().is_empty() {
-                (format!("{BODY_PREFIX}{text}{BODY_SUFFIX}"), Some(display))
-            } else {
-                (closed, Some(display))
-            }
+            (format!("{BODY_PREFIX}{text}{BODY_SUFFIX}"), Some(display))
         };
         let shift = u32::try_from(BODY_PREFIX.len()).map_err(|_| Ice::new("a long prefix"))?;
         let mut diagnostics = Vec::new();
@@ -750,15 +747,34 @@ impl Session {
         let shape = match shape {
             None => EntryShape::Decls,
             Some(display) => {
+                // A `}` that closes no `{` the user opened, with brackets
+                // paired as the parser pairs them (D-1526, D-1532).
+                let braces = brace_scan(text);
+                if let Some(brace) = braces.stray {
+                    stray_brace(&mut diagnostics, text, brace, parsed.file, shift);
+                } else if !braces.open.is_empty() {
+                    // Brackets still open at the end of the entry get one
+                    // E0015, as `cheby check` gives it (D-1540).
+                    open_at_end(&mut diagnostics, text, parsed.file);
+                }
                 // A grammar error at the wrapper's closing brace is at the
-                // end of what the user wrote.
-                let end = u32::try_from(text.len())
-                    .map_err(|_| Ice::new("a long entry"))?
-                    .saturating_add(shift);
+                // end of what the user wrote. Since the brace follows a
+                // line break, the parser puts it right after the entry's
+                // last token (D-1513), so only what the parser skips
+                // follows the span in the entry: white space, line breaks,
+                // comments and block comments, which the lexer already
+                // reported (E0004). The message then says "found the end of
+                // the entry", as before D-1513 (D-1520).
+                let at_wrapper = |start: u32| {
+                    usize::try_from(start.saturating_sub(shift))
+                        .ok()
+                        .and_then(|at| text.get(at..))
+                        .is_none_or(only_skipped)
+                };
                 for diagnostic in &mut diagnostics {
                     if diagnostic
                         .primary_span()
-                        .is_some_and(|span| span.range.start() > end)
+                        .is_some_and(|span| at_wrapper(span.range.start()))
                     {
                         diagnostic.message = diagnostic
                             .message
@@ -768,6 +784,14 @@ impl Session {
                 EntryShape::Body { display, shift }
             }
         };
+        // The end of the parsed file is the end of the entry too: that of
+        // a declarations entry, and that of a statements entry whose
+        // unclosed `/*` swallowed the wrapper's `}` (D-1528).
+        for diagnostic in &mut diagnostics {
+            diagnostic.message = diagnostic
+                .message
+                .replace("found end of file", "found the end of the entry");
+        }
         Ok(ReadEntry {
             name,
             number,
@@ -832,6 +856,7 @@ impl Session {
             || diagnostics.iter().any(Diagnostic::is_error)
             || (self.options.deny_warnings && !diagnostics.is_empty());
         if !diagnostics.is_empty() {
+            self.hide_wrapper(shape, parsed.file, &mut diagnostics);
             self.report(&mut diagnostics, out);
         }
         Ok(match checked {
@@ -896,6 +921,21 @@ impl Session {
                 Err(diags)
             }
         })
+    }
+
+    /// Moves what the diagnostics of a statements entry show of its
+    /// wrapper to the text the user wrote, or drops it (D-1527). The
+    /// wrapper's spans are those left in the parsed file `parsed`, which
+    /// are in `test "<repl>" {`, and those past the end of the entry's
+    /// text, which are in the wrapper's end.
+    fn hide_wrapper(&self, shape: EntryShape, parsed: FileId, diagnostics: &mut Vec<Diagnostic>) {
+        let EntryShape::Body { display, .. } = shape else {
+            return;
+        };
+        let Some(text) = self.sources.file(display).map(cheby_diag::SourceFile::text) else {
+            return;
+        };
+        hide_wrapper(diagnostics, text, parsed, display);
     }
 
     /// Writes diagnostics, sorted, to standard error.
@@ -2688,7 +2728,7 @@ fn constants_read(reach: &Reach, root: DefId, waiting: &[DefId]) -> Vec<DefId> {
 
 /// The module source the REPL parses for the entry `text`: declarations
 /// and imports as they are, statements inside the wrapper
-/// `test "<repl>" {` … `Nil }`; `None` for text that is not an entry
+/// `test "<repl>" {` … `}`; `None` for text that is not an entry
 /// (blanks and comments). For tools that parse REPL input the way the REPL
 /// does, such as the parser cross-check of `tests/repl/` transcripts
 /// (D-272).
@@ -2846,6 +2886,262 @@ fn mask(text: &str, keep: TextRange) -> String {
             std::iter::repeat_n(replacement, width)
         })
         .collect()
+}
+
+/// Whether token `i` of `lexed` is one the parser skips: white space, a
+/// line break, a `//` comment, or the error token of a `/*` comment, which
+/// the lexer reports (E0004).
+fn skipped(lexed: &Lexed, text: &str, i: usize) -> bool {
+    let kind = lexed.kind(i);
+    kind.is_trivia()
+        || kind == SyntaxKind::NEWLINE
+        || (kind == SyntaxKind::ERROR_TOKEN && lexed.text(text, i).starts_with("/*"))
+}
+
+/// Whether `text` holds only what the parser skips ([`skipped`]).
+fn only_skipped(text: &str) -> bool {
+    let lexed = cheby_syntax::lexer::lex(FileId::new(0), text);
+    (0..lexed.len()).all(|i| skipped(&lexed, text, i))
+}
+
+/// The end of the last token of `text` that the parser does not skip, or
+/// 0: where an error at the end of an entry is shown (D-1513, D-1520).
+fn last_token_end(text: &str) -> TextSize {
+    let lexed = cheby_syntax::lexer::lex(FileId::new(0), text);
+    (0..lexed.len())
+        .rev()
+        .find(|&i| !skipped(&lexed, text, i))
+        .map_or(0, |i| lexed.range(i).end())
+}
+
+/// The brackets of a statements entry, as the parser matches them: a `}`
+/// closes the innermost open `{`, whatever `(` or `[` is open inside it,
+/// and a `)` or `]` closes the innermost open bracket it matches, whatever
+/// `{` is open inside it. A bracket closed that way is left unclosed
+/// (E0015), and a closer that matches no open bracket closes nothing
+/// (D-1532).
+struct Braces {
+    /// The first `}` that closes no `{` the user opened: the parser takes
+    /// it to close the wrapper's `{` (D-1526).
+    stray: Option<TextRange>,
+    /// The brackets still open at the end of the text, or at the stray
+    /// `}`, innermost last.
+    open: Vec<(SyntaxKind, TextRange)>,
+}
+
+/// The brackets of the statements entry `text` ([`Braces`]), paired as the
+/// parser pairs them (D-1532). The braces of an interpolation are tokens
+/// of their own, and those in strings, comments and the error token of a
+/// `/*` are not tokens: the parser skips that error token (D-1541). It
+/// also skips every token inside an interpolation up to its end, so a
+/// bracket there pairs with nothing (D-1532, D-1541).
+fn brace_scan(text: &str) -> Braces {
+    use SyntaxKind::{
+        INTERP_END, INTERP_START, L_BRACE, L_BRACK, L_PAREN, R_BRACE, R_BRACK, R_PAREN, STRING_END,
+        STRING_ESCAPE, STRING_TEXT,
+    };
+    let lexed = cheby_syntax::lexer::lex(FileId::new(0), text);
+    let mut open: Vec<(SyntaxKind, TextRange)> = Vec::new();
+    let mut in_interpolation = false;
+    for i in 0..lexed.len() {
+        let kind = lexed.kind(i);
+        // An interpolation ends where the parser's does: at its `}`, or at
+        // the string's own text, escape or `"` (D-1532, D-1541).
+        if in_interpolation {
+            in_interpolation =
+                !matches!(kind, INTERP_END | STRING_TEXT | STRING_ESCAPE | STRING_END);
+            continue;
+        }
+        if kind == INTERP_START {
+            in_interpolation = true;
+            continue;
+        }
+        let opener = match kind {
+            kind @ (L_BRACE | L_BRACK | L_PAREN) => {
+                open.push((kind, lexed.range(i)));
+                continue;
+            }
+            R_BRACE => L_BRACE,
+            R_BRACK => L_BRACK,
+            R_PAREN => L_PAREN,
+            _ => continue,
+        };
+        match open.iter().rposition(|&(kind, _)| kind == opener) {
+            Some(at) => open.truncate(at),
+            None if opener == L_BRACE => {
+                return Braces {
+                    stray: Some(lexed.range(i)),
+                    open,
+                };
+            }
+            None => {}
+        }
+    }
+    Braces { stray: None, open }
+}
+
+/// Reports the `}` at `brace` of the statements entry `text`, which closes
+/// no `{` the user opened, at that `}`, the way a `)` that matches nothing
+/// is reported (D-1526). `diagnostics` are in the parsed file `file`, where
+/// the entry starts at `shift`.
+///
+/// The parser took the `}` to close the wrapper's `{`. An error it then
+/// reported at the `}` and moved to the line before it (D-1513) goes back
+/// to the `}`, which closes nothing the user wrote (D-1519). The rest of
+/// the entry, which a closing bracket that matches nothing ends (D-605),
+/// and the wrapper's own `}` were read as items: the parser's errors there
+/// are dropped, and only those about single tokens stay, such as E0010 and
+/// E0004 (D-1534). If no error is at the `}` then, one says "expected a
+/// statement, found `}`".
+fn stray_brace(
+    diagnostics: &mut Vec<Diagnostic>,
+    text: &str,
+    brace: TextRange,
+    file: FileId,
+    shift: u32,
+) {
+    let at = TextRange::new(
+        brace.start().saturating_add(shift),
+        brace.end().saturating_add(shift),
+    );
+    let before = |start: u32| {
+        let from = usize::try_from(start.checked_sub(shift)?).ok()?;
+        let to = usize::try_from(brace.start()).ok()?;
+        text.get(from..to)
+    };
+    for diagnostic in diagnostics.iter_mut() {
+        if !diagnostic.message.ends_with("found `}`") {
+            continue;
+        }
+        let Some(label) = diagnostic
+            .labels
+            .iter_mut()
+            .find(|label| label.style == LabelStyle::Primary)
+        else {
+            continue;
+        };
+        let range = label.span.range;
+        if label.span.file == file
+            && range.is_empty()
+            && range.start() < at.start()
+            && before(range.start()).is_some_and(only_skipped)
+        {
+            label.span = Span::new(file, at);
+        }
+    }
+    let structural = [
+        codes::SYNTAX_ERROR,
+        codes::UNEXPECTED_LINE_BREAK,
+        codes::UNCLOSED_DELIMITER,
+    ];
+    diagnostics.retain(|diagnostic| {
+        !(structural.contains(&diagnostic.code)
+            && diagnostic
+                .primary_span()
+                .is_some_and(|span| span.file == file && span.range.start() >= at.end()))
+    });
+    let reported = diagnostics.iter().any(|diagnostic| {
+        diagnostic.is_error()
+            && diagnostic
+                .primary_span()
+                .is_some_and(|span| span.file == file && span.range.start() == at.start())
+    });
+    if !reported {
+        diagnostics.push(
+            Diagnostic::new(codes::SYNTAX_ERROR, "expected a statement, found `}`")
+                .with_primary(Span::new(file, at), ""),
+        );
+    }
+}
+
+/// Replaces `diagnostics` of the statements entry `text`, which ends with
+/// brackets still open, with those of the wrapper's `test "<repl>" {` and
+/// `text` alone, parsed in file `file`. The entry's end is then the end of
+/// the file, as for a block that the end of a file leaves open, so the
+/// entry gets what `cheby check` gives there: one E0015, for the innermost
+/// bracket still open, in any order of brackets (D-1540), and none when
+/// another error is already at the end (D-1544). With the wrapper's
+/// `}`, which closed the innermost `{` still open, the parser named the
+/// brackets around that `{` instead. When a `(` or `[` of the user's
+/// ended before the end, the parser names the wrapper's `{` at the end,
+/// and that E0015 is dropped later, as any that names only the wrapper's
+/// `{` is ([`hide_wrapper`], D-1533). `diagnostics` stay as they are
+/// when this parse finds no error, though brackets left open always give
+/// one.
+fn open_at_end(diagnostics: &mut Vec<Diagnostic>, text: &str, file: FileId) {
+    let parse = cheby_syntax::parse(file, Arc::from(format!("{BODY_PREFIX}{text}")));
+    let (tree, mut errors) = parse.into_parts();
+    if !errors.iter().any(Diagnostic::is_error) {
+        return;
+    }
+    // Only the token-level checks run on a tree with grammar errors, as
+    // `parse_file` runs them (D-425).
+    errors.extend(cheby_syntax::validate_tokens(&tree));
+    *diagnostics = errors;
+}
+
+/// Moves what `diagnostics` of the statements entry `text` show of the
+/// wrapper to the text, or drops it (D-1527). Their spans in the entry's
+/// text are in file `display`. The wrapper's `test "<repl>" {` is in the
+/// parsed file `parsed`, where no span of the text is left, and its end is
+/// past the end of `text` in `display`.
+///
+/// An E0015 left naming only the wrapper's `{` is dropped when another
+/// error stays, and kept when it would be the only error (D-1533). The
+/// parser names it when an unclosed `/*` swallowed the wrapper's `}`
+/// (E0004), and when a `(` or `[` the user left open ended before the end
+/// of the entry ([`open_at_end`]). An E0015 for a bracket the user opened
+/// already names it there (D-1540).
+///
+/// Another label in the wrapper is dropped, unless it is primary: one at
+/// the wrapper's end moves to the end of the entry's last token, where an
+/// error at the end of the entry is shown (D-1513, D-1520), and one in
+/// `test "<repl>" {` to the start of the text. A suggestion that edits the
+/// wrapper loses its edits.
+fn hide_wrapper(diagnostics: &mut Vec<Diagnostic>, text: &str, parsed: FileId, display: FileId) {
+    let len = TextSize::try_from(text.len()).unwrap_or(TextSize::MAX);
+    let end = last_token_end(text);
+    let in_end = |span: Span| {
+        span.file == display
+            && (span.range.start() > len || (span.range.start() == len && !span.range.is_empty()))
+    };
+    let in_wrapper = |span: Span| span.file == parsed || in_end(span);
+    let mut wrapper_only = vec![false; diagnostics.len()];
+    for (diagnostic, wrapper_only) in diagnostics.iter_mut().zip(&mut wrapper_only) {
+        diagnostic.labels.retain_mut(|label| {
+            let span = label.span;
+            if in_wrapper(span) {
+                // "This `{` is never closed" at the wrapper's `{`.
+                *wrapper_only |= label.style == LabelStyle::Secondary
+                    && label.message.ends_with("is never closed")
+                    && span.file == parsed;
+                let at = if span.file == parsed { 0 } else { end };
+                label.span = Span::new(display, TextRange::empty(at));
+                return label.style == LabelStyle::Primary;
+            }
+            if span.file == display && span.range.end() > len {
+                label.span = Span::new(display, TextRange::new(span.range.start(), len));
+            }
+            true
+        });
+        *wrapper_only &=
+            diagnostic.code == codes::UNCLOSED_DELIMITER && diagnostic.message == "unclosed `{`";
+        for help in &mut diagnostic.helps {
+            if help.edits.iter().any(|edit| in_wrapper(edit.span)) {
+                help.edits.clear();
+            }
+        }
+    }
+    // An error about the wrapper's `{` alone goes, unless no other error
+    // would show why the entry failed (D-1533).
+    let others = diagnostics
+        .iter()
+        .zip(&wrapper_only)
+        .any(|(diagnostic, &only)| diagnostic.is_error() && !only);
+    if others {
+        let mut only = wrapper_only.into_iter();
+        diagnostics.retain(|_| !only.next().unwrap_or(false));
+    }
 }
 
 /// The package of a session started outside any package: no modules, the
@@ -3590,9 +3886,10 @@ mod tests {
             transcript_entries(transcript),
             vec!["1 + 2", "fn f() -> Int {\n  1\n}", "io::read_line()"]
         );
+        // No `Nil` follows the statements (D-1535).
         assert_eq!(
             entry_source("1 + 2").unwrap(),
-            "test \"<repl>\" {\n1 + 2\nNil\n}\n"
+            "test \"<repl>\" {\n1 + 2\n}\n"
         );
         assert_eq!(entry_source("import std::io").unwrap(), "import std::io");
         assert_eq!(entry_source("// nothing"), None);
@@ -3674,5 +3971,149 @@ mod tests {
         assert_eq!(masked.lines().count(), text.lines().count());
         assert!(masked.ends_with("fn é() {\n  2\n}\n"));
         assert!(masked.starts_with("        \n"));
+    }
+
+    /// A `}` closes the innermost open `{`, as the parser matches it, and
+    /// the first one that closes nothing is the stray one (D-1526,
+    /// D-1532). What the parser skips holds no bracket (D-1541).
+    #[test]
+    fn braces_as_the_parser_matches_them() {
+        use SyntaxKind::{L_BRACE, L_BRACK, L_PAREN};
+        let scan = brace_scan("let x = {\n  (1 }\n} 2 }");
+        assert_eq!(scan.stray, Some(TextRange::new(17, 18)));
+        assert_eq!(scan.open, []);
+        let scan = brace_scan("let x = {\n  let y = {\n    \"{a}\" // }\n");
+        assert_eq!(scan.stray, None);
+        assert_eq!(
+            scan.open,
+            [
+                (L_BRACE, TextRange::new(8, 9)),
+                (L_BRACE, TextRange::new(20, 21))
+            ]
+        );
+        assert_eq!(brace_scan("\"{a}\" }").stray, Some(TextRange::new(6, 7)));
+        // The parser skips the tokens of an interpolation, so its brackets
+        // pair with nothing, also when a `"` or a line break ends it.
+        assert_eq!(brace_scan("\"{{}\" }").stray, Some(TextRange::new(6, 7)));
+        assert_eq!(brace_scan("\"{ ( }\" }").stray, Some(TextRange::new(8, 9)));
+        assert_eq!(brace_scan("\"{ [\" }").stray, Some(TextRange::new(6, 7)));
+        let scan = brace_scan("{ \"{ (\n{a}\" }");
+        assert_eq!(scan.stray, None);
+        assert_eq!(scan.open, []);
+        // A `]` or `)` ends the `{` inside its bracket, so the `}` after it
+        // closes nothing the user opened.
+        assert_eq!(brace_scan("[ { ] }").stray, Some(TextRange::new(6, 7)));
+        assert_eq!(brace_scan("f({ ) }").stray, Some(TextRange::new(6, 7)));
+        // One that matches nothing open closes nothing.
+        let scan = brace_scan("{ ) [1, (2, {");
+        assert_eq!(scan.stray, None);
+        assert_eq!(
+            scan.open,
+            [
+                (L_BRACE, TextRange::new(0, 1)),
+                (L_BRACK, TextRange::new(4, 5)),
+                (L_PAREN, TextRange::new(8, 9)),
+                (L_BRACE, TextRange::new(12, 13)),
+            ]
+        );
+        // The parser skips the error token of a `/*`, so its brackets pair
+        // with nothing either (D-1541).
+        let scan = brace_scan("/* ( */ { /* } */ ( /* ) ]");
+        assert_eq!(scan.stray, None);
+        assert_eq!(
+            scan.open,
+            [
+                (L_BRACE, TextRange::new(8, 9)),
+                (L_PAREN, TextRange::new(18, 19))
+            ]
+        );
+        assert_eq!(brace_scan("{ /* x\n } */ }").stray, None);
+        assert_eq!(brace_scan("{ /* x\n }").open.len(), 1);
+        assert_eq!(brace_scan("/* { */ }").stray, Some(TextRange::new(8, 9)));
+        assert_eq!(last_token_end("1 + // c"), 3);
+        assert_eq!(last_token_end("1 + /* a"), 3);
+        assert_eq!(last_token_end("  \n"), 0);
+    }
+
+    /// An entry that the end of input leaves unfinished never shows the
+    /// wrapper (D-1527), and its end is "the end of the entry" (D-1528).
+    /// Brackets still open there get one E0015, as `cheby check` gives it
+    /// (D-1540). A transcript cannot hold one, since its last line would be
+    /// fed.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn unfinished_entries_never_show_the_wrapper() {
+        let printed = session(&[
+            "let x = {\n  let n: Int",
+            "let x = {\n  let y = {\n    1",
+            "fn f() {\n  1 +",
+            "1 + /* a",
+            "}",
+            "[1, (2, {",
+            "1 /* x",
+            "[ { ] }",
+            "{ [ (",
+            "( { [",
+            "[ { (",
+            "{ [1, 2",
+            "let x = {\n  let y = [\n    (1,",
+            "( let n: Int",
+        ]);
+        for text in &printed {
+            assert!(!text.contains("<repl>\""), "{text}");
+            assert!(!text.contains("end of file"), "{text}");
+            assert!(!text.contains("may be the one missing"), "{text}");
+        }
+        // Another error is at the end already, so no E0015, as in a file
+        // (D-1544).
+        assert_eq!(printed[0].matches("error[").count(), 1, "{}", printed[0]);
+        assert!(printed[0].starts_with("error[E0013]: expected `=`, found the end of the entry\n"));
+        let innermost = "2 |   let y = {\n  |           - this `{` is never closed\n";
+        assert!(printed[1].contains(innermost), "{}", printed[1]);
+        assert_eq!(printed[1].matches("error[").count(), 1, "{}", printed[1]);
+        let end = "error[E0013]: expected an expression, found the end of the entry\n";
+        assert!(printed[2].starts_with(end), "{}", printed[2]);
+        assert!(printed[3].starts_with(end), "{}", printed[3]);
+        assert_eq!(printed[4].matches("error[").count(), 1, "{}", printed[4]);
+        assert!(printed[4].starts_with("error[E0013]: expected a statement, found `}`\n"));
+        // The `{` is the innermost bracket still open.
+        assert_eq!(printed[5].matches("error[").count(), 1, "{}", printed[5]);
+        assert!(printed[5].starts_with("error[E0015]: unclosed `{`\n"));
+        let innermost = "1 | [1, (2, {\n  |         -^ expected `}`\n  |         |\n  |         this `{` is never closed\n";
+        assert!(printed[5].contains(innermost), "{}", printed[5]);
+        // An unclosed `/*` swallowed the wrapper's `}`: no error names the
+        // wrapper's `{`, and E0004 says why.
+        assert!(!printed[6].contains("E0015"), "{}", printed[6]);
+        assert!(printed[6].starts_with("error[E0004]"), "{}", printed[6]);
+        // The `]` ended the `{`, so the `}` closes nothing (D-1526).
+        assert_eq!(printed[7].matches("error[").count(), 2, "{}", printed[7]);
+        assert!(printed[7].starts_with("error[E0015]: unclosed `{`\n"));
+        assert!(printed[7].contains("error[E0013]: expected a statement, found `}`\n"));
+        assert!(!printed[7].contains("an item"), "{}", printed[7]);
+        // One E0015, for the innermost bracket, in any order (D-1540).
+        for (at, open, column) in [
+            (8, "(", 5),
+            (9, "[", 5),
+            (10, "(", 5),
+            (11, "[", 3),
+            (12, "(", 5),
+        ] {
+            let text = &printed[at];
+            assert_eq!(text.matches("error[").count(), 1, "{text}");
+            assert!(
+                text.starts_with(&format!("error[E0015]: unclosed `{open}`\n")),
+                "{text}"
+            );
+            let label = format!("  | {}-", " ".repeat(column - 1));
+            assert!(text.contains(&label), "{text}");
+        }
+        assert!(printed[12].contains("3 |     (1,\n"), "{}", printed[12]);
+        // The `(` ended at `let`; the parser's E0015 for the wrapper's `{`
+        // at the end is dropped (D-1533).
+        assert_eq!(printed[13].matches("error[").count(), 1, "{}", printed[13]);
+        assert!(printed[13].starts_with("error[E0015]: unclosed `(`\n"));
     }
 }

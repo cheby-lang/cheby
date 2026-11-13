@@ -6,12 +6,12 @@
       "message": "expected an expression, found `}`",
       "range": {
         "end": {
-          "character": 1,
-          "line": 11
+          "character": 16,
+          "line": 8
         },
         "start": {
-          "character": 0,
-          "line": 11
+          "character": 15,
+          "line": 8
         }
       },
       "severity": 1,
@@ -20,9 +20,9 @@
   ]
 }
 
-== src/main.cheby:9:18 completion map length fold
+== src/main.cheby:9:18 completion list::map list::length list::fold
 {
-  "count": 50,
+  "count": 51,
   "isIncomplete": true,
   "items": [
     {
@@ -31,14 +31,15 @@
         "kind": "markdown",
         "value": "Combines the elements from front to back, starting from `initial`."
       },
+      "filterText": "fold",
       "insertTextFormat": 2,
       "kind": 3,
-      "label": "fold",
+      "label": "list::fold",
       "labelDetails": {
-        "description": "list",
+        "description": "std::list",
         "detail": "(xs, initial, f)"
       },
-      "sortText": "10fold",
+      "sortText": "10list::fold",
       "textEdit": {
         "newText": "list::fold(_, ${1:initial}, ${2:f})$0",
         "range": {
@@ -59,13 +60,14 @@
         "kind": "markdown",
         "value": "Returns the number of elements in `xs` (D-301)."
       },
+      "filterText": "length",
       "kind": 3,
-      "label": "length",
+      "label": "list::length",
       "labelDetails": {
-        "description": "list",
+        "description": "std::list",
         "detail": "(xs)"
       },
-      "sortText": "10length",
+      "sortText": "10list::length",
       "textEdit": {
         "newText": "list::length",
         "range": {
@@ -86,14 +88,15 @@
         "kind": "markdown",
         "value": "Returns the results of calling `f` on each element, in order."
       },
+      "filterText": "map",
       "insertTextFormat": 2,
       "kind": 3,
-      "label": "map",
+      "label": "list::map",
       "labelDetails": {
-        "description": "list",
+        "description": "std::list",
         "detail": "(xs, f)"
       },
-      "sortText": "10map",
+      "sortText": "10list::map",
       "textEdit": {
         "newText": "list::map(_, ${1:f})$0",
         "range": {
@@ -111,7 +114,7 @@
   ]
 }
 
-== src/main.cheby:9:18 apply map
+== src/main.cheby:9:18 apply list::map
 {
   "item": {
     "detail": "pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>",
@@ -119,14 +122,15 @@
       "kind": "markdown",
       "value": "Returns the results of calling `f` on each element, in order."
     },
+    "filterText": "map",
     "insertTextFormat": 2,
     "kind": 3,
-    "label": "map",
+    "label": "list::map",
     "labelDetails": {
-      "description": "list",
+      "description": "std::list",
       "detail": "(xs, f)"
     },
-    "sortText": "10map",
+    "sortText": "10list::map",
     "textEdit": {
       "newText": "list::map(_, ${1:f})$0",
       "range": {
@@ -151,8 +155,8 @@
     "fn main() {",
     "  let xs = [1, 2, 3]",
     "  let ys = xs |> list::map(_, f)",
-    "  //             ^ completion map length fold",
-    "  //             ^ apply map",
+    "  //             ^ completion list::map list::length list::fold",
+    "  //             ^ apply list::map",
     "}",
     ""
   ]

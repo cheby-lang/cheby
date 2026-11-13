@@ -1,0 +1,37 @@
+// @decisions: D-173, D-1525, D-1530, D-1539
+//! Before a path's `::`, only what a path starts with is offered, as the
+//! file binds it and with no `::` added. In an expression and after `|>`:
+//! the modules, an alias among them, and the interfaces, bare as `Show`
+//! or through their module as `ops::Compare`. The file's functions, the
+//! locals, the keywords and the snippets are not. Where two segments
+//! follow the `::`, as in `op::Compare::compare(a, b)`, only the modules.
+//! In a type: the modules only. The list is complete (type error state).
+
+import std::json
+import std::list as l
+import std::ops
+
+fn order(a: Int, b: Int) -> Order {
+  Comp::compare(a, b)
+  //  ^ completion ops::Compare Show l order a `case`
+  //  ^ apply ops::Compare
+}
+
+fn rank(a: Int, b: Int) -> Order {
+  op::Compare::compare(a, b)
+  //^ completion ops l ops::Compare Show
+  //^ apply ops
+}
+
+fn size(xs: List<Int>) -> Int {
+  let n = l::length(xs)
+  //       ^ completion l json ops size xs `let`
+  let m = xs |> l::length
+  //             ^ completion l Show ops::Compare length l::length
+  n + m
+}
+
+fn first(v: js::Value) -> Int {
+  //          ^ completion json l ops Value Int dyn
+  0
+}

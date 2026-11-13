@@ -1,0 +1,153 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused parameter `b`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_b`",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 8
+        },
+        "start": {
+          "character": 17,
+          "line": 8
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `Comp` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 9
+        },
+        "start": {
+          "character": 10,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `Comp` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 11
+        },
+        "start": {
+          "character": 15,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:15 completion ops::Compare
+{
+  "count": 40,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::ops\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 8
+            },
+            "start": {
+              "character": 0,
+              "line": 8
+            }
+          }
+        }
+      ],
+      "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+      },
+      "filterText": "Compare",
+      "kind": 8,
+      "label": "ops::Compare",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "60ops::Compare",
+      "textEdit": {
+        "newText": "ops::Compare::",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 9
+          },
+          "start": {
+            "character": 10,
+            "line": 9
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:12:20 completion ops::Compare
+{
+  "count": 4,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::ops\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 8
+            },
+            "start": {
+              "character": 0,
+              "line": 8
+            }
+          }
+        }
+      ],
+      "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+      },
+      "filterText": "Compare",
+      "kind": 8,
+      "label": "ops::Compare",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "40ops::Compare",
+      "textEdit": {
+        "newText": "ops::Compare::",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 11
+          },
+          "start": {
+            "character": 15,
+            "line": 11
+          }
+        }
+      }
+    }
+  ]
+}

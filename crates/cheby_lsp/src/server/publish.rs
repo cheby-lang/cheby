@@ -22,6 +22,13 @@
 //! are mapped onto the published text with `NormMap`. When the child's
 //! lists change and no report comes, the latest report's files are
 //! published again (`republish_child`).
+//!
+//! A diagnostic's `message` carries `cheby check`'s text without its
+//! snippet (D-1509): the header, then one line each for the primary label
+//! when it is not empty, the related labels when the client takes no
+//! `relatedInformation`, each note as `note: …` and each help as
+//! `help: …`. The first line is the header alone, which is what parity
+//! with the UI goldens compares.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -451,6 +458,10 @@ impl Server {
             _ => Range::new(Position::new(0, 0), Position::new(0, 0)),
         };
         let mut message = d.message.clone();
+        if !d.primary_message.is_empty() {
+            message.push('\n');
+            message.push_str(&d.primary_message);
+        }
         let mut related = Vec::new();
         // A single-file session is keyed by its file: paths show relative
         // to the file's directory.
@@ -479,6 +490,12 @@ impl Server {
                     &label.message,
                 ));
             }
+        }
+        for note in &d.notes {
+            message.push_str(&child_line("note", note));
+        }
+        for help in &d.helps {
+            message.push_str(&child_line("help", &help.message));
         }
         Diagnostic {
             range,
@@ -536,3 +553,22 @@ fn related_line(root: &Path, path: &Path, range: Range, message: &str) -> String
         format!("\n{}:{line}:{column}: {message}", shown.display())
     }
 }
+
+/// A note or a help joined to the message as `cheby check` prints it after
+/// its `= ` (D-1509): `\nnote: text`, and each later line of the text
+/// indented under the first, with trailing spaces removed.
+fn child_line(kind: &str, text: &str) -> String {
+    let mut lines = text.split('\n');
+    let first = lines.next().unwrap_or_default();
+    let mut out = format!("\n{kind}: {first}");
+    let indent = " ".repeat(kind.len().saturating_add(2));
+    for line in lines {
+        out.push('\n');
+        out.push_str(format!("{indent}{line}").trim_end());
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "publish_tests.rs"]
+mod tests;

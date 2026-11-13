@@ -1,0 +1,233 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused parameter `b`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_b`",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 15
+        },
+        "start": {
+          "character": 17,
+          "line": 15
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `Sh` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 16
+        },
+        "start": {
+          "character": 10,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `Co` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 18
+        },
+        "start": {
+          "character": 10,
+          "line": 18
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `C` in this scope\nnot found\nhelp: a binding with a similar name exists: `a`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 20
+        },
+        "start": {
+          "character": 10,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `Co` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 22
+        },
+        "start": {
+          "character": 15,
+          "line": 22
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:17:13 completion Show Sized
+{
+  "count": 81,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "interface Sized {\n  fn size(Self) -> Int\n}",
+      "kind": 8,
+      "label": "Sized",
+      "sortText": "20Sized",
+      "textEdit": {
+        "newText": "Sized::",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 16
+          },
+          "start": {
+            "character": 10,
+            "line": 16
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show::",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 16
+          },
+          "start": {
+            "character": 10,
+            "line": 16
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:19:13 completion ops::Compare Compare
+{
+  "absent": [
+    "Compare"
+  ],
+  "count": 103,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+      },
+      "filterText": "Compare",
+      "kind": 8,
+      "label": "ops::Compare",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops::Compare",
+      "textEdit": {
+        "newText": "ops::Compare::",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 18
+          },
+          "start": {
+            "character": 10,
+            "line": 18
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:21:12 completion ops::Compare
+{
+  "absent": [
+    "ops::Compare"
+  ],
+  "count": 23,
+  "isIncomplete": true,
+  "items": []
+}
+
+== src/main.cheby:23:18 completion ops::Compare Show
+{
+  "count": 15,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",
+      "documentation": {
+        "kind": "markdown",
+        "value": "`a < b`, `a <= b`, `a > b` and `a >= b`."
+      },
+      "filterText": "Compare",
+      "kind": 8,
+      "label": "ops::Compare",
+      "labelDetails": {
+        "description": "std::ops"
+      },
+      "sortText": "30ops::Compare",
+      "textEdit": {
+        "newText": "ops::Compare::",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 22
+          },
+          "start": {
+            "character": 15,
+            "line": 22
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show::",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 22
+          },
+          "start": {
+            "character": 15,
+            "line": 22
+          }
+        }
+      }
+    }
+  ]
+}

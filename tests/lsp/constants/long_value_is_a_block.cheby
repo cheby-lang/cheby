@@ -1,0 +1,25 @@
+// @decisions: D-1512, D-1523
+// @steps: idle
+//! A value that would take the header past 80 columns is shown in its own
+//! code block below the header, broken by its brackets as `cheby fmt`
+//! breaks a literal. A short value stays on the header line. Numbers show
+//! as the runtime prints them, `10000`, with no `_` groups (D-1523).
+
+import std::list
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+const corners: List<Point> = list::map([1, 2, 3, 4, 5, 6, 7], fn(n) {
+  Point { x: n * 1000, y: n * 2000 }
+})
+
+const names: List<String> = ["north", "south"]
+//    ^ hover
+
+fn main() {
+  assert list::length(corners) > list::length(names)
+  //                  ^ hover
+}

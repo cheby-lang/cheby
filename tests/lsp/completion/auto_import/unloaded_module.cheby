@@ -4,6 +4,6 @@
 
 fn main() {
   let text = url_enc
-  //                ^ completion url_encode
-  //                ^ apply url_encode
+  //                ^ completion base64::url_encode
+  //                ^ apply base64::url_encode
 }

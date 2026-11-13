@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-1519, D-1513
+//! A `}` that closes no `{` is reported at the `}` itself, even when it
+//! sits several lines below an item.
+
+fn main() {
+  Nil
+}
+
+// A stray brace follows.
+
+}

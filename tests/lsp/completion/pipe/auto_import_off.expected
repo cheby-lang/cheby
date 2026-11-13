@@ -3,15 +3,15 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find value `un` in this scope",
+      "message": "cannot find value `un` in this scope\nnot found",
       "range": {
         "end": {
           "character": 19,
-          "line": 12
+          "line": 13
         },
         "start": {
           "character": 17,
-          "line": 12
+          "line": 13
         }
       },
       "severity": 1,
@@ -19,15 +19,15 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find value `u` in this scope",
+      "message": "cannot find value `u` in this scope\nnot found",
       "range": {
         "end": {
           "character": 18,
-          "line": 15
+          "line": 16
         },
         "start": {
           "character": 17,
-          "line": 15
+          "line": 16
         }
       },
       "severity": 1,
@@ -36,31 +36,32 @@
   ]
 }
 
-== src/main.cheby:13:20 completion
+== src/main.cheby:14:20 completion
 {
   "isIncomplete": false,
   "items": [
     "same | Variable | fn(List<Int>) -> List<Int>",
-    "io | Module | (std::io) | `io::`"
+    "io | Module | (std::io) | `io::`",
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`"
   ]
 }
 
-== src/main.cheby:13:20 completion unique
+== src/main.cheby:14:20 completion list::unique
 {
   "absent": [
-    "unique"
+    "list::unique"
   ],
-  "count": 2,
+  "count": 3,
   "isIncomplete": false,
   "items": []
 }
 
-== src/main.cheby:16:19 completion unique
+== src/main.cheby:17:19 completion list::unique
 {
   "absent": [
-    "unique"
+    "list::unique"
   ],
-  "count": 2,
-  "isIncomplete": false,
+  "count": 3,
+  "isIncomplete": true,
   "items": []
 }

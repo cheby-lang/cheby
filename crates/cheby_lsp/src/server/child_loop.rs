@@ -31,7 +31,7 @@ use lsp_server::ResponseError;
 use lsp_types::Uri;
 use serde_json::{Value, json};
 
-use super::child::{ChildDone, ChildEnv, Outbox, ReportFacts};
+use super::child::{ChildDone, ChildEnv, EditorText, Outbox, ReportFacts};
 use super::effects::Effect;
 use super::progress::IdleParams;
 use super::schedule::RunState;
@@ -333,6 +333,7 @@ impl Server {
                     "children": self.children.status(
                         root,
                         matches!(package.kind, PackageKind::Package),
+                        snapshot.map(|snapshot| -> &dyn EditorText { &**snapshot }),
                         &env,
                         now,
                     ),

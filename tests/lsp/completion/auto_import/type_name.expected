@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused parameter `d`",
+      "message": "unused parameter `d`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_d`",
       "range": {
         "end": {
           "character": 9,
@@ -19,7 +19,7 @@
     },
     {
       "code": "E0042",
-      "message": "cannot find type `Durat` in this scope",
+      "message": "cannot find type `Durat` in this scope\nnot found",
       "range": {
         "end": {
           "character": 16,
@@ -36,7 +36,7 @@
   ]
 }
 
-== src/main.cheby:4:17 completion Duration
+== src/main.cheby:4:17 completion duration::Duration
 {
   "count": 22,
   "isIncomplete": false,
@@ -62,12 +62,13 @@
         "kind": "markdown",
         "value": "A span of time, possibly negative, with a resolution of one\nnanosecond (D-650). A negative span has negative seconds and\nnon-negative nanoseconds."
       },
+      "filterText": "Duration",
       "kind": 13,
-      "label": "Duration",
+      "label": "duration::Duration",
       "labelDetails": {
         "description": "std::duration"
       },
-      "sortText": "60Duration",
+      "sortText": "60duration::Duration",
       "textEdit": {
         "newText": "duration::Duration",
         "range": {
@@ -85,7 +86,7 @@
   ]
 }
 
-== src/main.cheby:4:17 apply Duration
+== src/main.cheby:4:17 apply duration::Duration
 {
   "item": {
     "additionalTextEdits": [
@@ -108,12 +109,13 @@
       "kind": "markdown",
       "value": "A span of time, possibly negative, with a resolution of one\nnanosecond (D-650). A negative span has negative seconds and\nnon-negative nanoseconds."
     },
+    "filterText": "Duration",
     "kind": 13,
-    "label": "Duration",
+    "label": "duration::Duration",
     "labelDetails": {
       "description": "std::duration"
     },
-    "sortText": "60Duration",
+    "sortText": "60duration::Duration",
     "textEdit": {
       "newText": "duration::Duration",
       "range": {
@@ -135,8 +137,8 @@
     "import std::duration",
     "",
     "fn wait(d: duration::Duration) -> Int {",
-    "  //            ^ completion Duration",
-    "  //            ^ apply Duration",
+    "  //            ^ completion duration::Duration",
+    "  //            ^ apply duration::Duration",
     "  1",
     "}",
     "",

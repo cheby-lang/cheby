@@ -6,6 +6,6 @@
 fn main() {
   let k = 1
   let shown = k |> sh
-  //                 ^ completion show
+  //                 ^ completion int::show
   assert shown == "1"
 }

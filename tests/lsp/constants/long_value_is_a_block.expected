@@ -1,0 +1,38 @@
+== diagnostics
+{}
+
+== src/main.cheby:19:7 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst names: List<String> = [\"north\", \"south\"]\n```\n\n---\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 18
+    },
+    "start": {
+      "character": 6,
+      "line": 18
+    }
+  }
+}
+
+== src/main.cheby:23:23 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\nconst corners: List<Point>\n```\n```cheby\n[\n  Point { x: 1000, y: 2000 },\n  Point { x: 2000, y: 4000 },\n  Point { x: 3000, y: 6000 },\n  Point { x: 4000, y: 8000 },\n  Point { x: 5000, y: 10000 },\n  Point { x: 6000, y: 12000 },\n  Point { x: 7000, y: 14000 },\n]\n```\n\n---\n\nDefined in `lsp_test`."
+  },
+  "range": {
+    "end": {
+      "character": 29,
+      "line": 22
+    },
+    "start": {
+      "character": 22,
+      "line": 22
+    }
+  }
+}

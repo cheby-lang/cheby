@@ -2,8 +2,8 @@
 //! A type from a module the file does not import.
 
 fn wait(d: Durat) -> Int {
-  //            ^ completion Duration
-  //            ^ apply Duration
+  //            ^ completion duration::Duration
+  //            ^ apply duration::Duration
   1
 }
 

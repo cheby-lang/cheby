@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "W0009",
-      "message": "`todo` left in the code",
+      "message": "`todo` left in the code\nthis panics when it is reached\nhelp: write the missing code in place of the `todo`",
       "range": {
         "end": {
           "character": 6,
@@ -19,7 +19,7 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `wrong`",
+      "message": "unused binding `wrong`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_wrong`",
       "range": {
         "end": {
           "character": 11,
@@ -35,7 +35,7 @@
     },
     {
       "code": "E0047",
-      "message": "mismatched types",
+      "message": "mismatched types\nexpected `Int`, found `Point`",
       "range": {
         "end": {
           "character": 22,

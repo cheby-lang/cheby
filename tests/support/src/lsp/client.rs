@@ -217,6 +217,7 @@ fn text_document_capabilities() -> Value {
                 "documentationFormat": ["markdown", "plaintext"],
                 "deprecatedSupport": true,
                 "tagSupport": { "valueSet": [1] },
+                "insertTextModeSupport": { "valueSet": [1, 2] },
                 "resolveSupport": {
                     "properties": ["documentation", "detail", "additionalTextEdits"],
                 },
@@ -1235,6 +1236,10 @@ mod tests {
         assert_eq!(
             standard["textDocument"]["publishDiagnostics"]["versionSupport"],
             json!(true)
+        );
+        assert_eq!(
+            standard["textDocument"]["completion"]["completionItem"]["insertTextModeSupport"],
+            json!({ "valueSet": [1, 2] })
         );
         let full = ClientKind::Full.capabilities(None);
         assert_eq!(

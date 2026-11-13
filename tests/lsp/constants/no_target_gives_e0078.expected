@@ -3,7 +3,7 @@
   "src/main.cheby": [
     {
       "code": "E0078",
-      "message": "the constant `big` holds an `Int` that JavaScript cannot represent exactly",
+      "message": "the constant `big` holds an `Int` that JavaScript cannot represent exactly\nthis constant exists on `js`\nnote: it holds `18014398509481982`, outside ±(2^53 - 1), the range of integers JavaScript represents exactly\nhelp: keep its `Int`s between `int::min_safe` and `int::max_safe`, or mark the constant `@target(native)`",
       "range": {
         "end": {
           "character": 9,
