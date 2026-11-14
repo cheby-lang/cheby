@@ -46,18 +46,18 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 
 ### 4.6 Context values (tier 4)
 
-This workstream is built on native first, as one piece of work, before the JS backend exists. Its JS side follows with 4.3 and passes the same spec tests (D-1563). Its design is settled in D-1563 to D-1577.
+This workstream is built on native first, as one piece of work, before the JS backend exists. Its JS side follows with 4.3 and passes the same spec tests (D-1563). Its design is settled in D-1563 to D-1577, and the gaps found before the code in D-1578 to D-1590.
 
 - `std::context`: a context per fiber, empty at `main`, each test and each REPL entry (D-1044, ADR-0068). A fiber's bindings are a persistent map in the runtime's HAMT, behind one pointer, so a spawn and a capture copy it in O(1) (D-1571).
-- Keys: a `Key<T>` holds its constant's path, its type's text with each type's internal path, a 64-bit hash of both, and the default. The compiler passes the texts to the private constructor at the call that is a constant's whole initializer, and a lookup compares the hash, then the texts (D-1564, D-1572).
-- The compile error for every other mention of `context::key` or `context::key_without_default`, a call elsewhere, a function value or a pipe stage, with one code, its explanation and its UI test (D-1045, D-1565).
+- Keys: a `Key<T>` holds its constant's path, its type's text with each type's internal path, a 64-bit FNV-1a hash of both, and the default. The compiler passes the texts to the package-visible constructors `key_at` and `key_without_default_at` at the call that is a constant's whole initializer, and a lookup compares the hash, then the texts. At the REPL prompt the path is the bare name, and after `:reload` the unmarked path (D-1564, D-1572, D-1580, D-1587, D-1590).
+- E0080, the compile error for every other mention of `context::key` or `context::key_without_default` in an expression, a call elsewhere, a function value or a pipe stage, with its explanation and its UI test. E0081, the evaluation error for a key whose default value holds a function or a handle, which E0068 no longer covers, with its explanation and its UI test (D-1045, D-1565, D-1578, D-1581, D-1589).
 - `provide`, `with` and `random::with_generator` in Cheby over `@std_context` swap kernels. A scope records the fiber's bindings and stream when it opens and its close restores them, every entry starts from its own context, and the outer streams of `with_generator` and `with` live in the fiber. A test pins that every catch point after which Cheby code runs restores the context (D-1573).
 - Captured contexts: the external type `Context` with `capture`, `with`, which replaces the fiber's context while its body runs, and `empty` (D-1566, D-1568, ADR-0080).
 - `std::time`'s clocks in context, with timers left on the runtime's monotonic clock, and the readers `now_on` and `monotonic_on` (D-1047, D-1570).
 - `std::random`'s seeded stream per fiber, held in fiber fields beside the bindings, advanced by each host draw, and derived for a spawned fiber and for a capture from the fiber's state and spawn number without advancing the fiber's stream (D-1048, D-1567, D-1574).
 - `std::log` replaces `std::context` in the compiler's list of planned std modules, and E0038's probes and `E0038.md` import it (D-1575).
-- The example `request_context`, under the next free number, for M4 (D-1576).
-- The cost gate: the fiber group of `bench/runtime` and a loop of `time::now` calls, timed before and after on one machine, with a stop at a ratio of 1.05 (D-1577).
+- The example `request_context`, under the next free number, whose `test.toml` names M3, so it binds at once, as the new UI tests and REPL transcripts do (D-1576, D-1582).
+- The cost gate: the fiber group of `bench/runtime` and a loop of `time::now` calls in a new group `bench/runtime/time/`, timed before and after on one machine. Any one benchmark whose median run time of `main` reaches a ratio of 1.05, after a rerun, stops the work (D-1577, D-1586).
 - The tests of these parts in `context.md`, `time.md` and `random.md` leave `PENDING_SPEC_TESTS` when the native side passes them (D-741, D-1049, D-1563).
 - On JS, with 4.3: the same module over `map.mjs`, and a Cheby function passed to foreign code takes the passing fiber's context with it for its callbacks' fibers (D-1569). Which stream state each call of one callback starts from is open.
 

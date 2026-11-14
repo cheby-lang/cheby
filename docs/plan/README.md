@@ -430,6 +430,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1575    | `std::log` is the planned std module once `std::context` ships; E0038's probes import it            |
 | D-1576    | The context work adds the example `request_context`, 033 today, for M4                              |
 | D-1577    | Context's cost gate: fiber benchmarks and `time::now` before and after, stop at 1.05                |
+| D-1582    | Context's new UI tests and REPL transcripts bind at once; `request_context`'s `test.toml` names M3  |
+| D-1586    | Context's cost gate: one benchmark's median `main` time at 1.05 stops, after a rerun; no x86-64     |
 
 ## Open questions
 
