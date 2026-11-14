@@ -85,15 +85,16 @@ Tier 3 also covers the JS side of every earlier module: the `.mjs` kernels, and 
 
 ### Tier 4: before M4
 
-Drafted in [`docs/stdlib/`](../stdlib/README.md) and logged as D-1044 to D-1049 in the [Scoped context values](../decisions/LOG.md#2026-10-23-scoped-context-values) session. It is implemented in M4, natively and on JS together, as workstream 4.6 of [m4-js.md](m4-js.md) (D-1049).
+Drafted in [`docs/stdlib/`](../stdlib/README.md) and logged as D-1044 to D-1049 in the [Scoped context values](../decisions/LOG.md#2026-10-23-scoped-context-values) session, and as D-1563 to D-1577 in the session [`std::context` before it is built](../decisions/LOG.md#2026-11-14-stdcontext-before-it-is-built). It is implemented in M4 as workstream 4.6 of [m4-js.md](m4-js.md), on native first and on JS with the JS runtime (D-1049, D-1563).
 
 | Module          | Spec file                              | Contents                                                                                                                                                 |
 | --------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `std::context`  | [`context.md`](../stdlib/context.md)   | `Key<T>`, `key`, `key_without_default`, `get`, `provide`; every spawn copies the spawning fiber's context (D-1044, D-1045)                               |
+| `std::context`  | [`context.md`](../stdlib/context.md)   | `Key<T>`, `key`, `key_without_default`, `get`, `provide`, and `Context`, `capture`, `with`, `empty`; a spawn copies the context (D-1044, D-1045, D-1566) |
 | `std::filepath` | [`filepath.md`](../stdlib/filepath.md) | lexical paths with both separators and drive and UNC roots on every platform, `child`, and `env::current_dir` beside it in `std::env` (D-1432 to D-1441) |
 
-- Tier 4 also changes earlier modules: `std::time`'s `Clock`, its key `clock` and the builders `system_clock`, `fixed_clock`, `custom_clock` and `instant_at`, which D-1057 renames `instant::from_origin` (D-1047); `std::random`'s `with_generator` and the seeded stream that its host functions draw from (D-1048); and the spawns of `std::fiber` (D-1044).
-- `key` and `key_without_default` run in constants, and only as a constant's whole initializer. `get` and `provide` are E0077 in a constant (D-1045).
+- Tier 4 also changes earlier modules: `std::time`'s `Clock`, its key `clock` and the builders `system_clock`, `fixed_clock`, `custom_clock` and `instant_at`, which D-1057 renames `instant::from_origin` (D-1047), and the readers `now_on` and `monotonic_on` (D-1570); `std::random`'s `with_generator` and the seeded stream that its host functions draw from (D-1048); and the spawns of `std::fiber` (D-1044).
+- `key` and `key_without_default` run in constants, and only as a constant's whole initializer. Every other mention of them is a compile error (D-1565). `get`, `provide`, `capture`, `with` and `empty` are E0077 in a constant (D-1045, D-1566).
+- `std::log` is planned and not yet specified. It reads its logger from context (D-1046), and it becomes the compiler's one planned std module when `std::context` ships, so `import std::log` reports E0038 (D-1575).
 
 ## 3. Done criteria for a module
 

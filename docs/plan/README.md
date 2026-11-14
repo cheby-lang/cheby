@@ -423,6 +423,13 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1560    | More lints (unsafe docs, hash order, enum wildcards, some `nursery`); CI runs typos, taplo, etc.    |
 | D-1561    | `sanitize-cfg` clippies the workspace and checks fuzz/; a cfg-only build names no runtime            |
 | D-1562    | Under ASan, `jits_commit_only_what_they_use` skips its process-memory bound; per-JIT checks stay     |
+| D-1563    | Workstream 4.6 (`std::context`, clocks, seeded streams) is built on native first, JS with 4.3       |
+| D-1571    | A fiber's context is a persistent map in the runtime's HAMT, one pointer per fiber                  |
+| D-1573    | `provide` and `with` are Cheby over swap kernels; scopes and entries restore the context            |
+| D-1574    | The seeded stream is fiber state beside the bindings, not a context entry                           |
+| D-1575    | `std::log` is the planned std module once `std::context` ships; E0038's probes import it            |
+| D-1576    | The context work adds the example `request_context`, 033 today, for M4                              |
+| D-1577    | Context's cost gate: fiber benchmarks and `time::now` before and after, stop at 1.05                |
 
 ## Open questions
 

@@ -216,7 +216,7 @@ pub type Db
 ```
 
 - An external type has no constructors and no fields. Its values can only be created and inspected by foreign functions. Native foreign code creates one only as a function's direct result ([§12.5.1](#1251-native-abi)) (D-948).
-- An `@external` on an external type names its **drop function** for that target, which is called with the handle when the last reference to it goes away (D-101, [§9.5](09-memory-model.md#95-handles-and-drop-functions)). Without one, the handle is simply forgotten. The exception is the handles of the standard library: `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector` of the concurrency modules, `File` of `std::file`, and `Listener` and `Connection` of `std::net`. They are declared without an `@external`, and their drop functions are supplied by the runtime (D-647, D-703, D-982).
+- An `@external` on an external type names its **drop function** for that target, which is called with the handle when the last reference to it goes away (D-101, [§9.5](09-memory-model.md#95-handles-and-drop-functions)). Without one, the handle is simply forgotten. The exception is the handles of the standard library: `Sender`, `Receiver`, `Fiber`, `Scope` and `Selector` of the concurrency modules, `File` of `std::file`, `Listener` and `Connection` of `std::net`, and `Context` of `std::context`. They are declared without an `@external`, and their drop functions are supplied by the runtime (D-647, D-703, D-982, D-1566).
 - A native drop function is a C function `void f(void *handle)`. It is called once, on the fiber that released the last reference, never with a NULL handle, and under the contract of [§9.5](09-memory-model.md#95-handles-and-drop-functions) (D-949). A release by a `@blocking` function counts as its calling fiber's ([§12.7](#127-blocking-foreign-calls)) (D-1307). The handles of the standard library are the exception ([§9.5](09-memory-model.md#95-handles-and-drop-functions)) (D-1311).
 - External types have no structural equality and do not compare by identity, because identity differs between targets. `==` or hashing on a value that contains an external type panics, like function values (D-070, D-189, D-233). A value of an external type debug-prints as its type name in angle brackets, such as `<Db>` (D-233).
 - External types are handle types for reference counting on every target, including JS (D-100, ADR-0028).
@@ -307,6 +307,6 @@ The tail-call guarantee ([§5.15.3](05-expressions.md#5153-guaranteed-tail-calls
 
 ## 12.9 Callbacks from foreign code
 
-On JS, foreign code may call Cheby functions, for example as event handlers. Each such call runs in a new detached fiber ([§10.4](10-concurrency.md#104-detached-fibers)), so the foreign caller does not wait for its result (D-191).
+On JS, foreign code may call Cheby functions, for example as event handlers. Each such call runs in a new detached fiber ([§10.4](10-concurrency.md#104-detached-fibers)), so the foreign caller does not wait for its result (D-191). The fiber starts with the context of the fiber that passed the function to foreign code, as it was at that moment ([§10.11](10-concurrency.md#1011-context-values)) (D-1569).
 
 On native targets, calls from foreign code back into Cheby are not supported in v1, because a foreign thread that calls in has no fiber or scheduler context (D-191).

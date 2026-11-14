@@ -268,6 +268,14 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     ),
     ("random", "a spawn leaves the parent's stream alone", "M4"),
     ("random", "spawned fibers draw reproducibly and apart", "M4"),
+    // A captured context counts as a spawn for the seeded stream
+    // (D-1567).
+    (
+        "random",
+        "a capture derives its stream as a spawn does",
+        "M4",
+    ),
+    ("random", "a capture leaves the stream alone", "M4"),
     // `fiber::raise` needs the private kernel `sys_raise` (D-1097), and
     // `fiber::map` and `try_map` need it and S5's `fiber::cancel` (D-1098).
     // Both are built after M3.
@@ -323,6 +331,15 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     ("time", "a fixed clock fixes now", "M4"),
     ("time", "a clock in context does not change sleep", "M4"),
     ("time", "a custom clock calls its functions", "M4"),
+    // `time::now_on` and `time::monotonic_on` read a given clock, and
+    // come with the clocks in context (D-1570).
+    ("time", "now_on reads the clock it is given", "M4"),
+    (
+        "time",
+        "a custom clock builds on the system clock with now_on",
+        "M4",
+    ),
+    ("time", "monotonic_on reads the clock it is given", "M4"),
 ];
 
 include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
