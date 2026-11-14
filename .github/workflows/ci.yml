@@ -214,7 +214,17 @@ jobs:
           toolchain: "1.99.0"
       - uses: taiki-e/install-action@v2
         with:
-          tool: typos@1.52.2,taplo@0.10.0,actionlint@1.7.12,cargo-deny@0.20.2
+          tool: typos@1.52.2,taplo@0.10.0,cargo-deny@0.20.2
+      # install-action has no actionlint: the release archive, checked
+      # against the release's own checksum.
+      - name: Install actionlint 1.7.12
+        run: |
+          archive=actionlint_1.7.12_linux_amd64.tar.gz
+          curl -sSfL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" \
+            | sha256sum --check
+          tar -xzf "$archive" -C "$HOME/.cargo/bin" actionlint
       - name: Spelling (_typos.toml)
         run: typos
       - name: TOML formatting (.taplo.toml)
