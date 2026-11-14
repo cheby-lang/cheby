@@ -180,7 +180,7 @@
 //! 7. **The action** (D-859), with no worker gate, scope lock or runtime
 //!    lock held, unless the runtime now stops or halts: each root of D is
 //!    reported once (`reported`, a CAS). A `cheby run` root
-//!    ([`EntryMode::Run`]) gets `EntryOutcome::Deadlocked(report)` through
+//!    ([`EntryMode::Run`](crate::entry::EntryMode::Run)) gets `EntryOutcome::Deadlocked(report)` through
 //!    its registry sender, as a termination sends `Exited`; `run_main`
 //!    writes it and halts with nothing unwinding. Any other root gets
 //!    `cancel::cancel_deadlocked_root`, which stores the report under the
@@ -555,6 +555,13 @@ pub(super) fn detect(
 }
 
 /// Whether the tests asked for surveys with no backoff (the probe).
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )
+)]
 fn eager(shared: &Shared) -> bool {
     #[cfg(test)]
     {
@@ -709,6 +716,10 @@ fn survey(shared: &Shared, candidate: &Candidate, groups: &[Arc<DetachedGroup>])
     #[cfg(test)]
     shared.probe.surveyed(candidate.key());
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )]
     let _ = shared;
     let first = pass(candidate, groups)?;
     #[cfg(test)]
@@ -782,6 +793,10 @@ fn walked_live(shared: &Shared) {
     #[cfg(test)]
     shared.probe.walked_live.fetch_add(1, Ordering::SeqCst);
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )]
     let _ = shared;
 }
 

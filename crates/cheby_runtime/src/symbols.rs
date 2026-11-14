@@ -205,7 +205,7 @@ mod tests {
     fn symbols_list_every_abi_name_in_order() {
         let names: Vec<_> = symbols().into_iter().map(|(name, _)| name).collect();
         assert_eq!(names.get(..sym::ALL.len()), Some(&sym::ALL[..]));
-        for name in names.get(sym::ALL.len()..).unwrap() {
+        for name in &names[sym::ALL.len()..] {
             assert!(
                 name.starts_with("cheby_") && !name.starts_with("cheby_rt_"),
                 "`{name}` is not a kernel name"

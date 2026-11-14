@@ -146,7 +146,15 @@ impl std::error::Error for LinkError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Record(error) => Some(error),
-            _ => None,
+            Self::Object(_)
+            | Self::Copies(_)
+            | Self::MissingArchive(_)
+            | Self::RelativeArchiveVar(_)
+            | Self::BadArchive { .. }
+            | Self::StaleArchive { .. }
+            | Self::NoCc(_)
+            | Self::LinkFailed { .. }
+            | Self::Io(_) => None,
         }
     }
 }

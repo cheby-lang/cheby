@@ -255,6 +255,10 @@ impl BodyCx<'_, '_> {
     }
 
     /// A built-in binary operator on two operands of the same type.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "its matches name every variant (D-1560)"
+    )]
     fn builtin_binary(
         &mut self,
         op: BinOpKind,
@@ -283,7 +287,21 @@ impl BodyCx<'_, '_> {
                     BinOpKind::Lt => CmpOp::Lt,
                     BinOpKind::Le => CmpOp::Le,
                     BinOpKind::Gt => CmpOp::Gt,
-                    _ => CmpOp::Ge,
+                    BinOpKind::Or
+                    | BinOpKind::And
+                    | BinOpKind::Eq
+                    | BinOpKind::Ne
+                    | BinOpKind::Ge
+                    | BinOpKind::BitOr
+                    | BinOpKind::BitXor
+                    | BinOpKind::BitAnd
+                    | BinOpKind::Shl
+                    | BinOpKind::Shr
+                    | BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Rem => CmpOp::Ge,
                 };
                 (Repr::Bool, Rvalue::Compare { op, lhs, rhs, repr })
             }
@@ -301,7 +319,18 @@ impl BodyCx<'_, '_> {
                     BinOpKind::Div => ArithOp::Div,
                     BinOpKind::Rem => ArithOp::Rem,
                     BinOpKind::Shl => ArithOp::Shl,
-                    _ => ArithOp::Shr,
+                    BinOpKind::Or
+                    | BinOpKind::And
+                    | BinOpKind::Eq
+                    | BinOpKind::Ne
+                    | BinOpKind::Lt
+                    | BinOpKind::Le
+                    | BinOpKind::Gt
+                    | BinOpKind::Ge
+                    | BinOpKind::BitOr
+                    | BinOpKind::BitXor
+                    | BinOpKind::BitAnd
+                    | BinOpKind::Shr => ArithOp::Shr,
                 };
                 let shift = matches!(arith, ArithOp::Shl | ArithOp::Shr);
                 if is_integer(repr) {
@@ -337,11 +366,26 @@ impl BodyCx<'_, '_> {
                 let op = match op {
                     BinOpKind::BitAnd => BitOp::And,
                     BinOpKind::BitOr => BitOp::Or,
-                    _ => BitOp::Xor,
+                    BinOpKind::Or
+                    | BinOpKind::And
+                    | BinOpKind::Eq
+                    | BinOpKind::Ne
+                    | BinOpKind::Lt
+                    | BinOpKind::Le
+                    | BinOpKind::Gt
+                    | BinOpKind::Ge
+                    | BinOpKind::BitXor
+                    | BinOpKind::Shl
+                    | BinOpKind::Shr
+                    | BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Rem => BitOp::Xor,
                 };
                 (repr, Rvalue::Bitwise { op, lhs, rhs, repr })
             }
-            _ => return bad(self),
+            BinOpKind::Or | BinOpKind::And => return bad(self),
         };
         Ok(Operand::Local(self.define(out, value)?))
     }
@@ -381,9 +425,11 @@ impl BodyCx<'_, '_> {
             ThirCallee::Iface { iface_fn, dict } => {
                 self.call_iface_ops(*iface_fn, dict, args, ret_ty, span, tail)
             }
-            _ => Err(Ice::new(format!(
-                "an operator implemented by {callee:?} reached MIR lowering"
-            ))),
+            ThirCallee::Ctor { .. } | ThirCallee::Dyn { .. } | ThirCallee::Value(_) | _ => {
+                Err(Ice::new(format!(
+                    "an operator implemented by {callee:?} reached MIR lowering"
+                )))
+            }
         }
     }
 
@@ -436,7 +482,22 @@ const fn logical(op: BinOpKind) -> Option<bool> {
     match op {
         BinOpKind::And => Some(true),
         BinOpKind::Or => Some(false),
-        _ => None,
+        BinOpKind::Eq
+        | BinOpKind::Ne
+        | BinOpKind::Lt
+        | BinOpKind::Le
+        | BinOpKind::Gt
+        | BinOpKind::Ge
+        | BinOpKind::BitOr
+        | BinOpKind::BitXor
+        | BinOpKind::BitAnd
+        | BinOpKind::Shl
+        | BinOpKind::Shr
+        | BinOpKind::Add
+        | BinOpKind::Sub
+        | BinOpKind::Mul
+        | BinOpKind::Div
+        | BinOpKind::Rem => None,
     }
 }
 
@@ -463,7 +524,20 @@ const fn order_test(op: BinOpKind) -> Option<(CmpOp, i64)> {
         BinOpKind::Le => Some((CmpOp::Ne, 2)),
         BinOpKind::Gt => Some((CmpOp::Eq, 2)),
         BinOpKind::Ge => Some((CmpOp::Ne, 0)),
-        _ => None,
+        BinOpKind::Or
+        | BinOpKind::And
+        | BinOpKind::Eq
+        | BinOpKind::Ne
+        | BinOpKind::BitOr
+        | BinOpKind::BitXor
+        | BinOpKind::BitAnd
+        | BinOpKind::Shl
+        | BinOpKind::Shr
+        | BinOpKind::Add
+        | BinOpKind::Sub
+        | BinOpKind::Mul
+        | BinOpKind::Div
+        | BinOpKind::Rem => None,
     }
 }
 
@@ -517,7 +591,7 @@ fn int_const(v: i128, repr: Repr) -> Option<Const> {
         Repr::U16 => (0, u16::MAX.into()),
         Repr::U32 => (0, u32::MAX.into()),
         Repr::U64 => (0, u64::MAX.into()),
-        _ => return None,
+        Repr::Value | Repr::Float | Repr::Bool | Repr::F32 => return None,
     };
     if v < min || v > max {
         return None;
@@ -544,7 +618,17 @@ fn float_const(v: FloatLit, repr: Repr) -> Option<Const> {
             repr,
             bits: u64::from(v.narrow.to_bits()),
         }),
-        _ => None,
+        Repr::Value
+        | Repr::Int
+        | Repr::Bool
+        | Repr::I8
+        | Repr::I16
+        | Repr::I32
+        | Repr::I64
+        | Repr::U8
+        | Repr::U16
+        | Repr::U32
+        | Repr::U64 => None,
     }
 }
 

@@ -153,7 +153,27 @@ impl BodyCx<'_, '_> {
                 ctor: *ctor,
                 fields: Vec::new(),
             }),
-            _ => None,
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error
+            | _ => None,
         })
     }
 
@@ -468,7 +488,11 @@ impl BodyCx<'_, '_> {
         let (def, args) = match types.kind(ty) {
             TyKind::Tuple(elems) => return Some(Shape::Tuple(elems.to_vec())),
             TyKind::Named { def, args } => (*def, args),
-            _ => return None,
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Fn { .. }
+            | TyKind::Param(_)
+            | TyKind::Dyn { .. } => return None,
         };
         let Ok(item) = self.cx.defs.item(def) else {
             return None;

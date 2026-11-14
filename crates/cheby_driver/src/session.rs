@@ -664,7 +664,7 @@ impl Session {
                 .front
                 .local_module(&ModulePath::root(&self.front.package_name))
                 .map(|id| newest(&self.replaced, id)),
-            _ => None,
+            Lookup::Planned | Lookup::NoModule { .. } | Lookup::NoPackage => None,
         };
         Ok(module)
     }
@@ -2486,7 +2486,7 @@ impl Session {
         };
         let mut out = Vec::new();
         for (index, item) in own.items.iter_enumerated() {
-            if let cheby_iface::ItemSig::Type(t) = &item.sig
+            if let ItemSig::Type(t) = &item.sig
                 && t.hooks.is_some()
                 && let Some(fns) = cheby_mir::layout::type_hooks(DefId::new(module, index), &defs)?
             {
@@ -2935,6 +2935,10 @@ struct Braces {
 /// `/*` are not tokens: the parser skips that error token (D-1541). It
 /// also skips every token inside an interpolation up to its end, so a
 /// bracket there pairs with nothing (D-1532, D-1541).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn brace_scan(text: &str) -> Braces {
     use SyntaxKind::{
         INTERP_END, INTERP_START, L_BRACE, L_BRACK, L_PAREN, R_BRACE, R_BRACK, R_PAREN, STRING_END,
@@ -3224,7 +3228,7 @@ fn synthetic_import(
         .as_ref()
         .and_then(|tree| SourceFile::cast(tree.root()))
         .and_then(|file| file.imports().next())
-        .map(cheby_syntax::ast::AstNode::id)
+        .map(AstNode::id)
         .ok_or_else(|| Ice::new("the REPL's std module has no import").into())
 }
 
@@ -3650,7 +3654,7 @@ mod tests {
                 );
                 assert_eq!(printed, "");
                 let rx = last_binding(&session, 0);
-                let first = session.group.clone();
+                let first = Arc::clone(&session.group);
                 // The fiber parks in its send, linking its node; this waits
                 // for that, with a hang detector.
                 let start = std::time::Instant::now();

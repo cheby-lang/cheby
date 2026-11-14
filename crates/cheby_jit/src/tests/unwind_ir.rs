@@ -131,9 +131,9 @@ fn lowered_edges_lead_to_untaken_pads() {
     let target = p.call(f, Vec::new());
     let units = p.units();
     validate(&units[0], Stage::Unwound).unwrap();
-    let mut jit = Jit::with_options(cheby_codegen_clif::CodegenOptions {
+    let mut jit = Jit::with_options(CodegenOptions {
         capture_clif: true,
-        ..cheby_codegen_clif::CodegenOptions::default()
+        ..CodegenOptions::default()
     })
     .unwrap();
     jit.compile(&units).unwrap();

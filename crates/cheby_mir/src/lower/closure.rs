@@ -337,7 +337,11 @@ pub(super) fn owner_of(key: FnKey) -> Result<DefId, Ice> {
         | FnKey::Test(d)
         | FnKey::Closure { owner: d, .. }
         | FnKey::Continuation { owner: d, .. } => Ok(d),
-        other => Err(Ice::new(format!("a closure inside {other:?}"))),
+        other @ (FnKey::ValueShim(_)
+        | FnKey::Entry(_)
+        | FnKey::Trampoline(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. }) => Err(Ice::new(format!("a closure inside {other:?}"))),
     }
 }
 

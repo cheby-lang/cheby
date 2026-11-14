@@ -298,7 +298,9 @@ impl From<JitError> for Error {
         match e {
             JitError::Codegen(cheby_codegen_clif::CodegenError::Ice(ice)) => ice.into(),
             JitError::Codegen(e) => Self::new(format!("internal compiler error: {e}")),
-            other => Self::new(other.to_string()),
+            other @ (JitError::Host(_) | JitError::UnresolvedSymbols(_) | JitError::Runtime(_)) => {
+                Self::new(other.to_string())
+            }
         }
     }
 }

@@ -86,7 +86,7 @@ fn cheby_test(dir: &Path, redirects: &str, threads: &str, stdin: Option<&[u8]>) 
 /// `io::write_stdout` flushes, D-365), before the test's line, while the
 /// tests run at once and the second ends first.
 #[test]
-fn test_parallel_one_pipe_keeps_each_tests_chunk_order() {
+fn parallel_one_pipe_keeps_each_tests_chunk_order() {
     let source = format!(
         "//! Two tests write to both streams.\n\n\
          import std::duration\nimport std::io\nimport std::selector\n\n{PAUSE}\
@@ -120,7 +120,7 @@ fn test_parallel_one_pipe_keeps_each_tests_chunk_order() {
 /// pipe whose reading end is closed before the replay (a closed
 /// descriptor is a null device instead, D-306).
 #[test]
-fn test_parallel_a_broken_stderr_during_replay_ends_the_run_with_one() {
+fn parallel_a_broken_stderr_during_replay_ends_the_run_with_one() {
     let source = format!(
         "//! The second test writes to a broken standard error.\n\n\
          import std::duration\nimport std::io\nimport std::selector\n\n{PAUSE}\
@@ -174,7 +174,7 @@ fn test_parallel_a_broken_stderr_during_replay_ends_the_run_with_one() {
 /// standard input and take its lines in an unspecified order; both
 /// finish, each with one of the lines.
 #[test]
-fn test_parallel_two_tests_that_read_stdin_both_finish() {
+fn parallel_two_tests_that_read_stdin_both_finish() {
     let source = format!(
         "//! Two tests read a line each.\n\n\
          import std::duration\nimport std::io\nimport std::selector\n\n{PAUSE}\
@@ -218,7 +218,7 @@ fn compiled(dir: &Path, threads: usize) -> TestProgram {
 /// least 1.6 s one at a time, and at four threads, run four at once, at
 /// most 0.6 times that run phase (about 0.25 times with no overhead).
 #[test]
-fn test_parallel_eight_waiting_tests_run_at_once() {
+fn parallel_eight_waiting_tests_run_at_once() {
     let mut tests = String::new();
     for n in 1..=8 {
         write!(tests, "\ntest \"waits {n}\" {{\n  pause(200)\n}}\n").unwrap();

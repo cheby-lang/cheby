@@ -90,7 +90,7 @@ fn codes_of(report: &FileReport) -> Vec<String> {
 fn only<'a>(report: &'a Report, file: &Path) -> &'a FileReport {
     let paths: Vec<&PathBuf> = report.files.keys().collect();
     assert_eq!(paths, [file]);
-    report.files.get(file).unwrap()
+    &report.files[file]
 }
 
 /// `text`'s own phase-A diagnostics, as code and message.
@@ -210,7 +210,7 @@ fn loose_broken_file_shows_phase_a_and_plans_nothing() {
     // A D run would report no broken file, and there is no other.
     assert!(live.plan.is_none());
     assert_eq!(live.broken, BTreeSet::from([file.clone()]));
-    let shown = live.phase_a.get(&file).unwrap();
+    let shown = &live.phase_a[&file];
     assert_eq!(pairs(shown), phase_a_of("script.cheby", BROKEN));
     assert_eq!(shown.version, Some(1));
     assert!(live.snapshot.is_some(), "the Q run still serves queries");

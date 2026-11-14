@@ -159,6 +159,10 @@ fn folds(
 const CHECK_EVERY: usize = 4096;
 
 /// The folds of nodes and of runs of imports, in one walk.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn nodes(
     root: SyntaxNode<'_>,
     cx: &RequestCx<'_>,
@@ -225,6 +229,10 @@ fn push_imports(run: Option<TextRange>, out: &mut Vec<Fold>) {
 
 /// Runs of comments of any kind on adjacent lines, with nothing but
 /// spaces between them.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn comments(root: SyntaxNode<'_>, out: &mut Vec<Fold>) {
     let mut run: Option<TextRange> = None;
     let mut breaks = 0_usize;
@@ -272,6 +280,10 @@ fn comment_range(token: SyntaxToken<'_>) -> TextRange {
 }
 
 /// Whether `node` folds when it spans lines (syntax map §7.2).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn folds_node(node: SyntaxNode<'_>) -> bool {
     use SyntaxKind as K;
     match node.kind() {

@@ -664,10 +664,7 @@ fn blocking_io_a_timeout_around_a_file_write_waits() {
             None,
             "CHEBY_THREADS={threads}: printed before the FIFO was opened"
         );
-        let mut text = String::new();
-        std::fs::File::open(&fifo)
-            .and_then(|mut reader| reader.read_to_string(&mut text))
-            .expect("the FIFO cannot be read");
+        let text = std::fs::read_to_string(&fifo).expect("the FIFO cannot be read");
         assert_eq!(text, "the whole text\n", "CHEBY_THREADS={threads}");
         assert_eq!(
             child.next_line("timeout's result"),

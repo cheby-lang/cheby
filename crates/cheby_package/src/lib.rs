@@ -3,7 +3,7 @@
 //!
 //! - [`Manifest::load`] reads and checks `cheby.toml` (B1). Problems are
 //!   `E0036` diagnostics with a snippet of the manifest.
-//! - [`discover`] maps the files under `src/` to module paths (B2), and
+//! - [`discover()`] maps the files under `src/` to module paths (B2), and
 //!   reports invalid file and directory names as `E0037`.
 //!   [`module_file`] maps one file the other way, without a walk, for
 //!   the language server's unsaved buffers.

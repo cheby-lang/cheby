@@ -246,7 +246,7 @@ fn record_positions_checked() {
     assert!(zero.check().is_err());
     assert!(CodeRecord::decode(&zero.encode()).is_err());
     // A row's column 1 written as two bytes, `0x81 0x00`, is refused.
-    let mut one = good.clone();
+    let mut one = good;
     for f in &mut one.functions {
         f.positions.clear();
     }

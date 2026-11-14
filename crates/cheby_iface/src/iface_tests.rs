@@ -695,7 +695,7 @@ fn iface_artifact_roundtrip() {
     let read = read_artifact(&blob).unwrap();
     assert_eq!(read.build_id, build_id);
     assert_eq!(Some(read.hash), iface.hash);
-    assert_eq!(read.h, &bytes[..]);
+    assert_eq!(read.h, &*bytes);
     assert_eq!(read.spans, spans);
     // Decoded, with the spans of section S put back.
     let allowed = [f.dep];
@@ -744,7 +744,7 @@ fn iface_artifact_flipped_byte_in_h_is_an_error() {
         );
     }
     // So is a flipped byte of the recorded hash.
-    let mut flipped = blob.clone();
+    let mut flipped = blob;
     flipped[5 + 16] ^= 1;
     assert_eq!(
         read_artifact(&flipped).unwrap_err(),
@@ -823,7 +823,7 @@ fn iface_artifact_rejects_malformed_blobs() {
         Err(DecodeError::Malformed(_))
     ));
     // A huge section length.
-    let mut huge = blob.clone();
+    let mut huge = blob;
     for b in &mut huge[5 + 32..5 + 32 + 8] {
         *b = 0xFF;
     }

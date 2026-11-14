@@ -241,6 +241,10 @@ impl SessionScope {
     /// # Errors
     ///
     /// An [`Ice`] if a session item's module is not in `modules`.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "the groups and each group's names are sorted before use (D-264)"
+    )]
     pub fn imports_for(
         &self,
         own: &[ImportRequest],
@@ -534,10 +538,8 @@ fn is_upper(text: &str) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use cheby_diag::{Diagnostic, FileId, Span, TextRange, codes};
-    use cheby_iface::{
-        DefId, DefIndex, Globals, ModuleId, ModuleInfo, ModuleTable, Namespace, PackageId,
-    };
+    use cheby_diag::TextRange;
+    use cheby_iface::{DefIndex, Globals, ModuleInfo, PackageId};
     use cheby_package::ModulePath;
     use cheby_syntax::ast::{AstNode, SourceFile};
 

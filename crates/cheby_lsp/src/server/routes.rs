@@ -315,6 +315,10 @@ fn test_request(method: &str) -> Option<RequestHandler> {
 
 /// No test requests outside tests.
 #[cfg(not(test))]
+#[expect(
+    clippy::cfg_not_test,
+    reason = "the build without tests has no test hooks"
+)]
 const fn test_request(_method: &str) -> Option<RequestHandler> {
     None
 }
@@ -327,6 +331,10 @@ fn test_query(method: &str) -> Option<&'static Route> {
 
 /// No test queries outside tests.
 #[cfg(not(test))]
+#[expect(
+    clippy::cfg_not_test,
+    reason = "the build without tests has no test hooks"
+)]
 const fn test_query(_method: &str) -> Option<&'static Route> {
     None
 }

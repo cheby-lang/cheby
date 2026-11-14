@@ -72,7 +72,30 @@ impl BodyCx<'_, '_> {
                 };
                 (ok, Some((l, r, operand_ty)))
             }
-            _ => {
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error
+            | _ => {
                 let Some(ok) = self.expr_as(cond, Repr::Bool)? else {
                     return Ok(None);
                 };

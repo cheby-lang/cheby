@@ -224,7 +224,7 @@ pub(super) fn sin_cos(x: f64, prec: usize) -> (Big, Big) {
     let r2 = r.mul(&r, work);
     // sin r = r - r³/3! + r⁵/5! - …
     let mut term = r.clone();
-    let mut sin = r.clone();
+    let mut sin = r;
     let mut j = 1_u64;
     loop {
         let divisor = j

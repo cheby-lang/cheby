@@ -1,9 +1,6 @@
 //! E4: REPL redefinition through slots, generations and session names
 //! (D-043, D-456, D-547).
 
-use cheby_codegen_clif::SessionName;
-use cheby_mir::{FieldDesc, LayoutDesc, LayoutRef, StaticId, StaticKind, StaticObject};
-
 use super::*;
 
 /// The session name of an item of entry module `<repl:{entry}>`.

@@ -1,6 +1,10 @@
 //! Scalar operations on hand-built MIR: checked arithmetic (§3.3, §5.4.6),
 //! comparisons (§3.3.2, D-527), float arithmetic, bitwise operators,
 //! `!`, float negation, and boxing at the boundaries of D-521.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use super::*;
 

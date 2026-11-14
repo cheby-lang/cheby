@@ -822,7 +822,7 @@ impl Translator<'_, '_> {
                 abi::list::ROOT_LEN_OFFSET,
             )));
         }
-        if let RuntimeFn::ListUnconsHead = helper {
+        if helper == RuntimeFn::ListUnconsHead {
             // The word the `list_uncons` right before it wrote (D-909).
             let slot = self.uncons_slot.ok_or_else(|| {
                 CodegenError::ice("a `list_uncons_head` without its `list_uncons`")
@@ -848,7 +848,7 @@ impl Translator<'_, '_> {
             let slot = self.make_uncons_slot();
             vals.push(self.b.ins().stack_addr(types::I64, slot, 0));
         }
-        if let RuntimeFn::ScopeClose = helper {
+        if helper == RuntimeFn::ScopeClose {
             // The wait at a scope's end (D-856).
             self.store_wait_frame()?;
         }

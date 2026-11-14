@@ -281,7 +281,6 @@ impl Driver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
 
     use super::*;

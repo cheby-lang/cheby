@@ -324,7 +324,7 @@ fn cancel_and_timer_race() {
                     fiber.published.load(Ordering::Relaxed) && header.try_settle(state::CANCELLED);
                 drop(lock);
                 if won {
-                    walk_won.store(true, probe::Ordering::SeqCst);
+                    walk_won.store(true, Ordering::SeqCst);
                     fiber.wake();
                 }
             })
@@ -346,8 +346,8 @@ fn cancel_and_timer_race() {
 
         walk.join().unwrap();
         let timer_won = timer_thread.is_some_and(|thread| thread.join().unwrap());
-        let walk_won = walk_won.load(probe::Ordering::SeqCst);
-        let wakes = fiber.wakes.load(probe::Ordering::SeqCst);
+        let walk_won = walk_won.load(Ordering::SeqCst);
+        let wakes = fiber.wakes.load(Ordering::SeqCst);
         match slept {
             Slept::Refused => {
                 assert_eq!(wakes, 0, "a refused sleep was woken");

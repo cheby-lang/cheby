@@ -33,7 +33,7 @@ use crate::ctx::ExecCtx;
 use crate::entry::{EntryConfig, EntryMode, EntryOutcome};
 use crate::fiber_ops::cancel::{self, Cancelled};
 use crate::fiber_ops::detached_tests::{
-    self, config, detach, new_channel, receive_on, release, runtime, unwinding,
+    config, detach, new_channel, receive_on, release, runtime, unwinding,
 };
 use crate::pool::{Pool, THREAD_NAME};
 use crate::values;
@@ -552,7 +552,7 @@ fn pool_detached_an_abandoned_job_does_not_hold_detection_off() {
     let (s, g) = (Arc::clone(&seen), Arc::clone(&gate));
     let run = EntryConfig {
         mode: EntryMode::Run,
-        ..detached_tests::config(&domain)
+        ..config(&domain)
     };
     let root: mpsc::Receiver<EntryOutcome> =
         testing::start_root_in(&runtime, &run, &group, move |me| {

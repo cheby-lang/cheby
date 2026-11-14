@@ -26,8 +26,8 @@ fn to_fixed(x: f64, digits: i64) -> String {
 }
 
 fn parse(text: &str) -> Option<f64> {
-    // SAFETY: `word` is the live string `with_text` made.
     no_leaks(|| {
+        // SAFETY: `word` is the live string `with_text` made.
         take_result(with_text(text, |word| unsafe {
             float_kernels::parse(word)
         }))

@@ -13,15 +13,16 @@
 //! modelled in `sched/io_models.rs`: a close against a parked waiter
 //! (model 3), two accepters (model 4) and a cancelled turn waiter (model
 //! 5).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
-use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
+use std::io::ErrorKind;
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use parking_lot::Mutex;
 
 use super::hooks::{self, LookupHook};
 use super::*;
@@ -33,8 +34,8 @@ use crate::fiber_ops::detached_tests::{
 };
 use crate::fiber_ops::scope::{ScopeHandle, ScopeState};
 use crate::generic::{self, Reached};
+use crate::rc;
 use crate::sched::testing;
-use crate::{rc, values};
 
 /// The thread counts of every test that starts a runtime.
 const THREADS: [usize; 2] = [1, 4];
@@ -67,9 +68,9 @@ fn cancel_and_close(me: &ExecCtx, scope: Word, fiber: Word) {
 /// raise would make it (D-670), or with `Nil`.
 fn fiber_end(me: &ExecCtx, cancelled: bool) -> Word {
     let ctx = ctx_of(me);
-    crate::unwind::guard::guarded(Some(ctx), || {
+    guarded(Some(ctx), || {
         if cancelled {
-            crate::unwind::raise::raise_cancel(Some(ctx));
+            raise_cancel(Some(ctx));
         }
         values::nil()
     })
@@ -341,7 +342,8 @@ fn cancelled_reads(threads: usize) {
                     armed(&connection.socket, Direction::Read) || slot.lock().is_some()
                 });
                 cancel_and_close(me, scope, fiber);
-                match slot.lock().take() {
+                let got = slot.lock().take();
+                match got {
                     Some(Got::Done(data)) => received.extend(data),
                     Some(Got::Cancelled) => cancelled = cancelled.saturating_add(1),
                     other => panic!("a read gave {other:?}"),
@@ -500,9 +502,12 @@ fn net_two_accepters_each_get_one() {
         }
         let mut bytes: Vec<Vec<u8>> = slots
             .iter()
-            .map(|slot| match slot.lock().clone() {
-                Some(Got::Done(data)) => data,
-                other => panic!("an accepter gave {other:?} at {threads} workers"),
+            .map(|slot| {
+                let got = slot.lock().clone();
+                match got {
+                    Some(Got::Done(data)) => data,
+                    other => panic!("an accepter gave {other:?} at {threads} workers"),
+                }
             })
             .collect();
         bytes.sort();
@@ -536,7 +541,7 @@ fn net_writes_are_atomic() {
                     while all.len() < EACH * 2 {
                         let count = host.read(&mut chunk).unwrap();
                         assert_ne!(count, 0, "the peer ended early");
-                        all.extend_from_slice(chunk.get(..count).unwrap());
+                        all.extend_from_slice(&chunk[..count]);
                     }
                     all
                 });
@@ -923,7 +928,7 @@ fn net_errors_map_to_their_kinds() {
         of(libc::EPROTOTYPE, Op::Other).kind,
         if cfg!(target_vendor = "apple") { 9 } else { 0 }
     );
-    let closed = io::Error::new(io::ErrorKind::NotConnected, "x");
+    let closed = io::Error::new(ErrorKind::NotConnected, "x");
     assert_eq!(NetError::of(&closed, Op::Other).kind, 0);
 }
 

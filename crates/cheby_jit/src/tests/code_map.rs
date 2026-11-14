@@ -7,12 +7,9 @@
 //! carries the sites (D-679). The last test runs a deadlocking program
 //! and reads the location its report names.
 
-use std::sync::Arc;
-
-use cheby_mir::{CType, ForeignSig, LayoutRef};
-use cheby_runtime::alloc::Domain;
+use cheby_mir::{CType, ForeignSig};
+use cheby_runtime::RuntimeConfig;
 use cheby_runtime::locate::CodeRangeDesc;
-use cheby_runtime::{DetachedGroup, Runtime, RuntimeConfig};
 use cranelift_codegen::control::ControlPlane;
 
 use super::*;
@@ -167,7 +164,7 @@ fn code_map_offsets_are_return_addresses_of_calls() {
     let mut module = cheby_codegen_clif::record::RecordingModule::new(
         cheby_codegen_clif::isa::host_isa().unwrap(),
     );
-    let mut decls = cheby_codegen_clif::Decls::new(module.isa()).unwrap();
+    let mut decls = Decls::new(module.isa()).unwrap();
     cheby_codegen_clif::declare(&mut module, &mut decls, &units, &cx, &jit.codegen).unwrap();
     let caller = units[0]
         .functions
@@ -215,7 +212,11 @@ fn code_map_tail_calls_and_thunks_have_no_sites() {
     let ident = range_at(&jit, start_of(&jit, def(1, IDENT)));
     assert!(ident.cheby_abi && ident.sites.is_empty(), "{ident:?}");
     let thunk = jit.entry(EntryKind::Const(target)).unwrap().thunk;
-    #[expect(clippy::as_conversions, reason = "a function's address")]
+    #[expect(
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        reason = "a function's address"
+    )]
     let thunk = thunk as usize;
     let ranges = registered(&jit);
     assert!(

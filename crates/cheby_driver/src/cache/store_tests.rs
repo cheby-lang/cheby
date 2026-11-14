@@ -99,8 +99,8 @@ fn cache_store_round_trips_through_flush() {
     store.flush();
     for (name, bytes) in names.iter().zip(&blobs) {
         let file = fs::read(store.entry_path(FileKind::Blob, *name)).unwrap();
-        assert_eq!(&file[HEADER_LEN..], &bytes[..]);
-        assert_eq!(store.get_blob(*name).unwrap().as_deref(), Some(&bytes[..]));
+        assert_eq!(&file[HEADER_LEN..], &**bytes);
+        assert_eq!(store.get_blob(*name).unwrap().as_deref(), Some(&**bytes));
     }
     for i in 0..64 {
         let k = key(&format!("m{i}"));

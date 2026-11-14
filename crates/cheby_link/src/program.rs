@@ -100,8 +100,8 @@ const FUNCTIONS_PTR: u32 = 112;
 const BOUNDS_SIZE: u32 = 24;
 const BOUNDS_TAG: u32 = 16;
 
-const _: () = assert!(std::mem::size_of::<ProgramImage>() == 120);
-const _: () = assert!(std::mem::size_of::<cheby_runtime::image::FunctionBounds>() == 24);
+const _: () = assert!(size_of::<ProgramImage>() == 120);
+const _: () = assert!(size_of::<cheby_runtime::image::FunctionBounds>() == 24);
 const _: () = assert!(std::mem::offset_of!(cheby_runtime::image::FunctionBounds, tag) == 16);
 const _: () = assert!(BOUNDS_TAG == 16);
 

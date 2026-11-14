@@ -601,8 +601,12 @@ fn deleted_file_gets_one_empty_publish() {
     change(&client, &main, MAIN, 3);
     client.wait_publish(&main, |p| p["version"] == 3);
     let publishes = client.publishes(&bad);
-    let empty: Vec<&Value> = publishes.iter().filter(|p| is_empty(p)).collect();
-    assert_eq!(empty.len(), 1, "{publishes:?}");
+
+    assert_eq!(
+        publishes.iter().filter(|p| is_empty(p)).count(),
+        1,
+        "{publishes:?}"
+    );
     assert!(is_empty(publishes.last().unwrap()), "{publishes:?}");
     client.stop();
 }

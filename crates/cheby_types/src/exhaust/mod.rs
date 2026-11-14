@@ -218,20 +218,20 @@ fn case_fact(
         })
         .collect();
     let report = engine::check(cx, &tys, &engine_arms)?;
-    let mut missing = report
+    let found = report
         .missing
         .iter()
         .map(|row| row.iter().map(|w| cx.missing_pat(w)).collect())
         .collect::<Result<Vec<Vec<_>>, Ice>>()?;
-    let mut more = report.more;
     // With no arm, the engine's answer is one `_`, which is all a diagnostic
     // needs. Filling the arms of `case x { }` wants the constructors.
-    if let ([], [ty]) = (checked.as_slice(), tys.as_slice())
+    let (missing, more) = if let ([], [ty]) = (checked.as_slice(), tys.as_slice())
         && let Some((rows, rest)) = cx.every_variant(*ty)?
     {
-        missing = rows;
-        more = rest;
-    }
+        (rows, rest)
+    } else {
+        (found, report.more)
+    };
     let unreachable = report
         .unreachable
         .iter()
@@ -289,12 +289,34 @@ fn check(cx: &TyCx<'_>, body: &thir::Body) -> Result<Vec<Diagnostic>, Ice> {
                 for param in params {
                     let site = match param.origin {
                         ParamOrigin::Use => Site::UseBinder,
-                        _ => Site::Param,
+                        ParamOrigin::Closure
+                        | ParamOrigin::LocalFn
+                        | ParamOrigin::Capture
+                        | ParamOrigin::Pipe => Site::Param,
                     };
                     check_irrefutable(cx, &param.pat, site, &mut diags)?;
                 }
             }
-            _ => {}
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error => {}
         }
         // Reversed, so that the walk visits children in order.
         stack.extend(expr.kind.children().into_iter().rev());
@@ -597,7 +619,14 @@ impl TyCx<'_> {
                 TypeDefKind::Adt { ctors } => Some(ctors),
                 TypeDefKind::Builtin(_) | TypeDefKind::External => None,
             },
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         })
     }
 
@@ -618,7 +647,14 @@ impl TyCx<'_> {
     fn ctor_sig(&self, ctor: DefId) -> Result<&CtorSig, Ice> {
         match &self.item(ctor)?.sig {
             ItemSig::Ctor(sig) => Ok(sig),
-            _ => Err(Ice::new(format!(
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => Err(Ice::new(format!(
                 "exhaustiveness: {ctor:?} is not a constructor"
             ))),
         }
@@ -671,7 +707,11 @@ impl TyCx<'_> {
                     ctor: self.ctor_def(*def, *tag)?,
                     fields: items,
                 },
-                _ => {
+                TyKind::Error
+                | TyKind::Never
+                | TyKind::Fn { .. }
+                | TyKind::Param(_)
+                | TyKind::Dyn { .. } => {
                     return Err(Ice::new(
                         "exhaustiveness: a variant at a type without variants",
                     ));

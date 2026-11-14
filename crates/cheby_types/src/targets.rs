@@ -140,7 +140,7 @@ impl UseSink {
             Callee::Dyn { iface_fn } => self.push(*iface_fn, span),
             // A value of function type: whatever produced it is a use of
             // its own.
-            _ => {}
+            Callee::Value(_) => {}
         }
     }
 
@@ -207,7 +207,20 @@ fn implicit_uses(body: &thir::Body, out: &mut UseSink) {
                 out.push(*iface, span);
                 out.dict(dict, span);
             }
-            _ => {}
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Block { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Panic { .. }
+            | ExprKind::Error => {}
         }
     }
     for (_, pat) in body.pats() {
@@ -271,6 +284,7 @@ impl Cx<'_, '_> {
 
     /// The uses in signatures: every path of `sig_paths` that names an
     /// item, tied to the item whose declaration holds it.
+    #[expect(clippy::iter_over_hash_type, reason = "the uses are sorted before use")]
     fn signature_uses(&self, out: &mut Vec<Use>) -> Result<(), Ice> {
         let nodes = self.item_nodes();
         for (&node, &res) in &self.input.resolved.sig_paths {
@@ -295,6 +309,7 @@ impl Cx<'_, '_> {
 
     /// The written uses in bodies: every path of every body that names an
     /// item, including types in annotations, which THIR does not keep.
+    #[expect(clippy::iter_over_hash_type, reason = "the uses are sorted before use")]
     fn written_body_uses(&self, out: &mut Vec<Use>) -> Result<(), Ice> {
         for (&index, body) in &self.input.resolved.bodies {
             let runs = self.runs(index)?;

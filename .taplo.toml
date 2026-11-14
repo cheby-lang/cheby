@@ -1,0 +1,16 @@
+# TOML formatting, checked in CI with `taplo fmt --check` (D-1560).
+# Listed by directory, so taplo never walks `target/`.
+include = [
+  "*.toml",
+  ".cargo/*.toml",
+  ".config/*.toml",
+  "bench/**/*.toml",
+  "crates/**/*.toml",
+  "docs/**/*.toml",
+  "fuzz/*.toml",
+  "tests/**/*.toml",
+  "xtask/*.toml",
+]
+
+[formatting]
+column_width = 100

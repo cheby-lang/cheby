@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// The signature of an item.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ItemSig {
     Fn(FnSig),
     Type(TypeDef),
@@ -37,7 +37,7 @@ pub struct ParamSig {
 }
 
 /// A top-level function's signature.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FnSig {
     pub generics: Generics,
     pub params: Box<[ParamSig]>,
@@ -50,7 +50,7 @@ pub struct FnSig {
 }
 
 /// A type definition.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TypeDef {
     pub generics: Generics,
     pub kind: TypeDefKind,
@@ -127,7 +127,7 @@ pub enum CtorFields {
     Named(Box<[(Name, Ty)]>),
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AliasDef {
     pub generics: Generics,
     pub target: Ty,
@@ -142,7 +142,7 @@ pub struct ConstSig {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct InterfaceDef {
     /// Embedded interfaces, in written order.
-    pub embeds: Box<[crate::DefId]>,
+    pub embeds: Box<[DefId]>,
     /// Its functions, in declaration order.
     pub fns: Box<[DefIndex]>,
 }
@@ -155,7 +155,7 @@ pub struct InterfaceFnSig {
 }
 
 /// One item of a module's interface.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct IfaceItem {
     pub name: Name,
     pub kind: DefKind,
@@ -480,7 +480,7 @@ pub fn structure_visible(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Globals, InterfaceDef, ItemSig};
+    use crate::Globals;
 
     fn item(
         globals: &Globals,
@@ -561,9 +561,9 @@ mod tests {
     fn structure_visibility_follows_the_opacity_table() {
         let g = Globals::new();
         let ty = |vis: Vis, exposed: bool| IfaceItem {
-            sig: ItemSig::Type(crate::TypeDef {
+            sig: ItemSig::Type(TypeDef {
                 generics: Generics::empty(),
-                kind: crate::TypeDefKind::Adt {
+                kind: TypeDefKind::Adt {
                     ctors: Box::new([]),
                 },
                 exposed,
@@ -684,7 +684,7 @@ mod tests {
         let mut iface =
             ModuleInterface::new(ModuleId::from_u32(4), PackageId::LOCAL, items).unwrap();
         let body = DefIndex::from_u32(0);
-        let sig = ItemSig::Const(crate::ConstSig { ty: crate::Ty::INT });
+        let sig = ItemSig::Const(ConstSig { ty: Ty::INT });
         iface.set_sig(body, sig.clone()).unwrap();
         assert_eq!(iface.item(body).unwrap().sig, sig);
         let span = Span::new(cheby_diag::FileId::new(2), cheby_diag::TextRange::new(1, 3));

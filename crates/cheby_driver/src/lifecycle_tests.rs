@@ -15,9 +15,6 @@
 //! whose completion wakes nothing, so no thread returns into the dropped
 //! JIT's code (D-815).
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use cheby_runtime::alloc::Domain;
 use cheby_runtime::entry::{EntryConfig, EntryMode, EntryOutcome};
 use cheby_runtime::stats::{self, Event};
@@ -30,7 +27,7 @@ const PATIENCE: Duration = Duration::from_secs(10);
 
 /// A package in a fresh temporary directory with `main.cheby` as its root
 /// module.
-fn package(name: &str, main: &str) -> std::path::PathBuf {
+fn package(name: &str, main: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "cheby_driver_lifecycle_{}_{name}",
         std::process::id()
@@ -52,10 +49,7 @@ fn package(name: &str, main: &str) -> std::path::PathBuf {
 /// new runtime with two workers, in `group` if given (`run_root_in`) and
 /// otherwise in the runtime's default group (`run_root`). Returns the
 /// runtime, the `Jit` (still alive) and the JIT's accounting domain.
-fn run_main_as_root(
-    dir: &std::path::Path,
-    group: Option<&Arc<DetachedGroup>>,
-) -> (Runtime, Jit, Arc<Domain>) {
+fn run_main_as_root(dir: &Path, group: Option<&Arc<DetachedGroup>>) -> (Runtime, Jit, Arc<Domain>) {
     let Prepared::Ready(program) = prepare_run(dir, RunOptions::default()).unwrap() else {
         panic!("the package did not compile");
     };

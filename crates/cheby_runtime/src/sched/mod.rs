@@ -9,7 +9,7 @@
 //!   evaluation, the REPL, D-713) keep D-457's dedicated threads.
 //! - **Fibers** live at the top of their stack slots (D-677, D-685). The
 //!   scheduling part of their control block is [`fiber`]'s; a fiber
-//!   suspends only through [`park`], which hands the worker a post-switch
+//!   suspends only through [`park()`], which hands the worker a post-switch
 //!   action ([`AfterSwitch`]) such as releasing the lock the fiber
 //!   registered as a waiter under (D-687).
 //! - **Run queues** (D-689): per worker a runnext slot, a Chase-Lev deque
@@ -892,7 +892,7 @@ fn current_worker(shared: &Arc<Shared>) -> Option<usize> {
 /// parked nor parking.
 ///
 /// Wake only a fiber that registered as a waiter under a lock it hands to
-/// [`park`] (so it is parking or parked once the waker holds that lock),
+/// [`park()`] (so it is parking or parked once the waker holds that lock),
 /// or one a lockless waker owns otherwise; a fiber is woken once per park.
 ///
 /// # Safety
@@ -959,7 +959,7 @@ pub(crate) fn hand_off_before_blocking(me: &ExecCtx) {
     }
 }
 
-/// Why [`spawn_fiber`] could not start a fiber.
+/// Why `spawn_fiber` could not start a fiber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpawnError {
     /// The spawner is an isolated entry, which has no runtime (D-692).

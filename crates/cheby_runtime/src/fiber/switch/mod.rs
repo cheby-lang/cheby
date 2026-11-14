@@ -1,7 +1,7 @@
 //! The context switch between stacks (D-676): our own `naked_asm!`
 //! switch for x86-64 System V (ELF and Mach-O) and AAPCS64 (Linux and
 //! Apple).
-//! Windows and every other target get [`unsupported`]'s stubs, with
+//! Windows and every other target get `unsupported`'s stubs, with
 //! [`SUPPORTED`] false, until M6 (D-714).
 //!
 //! The switch is called only from Rust, so it saves exactly the C

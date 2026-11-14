@@ -389,7 +389,7 @@ fn const_image_table_round_trip() {
     let table = encode_table(&images);
     assert!(table.starts_with(b"CHBT"));
     assert_eq!(decode_table(&table).unwrap(), images);
-    let mut cut = table.clone();
+    let mut cut = table;
     cut.pop();
     assert!(matches!(
         decode_table(&cut),

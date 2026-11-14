@@ -16,7 +16,7 @@ use lsp_types::{Position, PositionEncodingKind, Range};
 
 /// The unit an LSP column counts (D-1368).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PositionEncoding {
+pub(crate) enum PositionEncoding {
     /// UTF-8 bytes.
     Utf8,
     /// UTF-16 code units, the protocol's default.
@@ -31,7 +31,7 @@ impl PositionEncoding {
     /// listed, else `utf-16` (D-1368). A client that sends no list gets
     /// UTF-16, the protocol's default.
     #[must_use]
-    pub fn negotiate(offered: Option<&[PositionEncodingKind]>) -> Self {
+    pub(crate) fn negotiate(offered: Option<&[PositionEncodingKind]>) -> Self {
         let offered = offered.unwrap_or_default();
         let has = |kind: &PositionEncodingKind| offered.iter().any(|o| o == kind);
         if has(&PositionEncodingKind::UTF8) {
@@ -46,7 +46,7 @@ impl PositionEncoding {
     /// The protocol's name for this encoding, for
     /// `capabilities.positionEncoding`.
     #[must_use]
-    pub fn kind(self) -> PositionEncodingKind {
+    pub(crate) fn kind(self) -> PositionEncodingKind {
         match self {
             Self::Utf8 => PositionEncodingKind::UTF8,
             Self::Utf16 => PositionEncodingKind::UTF16,
@@ -77,7 +77,7 @@ impl PositionEncoding {
 
 /// Whether a leading U+FEFF is a character the client counts (D-1368).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bom {
+pub(crate) enum Bom {
     /// The client sent this text, so a leading U+FEFF is a character to it.
     Counted,
     /// Disk text: clients strip a BOM when they load a file, so line 0
@@ -91,7 +91,7 @@ const BOM_LEN: TextSize = 3;
 /// The lines of one text, for converting byte offsets to LSP positions and
 /// back. Every method takes the text the index was built from.
 #[derive(Clone, Debug)]
-pub struct LspLines {
+pub(crate) struct LspLines {
     /// Where each line starts. Never empty.
     starts: Vec<TextSize>,
     /// Where each line's content ends, before its terminator. As long as
@@ -107,7 +107,7 @@ impl LspLines {
     /// The index of `text`, read in one pass. With [`Bom::Hidden`], a
     /// leading U+FEFF is outside line 0.
     #[must_use]
-    pub fn new(text: &str, bom: Bom) -> Self {
+    pub(crate) fn new(text: &str, bom: Bom) -> Self {
         let first = match bom {
             Bom::Hidden if text.starts_with('\u{feff}') => BOM_LEN,
             Bom::Hidden | Bom::Counted => 0,
@@ -137,14 +137,14 @@ impl LspLines {
     /// has an empty last line after it.
     #[cfg(test)]
     #[must_use]
-    pub fn line_count(&self) -> usize {
+    pub(crate) fn line_count(&self) -> usize {
         self.starts.len()
     }
 
     /// Where the content of the first line starts: 3 after a hidden BOM,
     /// else 0.
     #[must_use]
-    pub fn content_start(&self) -> TextSize {
+    pub(crate) fn content_start(&self) -> TextSize {
         self.starts.first().copied().unwrap_or(0)
     }
 
@@ -153,7 +153,7 @@ impl LspLines {
     /// gives that line's content end. An offset inside a hidden BOM is the
     /// start of line 0.
     #[must_use]
-    pub fn position(&self, text: &str, offset: TextSize, enc: PositionEncoding) -> Position {
+    pub(crate) fn position(&self, text: &str, offset: TextSize, enc: PositionEncoding) -> Position {
         let offset = offset.min(self.len);
         let line = self
             .starts
@@ -175,7 +175,7 @@ impl LspLines {
     /// inside a character, such as between the halves of a UTF-16
     /// surrogate pair, is that character's start.
     #[must_use]
-    pub fn offset(&self, text: &str, position: Position, enc: PositionEncoding) -> TextSize {
+    pub(crate) fn offset(&self, text: &str, position: Position, enc: PositionEncoding) -> TextSize {
         let Ok(line) = usize::try_from(position.line) else {
             return self.len;
         };
@@ -204,7 +204,7 @@ impl LspLines {
 
     /// `range` as an LSP range, each end converted by [`Self::position`].
     #[must_use]
-    pub fn range(&self, text: &str, range: TextRange, enc: PositionEncoding) -> Range {
+    pub(crate) fn range(&self, text: &str, range: TextRange, enc: PositionEncoding) -> Range {
         Range::new(
             self.position(text, range.start(), enc),
             self.position(text, range.end(), enc),
@@ -214,7 +214,7 @@ impl LspLines {
     /// `range` as a byte range, each end converted by [`Self::offset`]. A
     /// range whose end comes first is turned round.
     #[must_use]
-    pub fn text_range(&self, text: &str, range: Range, enc: PositionEncoding) -> TextRange {
+    pub(crate) fn text_range(&self, text: &str, range: Range, enc: PositionEncoding) -> TextRange {
         TextRange::new(
             self.offset(text, range.start, enc),
             self.offset(text, range.end, enc),
@@ -226,7 +226,7 @@ impl LspLines {
     /// it. A text with no character leaves it empty. A non-empty range is
     /// returned as it is.
     #[must_use]
-    pub fn widen_empty(&self, text: &str, range: TextRange) -> TextRange {
+    pub(crate) fn widen_empty(&self, text: &str, range: TextRange) -> TextRange {
         if !range.is_empty() {
             return range;
         }
@@ -262,7 +262,7 @@ impl LspLines {
 /// was, only if the range does not fall on character boundaries, which a
 /// range from [`LspLines::text_range`] always does.
 #[must_use]
-pub fn apply_change(
+pub(crate) fn apply_change(
     text: &mut String,
     range: Option<Range>,
     new_text: &str,

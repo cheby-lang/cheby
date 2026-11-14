@@ -1,0 +1,43 @@
+# `cargo deny check` in CI (D-1560): security advisories, licences, and where
+# dependencies come from.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every advisory fails the check, unmaintained crates included. An accepted
+# advisory goes in `ignore` with the reason.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Licences compatible with the workspace's `MIT OR Apache-2.0`.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+# Workspace crates are not published.
+ignore = true
+
+[bans]
+# Duplicate versions are reported, not denied: Cranelift and Wasmtime pin
+# their own.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

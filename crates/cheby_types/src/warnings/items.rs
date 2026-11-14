@@ -104,7 +104,9 @@ fn qualifier_interface(
     let iface = match segments.as_slice() {
         [iface, _] => match input.resolved.scope.get(Namespace::Type, name(iface)?)?.res {
             Res::Def(iface) => iface,
-            _ => return None,
+            Res::Local(_) | Res::Module(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => {
+                return None;
+            }
         },
         [module, iface, _] => {
             let Res::Module(module) = input

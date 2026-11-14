@@ -59,6 +59,10 @@ pub(super) fn pattern(p: &mut Parser<'_>) -> Option<CompletedMarker> {
 }
 
 /// A pattern without `|` or `as`. The caller checked `PAT_FIRST`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn primary(p: &mut Parser<'_>) -> CompletedMarker {
     match p.current() {
         UPPER_IDENT => ctor(p),

@@ -471,7 +471,7 @@ impl Cx<'_, '_> {
         let interned = self.intern(name.text());
         let span = name.span();
         self.check_shadowing(interned, span)?;
-        let start = self.visible_from.unwrap_or(span.range.end());
+        let start = self.visible_from.unwrap_or_else(|| span.range.end());
         let local = self.res.locals.push(LocalDecl {
             name: interned,
             span,
@@ -946,7 +946,9 @@ impl Cx<'_, '_> {
                 );
                 Ok(Res::Err)
             }
-            res => self.structure(res, span),
+            res @ (Res::Local(_) | Res::Def(_) | Res::TyParam(_) | Res::SelfTy | Res::Err) => {
+                self.structure(res, span)
+            }
         }
     }
 
@@ -1030,7 +1032,9 @@ impl Cx<'_, '_> {
             );
             return Ok(Res::Err);
         }
-        let span = path.name().map_or(path.significant_span(), AstToken::span);
+        let span = path
+            .name()
+            .map_or_else(|| path.significant_span(), AstToken::span);
         self.structure(res, span)
     }
 

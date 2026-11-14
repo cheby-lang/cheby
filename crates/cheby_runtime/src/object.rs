@@ -404,14 +404,14 @@ mod tests {
             assert_eq!(load_rc(word_to_ptr(word)), abi::RC_STATIC);
             assert_eq!(read_field(word_to_ptr(word), 8), nil());
         }
-        assert_eq!(std::mem::size_of::<StaticPair>(), 16);
+        assert_eq!(size_of::<StaticPair>(), 16);
     }
 
     /// Every value of `-128..=255` has a static `Some` holding its tagged
     /// word, and no other value has one (D-902).
     #[test]
     fn the_static_somes_hold_every_byte() {
-        assert_eq!(std::mem::size_of::<StaticSome>(), 16);
+        assert_eq!(size_of::<StaticSome>(), 16);
         for n in -128..=255 {
             let word = static_some_small(n).unwrap();
             assert_eq!(word % 8, 0);

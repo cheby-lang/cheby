@@ -145,7 +145,11 @@ impl BodyCx<'_, '_> {
         }
         match show {
             Callee::Fn { def, .. } => self.is_string_show(*def),
-            _ => Ok(false),
+            Callee::Ctor { .. }
+            | Callee::Iface { .. }
+            | Callee::Dyn { .. }
+            | Callee::Value(_)
+            | _ => Ok(false),
         }
     }
 

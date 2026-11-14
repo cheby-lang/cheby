@@ -27,7 +27,7 @@
 //!   checks every `dyn I` in it with `ifaces::check_object_safe` (E0064)
 //!   against the module's own interface; it returns [`Ty::ERROR`] when one
 //!   fails.
-//! - [`TyLowering::ret_in_body`] lowers an optional `-> T` written in a
+//! - `TyLowering::ret_in_body` lowers an optional `-> T` written in a
 //!   body; an omitted return type is `Nil` (D-083).
 //! - [`TyLowering::lower_sig`] and [`TyLowering::ret_sig`] are the
 //!   signature versions: they collect the `dyn I`s instead, which
@@ -172,7 +172,7 @@ impl TyLowering<'_> {
     ///
     /// An [`Ice`] if a path was not resolved, or an interface cannot be
     /// read.
-    pub fn lower_in_body(
+    pub(crate) fn lower_in_body(
         &self,
         own: &ModuleInterface,
         ty: Type<'_>,
@@ -189,7 +189,7 @@ impl TyLowering<'_> {
     /// # Errors
     ///
     /// An [`Ice`] if the path was not resolved.
-    pub fn interface(
+    pub(crate) fn interface(
         &self,
         iface: InterfaceRef<'_>,
         site: IfaceSite,
@@ -657,7 +657,11 @@ impl TyLowering<'_> {
                 },
                 DefKind::Alias => Named::OwnAlias(def.index),
                 DefKind::Interface => Named::Interface,
-                other => Named::Other(other.describe()),
+                other @ (DefKind::Fn
+                | DefKind::Const
+                | DefKind::InterfaceFn
+                | DefKind::Ctor
+                | DefKind::Test) => Named::Other(other.describe()),
             });
         }
         let item: &IfaceItem = self

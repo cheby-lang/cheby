@@ -5,7 +5,6 @@
 //! `CHEBY_RT_TEST_FFI` naming what the child does.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -286,11 +285,11 @@ fn ffi_debug_type_check_stops_on_a_value_of_another_type() {
 )]
 fn ffi_alloc_failure_sets_the_flag_and_returns_null() {
     node_key();
-    let _serial = crate::alloc::tests::serial();
+    let _serial = alloc::tests::serial();
     let before = DROPPED.load(Ordering::SeqCst);
     let (outcome, domain) = on_entry(1 << 20, || {
         let kept = string_word("an owned result");
-        crate::alloc::refuse_next_system_allocation();
+        alloc::refuse_next_system_allocation();
         // SAFETY: valid arguments; the values are released below.
         unsafe {
             assert!(cheby_ffi_string_new(b"abc".as_ptr().cast(), 3).is_null());
@@ -375,7 +374,7 @@ fn node(next: Word) -> Word {
 )]
 fn ffi_drop_chain_of_handles_is_freed_without_recursion() {
     node_key();
-    let _serial = crate::alloc::tests::serial();
+    let _serial = alloc::tests::serial();
     let before = DROPPED.load(Ordering::SeqCst);
     let (outcome, domain) = on_entry(MIN_STACK_SIZE, || {
         let mut chain = 0;
@@ -401,7 +400,7 @@ fn ffi_drop_chain_of_handles_is_freed_without_recursion() {
 )]
 fn ffi_drop_never_sees_a_null_handle() {
     node_key();
-    let _serial = crate::alloc::tests::serial();
+    let _serial = alloc::tests::serial();
     let before = DROPPED.load(Ordering::SeqCst);
     let (outcome, domain) = on_entry(1 << 20, || {
         // SAFETY: the running entry and the key of a registered type.
@@ -433,7 +432,7 @@ fn ffi_drop_never_sees_a_null_handle() {
 )]
 fn ffi_alloc_in_a_drop_function_child() {
     unsafe extern "C" fn allocating_drop(_: *mut c_void) {
-        crate::alloc::refuse_next_system_allocation();
+        alloc::refuse_next_system_allocation();
         // SAFETY: valid arguments.
         let s = unsafe { cheby_ffi_string_new(b"lost".as_ptr().cast(), 4) };
         // SAFETY: as above.
@@ -691,7 +690,7 @@ fn ffi_drop_writing_while_another_fiber_prints_does_not_deadlock() {
 #[cfg_attr(windows, ignore = "runs fibers; Windows support is M6 (D-545)")]
 fn ffi_drop_is_not_called_while_a_group_is_torn_down() {
     node_key();
-    let _serial = crate::alloc::tests::serial();
+    let _serial = alloc::tests::serial();
     let group = DetachedGroup::new();
     let before = DROPPED.load(Ordering::SeqCst);
     group.set_tearing_down(true);

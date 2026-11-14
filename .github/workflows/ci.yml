@@ -44,6 +44,13 @@
 #   The harnesses follow tests/milestone (D-288); CI sets none of the
 #   strict-run variables (D-544).
 # - `fmt`: rustfmt, once, because formatting does not depend on the platform.
+# - `lint`: the checks that are not Rust's, once (D-1560): spelling with
+#   `typos` (_typos.toml), TOML formatting with `taplo` (.taplo.toml), the
+#   workflows with `actionlint`, which runs the image's shellcheck on their
+#   scripts, and the dependencies' advisories, licences and sources with
+#   `cargo deny` (deny.toml).
+# - `doc`: rustdoc of the workspace with private items, warnings denied, so
+#   intra-doc links cannot break (D-1560).
 # - `cross-check`: parses examples, UI tests, REPL inputs and std sources with
 #   tree-sitter-cheby at the commit pinned in tests/tree-sitter-cheby.rev
 #   (D-272).
@@ -198,6 +205,39 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos@1.52.2,taplo@0.10.0,actionlint@1.7.12,cargo-deny@0.20.2
+      - name: Spelling (_typos.toml)
+        run: typos
+      - name: TOML formatting (.taplo.toml)
+        run: taplo fmt --check
+      # The image's shellcheck checks the `run:` scripts too.
+      - name: Workflows
+        run: actionlint
+      - name: Advisories, licences and sources (deny.toml)
+        run: cargo deny --locked check
+
+  doc:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc, private items included
+        run: cargo doc --workspace --no-deps --document-private-items --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   cross-check:
     runs-on: ubuntu-24.04
     steps:
@@ -282,7 +322,9 @@ jobs:
       - name: cheby check in every example
         run: cargo xtask check-examples
       - name: cheby fmt --check in std and every example (D-1029, D-1252)
-        run: cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')
+        run: >
+          git ls-files -z 'std/*.cheby' 'docs/examples/*/src/*.cheby'
+          | xargs -0 cargo run --locked -q -p cheby_cli -- fmt --check
       - name: Deterministic builds across thread counts and paths
         run: cargo xtask check-determinism
 
@@ -362,7 +404,7 @@ jobs:
           # From inside the worktree, so the base's own rust-toolchain.toml
           # and cargo config apply; without `-D warnings`, which only the
           # change itself must pass.
-          (cd "$RUNNER_TEMP/base" && RUSTFLAGS= cargo build --release --locked \
+          (cd "$RUNNER_TEMP/base" && RUSTFLAGS='' cargo build --release --locked \
             --package cheby_cli --target-dir "$GITHUB_WORKSPACE/target/gate-base")
           cargo build --release --locked --package cheby_cli
       - name: Time the RC group against the base

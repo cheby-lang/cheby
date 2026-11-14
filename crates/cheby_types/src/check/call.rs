@@ -127,7 +127,20 @@ pub(crate) fn is_late(e: Expr<'_>) -> bool {
         Expr::Closure(_) => true,
         Expr::Call(c) => c.args().any(|a| matches!(a, Arg::Hole(_))),
         Expr::Paren(p) => p.inner().is_some_and(is_late),
-        _ => false,
+        Expr::Literal(_)
+        | Expr::String(_)
+        | Expr::Path(_)
+        | Expr::Record(_)
+        | Expr::Tuple(_)
+        | Expr::List(_)
+        | Expr::Block(_)
+        | Expr::Case(_)
+        | Expr::Panic(_)
+        | Expr::Todo(_)
+        | Expr::Binary(_)
+        | Expr::Prefix(_)
+        | Expr::Hole(_)
+        | Expr::Field(_) => false,
     }
 }
 
@@ -271,7 +284,11 @@ impl BodyCx<'_> {
                     fact: None,
                 }
             }
-            _ => return Ok(None),
+            ItemSig::Type(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::Test => return Ok(None),
         }))
     }
 
@@ -303,7 +320,7 @@ impl BodyCx<'_> {
                 }
                 (params, ret)
             }
-            _ => {
+            InferTy::Known(_) | InferTy::Named { .. } | InferTy::Tuple(_) => {
                 self.not_a_function(&ty, spans);
                 return Ok(Signature::error());
             }
@@ -585,7 +602,7 @@ impl BodyCx<'_> {
         // result before the arguments are checked.
         if let Some(e) = expected
             && let InferTy::Fn { params, ret } = self.infcx.resolve(&e.ty)?
-            && let [param] = &params[..]
+            && let [param] = &*params
         {
             let _ = self.infcx.unify(&hole_ty, param)?;
             if sig.is_generic() {
@@ -603,7 +620,7 @@ impl BodyCx<'_> {
                     ..sig
                 }
             }
-            _ => sig,
+            Target::Fn { .. } | Target::Ctor { .. } | Target::Iface { .. } | Target::Error => sig,
         };
         let mut inner = Vec::with_capacity(written.len());
         for id in checked {

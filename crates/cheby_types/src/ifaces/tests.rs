@@ -6,13 +6,17 @@
 //! called directly from a *probe* module: one more module, resolved and
 //! given its interface like any other, whose dependencies the test
 //! chooses.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::sync::Arc;
 
 use cheby_diag::{Diagnostic, Span, TextRange};
 use cheby_iface::{
-    DefId, DepView, GenericParam, Generics, Ice, IndexVec, ModuleId, ModuleInfo, ModuleInterface,
-    Namespace, PackageId, ParamIdx, Ty, TyKind, builtin,
+    DepView, GenericParam, IndexVec, ModuleInfo, ModuleInterface, Namespace, PackageId, TyKind,
+    builtin,
 };
 use cheby_package::ModulePath;
 use cheby_resolve::{
@@ -22,15 +26,15 @@ use cheby_resolve::{
 use cheby_syntax::SyntaxTree;
 
 use super::*;
+use crate::build_interface;
 use crate::satisfaction::{
     QueryInput, Verdict, implementors, interfaces_of, reason_text, satisfies,
 };
 use crate::test_support::Build;
 use crate::test_support::quiet::build_with_std;
-use crate::thir::{BinOpKind, Callee, Dict, DictFn, OpImpl};
-use crate::{TypesInput, build_interface};
+use crate::thir::DictFn;
 
-const OPS: &str = r"//! Fake `std::ops`.
+const OPS: &str = "//! Fake `std::ops`.
 
 pub interface Add {
   fn add(Self, Self) -> Self
@@ -72,7 +76,7 @@ pub fn add(a: Int, b: Int) -> Int {
 }
 "#;
 
-const STRING: &str = r"//! Fake `std::string`.
+const STRING: &str = "//! Fake `std::string`.
 
 pub fn show(text: String) -> String {
   text
@@ -137,7 +141,7 @@ fn std_modules() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-const MAIN: &str = r"//! Root.
+const MAIN: &str = "//! Root.
 
 fn main() {}
 ";
@@ -177,7 +181,7 @@ fn show(a: Angle) -> String {
 }
 "#;
 
-const SHAPES: &str = r"//! Interfaces.
+const SHAPES: &str = "//! Interfaces.
 
 import std::ops::{Add, Sub}
 
@@ -417,7 +421,7 @@ impl Probe {
         f(&cx)
     }
 
-    fn types(&self) -> &cheby_iface::TyInterner {
+    fn types(&self) -> &TyInterner {
         &self.b.globals.types
     }
 
@@ -519,7 +523,7 @@ fn show_impl(ty: Ty, fns: Vec<DictFn>) -> Dict {
     }
 }
 
-const PROBE: &str = r"//! The checking module.
+const PROBE: &str = "//! The checking module.
 
 fn probe() {}
 ";
@@ -1257,7 +1261,7 @@ fn deep_requirements_fail_cleanly() {
     let p = probe(PROBE);
     let g = no_generics();
     let mut ty = Ty::INT;
-    for _ in 0..(super::solve::DEPTH_LIMIT + 5) {
+    for _ in 0..(solve::DEPTH_LIMIT + 5) {
         ty = p.list(ty);
     }
     p.with(&g, |cx| {
@@ -1326,7 +1330,7 @@ fn interface_declaration_errors() {
     // §8.1, D-209.
     assert_eq!(
         decl_messages(
-            r"//! A function without `Self` in a parameter.
+            "//! A function without `Self` in a parameter.
 
 interface Default {
   fn default() -> Self
@@ -1338,7 +1342,7 @@ interface Default {
     // §8.3: two embedded functions with different signatures.
     assert_eq!(
         decl_messages(
-            r"//! E0066's example.
+            "//! E0066's example.
 
 interface Named {
   fn name(Self) -> String
@@ -1356,7 +1360,7 @@ interface Tagged: Named + Numbered
     // Identical signatures count once; a diamond is fine.
     assert_eq!(
         decl_messages(
-            r"//! Identical requirements.
+            "//! Identical requirements.
 
 interface Base {
   fn id(Self) -> Int
@@ -1378,7 +1382,7 @@ interface Both: Left + Right
     // An own function with an embedded function's name (§8.1).
     assert_eq!(
         decl_messages(
-            r"//! Own and embedded.
+            "//! Own and embedded.
 
 interface Again: Show {
   fn show(Self) -> String
@@ -1390,7 +1394,7 @@ interface Again: Show {
     // Cycles are reported once.
     assert_eq!(
         decl_messages(
-            r"//! A cycle.
+            "//! A cycle.
 
 interface A: B
 
@@ -1406,7 +1410,7 @@ interface C: A
 #[test]
 fn interface_declaration_diagnostics_render() {
     let p = probe(
-        r"//! E0066's example.
+        "//! E0066's example.
 
 interface Named {
   fn name(Self) -> String
@@ -1920,7 +1924,7 @@ fn reason_text_is_one_line_per_kind_of_reason() {
             unsatisfied(t, Reason::TooDeep),
             format!(
                 "the requirement nests more than {} levels deep",
-                super::solve::DEPTH_LIMIT
+                solve::DEPTH_LIMIT
             ),
         ),
     ];

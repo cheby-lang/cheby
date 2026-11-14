@@ -409,7 +409,25 @@ impl ExprKind {
                 .iter()
                 .map(|param| (PatOrigin::Param(param.origin), &param.pat))
                 .collect(),
-            _ => Vec::new(),
+            Self::Lit(_)
+            | Self::Local(_)
+            | Self::Ctor { .. }
+            | Self::Call { .. }
+            | Self::FnRef { .. }
+            | Self::ConstRef { .. }
+            | Self::SelfRef { .. }
+            | Self::Field { .. }
+            | Self::Record { .. }
+            | Self::RecordUpdate { .. }
+            | Self::Tuple(_)
+            | Self::List { .. }
+            | Self::Binary { .. }
+            | Self::Not(_)
+            | Self::Neg { .. }
+            | Self::Interpolate { .. }
+            | Self::Panic { .. }
+            | Self::DynCoerce { .. }
+            | Self::Error => Vec::new(),
         }
     }
 
@@ -432,7 +450,25 @@ impl ExprKind {
                 .iter_mut()
                 .map(|param| (PatOrigin::Param(param.origin), &mut param.pat))
                 .collect(),
-            _ => Vec::new(),
+            Self::Lit(_)
+            | Self::Local(_)
+            | Self::Ctor { .. }
+            | Self::Call { .. }
+            | Self::FnRef { .. }
+            | Self::ConstRef { .. }
+            | Self::SelfRef { .. }
+            | Self::Field { .. }
+            | Self::Record { .. }
+            | Self::RecordUpdate { .. }
+            | Self::Tuple(_)
+            | Self::List { .. }
+            | Self::Binary { .. }
+            | Self::Not(_)
+            | Self::Neg { .. }
+            | Self::Interpolate { .. }
+            | Self::Panic { .. }
+            | Self::DynCoerce { .. }
+            | Self::Error => Vec::new(),
         }
     }
 }
@@ -452,7 +488,7 @@ pub enum PatOrigin {
 }
 
 /// A replaced field of a record update.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateField {
     /// The new value.
     pub value: ExprId,
@@ -746,7 +782,7 @@ pub enum CaseOrigin {
 }
 
 /// An element of a list literal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListItem {
     /// One element.
     Elem(ExprId),

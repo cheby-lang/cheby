@@ -235,7 +235,7 @@ pub(super) fn targeted_within(fiber: &ExecCtx, depth: u32) -> bool {
 /// `ctx` is the running fiber's control block and `owner` a live `Scope`
 /// handle, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_cancel(ctx: *mut ExecCtx, owner: Word) {
+pub(crate) unsafe extern "C" fn cheby_fiber_sys_cancel(ctx: *mut ExecCtx, owner: Word) {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { super::running(ctx) };
@@ -449,7 +449,8 @@ pub(crate) mod hooks {
         if won.is_empty() {
             return;
         }
-        let delay = match *DELAY_WAKES.lock() {
+        let entry = *DELAY_WAKES.lock();
+        let delay = match entry {
             Some((walker, delay)) if walker == thread::current().id() => delay,
             _ => return,
         };

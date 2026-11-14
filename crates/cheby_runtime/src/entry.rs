@@ -1324,7 +1324,7 @@ mod tests {
         // Through the print kernel, without visible output.
         let empty = StaticImage::new("");
         // SAFETY: a live static string, borrowed for the call.
-        unsafe { crate::io::cheby_io_print(empty.word()) };
+        unsafe { io::cheby_io_print(empty.word()) };
         0
     }
 
@@ -1376,7 +1376,7 @@ mod tests {
         // The leak was charged to the build's domain, not to this thread.
         assert_eq!(domain.live_objects(), 1);
         assert_eq!(alloc::live_objects(), 0);
-        assert_eq!(abi::status::PANIC, 101);
+        assert_eq!(status::PANIC, 101);
     }
 
     /// 0 when its runtime's default fiber stack is 3 MiB, else 1.
@@ -1418,12 +1418,12 @@ mod tests {
     #[test]
     fn exit_statuses_are_fixed_at_the_flush() {
         let returned = |raw| EntryOutcome::Returned(raw);
-        assert_eq!(super::exit_status(&returned(0), true).unwrap(), 0);
-        assert_eq!(super::exit_status(&returned(1), true).unwrap(), 1);
-        assert_eq!(super::exit_status(&returned(0), false).unwrap(), 1);
-        assert_eq!(super::exit_status(&returned(7), false).unwrap(), 1);
+        assert_eq!(exit_status(&returned(0), true).unwrap(), 0);
+        assert_eq!(exit_status(&returned(1), true).unwrap(), 1);
+        assert_eq!(exit_status(&returned(0), false).unwrap(), 1);
+        assert_eq!(exit_status(&returned(7), false).unwrap(), 1);
         assert!(matches!(
-            super::exit_status(&returned(7), true),
+            exit_status(&returned(7), true),
             Err(RuntimeError::InvalidStatus(7))
         ));
     }
@@ -1433,7 +1433,7 @@ mod tests {
         let _guard = serial();
         // Prints the panic report to the test's standard error.
         let status = run_main(panics_with_a_message, RunConfig::default()).unwrap();
-        assert_eq!(status, abi::status::PANIC);
+        assert_eq!(status, status::PANIC);
     }
 
     unsafe extern "C" fn allocates_two(_: *mut ExecCtx) -> u64 {
@@ -1562,6 +1562,10 @@ mod tests {
         assert_eq!(table.abandon().limit, None);
     }
 
+    #[expect(
+        clippy::infinite_loop,
+        reason = "the allocation that passes the memory limit ends the entry"
+    )]
     unsafe extern "C" fn grows(ctx: *mut ExecCtx) -> u64 {
         guarded(ctx, || {
             let mut chain = tuple(&[]);
@@ -1712,7 +1716,7 @@ mod tests {
             assert_eq!(outcome, EntryOutcome::Returned(0));
             let _guard = serial();
             let status = run_main(returns_zero, run_config()).unwrap();
-            assert_eq!(status, abi::status::SUCCESS);
+            assert_eq!(status, status::SUCCESS);
         }
 
         #[test]
@@ -1741,12 +1745,12 @@ mod tests {
             let _guard = serial();
             // Each prints the panic report to the test's standard error.
             let status = run_main(panics_cleanly, run_config()).unwrap();
-            assert_eq!(status, abi::status::PANIC);
+            assert_eq!(status, status::PANIC);
             let status = run_main(panics_after_a_leak, run_config()).unwrap();
             let leaked = if LEAK_CHECK_ENABLED {
-                abi::status::LEAK_CHECK
+                status::LEAK_CHECK
             } else {
-                abi::status::PANIC
+                status::PANIC
             };
             assert_eq!(status, leaked);
         }
@@ -1756,7 +1760,7 @@ mod tests {
         fn print(text: &str) {
             let word = crate::values::string(text);
             // SAFETY: a live string, borrowed for the call.
-            unsafe { crate::io::cheby_io_print(word) };
+            unsafe { io::cheby_io_print(word) };
             // SAFETY: the only reference.
             unsafe { rc::drop(word) };
         }
@@ -1770,7 +1774,7 @@ mod tests {
         unsafe extern "C" fn edgeless_out_of_memory(ctx: *mut ExecCtx) -> u64 {
             print("before the panic");
             // SAFETY: `ctx` is the running entry's; the size has no layout.
-            unsafe { crate::alloc::cheby_rt_alloc(ctx, u64::MAX, 0) }
+            unsafe { alloc::cheby_rt_alloc(ctx, u64::MAX, 0) }
         }
 
         unsafe extern "C" fn edgeless_overflow(ctx: *mut ExecCtx) -> u64 {
@@ -1843,11 +1847,7 @@ mod tests {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 // An exit status, never a signal.
-                assert_eq!(
-                    out.status.code(),
-                    Some(abi::status::PANIC),
-                    "{case}: {stderr}"
-                );
+                assert_eq!(out.status.code(), Some(status::PANIC), "{case}: {stderr}");
                 assert!(stdout.contains("before the panic"), "{case}: {stdout}");
                 assert!(stderr.contains(report), "{case}: {stderr}");
                 assert!(

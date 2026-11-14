@@ -146,11 +146,7 @@ pub fn interface(globals: &Globals) -> ModuleInterface {
     let mut items = Vec::new();
     let home = |segment: &str| Some(home_path(segment));
     let builtin = |items: &mut Vec<IfaceItem>, name: Name, kind: BuiltinType, segment| {
-        let params: &[Name] = match kind {
-            BuiltinType::List | BuiltinType::Set => &[sym::T],
-            BuiltinType::Map => &[sym::K, sym::V],
-            _ => &[],
-        };
+        let params = type_params(kind);
         items.push(ty_item(
             name,
             generics(params),
@@ -256,6 +252,28 @@ const fn item(name: Name, kind: DefKind, parent: Option<DefIndex>, sig: ItemSig)
         targets: Targets::ALL,
         deprecated: None,
         sig,
+    }
+}
+
+/// The type parameters of a builtin type.
+const fn type_params(kind: BuiltinType) -> &'static [Name] {
+    match kind {
+        BuiltinType::List | BuiltinType::Set => &[sym::T],
+        BuiltinType::Map => &[sym::K, sym::V],
+        BuiltinType::Int
+        | BuiltinType::Float
+        | BuiltinType::String
+        | BuiltinType::Never
+        | BuiltinType::I8
+        | BuiltinType::I16
+        | BuiltinType::I32
+        | BuiltinType::I64
+        | BuiltinType::U8
+        | BuiltinType::U16
+        | BuiltinType::U32
+        | BuiltinType::U64
+        | BuiltinType::F32
+        | BuiltinType::Bytes => &[],
     }
 }
 

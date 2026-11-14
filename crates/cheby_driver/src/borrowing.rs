@@ -775,7 +775,7 @@ impl Writing<'_> {
             && sink.reads
             && planned.is_some_and(|p| p.identity == Some(identity) && p.facts.is_none());
         let subject = match part {
-            UnitPart::Code => path.clone(),
+            UnitPart::Code => path,
             UnitPart::Tests => format!("{path}#tests"),
         };
         let own = match part {

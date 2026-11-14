@@ -72,6 +72,10 @@ pub fn reserved_word_error(word: &str, span: Span) -> Option<Diagnostic> {
 /// §2.4, D-059, D-128, D-240). Non-ASCII names are left to the lexer
 /// (E0005).
 #[must_use]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub fn check_name(token: SyntaxToken<'_>) -> Option<Diagnostic> {
     let text = token.text();
     if !text.is_ascii() {
@@ -180,6 +184,10 @@ pub fn check_candidate(text: &str, want: NameCase) -> Result<(), String> {
 /// file names, checked when modules are discovered (E0037). Attribute
 /// names bind nothing (D-435).
 #[must_use]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub fn bound_name(node: SyntaxNode<'_>) -> Option<SyntaxToken<'_>> {
     match node.kind() {
         SyntaxKind::FN_DECL

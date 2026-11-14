@@ -14,14 +14,13 @@
 //! parallel in one process. A kernel never panics: a panic in an
 //! `extern "C"` function aborts the process.
 
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Condvar, PoisonError};
+use std::sync::Condvar;
+use std::sync::atomic::{AtomicBool, AtomicPtr};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
-use cheby_codegen_clif::CodegenOptions;
 use cheby_mir::{CType, ForeignSig};
-use cheby_runtime::{DetachedGroup, ExecCtx, Runtime, RuntimeConfig};
+use cheby_runtime::{ExecCtx, RuntimeConfig};
 
 use super::*;
 

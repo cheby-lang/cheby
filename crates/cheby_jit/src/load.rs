@@ -127,7 +127,11 @@ const fn owner_of(key: FnKey) -> Option<DefId> {
         | FnKey::Closure { owner: def, .. }
         | FnKey::Continuation { owner: def, .. }
         | FnKey::Entry(cheby_mir::EntryKind::Const(def)) => Some(def),
-        _ => None,
+        FnKey::Test(_)
+        | FnKey::Entry(_)
+        | FnKey::Trampoline(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. } => None,
     }
 }
 

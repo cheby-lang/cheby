@@ -780,7 +780,7 @@ fn closed_chain_round(
         let o_notes = seen.clone();
         start_job(me, s, &[c_rx, dup(never_rx)], move |me, words| {
             let n = open(me);
-            let f_notes = o_notes.clone();
+            let f_notes = o_notes;
             start_job(me, n, &[dup(words[0])], move |me, words| {
                 let waiting = on_receive(me, empty(me), words[0], arm(1));
                 f_notes.set("f select", chosen_text(select_step(me, waiting)));

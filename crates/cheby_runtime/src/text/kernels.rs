@@ -126,7 +126,7 @@ fn string_list<'a>(parts: impl IntoIterator<Item = &'a str>) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_length(text: Word) -> i64 {
+pub(crate) unsafe extern "C" fn cheby_string_length(text: Word) -> i64 {
     // SAFETY: forwarded from the caller.
     int(ops::length(unsafe { arg(text) }))
 }
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn cheby_string_length(text: Word) -> i64 {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_grapheme_length(text: Word) -> i64 {
+pub(crate) unsafe extern "C" fn cheby_string_grapheme_length(text: Word) -> i64 {
     // SAFETY: forwarded from the caller.
     int(ops::grapheme_length(unsafe { arg(text) }))
 }
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn cheby_string_grapheme_length(text: Word) -> i64 {
 ///
 /// `a` and `b` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_compare(a: Word, b: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_compare(a: Word, b: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (a, b) = unsafe { (arg(a), arg(b)) };
@@ -167,7 +167,7 @@ pub unsafe extern "C" fn cheby_string_compare(a: Word, b: Word) -> Word {
 ///
 /// `text` and `prefix` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_starts_with(text: Word, prefix: Word) -> bool {
+pub(crate) unsafe extern "C" fn cheby_string_starts_with(text: Word, prefix: Word) -> bool {
     // SAFETY: forwarded from the caller.
     unsafe { arg(text).starts_with(arg(prefix)) }
 }
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn cheby_string_starts_with(text: Word, prefix: Word) -> b
 ///
 /// `text` and `suffix` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_ends_with(text: Word, suffix: Word) -> bool {
+pub(crate) unsafe extern "C" fn cheby_string_ends_with(text: Word, suffix: Word) -> bool {
     // SAFETY: forwarded from the caller.
     unsafe { arg(text).ends_with(arg(suffix)) }
 }
@@ -189,7 +189,7 @@ pub unsafe extern "C" fn cheby_string_ends_with(text: Word, suffix: Word) -> boo
 ///
 /// `text` and `part` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_contains(text: Word, part: Word) -> bool {
+pub(crate) unsafe extern "C" fn cheby_string_contains(text: Word, part: Word) -> bool {
     // SAFETY: forwarded from the caller.
     unsafe { arg(text).contains(arg(part)) }
 }
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn cheby_string_contains(text: Word, part: Word) -> bool {
 ///
 /// `text` and `separator` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (whole, sep) = unsafe { (arg(text), arg(separator)) };
@@ -227,7 +227,7 @@ pub unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) -> Word
 ///
 /// `text` and `separator` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (text, sep) = unsafe { (arg(text), arg(separator)) };
@@ -256,7 +256,7 @@ pub unsafe extern "C" fn cheby_string_split_once(text: Word, separator: Word) ->
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_words(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_words(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(None, || string_list(ops::words(unsafe { arg(text) })))
 }
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn cheby_string_words(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_to_code_points(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_to_code_points(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(None, || string_list(ops::code_points(unsafe { arg(text) })))
 }
@@ -278,7 +278,7 @@ pub unsafe extern "C" fn cheby_string_to_code_points(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_to_graphemes(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_to_graphemes(text: Word) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(None, || string_list(ops::graphemes(unsafe { arg(text) })))
 }
@@ -296,7 +296,7 @@ pub unsafe extern "C" fn cheby_string_to_graphemes(text: Word) -> Word {
 ///
 /// `a` and `b` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_add(a: Word, b: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_add(a: Word, b: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let piece = unsafe { arg(b) };
@@ -353,7 +353,7 @@ fn json_escape(byte: u8) -> Option<([u8; 6], usize)> {
 ///
 /// `out` and `text` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_add_json_quoted(out: Word, text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_add_json_quoted(out: Word, text: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let piece = unsafe { arg(text) }.as_bytes();
@@ -401,7 +401,7 @@ pub unsafe extern "C" fn cheby_string_add_json_quoted(out: Word, text: Word) -> 
 /// `parts` is a live `List<String>` and `separator` a live `String`, both
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_join(parts: Word, separator: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_join(parts: Word, separator: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let sep = unsafe { arg(separator) };
@@ -445,7 +445,7 @@ pub unsafe extern "C" fn cheby_string_join(parts: Word, separator: Word) -> Word
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_repeat(text: Word, count: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_repeat(text: Word, count: i64) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let piece = unsafe { arg(text) };
@@ -483,7 +483,7 @@ fn fill_bytes(fill: &Fill<'_>) -> u64 {
 ///
 /// `text` and `pad` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_pad_start(text: Word, width: i64, pad: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_pad_start(text: Word, width: i64, pad: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (body, pad) = unsafe { (arg(text), arg(pad)) };
@@ -507,7 +507,7 @@ pub unsafe extern "C" fn cheby_string_pad_start(text: Word, width: i64, pad: Wor
 ///
 /// `text` and `pad` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_pad_end(text: Word, width: i64, pad: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_pad_end(text: Word, width: i64, pad: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (body, pad_text) = unsafe { (arg(text), arg(pad)) };
@@ -535,7 +535,7 @@ pub unsafe extern "C" fn cheby_string_pad_end(text: Word, width: i64, pad: Word)
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_trim(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_trim(text: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
     guarded(None, || unsafe { keep(text, ops::trim(arg(text)), true) })
 }
@@ -546,7 +546,7 @@ pub unsafe extern "C" fn cheby_string_trim(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_trim_start(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_trim_start(text: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
     guarded(None, || unsafe {
         keep(text, ops::trim_start(arg(text)), true)
@@ -559,7 +559,7 @@ pub unsafe extern "C" fn cheby_string_trim_start(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_trim_end(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_trim_end(text: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
     guarded(None, || unsafe {
         keep(text, ops::trim_end(arg(text)), true)
@@ -573,7 +573,7 @@ pub unsafe extern "C" fn cheby_string_trim_end(text: Word) -> Word {
 ///
 /// `text` and `prefix` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_remove_prefix(text: Word, prefix: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_remove_prefix(text: Word, prefix: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
     guarded(None, || unsafe {
         let range = ops::remove_prefix(arg(text), arg(prefix));
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn cheby_string_remove_prefix(text: Word, prefix: Word) ->
 ///
 /// `text` and `suffix` are live `String`s, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_remove_suffix(text: Word, suffix: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_remove_suffix(text: Word, suffix: Word) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
     guarded(None, || unsafe {
         let range = ops::remove_suffix(arg(text), arg(suffix));
@@ -602,7 +602,7 @@ pub unsafe extern "C" fn cheby_string_remove_suffix(text: Word, suffix: Word) ->
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let text = unsafe { arg(text) };
@@ -617,7 +617,7 @@ pub unsafe extern "C" fn cheby_string_lowercase(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let text = unsafe { arg(text) };
@@ -631,7 +631,7 @@ pub unsafe extern "C" fn cheby_string_uppercase(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_reverse(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_reverse(text: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let text = unsafe { arg(text) };
@@ -646,7 +646,7 @@ pub unsafe extern "C" fn cheby_string_reverse(text: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_slice(text: Word, start: i64, end: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_slice(text: Word, start: i64, end: i64) -> Word {
     // SAFETY: forwarded from the caller; the range lies on boundaries.
     guarded(None, || unsafe {
         keep(text, ops::slice(arg(text), start, end), true)
@@ -663,7 +663,7 @@ pub unsafe extern "C" fn cheby_string_slice(text: Word, start: i64, end: i64) ->
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         match std::str::from_utf8(unsafe { values::bytes_of(data) }) {
@@ -687,7 +687,11 @@ pub unsafe extern "C" fn cheby_string_from_bytes(data: Word) -> Word {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_from_byte_range(data: Word, start: i64, end: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_from_byte_range(
+    data: Word,
+    start: i64,
+    end: i64,
+) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let all = unsafe { values::bytes_of(data) };
@@ -713,7 +717,7 @@ fn ok_owned(value: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_to_code_point_values(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_to_code_point_values(text: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let text = unsafe { arg(text) };
@@ -731,7 +735,7 @@ pub unsafe extern "C" fn cheby_string_to_code_point_values(text: Word) -> Word {
 ///
 /// `points` is a live `List<Int>`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_string_from_code_point_values(points: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_string_from_code_point_values(points: Word) -> Word {
     guarded(None, || {
         let scalars = || {
             // SAFETY: a live list, borrowed for the call.

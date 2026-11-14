@@ -118,6 +118,10 @@ pub fn escape_value(text: &str) -> Result<char, EscapeError> {
 /// `STRING_ESCAPE` tokens in order, as `(kind, text)`. Other kinds are
 /// skipped; interpolations are handled by the caller. Line breaks become
 /// LF (D-114). An invalid escape, already reported, keeps its text.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub fn string_value<'a>(parts: impl IntoIterator<Item = (SyntaxKind, &'a str)>) -> String {
     let mut value = String::new();
     for (kind, text) in parts {

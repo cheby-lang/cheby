@@ -3,6 +3,10 @@
 //! `check/` (C3, C7, C11, C13, C15), one section per area: inference, order, expected types and conversions, calls,
 //! values, operators, interpolation, desugaring, statements, `panic`,
 //! items and the end of a body.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::Path;
 use std::sync::Arc;
@@ -668,13 +672,13 @@ fn fake_std_modules_and_home_edges() {
     let int_id = b.module("std::int");
     assert_eq!(
         b.modules.get(int_id).map(|i| i.package),
-        Some(cheby_iface::PackageId::STD)
+        Some(PackageId::STD)
     );
     assert_eq!(b.thir_of("std::int").fns.len(), 1);
     // A std module that is not a home and not imported is never loaded.
     assert!(
         b.modules
-            .find(&cheby_package::ModulePath::root("std").child("util"))
+            .find(&ModulePath::root("std").child("util"))
             .is_none()
     );
     // A given `io` replaces the slice's and is not partial.
@@ -785,7 +789,7 @@ fn generic_callees_are_instantiated() {
         panic!("{calls:?}");
     };
     assert_eq!(*def, length);
-    assert_eq!(&ty_args[..], [Ty::STRING]);
+    assert_eq!(&**ty_args, [Ty::STRING]);
     assert_eq!(calls[0].ty, Ty::INT);
 }
 
@@ -1276,7 +1280,7 @@ fn bounded_calls_pass_dictionaries() {
     else {
         panic!()
     };
-    assert_eq!(&ty_args[..], [Ty::STRING]);
+    assert_eq!(&**ty_args, [Ty::STRING]);
     assert_eq!(dicts.len(), 1);
     assert!(
         matches!(&dicts[0], Dict::Impl { iface, ty, .. } if *iface == builtin::SHOW && *ty == Ty::STRING),
@@ -1290,7 +1294,7 @@ fn bounded_calls_pass_dictionaries() {
     };
     assert!(
         matches!(
-            &parts[..],
+            &**parts,
             [InterpPart::Value {
                 show: Some(Callee::Iface { .. }),
                 ..
@@ -1347,8 +1351,8 @@ fn items_as_values() {
     let ExprKind::FnRef { ty_args, dicts, .. } = &fn_refs[1].kind else {
         panic!()
     };
-    assert_eq!(&ty_args[..], [Ty::INT]);
-    assert!(matches!(&dicts[..], [Dict::Impl { .. }]), "{dicts:?}");
+    assert_eq!(&**ty_args, [Ty::INT]);
+    assert!(matches!(&**dicts, [Dict::Impl { .. }]), "{dicts:?}");
     // `Some` and `Show::show` are closures (D-500).
     let closures = exprs(body, |k| matches!(k, ExprKind::Closure { .. }));
     assert_eq!(closures.len(), 2);
@@ -1367,7 +1371,7 @@ fn constants_are_read_through_const_refs() {
     let extra = b.def("app", "extra");
     let answer_def = module.consts.iter().find(|c| c.def == answer).unwrap();
     // Sorted by (module path, name).
-    assert_eq!(&answer_def.deps[..], [base, extra]);
+    assert_eq!(&*answer_def.deps, [base, extra]);
     assert_eq!(answer_def.body.ret, Ty::INT);
     let body = body(&b, "main");
     assert!(

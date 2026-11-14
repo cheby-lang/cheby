@@ -113,7 +113,13 @@ pub(crate) fn setting_from_env() -> Result<(), RuntimeError> {
     let setting = SETTING.get_or_init(|| {
         parse_setting(env_value().as_deref()).map_err(|error| match error {
             RuntimeError::InvalidBacktrace(value) => value,
-            other => other.to_string(),
+            other @ (RuntimeError::StackTooSmall { .. }
+            | RuntimeError::Spawn(_)
+            | RuntimeError::EntryLost
+            | RuntimeError::InvalidStatus(_)
+            | RuntimeError::InvalidThreads(_)
+            | RuntimeError::Unsupported
+            | RuntimeError::Stack(_)) => other.to_string(),
         })
     });
     match setting {

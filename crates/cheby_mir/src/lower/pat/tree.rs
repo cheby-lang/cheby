@@ -429,7 +429,15 @@ fn literal_node(m: Matrix<'_>, c: usize, occ: OccId, kind: Kind) -> Result<Liter
             Some(Some(p)) => match &p.kind {
                 PatKind::Lit(Lit::Int(v)) => Key::Int(*v),
                 PatKind::Lit(Lit::Str(s)) => Key::Str(s.clone()),
-                _ => return Err(Ice::new("a literal column with another pattern")),
+                PatKind::Wild
+                | PatKind::Bind(_)
+                | PatKind::Lit(_)
+                | PatKind::Ctor { .. }
+                | PatKind::Tuple(_)
+                | PatKind::List { .. }
+                | PatKind::Or(_)
+                | PatKind::As { .. }
+                | _ => return Err(Ice::new("a literal column with another pattern")),
             },
             _ => continue,
         };
@@ -533,7 +541,11 @@ fn normalize<'p>(pat: &'p Pat, occ: OccId, binds: &mut Vec<(LocalId, OccId)>) ->
                 Some(first) if is_catch_all(first) => p = first,
                 _ => return Some(p),
             },
-            _ => return Some(p),
+            PatKind::Lit(_)
+            | PatKind::Ctor { .. }
+            | PatKind::Tuple(_)
+            | PatKind::List { .. }
+            | _ => return Some(p),
         }
     }
 }
@@ -544,7 +556,12 @@ fn is_catch_all(pat: &Pat) -> bool {
     match &pat.kind {
         PatKind::Wild | PatKind::Bind(_) => true,
         PatKind::As { pat, .. } => is_catch_all(pat),
-        _ => false,
+        PatKind::Lit(_)
+        | PatKind::Ctor { .. }
+        | PatKind::Tuple(_)
+        | PatKind::List { .. }
+        | PatKind::Or(_)
+        | _ => false,
     }
 }
 
@@ -554,7 +571,13 @@ fn head(pat: &Pat) -> &Pat {
     match &pat.kind {
         PatKind::As { pat, .. } => head(pat),
         PatKind::Or(alts) => alts.first().map_or(pat, |a| head(a)),
-        _ => pat,
+        PatKind::Wild
+        | PatKind::Bind(_)
+        | PatKind::Lit(_)
+        | PatKind::Ctor { .. }
+        | PatKind::Tuple(_)
+        | PatKind::List { .. }
+        | _ => pat,
     }
 }
 
@@ -570,7 +593,14 @@ fn list_parts(pat: &Pat) -> Option<(&[Pat], Option<&Pat>, &[Pat])> {
             rest,
             suffix,
         } => Some((prefix, rest.as_deref(), suffix)),
-        _ => None,
+        PatKind::Wild
+        | PatKind::Bind(_)
+        | PatKind::Lit(_)
+        | PatKind::Ctor { .. }
+        | PatKind::Tuple(_)
+        | PatKind::Or(_)
+        | PatKind::As { .. }
+        | _ => None,
     }
 }
 
@@ -633,7 +663,9 @@ impl<'p> Compiler<'_, '_> {
             PatKind::Lit(Lit::Str(_)) => Kind::Str,
             PatKind::Lit(_) => return Err(Ice::new("a float literal pattern (D-113)")),
             PatKind::List { .. } => Kind::List,
-            _ => return Ok(None),
+            PatKind::Wild | PatKind::Bind(_) | PatKind::Or(_) | PatKind::As { .. } | _ => {
+                return Ok(None);
+            }
         }))
     }
 
@@ -907,7 +939,14 @@ impl<'p> Compiler<'_, '_> {
                 })
                 .collect::<Result<Vec<_>, Ice>>()
                 .map(Some),
-            _ => Err(Ice::new("a tuple column with another pattern")),
+            PatKind::Wild
+            | PatKind::Bind(_)
+            | PatKind::Lit(_)
+            | PatKind::Ctor { .. }
+            | PatKind::List { .. }
+            | PatKind::Or(_)
+            | PatKind::As { .. }
+            | _ => Err(Ice::new("a tuple column with another pattern")),
         })
     }
 
@@ -977,7 +1016,14 @@ impl<'p> Compiler<'_, '_> {
                         .collect(),
                 )),
                 PatKind::Ctor { .. } => Ok(None),
-                _ => Err(Ice::new("a constructor column with another pattern")),
+                PatKind::Wild
+                | PatKind::Bind(_)
+                | PatKind::Lit(_)
+                | PatKind::Tuple(_)
+                | PatKind::List { .. }
+                | PatKind::Or(_)
+                | PatKind::As { .. }
+                | _ => Err(Ice::new("a constructor column with another pattern")),
             })?;
             if node.count == 1 {
                 return Ok(Next::Matrix(sub));
@@ -1183,7 +1229,7 @@ impl<'p> Compiler<'_, '_> {
         let ty = self.occs.get(node.occ.index()).map(|o| o.ty);
         let test = match node.kind {
             Kind::Int => Test::Int(ty.map_or(Repr::Int, |t| repr_of(t, self.defs.globals))),
-            _ => Test::Str,
+            Kind::Tuple(_) | Kind::Ctor { .. } | Kind::Str | Kind::List => Test::Str,
         };
         Ok(Next::Tree(Tree::Test {
             occ: node.occ,
@@ -1474,7 +1520,15 @@ pub(crate) fn bound_locals<'p>(pats: impl IntoIterator<Item = &'p Pat>) -> Vec<L
     for pat in pats {
         pat.walk(&mut |p| match &p.kind {
             PatKind::Bind(l) | PatKind::As { local: l, .. } if !out.contains(l) => out.push(*l),
-            _ => {}
+            PatKind::Wild
+            | PatKind::Bind(_)
+            | PatKind::Lit(_)
+            | PatKind::Ctor { .. }
+            | PatKind::Tuple(_)
+            | PatKind::List { .. }
+            | PatKind::Or(_)
+            | PatKind::As { .. }
+            | _ => {}
         });
     }
     out.sort_by_key(|l| l.index());

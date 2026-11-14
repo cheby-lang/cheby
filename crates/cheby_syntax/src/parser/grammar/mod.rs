@@ -27,6 +27,10 @@ use crate::TokenSet;
 /// order is checked by validation (E0018), because `tree-sitter-cheby`
 /// accepts any order. Line breaks at the start and the end of the file are
 /// ignored (D-426).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(super) fn source_file(p: &mut Parser<'_>) {
     let m = p.start();
     loop {
@@ -172,6 +176,10 @@ pub(super) fn list_rest(
 }
 
 /// The text of a closing delimiter, quoted, for messages.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 const fn closer_text(open: SyntaxKind) -> &'static str {
     match open {
         SyntaxKind::L_PAREN => "`)`",
@@ -199,6 +207,10 @@ pub(super) enum PathEnd {
 ///
 /// A path has at most one module qualifier, as in `tree-sitter-cheby`;
 /// more segments are kept in the path and reported (E0013).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(super) fn path(p: &mut Parser<'_>, interface: bool) -> PathEnd {
     let m = p.start();
     // The text of each segment, for the help of E0013.
@@ -264,7 +276,7 @@ fn long_path_help(segments: &[&str]) -> String {
     let item_start = segments
         .iter()
         .position(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-        .unwrap_or(segments.len().saturating_sub(1))
+        .unwrap_or_else(|| segments.len().saturating_sub(1))
         .min(segments.len().saturating_sub(1));
     match segments.split_at_checked(item_start) {
         Some((modules @ [_, .., last], item)) if !item.is_empty() => format!(

@@ -14,8 +14,6 @@
 //! its exit status shows that the code it ran is the code a cold build
 //! runs: a damaged record that were loaded would end it with another
 //! status, or with a signal that ends the test binary.
-
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
@@ -181,7 +179,7 @@ fn line(artifact: &str, module: &str, verdict: &str) -> String {
 /// Whether the environment's positions are on (`CHEBY_POSITIONS`, D-1173):
 /// a record names its source path only then.
 fn positions_on() -> bool {
-    crate::backend::mir_options_from_env().is_ok_and(|mir| mir.positions)
+    backend::mir_options_from_env().is_ok_and(|mir| mir.positions)
 }
 
 /// Damages the one record of `source` with `damage`, then checks that the

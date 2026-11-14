@@ -57,7 +57,14 @@ pub fn item_signature(def: DefId, item: &IfaceItem, cx: &DisplayCx<'_>, opts: Si
             let parent = DefId::new(def.module, ctor.ty);
             let generics = read_item(parent, cx).and_then(|parent| match &parent.sig {
                 ItemSig::Type(ty) => Some(&ty.generics),
-                _ => None,
+                ItemSig::Fn(_)
+                | ItemSig::Ctor(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::InterfaceFn(_)
+                | ItemSig::Test
+                | ItemSig::Error => None,
             });
             let cx = DisplayCx { generics, ..*cx };
             write_ctor(&mut out, item, &ctor.fields, &cx);
@@ -215,7 +222,14 @@ fn write_type_body(
         match read(*index) {
             Some(ctor) => match &ctor.sig {
                 ItemSig::Ctor(sig) => write_ctor(out, ctor, &sig.fields, cx),
-                _ => out.push_str(name_of(ctor, cx)),
+                ItemSig::Fn(_)
+                | ItemSig::Type(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::InterfaceFn(_)
+                | ItemSig::Test
+                | ItemSig::Error => out.push_str(name_of(ctor, cx)),
             },
             None => out.push('?'),
         }
@@ -280,7 +294,14 @@ fn write_interface(
         match read_item(DefId::new(def.module, *index), cx) {
             Some(function) => match &function.sig {
                 ItemSig::InterfaceFn(sig) => write_interface_fn(out, function, sig, cx),
-                _ => out.push_str(name_of(function, cx)),
+                ItemSig::Fn(_)
+                | ItemSig::Type(_)
+                | ItemSig::Ctor(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::Test
+                | ItemSig::Error => out.push_str(name_of(function, cx)),
             },
             None => out.push('?'),
         }

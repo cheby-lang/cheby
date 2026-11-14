@@ -3,6 +3,10 @@
 //! D-691, D-723), while [`Entry::run_root_in`] still charges the JIT's.
 //! The program is hand-built MIR: `mk()` allocates a pair and returns it,
 //! and a `Const` thunk calls it.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::sync::{Arc, mpsc};
 

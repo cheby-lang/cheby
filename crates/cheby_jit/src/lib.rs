@@ -421,10 +421,12 @@ impl Jit {
         // hold. D-913: no libcall resolves.
         let isa = cheby_codegen_clif::isa::host_isa().map_err(|e| match e {
             CodegenError::UnsupportedHost(message) => JitError::Host(message),
-            other => JitError::Codegen(other),
+            other @ (CodegenError::Ice(_) | CodegenError::Module(_) | CodegenError::Compile(_)) => {
+                JitError::Codegen(other)
+            }
         })?;
         let mut builder =
-            JITBuilder::with_isa(isa.clone(), cheby_codegen_clif::isa::libcall_names());
+            JITBuilder::with_isa(Arc::clone(&isa), cheby_codegen_clif::isa::libcall_names());
         builder.symbols(cheby_runtime::symbols());
         let symbols: SymbolTable = Arc::default();
         let libraries: Libraries = Arc::new(Mutex::new(vec![Vec::new()]));
@@ -616,7 +618,12 @@ impl Jit {
         for result in compiled {
             fresh.push(result.map_err(|e| match e {
                 cheby_codegen_clif::record::RecordError::Codegen(e) => JitError::Codegen(e),
-                other => JitError::ice(other.to_string()),
+                other @ (cheby_codegen_clif::record::RecordError::Malformed(_)
+                | cheby_codegen_clif::record::RecordError::Version(_)
+                | cheby_codegen_clif::record::RecordError::Undefined(_)
+                | cheby_codegen_clif::record::RecordError::Unsupported(_)) => {
+                    JitError::ice(other.to_string())
+                }
             })?);
         }
         let mut items = Vec::with_capacity(units.len());

@@ -3,8 +3,6 @@
 //! alone into a recording module (D-914), define only their own unit's
 //! symbols and import what other units define.
 
-use std::path::{Path, PathBuf};
-
 use cheby_codegen_clif::record::{CodeRecord, RecordingModule, SymbolLinkage};
 use cheby_codegen_clif::{CodegenOptions, UnitCx, compile_unit, isa, mangle};
 use cheby_iface::{DefId, Vis};

@@ -82,7 +82,7 @@ impl BodyCx<'_> {
     /// `Ty::ERROR` until `finish`. Refutability is checked later, on THIR
     /// (`crate::exhaust`). An error is reported here and leaves the body
     /// errored; this never returns an [`Ice`] for a user error.
-    pub fn check_pat(
+    pub(crate) fn check_pat(
         &mut self,
         pat: ast::Pat<'_>,
         expected: &InferTy,
@@ -319,7 +319,7 @@ impl BodyCx<'_> {
     fn int_pat(
         &mut self,
         p: ast::LiteralPat<'_>,
-        int: cheby_syntax::ast::IntLit<'_>,
+        int: ast::IntLit<'_>,
         expected: &InferTy,
         cx: &PatCx,
     ) -> Result<PatKind, Ice> {
@@ -389,7 +389,7 @@ impl BodyCx<'_> {
         // `Point { x }` binds `x` (D-113).
         let span = field
             .name()
-            .map_or(field.significant_span(), AstToken::span);
+            .map_or_else(|| field.significant_span(), AstToken::span);
         let local = self.bind_node(field.syntax().id(), ty, span)?;
         self.make_pat(PatKind::Bind(local), ty, span)
     }
@@ -409,7 +409,7 @@ impl BodyCx<'_> {
         };
         let info = match self.path_res(path.syntax().id())? {
             Res::Def(def) => self.ctor_info(def)?,
-            _ => None,
+            Res::Local(_) | Res::Module(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => None,
         };
         // An unresolved or invisible constructor was reported by the
         // resolver, an erroneous one with its declaration.

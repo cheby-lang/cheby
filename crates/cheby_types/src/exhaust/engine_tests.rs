@@ -1,4 +1,8 @@
 //! Engine tests over abstract spaces.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use super::*;
 

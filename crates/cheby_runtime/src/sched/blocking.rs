@@ -278,9 +278,7 @@ impl<R> Completion<R> {
         *self.result.lock() = Some(result);
         #[cfg(test)]
         if let Some(probe) = &self.probe {
-            probe
-                .completed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            probe.completed.store(true, Ordering::SeqCst);
         }
         // SAFETY: the fiber waits for this job, parked or parking (or
         // running it inline, after a refused thread), and only this
@@ -298,9 +296,7 @@ impl<R> Completion<R> {
         if wakes_nothing(&self.runtime) {
             #[cfg(test)]
             if let Some(probe) = &self.probe {
-                probe
-                    .skipped
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                probe.skipped.fetch_add(1, Ordering::SeqCst);
             }
             self.release_pending();
             leave(&self.runtime);
@@ -310,8 +306,8 @@ impl<R> Completion<R> {
         if let Some(probe) = &self.probe {
             probe
                 .marked_at_wake
-                .store(fiber.sched.blocking(), std::sync::atomic::Ordering::SeqCst);
-            probe.woke.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                .store(fiber.sched.blocking(), Ordering::SeqCst);
+            probe.woke.fetch_add(1, Ordering::SeqCst);
         }
         // SAFETY: as above; nothing touches the control block after the
         // wake, which may let the fiber run and retire. A fiber running
@@ -433,6 +429,10 @@ fn on_pool<R: Send + 'static>(
         probe: hooks.probe.clone(),
     });
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )]
     let _ = hooks;
     let done = Arc::clone(&completion);
     // `PARKING` first, then the mark, both before the submit: a completion
@@ -477,7 +477,6 @@ fn on_pool<R: Send + 'static>(
 /// so that the wake finds the fiber `PARKING` (survey-io §3.2).
 #[cfg(test)]
 fn wait_for_completion(me: &ExecCtx, hooks: &Hooks) {
-    use std::sync::atomic::Ordering;
     let Some(probe) = &hooks.probe else {
         return;
     };
@@ -636,18 +635,14 @@ impl<R> Detached<R> {
             // sees the abandoned result already dropped.
             #[cfg(test)]
             if let Some(probe) = &self.probe {
-                probe
-                    .abandoned
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                probe.abandoned.fetch_add(1, Ordering::SeqCst);
             }
             return;
         }
         *self.result.lock() = Some(result);
         #[cfg(test)]
         if let Some(probe) = &self.probe {
-            probe
-                .completed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            probe.completed.store(true, Ordering::SeqCst);
         }
         // SAFETY: the claim won the header, so the fiber is parked or
         // parking on it (or running this job inline, after a refused
@@ -659,9 +654,7 @@ impl<R> Detached<R> {
         if wakes_nothing(&self.runtime) {
             #[cfg(test)]
             if let Some(probe) = &self.probe {
-                probe
-                    .skipped
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                probe.skipped.fetch_add(1, Ordering::SeqCst);
             }
             self.release_pending();
             leave(&self.runtime);
@@ -671,8 +664,8 @@ impl<R> Detached<R> {
         if let Some(probe) = &self.probe {
             probe
                 .marked_at_wake
-                .store(fiber.sched.blocking(), std::sync::atomic::Ordering::SeqCst);
-            probe.woke.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                .store(fiber.sched.blocking(), Ordering::SeqCst);
+            probe.woke.fetch_add(1, Ordering::SeqCst);
         }
         // SAFETY: as above; nothing touches the control block after the
         // wake. A fiber running the job inline is `RUNNING`, and the wake
@@ -729,6 +722,10 @@ fn on_pool_detached<R: Send + 'static>(
         probe: hooks.probe.clone(),
     });
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )]
     let _ = hooks;
     // `PARKING`, then the mark, as `on_pool`; then the header goes to the
     // walk, before the submit, so a cancellation from now on either is
@@ -830,7 +827,6 @@ fn on_pool_detached<R: Send + 'static>(
 /// (`Probe::hold_refused`).
 #[cfg(test)]
 fn hold_refused(header: &WaitHeader, hooks: &Hooks) {
-    use std::sync::atomic::Ordering;
     let Some(probe) = &hooks.probe else {
         return;
     };
@@ -868,7 +864,7 @@ pub(crate) fn code_tokens(runtime: &Shared) -> Vec<CodeToken> {
 /// valid while the runtime's code tokens live, and which only reads its
 /// `nargs` words and writes its result word.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_blocking_call(
+pub(crate) unsafe extern "C" fn cheby_rt_blocking_call(
     ctx: *mut ExecCtx,
     shim: unsafe extern "C" fn(*const u64, *mut u64),
     args: *const u64,

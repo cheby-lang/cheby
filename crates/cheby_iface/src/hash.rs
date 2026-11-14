@@ -87,7 +87,14 @@ pub fn encoded_order(iface: &ModuleInterface, globals: &Globals) -> Result<Vec<D
                 ..
             }) => ctors,
             ItemSig::Interface(i) => &i.fns,
-            _ => &[],
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => &[],
         };
         for &child in children {
             iface.items.try_get(child, "child item")?;

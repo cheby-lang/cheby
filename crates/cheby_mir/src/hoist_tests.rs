@@ -1,6 +1,10 @@
 //! Tests of the hoist pass (D-911): field reads move up to the statement
 //! that consumes a sibling projection, on lowered programs under both RC
 //! modes, and the rules that keep a read where it is, on hand-built MIR.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, ModuleId, Ty};

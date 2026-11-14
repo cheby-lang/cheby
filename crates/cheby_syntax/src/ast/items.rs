@@ -293,6 +293,10 @@ pub enum VisibilityKind {
 impl<'t> Visibility<'t> {
     /// `pub` or `priv`.
     #[must_use]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub fn kind(self) -> Option<VisibilityKind> {
         match self.keyword()?.kind() {
             SyntaxKind::PUB_KW => Some(VisibilityKind::Pub),
@@ -583,7 +587,14 @@ impl<'t> Param<'t> {
     pub fn name(self) -> Option<Ident<'t>> {
         match self.pattern()? {
             Pat::Ident(pat) => pat.name(),
-            _ => None,
+            Pat::Wildcard(_)
+            | Pat::Literal(_)
+            | Pat::Ctor(_)
+            | Pat::Tuple(_)
+            | Pat::List(_)
+            | Pat::Paren(_)
+            | Pat::Or(_)
+            | Pat::As(_) => None,
         }
     }
 

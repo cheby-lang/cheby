@@ -24,7 +24,7 @@ use crate::values;
 /// Callable from generated code with any arguments; `ctx` is null or the
 /// running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64) -> Word {
     guarded(Some(ctx), || {
         let cap = u64::try_from(cap).unwrap_or(0);
         object::ptr_to_word(string::alloc_string(cap))
@@ -44,7 +44,11 @@ pub unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64)
 /// `acc` is an owned `String` (heap or static) and `piece` a borrowed live
 /// `String`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_str_append(ctx: *mut ExecCtx, acc: Word, piece: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_str_append(
+    ctx: *mut ExecCtx,
+    acc: Word,
+    piece: Word,
+) -> Word {
     guarded(Some(ctx), || {
         let owned = DropOnUnwind::new([acc]);
         // SAFETY: forwarded from the caller.
@@ -95,7 +99,7 @@ pub unsafe extern "C" fn cheby_rt_str_append(ctx: *mut ExecCtx, acc: Word, piece
 ///
 /// `a` and `b` are live `String`s.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_str_eq(a: Word, b: Word) -> bool {
+pub(crate) unsafe extern "C" fn cheby_rt_str_eq(a: Word, b: Word) -> bool {
     // SAFETY: forwarded from the caller.
     match unsafe { (string::bytes(a), string::bytes(b)) } {
         (Some(a), Some(b)) => a == b,
@@ -117,7 +121,7 @@ pub unsafe extern "C" fn cheby_rt_str_eq(a: Word, b: Word) -> bool {
 /// `ctx` is the running entry's context; `a` and `b` are live uniform
 /// words of one type; `location` is 0 or a live `String`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_equal(
+pub(crate) unsafe extern "C" fn cheby_rt_equal(
     ctx: *mut ExecCtx,
     a: Word,
     b: Word,
@@ -146,7 +150,7 @@ pub unsafe extern "C" fn cheby_rt_equal(
 ///
 /// `value` is a live uniform word; `ctx` is the running entry's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe { generic::debug_object(value) })
 }
@@ -160,7 +164,7 @@ pub unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -> Word 
 /// Callable with any arguments; `ctx` is null or the running fiber's
 /// context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word {
     guarded(Some(ctx), || values::int_word(value))
 }
 
@@ -172,7 +176,7 @@ pub unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word
 /// Callable with any arguments; `ctx` is null or the running fiber's
 /// context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) -> Word {
     guarded(Some(ctx), || values::u64_word(value))
 }
 
@@ -183,7 +187,7 @@ pub unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) -> Word
 /// Callable with any arguments; `ctx` is null or the running fiber's
 /// context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) -> Word {
     guarded(Some(ctx), || values::f64_word(value))
 }
 
@@ -194,20 +198,20 @@ pub unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) -> Word
 /// Callable with any arguments; `ctx` is null or the running fiber's
 /// context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_box_f32(ctx: *mut ExecCtx, value: f32) -> Word {
+pub(crate) unsafe extern "C" fn cheby_rt_box_f32(ctx: *mut ExecCtx, value: f32) -> Word {
     guarded(Some(ctx), || values::f32_word(value))
 }
 
 /// `cheby_rt_fmod_f64(a, b)`: `a % b` on `Float`, the exact remainder of
 /// truncating division with the sign of `a` (D-527).
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_rt_fmod_f64(a: f64, b: f64) -> f64 {
+pub(crate) extern "C" fn cheby_rt_fmod_f64(a: f64, b: f64) -> f64 {
     a % b
 }
 
 /// `cheby_rt_fmod_f32(a, b)`: `a % b` on `F32` (D-527).
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_rt_fmod_f32(a: f32, b: f32) -> f32 {
+pub(crate) extern "C" fn cheby_rt_fmod_f32(a: f32, b: f32) -> f32 {
     a % b
 }
 
@@ -314,8 +318,7 @@ mod tests {
     }
 
     unsafe extern "C" fn compares_closures(ctx: *mut ExecCtx) -> u64 {
-        let closure = crate::generic::tests::closure(&[]);
-        // SAFETY: the running entry's context and a live closure.
+        let closure = generic::tests::closure(&[]);
         let location = values::string("src/main.cheby:3:7");
         // SAFETY: the running entry's context, a live closure and a live
         // string.

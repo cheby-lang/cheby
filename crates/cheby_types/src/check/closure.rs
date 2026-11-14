@@ -32,11 +32,15 @@ impl BodyCx<'_> {
                 InferTy::Known(cheby_iface::Ty::ERROR) => {
                     Some((vec![InferTy::ERROR; written.len()].into(), InferTy::ERROR))
                 }
-                _ => None,
+                InferTy::Known(_)
+                | InferTy::Var(_)
+                | InferTy::Named { .. }
+                | InferTy::Tuple(_)
+                | InferTy::Fn { .. } => None,
             },
             None => None,
         };
-        let context = shape.as_ref().map(|(ps, _)| &ps[..]);
+        let context = shape.as_ref().map(|(ps, _)| &**ps);
         let (params, tys) = self.fn_params(&written, context, ParamOrigin::Closure)?;
         let ret_expected = self.ret_expected(c.ret_type(), shape.map(|(_, ret)| ret))?;
         let Some(block) = c.body() else {

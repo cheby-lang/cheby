@@ -121,6 +121,10 @@ fn previous_on_line(lexed: &Lexed, i: usize) -> Option<usize> {
 }
 
 /// The `(` that the `)` at raw index `close` closes, on the same line.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn matching_open_paren(lexed: &Lexed, close: usize) -> Option<usize> {
     let mut depth = 0_usize;
     for j in (0..=close).rev() {
@@ -180,6 +184,10 @@ struct Braces {
 }
 
 impl Braces {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn new(lexed: &Lexed, text: &str) -> Self {
         let mut braces = Self::default();
         // Open braces with the indentation of their line.
@@ -555,6 +563,10 @@ impl<'a> Parser<'a> {
 
     /// The span an error at the current token points at: the token, or an
     /// empty span after the previous token for a line break or the end.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn error_span(&self) -> Span {
         let range = match self.current() {
             NEWLINE | EOF => TextRange::empty(self.prev_end),
@@ -664,6 +676,10 @@ impl<'a> Parser<'a> {
     /// keyword at the start of a line (if `items`), or the end. Delimiters
     /// are skipped as balanced groups, entering their newline modes. Does
     /// nothing, and makes no node, if already at a stop.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub(crate) fn skip_until(&mut self, stop: TokenSet, items: bool) {
         let m = self.start();
         let entry = self.input.mode_depth();
@@ -751,6 +767,10 @@ impl<'a> Parser<'a> {
     /// keyword at the start of a line, or the end, and returns `false`; the
     /// caller then returns without parsing. Until the next top-level item,
     /// further errors are consequences and are not reported.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub(crate) fn enter(&mut self) -> bool {
         if self.depth < MAX_DEPTH {
             self.depth = self.depth.saturating_add(1);
@@ -808,6 +828,10 @@ impl<'a> Parser<'a> {
 }
 
 /// The closing delimiter of `open`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 const fn closer(open: SyntaxKind) -> SyntaxKind {
     match open {
         L_PAREN => R_PAREN,

@@ -2,6 +2,10 @@
 //! module is classified (F §5.1), and the rows of F §5.3 on clean text, a
 //! type error and a grammar error. The helpers of `ide::scope` and
 //! `ide::print` are tested here too, on the same packages.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -447,12 +451,7 @@ fn clean_main(main: &ModuleIndex) {
     // A punned initializer is the field, with the value as `also`.
     assert_eq!(
         w("x", 3),
-        (
-            field("x"),
-            Some(main_x.clone()),
-            Role::FieldInit,
-            NameKind::Field
-        )
+        (field("x"), Some(main_x), Role::FieldInit, NameKind::Field)
     );
     assert_eq!(
         w("y", 0),
@@ -484,7 +483,7 @@ fn clean_main_paths(main: &ModuleIndex) {
         w("P", 1),
         (p_value.clone(), None, Role::Use, NameKind::Constructor)
     );
-    assert_eq!(w("P", 2).0, p_value.clone());
+    assert_eq!(w("P", 2).0, p_value);
     let p_type = Symbol::import_alias(app(&[]), SymbolNs::Type, "P");
     assert_eq!(
         w("P", 0),

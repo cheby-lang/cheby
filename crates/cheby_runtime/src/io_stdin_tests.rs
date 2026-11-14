@@ -248,7 +248,8 @@ type Part = Result<&'static [u8], io::ErrorKind>;
 impl Read for Scripted {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.gate.pass();
-        match self.parts.lock().pop_front() {
+        let part = self.parts.lock().pop_front();
+        match part {
             Some(Ok(bytes)) => {
                 let count = bytes.len().min(buf.len());
                 buf[..count].copy_from_slice(&bytes[..count]);
@@ -297,7 +298,7 @@ fn stdin_detached_a_failed_refill_keeps_its_error_for_the_next_read() {
     // The abandoned refill reads on: `hal`, then the error, which it keeps.
     input.gate.open();
     wait_until(|| waiters.load(Ordering::SeqCst) == 0);
-    let script = input.clone();
+    let script = input;
     let (root, seen) = reading_root(&runtime, &domain, move |me| {
         let failed = read_line_on(me, lines, waiters, {
             let script = script.clone();

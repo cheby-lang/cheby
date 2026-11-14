@@ -1,6 +1,10 @@
 //! Lowering tests for dictionaries, interface calls and descriptors
 //! (W3-A), through `test_support::lower_source`, pinned by goldens under
 //! `tests/golden/dict/` (bless with `CHEBY_BLESS=1`, then read them).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use crate::dump::dump;
 use crate::golden_tests::check_golden;
@@ -126,7 +130,7 @@ fn main() {
 fn dictionaries_built_at_run_time_and_static_ones() {
     let l = lowered(&[(
         "",
-        r"
+        "
 fn shown<T: Show>(x: T) -> String {
   Show::show(x)
 }
@@ -190,7 +194,7 @@ fn user_type_descriptors() {
     let l = lowered(&[
         (
             "",
-            r"
+            "
 import app::boxed
 import app::geometry::{Point}
 
@@ -382,7 +386,7 @@ fn main() {
 fn function_values_with_dictionaries() {
     let l = lowered(&[(
         "",
-        r"
+        "
 fn shown<T: Show>(x: T) -> String {
   Show::show(x)
 }

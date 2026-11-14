@@ -2,6 +2,10 @@
 //! them, on hand-built MIR, its decisions (the reuse report's input), the
 //! parameters it keeps owned (D-806), and the validator's token rules
 //! (D-838, D-839, D-840, D-841).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, Idx, ModuleId};
@@ -119,7 +123,7 @@ fn function_of(source: &str, name: &str) -> String {
     lower_source(&[("", source)]).function("app", &format!("app::{name}"))
 }
 
-const RECORD: &str = r"//! Record updates.
+const RECORD: &str = "//! Record updates.
 
 type Point {
   x: Int,
@@ -154,7 +158,7 @@ fn main() {
 }
 ";
 
-const TREE: &str = r"//! A persistent tree's insert.
+const TREE: &str = "//! A persistent tree's insert.
 
 import std::int
 
@@ -219,7 +223,7 @@ fn reuse_pattern_and_rebuild_in_one_arm_reuses_the_node() {
     }
 }
 
-const NESTED: &str = r"//! Rebuilds in nested arms where no arm uses the matched tree, the shape
+const NESTED: &str = "//! Rebuilds in nested arms where no arm uses the matched tree, the shape
 //! of `std::sorted_map::insert`.
 
 import std::int
@@ -623,7 +627,7 @@ fn reuse_arm_of_several_tags_proves_no_layout() {
 #[test]
 fn reuse_owned_last_use_kernel_argument_stays_in_place() {
     let text = function_of(
-        r"//! A set grown in place.
+        "//! A set grown in place.
 
 import std::set
 

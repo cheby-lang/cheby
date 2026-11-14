@@ -8,6 +8,10 @@
 //! the module, a function of an imported module, a constructor, or a
 //! standard-library function the evaluator knows. Anything else, and every
 //! construct the generator never writes, is [`EvalError::Unsupported`].
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -456,7 +460,7 @@ impl Lowerer<'_> {
                     self.malformed(local.syntax(), "a local function without a name")
                 })?;
                 // The name is in scope in its own body (§5.8) and after it.
-                self.scope.push(fn_name.clone());
+                self.scope.push(Rc::clone(&fn_name));
                 let def = self.scoped(|l| {
                     let params = local
                         .params()
@@ -517,7 +521,7 @@ impl Lowerer<'_> {
                     .name()
                     .map(|n| name(n.text()))
                     .ok_or_else(|| self.malformed(p.syntax(), "a binding without a name"))?;
-                self.scope.push(bound.clone());
+                self.scope.push(Rc::clone(&bound));
                 Ok(Pat::Bind(bound))
             }
             ast::Pat::Literal(p) => match p.kind() {
@@ -567,8 +571,8 @@ impl Lowerer<'_> {
                                 self.pat(q)?
                             } else {
                                 // `C { f }` binds `f` (punning, §6.4).
-                                self.scope.push(field_name.clone());
-                                Pat::Bind(field_name.clone())
+                                self.scope.push(Rc::clone(&field_name));
+                                Pat::Bind(Rc::clone(&field_name))
                             };
                             fields.push((field_name, sub));
                         }
@@ -605,7 +609,7 @@ impl Lowerer<'_> {
                             rest = match r.name() {
                                 Some(n) => {
                                     let bound = name(n.text());
-                                    self.scope.push(bound.clone());
+                                    self.scope.push(Rc::clone(&bound));
                                     ListRest::Bind(bound)
                                 }
                                 None => ListRest::Anonymous,
@@ -647,7 +651,7 @@ impl Lowerer<'_> {
                     .name()
                     .map(|n| name(n.text()))
                     .ok_or_else(|| self.malformed(p.syntax(), "`as` without a name"))?;
-                self.scope.push(bound.clone());
+                self.scope.push(Rc::clone(&bound));
                 Ok(Pat::As(Box::new(inner), bound))
             }
         }
@@ -673,13 +677,13 @@ impl Lowerer<'_> {
         match segments.as_slice() {
             [one] => {
                 if let Some(local) = self.scope.iter().rev().find(|n| &***n == *one) {
-                    return Ok(Expr::Local(local.clone()));
+                    return Ok(Expr::Local(Rc::clone(local)));
                 }
                 if let Some(value) = bool_name(one) {
                     return Ok(Expr::Global(Global::Bool(value)));
                 }
                 if let Some(ctor) = self.ctors.get(*one) {
-                    return Ok(Expr::Global(Global::Ctor(ctor.clone())));
+                    return Ok(Expr::Global(Global::Ctor(Rc::clone(ctor))));
                 }
                 if let Some(index) = self.fn_index.get(&(self.module, (*one).to_owned())) {
                     return Ok(Expr::Global(Global::Fn(*index)));
@@ -738,7 +742,7 @@ impl Lowerer<'_> {
                         ));
                     };
                     parts.push(Part::Value {
-                        root: local.clone(),
+                        root: Rc::clone(local),
                         fields: i.fields().map(|f| name(f.text())).collect(),
                         debug: i.is_debug(),
                     });
@@ -857,7 +861,7 @@ impl Lowerer<'_> {
             .iter()
             .rev()
             .find(|n| &***n == local)
-            .map(|n| Expr::Local(n.clone()))
+            .map(|n| Expr::Local(Rc::clone(n)))
             .ok_or_else(|| self.unsupported(node, &format!("the punned field `{local}`")))
     }
 

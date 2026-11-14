@@ -508,6 +508,10 @@ pub enum BinOp {
 impl BinOp {
     /// The operator of a token kind, if it is a binary operator.
     #[must_use]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub const fn from_kind(kind: SyntaxKind) -> Option<Self> {
         let op = match kind {
             SyntaxKind::PIPE2 => Self::Or,
@@ -640,6 +644,10 @@ impl<'t> PrefixExpr<'t> {
 
     /// The operator.
     #[must_use]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub fn op(self) -> Option<PrefixOp> {
         match self.op_token()?.kind() {
             SyntaxKind::MINUS => Some(PrefixOp::Neg),
@@ -680,7 +688,23 @@ impl<'t> PrefixExpr<'t> {
             {
                 Some(literal)
             }
-            _ => None,
+            Expr::Literal(_)
+            | Expr::String(_)
+            | Expr::Path(_)
+            | Expr::Record(_)
+            | Expr::Tuple(_)
+            | Expr::Paren(_)
+            | Expr::List(_)
+            | Expr::Block(_)
+            | Expr::Closure(_)
+            | Expr::Case(_)
+            | Expr::Panic(_)
+            | Expr::Todo(_)
+            | Expr::Binary(_)
+            | Expr::Prefix(_)
+            | Expr::Call(_)
+            | Expr::Hole(_)
+            | Expr::Field(_) => None,
         }
     }
 

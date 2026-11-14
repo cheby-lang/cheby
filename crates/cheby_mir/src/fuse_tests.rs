@@ -4,6 +4,10 @@
 //! validation and dump; reuse's decisions unchanged by fusion; the
 //! drop-position check (D-851) with its negatives; and the bound on
 //! sinking (D-865).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeMap;
 

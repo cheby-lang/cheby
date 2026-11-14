@@ -9,9 +9,6 @@
 //! ends with nothing alive: reuse keeps the domain's charges balanced. The
 //! counters `reuse hits` and `reuse misses` (D-842) are read
 //! from the domain. Run with `CHEBY_RT_POISON=0` and `=1` (D-458).
-
-use cheby_codegen_clif::CodegenOptions;
-use cheby_mir::{FieldDesc, LayoutRef};
 use cheby_runtime::abi::PanicKind as RtPanicKind;
 use cheby_runtime::stats::{Event, count_events};
 

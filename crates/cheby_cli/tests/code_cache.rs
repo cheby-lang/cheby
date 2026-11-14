@@ -656,22 +656,21 @@ fn warm_run_constants_that_hit_parse_nothing() {
     let (first, second) = twice(&scratch, &dir, &["run"], &[]);
     assert_eq!(first.out.status, Some(0), "{}", first.out.stderr);
     same_output(&first, &second);
-    let constant_misses: Vec<&String> = second
+    let constants_missed = second
         .log
         .iter()
-        .filter(|l| l.starts_with("const ") && l.ends_with(" miss"))
-        .collect();
-    if constant_misses.is_empty() {
+        .any(|l| l.starts_with("const ") && l.ends_with(" miss"));
+    if constants_missed {
+        // Before K5b caches constants, every constant's module is checked
+        // (D-1134).
+        assert!(!parses(&second.log).is_empty(), "{:?}", second.log);
+    } else {
         assert_eq!(
             parses(&second.log),
             Vec::<String>::new(),
             "{:?}",
             second.log
         );
-    } else {
-        // Before K5b caches constants, every constant's module is checked
-        // (D-1134).
-        assert!(!parses(&second.log).is_empty(), "{:?}", second.log);
     }
 }
 

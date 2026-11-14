@@ -13,6 +13,10 @@
     clippy::cast_possible_truncation,
     reason = "test arithmetic on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -105,14 +109,15 @@ fn relocated(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
                 RelocationTarget::Section(index) => file.section_by_index(index).unwrap().address(),
                 other => panic!("{other:?}"),
             };
-            let mut implicit = 0_i64;
-            if reloc.has_implicit_addend() {
-                implicit = match size {
+            let implicit = if reloc.has_implicit_addend() {
+                match size {
                     4 => i64::from(i32::from_le_bytes(data[at..at + 4].try_into().unwrap())),
                     8 => i64::from_le_bytes(data[at..at + 8].try_into().unwrap()),
                     _ => panic!("size {size}"),
-                };
-            }
+                }
+            } else {
+                0_i64
+            };
             let value = (target.cast_signed() + implicit + reloc.addend()).cast_unsigned();
             data[at..at + size].copy_from_slice(&value.to_le_bytes()[..size]);
         }

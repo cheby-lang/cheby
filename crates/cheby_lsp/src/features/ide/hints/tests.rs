@@ -291,7 +291,7 @@ fn main() {
 
 #[test]
 fn implicit_dyn_after_the_value() {
-    let text = r"interface Shape {
+    let text = "interface Shape {
   fn area(Self) -> Float
 }
 
@@ -312,7 +312,7 @@ fn main() {
 ";
     check(
         text,
-        r"interface Shape {
+        "interface Shape {
   fn area(Self) -> Float
 }
 
@@ -365,7 +365,7 @@ fn main() {
 
 #[test]
 fn switches_turn_rows_off() {
-    let text = r"import std::list
+    let text = "import std::list
 
 fn twice(f: fn(Int) -> Int) -> Int {
   f(1)
@@ -424,7 +424,7 @@ fn a_range_limits_the_hints_but_not_the_rows() {
 /// generic record keeps its hint.
 #[test]
 fn only_a_non_generic_record_literal_skips_its_let_hint() {
-    let text = r"type Point { x: Int }
+    let text = "type Point { x: Int }
 
 type Shape {
   Circle(Float),
@@ -458,7 +458,7 @@ fn main() {
 /// `let` whose pattern is one name.
 #[test]
 fn local_functions_and_pattern_binders_have_their_own_switches() {
-    let text = r"import std::list
+    let text = "import std::list
 
 fn main() {
   let ys = list::map([1], fn(x) { x })
@@ -644,7 +644,7 @@ fn names_are_off_by_default() {
 /// its other calls.
 #[test]
 fn a_pipe_stage_with_no_hole_gets_no_names() {
-    let text = r"import std::list
+    let text = "import std::list
 
 fn main() {
   let xs = [1, 2]

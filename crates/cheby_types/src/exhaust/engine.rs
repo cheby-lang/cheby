@@ -971,7 +971,7 @@ impl<C: Types> Engine<'_, C> {
                     .chain(own)
                     .filter_map(|c| match c {
                         Ctor::List(len) => Some(*len),
-                        _ => None,
+                        Ctor::Variant(_) | Ctor::Lit(_) => None,
                     })
                     .collect();
                 if lens.is_empty() {

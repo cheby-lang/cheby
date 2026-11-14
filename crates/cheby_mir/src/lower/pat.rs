@@ -105,7 +105,13 @@ impl BodyCx<'_, '_> {
                 }
                 Ok(Some(()))
             }
-            _ => {
+            PatKind::Lit(_)
+            | PatKind::Ctor { .. }
+            | PatKind::Tuple(_)
+            | PatKind::List { .. }
+            | PatKind::Or(_)
+            | PatKind::As { .. }
+            | _ => {
                 let value = self.as_local(op, self.repr_of(init_ty))?;
                 self.destructure(pat, value, init_ty, OnFail::Unreachable)
             }
@@ -144,7 +150,13 @@ impl BodyCx<'_, '_> {
             PatKind::Bind(id) => self.bind_local(*id, op),
             // The RC pass drops the unused value.
             PatKind::Wild => Ok(()),
-            _ => {
+            PatKind::Lit(_)
+            | PatKind::Ctor { .. }
+            | PatKind::Tuple(_)
+            | PatKind::List { .. }
+            | PatKind::Or(_)
+            | PatKind::As { .. }
+            | _ => {
                 let value = self.as_local(op, self.repr_of(pat.ty))?;
                 self.destructure(pat, value, pat.ty, OnFail::Unreachable)?
                     .ok_or_else(|| Ice::new("an irrefutable parameter pattern diverged"))

@@ -187,7 +187,13 @@ impl Builder<'_, '_> {
                 let index = self.node(target)?;
                 Ok(self.nodes.get(index).cloned().unwrap_or(RangeNode::Opaque))
             }
-            _ => Ok(RangeNode::Opaque),
+            ItemSig::Fn(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => Ok(RangeNode::Opaque),
         }
     }
 }

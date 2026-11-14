@@ -60,7 +60,7 @@ fn plant(parent: &Path, name: &str) -> PathBuf {
 /// A dead process's objects' directory and staging directory are deleted
 /// by the sweep of their own prefix.
 #[test]
-fn link_sweep_removes_a_dead_processs_directories() {
+fn link_sweep_removes_a_dead_process_directories() {
     let dir = TestDir::new("dead");
     let dead = dead_pid();
     let objects = plant(dir.path(), &format!("{OBJECTS_PREFIX}-{dead}-0"));

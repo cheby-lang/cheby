@@ -54,7 +54,28 @@ pub(crate) fn free_locals(
     for id in subtree(body, value)? {
         let used = match &expr(body, id)?.kind {
             ExprKind::Local(l) | ExprKind::SelfRef { local: l } => *l,
-            _ => continue,
+            ExprKind::Lit(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error
+            | _ => continue,
         };
         if !bound.contains(&used) && seen.insert(used) {
             out.push(used);
@@ -88,6 +109,12 @@ fn bind_pat(pat: &thir::Pat, bound: &mut BTreeSet<LocalId>) {
         PatKind::Bind(l) | PatKind::As { local: l, .. } => {
             bound.insert(*l);
         }
-        _ => {}
+        PatKind::Wild
+        | PatKind::Lit(_)
+        | PatKind::Ctor { .. }
+        | PatKind::Tuple(_)
+        | PatKind::List { .. }
+        | PatKind::Or(_)
+        | _ => {}
     });
 }

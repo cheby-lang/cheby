@@ -1,5 +1,9 @@
 //! Signatures of every item kind (C2), written types and aliases, and the
 //! declaration checks of this directory, through the whole front end.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_iface::{
     CtorFields, DefId, IfaceItem, ItemSig, Namespace, ParamIdx, Ty, TyKind, TypeDefKind, Vis,

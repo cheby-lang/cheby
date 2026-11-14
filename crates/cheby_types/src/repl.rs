@@ -172,7 +172,7 @@ pub struct ReplBinding {
 }
 
 /// The body of a statements entry.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplBody {
     /// The entry's `test` item, whose interface signature is now
     /// `fn() -> (shown, b1, …)` and whose THIR body returns that tuple.
@@ -258,7 +258,7 @@ pub struct Forwarder {
 }
 
 /// A forwarder [`ReplSession::satisfaction`] asks for.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewForwarder {
     /// The session type, whose entry module gets the forwarder.
     pub ty: DefId,
@@ -275,7 +275,7 @@ pub struct NewForwarder {
 
 /// What the session's interface satisfaction needs after an entry
 /// (D-610): forwarders to add, and forwarders that no longer count.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SatisfactionPlan {
     pub add: Vec<NewForwarder>,
     /// Forwarders whose name their type's module no longer finds.
@@ -1187,7 +1187,9 @@ fn redefinition_kind(
         {
             RedefinitionKind::SameSignature
         }
-        _ => RedefinitionKind::NewSignature,
+        DefKind::Fn | DefKind::Const | DefKind::InterfaceFn | DefKind::Ctor | DefKind::Test => {
+            RedefinitionKind::NewSignature
+        }
     })
 }
 
@@ -1211,6 +1213,7 @@ fn same_fn(a: &FnSig, b: &FnSig) -> bool {
 }
 
 /// Every item that item `index`'s signature or body names.
+#[expect(clippy::iter_over_hash_type, reason = "the result is a `BTreeSet`")]
 fn refs_of(resolved: &ResolvedModule, index: DefIndex) -> BTreeSet<DefId> {
     let mut out = BTreeSet::new();
     if let Some(body) = resolved.bodies.get(&index) {
@@ -1277,7 +1280,25 @@ fn thir_refs(thir: &thir::Module, def: DefId) -> BTreeSet<DefId> {
                 }
             }
             ExprKind::DynCoerce { dict, .. } => dicts.push(dict),
-            _ => {}
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::Error => {}
         }
     }
     // Dictionaries nest: a worklist, never recursion over user data.
@@ -1302,7 +1323,7 @@ fn collect_callee_dicts<'a>(callee: &'a thir::Callee, dicts: &mut Vec<&'a thir::
     match callee {
         thir::Callee::Fn { dicts: d, .. } => dicts.extend(d.iter()),
         thir::Callee::Iface { dict, .. } => dicts.push(dict),
-        _ => {}
+        thir::Callee::Ctor { .. } | thir::Callee::Dyn { .. } | thir::Callee::Value(_) => {}
     }
 }
 
@@ -1686,7 +1707,26 @@ impl Move {
                         param.span = self.span(param.span);
                     }
                 }
-                _ => {}
+                ExprKind::Lit(_)
+                | ExprKind::Local(_)
+                | ExprKind::Ctor { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::Block { .. }
+                | ExprKind::FnRef { .. }
+                | ExprKind::ConstRef { .. }
+                | ExprKind::SelfRef { .. }
+                | ExprKind::Field { .. }
+                | ExprKind::Record { .. }
+                | ExprKind::RecordUpdate { .. }
+                | ExprKind::Tuple(_)
+                | ExprKind::List { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Not(_)
+                | ExprKind::Neg { .. }
+                | ExprKind::Interpolate { .. }
+                | ExprKind::Panic { .. }
+                | ExprKind::DynCoerce { .. }
+                | ExprKind::Error => {}
             }
         }
     }
@@ -1706,16 +1746,13 @@ impl Move {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use cheby_diag::{FileId, Span, TextRange};
-    use cheby_iface::{DefId, DepView, ModuleId, ModuleInfo, Namespace, PackageId, Ty, TyKind};
+    use cheby_iface::{DepView, PackageId};
     use cheby_package::{ModulePath, Targets};
-    use cheby_resolve::repl::SessionScope;
     use cheby_resolve::{
-        Lookup, ModuleLookup, ResolveInput, StdCatalog, collect_imports, resolve_import_targets,
+        Lookup, ModuleLookup, StdCatalog, collect_imports, resolve_import_targets,
     };
-    use cheby_syntax::ast::{AstNode, SourceFile};
+    use cheby_syntax::ast::SourceFile;
+    use std::sync::Arc;
 
     use super::*;
     use crate::test_support::{Build, build};
@@ -1732,7 +1769,7 @@ mod tests {
     }
 
     struct Lookups<'a> {
-        modules: &'a cheby_iface::ModuleTable,
+        modules: &'a ModuleTable,
     }
 
     impl ModuleLookup for Lookups<'_> {

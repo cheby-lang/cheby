@@ -165,7 +165,19 @@ impl Doc {
             Self::Group(doc, _) => Self::Group(Rc::clone(doc), true),
             Self::Choice(first, second, _) => match first.as_ref() {
                 Self::Flat(_) => second.expand_last(),
-                first => first.expand_last(),
+                first @ (Self::Nil
+                | Self::Text(_)
+                | Self::Line
+                | Self::SoftLine
+                | Self::HardLine
+                | Self::Nest(..)
+                | Self::Group(..)
+                | Self::IfBreak(..)
+                | Self::Concat(_)
+                | Self::Comment(_)
+                | Self::Verbatim(_)
+                | Self::Choice(..)
+                | Self::FlatIfFits(_)) => first.expand_last(),
             },
             Self::Concat(docs) => {
                 let mut parts: Vec<Self> = docs.to_vec();
@@ -174,7 +186,17 @@ impl Doc {
                 }
                 Self::concat(parts)
             }
-            other => other.clone(),
+            other @ (Self::Nil
+            | Self::Text(_)
+            | Self::Line
+            | Self::SoftLine
+            | Self::HardLine
+            | Self::Nest(..)
+            | Self::IfBreak(..)
+            | Self::Comment(_)
+            | Self::Verbatim(_)
+            | Self::Flat(_)
+            | Self::FlatIfFits(_)) => other.clone(),
         }
     }
 
@@ -440,7 +462,17 @@ impl Printer {
             let breaks_here = match cmd.doc {
                 Doc::HardLine => true,
                 Doc::Line | Doc::SoftLine => cmd.mode == Mode::Break,
-                _ => false,
+                Doc::Nil
+                | Doc::Text(_)
+                | Doc::Nest(..)
+                | Doc::Group(..)
+                | Doc::IfBreak(..)
+                | Doc::Concat(_)
+                | Doc::Comment(_)
+                | Doc::Verbatim(_)
+                | Doc::Flat(_)
+                | Doc::Choice(..)
+                | Doc::FlatIfFits(_) => false,
             };
             if breaks_here {
                 if first_line && own && !started {

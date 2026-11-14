@@ -188,7 +188,9 @@ fn is_empty(cx: &QueryInput<'_>, iface: DefId) -> Result<bool, Ice> {
 fn satisfying_fns(dict: &Dict) -> Vec<DefId> {
     match dict {
         Dict::Impl { fns, .. } => fns.iter().map(|f| f.def).collect(),
-        _ => Vec::new(),
+        Dict::Param { .. } | Dict::Embedded { .. } | Dict::Tuple { .. } | Dict::Dyn { .. } => {
+            Vec::new()
+        }
     }
 }
 
@@ -201,7 +203,15 @@ fn missing_bound(input: &TypesInput<'_>, err: &Unsatisfied) -> Option<(ParamIdx,
             (Want::Iface(want), TyKind::Param(on)) if on == param => Some((*param, want)),
             _ => None,
         },
-        _ => None,
+        Reason::Missing { .. }
+        | Reason::LessVisible { .. }
+        | Reason::Signature { .. }
+        | Reason::HomeNotInDeps { .. }
+        | Reason::NoModule
+        | Reason::Dyn { .. }
+        | Reason::Undetermined { .. }
+        | Reason::Descriptor { .. }
+        | Reason::TooDeep => None,
     }
 }
 

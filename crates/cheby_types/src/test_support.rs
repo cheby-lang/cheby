@@ -180,14 +180,14 @@ pub(crate) struct Build {
 
 impl Build {
     /// The codes of every diagnostic, sorted.
-    pub fn codes(&self) -> Vec<String> {
+    pub(crate) fn codes(&self) -> Vec<String> {
         let mut codes: Vec<String> = self.diags.iter().map(|d| d.code.to_string()).collect();
         codes.sort();
         codes
     }
 
     /// `CODE: message [labels]` for every diagnostic, sorted.
-    pub fn messages(&self) -> Vec<String> {
+    pub(crate) fn messages(&self) -> Vec<String> {
         let mut messages: Vec<String> = self
             .diags
             .iter()
@@ -202,14 +202,14 @@ impl Build {
 
     /// Every diagnostic rendered as plain text, in output order (D-418,
     /// D-264), as `cheby check` prints them.
-    pub fn rendered(&self) -> String {
+    pub(crate) fn rendered(&self) -> String {
         let mut diags = self.diags.clone();
         self.sources.sort(&mut diags);
         cheby_diag::render_all(&diags, &self.sources)
     }
 
     /// The module at `path`, such as `app`, `app::util` or `std::io`.
-    pub fn module(&self, path: &str) -> ModuleId {
+    pub(crate) fn module(&self, path: &str) -> ModuleId {
         let mut segments = path.split("::");
         let first = ModulePath::root(segments.next().unwrap());
         self.modules
@@ -218,12 +218,12 @@ impl Build {
     }
 
     /// The interface of the module at `path`.
-    pub fn iface(&self, path: &str) -> &ModuleInterface {
+    pub(crate) fn iface(&self, path: &str) -> &ModuleInterface {
         self.set.get(self.module(path)).unwrap()
     }
 
     /// The item `name` of namespace `ns` in the module at `path`.
-    pub fn def_in(&self, path: &str, ns: Namespace, name: &str) -> DefId {
+    pub(crate) fn def_in(&self, path: &str, ns: Namespace, name: &str) -> DefId {
         let module = self.module(path);
         let name_id = self.globals.names.intern(name);
         let index = self
@@ -236,12 +236,12 @@ impl Build {
     }
 
     /// The value item `name` in the module at `path`.
-    pub fn def(&self, path: &str, name: &str) -> DefId {
+    pub(crate) fn def(&self, path: &str, name: &str) -> DefId {
         self.def_in(path, Namespace::Value, name)
     }
 
     /// The signature of the value item `name` in the module at `path`.
-    pub fn fn_sig(&self, path: &str, name: &str) -> &ItemSig {
+    pub(crate) fn fn_sig(&self, path: &str, name: &str) -> &ItemSig {
         let def = self.def(path, name);
         &self
             .set
@@ -253,12 +253,12 @@ impl Build {
     }
 
     /// The THIR of the module at `path`.
-    pub fn thir_of(&self, path: &str) -> &thir::Module {
+    pub(crate) fn thir_of(&self, path: &str) -> &thir::Module {
         &self.thir[&self.module(path)]
     }
 
     /// The THIR of function `name` in the module at `path`, if it checked.
-    pub fn thir_fn(&self, path: &str, name: &str) -> Option<&thir::FnDef> {
+    pub(crate) fn thir_fn(&self, path: &str, name: &str) -> Option<&thir::FnDef> {
         let def = self.def(path, name);
         self.thir[&def.module].fns.iter().find(|f| f.def == def)
     }

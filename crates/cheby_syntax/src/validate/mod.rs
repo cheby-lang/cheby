@@ -54,6 +54,10 @@ pub(crate) fn validate_tokens(tree: &SyntaxTree) -> Vec<Diagnostic> {
 }
 
 /// Runs the checks of `node`'s kind.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn check_node(node: SyntaxNode<'_>, out: &mut Vec<Diagnostic>) {
     match node.kind() {
         SyntaxKind::ATTR => run(node, module::attr, out),

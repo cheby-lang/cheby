@@ -25,6 +25,10 @@
 //!   barrier D-1443 names for that, is not sent yet. So waits need no
 //!   sleep.
 //! - Dropping a client kills the process.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{BufReader, Read as _, Write as _};

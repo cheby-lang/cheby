@@ -6,10 +6,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cheby_diag::{FileId, TextRange};
+use cheby_diag::FileId;
 
 use super::*;
-use crate::{Parse, SyntaxKind};
+use crate::Parse;
 
 fn parse(text: &str) -> Parse {
     crate::parse(FileId::new(0), Arc::from(text))
@@ -112,7 +112,7 @@ fn touch_everything(parse: &Parse) {
     }
     for node in tree.root().descendants() {
         let range = node.text_range();
-        let inside = |span: cheby_diag::Span| assert!(range.contains_range(span.range));
+        let inside = |span: Span| assert!(range.contains_range(span.range));
         if let Some(n) = Attr::cast(node) {
             let _ = (n.name(), n.args().count());
         }

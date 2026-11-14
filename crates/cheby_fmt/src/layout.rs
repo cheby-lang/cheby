@@ -233,6 +233,10 @@ const fn is_header(kind: SyntaxKind) -> bool {
 
 /// The comma-separated list nodes the printer lays out, with their style.
 /// A one-element tuple's comma is settled by [`Formatter::list_node`].
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 const fn list_style(kind: SyntaxKind) -> Option<ListStyle> {
     match kind {
         SyntaxKind::TYPE_PARAM_LIST
@@ -263,6 +267,10 @@ const fn list_style(kind: SyntaxKind) -> Option<ListStyle> {
 /// delimiters when it comes last: a closure, a block, a `case`, a list or
 /// a record literal, or a call whose own last argument hugs, as in
 /// `Some(fold(xs, 0, fn(acc, x) {`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(crate) fn hugs(elem: SyntaxElement<'_>) -> bool {
     let Some(node) = elem.as_node() else {
         return false;
@@ -384,6 +392,10 @@ impl<'t> Formatter<'t> {
     /// them keeps its place and breaks the line there, and the parts after
     /// it go one level deeper (D-1160). `None` only
     /// when a part cannot be laid out.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn header(&mut self, node: SyntaxNode<'t>, anchor: usize) -> Option<Doc> {
         self.coverage.laid_out(node.kind());
         let mut parts = Parts::default();
@@ -755,15 +767,16 @@ impl<'t> Formatter<'t> {
         }
         let mut docs = vec![Doc::text("{")];
         // A comment on the line of `{` stays there.
-        let mut start = 0;
-        if let Some(first) = entries.first()
+        let start = if let Some(first) = entries.first()
             && first.newlines == 0
             && is_comment(first.elem.kind())
         {
             docs.push(Doc::text(" "));
             docs.push(Doc::comment(first.elem.text().trim_end()));
-            start = 1;
-        }
+            1
+        } else {
+            0
+        };
         let body_entries = entries.split_off(start);
         if !body_entries.is_empty() {
             let mut body = vec![Doc::hardline()];
@@ -876,6 +889,10 @@ enum Last {
 /// Splits the elements between a list's delimiters into elements with
 /// their comments. `None` for two elements without a comma between them,
 /// or a comma without an element before it.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
     let mut parsed = ParsedList {
         open_comment: None,
@@ -960,6 +977,10 @@ fn parse_list<'t>(inner: &[SyntaxElement<'t>]) -> Option<ParsedList<'t>> {
 /// The children of `node` that are not whitespace or line breaks, each
 /// with the number of line breaks before it. With `delims`, the first and
 /// last children (the delimiters) are left out.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(crate) fn entries<'t>(
     node: SyntaxNode<'t>,
     delims: Option<(SyntaxKind, SyntaxKind)>,
@@ -971,7 +992,7 @@ pub(crate) fn entries<'t>(
         Some(_) => children
             .get(1..children.len().saturating_sub(1))
             .unwrap_or(&[]),
-        None => &children[..],
+        None => &*children,
     };
     for &child in inner {
         match child.kind() {

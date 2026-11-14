@@ -245,11 +245,7 @@ fn assert_overflows(outcome: EntryOutcome) {
     let EntryOutcome::Panicked(report) = outcome else {
         panic!("the deep recursion returned: {outcome:?}");
     };
-    assert_eq!(
-        report.kind,
-        cheby_runtime::abi::PanicKind::StackOverflow,
-        "{report:?}"
-    );
+    assert_eq!(report.kind, abi::PanicKind::StackOverflow, "{report:?}");
     assert_eq!(report.location, "test.cheby:1:1", "{report:?}");
 }
 

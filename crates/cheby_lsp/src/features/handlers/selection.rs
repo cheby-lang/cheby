@@ -62,7 +62,7 @@ fn chain(root: SyntaxNode<'_>, offset: TextSize) -> Vec<TextRange> {
     // right beats punctuation on the left, and anything beats space.
     let token = match at {
         TokenAt::Between(l, r) if weight(r) > weight(l) => Some(r),
-        _ => at.left(),
+        TokenAt::None | TokenAt::One(_) | TokenAt::Between(..) => at.left(),
     };
     let Some(token) = token else {
         return Vec::new();

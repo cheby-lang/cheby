@@ -28,7 +28,7 @@ impl BodyCx<'_> {
     /// types are unified, and a mismatch is E0047 and gives
     /// [`InferTy::ERROR`]. This never packages a value as `dyn`: use
     /// [`BodyCx::coerce_expr`] where the expression is at hand.
-    pub fn coerce(
+    pub(crate) fn coerce(
         &mut self,
         found: &InferTy,
         expected: Option<&Expected>,
@@ -61,7 +61,11 @@ impl BodyCx<'_> {
     /// place: `id` itself, or a new [`ExprKind::DynCoerce`] around it. On a
     /// mismatch (E0047) the expression's type becomes [`InferTy::ERROR`],
     /// so enclosing expressions do not report it again.
-    pub fn coerce_expr(&mut self, id: ExprId, expected: Option<&Expected>) -> Result<ExprId, Ice> {
+    pub(crate) fn coerce_expr(
+        &mut self,
+        id: ExprId,
+        expected: Option<&Expected>,
+    ) -> Result<ExprId, Ice> {
         let Some(expected) = expected else {
             return Ok(id);
         };
@@ -77,7 +81,10 @@ impl BodyCx<'_> {
                 // known to be numeric and converts (D-237).
                 InferTy::Var(_) => self.infcx.var_kind(&found)? != Some(VarKind::General),
                 // Already this `dyn`: not packaged again.
-                other => *other != want,
+                other @ (InferTy::Known(_)
+                | InferTy::Named { .. }
+                | InferTy::Tuple(_)
+                | InferTy::Fn { .. }) => *other != want,
             };
             if packages {
                 let coerced = self.push(
@@ -108,9 +115,16 @@ impl BodyCx<'_> {
         Ok(match self.infcx.shallow(t)? {
             InferTy::Known(ty) => match self.input.globals.types.kind(ty) {
                 TyKind::Dyn { iface, .. } => Some(*iface),
-                _ => None,
+                TyKind::Error
+                | TyKind::Never
+                | TyKind::Named { .. }
+                | TyKind::Tuple(_)
+                | TyKind::Fn { .. }
+                | TyKind::Param(_) => None,
             },
-            _ => None,
+            InferTy::Var(_) | InferTy::Named { .. } | InferTy::Tuple(_) | InferTy::Fn { .. } => {
+                None
+            }
         })
     }
 
@@ -126,7 +140,7 @@ impl BodyCx<'_> {
     }
 
     /// E0047.
-    pub fn mismatch(
+    pub(crate) fn mismatch(
         &mut self,
         expected: &InferTy,
         found: &InferTy,

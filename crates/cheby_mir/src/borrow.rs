@@ -784,7 +784,19 @@ fn value_const(c: &Const, values: &mut BTreeSet<DefId>) {
         Const::FnValue(def) | Const::Code(FnKey::ValueShim(def) | FnKey::Item(def)) => {
             values.insert(*def);
         }
-        _ => {}
+        Const::Int(_)
+        | Const::Float(_)
+        | Const::Bool(_)
+        | Const::Sized { .. }
+        | Const::Str(_)
+        | Const::Nil
+        | Const::StaticCtor(_)
+        | Const::Code(_)
+        | Const::EmptyList
+        | Const::Static(_)
+        | Const::BuiltinDesc(_)
+        | Const::Ctx
+        | Const::ErrNil => {}
     }
 }
 
@@ -931,6 +943,10 @@ struct Node {
 /// unit at `Stage::Lowered`; any other unit gives an empty map. A
 /// function not in the map is all-owned.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "its matches name every variant (D-1560)"
+)]
 pub fn infer(
     module: &MirModule,
     facts: &BuildFacts,
@@ -946,7 +962,16 @@ pub fn infer(
         .enumerate()
         .filter_map(|(n, f)| match f.key {
             FnKey::Item(def) if def.module == own => Some((def, n)),
-            _ => None,
+            FnKey::Item(_)
+            | FnKey::ValueShim(_)
+            | FnKey::Closure { .. }
+            | FnKey::ConstInit(_)
+            | FnKey::Test(_)
+            | FnKey::Entry(_)
+            | FnKey::Trampoline(_)
+            | FnKey::TupleDictFn { .. }
+            | FnKey::DynForward { .. }
+            | FnKey::Continuation { .. } => None,
         })
         .collect();
     let mut masks: Vec<BorrowMask> = module
@@ -1037,7 +1062,16 @@ pub fn infer(
         .zip(masks)
         .filter_map(|(f, mask)| match f.key {
             FnKey::Item(def) if !mask.is_owned() => Some((def, mask)),
-            _ => None,
+            FnKey::Item(_)
+            | FnKey::ValueShim(_)
+            | FnKey::Closure { .. }
+            | FnKey::ConstInit(_)
+            | FnKey::Test(_)
+            | FnKey::Entry(_)
+            | FnKey::Trampoline(_)
+            | FnKey::TupleDictFn { .. }
+            | FnKey::DynForward { .. }
+            | FnKey::Continuation { .. } => None,
         })
         .collect()
 }
@@ -1158,7 +1192,13 @@ fn scan(module: &MirModule, f: &Function, eligible: bool) -> Node {
                 }
                 scan.call(callee, args, at, &uses);
             }
-            _ => scan.owned_uses(&uses, at),
+            Terminator::Return(_)
+            | Terminator::Goto { .. }
+            | Terminator::Branch { .. }
+            | Terminator::Switch { .. }
+            | Terminator::Panic { .. }
+            | Terminator::Unreachable
+            | Terminator::Resume => scan.owned_uses(&uses, at),
         }
     }
     // An error here keeps the parameter borrowable: reuse is an
@@ -1289,7 +1329,26 @@ impl Scan<'_> {
                     self.consume(*list, Consumer::Always, at, &[]);
                 }
             }
-            _ => self.owned_uses(&uses, at),
+            Rvalue::Use(_)
+            | Rvalue::CallForeign { .. }
+            | Rvalue::CallRuntime { .. }
+            | Rvalue::Alloc { .. }
+            | Rvalue::AllocPlaceholder { .. }
+            | Rvalue::InitField { .. }
+            | Rvalue::Field { .. }
+            | Rvalue::ReadLayout { .. }
+            | Rvalue::LoadConst(_)
+            | Rvalue::Box { .. }
+            | Rvalue::Unbox { .. }
+            | Rvalue::Checked { .. }
+            | Rvalue::Compare { .. }
+            | Rvalue::FloatArith { .. }
+            | Rvalue::Bitwise { .. }
+            | Rvalue::FloatNeg { .. }
+            | Rvalue::Not(_)
+            | Rvalue::ReadTag { .. }
+            | Rvalue::DropReuse { .. }
+            | Rvalue::AllocReuse { .. } => self.owned_uses(&uses, at),
         }
     }
 }
@@ -1306,7 +1365,12 @@ fn const_locals(f: &Function) -> BTreeSet<Local> {
                 dst,
                 value: Rvalue::Use(Operand::Const(_)),
             } => Some(*dst),
-            _ => None,
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => None,
         })
         .collect()
 }
@@ -1324,7 +1388,12 @@ fn projection_roots(f: &Function, params: &BTreeMap<Local, usize>) -> BTreeMap<L
                 dst,
                 value: Rvalue::Field { base, .. },
             } if f.local(*dst).is_ok_and(|d| d.repr == Repr::Value) => Some((*dst, *base)),
-            _ => None,
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => None,
         })
         .collect();
     let mut roots: BTreeMap<Local, usize> = BTreeMap::new();
@@ -1442,7 +1511,12 @@ fn apply_to_calls(f: &mut Function, masks: &BTreeMap<DefId, BorrowMask>) {
                 dst,
                 value: Rvalue::Use(Operand::Const(c)),
             } => Some((*dst, c.clone())),
-            _ => None,
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => None,
         })
         .collect();
     let substitute = |mask: BorrowMask, args: &mut [Operand], replaced: &mut BTreeSet<Local>| {
@@ -1501,7 +1575,11 @@ fn apply_to_calls(f: &mut Function, masks: &BTreeMap<DefId, BorrowMask>) {
     for block in &mut f.blocks {
         block.retain_stmts(|s| match s {
             Stmt::Assign { dst, .. } => !replaced.contains(dst) || read.contains(dst),
-            _ => true,
+            Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => true,
         });
     }
 }

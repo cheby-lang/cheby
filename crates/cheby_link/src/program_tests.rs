@@ -9,6 +9,10 @@
     clippy::arithmetic_side_effects,
     reason = "test offsets on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -732,7 +736,7 @@ fn program_stubs_call_unresolved_through_an_import_word() {
                 .map(|s| s.address())
                 .filter(|&a| a > symbol.address())
                 .min()
-                .unwrap_or(section.address() + section.size());
+                .unwrap_or_else(|| section.address() + section.size());
             let relocs = relocs_in(format, &file, &section, symbol.address(), end);
             assert!(!relocs.is_empty(), "{format:?}: {stub}");
             for (flags, target) in &relocs {

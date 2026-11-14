@@ -360,11 +360,15 @@ pub(crate) const PROBE_PLANNED_STD_MODULES: &[&str] = &["unshipped_probe"];
 
 /// The planned modules [`is_planned`] and [`known`] read:
 /// [`PLANNED_STD_MODULES`], and under `cfg(test)` the made-up
-/// [`PROBE_PLANNED_STD_MODULES`].
+/// `PROBE_PLANNED_STD_MODULES`.
 fn planned() -> impl Iterator<Item = &'static str> {
     #[cfg(test)]
     let probes = PROBE_PLANNED_STD_MODULES;
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test hooks"
+    )]
     let probes: &[&str] = &[];
     PLANNED_STD_MODULES.iter().chain(probes).copied()
 }

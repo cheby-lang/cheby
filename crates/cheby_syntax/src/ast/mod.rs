@@ -410,7 +410,7 @@ fn child_after<'t, N: AstNode<'t>>(parent: SyntaxNode<'t>, kind: SyntaxKind) -> 
             None
         }
         SyntaxElement::Node(node) if seen => N::cast(node),
-        _ => None,
+        SyntaxElement::Node(_) | SyntaxElement::Token(_) => None,
     })
 }
 
@@ -434,7 +434,7 @@ fn leading_docs(node: SyntaxNode<'_>) -> impl Iterator<Item = DocComment<'_>> {
             {
                 Some(token)
             }
-            _ => None,
+            SyntaxElement::Node(_) | SyntaxElement::Token(_) => None,
         })
         .filter_map(DocComment::cast)
 }

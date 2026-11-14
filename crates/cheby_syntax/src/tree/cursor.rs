@@ -59,7 +59,7 @@ identity_eq!(SyntaxToken);
 
 /// The element at `i`, or a harmless placeholder for an invalid index.
 fn element(tree: &SyntaxTree, i: u32) -> Element {
-    tree.elem(i).copied().unwrap_or(Element {
+    tree.elem(i).copied().unwrap_or_else(|| Element {
         kind: SyntaxKind::ERROR,
         parent: NO_PARENT,
         start: 0,
@@ -217,7 +217,7 @@ impl<'t> SyntaxNode<'t> {
     pub fn first_token_of_kind(self, kind: SyntaxKind) -> Option<SyntaxToken<'t>> {
         self.children_with_tokens().find_map(|child| match child {
             SyntaxElement::Token(token) if token.kind() == kind => Some(token),
-            _ => None,
+            SyntaxElement::Node(_) | SyntaxElement::Token(_) => None,
         })
     }
 

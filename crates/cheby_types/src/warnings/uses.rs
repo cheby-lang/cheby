@@ -39,7 +39,7 @@ impl PathUse {
     /// module (value namespace) or an interface (type namespace); a plain
     /// name is looked up in the namespace of what it resolved to. Locals
     /// and type parameters go through no module-scope name.
-    pub fn scope_keys(
+    pub(super) fn scope_keys(
         &self,
         input: &TypesInput<'_>,
         own: &ModuleInterface,
@@ -157,6 +157,10 @@ fn owner_of(ranges: &[(TextRange, DefIndex)], range: TextRange) -> Option<DefInd
 ///
 /// An [`Ice`] when a recorded node is missing from the tree or is not a
 /// path or a name.
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the uses are sorted before they are returned"
+)]
 pub(super) fn path_uses(input: &TypesInput<'_>) -> Result<Vec<PathUse>, Ice> {
     let ranges = item_ranges(input);
     let mut out = Vec::new();
@@ -373,9 +377,31 @@ fn called_args<'b, 'i>(
                 callee: Callee::Fn { def, .. },
                 args,
             } if read(*def).is_some_and(|item| item.name == name) => {
-                Some((e.span.range.len(), &args[..]))
+                Some((e.span.range.len(), (&**args)))
             }
-            _ => None,
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error => None,
         })
         .min_by_key(|&(len, _)| len)
         .map(|(_, args)| args)
@@ -433,7 +459,18 @@ fn body_refs(body: &thir::Body, push: &mut dyn FnMut(DefId)) {
                 push(*iface);
                 dict_refs(dict, push);
             }
-            _ => {}
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Block { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Panic { .. }
+            | ExprKind::Error => {}
         }
     }
     for (_, pat) in body.pats() {
@@ -459,7 +496,7 @@ fn callee_refs(callee: &Callee, push: &mut dyn FnMut(DefId)) {
             dict_refs(dict, push);
         }
         Callee::Dyn { iface_fn } => push(*iface_fn),
-        _ => {}
+        Callee::Value(_) => {}
     }
 }
 
@@ -495,7 +532,7 @@ fn dict_refs(dict: &Dict, push: &mut dyn FnMut(DefId)) {
 pub(super) fn hook_refs(own: &ModuleInterface, module: ModuleId) -> Vec<ThirRef> {
     let mut out = Vec::new();
     for (index, item) in own.items.iter_enumerated() {
-        let cheby_iface::ItemSig::Type(def) = &item.sig else {
+        let ItemSig::Type(def) = &item.sig else {
             continue;
         };
         if matches!(def.kind, TypeDefKind::Builtin(_)) {

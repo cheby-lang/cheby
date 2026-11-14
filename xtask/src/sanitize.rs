@@ -17,7 +17,7 @@
 //!   their checks but assert no upper time bound) and `CHEBY_HARNESS_SCALE=10`
 //!   (the harnesses' timeouts, D-748), and runs its tests one at a time,
 //!   `-j 1` (D-725). The `loom` models are skipped, since loom switches
-//!   stacks on its own (D-863). The steps are [`STEPS`]. Each test command
+//!   stacks on its own (D-863). The steps are `STEPS`. Each test command
 //!   gets one fresh `CHEBY_TEST_KEEP_CACHE` and `CHEBY_TEST_VERDICTS`, as
 //!   `cargo xtask test` gives a run (D-1554, D-1556), so the harness trials
 //!   of a step share one cache, as when the harness was one process, and
@@ -96,7 +96,7 @@ use cheby_test_support::milestone::{Expectation, Setting, VERDICTS_ENV, Verdicts
 use cheby_test_support::{example, golden, process, threads};
 
 /// The dated nightly of `nightly.yml` and `miri.yml` (D-781, D-721).
-pub const NIGHTLY: &str = "nightly-2026-10-01";
+pub(crate) const NIGHTLY: &str = "nightly-2026-10-01";
 
 /// `CHEBY_HARNESS_SCALE` of every sanitizer step (D-748, D-725).
 const HARNESS_SCALE: u32 = 10;
@@ -110,7 +110,7 @@ const HARNESS_SCALE: u32 = 10;
 /// overflowed to static, D-454) would be reported. The runtime's own
 /// accounting checks leaks instead: each test's domain returns to where it
 /// started (D-884).
-pub const MIRIFLAGS: &str =
+pub(crate) const MIRIFLAGS: &str =
     "-Zmiri-permissive-provenance -Zmiri-disable-isolation -Zmiri-ignore-leaks";
 
 /// Proptest's cases per property under Miri, which interprets every case.
@@ -141,7 +141,7 @@ const BUILD_VARIABLES: [&str; 7] = [
 
 /// Which job runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum Sanitizer {
+pub(crate) enum Sanitizer {
     /// The address sanitizer, with the leak checker on Linux.
     Address,
     /// The thread sanitizer.
@@ -153,7 +153,7 @@ pub enum Sanitizer {
 impl Sanitizer {
     /// The name `-Zsanitizer` and `cheby_sanitize` take.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Address => "address",
             Self::Thread => "thread",
@@ -163,7 +163,7 @@ impl Sanitizer {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct Args {
+pub(crate) struct Args {
     /// address, thread or miri
     #[arg(value_enum)]
     sanitizer: Sanitizer,
@@ -197,7 +197,7 @@ pub struct Args {
 /// One test group of the Miri subset: a filter over the runtime's
 /// unit tests and the tests it skips, each with its reason.
 #[derive(Debug, Clone, Copy)]
-pub struct MiriGroup {
+pub(crate) struct MiriGroup {
     /// The step is `miri-<name>`.
     pub name: &'static str,
     /// A substring of the test path (`test(~…)` in nextest's filterset).
@@ -216,7 +216,7 @@ pub struct MiriGroup {
 /// `cfg!(miri)` size in its own file where it can. The four slowest groups
 /// come first, in no order among them, so `--jobs 4`, the job's setting,
 /// starts them at once and the job ends early.
-pub const MIRI_GROUPS: &[MiriGroup] = &[
+pub(crate) const MIRI_GROUPS: &[MiriGroup] = &[
     MiriGroup {
         name: "hamt",
         filter: "hamt::",
@@ -338,7 +338,7 @@ pub const MIRI_GROUPS: &[MiriGroup] = &[
 
 /// Whether the leak checker runs in a step (D-881).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Leaks {
+pub(crate) enum Leaks {
     /// `detect_leaks=1` on Linux.
     On,
     /// `detect_leaks=0`: the runtime's unit tests leak on purpose, a
@@ -351,7 +351,7 @@ pub enum Leaks {
 
 /// What one command of a step does.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
+pub(crate) enum Action {
     /// `cargo nextest run` with these arguments (package and test
     /// selection, `-j` and a filterset) and environment.
     Test {
@@ -371,7 +371,7 @@ pub enum Action {
 
 /// One step of an address or thread job.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Step {
+pub(crate) struct Step {
     pub name: &'static str,
     /// Whether the step runs under each sanitizer.
     pub address: bool,
@@ -385,7 +385,7 @@ pub struct Step {
 /// slowdown
 /// (D-863, D-725). Empty until a run shows one; the workflow's header names
 /// each.
-pub const THREAD_TIMING_SKIPS: &[&str] = &[];
+pub(crate) const THREAD_TIMING_SKIPS: &[&str] = &[];
 
 /// The steps of the address and thread jobs (plan §2.3), in order.
 #[must_use]
@@ -393,7 +393,7 @@ pub const THREAD_TIMING_SKIPS: &[&str] = &[];
     clippy::too_many_lines,
     reason = "the table of steps reads best as one list"
 )]
-pub fn steps() -> Vec<Step> {
+pub(crate) fn steps() -> Vec<Step> {
     let runtime_args = vec![
         "-p",
         "cheby_runtime",
@@ -527,7 +527,7 @@ pub fn steps() -> Vec<Step> {
 
 /// What `--list` and a run show for one step.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Planned {
+pub(crate) struct Planned {
     /// `runtime`, `miri-hamt`, ...
     pub name: String,
     /// One line per command.
@@ -536,7 +536,7 @@ pub struct Planned {
 
 /// The steps of `sanitizer`, in order.
 #[must_use]
-pub fn plan(sanitizer: Sanitizer) -> Vec<Planned> {
+pub(crate) fn plan(sanitizer: Sanitizer) -> Vec<Planned> {
     match sanitizer {
         Sanitizer::Miri => MIRI_GROUPS
             .iter()
@@ -645,7 +645,7 @@ fn test_args(args: &[&'static str], sanitizer: Sanitizer) -> Vec<String> {
 /// # Errors
 ///
 /// Returns a message naming an unknown step.
-pub fn select(planned: Vec<Planned>, names: &[String]) -> Result<Vec<Planned>, String> {
+pub(crate) fn select(planned: Vec<Planned>, names: &[String]) -> Result<Vec<Planned>, String> {
     if let Some(unknown) = names
         .iter()
         .find(|name| !planned.iter().any(|step| step.name == **name))
@@ -664,7 +664,7 @@ pub fn select(planned: Vec<Planned>, names: &[String]) -> Result<Vec<Planned>, S
 
 /// `ASAN_OPTIONS` or `TSAN_OPTIONS` of a step; `None` for Miri.
 #[must_use]
-pub fn sanitizer_options(
+pub(crate) fn sanitizer_options(
     sanitizer: Sanitizer,
     leaks: Leaks,
     linux: bool,
@@ -706,14 +706,14 @@ fn with_caller(ours: &str, caller: Option<String>, separator: char) -> String {
 
 /// Lines of a step's output the driver repeats in the step's summary.
 #[must_use]
-pub fn is_summary_line(line: &str) -> bool {
+pub(crate) fn is_summary_line(line: &str) -> bool {
     let line = line.trim_start();
     line.starts_with("Summary [") || line.starts_with("pending ")
 }
 
 /// Whether a line starts a sanitizer report or a Miri error.
 #[must_use]
-pub fn is_report_line(line: &str) -> bool {
+pub(crate) fn is_report_line(line: &str) -> bool {
     [
         "ERROR: AddressSanitizer",
         "WARNING: ThreadSanitizer",
@@ -917,7 +917,7 @@ impl Context {
 }
 
 /// `cargo xtask sanitize`.
-pub fn run(root: &Path, args: &Args) -> Result<(), String> {
+pub(crate) fn run(root: &Path, args: &Args) -> Result<(), String> {
     let planned = select(plan(args.sanitizer), &args.steps)?;
     let name = args.sanitizer.name();
     if args.build_cheby.is_some() && args.sanitizer == Sanitizer::Miri {

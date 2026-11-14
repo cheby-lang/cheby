@@ -3,14 +3,13 @@
 //! and no value Cranelift's SSA construction had to merge, and a MIR whose
 //! block order is not dominance order still translates.
 
-use cranelift_codegen::ir;
 use cranelift_jit::{JITBuilder, JITModule};
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};
 use cheby_mir::{
     Abi, AbiSig, ArithOp, Block, BlockId, CalleeDecl, Const, DefName, FnKey, Function, Local,
-    LocalDecl, MirModule, Operand, Repr, RuntimeFn, Rvalue, Stmt, StrId, Terminator, UnitKind,
+    LocalDecl, Operand, Repr, RuntimeFn, Rvalue, Stmt, Terminator, UnitKind,
 };
 
 use crate::*;
@@ -145,7 +144,7 @@ fn literal(n: usize, computed: bool) -> MirModule {
 /// Translates the one function of `unit` and checks that Cranelift
 /// compiles it (with its verifier in debug builds).
 fn translate_one(m: &mut JITModule, unit: &MirModule) -> ir::Function {
-    let mut decls = Decls::new(cranelift_module::Module::isa(m)).unwrap();
+    let mut decls = Decls::new(Module::isa(m)).unwrap();
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
     };
@@ -153,7 +152,7 @@ fn translate_one(m: &mut JITModule, unit: &MirModule) -> ir::Function {
     let units = std::slice::from_ref(unit);
     declare(m, &mut decls, units, &cx, &opts).unwrap();
     let clif = translate(unit, &unit.functions[0], &decls, &cx, &opts).unwrap();
-    compile_function(cranelift_module::Module::isa(m), clif.clone()).unwrap();
+    compile_function(Module::isa(m), clif.clone()).unwrap();
     clif
 }
 

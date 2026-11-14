@@ -74,7 +74,10 @@ impl NewError {
                 suggestion: Some(suggestion),
                 ..
             } => Some(format!("try `{suggestion}`")),
-            _ => None,
+            Self::InvalidName { .. }
+            | Self::ReservedName { .. }
+            | Self::Exists { .. }
+            | Self::Create { .. } => None,
         }
     }
 }

@@ -61,7 +61,7 @@ fn os_threads(shared: &Shared) -> usize {
 
 /// The life of worker slot `index`.
 fn life_of(shared: &Shared, index: usize) -> Option<u8> {
-    shared.worker(index).map(super::worker::WorkerShared::life)
+    shared.worker(index).map(WorkerShared::life)
 }
 
 /// Waits on the host up to [`cap()`] for `ready`.

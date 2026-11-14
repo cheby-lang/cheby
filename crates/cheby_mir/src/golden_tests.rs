@@ -206,7 +206,7 @@ fn build(package: &str, main: &str) -> String {
         diags.extend(d);
         // Warnings such as an unused `let` are fine: MIR sees no errors.
         assert!(
-            !diags.iter().any(cheby_diag::Diagnostic::is_error),
+            !diags.iter().any(Diagnostic::is_error),
             "diagnostics: {diags:#?}"
         );
         let view = DepView::new(&set, &deps);

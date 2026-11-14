@@ -67,7 +67,7 @@ pub fn run(f: &mut Function) -> Result<(), Ice> {
             Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } => {
                 return Err(Ice::new("constant propagation after reference counting"));
             }
-            _ => {}
+            Stmt::Assign { .. } | Stmt::Eval(_) | Stmt::ClearUnwind => {}
         }
     }
     if constants.is_empty() {
@@ -90,7 +90,11 @@ pub fn run(f: &mut Function) -> Result<(), Ice> {
     for block in &mut f.blocks {
         block.retain_stmts(|s| match s {
             Stmt::Assign { dst, .. } => !constants.contains_key(dst) || read.contains(dst),
-            _ => true,
+            Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => true,
         });
     }
     Ok(())

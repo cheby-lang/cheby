@@ -22,7 +22,7 @@
 //!   constructor (D-716), after reuse; [`const_prop`]: static constant
 //!   locals become operands before counting (D-454). Both under Perceus
 //!   only ([`MirOptions::fuses`]).
-//! - [`validate`] and [`dump`]: the validator and the stable text form.
+//! - [`mod@validate`] and [`mod@dump`]: the validator and the stable text form.
 //! - [`stats`]: static counts for reports (D-759).
 
 pub mod abi;

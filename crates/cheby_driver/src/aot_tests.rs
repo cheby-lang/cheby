@@ -12,9 +12,12 @@
     clippy::too_many_lines,
     reason = "test helpers: offsets inside a small record, and one decoder of its layout"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use ::object::read::{Object as _, ObjectSection as _, ObjectSymbol as _};
 use ::object::{RelocationFlags, SectionKind, SymbolScope, elf, macho};
@@ -26,7 +29,7 @@ use cheby_runtime::image::{FIELD_KINDS, NO_STRING};
 use cheby_runtime::layout::{FieldKind, LayoutInfo};
 
 use super::*;
-use crate::aot::{BuildOptions, Objects, build_objects, compile_records};
+use crate::aot::{Objects, build_objects, compile_records};
 use crate::cache::{BuildId, CacheLog, Store};
 
 fn example(name: &str) -> PathBuf {
@@ -292,7 +295,7 @@ fn lowered_and_compiled(root: &Path) -> (Vec<MirModule>, Vec<(String, CodeRecord
         .code
         .iter()
         .zip(compiled.records)
-        .map(|(unit, record)| (unit.path.to_string(), record))
+        .map(|(unit, record)| (unit.path.to_owned(), record))
         .collect();
     (lowered.units, records)
 }
@@ -947,8 +950,7 @@ fn check_jit_records(units: &[MirModule], decoded: &[(String, DecodedRecord)]) {
         stub_unresolved: true,
         ..cheby_jit::JitOptions::from_env()
     };
-    let mut jit =
-        cheby_jit::Jit::configured(cheby_codegen_clif::CodegenOptions::default(), options).unwrap();
+    let mut jit = Jit::configured(cheby_codegen_clif::CodegenOptions::default(), options).unwrap();
     jit.compile(units).unwrap();
     let records = jit.module_records();
     assert!(

@@ -5,18 +5,14 @@
 //!
 //! `CHEBY_RT_TEST_EMULATED=1` (set by the linux/amd64 container runs; macOS
 //! x86-64 is dropped, D-892) keeps every check but the time bounds.
-
-use std::ffi::OsStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 
 use super::testing::{
     Mailbox, config, emulated, entry_check, hang, root, runtime, scaled, spawn, start_root, tuned,
 };
 use super::*;
 use crate::abi::PanicKind;
-use crate::entry::DEFAULT_STACK_SIZE;
 use crate::fiber::StackPool;
 use crate::panic::cheby_rt_panic;
 
@@ -626,7 +622,7 @@ fn edgeless_spawned_fibers_inherit_their_spawners_setting() {
             unwind_edges: false,
             ..config(MIN_STACK_SIZE)
         };
-        let outcome = super::testing::start_root_with(&runtime, &config, |me| {
+        let outcome = testing::start_root_with(&runtime, &config, |me| {
             assert!(!me.unwind_edges());
             spawn(me, false, |fiber| {
                 assert!(!fiber.unwind_edges());
@@ -692,7 +688,7 @@ fn edgeless_raises_on_several_workers_end_the_process_once() {
             unwind_edges: false,
             ..config(MIN_STACK_SIZE)
         };
-        let outcome = super::testing::start_root_with(&runtime, &config, |me| {
+        let outcome = testing::start_root_with(&runtime, &config, |me| {
             let arrived = Arc::new(AtomicUsize::new(0));
             for _ in 0..FIBERS {
                 let arrived = Arc::clone(&arrived);

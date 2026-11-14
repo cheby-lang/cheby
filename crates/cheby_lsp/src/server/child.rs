@@ -867,7 +867,7 @@ impl Children {
             .filter(|(root, _)| !env.analyzing.contains(*root))
             .filter_map(|(root, package)| match package.constants {
                 ChildState::Waiting { due } if due <= now => Some((due, root.clone())),
-                _ => None,
+                ChildState::Idle | ChildState::Waiting { .. } | ChildState::Running(_) => None,
             })
             .min();
         if let Some((_, root)) = due {
@@ -994,7 +994,7 @@ impl Children {
                 let detail = format!("its output passed {} MiB", STDOUT_CAP >> 20);
                 self.cut_short(&done.root, &detail, None, now, out);
             }
-            outcome => {
+            outcome @ (ChildOutcome::Exited { .. } | ChildOutcome::Io(_)) => {
                 let ChildState::Running(running) = std::mem::take(&mut package.constants) else {
                     return;
                 };

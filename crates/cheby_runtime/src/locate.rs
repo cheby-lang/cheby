@@ -48,7 +48,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::mem::{align_of, size_of};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 

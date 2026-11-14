@@ -309,6 +309,10 @@ impl SyntaxKind {
     /// The fixed text of a keyword or punctuation token, such as `"fn"` or
     /// `"=>"`. Other kinds have no fixed text.
     #[must_use]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub const fn fixed_text(self) -> Option<&'static str> {
         let text = match self {
             Self::UNDERSCORE => "_",

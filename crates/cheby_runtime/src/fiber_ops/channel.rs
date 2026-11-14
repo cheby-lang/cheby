@@ -350,7 +350,7 @@ pub(crate) unsafe fn channel_has_waiters(receiver: Word) -> bool {
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_channel_new(ctx: *mut ExecCtx, capacity: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_channel_new(ctx: *mut ExecCtx, capacity: i64) -> Word {
     guarded(Some(ctx), || {
         let cap = usize::try_from(capacity.max(0)).unwrap_or(usize::MAX);
         let chan = Arc::new(Chan::new(cap));
@@ -391,7 +391,11 @@ pub unsafe extern "C" fn cheby_channel_new(ctx: *mut ExecCtx, capacity: i64) -> 
 /// `ctx` is the running fiber's context, `sender` a live `Sender` handle
 /// and `value` a live value of the channel's type, both borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_channel_send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_channel_send(
+    ctx: *mut ExecCtx,
+    sender: Word,
+    value: Word,
+) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe { send(ctx, sender, value) })
 }
@@ -530,7 +534,7 @@ fn give_back(value: Word) -> Word {
 /// `ctx` is the running fiber's context and `receiver` a live `Receiver`
 /// handle, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_channel_receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_channel_receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe { receive(ctx, receiver) })
 }
@@ -630,8 +634,8 @@ mod tests {
     /// and fit in it.
     #[test]
     fn fiber_ops_channel_lock_has_its_own_lines() {
-        assert_eq!(std::mem::align_of::<Chan>(), 128);
-        assert!(std::mem::size_of::<Mutex<ChanInner>>() <= 128);
+        assert_eq!(align_of::<Chan>(), 128);
+        assert!(size_of::<Mutex<ChanInner>>() <= 128);
         let chan = Arc::new(Chan::new(4));
         assert_eq!((&raw const chan.inner).addr() % 128, 0);
     }
@@ -690,10 +694,12 @@ mod tests {
             let scope = open(me);
             let fiber = spawn(me, scope, &[values::int_word(op::RECEIVE), dup(rx)]);
             wait_for_waiters(me, tx, 0, 1);
+            // SAFETY: as above.
             assert!(unsafe { channel_has_waiters(rx) });
             assert_eq!(references(tx), 3, "the parked receiver's own");
             assert!(send(me, tx, values::int_word(7)).is_ok());
             assert!(close(me, scope));
+            // SAFETY: as above.
             assert!(!unsafe { channel_has_waiters(rx) });
             assert_eq!(references(tx), 2);
             drop_word(fiber);

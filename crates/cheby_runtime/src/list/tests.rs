@@ -14,6 +14,10 @@
     clippy::cast_sign_loss,
     reason = "test arithmetic on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use proptest::prelude::*;
 
@@ -165,6 +169,7 @@ fn the_empty_list_is_static() {
         );
         // SAFETY: a static object.
         assert_eq!(
+            // SAFETY: as above.
             unsafe { crate::object::load_rc(abi_ptr(nothing.word())) },
             abi::RC_STATIC
         );
@@ -279,7 +284,7 @@ fn push_and_set_are_in_place_at_count_one_and_copy_when_shared() {
         }
         check(xs, &model);
         // A unique leaf is updated where it is.
-        let before = super::node::Node::word(xs.view().tree.unwrap());
+        let before = Node::word(xs.view().tree.unwrap());
         xs = ops::set(xs, 4_000, elem(-4));
         model[4_000] = -4;
         assert_eq!(
@@ -440,17 +445,25 @@ fn helpers_follow_the_ownership_of_plan_4_1() {
         let null = std::ptr::null_mut();
         // SAFETY (every block below): live lists and elements with the
         // ownership each helper documents.
+        // SAFETY: as above.
         let xs = unsafe { cheby_rt_list_push(null, empty(), elem(1)) };
+        // SAFETY: as above.
         let xs = unsafe { cheby_rt_list_push(null, xs, elem(2)) };
+        // SAFETY: as above.
         let xs = unsafe { cheby_rt_list_push(null, xs, elem(3)) };
         check(root(xs), &[1, 2, 3]);
+        // SAFETY: as above.
         assert_eq!(unsafe { cheby_rt_list_length(xs) }, 3);
+        // SAFETY: as above.
         assert_eq!(unsafe { cheby_rt_list_length(empty()) }, 0);
+        // SAFETY: as above.
         let second = unsafe { cheby_rt_list_get(xs, 2) };
         assert_eq!(value(second), 3);
         drop_word(second);
+        // SAFETY: as above.
         let rest = unsafe { cheby_rt_list_slice(null, xs, 1, 3) };
         check(root(rest), &[2, 3]);
+        // SAFETY: as above.
         let joined = unsafe { cheby_rt_list_append(null, rest, xs) };
         check(root(joined), &[2, 3, 1, 2, 3]);
         check(root(xs), &[1, 2, 3]);
@@ -597,6 +610,7 @@ fn slicing_kernels_release_what_they_cut_at_count_one() {
         dup_word(first);
         // SAFETY: as above.
         let tail = root(unsafe { cheby_list_drop(xs.word(), 1) });
+        // SAFETY: as above.
         let head = root(unsafe { cheby_list_take(tail.word(), 2) });
         release(xs);
         assert_eq!(count(first), 1, "`drop` released it");
@@ -667,14 +681,17 @@ fn kernels_borrow_and_update_in_place_at_count_one() {
         let xs = list(&[1, 2, 3]);
         // Unique: the wrapper's reference is the only one.
         // SAFETY (every kernel call): live borrowed arguments.
+        // SAFETY: as above.
         let pushed = as_wrapper(xs, |w| unsafe { cheby_list_push(w, elem(4)) });
         assert_eq!(pushed, xs, "pushed in place");
         check(pushed, &[1, 2, 3, 4]);
+        // SAFETY: as above.
         let set = as_wrapper(pushed, |w| unsafe {
             cheby_list_set(w, 0, abi::tag_int(10).unwrap())
         });
         assert_eq!(set, xs);
         check(set, &[10, 2, 3, 4]);
+        // SAFETY: as above.
         let prepended = as_wrapper(set, |w| unsafe {
             cheby_list_prepend(w, abi::tag_int(0).unwrap())
         });
@@ -682,6 +699,7 @@ fn kernels_borrow_and_update_in_place_at_count_one() {
         check(prepended, &[0, 10, 2, 3, 4]);
         // Shared: the kernel leaves the argument alone.
         dup_word(prepended.word());
+        // SAFETY: as above.
         let other = as_wrapper(prepended, |w| unsafe {
             cheby_list_push(w, abi::tag_int(5).unwrap())
         });
@@ -690,6 +708,7 @@ fn kernels_borrow_and_update_in_place_at_count_one() {
         check(prepended, &[0, 10, 2, 3, 4]);
         // Appending a list to itself through the kernel.
         dup_word(prepended.word());
+        // SAFETY: as above.
         let doubled = as_wrapper(prepended, |w| unsafe { cheby_list_append(w, w) });
         check(doubled, &[0, 10, 2, 3, 4, 0, 10, 2, 3, 4]);
         check(prepended, &[0, 10, 2, 3, 4]);
@@ -709,6 +728,7 @@ fn kernels_read_and_cut_with_clamping() {
         // count one, the slicing kernels would cut it in place (D-894).
         dup_word(word);
         // SAFETY (every kernel call): live borrowed arguments.
+        // SAFETY: as above.
         unsafe {
             assert_eq!(cheby_list_length(word), 4);
             assert_eq!(cheby_list_length(empty()), 0);
@@ -982,8 +1002,8 @@ fn apply(xs: Root, model: &mut Vec<i64>, op: &Op, shared: bool) -> Root {
         }
         Op::Prepend(v) => {
             model.insert(0, v);
-            // SAFETY: a live borrowed list and element.
             let item = elem(v);
+            // SAFETY: a live borrowed list and element.
             let r = as_wrapper(xs, |w| unsafe { cheby_list_prepend(w, item) });
             drop_word(item);
             r
@@ -1463,9 +1483,7 @@ fn borrowed_uncons_matches_get_and_slice() {
                 let rest = root(rest);
                 check(
                     rest,
-                    model
-                        .get(clamped(start, n)..clamped(end, n).max(clamped(start, n)))
-                        .unwrap(),
+                    &model[clamped(start, n)..clamped(end, n).max(clamped(start, n))],
                 );
                 release(rest);
                 check(xs, &model);

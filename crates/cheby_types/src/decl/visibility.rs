@@ -140,7 +140,9 @@ impl Owner {
                 };
                 (true, exposed, required)
             }
-            _ => (false, false, item.vis),
+            Item::Fn(_) | Item::Alias(_) | Item::Const(_) | Item::Interface(_) => {
+                (false, false, item.vis)
+            }
         };
         // Nothing is less visible than `priv`.
         (required != Vis::Priv).then_some(Self {
@@ -247,7 +249,13 @@ impl VisCx<'_, '_> {
             DefKind::Type | DefKind::Interface if named.vis < self.owner.required => {
                 self.report(def, span, None);
             }
-            _ => {}
+            DefKind::Fn
+            | DefKind::Type
+            | DefKind::Const
+            | DefKind::Interface
+            | DefKind::InterfaceFn
+            | DefKind::Ctor
+            | DefKind::Test => {}
         }
         Ok(())
     }
@@ -328,7 +336,7 @@ impl VisCx<'_, '_> {
     fn advice(&self, owner: &str, name: &str, mentioned: Vis) -> (String, String) {
         let raise = match self.owner.required {
             Vis::Pub => "`pub`",
-            _ => "package-visible",
+            Vis::Priv | Vis::Package => "package-visible",
         };
         if self.owner.fields {
             if self.owner.exposed {
@@ -356,7 +364,7 @@ impl VisCx<'_, '_> {
         }
         let decision = match self.owner.required {
             Vis::Pub => "D-148",
-            _ => "D-149",
+            Vis::Priv | Vis::Package => "D-149",
         };
         let lower = vis_word(mentioned);
         (

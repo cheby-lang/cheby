@@ -17,6 +17,10 @@
     clippy::cast_sign_loss,
     reason = "test arithmetic on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -270,6 +274,7 @@ fn check_trie(word: Word, coll: Collection) {
 fn check_map(m: Word, model: &BTreeMap<Key, i64>) {
     check_trie(m, Collection::Map);
     // SAFETY (every kernel call): live borrowed arguments.
+    // SAFETY: as above.
     unsafe {
         assert_eq!(cheby_map_size(m), model.len() as i64);
         assert_eq!(cheby_map_is_empty(m), model.is_empty());
@@ -316,6 +321,7 @@ fn check_map(m: Word, model: &BTreeMap<Key, i64>) {
 fn check_set(s: Word, model: &BTreeSet<Key>) {
     check_trie(s, Collection::Set);
     // SAFETY (every kernel call): live borrowed arguments.
+    // SAFETY: as above.
     unsafe {
         assert_eq!(cheby_set_size(s), model.len() as i64);
         assert_eq!(cheby_set_is_empty(s), model.is_empty());
@@ -386,6 +392,7 @@ fn every_map_kernel_on_small_maps() {
         let alan = key_word(&Key::Str("alan".into()));
         let grace = key_word(&Key::Str("grace".into()));
         // SAFETY (every kernel call): live borrowed arguments.
+        // SAFETY: as above.
         unsafe {
             let pairs = crate::list::from_iter([
                 values::tuple(&[new_string("pear"), elem(1)]),
@@ -436,6 +443,7 @@ fn every_map_kernel_on_small_maps() {
 fn every_set_kernel_on_small_sets() {
     balanced(|| {
         // SAFETY (every kernel call): live borrowed arguments.
+        // SAFETY: as above.
         unsafe {
             let items = crate::list::from_iter([3, 1, 3, 2].map(|n| abi::tag_int(n).unwrap()));
             let digits = cheby_set_from_list(items);
@@ -530,6 +538,7 @@ fn kernels_update_in_place_at_count_one_and_copy_when_shared() {
         let k = abi::tag_int(5).unwrap();
         let fresh = abi::tag_int(1_000).unwrap();
         // SAFETY (every kernel call): live borrowed arguments.
+        // SAFETY: as above.
         unsafe {
             // Unique: the same root comes back, and nothing new is
             // allocated for a replacement.
@@ -541,7 +550,7 @@ fn kernels_update_in_place_at_count_one_and_copy_when_shared() {
             assert_eq!(m3, m);
             let m4 = as_wrapper(m3, |m| cheby_map_remove(m, fresh));
             assert_eq!(m4, m);
-            let mut expected = model.clone();
+            let mut expected = model;
             expected.insert(Key::Int(5), 50);
             check_map(m4, &expected);
             // Shared: a new root, and the old version is untouched.
@@ -583,7 +592,7 @@ fn a_unique_root_over_shared_nodes_copies_only_the_path() {
         let copied = live() - before;
         assert!(copied <= 14, "copied {copied} nodes for one path");
         check_map(a, &model);
-        let mut changed = model.clone();
+        let mut changed = model;
         changed.insert(Key::Int(3), 9);
         check_map(b2, &changed);
         drop_word(a);
@@ -1288,6 +1297,7 @@ unsafe extern "C" fn seeds_entry(_: *mut ExecCtx) -> u64 {
         (0..300).map(|i| values::tuple(&[values::int_word(i), values::int_word(i * 2)])),
     );
     // SAFETY (every kernel call): live borrowed arguments.
+    // SAFETY: as above.
     unsafe {
         let a = cheby_map_from_list(pairs);
         fail(&mut failed, 0, seed_of(a) == Some(0xA));
@@ -1328,7 +1338,7 @@ unsafe extern "C" fn seeds_entry(_: *mut ExecCtx) -> u64 {
 }
 
 #[test]
-fn new_maps_take_the_current_entrys_seed() {
+fn new_maps_take_the_current_entry_seed() {
     let config = EntryConfig {
         domain: Domain::new(),
         ..EntryConfig::new(EntryMode::ConstEval(ConstEvalLimits {
@@ -1382,6 +1392,7 @@ unsafe extern "C" fn upsert_entry(_: *mut ExecCtx) -> u64 {
     let mut failed = 0;
     let bump = closure(&[abi::tag_int(1).unwrap()]);
     // SAFETY (every kernel call): live borrowed arguments.
+    // SAFETY: as above.
     unsafe {
         let mut counts = cheby_map_new();
         for word in ["b", "a", "b"] {
@@ -1441,7 +1452,7 @@ unsafe extern "C" fn upsert_entry(_: *mut ExecCtx) -> u64 {
 }
 
 #[test]
-fn upsert_calls_its_closure_through_the_entrys_trampoline() {
+fn upsert_calls_its_closure_through_the_entry_trampoline() {
     let config = EntryConfig {
         domain: Domain::new(),
         callbacks: Callbacks {

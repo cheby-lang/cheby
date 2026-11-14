@@ -423,7 +423,12 @@ fn deadlock_a_timers_count_falls_after_its_firing_returns() {
         counts: Arc::clone(&counts),
         during: AtomicUsize::new(usize::MAX),
     });
-    let (fired, _) = timers.arm(now, watch.clone(), Some(Arc::clone(&counts)), || false);
+    let (fired, _) = timers.arm(
+        now,
+        Arc::<Watch>::clone(&watch),
+        Some(Arc::clone(&counts)),
+        || false,
+    );
     assert_eq!(counts.timers(), 1);
     assert_eq!(timers.fire_due(now), 1);
     assert_eq!(
@@ -435,13 +440,28 @@ fn deadlock_a_timers_count_falls_after_its_firing_returns() {
     assert!(!fired.cancel());
     assert_eq!(counts.timers(), 0);
     let later = now + Duration::from_secs(3600);
-    let (cancelled, _) = timers.arm(later, watch.clone(), Some(Arc::clone(&counts)), || false);
+    let (cancelled, _) = timers.arm(
+        later,
+        Arc::<Watch>::clone(&watch),
+        Some(Arc::clone(&counts)),
+        || false,
+    );
     assert_eq!(counts.timers(), 1);
     assert!(cancelled.cancel());
     assert!(!cancelled.cancel());
     assert_eq!(counts.timers(), 0);
-    timers.arm(later, watch.clone(), Some(Arc::clone(&counts)), || false);
-    timers.arm(later, watch.clone(), Some(Arc::clone(&counts)), || false);
+    timers.arm(
+        later,
+        Arc::<Watch>::clone(&watch),
+        Some(Arc::clone(&counts)),
+        || false,
+    );
+    timers.arm(
+        later,
+        Arc::<Watch>::clone(&watch),
+        Some(Arc::clone(&counts)),
+        || false,
+    );
     assert_eq!(counts.timers(), 2);
     timers.clear();
     assert_eq!(counts.timers(), 0);
@@ -610,6 +630,7 @@ fn deadlock_of_two_domains_only_the_deadlocked_one_is_reported() {
 /// confirmed by a later survey.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+#[expect(clippy::infinite_loop, reason = "the deadlock detector ends the fiber")]
 fn deadlock_a_resume_between_the_passes_cancels_the_confirmation() {
     let runtime = detecting(2);
     let domain = Domain::new();

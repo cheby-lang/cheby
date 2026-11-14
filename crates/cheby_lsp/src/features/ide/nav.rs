@@ -145,7 +145,15 @@ fn pick<'a>(index: Index<'a>, view: ModuleView<'a>, offset: TextSize) -> Option<
 fn entries_of<'a>(module: &'a ModuleIndex, occurrence: &Occurrence) -> Vec<&'a SymbolEntry> {
     let first = match occurrence.role {
         Role::FieldInit | Role::FieldPat => occurrence.also.unwrap_or(occurrence.symbol),
-        _ => occurrence.symbol,
+        Role::Decl
+        | Role::Use
+        | Role::Qualifier
+        | Role::Import
+        | Role::FieldRead
+        | Role::InterpRoot
+        | Role::InterpField
+        | Role::Attr
+        | Role::Implicit(_) => occurrence.symbol,
     };
     let twin = (occurrence.role == Role::Decl)
         .then_some(occurrence.also)
@@ -327,7 +335,10 @@ pub(crate) fn references(
     // A local is named in its own module only.
     let partial = match first.meaning {
         Meaning::Local { .. } => own_partial(picked.module, &text),
-        _ => first_partial,
+        Meaning::Module(_)
+        | Meaning::Item(_)
+        | Meaning::Field { .. }
+        | Meaning::TypeParam { .. } => first_partial,
     };
     Ok(Some(RefsAnswer {
         hits,
@@ -380,7 +391,16 @@ pub(crate) fn highlights(
             let kind = match o.role {
                 Role::Implicit(_) => HighlightKind::Text,
                 _ if write => HighlightKind::Write,
-                _ => HighlightKind::Read,
+                Role::Decl
+                | Role::Use
+                | Role::Qualifier
+                | Role::Import
+                | Role::FieldRead
+                | Role::FieldInit
+                | Role::FieldPat
+                | Role::InterpRoot
+                | Role::InterpField
+                | Role::Attr => HighlightKind::Read,
             };
             (o.range, kind)
         })
@@ -400,7 +420,16 @@ fn declares(module: &ModuleIndex, occurrence: &Occurrence, symbol: &Symbol) -> b
     };
     match occurrence.role {
         Role::FieldPat => occurrence.also == Some(id),
-        role => role.is_decl() && occurrence.names(id),
+        role @ (Role::Decl
+        | Role::Use
+        | Role::Qualifier
+        | Role::Import
+        | Role::FieldRead
+        | Role::FieldInit
+        | Role::InterpRoot
+        | Role::InterpField
+        | Role::Attr
+        | Role::Implicit(_)) => role.is_decl() && occurrence.names(id),
     }
 }
 
@@ -563,7 +592,9 @@ impl<'a> Places<'a> {
                 .map(|t| NavTarget {
                     file: NavFile::Run(file),
                     name: t.text_range(),
-                    full: t.parent().map_or(t.text_range(), SyntaxNode::text_range),
+                    full: t
+                        .parent()
+                        .map_or_else(|| t.text_range(), SyntaxNode::text_range),
                 })
                 .collect()
         })

@@ -8,8 +8,7 @@
 //! catch point, and leaves nothing of the entry's domain alive. Run with
 //! `CHEBY_RT_POISON=1` for freed objects to be poisoned (D-458).
 
-use cheby_codegen_clif::CodegenOptions;
-use cheby_mir::{CType, ForeignSig, LayoutRef};
+use cheby_mir::{CType, ForeignSig};
 use cheby_runtime::ConstEvalLimits;
 use cheby_runtime::abi::PanicKind as RtPanicKind;
 

@@ -519,11 +519,11 @@ impl BodyCx<'_, '_> {
                         let len = self.list_len(occ, value, &mut env)?;
                         (len, Some(len))
                     }
-                    _ => (value, None),
+                    Test::Bool | Test::Int(_) | Test::Str => (value, None),
                 };
                 let repr = match test {
                     Test::Int(r) => *r,
-                    _ => Repr::Int,
+                    Test::Tag(_) | Test::Bool | Test::Str | Test::Len => Repr::Int,
                 };
                 let mut blocks = Vec::with_capacity(cases.len());
                 let mut targets = Vec::with_capacity(cases.len());
@@ -808,7 +808,9 @@ impl BodyCx<'_, '_> {
             Step::Index(i) => Operand::Const(Const::Int(i64::from(i))),
             // `len - from_end`, the spread's end.
             Step::FromEnd(_) => end.clone(),
-            _ => return Err(Ice::new("an uncons of a position that is not an element")),
+            Step::Subject(_) | Step::Field { .. } | Step::Tuple { .. } | Step::Slice { .. } => {
+                return Err(Ice::new("an uncons of a position that is not an element"));
+            }
         };
         let rest = self.define(
             Repr::Value,
@@ -1023,7 +1025,9 @@ fn int_bits(v: i128, repr: Repr) -> Result<u64, Ice> {
         Repr::I16 | Repr::U16 => 16,
         Repr::I32 | Repr::U32 => 32,
         Repr::Int | Repr::I64 | Repr::U64 => 64,
-        _ => return Err(Ice::new(format!("an integer literal pattern of {repr}"))),
+        Repr::Value | Repr::Float | Repr::Bool | Repr::F32 => {
+            return Err(Ice::new(format!("an integer literal pattern of {repr}")));
+        }
     };
     let bits = if repr.is_unsigned_int() {
         u64::try_from(v).ok()

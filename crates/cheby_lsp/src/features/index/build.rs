@@ -189,7 +189,7 @@ const fn callee_def(callee: &thir::Callee) -> Option<DefId> {
         thir::Callee::Ctor { ctor, .. } => Some(*ctor),
         thir::Callee::Iface { iface_fn, .. } | thir::Callee::Dyn { iface_fn } => Some(*iface_fn),
         // A value of function type, and kinds added later, name no item.
-        _ => None,
+        thir::Callee::Value(_) | _ => None,
     }
 }
 
@@ -316,6 +316,10 @@ impl<'s> Cx<'s> {
     }
 
     /// Fills the maps from `resolved` and the module's imports.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each loop fills a map keyed by what it iterates"
+    )]
     fn merge(&mut self, resolved: &'s ResolvedModule) {
         for (&item, body) in &resolved.bodies {
             let slots: HashMap<_, u32> = body
@@ -328,7 +332,11 @@ impl<'s> Cx<'s> {
                 Res::Local(local) => slots
                     .get(&local)
                     .map_or(Ref::Err, |&slot| Ref::Local(item, slot)),
-                other => Ref::of(other),
+                other @ (Res::Def(_)
+                | Res::Module(_)
+                | Res::TyParam(_)
+                | Res::SelfTy
+                | Res::Err) => Ref::of(other),
             };
             for (&node, &res) in &body.paths {
                 self.paths.insert(node, convert(res));
@@ -406,6 +414,10 @@ impl<'s> Cx<'s> {
     }
 
     /// What the identifier `token` is, by its parent's kind (F §5.3).
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn classify(&self, token: SyntaxToken<'s>) -> Outcome {
         let Some(parent) = token.parent() else {
             return Outcome::Unknown(Unknown::NotRecorded);
@@ -498,7 +510,9 @@ impl<'s> Cx<'s> {
                         .and_then(|item| self.type_param(item, text)),
                     Role::Use,
                 ),
-                other => single(self.target_of(other, text), Role::Use),
+                other @ (Ref::Local(..) | Ref::Def(_) | Ref::Module(_)) => {
+                    single(self.target_of(other, text), Role::Use)
+                }
             };
         }
         let Some(k) = segments.iter().position(|s| *s == token) else {
@@ -601,7 +615,10 @@ impl<'s> Cx<'s> {
         }
         let ns = match target.meaning {
             Meaning::Item(def) => self.alias_ns(def),
-            _ => SymbolNs::Value,
+            Meaning::Module(_)
+            | Meaning::Field { .. }
+            | Meaning::TypeParam { .. }
+            | Meaning::Local { .. } => SymbolNs::Value,
         };
         Ok(Target {
             symbol: Symbol::import_alias(self.out.index.path.clone(), ns, text),
@@ -738,7 +755,15 @@ impl<'s> Cx<'s> {
                         CtorFields::Named(fields) => fields.iter().any(|(n, _)| *n == name),
                         CtorFields::Unit | CtorFields::Positional(_) => false,
                     },
-                    _ => false,
+                    ItemSig::Fn(_)
+                    | ItemSig::Type(_)
+                    | ItemSig::Ctor(_)
+                    | ItemSig::Alias(_)
+                    | ItemSig::Const(_)
+                    | ItemSig::Interface(_)
+                    | ItemSig::InterfaceFn(_)
+                    | ItemSig::Test
+                    | ItemSig::Error => false,
                 })
             })
     }
@@ -817,7 +842,13 @@ impl<'s> Cx<'s> {
         let item = resolved.item(index).ok_or(Unknown::NotRecorded)?;
         let ty = match item.kind {
             DefKind::Ctor => item.parent.ok_or(Unknown::NotRecorded)?,
-            _ => index,
+            DefKind::Fn
+            | DefKind::Type
+            | DefKind::Alias
+            | DefKind::Const
+            | DefKind::Interface
+            | DefKind::InterfaceFn
+            | DefKind::Test => index,
         };
         let name = self.lookup(token.text()).ok_or(Unknown::NotRecorded)?;
         self.field_of(resolved.def_id(ty), name)
@@ -887,7 +918,7 @@ impl<'s> Cx<'s> {
             .filter(|entry| entry.source == ScopeSource::Import(n))
             .filter_map(|entry| match entry.res {
                 Res::Def(def) => Some(def),
-                _ => None,
+                Res::Local(_) | Res::Module(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => None,
             })
             .collect()
     }

@@ -4,7 +4,7 @@
 //! [`lexer::lex`] splits the text into raw tokens, the parser turns them into
 //! [`event::Event`]s, and [`tree::build`] builds the flat tree. The tree is
 //! lossless and always covers the whole text, whatever the errors.
-//! [`validate`] then reports the rules that are not grammar errors.
+//! [`validate()`] then reports the rules that are not grammar errors.
 //!
 //! Grammar errors (class G) are the inputs that both the spec and
 //! `tree-sitter-cheby` reject; the parser cross-check (D-272) compares only
@@ -78,7 +78,7 @@ pub fn validate(tree: &SyntaxTree) -> Vec<Diagnostic> {
     validate::validate(tree)
 }
 
-/// The token-level part of [`validate`], sorted by position: lone carriage
+/// The token-level part of [`validate()`], sorted by position: lone carriage
 /// returns (E0002), number shapes (E0008), escapes (E0011) and whitespace
 /// in interpolations (E0012). Naming (E0006) and reserved words (E0007)
 /// are not syntax checks: name resolution reports them where a name is
@@ -86,7 +86,7 @@ pub fn validate(tree: &SyntaxTree) -> Vec<Diagnostic> {
 ///
 /// These checks look at single tokens, not at the shape of the tree, so
 /// they are meaningful on a file with grammar errors, where the rest of
-/// [`validate`] is not (D-425).
+/// [`validate()`] is not (D-425).
 #[must_use]
 pub fn validate_tokens(tree: &SyntaxTree) -> Vec<Diagnostic> {
     validate::validate_tokens(tree)

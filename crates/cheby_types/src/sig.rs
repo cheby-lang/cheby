@@ -341,7 +341,7 @@ impl LoweredFnSig {
     /// Whether any part has an error, already reported. A bound that failed
     /// to lower counts: the function's interface would otherwise promise
     /// less than it was written with.
-    pub fn has_error(&self, input: &TypesInput<'_>) -> bool {
+    pub(crate) fn has_error(&self, input: &TypesInput<'_>) -> bool {
         let types = &input.globals.types;
         !self.bound_errors.is_empty()
             || self.params.iter().any(|p| contains_error(types, p.ty))

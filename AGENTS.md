@@ -131,7 +131,14 @@ cargo xtask check-examples        # cheby check in every example
 # cheby fmt's form in std and the examples
 cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')
 cargo xtask check-determinism     # same outputs across thread counts and paths
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items --locked
+typos                             # spelling (_typos.toml)
+taplo fmt --check                 # TOML formatting (.taplo.toml)
+actionlint                        # the workflows, and their scripts through shellcheck
+cargo deny --locked check         # advisories, licences and sources (deny.toml)
 ```
+
+- The workspace lints are in `Cargo.toml` (D-423, D-1560). Exempt code with `#[expect(lint, reason = "…")]` on the smallest item, never `#[allow]` (D-422). Every `unsafe` block has a `// SAFETY:` comment directly above it, a loop over a hash map or set says why its order cannot reach the output, and a `match` lists its enum's variants instead of `_`, except on `SyntaxKind` and in tests.
 
 - Tests run under [cargo-nextest](https://nexte.st), never `cargo test`, which is not supported (D-1553). Install it with `cargo install cargo-nextest --locked`. `cargo xtask test [ARGS]` runs `cargo nextest run --workspace --locked ARGS` with one build cache shared by the whole run, and prints the harnesses' pending summary at the end (D-1554, D-1556). A plain `cargo nextest run` works too, but every harness trial then compiles `std` from scratch. Select tests with nextest's filters: `cargo xtask test -E 'binary_id(cheby_cli::ui)' deadlock`. `.config/nextest.toml` holds the configuration, and CI uses its `ci` profile (D-1558). `cargo xtask junit-report --html FILE` renders that profile's JUnit report as an HTML page, which CI shows in each job's summary and uploads (D-1559). Doctests do not run.
 - The harnesses are test targets of `cheby_cli`: `conformance` (the examples), `ui` (`tests/ui/`), `repl` (`tests/repl/`) and `lsp` (`cheby lsp` over stdio, with its tests in `tests/lsp/`). Run one with `cargo xtask test -E 'binary_id(cheby_cli::<name>)'`. Their trial names start with the expectation, such as `[pass]` or `[pending]`, which changes with `tests/milestone`. A UI check test's `.stderr` golden is also the expected output of an `lsp` parity trial, so a changed golden can fail both harnesses.

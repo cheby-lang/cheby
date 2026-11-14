@@ -33,6 +33,10 @@
 //! checker's facts for the type of the whole expression; through the
 //! protocol only names can be asked, so a `pipe_end` whose left side ends
 //! in no name has no key probe.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -673,7 +677,7 @@ fn pct(part: u32, whole: u32) -> f64 {
 }
 
 /// The tallies of a run, by kind.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     /// Each kind's tally.
     pub by_kind: BTreeMap<&'static str, Tally>,

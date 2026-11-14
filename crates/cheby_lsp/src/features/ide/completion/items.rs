@@ -315,7 +315,14 @@ fn path_starts(cx: &CompletionCx<'_>, out: &mut Items) -> bool {
         Context::Expr { .. } | Context::Pipe { .. } => !cx.next.more_segments,
         Context::Type | Context::Pattern { .. } => false,
         Context::Dot { .. } => return true,
-        _ => return false,
+        Context::None
+        | Context::ImportPath { .. }
+        | Context::ImportItems { .. }
+        | Context::Attribute { .. }
+        | Context::Qualified { .. }
+        | Context::RecordField { .. }
+        | Context::Interpolation
+        | Context::Item { .. } => return false,
     };
     modules(cx, out);
     if interfaces {
@@ -546,7 +553,14 @@ impl<'s> CompletionCx<'s> {
             ItemSig::Alias(a) => Some(&a.generics),
             ItemSig::Ctor(ctor) => match &iface.item(ctor.ty)?.sig {
                 ItemSig::Type(t) => Some(&t.generics),
-                _ => None,
+                ItemSig::Fn(_)
+                | ItemSig::Ctor(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::InterfaceFn(_)
+                | ItemSig::Test
+                | ItemSig::Error => None,
             },
             ItemSig::Const(_)
             | ItemSig::Interface(_)
@@ -653,7 +667,12 @@ impl<'s> CompletionCx<'s> {
     pub(crate) fn head(&self, ty: Ty) -> Option<DefId> {
         match self.snapshot.globals().types.kind(ty) {
             TyKind::Named { def, .. } => Some(*def),
-            _ => None,
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Param(_)
+            | TyKind::Dyn { .. } => None,
         }
     }
 
@@ -675,7 +694,13 @@ impl<'s> CompletionCx<'s> {
         match &self.item(def)?.sig {
             ItemSig::Fn(f) => Some(f.ret),
             ItemSig::Const(c) => Some(c.ty),
-            _ => None,
+            ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         }
     }
 
@@ -854,7 +879,11 @@ fn keywords_and_snippets(
 fn expr(cx: &CompletionCx<'_>, statement: bool, site: ExprSite<'_>, out: &mut Items) {
     let site = match site {
         ExprSite::Unknown => partial_path(cx).map_or(site, ExprSite::Path),
-        other => other,
+        other @ (ExprSite::Path(_)
+        | ExprSite::Arg { .. }
+        | ExprSite::LetValue(_)
+        | ExprSite::ArmBody(_)
+        | ExprSite::FieldValue(_)) => other,
     };
     let expected = if cx.options.type_driven {
         cx.expected(site)
@@ -1034,7 +1063,13 @@ fn value_insert(cx: &CompletionCx<'_>, label: &str, item: &IfaceItem, as_value: 
             }
             CtorFields::Positional(_) | CtorFields::Unit | CtorFields::Named(_) => cx.insert(label),
         },
-        _ => cx.insert(label),
+        ItemSig::Type(_)
+        | ItemSig::Alias(_)
+        | ItemSig::Const(_)
+        | ItemSig::Interface(_)
+        | ItemSig::InterfaceFn(_)
+        | ItemSig::Test
+        | ItemSig::Error => cx.insert(label),
     }
 }
 
@@ -1338,7 +1373,12 @@ fn record_def(cx: &CompletionCx<'_>, record: SyntaxNode<'_>) -> Option<(DefId, V
     let ty = match item.kind {
         DefKind::Ctor => DefId::new(def.module, item.parent?),
         DefKind::Type => def,
-        _ => return None,
+        DefKind::Fn
+        | DefKind::Alias
+        | DefKind::Const
+        | DefKind::Interface
+        | DefKind::InterfaceFn
+        | DefKind::Test => return None,
     };
     let ty_item = cx.item(ty)?;
     if !structure_seen(cx, ty, ty_item) {
@@ -1420,7 +1460,7 @@ pub(crate) fn qualified_module(cx: &CompletionCx<'_>, text: &str) -> Option<Modu
     let name = cx.snapshot.globals().names.lookup(text)?;
     match resolved.scope.get(Namespace::Value, name)?.res {
         Res::Module(module) => Some(module),
-        _ => None,
+        Res::Local(_) | Res::Def(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => None,
     }
 }
 

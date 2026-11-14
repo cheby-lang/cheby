@@ -9,11 +9,10 @@
 //! `CHEBY_CACHE_LOG`'s file (D-973, D-1135, D-1263).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
-use crate::aot::{BuildOptions, Objects, build_objects};
+use crate::aot::{Objects, build_objects};
 use crate::cache::{BuildId, CacheLog, Hash128, Store};
 
 /// The build ID of every test store.

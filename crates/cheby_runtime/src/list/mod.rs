@@ -9,7 +9,7 @@
 //! - [`tree`]: get, set, push, take, drop and concatenation on trees, in
 //!   place along the path where nodes are unique.
 //! - [`ops`]: the operations on list values (views over a tree).
-//! - [`kernels`]: the runtime helpers for generated code (plan §4.1) and
+//! - `kernels`: the runtime helpers for generated code (plan §4.1) and
 //!   the `std::list` kernels (D-484).
 //!
 //! Costs, as `docs/stdlib/list.md` requires (D-300) and the tests in
@@ -54,7 +54,7 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     out.extend(kernels::all());
 }
 
-/// Registers the list layouts (26-28) once per process, as [`kernels`]
+/// Registers the list layouts (26-28) once per process, as `kernels`
 /// does: an executable's start calls it through `image::install`, since
 /// it never builds the symbol table (D-919).
 pub(crate) fn register_kinds() {

@@ -2,12 +2,11 @@
 //! in their own shards, and reading sums the shards, exactly once nobody
 //! charges any more.
 
-use std::sync::{Arc, Barrier, Mutex, PoisonError};
+use std::sync::{Barrier, Mutex, PoisonError};
 
 use super::tests::tuple;
 use super::*;
 use crate::entry::{self, EntryConfig, EntryMode, EntryOutcome};
-use crate::stats::Event;
 
 #[test]
 fn shards_are_a_power_of_two_up_to_64() {
@@ -113,7 +112,7 @@ fn four_threads_count_exactly_in_one_domain() {
                             mine.push(word);
                         } else {
                             // SAFETY: the only reference.
-                            unsafe { crate::rc::drop(word) };
+                            unsafe { rc::drop(word) };
                         }
                     }
                     kept.lock()
@@ -140,7 +139,7 @@ fn four_threads_count_exactly_in_one_domain() {
     with_domain(Arc::clone(&domain), || {
         for word in kept {
             // SAFETY: the only reference, handed over by its entry.
-            unsafe { crate::rc::drop(word) };
+            unsafe { rc::drop(word) };
         }
     });
     assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
@@ -170,7 +169,7 @@ fn more_threads_than_shards_count_exactly() {
                 mine.push(word);
             } else {
                 // SAFETY: the only reference.
-                unsafe { crate::rc::drop(word) };
+                unsafe { rc::drop(word) };
             }
         }
         kept.lock()
@@ -246,7 +245,7 @@ fn more_threads_than_shards_count_exactly() {
     with_domain(Arc::clone(&domain), || {
         for word in kept {
             // SAFETY: the only reference, handed over by its thread.
-            unsafe { crate::rc::drop(word) };
+            unsafe { rc::drop(word) };
         }
     });
     assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
@@ -307,7 +306,7 @@ fn generated_code_allocates_in_its_fibers_domain() {
     assert_eq!((domain.live_objects(), domain.live_bytes()), (1, 16));
     with_domain(Arc::clone(&domain), || {
         // SAFETY: the only reference.
-        unsafe { crate::rc::drop(word) };
+        unsafe { rc::drop(word) };
     });
     assert_eq!(domain.live_objects(), 0);
 }

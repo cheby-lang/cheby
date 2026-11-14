@@ -46,6 +46,10 @@
 //! holds variables for the child's environment, `KEY=VALUE` lines in the
 //! format of an example's `env` file ([`UiTest::env`], D-1043). Other modes
 //! may not have them.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

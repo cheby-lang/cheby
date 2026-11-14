@@ -51,7 +51,7 @@ pub const DIR: &str = "tests/lsp";
 pub const GOLDEN_EXTENSION: &str = "expected";
 
 /// The directives of a test's header.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     /// The decisions the test pins.
     pub decisions: BTreeSet<u32>,

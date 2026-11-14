@@ -11,6 +11,10 @@
     clippy::arithmetic_side_effects,
     reason = "test counters on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use ::object::read::{Object as _, ObjectSection as _, ObjectSymbol as _};
 use ::object::{RelocationFlags, SectionKind, SymbolScope, elf, macho};

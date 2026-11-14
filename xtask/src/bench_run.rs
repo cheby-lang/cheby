@@ -91,7 +91,7 @@ const SPLIT_WARMUP: usize = 1;
 
 /// The command's options.
 #[derive(Debug, clap::Args)]
-pub struct Args {
+pub(crate) struct Args {
     /// One run per benchmark (unless `--runs` says otherwise)
     #[arg(long)]
     quick: bool,
@@ -161,7 +161,7 @@ pub struct Args {
 }
 
 /// Parses `KEY=VALUE`.
-pub fn parse_env(text: &str) -> Result<(String, String), String> {
+pub(crate) fn parse_env(text: &str) -> Result<(String, String), String> {
     match text.split_once('=') {
         Some((key, value)) if !key.is_empty() => Ok((key.to_owned(), value.to_owned())),
         _ => Err(format!("`{text}` is not KEY=VALUE")),
@@ -211,7 +211,7 @@ fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
-pub fn run(root: &Path, args: &Args) -> Result<(), String> {
+pub(crate) fn run(root: &Path, args: &Args) -> Result<(), String> {
     let runs = args.runs.unwrap_or(if args.quick { 1 } else { 5 });
     if runs == 0 {
         return Err("--runs must be at least 1".to_owned());
@@ -1481,7 +1481,7 @@ fn geometric_mean(ratios: &[f64]) -> Option<f64> {
     if ratios.is_empty() {
         return None;
     }
-    let count = u32::try_from(ratios.len()).map_or(f64::from(u32::MAX), f64::from);
+    let count = u32::try_from(ratios.len()).map_or_else(|_| f64::from(u32::MAX), f64::from);
     let sum: f64 = ratios.iter().map(|r| r.ln()).sum();
     Some((sum / count).exp())
 }
@@ -1502,7 +1502,7 @@ fn median(times: &[Duration]) -> Duration {
 }
 
 /// What the JSON says about the machine and the run.
-pub struct Meta {
+pub(crate) struct Meta {
     pub commit: String,
     pub cheby: String,
     pub env: Vec<(String, String)>,
@@ -1512,7 +1512,7 @@ pub struct Meta {
 }
 
 impl Meta {
-    pub fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let env: serde_json::Map<String, Value> = self
             .env
             .iter()
@@ -1538,14 +1538,14 @@ impl Meta {
 
 /// `path` relative to the repository `root` when it is inside it, so the
 /// JSON names no home directory; otherwise as given.
-pub fn relative_to(root: &Path, path: &Path) -> String {
+pub(crate) fn relative_to(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .map_or_else(|_| path.display().to_string(), |p| p.display().to_string())
 }
 
 /// The short hash of this tree's `HEAD`, with `+dirty` if tracked files
 /// changed; `unknown` without git.
-pub fn head_commit(root: &Path) -> String {
+pub(crate) fn head_commit(root: &Path) -> String {
     let git = |args: &[&str]| {
         Command::new("git")
             .args(args)
@@ -1595,7 +1595,7 @@ fn cpu_name() -> String {
 }
 
 /// The 1, 5 and 15-minute load averages, where the system reports them.
-pub fn load_average() -> Option<[f64; 3]> {
+pub(crate) fn load_average() -> Option<[f64; 3]> {
     let text = if cfg!(target_os = "macos") {
         command_output("sysctl", &["-n", "vm.loadavg"])?
     } else {

@@ -12,12 +12,10 @@
 //! [`trusting_test_ca`].
 
 use std::collections::VecDeque;
-use std::io::{self, Read, Write};
-use std::sync::Arc;
 
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::{RootCertStore, ServerConfig, ServerConnection};
+use rustls::{ServerConfig, ServerConnection};
 
 use super::*;
 

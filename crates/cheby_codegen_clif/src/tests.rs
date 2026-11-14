@@ -8,7 +8,7 @@ use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};
 use cheby_mir::{
     Abi, AbiSig, Block, CType, CalleeDecl, Const, DefName, FnKey, ForeignSig, Function, LocalDecl,
-    MirModule, Operand, Repr, Stmt, StrId, Terminator, UnitKind,
+    Operand, Repr, Stmt, Terminator, UnitKind,
 };
 
 use crate::mangle::{self, Kind};
@@ -334,7 +334,7 @@ fn unit() -> MirModule {
 )]
 fn translation_is_pure_and_deterministic() {
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [unit()];
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
@@ -351,7 +351,7 @@ fn translation_is_pure_and_deterministic() {
     assert!(text.contains("= cb$imp$cheby_io_print"), "{text}");
     assert!(text.contains("= cb$str$fn$app$f$1"), "{text}");
     assert!(text.contains(" tail {"), "{text}");
-    let compiled = compile_function(cranelift_module::Module::isa(&m), first).unwrap();
+    let compiled = compile_function(Module::isa(&m), first).unwrap();
     assert_ne!(compiled.bytes.len(), 0);
     assert_eq!(compiled.align % FUNCTION_ALIGN, 0);
 }
@@ -364,7 +364,7 @@ fn translation_is_pure_and_deterministic() {
 )]
 fn a_function_is_declared_once() {
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [unit()];
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
@@ -479,7 +479,7 @@ fn foreign_imports_by_address_allow_new_signatures() {
     };
     assert_eq!(jit.foreign_import, ForeignImport::Address);
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     for (index, params) in [(0, &[CType::I64][..]), (1, &[CType::I64, CType::I64][..])] {
         let units = [labs_unit(index, params)];
         declare(&mut m, &mut decls, &units, &cx, &jit).unwrap();
@@ -499,7 +499,7 @@ fn foreign_imports_by_address_allow_new_signatures() {
         ..CodegenOptions::default()
     };
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     declare(
         &mut m,
         &mut decls,
@@ -641,7 +641,7 @@ fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
         ..CodegenOptions::default()
     };
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let int_float = [CType::I64, CType::F64];
     let units = [
         blocking_fn(0, "kern", &int_float, CType::I64),
@@ -707,7 +707,7 @@ fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
 
     // No blocking call, no `cheby_rt_blocking_call`.
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [unit()];
     declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
     let text = define(&mut m, &units, &mut decls, &cx, &opts)
@@ -741,13 +741,8 @@ fn slice_runtime_functions() {
         .chain(words)
         .collect();
     let expected = [
-        (RuntimeFunc::StackSlowUnwind, 27, &plain[..], CType::U32),
-        (
-            RuntimeFunc::StackSlowFrameUnwind,
-            28,
-            &frame[..],
-            CType::U32,
-        ),
+        (RuntimeFunc::StackSlowUnwind, 27, (&*plain), CType::U32),
+        (RuntimeFunc::StackSlowFrameUnwind, 28, (&*frame), CType::U32),
         (
             RuntimeFunc::StackSlowFrame,
             24,
@@ -998,7 +993,7 @@ fn slice_forms_unit() -> MirModule {
 )]
 fn slice_forms_translate_with_their_edges() {
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [slice_forms_unit()];
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
@@ -1027,7 +1022,7 @@ fn slice_forms_translate_with_their_edges() {
     );
     assert_eq!(text.matches(&load_flag).count(), 3, "{text}");
     assert!(!text.contains("trap user"), "no trap is left:\n{text}");
-    let compiled = compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+    let compiled = compile_function(Module::isa(&m), clif).unwrap();
     assert_ne!(compiled.bytes.len(), 0);
 }
 
@@ -1040,7 +1035,7 @@ fn slice_forms_translate_with_their_edges() {
 )]
 fn units_without_the_slice_forms_keep_their_function_ids() {
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [unit()];
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
@@ -1075,14 +1070,14 @@ fn default_options_and_the_frame_size() {
     assert_eq!(opts.large_frame_threshold, 64 << 10);
     assert_eq!(LARGE_FRAME_THRESHOLD, 64 << 10);
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [unit()];
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
     };
     declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
     let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
-    let compiled = compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+    let compiled = compile_function(Module::isa(&m), clif).unwrap();
     assert!(compiled.frame_size < 1 << 10, "{compiled:?}");
 }
 
@@ -1104,11 +1099,11 @@ fn unwind_pads_are_translated_as_cold_blocks() {
     let opts = CodegenOptions::default();
     let text_of = |units: [MirModule; 1]| {
         let mut m = module();
-        let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+        let mut decls = Decls::new(Module::isa(&m)).unwrap();
         declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
         let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
         let text = decls.describe(&clif);
-        compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+        compile_function(Module::isa(&m), clif).unwrap();
         text
     };
     let plain = text_of([unit()]);
@@ -1279,13 +1274,13 @@ fn clif_of(units: &[MirModule; 1], opts: &CodegenOptions) -> String {
         layouts: &BuiltinLayouts,
     };
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     declare(&mut m, &mut decls, units, &cx, opts).unwrap();
     let clif = translate(&units[0], &units[0].functions[0], &decls, &cx, opts).unwrap();
     let again = translate(&units[0], &units[0].functions[0], &decls, &cx, opts).unwrap();
     let text = decls.describe(&clif);
     assert_eq!(text, decls.describe(&again), "translation is deterministic");
-    compile_function(cranelift_module::Module::isa(&m), clif).unwrap();
+    compile_function(Module::isa(&m), clif).unwrap();
     text
 }
 
@@ -1515,7 +1510,7 @@ fn drops_pass_their_functions_ctx() {
         };
         let units = [edges_unit()];
         let mut m = module();
-        let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+        let mut decls = Decls::new(Module::isa(&m)).unwrap();
         declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
         let (_, signature) = decls.runtime(runtime::RuntimeFunc::Drop).unwrap();
         assert_eq!(signature.params.len(), 2, "{signature}");

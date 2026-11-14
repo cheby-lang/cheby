@@ -309,7 +309,13 @@ fn pad_chain(func: &Function, pad: BlockId) -> Result<(Vec<Local>, BlockId), Cod
         match &block.term {
             Terminator::Resume => return Ok((drops, at)),
             Terminator::Goto { target, args } if args.is_empty() => at = *target,
-            _ => {
+            Terminator::Return(_)
+            | Terminator::TailCall { .. }
+            | Terminator::Goto { .. }
+            | Terminator::Branch { .. }
+            | Terminator::Switch { .. }
+            | Terminator::Panic { .. }
+            | Terminator::Unreachable => {
                 return Err(CodegenError::ice(format!(
                     "the entry pad chain at {at:?} ends other than with `goto` or `resume`"
                 )));
@@ -493,7 +499,9 @@ fn ffi_checked_later(stmts: &[Stmt], i: usize) -> bool {
             | Stmt::Eval(Rvalue::CallForeign { symbol, args, .. }) => {
                 return helper(symbol) && args.get(1) == Some(&Operand::Local(*dst));
             }
-            _ => return false,
+            Stmt::Assign { .. } | Stmt::Eval(_) | Stmt::DropKeep { .. } | Stmt::ClearUnwind => {
+                return false;
+            }
         }
     }
     false
@@ -1383,7 +1391,7 @@ impl Translator<'_, '_> {
     /// pointer of this function in the control block
     /// ([`Translator::store_wait_frame`]).
     fn store_wait_frame_for(&mut self, args: &[Operand]) -> Result<(), CodegenError> {
-        if let Some(Operand::Const(Const::Ctx)) = args.first() {
+        if matches!(args.first(), Some(Operand::Const(Const::Ctx))) {
             self.store_wait_frame()?;
         }
         Ok(())

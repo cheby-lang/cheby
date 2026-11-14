@@ -69,6 +69,10 @@ impl<'t> Gap<'t> {
 
     /// Takes `elem` into the gap when it is whitespace, a line break or a
     /// comment; `false` for a part of the node.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub(crate) fn take_trivia(&mut self, elem: SyntaxElement<'t>) -> bool {
         let SyntaxElement::Token(token) = elem else {
             return false;

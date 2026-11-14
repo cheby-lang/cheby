@@ -266,7 +266,18 @@ unsafe fn reuse_size(header: u64, obj: Option<*const u8>) -> Option<u64> {
                 .checked_add(abi::FIELD_SIZE)?
                 .checked_add(abi::FIELD_SIZE.checked_mul(count)?)?
         }
-        _ => return None,
+        LayoutKind::String
+        | LayoutKind::Bytes
+        | LayoutKind::BoxedInt
+        | LayoutKind::BoxedU64
+        | LayoutKind::BoxedFloat
+        | LayoutKind::BoxedF32
+        | LayoutKind::Closure
+        | LayoutKind::Dict
+        | LayoutKind::Dyn
+        | LayoutKind::Desc
+        | LayoutKind::DescNominal
+        | LayoutKind::Custom(_) => return None,
     };
     size.max(abi::HEADER_SIZE)
         .checked_next_multiple_of(abi::OBJECT_ALIGN)
@@ -294,7 +305,18 @@ unsafe fn fields_are_empty(header: u64, obj: *const u8) -> bool {
                 u64::try_from(count).unwrap_or(0),
             )
         }
-        _ => return false,
+        LayoutKind::String
+        | LayoutKind::Bytes
+        | LayoutKind::BoxedInt
+        | LayoutKind::BoxedU64
+        | LayoutKind::BoxedFloat
+        | LayoutKind::BoxedF32
+        | LayoutKind::Closure
+        | LayoutKind::Dict
+        | LayoutKind::Dyn
+        | LayoutKind::Desc
+        | LayoutKind::DescNominal
+        | LayoutKind::Custom(_) => return false,
     };
     (0..count).all(|n| {
         let offset = first.saturating_add(abi::FIELD_SIZE.saturating_mul(n));

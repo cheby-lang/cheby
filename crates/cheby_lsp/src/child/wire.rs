@@ -815,7 +815,7 @@ mod tests {
             Symbol::interface_fn(module.clone(), "Area", "area"),
             Symbol::type_param(module.clone(), SymbolNs::Type, "Box", "T"),
             Symbol::local(module.clone(), SymbolNs::Value, "main", "x", 2),
-            Symbol::import_alias(module.clone(), SymbolNs::Value, "l"),
+            Symbol::import_alias(module, SymbolNs::Value, "l"),
         ] {
             let data = SymbolData::from(&symbol);
             let json = serde_json::to_string(&data).expect("serializes");

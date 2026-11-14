@@ -1,5 +1,9 @@
 //! The evaluator's values, with the spec's structural equality, ordering,
 //! `show` and debug printing (§3.13, §3.14, §5.3.2, D-134, D-531, D-557).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;
@@ -91,7 +95,7 @@ impl Value {
 
     pub(super) fn data(ctor: &Rc<CtorDef>, fields: Vec<Self>) -> Self {
         Self::Data(Rc::new(Data {
-            ctor: ctor.clone(),
+            ctor: Rc::clone(ctor),
             fields,
         }))
     }

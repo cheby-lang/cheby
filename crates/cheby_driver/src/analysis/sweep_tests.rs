@@ -29,6 +29,10 @@
 //! `sweep_sample` takes twelve edits per package and runs by default.
 //! `sweep_full` takes up to six of each kind per package and is ignored,
 //! for a manual run with `--ignored --nocapture`, which prints its numbers.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

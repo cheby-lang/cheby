@@ -239,7 +239,7 @@ impl<'g> InferCtxt<'g> {
         for _ in 0..=self.vars.len() {
             match self.state(current)? {
                 VarState::Bound(InferTy::Var(parent)) => current = *parent,
-                _ => return Ok(current),
+                VarState::Unbound { .. } | VarState::Bound(_) => return Ok(current),
             }
         }
         Err(Ice::new("cycle in the type variable forest"))
@@ -306,7 +306,11 @@ impl<'g> InferCtxt<'g> {
                 params: known(params),
                 ret: Box::new(InferTy::Known(*ret)),
             },
-            _ => t.clone(),
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Named { .. }
+            | TyKind::Param(_)
+            | TyKind::Dyn { .. } => t.clone(),
         }
     }
 
@@ -460,7 +464,7 @@ impl<'g> InferCtxt<'g> {
                         kind: VarKind::General,
                         ..
                     } => self.write(root, VarState::Bound(InferTy::ERROR)),
-                    _ => Ok(()),
+                    VarState::Unbound { .. } | VarState::Bound(_) => Ok(()),
                 }
             }
             InferTy::Named { args: parts, .. } | InferTy::Tuple(parts) => {

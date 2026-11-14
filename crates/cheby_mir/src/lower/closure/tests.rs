@@ -2,6 +2,10 @@
 //! and trampolines (W2-C): the free-variable analysis on hand-built THIR,
 //! the rest through `test_support::lower_source`, pinned by goldens under
 //! `tests/golden/closure/` (bless with `CHEBY_BLESS=1`).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeSet;
 
@@ -284,7 +288,7 @@ fn closure_key(l: &Lowered, owner: &str, index: u32) -> FnKey {
     FnKey::Closure { owner, index }
 }
 
-const CAPTURES: &str = r"
+const CAPTURES: &str = "
 fn pick(n: Int, _k: Int, _x: Float, _b: Bool, _s: String, _small: U8, _f: F32) -> Int {
   n
 }
@@ -412,7 +416,7 @@ fn main() {
 #[test]
 fn local_functions_call_themselves_through_self() {
     let l = lowered(
-        r"
+        "
 fn spinner(len: Int) -> Int {
   fn spin(i: Int) -> Int {
     let again = fn() { spin(i) }
@@ -546,7 +550,7 @@ fn main() {
 #[test]
 fn calls_of_function_values_box_arguments_and_results() {
     let l = lowered(
-        r"
+        "
 fn call_once(f: fn(Int, Bool) -> Float, n: Int, b: Bool) -> Float {
   let x = f(n, b)
   f(n, b)
@@ -574,7 +578,7 @@ fn main() {
 #[test]
 fn function_values_and_their_shims() {
     let l = lowered(
-        r"
+        "
 import std::io
 import std::string
 

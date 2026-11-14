@@ -4,8 +4,8 @@
 //! a builtin descriptor (`Const::BuiltinDesc`). Each program is also
 //! checked by the MIR validator, so the hand-built MIR is well formed.
 
+use cheby_mir::BuiltinDesc;
 use cheby_mir::validate::{Stage, validate};
-use cheby_mir::{BuiltinDesc, LayoutRef};
 
 use super::*;
 
@@ -395,11 +395,8 @@ fn builtin_descriptors_are_runtime_objects() {
     );
     let entry = p.call(desc, Vec::new());
     let units = validated(p);
-    let symbol = format!("{}{}", abi::sym::DESC_PREFIX, BuiltinDesc::Int.name());
-    assert_eq!(
-        abi::sym::desc_symbol(BuiltinDesc::Int.name()),
-        Some(&*symbol)
-    );
+    let symbol = format!("{}{}", sym::DESC_PREFIX, BuiltinDesc::Int.name());
+    assert_eq!(sym::desc_symbol(BuiltinDesc::Int.name()), Some(&*symbol));
     assert!(
         cheby_runtime::symbols()
             .iter()

@@ -109,8 +109,13 @@ fn every_example_module_path() {
         let mut diags = Vec::new();
         let modules = discover(&dir, &manifest.name, &mut diags).unwrap();
         assert!(diags.is_empty(), "{}", dir.display());
-        let root: Vec<_> = modules.iter().filter(|m| m.path.is_root()).collect();
-        assert_eq!(root.len(), 1, "{}: one root module", dir.display());
+
+        assert_eq!(
+            modules.iter().filter(|m| m.path.is_root()).count(),
+            1,
+            "{}: one root module",
+            dir.display()
+        );
         for module in &modules {
             assert_eq!(module.path.package(), manifest.name);
             let stem = module.display.strip_prefix("src/").unwrap();

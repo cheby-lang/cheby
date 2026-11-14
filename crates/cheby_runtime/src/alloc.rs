@@ -2310,6 +2310,10 @@ unsafe fn release_block(obj: *mut u8, layout: Layout, cache: Option<&mut BlockCa
 
 /// Whether freed blocks may be kept, in the quarantine or the block cache.
 #[cfg(not(test))]
+#[expect(
+    clippy::cfg_not_test,
+    reason = "the build without tests has no test probe"
+)]
 #[inline]
 const fn keeps_freed_blocks() -> bool {
     true
@@ -2463,7 +2467,7 @@ pub(crate) mod tests {
         assert_eq!(word % 8, 0);
         // SAFETY: a live tuple.
         unsafe {
-            assert_eq!(object::load_rc(word_to_ptr(word)), 1);
+            assert_eq!(load_rc(word_to_ptr(word)), 1);
             assert_eq!(scan_and_layout(word_to_ptr(word)), (1, ids::TUPLE));
         }
         assert_eq!(live_objects(), before.wrapping_add(1));
@@ -2706,7 +2710,7 @@ pub(crate) mod tests {
         // SAFETY: the node's own reference; then the test's.
         unsafe {
             rc::drop(parent);
-            assert_eq!(object::load_rc(word_to_ptr(shared)), 1);
+            assert_eq!(load_rc(word_to_ptr(shared)), 1);
             rc::drop(shared);
         }
         assert_eq!(
@@ -2763,7 +2767,7 @@ pub(crate) mod tests {
             // SAFETY: a live object only this thread uses.
             unsafe {
                 forget(word);
-                assert_eq!(object::load_rc(word_to_ptr(word)), abi::RC_STATIC);
+                assert_eq!(load_rc(word_to_ptr(word)), abi::RC_STATIC);
                 forget(word);
                 rc::dup(word);
                 rc::drop(word);
@@ -2793,14 +2797,14 @@ pub(crate) mod tests {
                         // SAFETY: live objects; the pair takes a second
                         // reference to `shared`.
                         unsafe { rc::dup(shared) };
-                        let both = tuple(&[chain, shared, shared, crate::object::nil()]);
+                        let both = tuple(&[chain, shared, shared, object::nil()]);
                         assert_eq!(domain.live_objects(), 1_000_003);
                         // SAFETY: live objects only this thread uses,
                         // charged to the current domain.
                         unsafe {
                             freeze(both);
-                            assert_eq!(object::load_rc(word_to_ptr(both)), abi::RC_STATIC);
-                            assert_eq!(object::load_rc(word_to_ptr(shared)), abi::RC_STATIC);
+                            assert_eq!(load_rc(word_to_ptr(both)), abi::RC_STATIC);
+                            assert_eq!(load_rc(word_to_ptr(shared)), abi::RC_STATIC);
                             // Counting a static value changes nothing.
                             rc::dup(both);
                             rc::drop(both);

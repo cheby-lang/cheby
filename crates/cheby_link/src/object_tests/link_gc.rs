@@ -141,7 +141,7 @@ fn link_gc_entries_are_tied_to_their_functions() {
                 }
                 for index in 0..split.chunks.len() {
                     let at = 40 * u64::try_from(index).unwrap();
-                    let reloc = relocs.get(&at).unwrap();
+                    let reloc = &relocs[&at];
                     let RelocationTarget::Symbol(symbol) = reloc.target() else {
                         panic!("a relocation without a symbol");
                     };

@@ -12,12 +12,11 @@
 use std::ffi::c_void;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::abi::Word;
 use crate::entry::EntryOutcome;
 use crate::ffi::{
     cheby_ffi_drop, cheby_ffi_dup, cheby_ffi_int_new, cheby_ffi_string_bytes, cheby_ffi_string_new,
@@ -44,7 +43,7 @@ fn wait_until(ready: impl Fn() -> bool) {
 }
 
 /// The control block pointer of a running fiber.
-fn ctx_ptr(me: &crate::ctx::ExecCtx) -> *mut crate::ctx::ExecCtx {
+fn ctx_ptr(me: &ExecCtx) -> *mut ExecCtx {
     std::ptr::from_ref(me).cast_mut()
 }
 
@@ -188,7 +187,7 @@ unsafe extern "C" fn build_shim(args: *const u64, out: *mut u64) {
 fn on_root(
     threads: usize,
     domain: &Arc<Domain>,
-    body: impl FnOnce(&crate::ctx::ExecCtx) -> u64 + Send + 'static,
+    body: impl FnOnce(&ExecCtx) -> u64 + Send + 'static,
 ) -> EntryOutcome {
     let runtime = runtime(threads);
     let outcome = testing::start_root_with(&runtime, &config(domain), body)
@@ -258,7 +257,7 @@ unsafe extern "C" fn failing_shim(args: *const u64, out: *mut u64) {
     // SAFETY: the test's probe.
     let probe = unsafe { probe(args) };
     record_thread(probe);
-    crate::alloc::refuse_next_system_allocation();
+    alloc::refuse_next_system_allocation();
     let text = b"never built";
     // SAFETY: valid bytes.
     let first = unsafe { cheby_ffi_string_new(text.as_ptr().cast(), text.len()) };
@@ -281,7 +280,7 @@ unsafe extern "C" fn failing_shim(args: *const u64, out: *mut u64) {
     ignore = "runs entries on fibers; Windows support is M6 (D-545)"
 )]
 fn ffi_pool_job_a_failed_allocation_raises_on_the_fiber() {
-    let _serial = crate::alloc::tests::serial();
+    let _serial = alloc::tests::serial();
     let domain = Domain::new();
     let probe = Probe::new();
     let p = Arc::clone(&probe);
@@ -471,7 +470,7 @@ type Ran = (EntryOutcome, Arc<Probe>, Arc<Domain>);
 /// child process: the refusal is the global pool's.
 fn refused_pair(
     shim: unsafe extern "C" fn(*const u64, *mut u64),
-    after: fn(&crate::ctx::ExecCtx, u64) -> u64,
+    after: fn(&ExecCtx, u64) -> u64,
 ) -> [Ran; 2] {
     let pool = crate::pool::Pool::global();
     pool.refuse_until_queued(2);
@@ -532,7 +531,7 @@ fn check_inline_pair(pair: &[Ran; 2]) {
 
 /// What a root of the building test makes of its call: 1 when it got the
 /// `String` without the flag; the `String` is released on the fiber.
-fn kept_built(me: &crate::ctx::ExecCtx, word: u64) -> u64 {
+fn kept_built(me: &ExecCtx, word: u64) -> u64 {
     let built = !unwinding(me) && word != 0 && text(word) == "built on the pool";
     // SAFETY: the call's owned result, or 0.
     unsafe { rc::drop(word) };
@@ -541,7 +540,7 @@ fn kept_built(me: &crate::ctx::ExecCtx, word: u64) -> u64 {
 
 /// What a root of the failing test makes of its call: 1 when it got 0
 /// with the `out of memory` panic raised on it.
-fn raised_out_of_memory(me: &crate::ctx::ExecCtx, word: u64) -> u64 {
+fn raised_out_of_memory(me: &ExecCtx, word: u64) -> u64 {
     let flagged = unwinding(me);
     // The catch point's work: the record the flag stands for.
     let record = crate::unwind::record::take_record(me);
@@ -589,7 +588,7 @@ fn ffi_pool_job_inline_for_another_fiber_charges_its_domain() {
 fn ffi_pool_job_inline_for_another_fiber_raises_on_it() {
     const CHILD: &str = "CHEBY_RT_TEST_FFI_INLINE_OTHER_FAIL";
     if std::env::var_os(CHILD).is_some() {
-        let _serial = crate::alloc::tests::serial();
+        let _serial = alloc::tests::serial();
         let pair = refused_pair(failing_shim, raised_out_of_memory);
         for (_, probe, _) in &pair {
             assert_eq!(
@@ -651,7 +650,7 @@ fn pool_node_key() -> u64 {
 
 /// A new value of `PoolNode`, owned by the running fiber `me`, whose drop
 /// function reports to `probe`.
-fn pool_node(me: &crate::ctx::ExecCtx, probe: &Arc<Probe>) -> Word {
+fn pool_node(me: &ExecCtx, probe: &Arc<Probe>) -> Word {
     let handle = Box::into_raw(Box::new(PoolNode {
         probe: Arc::clone(probe),
     }));
@@ -701,7 +700,7 @@ fn last_reference_on_the_pool(in_list: bool) -> Arc<Probe> {
 /// thread, the last reference. Returns the probe.
 fn last_reference_of(
     in_list: bool,
-    make: impl FnOnce(&crate::ctx::ExecCtx, &Arc<Probe>) -> Word + Send + 'static,
+    make: impl FnOnce(&ExecCtx, &Arc<Probe>) -> Word + Send + 'static,
 ) -> Arc<Probe> {
     let domain = Domain::new();
     let probe = Probe::new();
@@ -1441,7 +1440,7 @@ fn ffi_pool_job_drop_of_a_cancelled_call_runs_on_the_fiber() {
     ignore = "runs entries on fibers; Windows support is M6 (D-545)"
 )]
 fn ffi_pool_job_drop_of_a_call_whose_allocation_failed_runs_on_the_fiber() {
-    let _serial = crate::alloc::tests::serial();
+    let _serial = alloc::tests::serial();
     pool_node_key();
     let domain = Domain::new();
     let probe = Probe::new();
@@ -1477,7 +1476,7 @@ fn ffi_pool_job_drop_of_a_call_whose_allocation_failed_runs_on_the_fiber() {
 /// jobs. Each root returns 1 when its call neither raised nor returned a
 /// value.
 fn refused_releases(
-    make: impl FnOnce(&crate::ctx::ExecCtx, &Arc<Probe>) -> Word + Copy + Send + 'static,
+    make: impl FnOnce(&ExecCtx, &Arc<Probe>) -> Word + Copy + Send + 'static,
 ) -> [Ran; 2] {
     let pool = crate::pool::Pool::global();
     pool.refuse_until_queued(2);
@@ -1635,7 +1634,7 @@ fn chain_node_key() -> u64 {
 /// A new value of `ChainNode`, owned by the running fiber `me`, that owns
 /// the reference `next`.
 fn chain_node(
-    me: &crate::ctx::ExecCtx,
+    me: &ExecCtx,
     id: usize,
     probe: &Arc<Probe>,
     runs: &Arc<Mutex<Vec<ChainRun>>>,
@@ -1843,7 +1842,7 @@ impl HandlePayload for ThreadProbe {
 
 /// A new handle of `kind`, owned by the running fiber `me`, whose finalizer
 /// reports to `probe`.
-fn std_handle(me: &crate::ctx::ExecCtx, probe: &Arc<Probe>, kind: HandleKind) -> Word {
+fn std_handle(me: &ExecCtx, probe: &Arc<Probe>, kind: HandleKind) -> Word {
     let payload = Box::new(ThreadProbe {
         probe: Arc::clone(probe),
     });

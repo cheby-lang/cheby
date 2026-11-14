@@ -331,7 +331,29 @@ fn first_reference(body: &thir::Body, targets: &[DefId]) -> Option<(DefId, Span)
         .iter()
         .filter_map(|expr| match expr.kind {
             ExprKind::ConstRef { def } if targets.contains(&def) => Some((def, expr.span)),
-            _ => None,
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error => None,
         })
         .min_by_key(|(_, span)| (span.range.start(), span.range.end()))
 }

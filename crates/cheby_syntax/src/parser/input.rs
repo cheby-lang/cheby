@@ -196,6 +196,10 @@ impl<'a> Input<'a> {
         continues || SKIP_BEFORE.contains(self.next_significant(i.saturating_add(1)))
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn compute(&self) -> Current {
         if self.split_off > 0 {
             let kind = match self.lexed.kind(self.pos) {
@@ -278,6 +282,10 @@ impl<'a> Input<'a> {
     /// matched like brackets, ignoring the grammar, as `Braces` in the
     /// parser does. `None` if the current token is not `{` or no `}`
     /// closes it. Recovery uses this to tell a block from a body.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub(super) fn after_matching_brace(&self) -> Option<SyntaxKind> {
         let current = self.current();
         if current.kind != L_BRACE {

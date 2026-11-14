@@ -1,0 +1,45 @@
+# Spelling, checked in CI with `typos` (D-1560).
+
+[files]
+extend-exclude = [
+  # Test vectors of hexadecimal floats.
+  "crates/cheby_runtime/src/num/math/testdata/*.wc",
+  "*.lock",
+]
+
+[default]
+# Commit hashes, such as `5dbe0ff`.
+extend-ignore-re = ["\\b[0-9a-f]{7,40}\\b"]
+
+[default.extend-words]
+# THIR, the typed high-level IR.
+thir = "thir"
+# Short words in test inputs, such as completion prefixes (`fo‸`), byte
+# strings (`b"ba"`), `tru` and `fls` patterns and `"caf\u00e9"`.
+abd = "abd"
+ba = "ba"
+caf = "caf"
+fo = "fo"
+tru = "tru"
+# Plurals in names.
+befores = "befores"
+datas = "datas"
+lits = "lits"
+somes = "somes"
+# Misspellings on purpose: tests and examples of did-you-mean suggestions,
+# rejected keys and values, and partial input.
+alue = "alue"
+fals = "fals"
+ist = "ist"
+iz = "iz"
+lengt = "lengt"
+mak = "mak"
+mesage = "mesage"
+nd = "nd"
+ond = "ond"
+pn = "pn"
+requre = "requre"
+som = "som"
+sme = "sme"
+strng = "strng"
+1 = "verison"

@@ -238,7 +238,7 @@ fn outcome_word<T>(outcome: HeadOutcome<T>, complete: impl FnOnce(T, usize) -> W
 ///
 /// `head` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_http_sys_parse_response_head(head: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_http_sys_parse_response_head(head: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let data = unsafe { values::bytes_of(head) };
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn cheby_http_sys_parse_response_head(head: Word) -> Word 
 ///
 /// `head` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_http_sys_parse_request_head(head: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_http_sys_parse_request_head(head: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let data = unsafe { values::bytes_of(head) };

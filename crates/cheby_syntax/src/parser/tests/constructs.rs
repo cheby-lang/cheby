@@ -509,12 +509,14 @@ fn partial_trees_keep_the_good_parts() {
     let text = "fn a() {\n  let = 1\n  let ok = 2\n}\n%%%\nfn b() {\n  f(1,\n}\nfn c() {}\n";
     let (_, tree, errors) = parse_text("test.cheby", text);
     assert!(errors.len() >= 2, "{errors:?}");
-    let fns: Vec<_> = tree
-        .root()
-        .children()
-        .filter(|n| n.kind() == FN_DECL)
-        .collect();
-    assert_eq!(fns.len(), 3);
+
+    assert_eq!(
+        tree.root()
+            .children()
+            .filter(|n| n.kind() == FN_DECL)
+            .count(),
+        3
+    );
     assert_eq!(count(text, LET_STMT), 2);
 }
 

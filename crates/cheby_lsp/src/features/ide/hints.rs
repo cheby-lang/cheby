@@ -184,11 +184,22 @@ impl Cx<'_> {
         let iface = self.snapshot.interfaces().get(self.view.id())?;
         match &iface.item(item)?.sig {
             ItemSig::Fn(f) => Some(&f.generics),
-            _ => None,
+            ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         }
     }
 
     /// Every hint of one body, in tree order.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn body(&self, body: &Body<'_>, node: SyntaxNode<'_>, out: &mut Vec<Hint>) {
         for n in node.descendants() {
             match n.kind() {
@@ -236,7 +247,12 @@ impl Cx<'_> {
     fn result_of(&self, ty: Ty) -> Option<Ty> {
         match self.snapshot.globals().types.kind(ty) {
             TyKind::Fn { ret, .. } => Some(*ret),
-            _ => None,
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Named { .. }
+            | TyKind::Tuple(_)
+            | TyKind::Param(_)
+            | TyKind::Dyn { .. } => None,
         }
     }
 
@@ -509,7 +525,14 @@ impl Cx<'_> {
         let iface = self.snapshot.interfaces().get(def.module)?;
         match &iface.item(def.index)?.sig {
             ItemSig::Fn(f) => Some(&f.params),
-            _ => None,
+            ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         }
     }
 
@@ -567,7 +590,19 @@ fn type_on_line(snapshot: &Snapshot, body: &Body<'_>, value: SyntaxNode<'_>, ty:
                     .and_then(|path| body.res.paths.get(&path.syntax().id()))
                     .is_some_and(|res| names_type(snapshot, res, *def));
         }
-        _ => None,
+        Expr::Path(_)
+        | Expr::Tuple(_)
+        | Expr::Paren(_)
+        | Expr::List(_)
+        | Expr::Block(_)
+        | Expr::Closure(_)
+        | Expr::Case(_)
+        | Expr::Panic(_)
+        | Expr::Todo(_)
+        | Expr::Binary(_)
+        | Expr::Call(_)
+        | Expr::Hole(_)
+        | Expr::Field(_) => None,
     };
     literal.is_some_and(|kind| match kind {
         LiteralKind::Int(_) => ty == Ty::INT,
@@ -682,6 +717,10 @@ enum Owner<'t> {
 impl<'t> Owner<'t> {
     /// The nearest owner of the binding pattern `node`. `None` inside a
     /// `case` arm, whose binders get no hint.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     fn of(node: SyntaxNode<'t>) -> Option<Self> {
         node.ancestors().find_map(|a| match a.kind() {
             K::LET_STMT | K::GUARD_STMT => Some(LetLike::of(a).map(Self::Let)),

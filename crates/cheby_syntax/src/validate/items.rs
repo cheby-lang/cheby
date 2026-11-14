@@ -249,9 +249,10 @@ pub(super) fn local_fn(function: LocalFn<'_>, out: &mut Vec<Diagnostic>) {
         let fn_start = function
             .syntax()
             .first_token_of_kind(SyntaxKind::FN_KW)
-            .map_or(visibility.significant_span().range.end(), |t| {
-                t.text_range().start()
-            });
+            .map_or_else(
+                || visibility.significant_span().range.end(),
+                |t| t.text_range().start(),
+            );
         let removal = Span::new(
             visibility.span().file,
             TextRange::new(visibility.significant_span().range.start(), fn_start),
@@ -319,7 +320,7 @@ pub(super) fn use_stmt(stmt: UseStmt<'_>, out: &mut Vec<Diagnostic>) {
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::LEFT_ARROW => break,
             SyntaxElement::Token(token)
                 if token.kind().is_trivia() || token.kind() == SyntaxKind::NEWLINE => {}
-            _ => last_comma = None,
+            SyntaxElement::Node(_) | SyntaxElement::Token(_) => last_comma = None,
         }
     }
     let Some(comma) = last_comma else {

@@ -7,8 +7,6 @@
 //!
 //! Every test opens its own store in a fresh directory (D-1128) and reads
 //! the lookups through `CHEBY_CACHE_LOG`'s file (D-973).
-
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cheby_iface::{ModuleId, PackageId};
@@ -156,9 +154,9 @@ impl Pkg {
         let module = front.local_module(&ModulePath::root(&package)).unwrap();
         let main = front.main_of(module).unwrap();
         let roots = Roots::Main(main);
-        let mir = crate::backend::kind_options(
+        let mir = backend::kind_options(
             &roots,
-            crate::backend::mir_options_from_env().unwrap(),
+            backend::mir_options_from_env().unwrap(),
             Scope::Whole,
         );
         let reading = Reading {
@@ -168,7 +166,7 @@ impl Pkg {
             reuse: false,
         };
         let lowered =
-            crate::backend::lower_reading(&front, &out.sources, &roots, mir, Scope::Whole, reading)
+            backend::lower_reading(&front, &out.sources, &roots, mir, Scope::Whole, reading)
                 .unwrap();
         let fresh: Vec<UnitKind> = lowered.units.iter().map(|u| u.unit).collect();
         let order: Vec<(UnitKind, bool)> = lowered
@@ -285,14 +283,18 @@ fn code_record_warm_run_lowers_no_package_unit() {
     }
     // The package's units, each from its record (std's may come from
     // records too, K6).
-    let cached: Vec<UnitKind> = order
-        .iter()
-        .filter(|(unit, cached)| {
-            *cached && matches!(unit, UnitKind::Code(m) | UnitKind::Tests(m) if local.contains(m))
-        })
-        .map(|(unit, _)| *unit)
-        .collect();
-    assert_eq!(cached.len(), MODULES.len(), "{order:?}");
+
+    assert_eq!(
+        order
+            .iter()
+            .filter(|(unit, cached)| {
+                *cached
+                    && matches!(unit, UnitKind::Code(m) | UnitKind::Tests(m) if local.contains(m))
+            })
+            .count(),
+        MODULES.len(),
+        "{order:?}"
+    );
     assert_eq!(order.last(), Some(&(UnitKind::Entries, false)));
 }
 
@@ -378,7 +380,7 @@ const LMAIN: &str = "//! Root.\n\nimport app::b\n\n\
 fn hints(p: &Pkg) -> Vec<Vec<String>> {
     p.files("hint")
         .iter()
-        .filter_map(|(_, bytes)| crate::cache::front::decode_hint(&bytes[HEADER_LEN..]))
+        .filter_map(|(_, bytes)| cache::front::decode_hint(&bytes[HEADER_LEN..]))
         .collect()
 }
 
@@ -455,7 +457,7 @@ fn code_record_reuse_report_reads_records_with_lines() {
         ..RunOptions::default()
     };
     // The cacheless report.
-    let cold = match crate::prepare_run(p.dir(), options.clone()).unwrap() {
+    let cold = match prepare_run(p.dir(), options.clone()).unwrap() {
         Prepared::Ready(program) => program.reuse_report().to_owned(),
         Prepared::CompileFailed(out) => panic!("{}", out.render()),
     };

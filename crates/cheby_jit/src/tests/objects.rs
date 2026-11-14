@@ -73,11 +73,11 @@ fn t_layouts() -> Vec<LayoutDesc> {
 /// layout words through the batch's module record (D-919, D-920).
 fn t_ids(jit: &Jit) -> [u32; 3] {
     let records = jit.module_records();
-    let words = super::records::ctor_words(&records[0]);
+    let words = records::ctor_words(&records[0]);
     let [a, b, c] = words[0].as_slice() else {
         panic!("{words:?}");
     };
-    [a, b, c].map(|&(word, _)| super::records::id_at(word))
+    [a, b, c].map(|&(word, _)| records::id_at(word))
 }
 
 /// A `Prog` that declares `T`.

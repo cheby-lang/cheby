@@ -164,7 +164,7 @@ impl Statics<'_, '_> {
             Dict::Impl { iface, ty, fns } => self.impl_dict(iface, ty, &fns),
             Dict::Tuple { iface, ty, elems } => self.tuple_dict(iface, ty, &elems),
             Dict::Dyn { iface, ty } => self.dyn_dict(iface, ty),
-            other => Err(Ice::new(format!(
+            other @ (Dict::Param { .. } | Dict::Embedded { .. }) => Err(Ice::new(format!(
                 "a static dictionary for {other:?}, which is not closed"
             ))),
         }
@@ -342,7 +342,7 @@ impl Statics<'_, '_> {
                 args.push(*ret);
                 (Const::BuiltinDesc(BuiltinDesc::Fn), args)
             }
-            other => {
+            other @ (TyKind::Error | TyKind::Never | TyKind::Param(_)) => {
                 return Err(Ice::new(format!("a static descriptor of {other:?}")));
             }
         };

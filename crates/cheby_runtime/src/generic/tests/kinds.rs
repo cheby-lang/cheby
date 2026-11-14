@@ -459,7 +459,7 @@ fn a_dyn_value_inside_a_dyn_value_is_that_value() {
 /// the innermost).
 fn dyn_chain() -> Word {
     let mut chain = dyn_value(builtin("nil"), nil());
-    for n in 0..super::DEPTH {
+    for n in 0..DEPTH {
         let desc = applied(builtin("tuple"), &[builtin("int"), DYN_ANY_DESC.word()]);
         chain = dyn_value(desc, tuple(&[int_word(n), chain]));
     }
@@ -470,13 +470,13 @@ unsafe extern "C" fn deep_dyn_values(_: *mut ExecCtx) -> u64 {
     let (a, b) = (dyn_chain(), dyn_chain());
     // A different innermost value, under the same descriptors.
     let mut c = dyn_value(builtin("nil"), int_word(0));
-    for n in 0..super::DEPTH {
+    for n in 0..DEPTH {
         let desc = applied(builtin("tuple"), &[builtin("int"), DYN_ANY_DESC.word()]);
         c = dyn_value(desc, tuple(&[int_word(n), c]));
     }
     let differs = eq(a, c) == Ok(false);
     release([c]);
-    let checks = super::deep_checks(a, b, "(999999, (999998, ", "(1, (0, Nil)))", ")))");
+    let checks = deep_checks(a, b, "(999999, (999998, ", "(1, (0, Nil)))", ")))");
     checks | (u64::from(differs) << 3)
 }
 
@@ -500,7 +500,7 @@ fn deep_chains_through_dyn_values_compare_hash_and_print_on_an_entry_stack() {
 
 unsafe fn table_debug(word: Word, p: &mut Printer) {
     // SAFETY: a live bag of alternating keys and values.
-    let items = unsafe { super::bag_items(word) };
+    let items = unsafe { bag_items(word) };
     let pairs = items
         .chunks(2)
         .filter_map(|pair| match *pair {
@@ -516,14 +516,14 @@ unsafe fn table_debug(word: Word, p: &mut Printer) {
 
 static TABLE: CustomKind = CustomKind {
     name: "table",
-    size: super::bag_size,
-    children: super::bag_children,
+    size: bag_size,
+    children: bag_children,
     equal: None,
     hash: None,
     debug: Some(table_debug),
     handle: false,
     finalize: None,
-    shape: crate::layout::KindShape::Opaque,
+    shape: layout::KindShape::Opaque,
 };
 
 /// An id unused by every runtime module.
@@ -531,7 +531,7 @@ const TABLE_ID: abi::LayoutId = 61;
 
 fn table(items: &[Word]) -> Word {
     layout::register_builtin(TABLE_ID, LayoutInfo::custom(&TABLE)).unwrap();
-    let word = super::bag(items);
+    let word = bag(items);
     let obj = word_to_ptr(word);
     // Re-label the bag as a table: same shape.
     // SAFETY: a fresh, unique bag.

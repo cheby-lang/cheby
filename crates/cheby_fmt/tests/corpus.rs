@@ -16,6 +16,10 @@
 //!
 //! The same checks run over the UI test sources without a grammar error.
 //! The test only reads the repository.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

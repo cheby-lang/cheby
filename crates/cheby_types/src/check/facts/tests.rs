@@ -800,7 +800,7 @@ fn an_unsatisfied_bound_leaves_no_callee() {
         let facts = r.body("f");
         let call = facts.call(r.node(SyntaxKind::PATH_EXPR, "g(p)")).unwrap();
         assert!(call.resolved.is_none());
-        let [fact] = &facts.unsatisfied[..] else {
+        let [fact] = &*facts.unsatisfied else {
             panic!("{:?}", facts.unsatisfied);
         };
         assert_eq!(r.show(fact.err.ty), "Point");

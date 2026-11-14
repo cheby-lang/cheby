@@ -1,6 +1,10 @@
 //! Tests of the analysis API (D-1361, D-1362, D-1364, D-1365, D-1358): a
 //! session's runs against `cheby check`, what a run keeps, symbols, cycle
 //! cuts, containment and the life of snapshots.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -239,7 +243,7 @@ fn check_lists(
                 })
             })
             .collect();
-        out.entry(paths.get(&owner).unwrap().clone())
+        out.entry(paths[&owner].clone())
             .or_default()
             .push(PlainDiagnostic {
                 code: diag.code,
@@ -981,11 +985,7 @@ fn panic_in_run_keeps_session() {
     let report = live.report.unwrap();
     assert!(report.clean);
     assert_eq!(
-        report
-            .files
-            .get(&temp.0.join("src/lone.cheby"))
-            .unwrap()
-            .version,
+        report.files[&temp.0.join("src/lone.cheby")].version,
         Some(1)
     );
     let snapshot = live.snapshot.unwrap();

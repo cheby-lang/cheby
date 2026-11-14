@@ -161,7 +161,7 @@ fn strings(xs: &[&str]) -> Vec<String> {
     xs.iter().map(|s| (*s).to_owned()).collect()
 }
 
-const CLEAN: &str = r"import std::list
+const CLEAN: &str = "import std::list
 
 /// Something with an area.
 interface Shape {

@@ -34,7 +34,15 @@ pub(super) fn lower_body(
 ) -> Result<Function, Ice> {
     let generics = match key {
         FnKey::Item(def) => Some(&cx.defs.fn_sig(def)?.generics),
-        _ => None,
+        FnKey::ValueShim(_)
+        | FnKey::Closure { .. }
+        | FnKey::ConstInit(_)
+        | FnKey::Test(_)
+        | FnKey::Entry(_)
+        | FnKey::Trampoline(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. }
+        | FnKey::Continuation { .. } => None,
     };
     let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
     b.set_entry_loc(&cx.location(span)?)?;
@@ -233,7 +241,7 @@ impl<'a> BodyCx<'a, '_> {
         let repr = self.repr_of(ty);
         let local = match op {
             Operand::Local(l) if self.b.name_local(l, name, ty)? => l,
-            op => {
+            op @ (Operand::Local(_) | Operand::Const(_)) => {
                 let l = self.b.new_local(repr, Some(name), Some(ty))?;
                 self.emit(Stmt::Assign {
                     dst: l,
@@ -335,7 +343,30 @@ impl BodyCx<'_, '_> {
             let e = self.expr_data(id)?;
             match &e.kind {
                 thir::ExprKind::Block { tail: Some(t), .. } => id = *t,
-                _ => return Ok(e.span),
+                thir::ExprKind::Lit(_)
+                | thir::ExprKind::Local(_)
+                | thir::ExprKind::Ctor { .. }
+                | thir::ExprKind::Call { .. }
+                | thir::ExprKind::Block { .. }
+                | thir::ExprKind::FnRef { .. }
+                | thir::ExprKind::ConstRef { .. }
+                | thir::ExprKind::Closure { .. }
+                | thir::ExprKind::LocalFn { .. }
+                | thir::ExprKind::SelfRef { .. }
+                | thir::ExprKind::Case { .. }
+                | thir::ExprKind::Field { .. }
+                | thir::ExprKind::Record { .. }
+                | thir::ExprKind::RecordUpdate { .. }
+                | thir::ExprKind::Tuple(_)
+                | thir::ExprKind::List { .. }
+                | thir::ExprKind::Binary { .. }
+                | thir::ExprKind::Not(_)
+                | thir::ExprKind::Neg { .. }
+                | thir::ExprKind::Interpolate { .. }
+                | thir::ExprKind::Panic { .. }
+                | thir::ExprKind::DynCoerce { .. }
+                | thir::ExprKind::Error
+                | _ => return Ok(e.span),
             }
         }
     }
