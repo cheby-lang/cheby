@@ -208,7 +208,7 @@ pub(crate) fn detect(root: SyntaxNode<'_>, offset: TextSize) -> Found<'_> {
         return Found::at(Context::None, offset);
     }
     let partial = is_word(left.kind()).then_some(left);
-    let range = partial.map_or(TextRange::empty(offset), SyntaxToken::text_range);
+    let range = partial.map_or_else(|| TextRange::empty(offset), SyntaxToken::text_range);
     let start = partial.map_or(Some(left), SyntaxToken::prev_token);
     let anchor = start.and_then(|t| {
         if is_significant(t.kind()) {
@@ -230,6 +230,10 @@ pub(crate) fn detect(root: SyntaxNode<'_>, offset: TextSize) -> Found<'_> {
 
 /// Whether the cursor is inside text no name can be typed in: a comment,
 /// a string's text, a number, a lexer error.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn inside_text(left: SyntaxToken<'_>, offset: TextSize) -> bool {
     let range = left.text_range();
     match left.kind() {
@@ -258,6 +262,10 @@ fn is_word(kind: K) -> bool {
 /// later segment of a path, a module path, an import item, an attribute,
 /// a field, an interpolation, or a name being declared. `None` when the
 /// anchor decides.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn by_partial(partial: SyntaxToken<'_>) -> Option<Context<'_>> {
     let parent = partial.parent()?;
     match parent.kind() {
@@ -349,6 +357,10 @@ fn by_anchor<'t>(
 
 /// The context of a cursor that starts a line in `container`, the node
 /// that holds the line break. `anchor` is the last token before it.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn line_start<'t>(container: SyntaxNode<'t>, anchor: SyntaxToken<'t>) -> Context<'t> {
     match container.kind() {
         K::BLOCK => Context::Expr {
@@ -420,6 +432,10 @@ fn in_unclosed_body(anchor: SyntaxToken<'_>) -> bool {
 
 /// The context after a token that wants more, by its kind and parent.
 /// `None` for a token that ends something.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn open_anchor<'t>(anchor: SyntaxToken<'t>, at: TextSize) -> Option<Context<'t>> {
     let parent = anchor.parent()?;
     let p = parent.kind();
@@ -531,6 +547,10 @@ fn is_let_guard(stmt: SyntaxNode<'_>) -> bool {
 
 /// The context after `::`: a qualified path, broken or whole, or a module
 /// path of an import.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn colon2<'t>(colon2: SyntaxToken<'t>, parent: SyntaxNode<'t>) -> Option<Context<'t>> {
     match parent.kind() {
         // `list::` alone parses as a path, then `::` in an `ERROR` (syntax
@@ -579,6 +599,10 @@ fn colon2<'t>(colon2: SyntaxToken<'t>, parent: SyntaxNode<'t>) -> Option<Context
 }
 
 /// The context after `(`, `[` or `,`, by the list they open or separate.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn list_item<'t>(anchor: SyntaxToken<'t>, list: SyntaxNode<'t>, at: TextSize) -> Context<'t> {
     let expr = |site| Context::Expr {
         statement: false,

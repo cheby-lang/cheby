@@ -477,7 +477,7 @@ fn plain_text_has_no_fences() {
 
 /// A package whose root module declares the constants `limit`, `twice`
 /// and `broken`, and reads `int::max_value` from std.
-const CONSTANTS: &str = r"import std::int
+const CONSTANTS: &str = "import std::int
 
 /// The most.
 const limit: Int = 20

@@ -317,7 +317,13 @@ fn give_pads_positions(f: &mut Function, edges: &[(BlockId, u32, BlockId)]) -> R
             block.pos = vec![at; block.stmts.len().saturating_add(1)];
             match &block.term {
                 Terminator::Goto { target, .. } => id = *target,
-                _ => break,
+                Terminator::Return(_)
+                | Terminator::TailCall { .. }
+                | Terminator::Branch { .. }
+                | Terminator::Switch { .. }
+                | Terminator::Panic { .. }
+                | Terminator::Unreachable
+                | Terminator::Resume => break,
             }
         }
     }

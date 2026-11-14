@@ -159,7 +159,7 @@ fn cancel_against_spawn_and_panic(record: Record) {
                 };
                 if !inner.first_cause && !inner.cancelled && !reached {
                     inner.first_cause = true;
-                    recorded.store(true, probe::Ordering::SeqCst);
+                    recorded.store(true, Ordering::SeqCst);
                 }
             })
         };
@@ -199,7 +199,7 @@ fn cancel_against_spawn_and_panic(record: Record) {
                 "a member escaped the cancellation"
             );
             let panicked_at = inner.panicked_at.unwrap();
-            if recorded.load(probe::Ordering::SeqCst) {
+            if recorded.load(Ordering::SeqCst) {
                 assert!(
                     panicked_at < walk_at,
                     "a panic after the cancel reached the fiber was recorded"

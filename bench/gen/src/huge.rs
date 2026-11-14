@@ -257,7 +257,13 @@ mod tests {
                 let elements = match shape {
                     Shape::HugeInterpolation => text.matches("{v").count(),
                     Shape::HugeMap => text.matches("\n    (x + ").count(),
-                    _ => text.matches("\n    x + ").count(),
+                    Shape::Small
+                    | Shape::Large
+                    | Shape::Deep
+                    | Shape::Wide
+                    | Shape::Generic
+                    | Shape::HugeList
+                    | Shape::HugeTuple => text.matches("\n    x + ").count(),
                 };
                 assert_eq!(elements, n, "{} at {n}", shape.name());
                 assert_eq!(project.modules(), 1);

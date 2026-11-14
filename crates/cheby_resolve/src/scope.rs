@@ -96,7 +96,10 @@ impl ModuleScope {
                     name,
                     entry.res,
                 )),
-                _ => None,
+                ScopeSource::Item
+                | ScopeSource::Prelude
+                | ScopeSource::HomeReexport
+                | ScopeSource::Withdrawn => None,
             })
             .collect();
         imports.sort_by_key(|&(position, start, ..)| (position, start));
@@ -109,7 +112,7 @@ impl ModuleScope {
                 Res::Module(module) => {
                     names.modules.entry(module).or_insert(name);
                 }
-                _ => {}
+                Res::Local(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => {}
             }
         }
         names
@@ -248,7 +251,12 @@ impl<'a> Prelude<'a> {
         let kind = item.map_or("item", |item| match item.kind {
             DefKind::Ctor => "constructor",
             DefKind::Interface => "interface",
-            _ => "type",
+            DefKind::Fn
+            | DefKind::Type
+            | DefKind::Alias
+            | DefKind::Const
+            | DefKind::InterfaceFn
+            | DefKind::Test => "type",
         });
         let owner = item
             .filter(|item| item.kind == DefKind::Ctor)
@@ -407,7 +415,12 @@ fn insert_import(
                 (source, first) => {
                     let message = match source {
                         ScopeSource::Import(_) => format!("`{text}` is imported twice"),
-                        _ => format!("`{text}` is both imported and declared in this module"),
+                        ScopeSource::Item
+                        | ScopeSource::Prelude
+                        | ScopeSource::HomeReexport
+                        | ScopeSource::Withdrawn => {
+                            format!("`{text}` is both imported and declared in this module")
+                        }
                     };
                     let mut diag = Diagnostic::new(codes::DUPLICATE_NAME, message)
                         .with_primary(span, "imported here");
@@ -474,7 +487,7 @@ mod tests {
     use cheby_diag::FileId;
     use cheby_iface::{
         CtorFields, CtorSig, DepView, DisplayCx, Globals, IfaceItem, InterfaceSet, ItemSig,
-        ModuleId, ModuleInfo, ModuleTable, PackageId, TypeDef, TypeDefKind, Vis, display,
+        ModuleInfo, ModuleTable, PackageId, TypeDef, TypeDefKind, Vis, display,
     };
     use cheby_package::{ModulePath, Targets};
 

@@ -4,6 +4,10 @@
 //! `test_support`: the shapes by string checks, two goldens under
 //! `tests/golden/data/` (`CHEBY_BLESS=1` rewrites them), the validator on
 //! hand-built forms, and the structural guard of the statement budget.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::fmt::Write as _;
 
@@ -352,11 +356,15 @@ fn closures_and_nested_literals_in_continuations() {
             .any(|h| h.starts_with("fn closure app::fns#11(")),
         "{heads:#?}"
     );
-    let nested: Vec<&String> = heads
-        .iter()
-        .filter(|h| h.starts_with("fn continuation app::nested#"))
-        .collect();
-    assert!(nested.len() >= 4, "{heads:#?}");
+
+    assert!(
+        heads
+            .iter()
+            .filter(|h| h.starts_with("fn continuation app::nested#"))
+            .count()
+            >= 4,
+        "{heads:#?}"
+    );
 }
 
 /// An item that diverges ends the chain: the continuation that holds it
@@ -509,7 +517,7 @@ fn main() {
 
 /// `cheby test`'s units split as `cheby run`'s do.
 #[test]
-fn test_units_lower_with_the_default_size() {
+fn units_lower_with_the_default_size() {
     let src = "//! A test with a small literal.\n\nimport std::io\nimport std::list\n\nfn main() {\n  io::println(\"x\")\n}\n\ntest \"small\" {\n  assert list::length([1, 2, 3]) == 3\n}\n";
     let lowered = lower_source_with_tests(&[("", src)]);
     assert!(!lowered.dump().contains("continuation"));

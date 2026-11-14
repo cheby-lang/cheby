@@ -85,7 +85,7 @@ use serde_json::{Value, json};
 
 /// The command's options.
 #[derive(Debug, clap::Args)]
-pub struct Args {
+pub(crate) struct Args {
     /// Only the 10k-line projects
     #[arg(long, conflicts_with = "shapes")]
     quick: bool,
@@ -266,7 +266,7 @@ struct BuildRun {
     size: BuildSize,
 }
 
-pub fn run(root: &Path, args: &Args) -> Result<(), String> {
+pub(crate) fn run(root: &Path, args: &Args) -> Result<(), String> {
     if cfg!(debug_assertions) && std::env::var_os(RERUN_ENV).is_none() {
         return rerun_optimized(root, args);
     }
@@ -1129,7 +1129,7 @@ fn rate(lines: usize, time: Duration) -> String {
     if seconds <= 0.0 {
         return "-".to_owned();
     }
-    let lines = u32::try_from(lines).map_or(f64::from(u32::MAX), f64::from);
+    let lines = u32::try_from(lines).map_or_else(|_| f64::from(u32::MAX), f64::from);
     let per_second = lines / seconds;
     format!("{:.0}k", per_second / 1000.0)
 }
@@ -1200,7 +1200,7 @@ fn render(rows: &[Row]) -> String {
 
 /// Bytes as KiB with one decimal.
 fn kib(bytes: u64) -> String {
-    let bytes = u32::try_from(bytes).map_or(f64::from(u32::MAX), f64::from);
+    let bytes = u32::try_from(bytes).map_or_else(|_| f64::from(u32::MAX), f64::from);
     format!("{:.1}", bytes / 1024.0)
 }
 

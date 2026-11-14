@@ -188,6 +188,10 @@ impl<'a> From<Option<&'a StdIndex>> for StdDocs<'a> {
 /// last evaluation said, `None` where constants are never evaluated, and
 /// a package constant then shows no value line. `None` where hover has
 /// nothing to say (X §1.4).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(crate) fn hover(
     analyzed: &Analyzed,
     source: &Source<'_>,
@@ -227,7 +231,7 @@ pub(crate) fn hover(
     let token = match at {
         TokenAt::None => None,
         TokenAt::One(t) => Some(t).filter(literal),
-        TokenAt::Between(l, r) => Some(r).filter(literal).or(Some(l).filter(literal)),
+        TokenAt::Between(l, r) => Some(r).filter(literal).or_else(|| Some(l).filter(literal)),
     }?;
     match token.kind() {
         K::INTERP_START | K::INTERP_END => cx.interpolation(token),
@@ -292,7 +296,14 @@ impl<'s> Cx<'s> {
             ItemSig::Alias(a) => Some(&a.generics),
             ItemSig::Ctor(ctor) => match &iface.item(ctor.ty)?.sig {
                 ItemSig::Type(t) => Some(&t.generics),
-                _ => None,
+                ItemSig::Fn(_)
+                | ItemSig::Ctor(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::InterfaceFn(_)
+                | ItemSig::Test
+                | ItemSig::Error => None,
             },
             ItemSig::Const(_)
             | ItemSig::Interface(_)
@@ -731,7 +742,15 @@ impl<'s> Cx<'s> {
                 CtorFields::Named(fields) => fields.iter().find(|(n, _)| *n == name).map(|f| f.1),
                 CtorFields::Unit | CtorFields::Positional(_) => None,
             },
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         })
     }
 
@@ -912,6 +931,10 @@ impl<'s> Cx<'s> {
 /// fallback may answer (F §1.8's last row): a name inside an `ERROR`
 /// node, a one-segment path or an interpolation's root. A field, a later
 /// path segment or an interpolation's field never names a local.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn may_be_local(token: SyntaxToken<'_>) -> bool {
     let Some(parent) = token.parent() else {
         return false;

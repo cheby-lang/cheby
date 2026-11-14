@@ -52,7 +52,15 @@ fn descriptor_leaf(err: &Unsatisfied) -> Option<(&Unsatisfied, ParamIdx)> {
     match &err.reason {
         Reason::Descriptor { param } => Some((err, *param)),
         Reason::Element { inner, .. } | Reason::Bound { inner, .. } => descriptor_leaf(inner),
-        _ => None,
+        Reason::Missing { .. }
+        | Reason::LessVisible { .. }
+        | Reason::Signature { .. }
+        | Reason::HomeNotInDeps { .. }
+        | Reason::NoModule
+        | Reason::Param { .. }
+        | Reason::Dyn { .. }
+        | Reason::Undetermined { .. }
+        | Reason::TooDeep => None,
     }
 }
 
@@ -281,7 +289,9 @@ impl Writer<'_, '_> {
             }
             TyKind::Fn { .. } => "function types satisfy only empty interfaces (§8.2, D-166)",
             TyKind::Dyn { .. } => "operators are not defined on `dyn` values (§8.6, §8.7)",
-            _ => "`Never` is declared in no module, so it satisfies only empty interfaces",
+            TyKind::Error | TyKind::Never | TyKind::Named { .. } | TyKind::Param(_) => {
+                "`Never` is declared in no module, so it satisfies only empty interfaces"
+            }
         }
     }
 
@@ -557,7 +567,13 @@ impl Writer<'_, '_> {
             {
                 Some(self.ty(types.named(*other, [])))
             }
-            _ => None,
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Named { .. }
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Param(_)
+            | TyKind::Dyn { .. } => None,
         })
     }
 
@@ -591,10 +607,12 @@ impl Writer<'_, '_> {
                 self.ty(err.ty),
                 self.name(callee)
             ),
-            _ => format!(
-                "cannot build the dictionaries for `{}`: the type parameter `{name}` has no bound",
-                self.ty(err.ty)
-            ),
+            Need::Interpolation | Need::Operator(_) | Need::Neg | Need::IfaceCall { .. } => {
+                format!(
+                    "cannot build the dictionaries for `{}`: the type parameter `{name}` has no bound",
+                    self.ty(err.ty)
+                )
+            }
         };
         let mut diag = Diagnostic::new(codes::DYN_NEEDS_BOUND, message)
             .with_primary(span, self.need_label(err, need));
@@ -605,7 +623,11 @@ impl Writer<'_, '_> {
             Need::Dyn => format!(
                 "a `dyn` value carries a descriptor of its value's type, and the descriptor of `{name}` can come only from one of its bounds (§8.6.1, D-236)"
             ),
-            _ => format!(
+            Need::Bound { .. }
+            | Need::Interpolation
+            | Need::Operator(_)
+            | Need::Neg
+            | Need::IfaceCall { .. } => format!(
                 "a dictionary passed for a bound carries a descriptor of its type, and the descriptor of `{name}` can come only from one of its bounds (§8.5.1, D-236)"
             ),
         };
@@ -640,7 +662,16 @@ impl Writer<'_, '_> {
                 ));
                 self.chain_notes(diag, inner)
             }
-            _ => diag,
+            Reason::Missing { .. }
+            | Reason::LessVisible { .. }
+            | Reason::Signature { .. }
+            | Reason::HomeNotInDeps { .. }
+            | Reason::NoModule
+            | Reason::Param { .. }
+            | Reason::Dyn { .. }
+            | Reason::Undetermined { .. }
+            | Reason::Descriptor { .. }
+            | Reason::TooDeep => diag,
         }
     }
 }

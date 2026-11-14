@@ -26,7 +26,7 @@ pub(crate) const COMPLETE: &[&str] = &["random"];
 /// says no call fails or panics), so it ends the program with a fatal
 /// runtime error naming the operating system's error (D-794).
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_random_host_bits() -> u64 {
+pub(crate) extern "C" fn cheby_random_host_bits() -> u64 {
     guarded(None, || {
         getrandom::u64().unwrap_or_else(|error| {
             fatal(format_args!(

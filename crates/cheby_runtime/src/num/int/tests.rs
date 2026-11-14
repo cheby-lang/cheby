@@ -50,8 +50,8 @@ fn parse_int(text: &str) -> Option<i64> {
 }
 
 fn parse_base(text: &str, base: i64) -> Option<i64> {
-    // SAFETY: as above.
     no_leaks(|| {
+        // SAFETY: as above.
         take_result(with_text(text, |word| unsafe {
             int_kernels::parse_base(word, base)
         }))
@@ -110,8 +110,8 @@ fn int_parse_follows_d312() {
 
 #[test]
 fn sized_parse_reads_the_value_then_checks_the_range() {
-    // SAFETY: `word` is the live string `with_text` made.
     let parse_u8 = |text: &str| {
+        // SAFETY: `word` is the live string `with_text` made.
         no_leaks(|| take_result::<u8>(with_text(text, |word| unsafe { u8_kernels::parse(word) })))
     };
     assert_eq!(parse_u8("255"), Some(255));
@@ -120,15 +120,15 @@ fn sized_parse_reads_the_value_then_checks_the_range() {
     assert_eq!(parse_u8("-1"), None);
     // `-0` is the value 0, which `U8` holds (D-312).
     assert_eq!(parse_u8("-0"), Some(0));
-    // SAFETY: as above.
     let parse_u64 = |text: &str| {
+        // SAFETY: as above.
         no_leaks(|| take_result::<u64>(with_text(text, |word| unsafe { u64_kernels::parse(word) })))
     };
     assert_eq!(parse_u64("18446744073709551615"), Some(u64::MAX));
     assert_eq!(parse_u64("18446744073709551616"), None);
-    // SAFETY: as above.
     let parse_base_u64 = |text: &str| {
         no_leaks(|| {
+            // SAFETY: as above.
             take_result::<u64>(with_text(text, |word| unsafe {
                 u64_kernels::parse_base(word, 16)
             }))

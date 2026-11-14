@@ -49,7 +49,7 @@ impl BodyCx<'_> {
                     break;
                 }
                 Stmt::Expr(e) if last => tail = Some(self.check_expr(e, expected)?),
-                _ => {
+                Stmt::Let(_) | Stmt::Assert(_) | Stmt::LocalFn(_) | Stmt::Expr(_) => {
                     if let Some(stmt) = self.stmt(*stmt)? {
                         out.push(stmt);
                     }

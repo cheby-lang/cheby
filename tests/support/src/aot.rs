@@ -186,6 +186,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test matches only the variants it checks"
+    )]
+
     use std::cell::RefCell;
 
     use super::*;

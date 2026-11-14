@@ -42,7 +42,7 @@ use cheby_iface::{
     PackageId, Ty, TyKind, builtin, sym,
 };
 use cheby_resolve::{BodyRes, ItemDef, LocalId, Res};
-use cheby_syntax::ast::{self, AstNode, Block, ConstDecl, FnDecl, RetType, TestDecl, Type};
+use cheby_syntax::ast::{AstNode, Block, ConstDecl, FnDecl, RetType, TestDecl, Type};
 use rayon::prelude::*;
 
 use crate::facts::{BodyFacts, FactLog, ModuleFacts};
@@ -288,7 +288,11 @@ fn check_item_inner(
         DefKind::Const => check_const(input, own, def, item, iface_item, record)?,
         DefKind::Test => check_test(input, own, def, item, tests, record)?,
         // Other kinds have no body.
-        _ => (None, Vec::new(), None),
+        DefKind::Type
+        | DefKind::Alias
+        | DefKind::Interface
+        | DefKind::InterfaceFn
+        | DefKind::Ctor => (None, Vec::new(), None),
     };
     // What ends a body after the log does, such as E0061 or a bad signature.
     if let Some(facts) = &mut facts {
@@ -324,11 +328,21 @@ impl EntryKind {
                 [ok, err] if ok == Ty::NIL => Some(Self::Result(InferTy::Known(err))),
                 _ => None,
             },
-            _ => None,
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Named { .. }
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Param(_)
+            | TyKind::Dyn { .. } => None,
         }
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "its matches name every variant (D-1560)"
+)]
 fn check_fn(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
@@ -364,7 +378,7 @@ fn check_fn(
                     }
                 })
                 .collect::<Vec<Ty>>();
-            let erase = |ty| crate::ifaces::tyutil::subst(types, ty, &args);
+            let erase = |ty| ifaces::tyutil::subst(types, ty, &args);
             (
                 lowered
                     .params
@@ -376,7 +390,13 @@ fn check_fn(
                 false,
             )
         }
-        _ => return Err(Ice::new("a function without a function signature")),
+        ItemSig::Type(_)
+        | ItemSig::Ctor(_)
+        | ItemSig::Alias(_)
+        | ItemSig::Const(_)
+        | ItemSig::Interface(_)
+        | ItemSig::InterfaceFn(_)
+        | ItemSig::Test => return Err(Ice::new("a function without a function signature")),
     };
     let def = input.def_id(index);
     let mut diags = Vec::new();
@@ -434,7 +454,9 @@ fn check_fn(
         None => None,
         Some(kind) => Some(entry_info(input, own, &generics, kind, |t| match t {
             InferTy::Known(ty) => Ok(*ty),
-            _ => Err(Ice::new("an entry point's error type with variables")),
+            InferTy::Var(_) | InferTy::Named { .. } | InferTy::Tuple(_) | InferTy::Fn { .. } => {
+                Err(Ice::new("an entry point's error type with variables"))
+            }
         })?),
     };
     Ok((
@@ -498,7 +520,13 @@ fn check_const(
     let (ty, sig_ok) = match &iface_item.sig {
         ItemSig::Const(sig) => (sig.ty, !contains_error(&input.globals.types, sig.ty)),
         ItemSig::Error => (Ty::ERROR, false),
-        _ => return Err(Ice::new("a constant without a constant signature")),
+        ItemSig::Fn(_)
+        | ItemSig::Type(_)
+        | ItemSig::Ctor(_)
+        | ItemSig::Alias(_)
+        | ItemSig::Interface(_)
+        | ItemSig::InterfaceFn(_)
+        | ItemSig::Test => return Err(Ice::new("a constant without a constant signature")),
     };
     // A missing initializer or type is a syntax error.
     let Some(value) = decl.value() else {
@@ -616,12 +644,12 @@ pub(crate) struct Expected {
 }
 
 impl Expected {
-    pub const fn new(ty: InferTy, origin: Option<(Span, String)>) -> Self {
+    pub(crate) const fn new(ty: InferTy, origin: Option<(Span, String)>) -> Self {
         Self { ty, origin }
     }
 
     /// An expectation without an origin label.
-    pub const fn plain(ty: InferTy) -> Self {
+    pub(crate) const fn plain(ty: InferTy) -> Self {
         Self { ty, origin: None }
     }
 }
@@ -774,13 +802,17 @@ impl<'a> BodyCx<'a> {
                 return Ok(Some(EntryKind::Nil));
             }
             InferTy::Named { def, args } if def == builtin::RESULT => {
-                if let [ok, err] = &args[..]
+                if let [ok, err] = &*args
                     && self.infcx.unify(ok, &InferTy::NIL)?.is_ok()
                 {
                     return Ok(Some(EntryKind::Result(err.clone())));
                 }
             }
-            _ => {}
+            InferTy::Known(_)
+            | InferTy::Var(_)
+            | InferTy::Named { .. }
+            | InferTy::Tuple(_)
+            | InferTy::Fn { .. } => {}
         }
         let shown = self.show(&ty);
         let span = self.tail_span(value)?;
@@ -803,14 +835,36 @@ impl<'a> BodyCx<'a> {
             ExprKind::Block {
                 tail: Some(tail), ..
             } => self.tail_span(*tail),
-            _ => Ok(expr.span),
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error => Ok(expr.span),
         }
     }
 
     // ---- building THIR ----------------------------------------------
 
     /// Appends an expression of inference type `ty`.
-    pub fn push(&mut self, kind: ExprKind, ty: InferTy, span: Span) -> Result<ExprId, Ice> {
+    pub(crate) fn push(&mut self, kind: ExprKind, ty: InferTy, span: Span) -> Result<ExprId, Ice> {
         let id = self.exprs.push(Expr {
             kind,
             ty: Ty::ERROR,
@@ -825,7 +879,7 @@ impl<'a> BodyCx<'a> {
 
     /// An expression whose error is already reported, or is reported by
     /// the caller.
-    pub fn error_expr(&mut self, span: Span) -> Result<ExprId, Ice> {
+    pub(crate) fn error_expr(&mut self, span: Span) -> Result<ExprId, Ice> {
         self.errored = true;
         self.push(ExprKind::Error, InferTy::ERROR, span)
     }
@@ -835,14 +889,14 @@ impl<'a> BodyCx<'a> {
     /// follows from is already counted where it arose, and an E0057 may
     /// still be dropped at the end of the body (D-494), so this sets
     /// [`Self::propagated`], not [`Self::errored`].
-    pub fn propagated_error_expr(&mut self, span: Span) -> Result<ExprId, Ice> {
+    pub(crate) fn propagated_error_expr(&mut self, span: Span) -> Result<ExprId, Ice> {
         self.propagated = true;
         self.push(ExprKind::Error, InferTy::ERROR, span)
     }
 
     /// Records a diagnostic; an error other than E0057 marks the body as
     /// errored (D-494).
-    pub fn report(&mut self, diag: Diagnostic) {
+    pub(crate) fn report(&mut self, diag: Diagnostic) {
         if diag.is_error() && diag.code != codes::TYPE_ANNOTATION_NEEDED {
             self.errored = true;
         }
@@ -851,23 +905,23 @@ impl<'a> BodyCx<'a> {
 
     /// Whether the body has an error of any kind so far, E0057 and the
     /// error type of an erroneous signature included.
-    pub fn any_error(&self) -> bool {
+    pub(crate) fn any_error(&self) -> bool {
         self.errored || self.propagated || has_error(&self.diags)
     }
 
     /// The inference type of expression `id`.
-    pub fn ty_of(&self, id: ExprId) -> Result<InferTy, Ice> {
+    pub(crate) fn ty_of(&self, id: ExprId) -> Result<InferTy, Ice> {
         self.expr_tys.try_get(id, "expression type").cloned()
     }
 
     /// The span of expression `id`.
-    pub fn span_of(&self, id: ExprId) -> Result<Span, Ice> {
+    pub(crate) fn span_of(&self, id: ExprId) -> Result<Span, Ice> {
         Ok(self.exprs.try_get(id, "expression")?.span)
     }
 
     /// The type of `local`. A local bound by a rejected construct (its
     /// error already reported) has type [`Ty::ERROR`].
-    pub fn local_ty(&self, local: LocalId) -> Result<InferTy, Ice> {
+    pub(crate) fn local_ty(&self, local: LocalId) -> Result<InferTy, Ice> {
         match self.locals.try_get(local, "local")? {
             Some(ty) => Ok(ty.clone()),
             None if self.any_error() => Ok(InferTy::ERROR),
@@ -878,7 +932,7 @@ impl<'a> BodyCx<'a> {
     }
 
     /// Sets the type of `local` when its binding is checked.
-    pub fn set_local(&mut self, local: LocalId, ty: InferTy) -> Result<(), Ice> {
+    pub(crate) fn set_local(&mut self, local: LocalId, ty: InferTy) -> Result<(), Ice> {
         let slot = self
             .locals
             .get_mut(local)
@@ -889,7 +943,12 @@ impl<'a> BodyCx<'a> {
 
     /// A new synthetic local of type `ty`, made by desugaring (a capture's
     /// argument, a pipe's left side), after the resolver's locals.
-    pub fn new_local(&mut self, name: Name, ty: InferTy, span: Span) -> Result<LocalId, Ice> {
+    pub(crate) fn new_local(
+        &mut self,
+        name: Name,
+        ty: InferTy,
+        span: Span,
+    ) -> Result<LocalId, Ice> {
         let local = self.locals.push(Some(ty))?;
         self.synthetic.push((name, span));
         Ok(local)
@@ -897,7 +956,7 @@ impl<'a> BodyCx<'a> {
 
     /// A new pattern id whose inference type is `ty`. The pattern's `ty`
     /// stays `Ty::ERROR` until [`Self::finish`] zonks this one into it.
-    pub fn new_pat_id(&mut self, ty: InferTy, span: Span) -> Result<PatId, Ice> {
+    pub(crate) fn new_pat_id(&mut self, ty: InferTy, span: Span) -> Result<PatId, Ice> {
         let id = self.pat_tys.push(ty)?;
         let span_id = self.pat_spans.push(span)?;
         if span_id != id {
@@ -907,7 +966,7 @@ impl<'a> BodyCx<'a> {
     }
 
     /// A fresh type variable that may become any type.
-    pub fn fresh_var(&mut self, span: Span) -> Result<InferTy, Ice> {
+    pub(crate) fn fresh_var(&mut self, span: Span) -> Result<InferTy, Ice> {
         self.infcx.new_var(span, VarKind::General)
     }
 
@@ -923,17 +982,20 @@ impl<'a> BodyCx<'a> {
     /// `t` shallow-resolved, or `None` while it is still a variable: for
     /// the constructs that need a known type at their point of checking
     /// (D-213).
-    pub fn known_ty(&mut self, t: &InferTy) -> Result<Option<InferTy>, Ice> {
+    pub(crate) fn known_ty(&mut self, t: &InferTy) -> Result<Option<InferTy>, Ice> {
         Ok(match self.infcx.shallow(t)? {
             InferTy::Var(_) => None,
-            known => Some(known),
+            known @ (InferTy::Known(_)
+            | InferTy::Named { .. }
+            | InferTy::Tuple(_)
+            | InferTy::Fn { .. }) => Some(known),
         })
     }
 
     /// A type written in the body (an annotation, a turbofish argument),
     /// lowered with the body's path resolutions and the item's generics.
     /// Errors are reported here, and the result is then [`Ty::ERROR`].
-    pub fn lower_written_ty(&mut self, ty: ast::Type<'_>) -> Result<InferTy, Ice> {
+    pub(crate) fn lower_written_ty(&mut self, ty: Type<'_>) -> Result<InferTy, Ice> {
         let lowering = TyLowering {
             input: self.input,
             paths: &self.res.paths,
@@ -951,7 +1013,7 @@ impl<'a> BodyCx<'a> {
     }
 
     /// The resolution of the path node `node` of the body.
-    pub fn path_res(&self, node: cheby_syntax::NodeId) -> Result<Res, Ice> {
+    pub(crate) fn path_res(&self, node: cheby_syntax::NodeId) -> Result<Res, Ice> {
         self.res
             .paths
             .get(&node)
@@ -960,7 +1022,7 @@ impl<'a> BodyCx<'a> {
     }
 
     /// `t` as users write it.
-    pub fn show(&self, t: &InferTy) -> String {
+    pub(crate) fn show(&self, t: &InferTy) -> String {
         let cx = self.input.display_cx(self.own, Some(&self.generics));
         self.infcx.display(t, &cx)
     }
@@ -1286,6 +1348,26 @@ fn set_ty_args(kind: &mut ExprKind, args: Box<[Ty]>) -> Result<(), Ice> {
             callee: Callee::Iface { .. } | Callee::Dyn { .. },
             ..
         } => Ok(()),
-        _ => Err(Ice::new("type arguments for an expression that takes none")),
+        ExprKind::Lit(_)
+        | ExprKind::Local(_)
+        | ExprKind::Call { .. }
+        | ExprKind::Block { .. }
+        | ExprKind::ConstRef { .. }
+        | ExprKind::Closure { .. }
+        | ExprKind::LocalFn { .. }
+        | ExprKind::SelfRef { .. }
+        | ExprKind::Case { .. }
+        | ExprKind::Field { .. }
+        | ExprKind::RecordUpdate { .. }
+        | ExprKind::Tuple(_)
+        | ExprKind::List { .. }
+        | ExprKind::Binary { .. }
+        | ExprKind::Not(_)
+        | ExprKind::Neg { .. }
+        | ExprKind::Interpolate { .. }
+        | ExprKind::Panic { .. }
+        | ExprKind::DynCoerce { .. } => {
+            Err(Ice::new("type arguments for an expression that takes none"))
+        }
     }
 }

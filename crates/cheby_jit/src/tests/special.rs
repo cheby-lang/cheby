@@ -114,7 +114,7 @@ fn the_same_recursion_without_tail_calls_overflows() {
     let EntryOutcome::Panicked(report) = outcome else {
         panic!("ten million nested calls returned: {outcome:?}");
     };
-    assert_eq!(report.kind, cheby_runtime::abi::PanicKind::StackOverflow);
+    assert_eq!(report.kind, abi::PanicKind::StackOverflow);
 }
 
 /// E2 through closures: a closure that tail-calls itself through `self`
@@ -574,10 +574,7 @@ fn equality_on_functions_panics_at_its_location() {
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("comparing a closure did not panic");
     };
-    assert_eq!(
-        report.kind,
-        cheby_runtime::abi::PanicKind::EqualityOnFunction
-    );
+    assert_eq!(report.kind, abi::PanicKind::EqualityOnFunction);
     assert_eq!(report.location, LOC);
 }
 

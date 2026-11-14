@@ -336,10 +336,36 @@ fn check_static(m: &MirModule, n: usize, s: &StaticObject, errors: &mut Vec<Stri
             Const::Str(id) if s.strings.get(*id).is_none() => {
                 errors.push(format!("{label}: unknown string str#{}", id.as_u32()));
             }
-            c if c.repr() != Repr::Value => {
+            c @ (Const::Int(_)
+            | Const::Float(_)
+            | Const::Bool(_)
+            | Const::Sized { .. }
+            | Const::Str(_)
+            | Const::Nil
+            | Const::StaticCtor(_)
+            | Const::FnValue(_)
+            | Const::EmptyList
+            | Const::Static(_)
+            | Const::BuiltinDesc(_)
+            | Const::Ctx
+            | Const::ErrNil)
+                if c.repr() != Repr::Value =>
+            {
                 errors.push(format!("{label}: field {i} is a raw {}", c.repr()));
             }
-            _ => {}
+            Const::Int(_)
+            | Const::Float(_)
+            | Const::Bool(_)
+            | Const::Sized { .. }
+            | Const::Str(_)
+            | Const::Nil
+            | Const::StaticCtor(_)
+            | Const::FnValue(_)
+            | Const::EmptyList
+            | Const::Static(_)
+            | Const::BuiltinDesc(_)
+            | Const::Ctx
+            | Const::ErrNil => {}
         }
     }
 }
@@ -968,7 +994,12 @@ impl FnCx<'_> {
                         ..
                     } => Some((*func, true)),
                     Stmt::Eval(Rvalue::CallRuntime { func, .. }) => Some((*func, false)),
-                    _ => None,
+                    Stmt::Assign { .. }
+                    | Stmt::Eval(_)
+                    | Stmt::Dup(_)
+                    | Stmt::Drop(_)
+                    | Stmt::DropKeep { .. }
+                    | Stmt::ClearUnwind => None,
                 })
                 .collect();
             for (j, &call) in funcs.iter().enumerate() {
@@ -1032,7 +1063,12 @@ impl FnCx<'_> {
                 .layout(layout)
                 .is_some_and(|d| d.fields.is_empty()),
             LayoutRef::Tuple(n) => n > 0,
-            _ => false,
+            LayoutRef::Builtin(_)
+            | LayoutRef::Closure(_)
+            | LayoutRef::Dict { .. }
+            | LayoutRef::Dyn
+            | LayoutRef::Desc { .. }
+            | LayoutRef::DescNominal => false,
         };
         if shape && crate::layout::object_size(self.module, layout).is_some() {
             return true;
@@ -1053,6 +1089,10 @@ impl FnCx<'_> {
     /// as its own. That each token is consumed once on every path, pads
     /// included, is the ownership simulation's rule for every counted
     /// local.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "its matches name every variant (D-1560)"
+    )]
     fn check_reuse(&mut self, stage: Stage) -> Result<(), Ice> {
         let f = self.f;
         let mut tokens: FxHashMap<Local, LayoutRef> = FxHashMap::default();
@@ -1104,7 +1144,11 @@ impl FnCx<'_> {
                         let normal = normal.get_or_insert_with(|| normally_reachable(f));
                         self.check_specialized_site(id, *local, keep, normal);
                     }
-                    _ => continue,
+                    Stmt::Assign { .. }
+                    | Stmt::Eval(_)
+                    | Stmt::Dup(_)
+                    | Stmt::Drop(_)
+                    | Stmt::ClearUnwind => continue,
                 }
                 if !self.counted(stage) {
                     self.err(format!(
@@ -1126,7 +1170,12 @@ impl FnCx<'_> {
             .flat_map(|b| &b.stmts)
             .filter_map(|s| match s {
                 Stmt::Eval(Rvalue::InitField { obj, .. }) => Some(*obj),
-                _ => None,
+                Stmt::Assign { .. }
+                | Stmt::Eval(_)
+                | Stmt::Dup(_)
+                | Stmt::Drop(_)
+                | Stmt::DropKeep { .. }
+                | Stmt::ClearUnwind => None,
             })
             .chain(match (f.key, f.params.first()) {
                 (FnKey::Continuation { .. }, Some(&p)) => Some(p),
@@ -1527,7 +1576,7 @@ impl FnCx<'_> {
             Operand::Const(Const::Ctx) => {
                 self.err("ctx appears only as the first argument of a foreign call (D-692)");
             }
-            _ => {}
+            Operand::Local(_) | Operand::Const(_) => {}
         }
     }
 
@@ -1643,6 +1692,10 @@ impl FnCx<'_> {
     }
 
     /// The representation the rvalue produces, after checking its operands.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "its matches name every variant (D-1560)"
+    )]
     fn check_rvalue(&mut self, value: &Rvalue) -> Option<Repr> {
         match value {
             Rvalue::Use(op) => {
@@ -1701,7 +1754,14 @@ impl FnCx<'_> {
                 self.expect_repr(&Operand::Local(*obj), Repr::Value, "init_field object");
                 match layout {
                     LayoutRef::Tuple(n) if field < n => {}
-                    _ => self.err(format!(
+                    LayoutRef::Builtin(_)
+                    | LayoutRef::Ctor(_)
+                    | LayoutRef::Tuple(_)
+                    | LayoutRef::Closure(_)
+                    | LayoutRef::Dict { .. }
+                    | LayoutRef::Dyn
+                    | LayoutRef::Desc { .. }
+                    | LayoutRef::DescNominal => self.err(format!(
                         "init_field {field} of {layout:?}, which is not a tuple field (D-720)"
                     )),
                 }
@@ -1813,7 +1873,21 @@ impl FnCx<'_> {
                 self.expect_repr(value, Repr::Bool, "not operand");
                 Some(Repr::Bool)
             }
-            _ => None,
+            Rvalue::Use(_)
+            | Rvalue::Call { .. }
+            | Rvalue::CallForeign { .. }
+            | Rvalue::CallRuntime { .. }
+            | Rvalue::Alloc { .. }
+            | Rvalue::AllocPlaceholder { .. }
+            | Rvalue::InitField { .. }
+            | Rvalue::Field { .. }
+            | Rvalue::ReadLayout { .. }
+            | Rvalue::LoadConst(_)
+            | Rvalue::Box { .. }
+            | Rvalue::Unbox { .. }
+            | Rvalue::ReadTag { .. }
+            | Rvalue::DropReuse { .. }
+            | Rvalue::AllocReuse { .. } => None,
         }
     }
 
@@ -1921,7 +1995,9 @@ impl FnCx<'_> {
                     Operand::Const(Const::Code(key)) => {
                         self.err(format!("a closure's code {key:?} is not uniform"));
                     }
-                    _ => self.err("a closure's first field is its code word"),
+                    Operand::Local(_) | Operand::Const(_) => {
+                        self.err("a closure's first field is its code word");
+                    }
                 }
                 if usize::try_from(n).ok() != Some(captures.len()) {
                     self.err("closure capture count differs from its layout");
@@ -2146,7 +2222,7 @@ fn released(stmt: &Stmt) -> Option<Local> {
             value: Rvalue::DropReuse { local: x, .. },
             ..
         } => Some(*x),
-        _ => None,
+        Stmt::Assign { .. } | Stmt::Eval(_) | Stmt::Dup(_) | Stmt::ClearUnwind => None,
     }
 }
 
@@ -2426,7 +2502,24 @@ fn is_void_call(value: &Rvalue) -> bool {
         Rvalue::CallForeign { sig, .. } => sig.ret == CType::Void,
         Rvalue::CallRuntime { func, .. } => func.ret().is_none(),
         Rvalue::InitField { .. } => true,
-        _ => false,
+        Rvalue::Use(_)
+        | Rvalue::Call { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::AllocPlaceholder { .. }
+        | Rvalue::Field { .. }
+        | Rvalue::ReadLayout { .. }
+        | Rvalue::LoadConst(_)
+        | Rvalue::Box { .. }
+        | Rvalue::Unbox { .. }
+        | Rvalue::Checked { .. }
+        | Rvalue::Compare { .. }
+        | Rvalue::FloatArith { .. }
+        | Rvalue::Bitwise { .. }
+        | Rvalue::FloatNeg { .. }
+        | Rvalue::Not(_)
+        | Rvalue::ReadTag { .. }
+        | Rvalue::DropReuse { .. }
+        | Rvalue::AllocReuse { .. } => false,
     }
 }
 

@@ -23,7 +23,7 @@ pub(crate) struct Instance {
 impl BodyCx<'_> {
     /// Checks `expr`, against `expected` if given, and returns its THIR,
     /// already converted to the expected type where §3.12.5 allows.
-    pub fn check_expr(
+    pub(crate) fn check_expr(
         &mut self,
         expr: Expr<'_>,
         expected: Option<&Expected>,
@@ -356,7 +356,14 @@ impl BodyCx<'_> {
         let ty_def = DefId::new(ctor_def.module, ctor.ty);
         let generics = match &self.input.item(self.own, ty_def)?.sig {
             ItemSig::Type(def) => def.generics.clone(),
-            _ => return Err(Ice::new("a constructor's type is not a type")),
+            ItemSig::Fn(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => return Err(Ice::new("a constructor's type is not a type")),
         };
         let params = item_params(&generics);
         let Some(inst) = self.instance(ty_def, &params, type_args, span)? else {
@@ -376,7 +383,14 @@ impl BodyCx<'_> {
         let ty_def = DefId::new(ctor_def.module, ctor.ty);
         let generics = match &self.input.item(self.own, ty_def)?.sig {
             ItemSig::Type(def) => def.generics.clone(),
-            _ => return Err(Ice::new("a constructor's type is not a type")),
+            ItemSig::Fn(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => return Err(Ice::new("a constructor's type is not a type")),
         };
         let args = generics
             .params
@@ -415,7 +429,11 @@ impl BodyCx<'_> {
         let expected_elems = match expected {
             Some(e) => match self.infcx.resolve(&e.ty)? {
                 InferTy::Tuple(tys) if tys.len() == elems.len() => Some(tys),
-                _ => None,
+                InferTy::Known(_)
+                | InferTy::Var(_)
+                | InferTy::Named { .. }
+                | InferTy::Tuple(_)
+                | InferTy::Fn { .. } => None,
             },
             None => None,
         };
@@ -447,7 +465,11 @@ impl BodyCx<'_> {
                 InferTy::Named { def, args } if def == cheby_iface::builtin::LIST => {
                     args.first().cloned()
                 }
-                _ => None,
+                InferTy::Known(_)
+                | InferTy::Var(_)
+                | InferTy::Named { .. }
+                | InferTy::Tuple(_)
+                | InferTy::Fn { .. } => None,
             },
             None => None,
         };
@@ -540,7 +562,10 @@ impl BodyCx<'_> {
         let list = cheby_iface::builtin::LIST;
         match elem {
             InferTy::Known(t) => InferTy::Known(self.input.globals.types.named(list, [t])),
-            other => InferTy::Named {
+            other @ (InferTy::Var(_)
+            | InferTy::Named { .. }
+            | InferTy::Tuple(_)
+            | InferTy::Fn { .. }) => InferTy::Named {
                 def: list,
                 args: Box::new([other]),
             },

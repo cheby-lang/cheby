@@ -13,18 +13,14 @@
     reason = "test arithmetic and offsets on small, known values"
 )]
 
-use std::mem::size_of;
-
-use cranelift_codegen::control::ControlPlane;
-use cranelift_codegen::ir;
-use cranelift_module::{DataDescription, Linkage, Module};
+use cranelift_module::{DataDescription, Linkage};
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};
 use cheby_mir::{
     Abi, AbiSig, Block, CType, Callee, CalleeDecl, Const, DefName, FieldDesc, FnKey, ForeignSig,
-    Function, LayoutDesc, LayoutRef, Local, LocalDecl, MirModule, Operand, Repr, Rvalue, Stmt,
-    StrId, Terminator, UnitKind,
+    Function, LayoutDesc, LayoutRef, Local, LocalDecl, Operand, Repr, Rvalue, Stmt, Terminator,
+    UnitKind,
 };
 use cheby_runtime::image::{FN_CHEBY_ABI, ModuleRecord, NO_STRING};
 
@@ -562,7 +558,7 @@ fn record_module_refuses_what_a_record_cannot_hold() {
         let mut m = RecordingModule::new(isa::host_isa().unwrap());
         let sig = m.make_signature();
         let f = m.declare_function("cb$fn$x", Linkage::Local, &sig).unwrap();
-        let reloc = cranelift_module::ModuleReloc {
+        let reloc = ModuleReloc {
             offset: 0,
             kind,
             name,

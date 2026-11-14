@@ -16,6 +16,10 @@
     clippy::cast_sign_loss,
     reason = "test arithmetic and indexing on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use proptest::prelude::*;
 
@@ -49,6 +53,7 @@ fn data(word: Word) -> Vec<u8> {
     let bytes = unsafe { string::text_bytes(word) }.unwrap().to_vec();
     // SAFETY: as above.
     assert_eq!(
+        // SAFETY: as above.
         unsafe { string::bytes(word) },
         None,
         "a `Bytes` is no `String`"
@@ -160,6 +165,7 @@ fn from_string_encodes_utf8() {
             let word = new_string(text);
             // SAFETY: a live `String`, borrowed.
             assert_eq!(
+                // SAFETY: as above.
                 take(unsafe { cheby_bytes_from_string(word) }),
                 text.as_bytes()
             );
@@ -367,6 +373,7 @@ fn slice_of_the_whole_shares_the_value() {
         let word = new_bytes(&[1, 2]);
         // SAFETY: a live `Bytes`, borrowed; the test keeps its reference.
         unsafe { rc::dup(word) };
+        // SAFETY: as above.
         let out = as_wrapper(word, |w| unsafe { cheby_bytes_slice(w, -5, 9) });
         assert_eq!(out, word);
         release(out);
@@ -402,7 +409,9 @@ fn to_list_gives_every_byte() {
 fn push_adds_one_byte() {
     balanced(|| {
         let empty = cheby_bytes_new();
+        // SAFETY: as above.
         let a = as_wrapper(empty, |w| unsafe { cheby_bytes_push(w, 0x41) });
+        // SAFETY: as above.
         let ab = as_wrapper(a, |w| unsafe { cheby_bytes_push(w, 0x42) });
         assert_eq!(take(ab), b"AB");
     });
@@ -459,6 +468,7 @@ fn concat_joins_many_sequences() {
 /// `kernel(new(), value)`'s bytes.
 fn pushed<T>(kernel: unsafe extern "C" fn(Word, T) -> Word, value: T) -> Vec<u8> {
     let empty = cheby_bytes_new();
+    // SAFETY: as above.
     take(as_wrapper(empty, |w| unsafe { kernel(w, value) }))
 }
 
@@ -754,14 +764,14 @@ fn kernels_accept_static_bytes_values() {
     balanced(|| {
         // A static `Bytes` image (count 0), as constants freeze them: a
         // static string image with the `Bytes` layout in its header.
-        let mut image: Vec<u64> = crate::abi::string::static_image("ab")
+        let mut image: Vec<u64> = abi::string::static_image("ab")
             .as_chunks::<8>()
             .0
             .iter()
             .copied()
             .map(u64::from_le_bytes)
             .collect();
-        image[0] = crate::abi::header(crate::abi::RC_STATIC, 0, crate::abi::layout::BYTES);
+        image[0] = abi::header(abi::RC_STATIC, 0, abi::layout::BYTES);
         let word = crate::object::ptr_to_word(image.as_ptr().cast::<u8>());
         // SAFETY: a static `Bytes`, borrowed.
         unsafe {
@@ -781,11 +791,14 @@ fn kernels_accept_static_bytes_values() {
 fn push_and_append_work_in_place_at_count_one() {
     balanced(|| {
         let word = roomy(&[1], 16);
+        // SAFETY: as above.
         let same = as_wrapper(word, |w| unsafe { cheby_bytes_push(w, 2) });
         assert_eq!(same, word, "a unique value with room is reused");
+        // SAFETY: as above.
         let same = as_wrapper(same, |w| unsafe { cheby_bytes_push_u32_be(w, 0x0304_0506) });
         assert_eq!(same, word);
         let tail = new_bytes(&[7, 8]);
+        // SAFETY: as above.
         let same = as_wrapper(same, |w| unsafe { cheby_bytes_append(w, tail) });
         assert_eq!(same, word);
         // SAFETY: a live `Bytes`.
@@ -801,6 +814,7 @@ fn pushes_on_a_unique_value_grow_by_doubling() {
         let mut word = cheby_bytes_new();
         let mut moves = 0;
         for i in 0..1000_u32 {
+            // SAFETY: as above.
             let next = as_wrapper(word, |w| unsafe { cheby_bytes_push(w, i as u8) });
             if next != word {
                 moves += 1;
@@ -822,6 +836,7 @@ fn shared_and_aliased_values_are_never_changed() {
         let shared = roomy(&[1, 2], 16);
         // SAFETY: a live `Bytes`; the test keeps a second reference.
         unsafe { rc::dup(shared) };
+        // SAFETY: as above.
         let out = as_wrapper(shared, |w| unsafe { cheby_bytes_push(w, 3) });
         assert_ne!(out, shared);
         assert_eq!(data(shared), [1, 2]);
@@ -835,11 +850,13 @@ fn shared_and_aliased_values_are_never_changed() {
         // A shared slice copies.
         // SAFETY: as above.
         unsafe { rc::dup(shared) };
+        // SAFETY: as above.
         let sliced = as_wrapper(shared, |w| unsafe { cheby_bytes_slice(w, 1, 2) });
         assert_ne!(sliced, shared);
         assert_eq!(take(sliced), [2]);
         assert_eq!(data(shared), [1, 2]);
         // A unique slice keeps its range in place.
+        // SAFETY: as above.
         let kept = as_wrapper(shared, |w| unsafe { cheby_bytes_slice(w, 1, 2) });
         assert_eq!(kept, shared);
         assert_eq!(take(kept), [2]);
@@ -1089,6 +1106,7 @@ proptest! {
                         // The wrapper owns one reference per argument.
                         // SAFETY: live versions, borrowed.
                         unsafe { rc::dup(other) };
+                        // SAFETY: as above.
                         update(&mut versions, i, model, |w| unsafe { cheby_bytes_append(w, other) });
                         release(other);
                     }

@@ -83,9 +83,16 @@ fn interpolated_ty(
         Res::Local(local) => facts.locals.get(local)?.ty,
         Res::Def(def) => match &cx.item(def)?.sig {
             ItemSig::Const(c) => c.ty,
-            _ => return None,
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => return None,
         },
-        _ => return None,
+        Res::Module(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => return None,
     };
     for name in rest {
         ty = facts.field_at(name.text_range().start())?.ty?;
@@ -143,7 +150,12 @@ fn fields(cx: &CompletionCx<'_>, ty: Ty, out: &mut Items) {
                 .position(|(p, _)| p == *param)
                 .and_then(|n| args.get(n))
                 .and_then(|&arg| cx.type_text(arg, None)),
-            _ => cx.type_text(field_ty, Some(def)),
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Named { .. }
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Dyn { .. } => cx.type_text(field_ty, Some(def)),
         };
         out.push(entry);
     }
@@ -201,6 +213,10 @@ fn spans_lines(cx: &CompletionCx<'_>, range: TextRange) -> bool {
 /// that binds as tightly as `|>` or more (binding power 4 and up, §5.4.1),
 /// of a prefix operator, or the receiver of a further `.` or the callee of
 /// a call.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn is_tight(field: SyntaxNode<'_>) -> bool {
     let Some(parent) = field.parent() else {
         return false;
@@ -218,6 +234,10 @@ fn is_tight(field: SyntaxNode<'_>) -> bool {
 }
 
 /// The binding power of a binary operator (§5.4.1), as the parser has it.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 const fn binding_power(kind: K) -> Option<u8> {
     let bp = match kind {
         K::PIPE2 => 1,

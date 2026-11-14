@@ -7,15 +7,12 @@
 //! `cheby_types`, and that site's test is in `cheby_types/src/repl.rs`.
 //! `session.rs`'s hook stops a session definition of that name when it is
 //! checked again.
-
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
-use crate::aot::{BuildOptions, build_objects};
+use crate::aot::build_objects;
 use crate::cache::{BuildId, CacheLog, Store};
 use crate::session::{Output, Session, SessionOptions, Start};
-use crate::test::{TestOptions, prepare_test, prepare_test_cached};
 
 /// The build ID of every test store.
 const BUILD: BuildId = BuildId([12; 16]);

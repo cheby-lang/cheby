@@ -71,7 +71,7 @@ pub(crate) enum Deferred {
 
 impl BodyCx<'_> {
     /// Records `d` for resolution at the end of the body.
-    pub fn defer(&mut self, d: Deferred) {
+    pub(crate) fn defer(&mut self, d: Deferred) {
         self.deferred.push(d);
     }
 
@@ -390,7 +390,23 @@ impl BodyCx<'_> {
             BinOpKind::BitOr if ty == Ty::BOOL => {
                 ("integer types", Some("for logical or, write `||`"))
             }
-            _ => ("integer types", None),
+            BinOpKind::Or
+            | BinOpKind::And
+            | BinOpKind::Eq
+            | BinOpKind::Ne
+            | BinOpKind::Lt
+            | BinOpKind::Le
+            | BinOpKind::Gt
+            | BinOpKind::Ge
+            | BinOpKind::BitOr
+            | BinOpKind::BitXor
+            | BinOpKind::BitAnd
+            | BinOpKind::Shl
+            | BinOpKind::Shr
+            | BinOpKind::Add
+            | BinOpKind::Sub
+            | BinOpKind::Mul
+            | BinOpKind::Div => ("integer types", None),
         };
         let mut diag = Diagnostic::new(
             codes::INVALID_OPERAND,

@@ -24,6 +24,10 @@
     reason = "test helpers: a failed setup step or a step past its bound fails the test; \
               a deadline is now plus a bound"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::io::{BufRead as _, BufReader, Read};
 use std::path::{Path, PathBuf};

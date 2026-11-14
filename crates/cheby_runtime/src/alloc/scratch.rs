@@ -205,7 +205,7 @@ fn grow(
         .checked_mul(item)
         .and_then(|bytes| u64::try_from(bytes).ok())
         .unwrap_or(u64::MAX);
-    if let Budget::Charged = budget {
+    if matches!(budget, Budget::Charged) {
         // The old buffer is still counted in the scratch live now, so a
         // move that holds both for a moment fits the budget too.
         crate::entry::check_budget_of(charge.fiber(), bytes);
@@ -213,7 +213,7 @@ fn grow(
     if refusal_hook::refuses() || reserve(new_cap.saturating_sub(len)).is_err() {
         refused(budget, bytes);
     }
-    if let Budget::Charged = budget {
+    if matches!(budget, Budget::Charged) {
         charge.recharge(bytes);
     }
 }
@@ -265,6 +265,10 @@ mod refusal_hook {
 
     /// Never, outside tests.
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )]
     #[inline]
     pub(super) const fn refuses() -> bool {
         false

@@ -745,7 +745,7 @@ fn macho_name_dependent(bytes: &[u8]) -> (Vec<std::ops::Range<usize>>, usize) {
     let mut commands = header.load_commands(endian, bytes, 0).unwrap();
     let mut ranges = Vec::new();
     let mut signature = None;
-    let mut offset = std::mem::size_of::<macho::MachHeader64<object::Endianness>>();
+    let mut offset = size_of::<MachHeader64<object::Endianness>>();
     while let Some(command) = commands.next().unwrap() {
         match command.cmd() {
             macho::LC_UUID => ranges.push(offset + 8..offset + 24),

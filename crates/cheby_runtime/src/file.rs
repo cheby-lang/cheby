@@ -180,6 +180,10 @@ impl FileError {
     }
 
     /// The kind of an IO error, before any operation's own mapping.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "`io::ErrorKind` is non-exhaustive"
+    )]
     fn kind_of(error: &io::Error) -> i64 {
         match error.kind() {
             io::ErrorKind::NotFound => KIND_NOT_FOUND,
@@ -695,6 +699,10 @@ pub(crate) fn remove_dir_all_on(me: &ExecCtx, path: &str) -> Work<()> {
 /// itself (on Windows a link to a directory is one), anything else that is
 /// not a directory is `ENOTDIR`'s kind, and a directory goes with all it
 /// holds, never through a link.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "`io::ErrorKind` is non-exhaustive"
+)]
 fn remove_tree(path: &Path) -> io::Result<()> {
     let found = fs::symlink_metadata(path)?;
     if found.file_type().is_symlink() {

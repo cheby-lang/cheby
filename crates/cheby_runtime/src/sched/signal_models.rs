@@ -163,7 +163,7 @@ impl World {
             }
             self.pipe[which].fetch_add(1, Ordering::SeqCst);
         } else {
-            self.killed.store(true, probe::Ordering::SeqCst);
+            self.killed.store(true, Ordering::SeqCst);
         }
     }
 
@@ -261,7 +261,7 @@ impl World {
             }
         };
         if reraise {
-            self.killed.store(true, probe::Ordering::SeqCst);
+            self.killed.store(true, Ordering::SeqCst);
         }
     }
 
@@ -348,7 +348,7 @@ impl World {
             let mut scope = self.scopes[which].lock().unwrap();
             if !scope.ended {
                 scope.cancelled = true;
-                self.walked_open[which].store(true, probe::Ordering::SeqCst);
+                self.walked_open[which].store(true, Ordering::SeqCst);
             }
             drop(scope);
             if self.walk == Walk::Upgrades {
@@ -357,7 +357,7 @@ impl World {
         }
         if reraise > 0 {
             // `reraise`: the default action is back, so the process ends.
-            self.killed.store(true, probe::Ordering::SeqCst);
+            self.killed.store(true, Ordering::SeqCst);
         }
     }
 
@@ -383,7 +383,7 @@ impl World {
     /// One signal that came was either an interruption or the end of the
     /// process, never both and never neither.
     fn check_one_signal(&self, interrupted: bool) {
-        let killed = self.killed.load(probe::Ordering::SeqCst);
+        let killed = self.killed.load(Ordering::SeqCst);
         assert!(
             !(interrupted && killed),
             "one signal both cancelled a scope and ended the process"
@@ -419,7 +419,7 @@ fn signal_against_a_closing_scope(walk: Walk) {
         world.poll();
 
         world.check_idle();
-        let walked = world.walked_open[0].load(probe::Ordering::SeqCst);
+        let walked = world.walked_open[0].load(Ordering::SeqCst);
         assert_eq!(cancelled, walked, "the close missed the walk's mark");
         world.check_one_signal(interrupted);
     });
@@ -471,7 +471,7 @@ fn two_signals(second: usize) {
         let (interrupted, _) = world.close(0, false);
         assert!(interrupted, "the first signal did not cancel the scope");
         assert!(
-            world.killed.load(probe::Ordering::SeqCst),
+            world.killed.load(Ordering::SeqCst),
             "the second signal did not end the process"
         );
     });

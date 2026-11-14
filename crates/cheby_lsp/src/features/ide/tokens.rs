@@ -358,7 +358,14 @@ impl Cx<'_> {
             .sig
         {
             ItemSig::Type(ty) => Some(ty),
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         }
     }
 
@@ -443,6 +450,10 @@ impl Cx<'_> {
 
 /// Whether the parent of `token` declares it: the L0 rows with
 /// `declaration` (syntax map §7.5).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn decl_by_syntax(token: SyntaxToken<'_>) -> Modifiers {
     let declares = token.parent().is_some_and(|parent| match parent.kind() {
         K::FN_DECL
@@ -468,6 +479,10 @@ fn decl_by_syntax(token: SyntaxToken<'_>) -> Modifiers {
 /// (syntax map §7.5): its parent's row, else the fallback row. `None` for
 /// an attribute's name or argument and for a token directly inside an
 /// `ERROR` node, whose parent says nothing.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn syntactic(token: SyntaxToken<'_>) -> Option<TokenType> {
     let parent = token.parent()?;
     let upper = token.kind() == K::UPPER_IDENT;
@@ -523,6 +538,10 @@ const fn fallback(upper: bool) -> TokenType {
 /// A segment of a `PATH` with no resolution: a qualifier is a module, or a
 /// type when it is upper case; the last segment takes the kind of what
 /// holds the path.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn in_path(path: SyntaxNode<'_>, token: SyntaxToken<'_>, upper: bool) -> TokenType {
     let last = path
         .children_with_tokens()

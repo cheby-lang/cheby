@@ -100,6 +100,10 @@ const fn tight(node: SyntaxKind, prev: SyntaxKind, next: SyntaxKind) -> bool {
 
 /// The precedence level of a binary operator (Appendix A.5); `&&` and
 /// `||` share one, so a condition breaks at all of them together.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 const fn level(op: SyntaxKind) -> u8 {
     match op {
         SyntaxKind::PIPE2 | SyntaxKind::AMP2 => 1,
@@ -202,6 +206,10 @@ fn bin_parts(node: SyntaxNode<'_>) -> Option<BinParts<'_>> {
 /// fits, else broken there; a body that cannot break stays there past the
 /// width. D-1157's "flat on the next line" and "hugging on the next line"
 /// steps, and D-1156's next-line body, no longer apply to an arm.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn tail_doc(value: SyntaxNode<'_>, doc: Doc, arm: bool) -> Doc {
     let kind = value.kind();
     let same_line = Doc::concat(vec![Doc::text(" "), doc.clone()]);
@@ -269,6 +277,10 @@ impl<'t> Formatter<'t> {
     /// Lays out an expression, statement, pattern or type node; `None` for
     /// a kind this part of the formatter does not lay out, or a node with
     /// a gap D-470 rejects or a shape the grammar does not produce.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a match on syntax kinds names only the kinds it handles"
+    )]
     pub(crate) fn syntax(&mut self, node: SyntaxNode<'t>) -> Option<Doc> {
         match node.kind() {
             SyntaxKind::LITERAL => Some(self.literal(node)),
@@ -592,7 +604,7 @@ impl<'t> Formatter<'t> {
             }
             match child {
                 SyntaxElement::Node(n) if path.is_none() => path = Some(n),
-                _ => return None,
+                SyntaxElement::Node(_) | SyntaxElement::Token(_) => return None,
             }
         }
         let mut parts = Parts::default();
@@ -645,16 +657,17 @@ impl<'t> Formatter<'t> {
             return empty_ok.then(|| Doc::text("{}"));
         }
         let mut docs = vec![Doc::text("{")];
-        let mut start = 0;
-        if let Some(first) = entries.first()
+        let start = if let Some(first) = entries.first()
             && first.newlines == 0
             && let SyntaxElement::Token(token) = first.elem
             && is_comment(token.kind())
         {
             docs.push(Doc::text(" "));
             docs.push(Doc::comment(crate::layout::comment_text(token)));
-            start = 1;
-        }
+            1
+        } else {
+            0
+        };
         let mut body = Vec::new();
         for (i, entry) in entries.iter().enumerate().skip(start) {
             let trailing = entry.newlines == 0 && is_comment(entry.elem.kind());

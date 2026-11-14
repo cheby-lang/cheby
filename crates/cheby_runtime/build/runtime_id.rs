@@ -33,27 +33,27 @@ use siphasher::sip128::{Hasher128 as _, SipHasher13};
 
 /// The first field: names this encoding, so a change of the encoding
 /// changes every ID.
-pub const ENCODING: &str = "cheby-runtime-id/1";
+pub(crate) const ENCODING: &str = "cheby-runtime-id/1";
 
 /// The cfg names the runtime's code reads whose values the target does
 /// not fix: `debug_assertions` (the leak check, poisoning), D-875's
 /// `cheby_sanitize`, `panic` (D-697 needs `unwind`) and `miri`.
-pub const CFGS: [&str; 4] = ["debug_assertions", "cheby_sanitize", "panic", "miri"];
+pub(crate) const CFGS: [&str; 4] = ["debug_assertions", "cheby_sanitize", "panic", "miri"];
 
 /// The directories of the crate whose files are inputs, relative to it.
-pub const CRATE_DIRS: [&str; 2] = ["src", "build"];
+pub(crate) const CRATE_DIRS: [&str; 2] = ["src", "build"];
 
 /// The single files of the crate that are inputs, relative to it.
-pub const CRATE_FILES: [&str; 2] = ["build.rs", "Cargo.toml"];
+pub(crate) const CRATE_FILES: [&str; 2] = ["build.rs", "Cargo.toml"];
 
 /// The workspace's files that are inputs, relative to the workspace, with
 /// the label that precedes each.
-pub const WORKSPACE_FILES: [(&str, &str); 2] =
+pub(crate) const WORKSPACE_FILES: [(&str, &str); 2] =
     [("lock", "Cargo.lock"), ("toolchain", "rust-toolchain.toml")];
 
 /// What the ID hashes besides files.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Settings {
+pub(crate) struct Settings {
     /// The target triple (`TARGET`).
     pub target: String,
     /// The enabled features, in any order: lowercase names as
@@ -65,7 +65,7 @@ pub struct Settings {
 
 /// A computed runtime ID and the files it read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeId {
+pub(crate) struct RuntimeId {
     /// The ID.
     pub id: [u8; 16],
     /// Every file read, for `cargo::rerun-if-changed`.
@@ -75,14 +75,14 @@ pub struct RuntimeId {
 impl RuntimeId {
     /// The ID as 32 lowercase hex digits.
     #[must_use]
-    pub fn hex(&self) -> String {
+    pub(crate) fn hex(&self) -> String {
         hex(&self.id)
     }
 }
 
 /// `id` as 32 lowercase hex digits.
 #[must_use]
-pub fn hex(id: &[u8; 16]) -> String {
+pub(crate) fn hex(id: &[u8; 16]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(32);
     for byte in id {
@@ -101,7 +101,7 @@ pub fn hex(id: &[u8; 16]) -> String {
 ///
 /// A file or directory that cannot be read, a path that is not UTF-8, or
 /// a missing workspace file.
-pub fn compute(
+pub(crate) fn compute(
     crate_dir: &Path,
     workspace_dir: &Path,
     settings: &Settings,

@@ -1,4 +1,8 @@
 //! Tests of `pat.rs`: every pattern form and its errors (chapter 6).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use crate::test_support::Build;
 use crate::test_support::quiet::build;

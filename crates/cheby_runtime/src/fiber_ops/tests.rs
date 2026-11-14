@@ -107,7 +107,7 @@ pub(super) static OVERFLOW_WHEN_STACK_USED: AtomicUsize = AtomicUsize::new(0);
 /// included (D-536).
 pub(super) fn limit_to(me: &ExecCtx, extra: u64) {
     let live = u64::try_from(me.domain().live_bytes()).unwrap_or(u64::MAX);
-    let scratch = me.scratch().0.load(std::sync::atomic::Ordering::Relaxed);
+    let scratch = me.scratch().0.load(Ordering::Relaxed);
     me.set_budget(live.saturating_add(scratch).saturating_add(extra));
 }
 
@@ -480,7 +480,7 @@ pub(super) fn stack_used(raise: impl FnOnce()) -> usize {
     let lowest = area
         .clone()
         .find(|&at| {
-            let byte = std::ptr::with_exposed_provenance::<u8>(at);
+            let byte = ptr::with_exposed_provenance::<u8>(at);
             // SAFETY: the painted bytes lie in this thread's stack, below
             // the current frame, mapped and no longer used.
             let value = unsafe { byte.read_volatile() };
@@ -943,9 +943,7 @@ fn a_stack_that_cannot_be_mapped_makes_spawn_panic() {
     let (outcome, _) = outcome(1, |me| {
         let scope = open(me);
         if let Some(runtime) = me.sched.runtime() {
-            runtime
-                .fail_stack
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            runtime.fail_stack.store(true, Ordering::SeqCst);
         }
         let fiber = spawn(
             me,
@@ -962,7 +960,7 @@ fn a_stack_that_cannot_be_mapped_makes_spawn_panic() {
 
 /// The handle of a fiber that failed, owned, with its cell failed by hand.
 pub(super) fn failed_fiber(me: &ExecCtx) -> Word {
-    let cell = Arc::new(super::base::JoinCell::default());
+    let cell = Arc::new(JoinCell::default());
     assert_eq!(cell.finish(Outcome::Failed), None);
     // SAFETY: the running fiber's context.
     unsafe { handles::new_handle(ctx_of(me), HandleKind::Fiber, Box::new(FiberHandle(cell))) }

@@ -31,6 +31,10 @@
 //! of a milestone later than `tests/milestone` that the override made
 //! pending: `CHEBY_MILESTONE=M2` requires every M1 test, not the M2 ones
 //! ([`Setting::expectation`]).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::ffi::OsString;
 use std::fmt;
@@ -621,7 +625,10 @@ pub fn merged_summary(dir: &Path) -> Result<String, String> {
                 .ok_or_else(|| format!("{}: unknown outcome in `{line}`", path.display()))?;
             let entry = harnesses.entry((*what).to_owned()).or_default();
             entry.0 |= *mode == "strict";
-            let slot = entry.1.entry((*name).to_owned()).or_insert(outcome.clone());
+            let slot = entry
+                .1
+                .entry((*name).to_owned())
+                .or_insert_with(|| outcome.clone());
             if outcome == Outcome::Passed {
                 *slot = outcome;
             }

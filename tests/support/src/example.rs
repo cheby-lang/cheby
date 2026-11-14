@@ -23,6 +23,10 @@
 //! test group (D-725, D-1555). Another type, or `timing = true` with
 //! `skip-run = true`, is an error, since a check-only example waits for
 //! nothing (D-886).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::{Path, PathBuf};
 

@@ -143,19 +143,24 @@ pub(crate) fn scan_number(bytes: &[u8]) -> NumberScan {
 
     let digit_run = |i: usize| run(i, &|b| b.is_ascii_digit() || b == b'_');
     let mut i = digit_run(1);
-    let mut kind = SyntaxKind::INT_NUMBER;
-    if at(i) == Some(b'.') && at(i + 1).is_some_and(|b| b.is_ascii_digit()) {
+    let fraction = at(i) == Some(b'.') && at(i + 1).is_some_and(|b| b.is_ascii_digit());
+    if fraction {
         i = digit_run(i + 2);
-        kind = SyntaxKind::FLOAT_NUMBER;
     }
+    let mut exponent = false;
     if matches!(at(i), Some(b'e' | b'E')) {
         let sign = usize::from(matches!(at(i + 1), Some(b'+' | b'-')));
         let first = i + 1 + sign;
         if at(first).is_some_and(|b| b.is_ascii_digit()) {
             i = digit_run(first + 1);
-            kind = SyntaxKind::FLOAT_NUMBER;
+            exponent = true;
         }
     }
+    let kind = if fraction || exponent {
+        SyntaxKind::FLOAT_NUMBER
+    } else {
+        SyntaxKind::INT_NUMBER
+    };
     let end = run(i, &word);
     let error = (end != i).then_some(NumberError::Suffix { at: i });
     NumberScan {

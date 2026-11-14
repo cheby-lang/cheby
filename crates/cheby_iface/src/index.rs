@@ -1,7 +1,7 @@
 //! Dense `u32` ids and vectors indexed by them.
 //!
 //! [`IndexVec`] has no `Index` impl on purpose: a missing id is an
-//! [`Ice`](crate::Ice) that the caller reports, never a panic (D-423).
+//! [`Ice`] that the caller reports, never a panic (D-423).
 
 use std::fmt;
 use std::hash::Hash;
@@ -38,13 +38,13 @@ macro_rules! newtype_index {
         impl $name {
             /// The id with this number.
             #[must_use]
-            pub const fn from_u32(value: u32) -> Self {
+            $vis const fn from_u32(value: u32) -> Self {
                 Self(value)
             }
 
             /// The id's number.
             #[must_use]
-            pub const fn as_u32(self) -> u32 {
+            $vis const fn as_u32(self) -> u32 {
                 self.0
             }
         }

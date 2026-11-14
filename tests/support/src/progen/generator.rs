@@ -24,6 +24,10 @@
 //! and full signatures on top-level functions. A binding that nothing
 //! reads is written with a leading `_`, so `cheby check` warns about
 //! nothing.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

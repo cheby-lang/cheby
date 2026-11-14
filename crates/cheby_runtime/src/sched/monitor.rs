@@ -61,6 +61,13 @@ fn stuck_inline(fiber: &ExecCtx) -> bool {
 
 /// Whether the tests asked the monitor to survey on every pass, with no
 /// sleep and no backoff (the probe's `eager_detection`).
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )
+)]
 fn eager_detection(shared: &Shared) -> bool {
     #[cfg(test)]
     {
@@ -149,6 +156,27 @@ fn poll_sockets(shared: &Shared) {
     }
 }
 
+/// Whether the monitor fires due timers itself: always, unless the tests
+/// asked it not to (the probe's `skip_timers`).
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test probe"
+    )
+)]
+fn fires_timers(shared: &Shared) -> bool {
+    #[cfg(test)]
+    {
+        !shared.probe.skip_timers.load(Ordering::SeqCst)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = shared;
+        true
+    }
+}
+
 /// The body of the monitor thread.
 pub(super) fn main(shared: &Shared) {
     // One sample per worker slot, grown as slots fill
@@ -187,11 +215,7 @@ pub(super) fn main(shared: &Shared) {
         // itself, with no lock held and no Cheby code run. A fiber a timer
         // wakes goes to the global queue, so `fibers_waiting` below sees
         // it and the spinner on its worker is asked to yield (D-737).
-        #[cfg(test)]
-        let fire = !shared.probe.skip_timers.load(Ordering::SeqCst);
-        #[cfg(not(test))]
-        let fire = true;
-        if fire {
+        if fires_timers(shared) {
             shared.fire_due(now);
         }
         poll_sockets(shared);

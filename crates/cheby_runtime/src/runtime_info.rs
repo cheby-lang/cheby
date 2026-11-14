@@ -34,7 +34,7 @@ pub(crate) const COMPLETE: &[&str] = &["runtime"];
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_runtime_thread_count(ctx: *mut ExecCtx) -> i64 {
+pub(crate) unsafe extern "C" fn cheby_runtime_thread_count(ctx: *mut ExecCtx) -> i64 {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { running(ctx) };
@@ -51,7 +51,7 @@ pub unsafe extern "C" fn cheby_runtime_thread_count(ctx: *mut ExecCtx) -> i64 {
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_runtime_set_thread_count(ctx: *mut ExecCtx, count: i64) {
+pub(crate) unsafe extern "C" fn cheby_runtime_set_thread_count(ctx: *mut ExecCtx, count: i64) {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { running(ctx) };
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn cheby_runtime_set_thread_count(ctx: *mut ExecCtx, count
 /// reports nothing (D-657). It is not clamped to 1024: the page calls it
 /// the default thread count "before the clamp".
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_runtime_cpu_count() -> i64 {
+pub(crate) extern "C" fn cheby_runtime_cpu_count() -> i64 {
     guarded(None, || {
         let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         i64::try_from(cpus).unwrap_or(i64::MAX)
@@ -151,8 +151,8 @@ pub(crate) fn signatures() -> Vec<(&'static str, &'static [&'static str], &'stat
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicI64, Ordering};
-    use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::entry::{EntryConfig, EntryMode, EntryOutcome, run_entry};

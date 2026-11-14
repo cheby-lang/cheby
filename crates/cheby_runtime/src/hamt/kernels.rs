@@ -148,8 +148,8 @@ pub unsafe extern "C" fn cheby_map_get(m: u64, key: u64) -> u64 {
 /// `m` is a live map and `key` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_has_key(m: u64, key: u64) -> bool {
-    // SAFETY: forwarded from the caller.
     guarded(None, || {
+        // SAFETY: forwarded from the caller.
         ops::find(unsafe { map(m) }, Collection::Map, key).is_some()
     })
 }
@@ -161,8 +161,8 @@ pub unsafe extern "C" fn cheby_map_has_key(m: u64, key: u64) -> bool {
 /// `m` is a live map; `key` and `value` are live uniform words.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_insert(m: u64, key: u64, value: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
     guarded(None, || {
+        // SAFETY: forwarded from the caller.
         ops::insert(unsafe { map(m) }, Collection::Map, key, Some(value)).word()
     })
 }
@@ -175,8 +175,8 @@ pub unsafe extern "C" fn cheby_map_insert(m: u64, key: u64, value: u64) -> u64 {
 /// `m` is a live map and `key` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_map_remove(m: u64, key: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
     guarded(None, || {
+        // SAFETY: forwarded from the caller.
         ops::remove(unsafe { map(m) }, Collection::Map, key).word()
     })
 }
@@ -237,7 +237,7 @@ pub unsafe extern "C" fn cheby_map_values(m: u64) -> u64 {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         listed(unsafe { map(m) }, Collection::Map, |(_, value)| {
-            let value = value.unwrap_or(crate::object::nil());
+            let value = value.unwrap_or_else(crate::object::nil);
             dup_word(value);
             value
         })
@@ -254,7 +254,7 @@ pub unsafe extern "C" fn cheby_map_to_list(m: u64) -> u64 {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         listed(unsafe { map(m) }, Collection::Map, |(key, value)| {
-            let value = value.unwrap_or(crate::object::nil());
+            let value = value.unwrap_or_else(crate::object::nil);
             dup_word(key);
             dup_word(value);
             let held = DropOnUnwind::new([key, value]);
@@ -320,8 +320,8 @@ pub unsafe extern "C" fn cheby_set_is_empty(s: u64) -> bool {
 /// `s` is a live set and `item` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_contains(s: u64, item: u64) -> bool {
-    // SAFETY: forwarded from the caller.
     guarded(None, || {
+        // SAFETY: forwarded from the caller.
         ops::find(unsafe { set(s) }, Collection::Set, item).is_some()
     })
 }
@@ -358,8 +358,8 @@ pub unsafe extern "C" fn cheby_set_sys_get(s: u64, item: u64) -> u64 {
 /// `s` is a live set and `item` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_insert(s: u64, item: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
     guarded(None, || {
+        // SAFETY: forwarded from the caller.
         ops::insert(unsafe { set(s) }, Collection::Set, item, None).word()
     })
 }
@@ -371,8 +371,8 @@ pub unsafe extern "C" fn cheby_set_insert(s: u64, item: u64) -> u64 {
 /// `s` is a live set and `item` a live uniform word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_set_remove(s: u64, item: u64) -> u64 {
-    // SAFETY: forwarded from the caller.
     guarded(None, || {
+        // SAFETY: forwarded from the caller.
         ops::remove(unsafe { set(s) }, Collection::Set, item).word()
     })
 }

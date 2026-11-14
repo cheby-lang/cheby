@@ -62,7 +62,7 @@
 //! (D-920).
 
 use std::collections::BTreeMap;
-use std::mem::{offset_of, size_of};
+use std::mem::offset_of;
 
 use cranelift_codegen::ir::GlobalValue;
 use cranelift_module::{DataDescription, DataId, Linkage, Module};

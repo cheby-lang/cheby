@@ -735,7 +735,7 @@ fn native_start_stop_section_with_retain_is_kept() {
 
 /// C code that keeps a duplicate of a `Sender` between two `@blocking`
 /// calls, as C code reaches a value's last reference (D-187, D-945).
-const KEPT_SENDER_C: &str = r"#include <stdint.h>
+const KEPT_SENDER_C: &str = "#include <stdint.h>
 #include <cheby.h>
 
 static cheby_value *kept;

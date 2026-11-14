@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn pushed_reads_settings_cheby() {
         let object = json!({ "analysis": { "debounceMs": 5 } });
-        let push = json!({ "settings": { "cheby": object.clone() } });
+        let push = json!({ "settings": { "cheby": object } });
         assert_eq!(pushed(&push), Some(&object));
         let null = json!({ "settings": { "cheby": null } });
         assert_eq!(pushed(&null), Some(&Value::Null));

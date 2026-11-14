@@ -41,6 +41,10 @@ pub(super) struct Restrictions {
 const PREFIX_BP: u8 = 11;
 
 /// The binding power of a binary operator, or `None`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 const fn infix_bp(kind: SyntaxKind) -> Option<u8> {
     let bp = match kind {
         PIPE2 => 1,
@@ -163,6 +167,10 @@ fn unary(p: &mut Parser<'_>, r: Restrictions) -> Option<CompletedMarker> {
 
 /// The name after `.`. A number there is positional access, which Cheby
 /// does not have (E0024, D-241).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn field_name(p: &mut Parser<'_>) {
     match p.current() {
         LOWER_IDENT => p.bump(LOWER_IDENT),
@@ -184,6 +192,10 @@ fn field_name(p: &mut Parser<'_>) {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn primary(p: &mut Parser<'_>, r: Restrictions) -> Option<CompletedMarker> {
     let done = match p.current() {
         INT_NUMBER | FLOAT_NUMBER | RAW_STRING => {
@@ -476,6 +488,10 @@ fn cond_arm(p: &mut Parser<'_>) {
 /// file is string text, and every `{` in it starts an interpolation. The
 /// interpolation errors after the string's first line break are only
 /// consequences of the missing `"`, and are dropped.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(super) fn string_lit(p: &mut Parser<'_>) -> CompletedMarker {
     let m = p.start();
     let errors_before = p.errors.len();

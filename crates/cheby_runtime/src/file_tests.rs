@@ -11,15 +11,8 @@
 //! path and operation (`hooks`), and every wait for an event is bounded by
 //! `testing::hang` (D-872). The refill against the next read is modelled
 //! in `sched/blocking_models.rs` (model 5) before these tests rely on it.
-
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use parking_lot::Mutex;
 
 use super::hooks::{self, JobHook};
 use super::*;
@@ -30,7 +23,7 @@ use crate::fiber_ops::detached_tests::{
 };
 use crate::fiber_ops::scope::{ScopeHandle, ScopeState};
 use crate::generic::{self, Reached};
-use crate::{rc, values};
+use crate::rc;
 
 /// The thread counts of every test that starts a runtime.
 const THREADS: [usize; 2] = [1, 4];
@@ -506,7 +499,7 @@ fn file_kernel_reads_refill_once_per_buffer() {
     hooks::install(&hook);
     let count: Arc<Mutex<usize>> = Arc::default();
     {
-        let (path, count) = (path.clone(), Arc::clone(&count));
+        let (path, count) = (path, Arc::clone(&count));
         run_root(2, move |me| {
             let source = opened(me, &path, 0);
             let mut lines = 0_usize;
@@ -932,8 +925,8 @@ fn std_stream_handles_print_refuse_equality_and_close_alone() {
             err(12),
             ok.clone(),
             err(12),
-            ok.clone(),
-            format!("{:?}", Ok::<(), std::io::ErrorKind>(())),
+            ok,
+            format!("{:?}", Ok::<(), io::ErrorKind>(())),
         ]
     );
     assert_eq!(domain.live_objects(), 0, "objects leaked");

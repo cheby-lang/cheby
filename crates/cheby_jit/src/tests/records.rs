@@ -12,9 +12,6 @@
     clippy::arithmetic_side_effects,
     reason = "test helpers: offsets inside a record and its tables, and consecutive layout ids"
 )]
-
-use cheby_codegen_clif::SessionName;
-use cheby_mir::{FieldDesc, LayoutDesc, LayoutRef};
 use cheby_runtime::layout;
 use cheby_runtime::locate;
 
@@ -465,7 +462,11 @@ fn jit_records_entry_thunks_are_in_no_range() {
     let owner = jit.keep_alive.code_owner;
     for target in [run_p, run_q] {
         let thunk = jit.entry(EntryKind::Const(target)).unwrap().thunk();
-        #[expect(clippy::as_conversions, reason = "a function's address")]
+        #[expect(
+            clippy::as_conversions,
+            clippy::fn_to_numeric_cast_any,
+            reason = "a function's address"
+        )]
         let thunk = thunk as usize;
         // A return address inside the thunk: past its first instruction.
         assert_eq!(locate::range_at(thunk + 4), None);

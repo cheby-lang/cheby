@@ -215,7 +215,17 @@ impl Translator<'_, '_> {
                 let f = match repr {
                     Repr::Float => RuntimeFunc::FmodF64,
                     Repr::F32 => RuntimeFunc::FmodF32,
-                    _ => return Err(unsupported(&format!("float `%` on {repr}"))),
+                    Repr::Value
+                    | Repr::Int
+                    | Repr::Bool
+                    | Repr::I8
+                    | Repr::I16
+                    | Repr::I32
+                    | Repr::I64
+                    | Repr::U8
+                    | Repr::U16
+                    | Repr::U32
+                    | Repr::U64 => return Err(unsupported(&format!("float `%` on {repr}"))),
                 };
                 self.runtime_value(f, &[a, b])?
             }

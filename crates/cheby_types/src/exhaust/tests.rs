@@ -11,6 +11,10 @@
 //! and imports `geo` from another package, which declares
 //! `pub type Opaque { Opaque(Int) }` (not exposed) and
 //! `pub exposed type Dir { North, South }`.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -415,7 +419,7 @@ fn name(color: Color) -> Int {
         ExprKind::Case {
             subjects: Box::new([subject]),
             arms: Box::new([arm(vec![red], None, one), arm(vec![green], None, two)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -470,7 +474,7 @@ fn f(a: Bool, b: Bool) -> Int {
                 arm(vec![f1, w1], Some(guard), two),
                 arm(vec![f2, w2], None, three),
             ]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -514,7 +518,7 @@ fn f(n: Int) -> Int {
         ExprKind::Case {
             subjects: Box::new([subject]),
             arms: Box::new([arm(vec![wild], None, one), arm(vec![zero], None, two)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -770,7 +774,7 @@ fn named_fields_and_other_modules() {
         ExprKind::Case {
             subjects: Box::new([s]),
             arms: Box::new([arm(vec![circle], None, one)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -784,7 +788,7 @@ fn named_fields_and_other_modules() {
         ExprKind::Case {
             subjects: Box::new([d]),
             arms: Box::new([arm(vec![north], None, one)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -821,7 +825,7 @@ fn opaque_types_need_a_wildcard() {
         ExprKind::Case {
             subjects: Box::new([o]),
             arms: Box::new([arm(vec![x], None, one)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -836,7 +840,7 @@ fn opaque_types_need_a_wildcard() {
         ExprKind::Case {
             subjects: Box::new([s]),
             arms: Box::new([arm(vec![wild], None, one)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -860,7 +864,7 @@ fn opaque_types_need_a_wildcard() {
         ExprKind::Case {
             subjects: Box::new([p]),
             arms: Box::new([arm(vec![some], None, one)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -880,7 +884,7 @@ fn opaque_types_need_a_wildcard() {
     assert!(out.contains("`None` not covered"), "{out}");
     // The structure of these types is not visible here.
     let deps = DepView::new(&world.set, &world.allowed);
-    let cx = super::TyCx {
+    let cx = TyCx {
         module: world.app,
         package: PackageId::LOCAL,
         deps: &deps,
@@ -917,7 +921,7 @@ fn nested_and_subjectless_cases() {
                 body: one,
                 span: bld.at("_ => 1", 0),
             }]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -931,7 +935,7 @@ fn nested_and_subjectless_cases() {
         ExprKind::Case {
             subjects: Box::new([o]),
             arms: Box::new([arm(vec![none], None, one)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -1009,7 +1013,7 @@ fn patterns_over_the_error_type_are_not_checked() {
         ExprKind::Case {
             subjects: Box::new([subject]),
             arms: Box::new([arm(vec![some], None, one), arm(vec![none], None, zero)]),
-            origin: crate::thir::CaseOrigin::Case,
+            origin: CaseOrigin::Case,
         },
         Ty::INT,
         "case",
@@ -1622,7 +1626,7 @@ fn show(cx: &TyCx<'_>, pat: &MissingPat) -> String {
             let mut parts = shown(cx, items);
             if let Some(at) = rest_at {
                 let at = usize::try_from(*at).unwrap();
-                let back = items.get(at..).unwrap();
+                let back = &items[at..];
                 let tail = back.iter().all(|item| *item == MissingPat::Wild);
                 parts.insert(if tail { parts.len() } else { at }, "..".to_owned());
             }

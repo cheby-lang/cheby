@@ -257,7 +257,12 @@ pub(crate) fn pipe_interfaces(
                 .iter(Namespace::Type)
                 .filter_map(|(_, entry)| match entry.res {
                     Res::Def(def) if matches!(entry.source, ScopeSource::Import(_)) => Some(def),
-                    _ => None,
+                    Res::Local(_)
+                    | Res::Def(_)
+                    | Res::Module(_)
+                    | Res::TyParam(_)
+                    | Res::SelfTy
+                    | Res::Err => None,
                 })
                 .collect()
         })
@@ -552,7 +557,15 @@ fn loaded_entry(
             }
             CtorFields::Unit | CtorFields::Named(_) => cx.insert(qualified),
         },
-        _ => cx.insert(qualified),
+        ItemSig::Fn(_)
+        | ItemSig::Type(_)
+        | ItemSig::Ctor(_)
+        | ItemSig::Alias(_)
+        | ItemSig::Const(_)
+        | ItemSig::Interface(_)
+        | ItemSig::InterfaceFn(_)
+        | ItemSig::Test
+        | ItemSig::Error => cx.insert(qualified),
     };
     entry.additional = plan.edit.clone().into_iter().collect();
     Some(entry)

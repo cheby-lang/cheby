@@ -68,7 +68,23 @@ impl BodyCx<'_> {
         };
         let call = match rhs {
             Expr::Call(c) if !c.args().any(|a| matches!(a, Arg::Hole(_))) => Some(c),
-            _ => None,
+            Expr::Literal(_)
+            | Expr::String(_)
+            | Expr::Path(_)
+            | Expr::Record(_)
+            | Expr::Tuple(_)
+            | Expr::Paren(_)
+            | Expr::List(_)
+            | Expr::Block(_)
+            | Expr::Closure(_)
+            | Expr::Case(_)
+            | Expr::Panic(_)
+            | Expr::Todo(_)
+            | Expr::Binary(_)
+            | Expr::Prefix(_)
+            | Expr::Call(_)
+            | Expr::Hole(_)
+            | Expr::Field(_) => None,
         };
         if let Some(c) = call
             && let Some(callee) = c.callee()
@@ -120,10 +136,14 @@ impl BodyCx<'_> {
                     Some((params, *ret))
                 }
                 // The callee had an error: nothing more is reported.
-                InferTy::Known(cheby_iface::Ty::ERROR) => {
+                InferTy::Known(Ty::ERROR) => {
                     Some((vec![InferTy::ERROR; binders.len()].into(), InferTy::ERROR))
                 }
-                _ => None,
+                InferTy::Known(_)
+                | InferTy::Var(_)
+                | InferTy::Named { .. }
+                | InferTy::Tuple(_)
+                | InferTy::Fn { .. } => None,
             },
             None => None,
         };
@@ -231,7 +251,14 @@ impl BodyCx<'_> {
                     .names
                     .intern(cheby_syntax::ast::AstToken::text(n))
             }),
-            _ => None,
+            cheby_syntax::ast::Pat::Wildcard(_)
+            | cheby_syntax::ast::Pat::Literal(_)
+            | cheby_syntax::ast::Pat::Ctor(_)
+            | cheby_syntax::ast::Pat::Tuple(_)
+            | cheby_syntax::ast::Pat::List(_)
+            | cheby_syntax::ast::Pat::Paren(_)
+            | cheby_syntax::ast::Pat::Or(_)
+            | cheby_syntax::ast::Pat::As(_) => None,
         };
         self.noted_var(span, VarNote::Param { name })
     }
@@ -295,7 +322,7 @@ impl BodyCx<'_> {
         if matches!(sig.target, Target::Error) {
             return self.propagated_error_expr(span);
         }
-        let [param] = &sig.params[..] else {
+        let [param] = &*sig.params else {
             self.arity_error(None, sig.params.len(), 1, spans);
             return self.error_expr(span);
         };

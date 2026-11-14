@@ -8,7 +8,7 @@
 //! object of the entry's domain is released on the way out. Run with
 //! `CHEBY_RT_POISON=1` for freed objects to be poisoned (D-458).
 
-use cheby_codegen_clif::{CodegenOptions, LARGE_FRAME_THRESHOLD};
+use cheby_codegen_clif::LARGE_FRAME_THRESHOLD;
 use cheby_runtime::abi::PanicKind as RtPanicKind;
 
 use super::*;

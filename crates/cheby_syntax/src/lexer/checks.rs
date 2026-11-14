@@ -18,6 +18,10 @@ use crate::{SyntaxKind, SyntaxToken, SyntaxTree};
 
 /// Reports the V-class lexical diagnostics of `tree`, in source order
 /// except that E0002 comes first.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(crate) fn check_tokens(tree: &SyntaxTree, out: &mut Vec<Diagnostic>) {
     lone_carriage_returns(tree, out);
     let mut in_interpolation = false;

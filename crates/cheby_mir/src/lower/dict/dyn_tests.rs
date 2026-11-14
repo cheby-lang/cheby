@@ -1,6 +1,10 @@
 //! Lowering tests for `dyn` values (W4-A, §8.6, D-502, D-524), through
 //! `test_support::lower_source`, pinned by goldens under
 //! `tests/golden/dict/` (bless with `CHEBY_BLESS=1`, then read them).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_iface::DefId;
 
@@ -73,7 +77,7 @@ fn target<'u>(unit: &'u MirModule, c: &Const) -> &'u StaticObject {
 const SHAPES: [(&str, &str); 3] = [
     (
         "shape",
-        r"
+        "
 /// Something with an area.
 interface Shape: Show {
   fn area(Self) -> Float
@@ -376,7 +380,7 @@ fn dyn_values_satisfy_bounds_through_forwarding_dictionaries() {
 fn forwarders_follow_the_dyn_interface() {
     let l = lowered(&[(
         "",
-        r"
+        "
 interface A {
   fn a(Self) -> Int
 }

@@ -537,7 +537,10 @@ impl RecordingModule {
                 namespace: 1,
                 index,
             } => self.datas.get(usize::try_from(index).ok()?).copied(),
-            _ => None,
+            ModuleRelocTarget::User { .. }
+            | ModuleRelocTarget::LibCall(_)
+            | ModuleRelocTarget::KnownSymbol(_)
+            | ModuleRelocTarget::FunctionOffset(..) => None,
         }
     }
 
@@ -891,7 +894,37 @@ fn reloc_kind(code: u8) -> Option<Reloc> {
 pub const fn reloc_width(kind: Reloc) -> u64 {
     match kind {
         Reloc::Abs8 => 8,
-        _ => 4,
+        Reloc::Abs4
+        | Reloc::X86PCRel4
+        | Reloc::X86CallPCRel4
+        | Reloc::X86CallPLTRel4
+        | Reloc::X86GOTPCRel4
+        | Reloc::X86SecRel
+        | Reloc::Arm32Call
+        | Reloc::Arm64Call
+        | Reloc::S390xPCRel32Dbl
+        | Reloc::S390xPLTRel32Dbl
+        | Reloc::ElfX86_64TlsGd
+        | Reloc::MachOX86_64Tlv
+        | Reloc::MachOAarch64TlsAdrPage21
+        | Reloc::MachOAarch64TlsAdrPageOff12
+        | Reloc::Aarch64TlsDescAdrPage21
+        | Reloc::Aarch64TlsDescLd64Lo12
+        | Reloc::Aarch64TlsDescAddLo12
+        | Reloc::Aarch64TlsDescCall
+        | Reloc::Aarch64AdrGotPage21
+        | Reloc::Aarch64AdrPrelPgHi21
+        | Reloc::Aarch64AddAbsLo12Nc
+        | Reloc::Aarch64Ld64GotLo12Nc
+        | Reloc::RiscvCallPlt
+        | Reloc::RiscvTlsGdHi20
+        | Reloc::RiscvPCRelLo12I
+        | Reloc::RiscvGotHi20
+        | Reloc::RiscvPCRelHi20
+        | Reloc::S390xTlsGd64
+        | Reloc::S390xTlsGdCall
+        | Reloc::PulleyPcRel
+        | Reloc::PulleyCallIndirectHost => 4,
     }
 }
 

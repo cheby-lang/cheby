@@ -14,7 +14,7 @@ use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::fiber::{StackPool, StackSlot};
+use crate::fiber::StackPool;
 
 /// Whether the tests run under an emulator, where only correctness is
 /// asserted.

@@ -326,7 +326,11 @@ fn holding<'a>(packages: &[&'a Analyzed], path: &Path) -> Option<&'a Snapshot> {
 fn docs(snapshot: Option<&Snapshot>, symbol: &Symbol, std: StdAccess<'_>) -> Option<String> {
     let def = snapshot.and_then(|s| match s.find(symbol)? {
         SymbolTarget::Item(def) => Some((s, def)),
-        _ => None,
+        SymbolTarget::Module(_)
+        | SymbolTarget::Field { .. }
+        | SymbolTarget::TypeParam { .. }
+        | SymbolTarget::Local { .. }
+        | SymbolTarget::ImportAlias { .. } => None,
     });
     let local = def.and_then(|(s, def)| {
         let view = s.module(def.module)?;

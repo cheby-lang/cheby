@@ -9,6 +9,10 @@
 //! left out. [`check`] compares an answer with it by name, kind and
 //! nesting, and checks that every `selectionRange` lies inside its
 //! `range` and every child inside its parent.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::fmt::Write as _;
 

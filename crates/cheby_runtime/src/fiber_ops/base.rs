@@ -186,7 +186,10 @@ impl JoinCell {
             let mut state = self.state.lock();
             let (result, released) = match outcome {
                 Outcome::Done(value) if state.handle_gone => (Outcome::Released, Some(value)),
-                other => (other, None),
+                other @ (Outcome::Running
+                | Outcome::Done(_)
+                | Outcome::Failed
+                | Outcome::Released) => (other, None),
             };
             state.result = result;
             while let Some(node) = state.joiners.pop_settled(WaitState::Claimed) {

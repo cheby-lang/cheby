@@ -41,6 +41,11 @@ pub(super) fn unused_locals(input: &TypesInput<'_>) -> Result<Vec<Diagnostic>, I
     Ok(out)
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
+#[expect(clippy::iter_over_hash_type, reason = "the loop fills a map and a set")]
 fn body_warnings(
     input: &TypesInput<'_>,
     body: &BodyRes,

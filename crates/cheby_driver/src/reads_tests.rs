@@ -1,8 +1,6 @@
 //! Hidden reads recorded in every phase (D-955, `cache.md` §3.3): the
 //! front end's set per module and the lowering sets per unit.
 
-use std::path::{Path, PathBuf};
-
 use cheby_iface::{ModuleId, PackageId};
 use cheby_mir::MirOptions;
 
@@ -112,7 +110,7 @@ fn lowering_reads(front: &Frontend, out: &CheckOutput) -> Vec<(String, UnitReads
                 .thir
                 .tests
                 .iter()
-                .filter(|test| crate::test::on_native(front, test))
+                .filter(|test| test::on_native(front, test))
                 .map(move |test| TestRoot { module: m, test })
         })
         .collect();
@@ -139,10 +137,7 @@ fn assert_never_imports_or_std(front: &Frontend, out: &CheckOutput) {
     let lowered = lowering_reads(front, out);
     for &m in &front.order {
         let checked = front.checked(m).unwrap();
-        let imports: Vec<ModuleId> = front
-            .import_targets
-            .get(usize::try_from(m.as_u32()).unwrap())
-            .unwrap()
+        let imports: Vec<ModuleId> = front.import_targets[usize::try_from(m.as_u32()).unwrap()]
             .iter()
             .filter_map(|t| t.module())
             .collect();

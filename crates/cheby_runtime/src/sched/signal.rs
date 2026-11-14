@@ -400,10 +400,12 @@ mod sys {
     /// `on_signal`'s address, as `sigaction` takes it.
     #[expect(
         clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
         reason = "`sigaction` takes a handler's address as an integer"
     )]
     fn handler_address() -> libc::sighandler_t {
-        on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t
+        let handler: extern "C" fn(libc::c_int) = on_signal;
+        handler as libc::sighandler_t
     }
 
     /// The handler (module documentation): sets `FIRED`, writes the
@@ -442,6 +444,13 @@ mod sys {
     /// Sends signal `index` to the process again, now that its action from
     /// before the handler is back (module documentation). In this crate's
     /// tests it is recorded instead (`hooks::RERAISED`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::cfg_not_test,
+            reason = "the build without tests has no test probe"
+        )
+    )]
     pub(super) fn reraise(index: usize) {
         let Some(signal) = SIGNALS.get(index) else {
             return;

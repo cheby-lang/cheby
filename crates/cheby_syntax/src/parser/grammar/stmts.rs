@@ -173,6 +173,10 @@ fn at_local_fn(p: &Parser<'_>) -> bool {
         || ((p.at(PUB_KW) || p.at(PRIV_KW)) && p.nth_at(1, FN_KW))
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn stmt(p: &mut Parser<'_>) {
     match p.current() {
         GUARD_KW => guard_stmt(p),

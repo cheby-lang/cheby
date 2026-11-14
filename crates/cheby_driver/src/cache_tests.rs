@@ -23,12 +23,8 @@
 //!
 //! Every test opens its own store in a fresh directory, so no test reads
 //! or fills the developer's cache (D-1128).
-
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
-
-use cheby_diag::{Colors, Diagnostic, Span, codes};
 use cheby_iface::ModuleId;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
 use crate::cache::front::{
@@ -195,10 +191,10 @@ impl Fixture {
     /// Every package front record in the store: std's front records (K6,
     /// D-980) and every code record are left out.
     fn records(&self) -> Vec<FrontRecord> {
-        let std: Vec<String> = crate::std_lib::STD_MODULES
+        let std: Vec<String> = std_lib::STD_MODULES
             .iter()
             .map(|m| {
-                crate::std_cache::std_front_key(BUILD, &format!("std::{}", m.path))
+                std_cache::std_front_key(BUILD, &format!("std::{}", m.path))
                     .hash()
                     .to_hex()
             })
@@ -511,7 +507,7 @@ fn cache_hit_moved_item() {
         .iter()
         .find(|d| d.message == "a synthetic warning")
         .unwrap();
-    let label = replayed.labels.get(1).unwrap();
+    let label = &replayed.labels[1];
     assert_eq!(label.span, new, "the note follows the moved item");
     assert_eq!(
         out.sources.file(label.span.file).unwrap().path(),
@@ -616,7 +612,7 @@ fn cache_hit_moved_item_run() {
         .iter()
         .find(|d| d.message == "a synthetic warning")
         .unwrap();
-    let label = replayed.labels.get(1).unwrap();
+    let label = &replayed.labels[1];
     assert_eq!(label.span, new, "the note follows the moved item");
     assert!(warm.output.contains("src/b.cheby:6:"), "{}", warm.output);
 }
@@ -649,7 +645,7 @@ fn front_key_stability() {
     let mut other = key.clone();
     other.targets = Targets::only(Target::Native);
     assert_ne!(other.key(build), f1);
-    let mut other = key.clone();
+    let mut other = key;
     other.imports.pop();
     assert_ne!(other.key(build), f1);
     assert_ne!(front_identity(f1, build, &[]), f2);
@@ -895,7 +891,7 @@ fn replay_renders_as_fresh() {
     let c = module(&front, "app::c");
     let own = item_span(&front, root, "text");
     let other = item_span(&front, c, "Thing");
-    let edit = Span::new(own.file, cheby_diag::TextRange::at(own.range.start(), 1));
+    let edit = Span::new(own.file, TextRange::at(own.range.start(), 1));
     let warning = Diagnostic::new(codes::UNUSED_BINDING, "a warning")
         .with_primary(own, "primary")
         .with_secondary(edit, "secondary")
@@ -950,10 +946,7 @@ fn replay_refuses_other_spans_into_other_modules() {
     let root = module(&front, "app");
     let c = module(&front, "app::c");
     let thing = item_span(&front, c, "Thing");
-    let inside = Span::new(
-        thing.file,
-        cheby_diag::TextRange::at(thing.range.start(), 1),
-    );
+    let inside = Span::new(thing.file, TextRange::at(thing.range.start(), 1));
     let span_cx = SpanCx {
         own: item_span(&front, root, "text").file,
         own_len: u32::try_from(ROOT.len()).unwrap(),
@@ -1245,7 +1238,7 @@ fn index_trim_waits_for_queued_writes() {
     let old = store.put_blob(b"an old artifact").unwrap();
     let unnamed = store.put_blob(b"an old blob no index names").unwrap();
     store.flush();
-    let week_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(7 * 24);
+    let week_ago = std::time::SystemTime::now() - Duration::from_hours(7 * 24);
     for name in [old, unnamed] {
         let path = root
             .join("v1/blob")
@@ -1261,7 +1254,7 @@ fn index_trim_waits_for_queued_writes() {
     let mut record = summary_record();
     record.artifact = old;
     let index = PackageIndex {
-        modules: vec![crate::cache::index::IndexEntry {
+        modules: vec![cache::index::IndexEntry {
             path: "app".to_owned(),
             source: Hash128([9; 16]),
             written: Vec::new(),
@@ -1822,7 +1815,7 @@ const HIT_MODULES: [&str; 4] = ["app", "app::lone", "app::other", "app::util"];
 /// Whether the environment's MIR options infer masks (`CHEBY_RC=naive`
 /// infers none, so no edit changes one).
 fn infers_masks() -> bool {
-    crate::backend::mir_options_from_env().is_ok_and(|mir| mir.borrow)
+    backend::mir_options_from_env().is_ok_and(|mir| mir.borrow)
 }
 
 /// Cache-hit test 1 (D-973, D-1193): a body edit that changes no mask
@@ -1937,7 +1930,7 @@ fn warm_run_entries_round_trip_on_every_example() {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.join("cheby.toml").is_file())
-        .filter(|p| !crate::native::not_yet_here(p))
+        .filter(|p| !native::not_yet_here(p))
         .collect();
     examples.sort();
     let (mut mains, mut results, mut tests) = (0_usize, 0_usize, 0_usize);
@@ -1946,7 +1939,7 @@ fn warm_run_entries_round_trip_on_every_example() {
         let Some((front, _)) = front_end(&example, frontend::Mode::Build, &mut out).unwrap() else {
             continue;
         };
-        let naming = crate::warm_keys::Naming {
+        let naming = warm_keys::Naming {
             modules: &front.modules,
             set: &front.set,
             globals: &front.globals,

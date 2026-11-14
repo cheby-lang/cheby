@@ -349,6 +349,7 @@ mod tests {
             assert_eq!((scan, id), (2, layout::DESC_NOMINAL));
             // SAFETY: as above.
             assert_eq!(
+                // SAFETY: as above.
                 unsafe { object::load_rc(word_to_ptr(word)) },
                 abi::RC_STATIC
             );
@@ -368,11 +369,13 @@ mod tests {
         assert_eq!(unsafe { parts(tuple) }.unwrap().shape(), Shape::Tuple);
         // SAFETY: as above.
         assert_eq!(
+            // SAFETY: as above.
             unsafe { parts(builtin("fn").unwrap()) }.unwrap().shape(),
             Shape::Fn
         );
         // SAFETY: as above.
         assert_eq!(
+            // SAFETY: as above.
             unsafe { parts(builtin("list").unwrap()) }.unwrap().shape(),
             Shape::Named
         );

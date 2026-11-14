@@ -17,7 +17,7 @@ use std::process::Command;
 
 use cheby_link::native_libs;
 
-pub fn run(root: &Path) -> Result<(), String> {
+pub(crate) fn run(root: &Path) -> Result<(), String> {
     if cfg!(windows) {
         println!("check-native-libs: executables on Windows are M6 (D-935); nothing to check");
         return Ok(());

@@ -31,6 +31,10 @@ use crate::parser::recovery::{ITEM_BODY_FIRST, PAT_FIRST, TYPE_FIRST};
 /// them, and validation reports E0019.
 ///
 /// Returns whether a line break must follow.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(super) fn item(p: &mut Parser<'_>) -> bool {
     let m = p.start();
     while p.at(AT) {
@@ -102,6 +106,10 @@ pub(super) fn item(p: &mut Parser<'_>) -> bool {
 /// E0022 for `exposed` on anything but a type declaration (D-150).
 /// `tree-sitter-cheby` rejects these; `exposed` without `pub` on a type is
 /// left to validation.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn exposed_error(p: &mut Parser<'_>, kind: SyntaxKind, range: TextRange) {
     let what = match kind {
         TYPE_DECL | ERROR => return,

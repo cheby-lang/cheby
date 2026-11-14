@@ -87,7 +87,7 @@ pub(super) fn field_pat_list(list: FieldPatList<'_>, out: &mut Vec<Diagnostic>) 
                 .with_help("move `..` after the fields"),
             );
         }
-        seen_rest.get_or_insert(rest.significant_span());
+        seen_rest.get_or_insert_with(|| rest.significant_span());
     }
 }
 

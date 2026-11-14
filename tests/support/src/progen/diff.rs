@@ -22,7 +22,7 @@
 //!
 //! Every `cheby` the differential starts gets `CHEBY_CACHE` set to the
 //! process's own fresh cache ([`shared_cache`], a
-//! [`HarnessCache`](crate::cache::HarnessCache)), so no run reads or fills
+//! [`HarnessCache`]), so no run reads or fills
 //! the developer's cache (D-959, D-1128).
 
 use std::fmt;

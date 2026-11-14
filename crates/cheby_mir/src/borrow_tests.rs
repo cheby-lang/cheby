@@ -1,6 +1,10 @@
 //! Borrowing inference on lowered MIR of small packages (D-715, D-779):
 //! eligibility, the handle-free predicate, profitability and the
 //! tail-call fixed point ([`crate::borrow`]).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::BTreeMap;
 

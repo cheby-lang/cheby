@@ -41,7 +41,7 @@ struct Outcome {
     text: String,
 }
 
-pub fn run(root: &Path) -> Result<(), String> {
+pub(crate) fn run(root: &Path) -> Result<(), String> {
     let cheby = crate::build_cheby(root)?;
     let mut failures = Vec::new();
     let examples = example::all(root)?;

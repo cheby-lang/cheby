@@ -557,7 +557,7 @@ mod tests {
     fn the_current_fiber_is_per_thread() {
         assert!(current_fiber().is_null());
         let fiber = std::thread::spawn(|| {
-            let ctx = Box::into_raw(Box::new(crate::ctx::ExecCtx::new(crate::ctx::FiberInit {
+            let ctx = Box::into_raw(Box::new(ExecCtx::new(crate::ctx::FiberInit {
                 entry_mode: crate::entry::EntryMode::Test,
                 ..crate::ctx::FiberInit::placeholder()
             })));
@@ -585,7 +585,7 @@ mod tests {
     #[test]
     fn a_current_fiber_holds_its_threads_block_cache() {
         let new_ctx = || {
-            Box::into_raw(Box::new(crate::ctx::ExecCtx::new(crate::ctx::FiberInit {
+            Box::into_raw(Box::new(ExecCtx::new(crate::ctx::FiberInit {
                 entry_mode: crate::entry::EntryMode::Test,
                 ..crate::ctx::FiberInit::placeholder()
             })))
@@ -616,7 +616,7 @@ mod tests {
         }
         let ctx_word = ctx.expose_provenance();
         let there = std::thread::spawn(move || {
-            let ctx = ptr::with_exposed_provenance_mut::<crate::ctx::ExecCtx>(ctx_word);
+            let ctx = ptr::with_exposed_provenance_mut::<ExecCtx>(ctx_word);
             let there = with_cache(address).unwrap();
             // SAFETY: as above; current on this thread until cleared.
             unsafe {

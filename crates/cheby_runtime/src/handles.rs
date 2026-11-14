@@ -330,7 +330,7 @@ unsafe fn handle_children(_: Word, _: &mut dyn FnMut(Word)) {}
 
 /// The finalizer of the kinds with a payload: finalizes and frees it.
 ///
-/// Safety: `word` is a dying handle with a payload made by
+/// # Safety `word` is a dying handle with a payload made by
 /// [`new_handle`], finalized once.
 unsafe fn handle_finalize(word: Word, release: &mut dyn FnMut(Word)) {
     // SAFETY: forwarded from the caller.
@@ -346,7 +346,7 @@ unsafe fn selector_size(_: Word) -> u64 {
 
 /// Visits a selector node's five words.
 ///
-/// Safety: `word` is a live (or dying) selector node.
+/// # Safety `word` is a live (or dying) selector node.
 unsafe fn selector_children(word: Word, visit: &mut dyn FnMut(Word)) {
     let obj = word_to_ptr(word);
     let mut offset = abi::HEADER_SIZE;
@@ -639,7 +639,7 @@ pub(crate) mod tests {
                 string("apply"),
                 previous,
                 int_word(5),
-                crate::object::nil(),
+                object::nil(),
             ]);
             assert_eq!(domain.live_objects(), 4);
             release([node]);

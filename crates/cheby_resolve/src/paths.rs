@@ -262,7 +262,7 @@ impl PathCx<'_> {
                 Res::Err => None,
                 // An import of this name collided (E0041): no follow-up.
                 _ if self.scope.is_conflicted(name) => None,
-                _ => {
+                Res::Local(_) | Res::Def(_) | Res::TyParam(_) | Res::SelfTy => {
                     diags.push(
                         Diagnostic::new(
                             codes::UNRESOLVED_NAME,
@@ -356,7 +356,7 @@ impl PathCx<'_> {
         if !iface.visible_from(index, self.input.package) {
             let reason = match item.vis {
                 Vis::Priv => format!("`{text}` is private to module `{path}`"),
-                _ => format!("`{text}` is visible only inside its package"),
+                Vis::Package | Vis::Pub => format!("`{text}` is visible only inside its package"),
             };
             let mut diag = Diagnostic::new(codes::PRIVATE_ITEM, reason).with_primary(span, "");
             if let Some(decl) = item.span {
@@ -418,7 +418,12 @@ impl PathCx<'_> {
                 .parent
                 .ok_or_else(|| Ice::new("a constructor without a type"))?,
             DefKind::Type => def.index,
-            _ => return Ok(true),
+            DefKind::Fn
+            | DefKind::Alias
+            | DefKind::Const
+            | DefKind::Interface
+            | DefKind::InterfaceFn
+            | DefKind::Test => return Ok(true),
         };
         let ty = iface
             .item(ty_index)
@@ -438,7 +443,15 @@ impl PathCx<'_> {
                 "the constructor `{}` is not visible outside its package",
                 self.text(item.name)
             ),
-            _ => format!("the fields of `{ty_text}` are not visible outside its package"),
+            DefKind::Fn
+            | DefKind::Type
+            | DefKind::Alias
+            | DefKind::Const
+            | DefKind::Interface
+            | DefKind::InterfaceFn
+            | DefKind::Test => {
+                format!("the fields of `{ty_text}` are not visible outside its package")
+            }
         };
         let mut diag = Diagnostic::new(codes::PRIVATE_ITEM, message).with_primary(span, "");
         diag = match ty.vis {
@@ -450,7 +463,7 @@ impl PathCx<'_> {
                 diag.with_note("a `pub` type hides its constructors unless it is `pub exposed`")
             }
             // The same note as for field access in a body.
-            _ => diag.with_note(
+            Vis::Package | Vis::Pub => diag.with_note(
                 "a `pub` type hides its constructors and fields unless it is `pub exposed`",
             ),
         };
@@ -580,7 +593,7 @@ impl PathCx<'_> {
         for embedded in embeds {
             match self.find_interface_fn(embedded, name, visited)? {
                 Found::None => {}
-                found => return Ok(found),
+                found @ (Found::Fn(_) | Found::Silent) => return Ok(found),
             }
         }
         Ok(Found::None)

@@ -44,7 +44,7 @@
 //! split is a step of replay. D-1288: the section names,
 //! the key, `-z start-stop-gc` and the image's bounds table.
 
-use std::mem::{offset_of, size_of};
+use std::mem::offset_of;
 
 use object::write::{Object, Relocation, SectionId, Symbol, SymbolId, SymbolSection};
 use object::{

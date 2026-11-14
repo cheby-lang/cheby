@@ -279,10 +279,10 @@ fn three_way_race(settle: Settle) {
                 };
                 drop(guard);
                 if won {
-                    winners.fetch_add(1, probe::Ordering::SeqCst);
+                    winners.fetch_add(1, Ordering::SeqCst);
                     fiber.wake();
                 } else {
-                    kept.store(true, probe::Ordering::SeqCst);
+                    kept.store(true, Ordering::SeqCst);
                 }
             })
         };
@@ -301,7 +301,7 @@ fn three_way_race(settle: Settle) {
                 let won = fiber.published.load(Ordering::Relaxed) && header.try_cancel();
                 drop(lock);
                 if won {
-                    winners.fetch_add(1, probe::Ordering::SeqCst);
+                    winners.fetch_add(1, Ordering::SeqCst);
                     fiber.wake();
                 }
             })
@@ -343,7 +343,7 @@ fn three_way_race(settle: Settle) {
                         )
                         .is_ok();
                     if fired && header.try_settle(TIMER_ARM) {
-                        winners.fetch_add(1, probe::Ordering::SeqCst);
+                        winners.fetch_add(1, Ordering::SeqCst);
                         fiber.wake();
                     }
                 })
@@ -388,9 +388,9 @@ fn three_way_race(settle: Settle) {
             timer_thread.join().unwrap();
         }
 
-        let wins = winners.load(probe::Ordering::SeqCst);
-        let wakes = fiber.wakes.load(probe::Ordering::SeqCst);
-        let kept = sender_kept.load(probe::Ordering::SeqCst);
+        let wins = winners.load(Ordering::SeqCst);
+        let wakes = fiber.wakes.load(Ordering::SeqCst);
+        let kept = sender_kept.load(Ordering::SeqCst);
         if selected == Selected::Refused {
             assert_eq!((wins, wakes), (0, 0), "a refused select was woken");
             assert_eq!(header.get().0, state::WAITING);

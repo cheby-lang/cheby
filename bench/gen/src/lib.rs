@@ -106,7 +106,14 @@ impl Shape {
     const fn module_lines(self) -> usize {
         match self {
             Self::Large => 20_000,
-            _ => 250,
+            Self::Small
+            | Self::Deep
+            | Self::Wide
+            | Self::Generic
+            | Self::HugeList
+            | Self::HugeInterpolation
+            | Self::HugeMap
+            | Self::HugeTuple => 250,
         }
     }
 }

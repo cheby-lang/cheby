@@ -482,7 +482,14 @@ impl Reader<'_> {
         let (params, ret) = self.heads(def, item);
         let fields = match item.kind {
             DefKind::Type if opts.structure => self.fields(iface, def, source),
-            _ => Vec::new(),
+            DefKind::Fn
+            | DefKind::Type
+            | DefKind::Alias
+            | DefKind::Const
+            | DefKind::Interface
+            | DefKind::InterfaceFn
+            | DefKind::Ctor
+            | DefKind::Test => Vec::new(),
         };
         let initializer = match (item.kind, source) {
             (DefKind::Const, Some((tree, item_def))) => initializer(tree, item_def),
@@ -510,7 +517,14 @@ impl Reader<'_> {
                     .iter()
                     .map(|p| self.snapshot.globals().names.get(p.name).to_owned())
                     .collect(),
-                _ => Vec::new(),
+                ItemSig::Type(_)
+                | ItemSig::Ctor(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::InterfaceFn(_)
+                | ItemSig::Test
+                | ItemSig::Error => Vec::new(),
             },
             ret,
             fields,

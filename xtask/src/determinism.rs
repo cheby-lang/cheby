@@ -87,7 +87,7 @@ const HUGE_ELEMENTS: usize = 2_000;
 /// `CHEBY_HARNESS_SCALE` (D-722).
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
-pub fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String> {
+pub(crate) fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(), String> {
     let base = root.join("target/determinism");
     if base.exists() {
         std::fs::remove_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;

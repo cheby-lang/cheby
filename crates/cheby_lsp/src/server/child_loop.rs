@@ -299,7 +299,9 @@ impl Server {
                 }
                 Some(_) => return Err(invalid("`root` is not a string")),
             },
-            _ => return Err(invalid("expected an object or null")),
+            Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+                return Err(invalid("expected an object or null"));
+            }
         };
         let now = Instant::now();
         let analyzing = self.analyzing();

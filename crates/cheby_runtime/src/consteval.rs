@@ -499,7 +499,7 @@ pub unsafe fn find_out_of_js_range(value: Word, nodes: &[RangeNode], root: usize
         if matches!(node_kind, RangeNode::Opaque) {
             continue;
         }
-        if let RangeNode::Int = node_kind {
+        if matches!(node_kind, RangeNode::Int) {
             // SAFETY: an `Int` of the caller's value.
             let n = unsafe { values::word_to_i64(word) };
             if out(n) {
@@ -565,7 +565,17 @@ pub unsafe fn find_out_of_js_range(value: Word, nodes: &[RangeNode], root: usize
                                 return Some(n);
                             }
                         }
-                        _ => {}
+                        FieldKind::Float
+                        | FieldKind::Bool
+                        | FieldKind::I8
+                        | FieldKind::I16
+                        | FieldKind::I32
+                        | FieldKind::I64
+                        | FieldKind::U8
+                        | FieldKind::U16
+                        | FieldKind::U32
+                        | FieldKind::U64
+                        | FieldKind::F32 => {}
                     }
                 }
             }
@@ -626,7 +636,7 @@ mod tests {
         unsafe { cheby_rt_unresolved() }
     }
 
-    fn run(entry: crate::entry::EntryFn, mode: EntryMode) -> EntryOutcome {
+    fn run(entry: EntryFn, mode: EntryMode) -> EntryOutcome {
         // SAFETY: test thunks with the `EntryFn` ABI and static code.
         unsafe { run_entry(entry, &EntryConfig::new(mode)) }.unwrap()
     }

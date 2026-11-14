@@ -545,7 +545,7 @@ fn write_qualifier(out: &mut String, def: DefId, cx: &DisplayCx<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InterfaceSet, builtin};
+    use crate::InterfaceSet;
 
     #[test]
     fn constants_are_preinterned() {

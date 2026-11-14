@@ -2,22 +2,24 @@
 //! relocations to generated symbols, runtime and foreign symbols are named
 //! only by import words' `Abs8` data relocations, no libcall appears, and
 //! the ISA's flags are a constant of the target, never of the machine.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cranelift_codegen::binemit::Reloc;
-use cranelift_codegen::control::ControlPlane;
 use cranelift_codegen::ir::{self, LibCall};
-use cranelift_codegen::isa::{OwnedTargetIsa, TargetIsa};
+use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_module::{
-    DataDescription, DataId, FuncId, Linkage, Module, ModuleDeclarations, ModuleReloc,
-    ModuleRelocTarget, ModuleResult,
+    DataDescription, DataId, FuncId, Linkage, ModuleDeclarations, ModuleRelocTarget, ModuleResult,
 };
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, Ice, IndexVec, ModuleId};
 use cheby_mir::{
     Abi, AbiSig, Block, CType, Callee, CalleeDecl, Const, DefName, FieldDesc, FnKey, ForeignSig,
-    Function, LayoutDesc, LayoutRef, Local, LocalDecl, MirModule, Operand, Repr, Rvalue, Stmt,
-    StrId, Terminator, UnitKind,
+    Function, LayoutDesc, LayoutRef, Local, LocalDecl, Operand, Repr, Rvalue, Stmt, Terminator,
+    UnitKind,
 };
 
 use crate::*;

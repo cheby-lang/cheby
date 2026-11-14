@@ -195,6 +195,10 @@ fn invalid_path(path: &str) -> Option<Word> {
 pub(crate) const INVALID_UTF8: &str = "invalid UTF-8";
 
 /// The kind code of an IO error (D-484).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "`io::ErrorKind` is non-exhaustive"
+)]
 pub(crate) fn kind_code(error: &io::Error) -> i64 {
     match error.kind() {
         io::ErrorKind::NotFound => KIND_NOT_FOUND,
@@ -1180,7 +1184,7 @@ fn read_line_waiting(waiter: Waiter) -> io::Result<Option<Vec<u8>>> {
 /// thread (D-548, D-575), never on the blocking pool.
 fn inline_marked<R>(call: impl FnOnce() -> R) -> R {
     /// Clears the mark, also if `call` unwinds.
-    struct Mark<'a>(&'a crate::ctx::ExecCtx);
+    struct Mark<'a>(&'a ExecCtx);
     impl Drop for Mark<'_> {
         fn drop(&mut self) {
             self.0.sched.set_blocking(false);
@@ -1348,7 +1352,7 @@ mod tests {
     }
 
     use crate::alloc::live;
-    use crate::{rc, values};
+    use crate::rc;
 
     /// A scratch directory for this test, empty.
     fn scratch(name: &str) -> std::path::PathBuf {

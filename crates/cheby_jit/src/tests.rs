@@ -407,15 +407,9 @@ mod record_placement_tests;
 #[test]
 fn panic_kinds_match_the_runtime() {
     let mir: Vec<u32> = PanicKind::ALL.iter().map(|k| k.code()).collect();
-    let runtime: Vec<u32> = cheby_runtime::abi::PanicKind::ALL
-        .iter()
-        .map(|k| k.code())
-        .collect();
+    let runtime: Vec<u32> = abi::PanicKind::ALL.iter().map(|k| k.code()).collect();
     assert_eq!(mir, runtime);
-    for (m, r) in PanicKind::ALL
-        .iter()
-        .zip(cheby_runtime::abi::PanicKind::ALL)
-    {
+    for (m, r) in PanicKind::ALL.iter().zip(abi::PanicKind::ALL) {
         assert_eq!(format!("{m:?}"), format!("{r:?}"));
     }
 }
@@ -626,7 +620,7 @@ fn panics_report_kind_and_location() {
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("the entry returned");
     };
-    assert_eq!(report.kind, cheby_runtime::abi::PanicKind::Todo);
+    assert_eq!(report.kind, abi::PanicKind::Todo);
     assert_eq!(report.location, "src/main.cheby:3:5");
 }
 
@@ -658,7 +652,7 @@ fn the_entry_check_catches_stack_overflow() {
     let EntryOutcome::Panicked(report) = run_with_stack(&jit, target, 1 << 20) else {
         panic!("the recursion returned");
     };
-    assert_eq!(report.kind, cheby_runtime::abi::PanicKind::StackOverflow);
+    assert_eq!(report.kind, abi::PanicKind::StackOverflow);
     assert_eq!(report.location, "test.cheby:1:1");
 }
 
@@ -735,7 +729,7 @@ fn unresolved_symbols_can_be_stubbed() {
     let EntryOutcome::Panicked(report) = run_const(&jit, target) else {
         panic!("a stub returned");
     };
-    assert_eq!(report.kind, cheby_runtime::abi::PanicKind::ForbiddenEffect);
+    assert_eq!(report.kind, abi::PanicKind::ForbiddenEffect);
 }
 
 #[test]
@@ -803,7 +797,7 @@ fn run_reports_leaks_in_debug_builds() {
     let status = entry.run_main(RunConfig::default()).unwrap();
     release(&jit, leaked);
     let expected = if cheby_runtime::LEAK_CHECK_ENABLED {
-        cheby_runtime::abi::status::LEAK_CHECK
+        abi::status::LEAK_CHECK
     } else {
         0
     };
@@ -942,9 +936,7 @@ fn process_memory() -> Option<u64> {
 #[test]
 fn jits_commit_only_what_they_use() {
     const JITS: usize = 64;
-    let _guard = MEMORY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = MEMORY.lock().unwrap_or_else(PoisonError::into_inner);
     let before = process_memory();
     let mut jits = Vec::new();
     let mut target = def(1, 0);

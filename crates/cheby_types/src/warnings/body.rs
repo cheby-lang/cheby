@@ -127,7 +127,28 @@ impl BodyCx<'_, '_> {
                     callee: Callee::Fn { def, .. },
                     args,
                 } => self.counts(*def, args, &synthetic, out)?,
-                _ => {}
+                ExprKind::Lit(_)
+                | ExprKind::Local(_)
+                | ExprKind::Ctor { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::FnRef { .. }
+                | ExprKind::ConstRef { .. }
+                | ExprKind::Closure { .. }
+                | ExprKind::LocalFn { .. }
+                | ExprKind::SelfRef { .. }
+                | ExprKind::Case { .. }
+                | ExprKind::Field { .. }
+                | ExprKind::Record { .. }
+                | ExprKind::RecordUpdate { .. }
+                | ExprKind::Tuple(_)
+                | ExprKind::List { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Not(_)
+                | ExprKind::Neg { .. }
+                | ExprKind::Interpolate { .. }
+                | ExprKind::Panic { .. }
+                | ExprKind::DynCoerce { .. }
+                | ExprKind::Error => {}
             }
         }
         Ok(())
@@ -229,7 +250,7 @@ impl BodyCx<'_, '_> {
                     .collect();
                 self.find_in_type(*def, &args, visited)
             }
-            _ => None,
+            TyKind::Error | TyKind::Never | TyKind::Dyn { .. } => None,
         }
     }
 

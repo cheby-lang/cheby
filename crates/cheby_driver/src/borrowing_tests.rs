@@ -8,7 +8,6 @@
 //! `CHEBY_CACHE_LOG`'s file (D-973).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cheby_iface::PackageId;
@@ -89,7 +88,7 @@ fn local_tests(front: &Frontend) -> Vec<TestRoot<'_>> {
                 .thir
                 .tests
                 .iter()
-                .filter(|test| crate::test::on_native(front, test))
+                .filter(|test| test::on_native(front, test))
                 .map(move |test| TestRoot { module: m, test })
         })
         .collect()
@@ -206,7 +205,7 @@ fn unit_facts_every_example() {
 fn std_self_test(seen: &mut Seen) {
     let mut sources = SourceMap::new();
     let mut diagnostics = Vec::new();
-    let package = crate::test::std_test_package(&mut sources, &mut diagnostics).unwrap();
+    let package = test::std_test_package(&mut sources, &mut diagnostics).unwrap();
     let front = frontend::run(
         package,
         frontend::Mode::StdTests,
@@ -226,7 +225,7 @@ fn std_self_test(seen: &mut Seen) {
             .thir
             .tests
             .iter()
-            .filter(|t| crate::test::on_native(&front, t))
+            .filter(|t| test::on_native(&front, t))
             .map(|test| TestRoot { module, test })
             .collect();
         if roots.is_empty() {
@@ -684,8 +683,8 @@ fn masks_record_round_trip() {
         ],
     };
     let bytes = record.encode();
-    assert_eq!(MasksRecord::decode(&bytes), Some(record.clone()));
-    let mut damaged = bytes.clone();
+    assert_eq!(MasksRecord::decode(&bytes), Some(record));
+    let mut damaged = bytes;
     damaged[2] ^= 1;
     assert_eq!(MasksRecord::decode(&damaged), None);
     assert_eq!(MasksRecord::decode(&sealed(vec![9])), None);
@@ -734,8 +733,7 @@ fn lowering_reads_enter_the_code_identity() {
     let hints = p.files("hint");
     assert!(
         hints.iter().any(|(_, bytes)| {
-            crate::cache::front::decode_hint(&bytes[HEADER_LEN..])
-                .is_some_and(|paths| paths == ["app::c"])
+            cache::front::decode_hint(&bytes[HEADER_LEN..]).is_some_and(|paths| paths == ["app::c"])
         }),
         "no lowering hint names app::c"
     );

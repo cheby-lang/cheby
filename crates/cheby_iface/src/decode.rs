@@ -139,7 +139,14 @@ pub fn decode_interface(
                 ..
             } => (ctors, DefKind::Ctor),
             RawSig::Interface { fns, .. } => (fns, DefKind::InterfaceFn),
-            _ => (&[], DefKind::Fn),
+            RawSig::Fn { .. }
+            | RawSig::Type { .. }
+            | RawSig::Ctor { .. }
+            | RawSig::Alias { .. }
+            | RawSig::Const(_)
+            | RawSig::InterfaceFn { .. }
+            | RawSig::Test
+            | RawSig::Error => (&[], DefKind::Fn),
         };
         for (name, sig) in children {
             let child = next_index(&items)?;
@@ -770,7 +777,14 @@ impl<'a> Numbering<'a> {
                     ..
                 } => ctors,
                 RawSig::Interface { fns, .. } => fns,
-                _ => &[],
+                RawSig::Fn { .. }
+                | RawSig::Type { .. }
+                | RawSig::Ctor { .. }
+                | RawSig::Alias { .. }
+                | RawSig::Const(_)
+                | RawSig::InterfaceFn { .. }
+                | RawSig::Test
+                | RawSig::Error => &[],
             };
             let mut named = Vec::new();
             for &(name, _) in children {

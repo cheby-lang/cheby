@@ -288,7 +288,19 @@ fn static_print(decls: &Decls, unit: &MirModule, object: &StaticObject) -> Strin
                     let _ = write!(print, "{field:?}, ");
                 }
             },
-            other => {
+            other @ (Const::Int(_)
+            | Const::Float(_)
+            | Const::Bool(_)
+            | Const::Sized { .. }
+            | Const::Str(_)
+            | Const::Nil
+            | Const::StaticCtor(_)
+            | Const::FnValue(_)
+            | Const::Code(_)
+            | Const::EmptyList
+            | Const::BuiltinDesc(_)
+            | Const::Ctx
+            | Const::ErrNil) => {
                 let _ = write!(print, "{other:?}, ");
             }
         }
@@ -308,7 +320,11 @@ const fn owner_of(key: FnKey) -> Option<DefId> {
         | FnKey::Closure { owner: def, .. }
         | FnKey::Continuation { owner: def, .. }
         | FnKey::Entry(EntryKind::Const(def)) => Some(def),
-        _ => None,
+        FnKey::Test(_)
+        | FnKey::Entry(_)
+        | FnKey::Trampoline(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. } => None,
     }
 }
 
@@ -443,6 +459,7 @@ impl Decls {
     /// # Errors
     ///
     /// As [`Decls::new`].
+    #[expect(clippy::iter_over_hash_type, reason = "the loops fill maps")]
     pub(crate) fn new_seeded(
         isa: &dyn TargetIsa,
         named_outside: FxHashSet<DefId>,
@@ -1305,7 +1322,13 @@ impl Decls {
         // the other copies of D-918 included, is local.
         let linkage = match key {
             FnKey::Item(def) | FnKey::Test(def) | FnKey::ConstInit(def) => self.item_linkage(def),
-            _ => Linkage::Local,
+            FnKey::ValueShim(_)
+            | FnKey::Closure { .. }
+            | FnKey::Entry(_)
+            | FnKey::Trampoline(_)
+            | FnKey::TupleDictFn { .. }
+            | FnKey::DynForward { .. }
+            | FnKey::Continuation { .. } => Linkage::Local,
         };
         let id = module
             .declare_function(&symbol, linkage, &signature)
@@ -1709,7 +1732,18 @@ impl Decls {
         let mut add = |c: &Const| match c {
             Const::FnValue(def) => defs.push(*def),
             Const::BuiltinDesc(desc) => descs.push(*desc),
-            _ => {}
+            Const::Int(_)
+            | Const::Float(_)
+            | Const::Bool(_)
+            | Const::Sized { .. }
+            | Const::Str(_)
+            | Const::Nil
+            | Const::StaticCtor(_)
+            | Const::Code(_)
+            | Const::EmptyList
+            | Const::Static(_)
+            | Const::Ctx
+            | Const::ErrNil => {}
         };
         for function in &unit.functions {
             for block in &function.blocks {

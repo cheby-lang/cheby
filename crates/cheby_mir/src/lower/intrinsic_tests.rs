@@ -1,6 +1,10 @@
 //! Tests of std intrinsics and `@std_context` wrappers (D-692, D-693), on
 //! a hand-built `std::fiber`: the shipped std has no tier-2 module yet,
 //! and the front end's part (the attribute) is tested in `cheby_resolve`.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_diag::{FileId, SourceMap, Span, TextRange, TextSize};
 use cheby_iface::{

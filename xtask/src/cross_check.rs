@@ -49,7 +49,7 @@ use cheby_test_support::{display_relative, example, ui};
 const UPSTREAM: &str = "https://github.com/cheby-lang/tree-sitter-cheby.git";
 
 #[derive(Debug, clap::Args)]
-pub struct Args {
+pub(crate) struct Args {
     /// The `tree-sitter` CLI to use. Defaults to `tree-sitter` on PATH,
     /// then to `node_modules/.bin/tree-sitter` of a sibling checkout.
     #[arg(long)]
@@ -99,7 +99,7 @@ struct ReplEntry {
     forms: [PathBuf; 2],
 }
 
-pub fn run(root: &Path, args: &Args) -> Result<(), String> {
+pub(crate) fn run(root: &Path, args: &Args) -> Result<(), String> {
     let rev = std::fs::read_to_string(root.join("tests/tree-sitter-cheby.rev"))
         .map_err(|e| format!("tests/tree-sitter-cheby.rev: {e}"))?
         .trim()
@@ -537,8 +537,12 @@ fn transcript_inputs(text: &str) -> Vec<(usize, String)> {
     let mut inputs: Vec<(usize, String)> = Vec::new();
     let mut current: Option<(usize, String)> = None;
     for (n, line) in text.lines().enumerate() {
-        let first = line.strip_prefix("> ").or((line == ">").then_some(""));
-        let more = line.strip_prefix(". ").or((line == ".").then_some(""));
+        let first = line
+            .strip_prefix("> ")
+            .or_else(|| (line == ">").then_some(""));
+        let more = line
+            .strip_prefix(". ")
+            .or_else(|| (line == ".").then_some(""));
         if let Some(rest) = first {
             inputs.extend(current.take());
             current = Some((n.saturating_add(1), rest.to_owned()));

@@ -55,7 +55,12 @@ const fn field_base(stmt: &Stmt) -> Option<Local> {
             value: Rvalue::Field { base, .. },
             ..
         } => Some(*base),
-        _ => None,
+        Stmt::Assign { .. }
+        | Stmt::Eval(_)
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => None,
     }
 }
 
@@ -92,7 +97,7 @@ fn consumed_by(stmt: &Stmt) -> Vec<Local> {
         Rvalue::Call { callee, .. } => {
             let indirect = match callee {
                 Callee::Indirect(l) => Some(*l),
-                _ => None,
+                Callee::Direct(_) | Callee::Borrowing(..) | Callee::Code(_) => None,
             };
             value
                 .uses()
@@ -101,7 +106,26 @@ fn consumed_by(stmt: &Stmt) -> Vec<Local> {
                 .map(|(l, _)| l)
                 .collect()
         }
-        _ => value
+        Rvalue::Use(_)
+        | Rvalue::CallForeign { .. }
+        | Rvalue::CallRuntime { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::AllocPlaceholder { .. }
+        | Rvalue::InitField { .. }
+        | Rvalue::Field { .. }
+        | Rvalue::ReadLayout { .. }
+        | Rvalue::LoadConst(_)
+        | Rvalue::Box { .. }
+        | Rvalue::Unbox { .. }
+        | Rvalue::Checked { .. }
+        | Rvalue::Compare { .. }
+        | Rvalue::FloatArith { .. }
+        | Rvalue::Bitwise { .. }
+        | Rvalue::FloatNeg { .. }
+        | Rvalue::Not(_)
+        | Rvalue::ReadTag { .. }
+        | Rvalue::DropReuse { .. }
+        | Rvalue::AllocReuse { .. } => value
             .uses()
             .into_iter()
             .filter(|&(_, kind)| kind == UseKind::Owned)
@@ -190,6 +214,10 @@ impl Cx<'_> {
     /// was seen. A read at `j` moved before `k` crosses `u(k) - u(j)` such
     /// statements, `u(i)` counting those at `i` and after, so the reads of
     /// `b` cross `reads[b].len() * u(k) - marks[b]` in all.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "the lists are sorted before they are returned"
+    )]
     fn plan(&mut self, f: &Function, id: BlockId) -> Result<FxHashMap<usize, Vec<usize>>, Ice> {
         let bl = self.live.block(f, id)?;
         let block = f.block(id)?;

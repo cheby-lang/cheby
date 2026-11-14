@@ -8,7 +8,7 @@
 //!   notes, and help lines with optional suggested edits (D-418).
 //! - [`codes`]: the registry of codes (D-419), each explained by a file in
 //!   `docs/diagnostics/` that is embedded here for `cheby explain` (D-420).
-//! - [`render`] and [`render_all`]: the plain-text layout of D-418, which
+//! - [`render()`] and [`render_all`]: the plain-text layout of D-418, which
 //!   the UI-test goldens pin. [`render_with`] and [`render_all_with`] add
 //!   color escapes for a terminal, and [`strip_colors`] removes them again.
 

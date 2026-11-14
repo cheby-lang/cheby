@@ -20,7 +20,7 @@ use lsp_types::Uri;
 
 /// Whose path rules apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Platform {
+pub(crate) enum Platform {
     /// `/`-separated paths from the root `/`, made of bytes.
     Unix,
     /// Drive (`C:\x`) and UNC (`\\server\share\x`) paths, `\` or `/`
@@ -30,7 +30,7 @@ pub enum Platform {
 
 impl Platform {
     /// The platform this server runs on.
-    pub const CURRENT: Self = if cfg!(windows) {
+    pub(crate) const CURRENT: Self = if cfg!(windows) {
         Self::Windows
     } else {
         Self::Unix
@@ -39,7 +39,7 @@ impl Platform {
 
 /// Why a path has no `file:` URI.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum UriError {
+pub(crate) enum UriError {
     /// The path is not absolute, so it names no file on its own.
     Relative(PathBuf),
     /// A Windows path that is not valid Unicode.
@@ -66,7 +66,7 @@ impl std::error::Error for UriError {}
 ///
 /// [`UriError::Relative`] for a path that is not absolute, and
 /// [`UriError::NotUnicode`] for a Windows path that is not Unicode.
-pub fn path_to_uri(path: &Path) -> Result<Uri, UriError> {
+pub(crate) fn path_to_uri(path: &Path) -> Result<Uri, UriError> {
     let bytes = path_bytes(path).ok_or_else(|| UriError::NotUnicode(path.to_path_buf()))?;
     let text = to_uri_bytes(&bytes, Platform::CURRENT)
         .ok_or_else(|| UriError::Relative(path.to_path_buf()))?;
@@ -78,7 +78,7 @@ pub fn path_to_uri(path: &Path) -> Result<Uri, UriError> {
 /// or NUL, or a Windows path that is not Unicode or has no drive or host.
 /// A query and a fragment are ignored.
 #[must_use]
-pub fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
+pub(crate) fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
     bytes_to_path(to_path_bytes(uri.as_str(), Platform::CURRENT)?)
 }
 
@@ -86,7 +86,7 @@ pub fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
 /// path is not absolute there. Tests use it to run every platform's rules.
 #[cfg(test)]
 #[must_use]
-pub fn to_uri_on(path: &str, platform: Platform) -> Option<String> {
+pub(crate) fn to_uri_on(path: &str, platform: Platform) -> Option<String> {
     to_uri_bytes(path.as_bytes(), platform)
 }
 
@@ -94,7 +94,7 @@ pub fn to_uri_on(path: &str, platform: Platform) -> Option<String> {
 /// [`uri_to_path`].
 #[cfg(test)]
 #[must_use]
-pub fn to_path_on(uri: &str, platform: Platform) -> Option<String> {
+pub(crate) fn to_path_on(uri: &str, platform: Platform) -> Option<String> {
     String::from_utf8(to_path_bytes(uri, platform)?).ok()
 }
 
@@ -104,7 +104,7 @@ pub fn to_path_on(uri: &str, platform: Platform) -> Option<String> {
 /// the client's spelling of it meet. A `..` at the root stays at the root,
 /// and a leading `..` of a relative path is kept.
 #[must_use]
-pub fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -141,34 +141,34 @@ pub fn normalize(path: &Path) -> PathBuf {
 /// The client's spelling of each open document, by normalized path, so a
 /// response names a document as the client did (A §6.1).
 #[derive(Clone, Debug, Default)]
-pub struct UriMap {
+pub(crate) struct UriMap {
     uris: BTreeMap<PathBuf, Uri>,
 }
 
 impl UriMap {
     /// An empty map.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Records `uri` as the client's spelling of the file it names, and
     /// returns that file's normalized path. `None`, recording nothing, when
     /// `uri` names no file here.
-    pub fn insert(&mut self, uri: &Uri) -> Option<PathBuf> {
+    pub(crate) fn insert(&mut self, uri: &Uri) -> Option<PathBuf> {
         let path = normalize(&uri_to_path(uri)?);
         self.uris.insert(path.clone(), uri.clone());
         Some(path)
     }
 
     /// Forgets the spelling of `path`, returning it.
-    pub fn remove(&mut self, path: &Path) -> Option<Uri> {
+    pub(crate) fn remove(&mut self, path: &Path) -> Option<Uri> {
         self.uris.remove(&normalize(path))
     }
 
     /// The client's spelling of `path`, if one is recorded.
     #[must_use]
-    pub fn get(&self, path: &Path) -> Option<&Uri> {
+    pub(crate) fn get(&self, path: &Path) -> Option<&Uri> {
         self.uris.get(&normalize(path))
     }
 
@@ -178,7 +178,7 @@ impl UriMap {
     /// # Errors
     ///
     /// As [`path_to_uri`], for a path with no recorded spelling.
-    pub fn uri_of(&self, path: &Path) -> Result<Uri, UriError> {
+    pub(crate) fn uri_of(&self, path: &Path) -> Result<Uri, UriError> {
         match self.get(path) {
             Some(uri) => Ok(uri.clone()),
             None => path_to_uri(path),

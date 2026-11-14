@@ -48,7 +48,7 @@ const SUMMARY_NAMED: usize = 200;
 const SUMMARY_SLOW: usize = 20;
 
 #[derive(Debug, clap::Args)]
-pub struct Args {
+pub(crate) struct Args {
     /// nextest's `JUnit` report (default: `target/nextest/ci/junit.xml` of
     /// the repository)
     #[arg(long)]
@@ -448,7 +448,7 @@ fn headline(case: &Case) -> &str {
     })
 }
 
-const STYLE: &str = r"
+const STYLE: &str = "
 :root {
   color-scheme: light dark;
   --text: #1f2328; --muted: #59636e; --line: #d1d9e0; --panel: #f6f8fa; --page: #fff;

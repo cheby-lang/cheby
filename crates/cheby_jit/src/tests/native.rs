@@ -5,8 +5,7 @@
 //! library with `cc`, as the driver's shared library is built.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use super::*;
 

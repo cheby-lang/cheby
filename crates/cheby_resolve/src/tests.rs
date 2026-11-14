@@ -1,19 +1,21 @@
 //! Resolution tests over small multi-module builds, and the import graph
 //! and resolution of every example.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use cheby_diag::{Diagnostic, FileId, SourceMap};
+use cheby_diag::{FileId, SourceMap};
 use cheby_iface::{
-    DefId, DefIndex, DefKind, DepView, Globals, IfaceItem, IndexVec, InterfaceSet, ItemSig,
-    ModuleId, ModuleInfo, ModuleInterface, ModuleTable, PackageId, TypeDef, TypeDefKind, builtin,
+    IfaceItem, InterfaceSet, ItemSig, ModuleInfo, ModuleInterface, TypeDef, TypeDefKind, builtin,
 };
 use cheby_package::ModulePath;
 use cheby_package::graph::{Graph, reachable, topological_order};
-use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, Item, PathNode, TypeDecl};
-use rustc_hash::FxHashMap;
 
 use crate::*;
 
@@ -62,7 +64,7 @@ pub fn read_file(path: String) -> Result<String, Error>
 
 /// A std module, so another package: private, package-visible, opaque and
 /// exposed items, for E0043.
-const STD_SECRET: &str = r"//! Test module.
+const STD_SECRET: &str = "//! Test module.
 
 pub fn open() {
   Nil
@@ -415,7 +417,7 @@ fn build_with(package: &str, local: &[(&str, &str)], tolerant: bool) -> Build {
     let planned = planned();
     // Imports and their targets, module by module in id order (B3).
     let mut requests: FxHashMap<ModuleId, Vec<ImportRequest>> = FxHashMap::default();
-    let mut targets: FxHashMap<ModuleId, Vec<ImportTarget>> = FxHashMap::default();
+    let mut targets: BTreeMap<ModuleId, Vec<ImportTarget>> = BTreeMap::new();
     let mut next = 1_u32;
     while usize::try_from(next).unwrap() < modules.len() {
         let id = ModuleId::from_u32(next);
@@ -458,7 +460,7 @@ fn build_with(package: &str, local: &[(&str, &str)], tolerant: bool) -> Build {
         Err(cycles) => {
             for cycle in cycles {
                 let nodes = &cycle.nodes;
-                let with_spans: Vec<(ModuleId, cheby_diag::Span)> = nodes
+                let with_spans: Vec<(ModuleId, Span)> = nodes
                     .iter()
                     .enumerate()
                     .map(|(n, &node)| {
@@ -513,7 +515,7 @@ fn build_with(package: &str, local: &[(&str, &str)], tolerant: bool) -> Build {
             modules: &modules,
             globals: &globals,
             std: StdCatalog { known: &std_refs },
-            package_targets: cheby_package::Targets::ALL,
+            package_targets: Targets::ALL,
         };
         let (module, d) = resolve_module(&input).unwrap();
         diags.extend(d);
@@ -613,7 +615,7 @@ fn hello_world_resolves() {
     let app = b.resolved("app");
     let main = app.items.get(DefIndex::from_u32(0)).unwrap();
     assert_eq!(b.globals.names.get(main.name), "main");
-    assert_eq!(main.vis, cheby_iface::Vis::Package);
+    assert_eq!(main.vis, Vis::Package);
     let println = b.def("std::io", "println");
     assert_eq!(
         b.body_paths("app", "main"),
@@ -628,12 +630,15 @@ fn hello_world_resolves() {
     assert_eq!(item.attrs.externals.len(), 2);
     assert!(std_io.bodies.is_empty());
     // `String` in the signature resolves to the prelude type.
-    let strings: Vec<_> = std_io
-        .sig_paths
-        .values()
-        .filter(|r| **r == Res::Def(builtin::STRING))
-        .collect();
-    assert_eq!(strings.len(), 8);
+
+    assert_eq!(
+        std_io
+            .sig_paths
+            .values()
+            .filter(|r| **r == Res::Def(builtin::STRING))
+            .count(),
+        8
+    );
     // The import scope entry.
     let io = b.globals.names.intern("io");
     let entry = app.scope.get(cheby_iface::Namespace::Value, io).unwrap();
@@ -790,20 +795,17 @@ fn valid_attributes_are_recorded() {
     let status = |n: u32| app.items.get(DefIndex::from_u32(n)).unwrap();
     assert_eq!(
         status(0).attrs.targets,
-        cheby_package::Targets::only(cheby_package::Target::Native)
+        Targets::only(cheby_package::Target::Native)
     );
     assert!(status(1).attrs.blocking);
     let c = status(2);
     assert!(c.attrs.is_async);
     assert_eq!(c.attrs.deprecated.as_deref(), Some("use b"));
-    assert_eq!(
-        c.attrs.targets,
-        cheby_package::Targets::only(cheby_package::Target::Js)
-    );
-    assert_eq!(status(3).attrs.targets, cheby_package::Targets::ALL);
+    assert_eq!(c.attrs.targets, Targets::only(cheby_package::Target::Js));
+    assert_eq!(status(3).attrs.targets, Targets::ALL);
     // A function with a body and an `@external` for one target exists on
     // every target (D-207).
-    assert_eq!(status(4).attrs.targets, cheby_package::Targets::ALL);
+    assert_eq!(status(4).attrs.targets, Targets::ALL);
     assert!(app.bodies.contains_key(&DefIndex::from_u32(4)));
 }
 
@@ -886,7 +888,7 @@ fn std_only_attributes() {
             .find(|i| b.globals.names.get(i.name) == name)
             .unwrap()
     };
-    let names = |list: &[(cheby_iface::Name, cheby_diag::Span)]| -> Vec<&str> {
+    let names = |list: &[(Name, Span)]| -> Vec<&str> {
         list.iter().map(|(n, _)| b.globals.names.get(*n)).collect()
     };
     assert_eq!(names(&item("take").attrs.clamped), ["count"]);
@@ -1265,13 +1267,12 @@ fn kernel_types_are_reachable_only_through_their_home_modules() {
             "E0042: cannot find type `Set` in this scope",
         ]
     );
-    let helps: Vec<&str> = b
+
+    assert!(
+        b
         .diags
         .iter()
-        .flat_map(|d| d.helps.iter().map(|h| h.message.as_str()))
-        .collect();
-    assert!(
-        helps.contains(&"`Set` is not in the prelude: add `import std::set` and write `set::Set`")
+        .flat_map(|d| d.helps.iter().map(|h| h.message.as_str())).any(|x| x == "`Set` is not in the prelude: add `import std::set` and write `set::Set`")
     );
     let app = b.resolved("app");
     let sig: Vec<Res> = {
@@ -1767,13 +1768,13 @@ fn every_item_kind_has_a_node_view() {
 }
 
 /// The span of `needle` in `text`, a file of `sources`.
-fn span_of(sources: &mut SourceMap, text: &str, needle: &str) -> cheby_diag::Span {
+fn span_of(sources: &mut SourceMap, text: &str, needle: &str) -> Span {
     let file = sources.add_file("src/main.cheby", text).unwrap();
     let start = u32::try_from(text.find(needle).unwrap()).unwrap();
     let end = start
         .checked_add(u32::try_from(needle.len()).unwrap())
         .unwrap();
-    cheby_diag::Span::new(file, cheby_diag::TextRange::new(start, end))
+    Span::new(file, TextRange::new(start, end))
 }
 
 /// D-944: a name the runtime exports is E0055 outside std, with its own

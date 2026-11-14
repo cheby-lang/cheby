@@ -429,7 +429,7 @@ mod tests {
         ) {
             let (old, new) = (old.concat(), new.concat());
             let hunks = line_diff(&old, &new);
-            prop_assert_eq!(patch(&old, &new, &hunks), new.clone());
+            prop_assert_eq!(patch(&old, &new, &hunks), new);
             for pair in hunks.windows(2) {
                 prop_assert!(pair[0].old_lines.end < pair[1].old_lines.start);
                 prop_assert!(pair[0].old.end() < pair[1].old.start());

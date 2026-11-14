@@ -161,6 +161,10 @@ impl NetError {
     }
 
     /// The failure of the system call `op` (module documentation).
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "`io::ErrorKind` is non-exhaustive"
+    )]
     fn of(error: &io::Error, op: Op) -> Self {
         if is_closed_error(error) {
             return Self::fixed(KIND_CLOSED);
@@ -950,7 +954,11 @@ fn outcome<T>(
 /// `ctx` is the running fiber's context; `host` is a live `String`,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_listen(ctx: *mut ExecCtx, host: Word, port: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_net_sys_listen(
+    ctx: *mut ExecCtx,
+    host: Word,
+    port: i64,
+) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let (me, runtime) = unsafe { scheduled(ctx, "net::listen") };
@@ -970,7 +978,7 @@ pub unsafe extern "C" fn cheby_net_sys_listen(ctx: *mut ExecCtx, host: Word, por
 ///
 /// `listener` is a live `Listener`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_local_port(ctx: *mut ExecCtx, listener: Word) -> i64 {
+pub(crate) unsafe extern "C" fn cheby_net_sys_local_port(ctx: *mut ExecCtx, listener: Word) -> i64 {
     guarded(guard_ctx(ctx), || {
         // SAFETY: forwarded from the caller.
         i64::from(unsafe { listener_of(listener) }.port)
@@ -990,7 +998,7 @@ fn guard_ctx(ctx: *mut ExecCtx) -> Option<*mut ExecCtx> {
 /// `ctx` is the running fiber's context; `listener` is a live `Listener`,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_accept(ctx: *mut ExecCtx, listener: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_net_sys_accept(ctx: *mut ExecCtx, listener: Word) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let (me, runtime) = unsafe { scheduled(ctx, "net::accept") };
@@ -1011,7 +1019,11 @@ pub unsafe extern "C" fn cheby_net_sys_accept(ctx: *mut ExecCtx, listener: Word)
 /// `ctx` is the running fiber's context; `host` is a live `String`,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_connect(ctx: *mut ExecCtx, host: Word, port: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_net_sys_connect(
+    ctx: *mut ExecCtx,
+    host: Word,
+    port: i64,
+) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let (me, runtime) = unsafe { scheduled(ctx, "net::connect") };
@@ -1032,7 +1044,7 @@ pub unsafe extern "C" fn cheby_net_sys_connect(ctx: *mut ExecCtx, host: Word, po
 /// `ctx` is the running fiber's context; `connection` is a live
 /// `Connection`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_read_bytes(
+pub(crate) unsafe extern "C" fn cheby_net_sys_read_bytes(
     ctx: *mut ExecCtx,
     connection: Word,
     limit: i64,
@@ -1057,7 +1069,7 @@ pub unsafe extern "C" fn cheby_net_sys_read_bytes(
 /// `ctx` is the running fiber's context; `connection` is a live
 /// `Connection` and `data` a live `Bytes`, both borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_write_bytes(
+pub(crate) unsafe extern "C" fn cheby_net_sys_write_bytes(
     ctx: *mut ExecCtx,
     connection: Word,
     data: Word,
@@ -1082,7 +1094,10 @@ pub unsafe extern "C" fn cheby_net_sys_write_bytes(
 /// `ctx` is the running fiber's context; `connection` is a live
 /// `Connection`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_shutdown_write(ctx: *mut ExecCtx, connection: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_net_sys_shutdown_write(
+    ctx: *mut ExecCtx,
+    connection: Word,
+) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let (me, _) = unsafe { scheduled(ctx, "net::shutdown_write") };
@@ -1100,7 +1115,7 @@ pub unsafe extern "C" fn cheby_net_sys_shutdown_write(ctx: *mut ExecCtx, connect
 /// `ctx` is the running fiber's context; `connection` is a live
 /// `Connection`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_close(ctx: *mut ExecCtx, connection: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_net_sys_close(ctx: *mut ExecCtx, connection: Word) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let _ = unsafe { scheduled(ctx, "net::close") };
@@ -1117,7 +1132,10 @@ pub unsafe extern "C" fn cheby_net_sys_close(ctx: *mut ExecCtx, connection: Word
 /// `ctx` is the running fiber's context; `listener` is a live `Listener`,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_close_listener(ctx: *mut ExecCtx, listener: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_net_sys_close_listener(
+    ctx: *mut ExecCtx,
+    listener: Word,
+) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let _ = unsafe { scheduled(ctx, "net::close_listener") };
@@ -1138,7 +1156,7 @@ pub unsafe extern "C" fn cheby_net_sys_close_listener(ctx: *mut ExecCtx, listene
 /// `ctx` is the running fiber's context; `host` is a live `String`,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_net_sys_connect_tls(
+pub(crate) unsafe extern "C" fn cheby_net_sys_connect_tls(
     ctx: *mut ExecCtx,
     host: Word,
     port: i64,

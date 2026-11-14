@@ -643,7 +643,7 @@ fn permissive_golden() {
 }
 
 #[test]
-fn test_names_have_no_interpolation() {
+fn names_have_no_interpolation() {
     ok("test \"plain \\{name} text\" {\n  assert True\n}\n");
     reports(
         "test \"{subject} works\" {\n  assert True\n}\n",

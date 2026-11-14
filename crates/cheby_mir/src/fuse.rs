@@ -153,7 +153,12 @@ impl Facts {
                 Stmt::Eval(Rvalue::InitField { obj, .. }) => {
                     plain.insert(*obj);
                 }
-                _ => {}
+                Stmt::Assign { .. }
+                | Stmt::Eval(_)
+                | Stmt::Dup(_)
+                | Stmt::Drop(_)
+                | Stmt::DropKeep { .. }
+                | Stmt::ClearUnwind => {}
             }
         }
         let n = f.blocks.len();
@@ -470,7 +475,11 @@ fn cancels(
                 value: Rvalue::DropReuse { local, keep, .. },
                 ..
             } if *local != proj && keep.iter().all(|&(_, kept)| !facts.needs(kept, proj)) => {}
-            _ => break,
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => break,
         }
     }
     let Some(drop_at) = pair else {
@@ -551,6 +560,10 @@ fn sink_points(
 /// Step 2 (module documentation): cancels each `dup x` against the first
 /// later `drop x` when only releases of other locals and `dup`s that do
 /// not need `x` alive come between, until none is left.
+#[expect(
+    clippy::mixed_read_write_in_expression,
+    reason = "the `else` block writes `i` after the read"
+)]
 fn cancel(f: &mut Function, facts: &Facts) {
     for block in &mut f.blocks {
         let mut i = 0;
@@ -573,7 +586,11 @@ fn cancel(f: &mut Function, facts: &Facts) {
                         value: Rvalue::DropReuse { local, keep, .. },
                         ..
                     } if *local != x && keep.iter().all(|&(_, p)| !facts.needs(p, x)) => {}
-                    _ => break,
+                    Stmt::Assign { .. }
+                    | Stmt::Eval(_)
+                    | Stmt::Dup(_)
+                    | Stmt::DropKeep { .. }
+                    | Stmt::ClearUnwind => break,
                 }
             }
             if let Some(k) = pair {
@@ -644,7 +661,12 @@ fn specializable(module: &MirModule, layout: LayoutRef) -> bool {
     let shape = match layout {
         LayoutRef::Ctor(_) => !module.layout(layout).is_some_and(|d| d.fields.is_empty()),
         LayoutRef::Tuple(n) => n > 0,
-        _ => false,
+        LayoutRef::Builtin(_)
+        | LayoutRef::Closure(_)
+        | LayoutRef::Dict { .. }
+        | LayoutRef::Dyn
+        | LayoutRef::Desc { .. }
+        | LayoutRef::DescNominal => false,
     };
     shape && crate::layout::object_size(module, layout).is_some()
 }

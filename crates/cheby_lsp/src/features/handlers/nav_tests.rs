@@ -3,6 +3,10 @@
 //! answer is written as `file line:col-line:col`, lines and columns from 0
 //! as the protocol counts them, files relative to the package's `src/`
 //! or to the std directory.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

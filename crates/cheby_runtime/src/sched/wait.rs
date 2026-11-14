@@ -482,9 +482,10 @@ mod tests {
         let ctx = ExecCtx::new(FiberInit::placeholder());
         let header = std::sync::Arc::new(WaitHeader::new(&ctx));
         // SAFETY: the header outlives the nodes, which are dropped first.
-        let left = pin!(unsafe { WaitNode::sharing(&ctx, &header, 3, 30_u8) });
+        let left = unsafe { WaitNode::sharing(&ctx, &header, 3, 30_u8) };
         // SAFETY: as above.
-        let right = pin!(unsafe { WaitNode::sharing(&ctx, &header, 5, 50_u8) });
+        let right = unsafe { WaitNode::sharing(&ctx, &header, 5, 50_u8) };
+        let (left, right) = (pin!(left), pin!(right));
         let other = pin!(WaitNode::new(&ctx, 7_u8));
         let (mut first, mut second) = (WaitQueue::default(), WaitQueue::default());
         let [left, right, other] = [&*left, &*right, &*other].map(NonNull::from);

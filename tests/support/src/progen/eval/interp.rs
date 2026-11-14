@@ -3,6 +3,10 @@
 //! (§5.4.2), structural equality (§3.13), `case` with guards tried at
 //! most once per arm (§5.9), and panics that carry the message and the
 //! location of §11.6 until a `fiber::scope` catches them (§11.7).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::rc::Rc;
 
@@ -148,7 +152,7 @@ impl<'p> Interp<'p> {
             Value::Closure(closure) => {
                 let mut env = closure.env.clone();
                 if let Some(name) = &closure.name {
-                    env = env.bind(name.clone(), Value::Closure(closure.clone()));
+                    env = env.bind(Rc::clone(name), Value::Closure(Rc::clone(closure)));
                 }
                 let env = Self::bind_params(&closure.def.params, args, env, "a closure")?;
                 self.block(&closure.def.body, &env)
@@ -232,11 +236,11 @@ impl<'p> Interp<'p> {
                 } => self.assert(cond, message.as_ref(), text, *loc, &env)?,
                 Stmt::LocalFn { name, def } => {
                     let closure = Value::Closure(Rc::new(Closure {
-                        def: def.clone(),
+                        def: Rc::clone(def),
                         env: env.clone(),
-                        name: Some(name.clone()),
+                        name: Some(Rc::clone(name)),
                     }));
-                    env = env.bind(name.clone(), closure);
+                    env = env.bind(Rc::clone(name), closure);
                 }
                 Stmt::Expr(e) => last = self.eval(e, &env)?,
             }
@@ -333,7 +337,7 @@ impl<'p> Interp<'p> {
         self.step()?;
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
-            Expr::Str(s) => Ok(Value::Str(s.clone())),
+            Expr::Str(s) => Ok(Value::Str(Rc::clone(s))),
             Expr::Interp(parts) => {
                 let mut out = String::new();
                 for part in parts {
@@ -427,7 +431,7 @@ impl<'p> Interp<'p> {
             }
             Expr::Block(block) => self.block(block, env),
             Expr::Closure(def) => Ok(Value::Closure(Rc::new(Closure {
-                def: def.clone(),
+                def: Rc::clone(def),
                 env: env.clone(),
                 name: None,
             }))),
@@ -562,7 +566,7 @@ impl<'p> Interp<'p> {
     pub(super) fn matches(pat: &Pat, value: &Value, env: Env) -> R<Option<Env>> {
         Ok(match (pat, value) {
             (Pat::Wild, _) => Some(env),
-            (Pat::Bind(name), _) => Some(env.bind(name.clone(), value.clone())),
+            (Pat::Bind(name), _) => Some(env.bind(Rc::clone(name), value.clone())),
             (Pat::Int(n), Value::Int(v)) => (n == v).then_some(env),
             (Pat::Str(s), Value::Str(v)) => (s == v).then_some(env),
             (Pat::Bool(b), Value::Bool(v)) => (b == v).then_some(env),
@@ -637,7 +641,7 @@ impl<'p> Interp<'p> {
                             .skip(before.len())
                             .cloned()
                             .collect();
-                        Some(env.bind(name.clone(), Value::list(middle)))
+                        Some(env.bind(Rc::clone(name), Value::list(middle)))
                     }
                     (env, _) => env,
                 }
@@ -651,7 +655,7 @@ impl<'p> Interp<'p> {
                 None
             }
             (Pat::As(p, name), _) => {
-                Self::matches(p, value, env)?.map(|next| next.bind(name.clone(), value.clone()))
+                Self::matches(p, value, env)?.map(|next| next.bind(Rc::clone(name), value.clone()))
             }
             (p, v) => {
                 return malformed(format!("the pattern {p:?} against {}", v.kind()));

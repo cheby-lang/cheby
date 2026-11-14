@@ -539,7 +539,7 @@ fn reachability_follows_dictionaries_constants_and_operators() {
         body: Some(b.finish(call, Ty::NIL)),
         entry: Some(EntryInfo::Nil),
     };
-    let mut module = f.thir.clone();
+    let mut module = f.thir;
     module.fns.retain(|func| func.def != def(MAIN));
     module.fns.insert(0, entry.clone());
     let program = Program::from([(MODULE, &module)]);
@@ -1053,7 +1053,7 @@ fn modules_of_named_constructors_register_their_layouts() {
     let lowered = crate::test_support::lower_source(&[
         (
             "",
-            r"//! Names a constructor of another module.
+            "//! Names a constructor of another module.
 
 import app::colors
 
@@ -1068,7 +1068,7 @@ fn main() {
         ),
         (
             "colors",
-            r"//! Colors.
+            "//! Colors.
 
 /// A color.
 pub type Color {

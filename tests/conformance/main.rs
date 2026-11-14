@@ -121,6 +121,10 @@
 //! `CHEBY_TEST_KEEP_CACHE=<absolute directory>` it uses that directory
 //! instead, creating it owner-only if needed, and never deletes it, so two
 //! runs share one cache (D-1144).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::Path;
 use std::process::{Command, ExitCode};

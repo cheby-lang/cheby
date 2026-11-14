@@ -849,7 +849,7 @@ fn release_turn(turn: &Mutex<TurnSlot>, fibers: &[Arc<Fiber>]) {
         }
     };
     if let Some(index) = next {
-        let fiber = fibers.get(index).unwrap();
+        let fiber = &fibers[index];
         assert!(fiber.try_wake(), "a turn's waiter was not parking");
     }
 }

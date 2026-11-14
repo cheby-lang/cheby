@@ -207,6 +207,10 @@ fn parser_skips(token: SyntaxToken<'_>) -> bool {
 /// That delimiter's opener is a token of the node the parser was
 /// building, so it is the first ancestor of `token` with an opener before
 /// it that no closer among its tokens matches.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn newlines_skipped(token: SyntaxToken<'_>) -> bool {
     use SyntaxKind as K;
     let at = token.text_range().start();

@@ -1,5 +1,9 @@
 //! Tests of `record.rs`: construction, record update and field access
 //! (§5.11), with opacity (§4.3.4), D-071 and D-213.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use crate::test_support::{Build, build, build_with_std};
 use crate::thir::ExprKind;

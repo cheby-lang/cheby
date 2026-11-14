@@ -202,12 +202,15 @@ fn split_holds_no_buffer_of_its_parts() {
 #[cfg_attr(miri, ignore = "runs an entry thread")]
 fn text_kernels_write_their_result_in_place() {
     // SAFETY (each kernel): a live string argument.
+    // SAFETY: as above.
     assert_accounted(greek, |text| unsafe {
         crate::text::kernels::cheby_string_reverse(text)
     });
+    // SAFETY: as above.
     assert_accounted(greek, |text| unsafe {
         crate::text::kernels::cheby_string_uppercase(text)
     });
+    // SAFETY: as above.
     assert_accounted(greek, |text| unsafe {
         crate::text::kernels::cheby_string_lowercase(text)
     });
@@ -242,8 +245,11 @@ fn list_conversions_write_their_result_in_place() {
 #[cfg_attr(miri, ignore = "runs an entry thread")]
 fn debug_text_holds_no_copy_of_the_data() {
     // SAFETY (each walk): a live value without hooks.
+    // SAFETY: as above.
     assert_accounted(ascii, |text| unsafe { generic::debug_object(text) });
+    // SAFETY: as above.
     assert_accounted(data, |data| unsafe { generic::debug_object(data) });
+    // SAFETY: as above.
     assert_accounted(ints, |list| unsafe { generic::debug_object(list) });
 }
 

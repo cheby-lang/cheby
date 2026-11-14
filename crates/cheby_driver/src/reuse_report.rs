@@ -237,7 +237,13 @@ fn decision_text(
 fn built_value(unit: &MirModule, layout: LayoutRef) -> String {
     match layout {
         LayoutRef::Tuple(n) => format!("a tuple of {n}"),
-        _ => unit.layout(layout).map_or_else(
+        LayoutRef::Builtin(_)
+        | LayoutRef::Ctor(_)
+        | LayoutRef::Closure(_)
+        | LayoutRef::Dict { .. }
+        | LayoutRef::Dyn
+        | LayoutRef::Desc { .. }
+        | LayoutRef::DescNominal => unit.layout(layout).map_or_else(
             || "a value".to_owned(),
             |desc| format!("`{}`", desc.ctor_name),
         ),
@@ -382,7 +388,22 @@ fn constants(f: &Function, incoming: &BTreeMap<Local, Vec<Option<Local>>>) -> BT
                         .collect();
                     (!at.is_empty()).then_some(Some(at))
                 }
-                _ => None,
+                Rvalue::Call { .. }
+                | Rvalue::CallForeign { .. }
+                | Rvalue::CallRuntime { .. }
+                | Rvalue::AllocPlaceholder { .. }
+                | Rvalue::InitField { .. }
+                | Rvalue::ReadLayout { .. }
+                | Rvalue::Box { .. }
+                | Rvalue::Unbox { .. }
+                | Rvalue::Checked { .. }
+                | Rvalue::Compare { .. }
+                | Rvalue::FloatArith { .. }
+                | Rvalue::Bitwise { .. }
+                | Rvalue::FloatNeg { .. }
+                | Rvalue::Not(_)
+                | Rvalue::ReadTag { .. }
+                | Rvalue::DropReuse { .. } => None,
             };
             if let Some(v) = new {
                 changed |= set(&mut fields, *dst, v);
@@ -787,6 +808,10 @@ impl<'f> Flow<'f> {
 
     /// One statement's rules of [`Flow::holders`]: whether it changed
     /// `holds`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "its matches name every variant (D-1560)"
+    )]
     fn step(
         &self,
         call: &KernelAt,
@@ -803,7 +828,11 @@ impl<'f> Flow<'f> {
             }) => {
                 return Ok(held(holds, value) && join_into(holds, *obj, Hold::field(*field)));
             }
-            _ => return Ok(false),
+            Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => return Ok(false),
         };
         Ok(match value {
             // A move: one object under two names, both ways.
@@ -881,7 +910,18 @@ impl<'f> Flow<'f> {
                         }
                         changed
                     }
-                    _ => false,
+                    RuntimeFn::StrWithCapacity
+                    | RuntimeFn::StrAppend
+                    | RuntimeFn::StrEq
+                    | RuntimeFn::ListLength
+                    | RuntimeFn::Equal
+                    | RuntimeFn::Debug
+                    | RuntimeFn::EffectCheck
+                    | RuntimeFn::ScopeOpen
+                    | RuntimeFn::ScopeClose
+                    | RuntimeFn::ListUncons
+                    | RuntimeFn::ListUnconsOwned
+                    | RuntimeFn::ListUnconsHead => false,
                 }
             }
             Rvalue::Call { .. } | Rvalue::CallForeign { .. } => {
@@ -889,7 +929,21 @@ impl<'f> Flow<'f> {
                     && self.may_hold(call, dst)?
                     && join_into(holds, dst, Hold::Any)
             }
-            _ => false,
+            Rvalue::Use(_)
+            | Rvalue::AllocPlaceholder { .. }
+            | Rvalue::InitField { .. }
+            | Rvalue::ReadLayout { .. }
+            | Rvalue::LoadConst(_)
+            | Rvalue::Box { .. }
+            | Rvalue::Unbox { .. }
+            | Rvalue::Checked { .. }
+            | Rvalue::Compare { .. }
+            | Rvalue::FloatArith { .. }
+            | Rvalue::Bitwise { .. }
+            | Rvalue::FloatNeg { .. }
+            | Rvalue::Not(_)
+            | Rvalue::ReadTag { .. }
+            | Rvalue::DropReuse { .. } => false,
         })
     }
 
@@ -954,7 +1008,12 @@ fn unfused(stmt: &Stmt, prev: Option<&Stmt>) -> Stmt {
             dst,
             value: Rvalue::CallRuntime { func, args },
         } => Some((*dst, *func, args.clone())),
-        _ => None,
+        Stmt::Assign { .. }
+        | Stmt::Eval(_)
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => None,
     };
     match call(stmt) {
         Some((dst, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned, args)) => {
@@ -1111,6 +1170,6 @@ fn mentions(stmt: &Stmt, x: Local) -> bool {
 }
 
 /// Whether the terminator reads or passes on `x`.
-fn term_mentions(term: &cheby_mir::Terminator, x: Local) -> bool {
+fn term_mentions(term: &Terminator, x: Local) -> bool {
     term.uses().iter().any(|&(l, _)| l == x)
 }

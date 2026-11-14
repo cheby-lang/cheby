@@ -2,6 +2,10 @@
 //! defines them: `list.md`, `string.md`, `map.md`, `int.md`, `io.md` and
 //! `fiber.md`. Positions, counts and lengths of strings are in code
 //! points (§3.5, D-302), and clamped arguments are clamped (D-298).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -337,7 +341,7 @@ pub(super) fn call(interp: &mut Interp<'_>, f: StdFn, args: &[Value]) -> R<Value
             }
         }
         (StdFn::FiberMessage, [failure]) => match failure {
-            Value::Panic(message) => Ok(Value::Str(message.clone())),
+            Value::Panic(message) => Ok(Value::Str(Rc::clone(message))),
             other => malformed(format!("fiber::message of {}", other.kind())),
         },
         _ => Err(bad()),

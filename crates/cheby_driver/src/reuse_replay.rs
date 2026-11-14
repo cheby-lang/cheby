@@ -301,7 +301,10 @@ fn owner_of(unit: &MirModule, key: FnKey) -> Result<Option<String>, Ice> {
         | FnKey::Test(def)
         | FnKey::Closure { owner: def, .. }
         | FnKey::Continuation { owner: def, .. } => Ok(Some(unit.name(def)?.item.to_string())),
-        _ => Ok(None),
+        FnKey::Entry(_)
+        | FnKey::Trampoline(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. } => Ok(None),
     }
 }
 

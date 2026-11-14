@@ -5,7 +5,7 @@
 //! through that run's snapshot.
 //!
 //! - [`PlainDiagnostic`] and its parts: diagnostics with no generation
-//!   handles, made by [`plain`] at the end of a run.
+//!   handles, made by [`plain()`] at the end of a run.
 //! - [`Symbol`]: the only identity that crosses snapshots (D-1365).
 //! - [`exact_key`], [`normalized_key`] and [`InputsKey`]: [`Hash128`] keys
 //!   over text (D-1393, D-1412), and [`NormMap`] between live and
@@ -20,7 +20,7 @@
 //! - [`StdBase`]: every shipped std module checked once, with its plain
 //!   [`StdIndex`], and [`materialize_std`] for std's files on disk
 //!   (D-1369, D-1372).
-//! - [`verify`]: a stateless re-check of an edit plan against a snapshot
+//! - [`mod@verify`]: a stateless re-check of an edit plan against a snapshot
 //!   (D-1389).
 //!
 //! The re-exports below are what a client needs to read a snapshot: data

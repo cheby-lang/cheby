@@ -36,7 +36,7 @@ pub(super) struct CtorInfo {
 
 impl CtorInfo {
     /// The declaration index and type of the named field `name`.
-    pub fn named_field(&self, names: &Interner, name: &str) -> Option<(u32, Ty)> {
+    pub(super) fn named_field(&self, names: &Interner, name: &str) -> Option<(u32, Ty)> {
         let CtorFields::Named(fields) = &self.fields else {
             return None;
         };
@@ -47,7 +47,7 @@ impl CtorInfo {
     }
 
     /// The names of the named fields, in declaration order.
-    pub fn field_names(&self, names: &Interner) -> Vec<&'static str> {
+    pub(super) fn field_names(&self, names: &Interner) -> Vec<&'static str> {
         match &self.fields {
             CtorFields::Named(fields) => fields.iter().map(|&(n, _)| names.get(n)).collect(),
             CtorFields::Unit | CtorFields::Positional(_) => Vec::new(),
@@ -150,7 +150,16 @@ impl BodyCx<'_> {
     ) -> Result<(InferTy, Box<[InferTy]>), Ice> {
         let arity = match &self.input.item(self.own, ty_def)?.sig {
             ItemSig::Type(def) => def.generics.len(),
-            _ => return Err(Ice::new("an instance of something that is not a type")),
+            ItemSig::Fn(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => {
+                return Err(Ice::new("an instance of something that is not a type"));
+            }
         };
         let args = (0..arity)
             .map(|_| self.infcx.new_var(span, VarKind::General))
@@ -174,9 +183,14 @@ impl BodyCx<'_> {
             InferTy::Named { def, args } => Some((def, args)),
             InferTy::Known(t) => match self.input.globals.types.kind(t) {
                 TyKind::Named { def, .. } => Some((*def, Box::default())),
-                _ => None,
+                TyKind::Error
+                | TyKind::Never
+                | TyKind::Tuple(_)
+                | TyKind::Fn { .. }
+                | TyKind::Param(_)
+                | TyKind::Dyn { .. } => None,
             },
-            _ => None,
+            InferTy::Var(_) | InferTy::Tuple(_) | InferTy::Fn { .. } => None,
         })
     }
 
@@ -268,7 +282,7 @@ impl BodyCx<'_> {
     /// already coerced to it), and returns its
     /// [`crate::thir::ExprKind::Record`] or
     /// [`crate::thir::ExprKind::RecordUpdate`].
-    pub fn check_record(
+    pub(crate) fn check_record(
         &mut self,
         rec: ast::RecordExpr<'_>,
         expected: Option<&Expected>,
@@ -313,7 +327,7 @@ impl BodyCx<'_> {
         };
         let info = match self.path_res(path.syntax().id())? {
             Res::Def(def) => self.ctor_info(def)?,
-            _ => None,
+            Res::Local(_) | Res::Module(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => None,
         };
         // An unresolved or erroneous constructor was reported already.
         let Some(info) = info else {
@@ -413,7 +427,7 @@ impl BodyCx<'_> {
                 format!("`{}` has no fields", info.name),
                 format!("write the constructor alone: `{}`", info.name),
             ),
-            _ => (
+            CtorFields::Positional(_) | CtorFields::Named(_) => (
                 format!("`{}` has positional fields, not named ones", info.name),
                 format!("call it with its fields in order: `{}(…)`", info.name),
             ),
@@ -504,7 +518,7 @@ impl BodyCx<'_> {
                 None
             }
             // The resolver reported a path that names no type.
-            _ => None,
+            Res::Local(_) | Res::Module(_) | Res::Err => None,
         };
         // `base` is evaluated and checked first.
         let base_id = self.check_expr(base, None)?;
@@ -675,7 +689,14 @@ impl BodyCx<'_> {
             // Its declaration has the error (`sig.rs`), so one here would
             // only repeat it. It is not this body's error (D-494).
             ItemSig::Error => self.propagated = true,
-            _ => self.no_fields_to_update(path, span),
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test => self.no_fields_to_update(path, span),
         }
         Ok(())
     }
@@ -816,7 +837,28 @@ impl BodyCx<'_> {
         let ty = ty.unwrap_or("Type");
         let local = match &self.exprs.try_get(id, "expression")?.kind {
             ExprKind::Local(local) => Some(*local),
-            _ => None,
+            ExprKind::Lit(_)
+            | ExprKind::Ctor { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Block { .. }
+            | ExprKind::FnRef { .. }
+            | ExprKind::ConstRef { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::RecordUpdate { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Neg { .. }
+            | ExprKind::Interpolate { .. }
+            | ExprKind::Panic { .. }
+            | ExprKind::DynCoerce { .. }
+            | ExprKind::Error => None,
         };
         let mut diag = Diagnostic::new(codes::TYPE_ANNOTATION_NEEDED, "type annotation needed");
         match local.and_then(|l| self.res.locals.get(l).map(|decl| (l, decl.clone()))) {
@@ -833,7 +875,10 @@ impl BodyCx<'_> {
                         format!("annotate the parameter: `fn({name}: {ty})`")
                     }
                     LocalKind::Let => format!("annotate the binding: `let {name}: {ty} = …`"),
-                    _ => format!("annotate the type where `{name}` is bound"),
+                    LocalKind::Param
+                    | LocalKind::CaseArm
+                    | LocalKind::UseBinder
+                    | LocalKind::LocalFn => format!("annotate the type where `{name}` is bound"),
                 };
                 diag = diag.with_help(help);
             }
@@ -896,7 +941,7 @@ impl BodyCx<'_> {
     /// Checks a field access `x.name`, against `expected` if given (the
     /// result is already coerced to it), and returns its
     /// [`crate::thir::ExprKind::Field`].
-    pub fn check_field(
+    pub(crate) fn check_field(
         &mut self,
         field: ast::FieldExpr<'_>,
         expected: Option<&Expected>,
@@ -970,7 +1015,7 @@ impl BodyCx<'_> {
                     .iter()
                     .find(|&&(n, _)| self.input.globals.names.get(n) == text)
                     .map(|&(n, _)| n),
-                _ => None,
+                CtorFields::Unit | CtorFields::Positional(_) => None,
             })
             .ok_or_else(|| Ice::new("a common field without a name"))?;
         let ty = self.field_ty(field_ty, &args);

@@ -189,7 +189,7 @@ unsafe fn dup(word: Word) -> Word {
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_selector_sys_new(ctx: *mut ExecCtx) -> Word {
+pub(crate) unsafe extern "C" fn cheby_selector_sys_new(ctx: *mut ExecCtx) -> Word {
     guarded(Some(ctx), || {
         let zero = values::int_word(0);
         handles::new_selector_node([zero, values::int_word(SELECTOR_EMPTY), zero, zero, zero])
@@ -205,7 +205,7 @@ pub unsafe extern "C" fn cheby_selector_sys_new(ctx: *mut ExecCtx) -> Word {
 /// `ctx` is the running fiber's context, `selector` a live selector,
 /// `receiver` a live `Receiver` and `apply` a live closure, all borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_selector_sys_add_receive(
+pub(crate) unsafe extern "C" fn cheby_selector_sys_add_receive(
     ctx: *mut ExecCtx,
     selector: Word,
     receiver: Word,
@@ -246,7 +246,7 @@ pub unsafe extern "C" fn cheby_selector_sys_add_receive(
 /// `ctx` is the running fiber's context, `selector` a live selector and
 /// `apply` a live closure, both borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_selector_sys_add_after(
+pub(crate) unsafe extern "C" fn cheby_selector_sys_add_after(
     ctx: *mut ExecCtx,
     selector: Word,
     seconds: i64,
@@ -445,7 +445,7 @@ impl TimerTarget for SelectTimer {
 /// `ctx` is the running fiber's context and `selector` a live selector,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_selector_sys_wait(ctx: *mut ExecCtx, selector: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_selector_sys_wait(ctx: *mut ExecCtx, selector: Word) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe { wait(ctx, selector) })
 }
@@ -655,7 +655,10 @@ fn err_nil() -> Owned {
 /// `ctx` is the running fiber's context and `receiver` a live `Receiver`,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_selector_take_selected(ctx: *mut ExecCtx, receiver: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_selector_take_selected(
+    ctx: *mut ExecCtx,
+    receiver: Word,
+) -> Word {
     guarded(Some(ctx), || {
         let _ = receiver;
         // SAFETY: forwarded from the caller.

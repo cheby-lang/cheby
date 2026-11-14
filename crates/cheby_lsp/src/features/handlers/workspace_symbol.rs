@@ -383,7 +383,7 @@ mod tests {
     fn check_package(name: &str, main_text: &str) {
         let temp = Temp::package(name, &[("main.cheby", main_text), ("shapes.cheby", SHAPES)]);
         let main = temp.src("main.cheby");
-        let analyzed = analyze(&temp.0, &[(main.clone(), main_text)]);
+        let analyzed = analyze(&temp.0, &[(main, main_text)]);
         let s = |x: &str| x.to_owned();
         let got = query(&[&analyzed], "shape", None);
         assert_eq!(

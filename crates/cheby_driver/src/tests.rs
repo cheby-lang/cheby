@@ -1,7 +1,5 @@
 //! Tests of `check` on the examples and on small temporary packages.
 
-use std::path::{Path, PathBuf};
-
 use super::*;
 
 fn examples() -> Vec<PathBuf> {
@@ -252,7 +250,7 @@ fn run_never_fails_internally_on_ui_tests() {
 fn only_unshipped_imports_are_e0038(out: &CheckOutput) -> bool {
     out.diagnostics
         .iter()
-        .filter(|d| d.code == cheby_diag::codes::NOT_SUPPORTED_YET)
+        .filter(|d| d.code == codes::NOT_SUPPORTED_YET)
         .all(|d| {
             d.message
                 .strip_prefix("the module `std::")
@@ -295,7 +293,7 @@ fn lowering_reports_no_e0038() {
     let mut not_yet = 0_usize;
     for dir in examples() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-        if crate::native::not_yet_here(&dir) {
+        if native::not_yet_here(&dir) {
             not_yet += 1;
             continue;
         }
@@ -336,7 +334,7 @@ fn lowering_reports_no_e0038() {
             Some("run-fail") => true,
             _ => continue,
         };
-        if crate::native::not_yet_here(case) {
+        if native::not_yet_here(case) {
             continue;
         }
         let dir = if case.is_dir() {
@@ -1604,7 +1602,7 @@ fn iface_roundtrip_every_example_and_std() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         if name == "030_shop_service"
             || LATER_EXAMPLES.contains(&name.as_str())
-            || crate::native::not_yet_here(&dir)
+            || native::not_yet_here(&dir)
         {
             continue;
         }

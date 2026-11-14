@@ -860,11 +860,12 @@ impl Worker<'_> {
         let shared = self.shared;
         // 1. The fibers waiting here go where every live worker finds
         //    them, as before a blocking call (`hand_off_before_blocking`).
-        let mut moved = false;
-        if let Some(next) = self.me.take_next() {
+        let mut moved = if let Some(next) = self.me.take_next() {
             shared.injector.push(next);
-            moved = true;
-        }
+            true
+        } else {
+            false
+        };
         // SAFETY: the worker loop runs on the worker's own thread, and the
         // reference ends with this block.
         let local = unsafe { self.me.local() };

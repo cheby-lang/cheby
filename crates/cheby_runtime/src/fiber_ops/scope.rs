@@ -794,7 +794,7 @@ pub(crate) fn close_root_base(ctx: &ExecCtx) {
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_scope_open(
+pub(crate) unsafe extern "C" fn cheby_rt_scope_open(
     ctx: *mut ExecCtx,
     timed: bool,
     seconds: i64,
@@ -891,7 +891,7 @@ pub unsafe extern "C" fn cheby_rt_scope_open(
 /// `ctx` is the running fiber's context and `scope` the handle its
 /// `scope_open` returned, whose reference the call consumes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_scope_close(
+pub(crate) unsafe extern "C" fn cheby_rt_scope_close(
     ctx: *mut ExecCtx,
     scope: Word,
     unwound: bool,
@@ -1014,7 +1014,7 @@ pub unsafe extern "C" fn cheby_rt_scope_close(
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_take_failure(ctx: *mut ExecCtx) -> Word {
+pub(crate) unsafe extern "C" fn cheby_fiber_take_failure(ctx: *mut ExecCtx) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { running(ctx) };

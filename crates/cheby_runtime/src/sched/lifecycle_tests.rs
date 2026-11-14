@@ -1038,6 +1038,10 @@ fn lifecycle_halt_run_main_freezes_under_freeze() {
 /// `main`'s thunk for [`lifecycle_terminate_after_the_flush_keeps_the_status`]:
 /// spawns a detached fiber that waits, without an entry check, until
 /// `run_main` has fixed the status, then prints lines until a write fails.
+#[expect(
+    clippy::infinite_loop,
+    reason = "a write that fails terminates the fiber"
+)]
 unsafe extern "C" fn main_with_a_late_writer(ctx: *mut ExecCtx) -> u64 {
     // SAFETY: the root's context.
     let me = unsafe { &*ctx };

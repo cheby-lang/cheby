@@ -51,7 +51,7 @@ pub enum UnitKind {
 }
 
 /// A unit of MIR: one module's code, one module's tests, or entry thunks.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MirModule {
     pub unit: UnitKind,
     /// The module's path (`std::io`) for `Code` and `Tests`; empty for
@@ -190,7 +190,7 @@ impl MirModule {
 /// written, defined once per JIT (a later unit that names the same
 /// symbol reuses it, D-561). Its symbol is `cb$<kind>$<module>$$<name>`
 /// (plan §4.4, D-579), with the module path of [`StaticObject::module`].
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StaticObject {
     /// Its position in [`MirModule::statics`].
     pub id: StaticId,
@@ -360,7 +360,7 @@ pub enum Abi {
 }
 
 /// One function of MIR.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Function {
     pub key: FnKey,
     pub abi: Abi,
@@ -481,7 +481,7 @@ pub struct LocalDecl {
 }
 
 /// A basic block.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Block {
     pub params: Vec<Local>,
     pub stmts: Vec<Stmt>,
@@ -514,7 +514,7 @@ impl Block {
 }
 
 /// A statement.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Stmt {
     Assign {
         dst: Local,
@@ -558,7 +558,7 @@ pub enum Stmt {
 pub type Keep = Vec<(u32, Local)>;
 
 /// An operand: a local or a constant.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Operand {
     Local(Local),
     Const(Const),
@@ -577,7 +577,7 @@ impl Operand {
 
 /// A constant operand. Value constants are static objects, so they need no
 /// reference counting.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Const {
     /// [`Repr::Int`].
     Int(i64),
@@ -708,7 +708,7 @@ impl Const {
 }
 
 /// A value computation.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Rvalue {
     /// A copy of a constant, or a move of a local (an owned use).
     Use(Operand),
@@ -1040,7 +1040,26 @@ impl Rvalue {
     pub fn kept(&self) -> &[(u32, Local)] {
         match self {
             Self::DropReuse { keep, .. } => keep,
-            _ => &[],
+            Self::Use(_)
+            | Self::Call { .. }
+            | Self::CallForeign { .. }
+            | Self::CallRuntime { .. }
+            | Self::Alloc { .. }
+            | Self::AllocPlaceholder { .. }
+            | Self::InitField { .. }
+            | Self::Field { .. }
+            | Self::ReadLayout { .. }
+            | Self::LoadConst(_)
+            | Self::Box { .. }
+            | Self::Unbox { .. }
+            | Self::Checked { .. }
+            | Self::Compare { .. }
+            | Self::FloatArith { .. }
+            | Self::Bitwise { .. }
+            | Self::FloatNeg { .. }
+            | Self::Not(_)
+            | Self::ReadTag { .. }
+            | Self::AllocReuse { .. } => &[],
         }
     }
 }
@@ -1059,7 +1078,7 @@ impl Stmt {
 }
 
 /// What a Cheby-ABI call calls.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Callee {
     /// A top-level Cheby function, always through its indirection slot
     /// (D-043), even in the same module. Its signature is in
@@ -1105,7 +1124,7 @@ impl Callee {
 }
 
 /// How a block ends.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Terminator {
     /// Returns an owned value.
     Return(Operand),

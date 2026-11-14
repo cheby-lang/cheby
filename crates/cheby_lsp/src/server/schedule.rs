@@ -527,6 +527,10 @@ impl Server {
 
     /// Nothing holds the analysis thread outside tests.
     #[cfg(not(test))]
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "the build without tests has no test hooks"
+    )]
     #[expect(clippy::unused_self, reason = "the test build reads a field")]
     const fn held(&self) -> bool {
         false
@@ -573,6 +577,10 @@ impl Server {
 }
 
 #[cfg(not(test))]
+#[expect(
+    clippy::cfg_not_test,
+    reason = "the build without tests has no test hooks"
+)]
 impl Server {
     /// No test requests outside tests.
     #[expect(clippy::unused_self, reason = "the test build has some")]

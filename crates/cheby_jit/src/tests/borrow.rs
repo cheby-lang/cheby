@@ -7,8 +7,6 @@
 //! nothing of the entry's domain stays alive either way. Run with
 //! `CHEBY_RT_POISON=1` for freed objects to be poisoned (D-458).
 
-use cheby_codegen_clif::CodegenOptions;
-use cheby_mir::LayoutRef;
 use cheby_mir::borrow::BorrowMask;
 use cheby_runtime::abi::PanicKind as RtPanicKind;
 

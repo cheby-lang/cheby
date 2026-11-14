@@ -25,7 +25,7 @@ use clap::ValueEnum;
 
 /// The value of `--color`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
-pub enum ColorWhen {
+pub(crate) enum ColorWhen {
     /// Color on a terminal, unless `NO_COLOR`, `CLICOLOR=0` or `TERM=dumb`
     /// is set; `CLICOLOR_FORCE` colors anyway
     #[default]
@@ -39,7 +39,7 @@ pub enum ColorWhen {
 /// The value of the last valid `--color` before `--`, read before clap
 /// parses the command line, so that clap's own help and errors follow it.
 /// An invalid value is skipped here; clap reports it.
-pub fn scan_flag<I>(args: I) -> Option<ColorWhen>
+pub(crate) fn scan_flag<I>(args: I) -> Option<ColorWhen>
 where
     I: IntoIterator<Item = OsString>,
 {
@@ -70,7 +70,7 @@ where
 
 /// The decision made by the flag and the environment alone: `Some` when
 /// they settle it, `None` when it depends on whether stderr is a terminal.
-pub fn forced<F>(flag: ColorWhen, var: F) -> Option<bool>
+pub(crate) fn forced<F>(flag: ColorWhen, var: F) -> Option<bool>
 where
     F: Fn(&str) -> Option<OsString>,
 {
@@ -97,7 +97,7 @@ where
 /// The choice passed to clap: the forced decision, or clap's own `Auto`,
 /// which checks the stream it writes to (stdout for help, stderr for
 /// errors).
-pub const fn clap_choice(forced: Option<bool>) -> clap::ColorChoice {
+pub(crate) const fn clap_choice(forced: Option<bool>) -> clap::ColorChoice {
     match forced {
         Some(true) => clap::ColorChoice::Always,
         Some(false) => clap::ColorChoice::Never,
@@ -106,7 +106,7 @@ pub const fn clap_choice(forced: Option<bool>) -> clap::ColorChoice {
 }
 
 /// Whether diagnostics on stderr are colored.
-pub fn diagnostics(forced: Option<bool>, stderr_is_terminal: bool) -> cheby_diag::Colors {
+pub(crate) fn diagnostics(forced: Option<bool>, stderr_is_terminal: bool) -> cheby_diag::Colors {
     if forced.unwrap_or(stderr_is_terminal) {
         cheby_diag::Colors::On
     } else {

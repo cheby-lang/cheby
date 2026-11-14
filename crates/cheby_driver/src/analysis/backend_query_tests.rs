@@ -2,9 +2,6 @@
 //! D-1413). Every test that runs the front end evaluates constants or
 //! could, so it carries the Windows ignore (D-545, plan §0.1).
 
-use std::path::{Path, PathBuf};
-
-use cheby_diag::TextRange;
 use cheby_package::ModulePath;
 
 use super::*;

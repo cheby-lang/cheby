@@ -32,7 +32,7 @@ pub(crate) const COMPLETE: &[&str] = &["env"];
 
 /// `env::args`: the arguments, without the program name (D-347).
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_env_args() -> Word {
+pub(crate) extern "C" fn cheby_env_args() -> Word {
     guarded(None, || {
         list::from_iter(entry::program_args().iter().map(|arg| values::string(arg)))
     })
@@ -41,7 +41,7 @@ pub extern "C" fn cheby_env_args() -> Word {
 /// `env::program_name`: the package's name under the toolchain (D-369),
 /// else the process's first argument, with invalid UTF-8 replaced.
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_env_program_name() -> Word {
+pub(crate) extern "C" fn cheby_env_program_name() -> Word {
     guarded(None, || {
         let name = entry::program_name_if_set().unwrap_or_else(|| {
             std::env::args_os()
@@ -61,7 +61,7 @@ pub extern "C" fn cheby_env_program_name() -> Word {
 ///
 /// `name` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_env_get(name: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_env_get(name: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let name = unsafe { string::as_str_unchecked(name) }
@@ -100,7 +100,7 @@ fn lossy(text: &OsString) -> String {
 /// (D-311), and 0 with the system's message otherwise. `getcwd` waits on
 /// nothing, so the kernel takes no context and runs inline, as `get` does.
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_env_sys_current_dir() -> Word {
+pub(crate) extern "C" fn cheby_env_sys_current_dir() -> Word {
     guarded(None, || match working_dir() {
         Ok(dir) => {
             let text = values::string(&dir);
@@ -230,6 +230,7 @@ mod tests {
             let word = values::string(name);
             // SAFETY: a live string, borrowed for the call.
             assert_eq!(
+                // SAFETY: as above.
                 option_text(unsafe { cheby_env_get(word) }),
                 None,
                 "{name:?}"

@@ -45,7 +45,14 @@ impl<'a> Defs<'a> {
     pub fn fn_sig(&self, def: DefId) -> Result<&'a FnSig, Ice> {
         match &self.item(def)?.sig {
             ItemSig::Fn(sig) => Ok(sig),
-            other => Err(Ice::new(format!(
+            other @ (ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error) => Err(Ice::new(format!(
                 "{def:?} is called as a function but its signature is {other:?}"
             ))),
         }
@@ -141,7 +148,7 @@ impl<'a> Defs<'a> {
 
 /// How many ADT instantiations [`Defs::handle_free`] visits at most
 /// before it answers "not handle-free".
-pub const HANDLE_WALK_LIMIT: u32 = 4096;
+pub(crate) const HANDLE_WALK_LIMIT: u32 = 4096;
 
 /// The walk of [`Defs::handle_free`]. An instantiation is an ADT with the
 /// handle-freedom of each type argument, so there are finitely many.

@@ -112,7 +112,12 @@ fn outer_name(input: &TypesInput<'_>, own: &ModuleInterface, ty: Ty) -> Outer {
                 build: format!("the `{name}`"),
             }
         }
-        _ => Outer {
+        TyKind::Error
+        | TyKind::Never
+        | TyKind::Tuple(_)
+        | TyKind::Fn { .. }
+        | TyKind::Param(_)
+        | TyKind::Dyn { .. } => Outer {
             inside: "a tuple".to_owned(),
             build: "the tuple".to_owned(),
         },

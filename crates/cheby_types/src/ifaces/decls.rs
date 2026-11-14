@@ -40,14 +40,28 @@ impl<'r> Reader<'r, '_> {
     fn interface(&self, def: DefId) -> Option<&'r InterfaceDef> {
         match &self.item(def)?.sig {
             ItemSig::Interface(def) => Some(def),
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         }
     }
 
     fn fn_sig(&self, def: DefId) -> Option<&'r InterfaceFnSig> {
         match &self.item(def)?.sig {
             ItemSig::InterfaceFn(sig) => Some(sig),
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         }
     }
 

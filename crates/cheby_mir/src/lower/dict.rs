@@ -280,10 +280,12 @@ pub(super) fn normalize(cx: &LowerCx<'_>, dict: &Dict) -> Result<Dict, Ice> {
             ty,
             fns: project(cx, from, &fns, *iface)?.into(),
         }),
-        other => Ok(Dict::Embedded {
-            of: Box::new(other),
-            iface: *iface,
-        }),
+        other @ (Dict::Param { .. } | Dict::Embedded { .. } | Dict::Tuple { .. }) => {
+            Ok(Dict::Embedded {
+                of: Box::new(other),
+                iface: *iface,
+            })
+        }
     }
 }
 
@@ -313,7 +315,7 @@ fn callee_dicts(c: &Callee) -> Vec<&Dict> {
     match c {
         Callee::Fn { dicts, .. } => dicts.iter().collect(),
         Callee::Iface { dict, .. } => vec![dict],
-        _ => Vec::new(),
+        Callee::Ctor { .. } | Callee::Dyn { .. } | Callee::Value(_) | _ => Vec::new(),
     }
 }
 
@@ -336,10 +338,29 @@ fn expr_dicts(kind: &ExprKind) -> Vec<&Dict> {
             .iter()
             .flat_map(|p| match p {
                 InterpPart::Value { show: Some(c), .. } => callee(c),
-                _ => Vec::new(),
+                InterpPart::Text(_) | InterpPart::Value { .. } => Vec::new(),
             })
             .collect(),
-        _ => Vec::new(),
+        ExprKind::Lit(_)
+        | ExprKind::Local(_)
+        | ExprKind::Ctor { .. }
+        | ExprKind::Block { .. }
+        | ExprKind::ConstRef { .. }
+        | ExprKind::Closure { .. }
+        | ExprKind::LocalFn { .. }
+        | ExprKind::SelfRef { .. }
+        | ExprKind::Case { .. }
+        | ExprKind::Field { .. }
+        | ExprKind::Record { .. }
+        | ExprKind::RecordUpdate { .. }
+        | ExprKind::Tuple(_)
+        | ExprKind::List { .. }
+        | ExprKind::Binary { .. }
+        | ExprKind::Not(_)
+        | ExprKind::Neg { .. }
+        | ExprKind::Panic { .. }
+        | ExprKind::Error
+        | _ => Vec::new(),
     }
 }
 
@@ -598,7 +619,7 @@ impl BodyCx<'_, '_> {
                 args.push(*ret);
                 (Const::BuiltinDesc(BuiltinDesc::Fn), args)
             }
-            other => {
+            other @ (TyKind::Error | TyKind::Never | TyKind::Dyn { .. }) => {
                 return Err(Ice::new(format!("a descriptor of the type {other:?}")));
             }
         };
@@ -754,7 +775,12 @@ impl BodyCx<'_, '_> {
     fn dyn_iface(&self, ty: Ty) -> Result<DefId, Ice> {
         match self.cx.defs.globals.types.kind(ty) {
             TyKind::Dyn { iface, .. } => Ok(*iface),
-            other => Err(Ice::new(format!("a `dyn` value of type {other:?}"))),
+            other @ (TyKind::Error
+            | TyKind::Never
+            | TyKind::Named { .. }
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Param(_)) => Err(Ice::new(format!("a `dyn` value of type {other:?}"))),
         }
     }
 

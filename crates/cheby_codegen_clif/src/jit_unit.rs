@@ -127,7 +127,7 @@ pub fn records_for_jit(
     use rayon::prelude::*;
     units
         .par_iter()
-        .map(|&(unit, seed)| record_with(isa.clone(), unit, ucx, seed, opts))
+        .map(|&(unit, seed)| record_with(std::sync::Arc::clone(isa), unit, ucx, seed, opts))
         .collect()
 }
 

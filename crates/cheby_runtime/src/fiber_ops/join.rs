@@ -33,7 +33,7 @@ use crate::unwind::raise::{raise_cancel, raise_panic_from_wait};
 /// `ctx` is the running fiber's context and `fiber` a live `Fiber` handle,
 /// borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_join(ctx: *mut ExecCtx, fiber: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_fiber_sys_join(ctx: *mut ExecCtx, fiber: Word) -> Word {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { running(ctx) };

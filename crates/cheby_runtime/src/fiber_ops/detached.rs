@@ -79,7 +79,7 @@ use crate::unwind::record::{UnwindRecord, take_unwound};
 /// `ctx` is the running fiber's context and `f` a live `fn() -> Nil`
 /// closure, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_spawn_detached(ctx: *mut ExecCtx, f: Word) {
+pub(crate) unsafe extern "C" fn cheby_fiber_sys_spawn_detached(ctx: *mut ExecCtx, f: Word) {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe { spawn_detached(ctx, f) });
 }

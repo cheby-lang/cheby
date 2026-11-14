@@ -387,6 +387,7 @@ mod tests {
         let piece = values::string("ab");
         // SAFETY (every block below): live strings with the ownership each
         // helper or kernel documents.
+        // SAFETY: as above.
         unsafe {
             let acc = cheby_rt_str_with_capacity(null, 4);
             let acc = cheby_rt_str_append(null, acc, piece);

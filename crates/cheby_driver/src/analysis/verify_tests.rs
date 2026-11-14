@@ -1,4 +1,8 @@
 //! Tests of the analysis API: `verify` (plan §1.6, D-1389, D-1393).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -550,10 +554,10 @@ fn verify_rejects_a_bad_request() {
 #[test]
 fn rename_reads_whole_names_only() {
     assert_eq!(
-        super::verify::rename_in("`count` and `counter` and count", "count", "n"),
+        verify::rename_in("`count` and `counter` and count", "count", "n"),
         "`n` and `counter` and n"
     );
-    assert_eq!(super::verify::rename_in("aa", "a", "b"), "aa");
+    assert_eq!(verify::rename_in("aa", "a", "b"), "aa");
 }
 
 /// The diagnostics of a Q-run report, by path.

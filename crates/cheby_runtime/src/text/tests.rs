@@ -19,6 +19,10 @@
     clippy::unreadable_literal,
     reason = "test arithmetic and slicing on small, known values"
 )]
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::cmp::Ordering;
 
@@ -134,6 +138,7 @@ fn grapheme_length(a: &str) -> i64 {
 }
 
 fn compare(a: &str, b: &str) -> Ordering {
+    // SAFETY: as above.
     let result = call(&[a, b], |w| unsafe { cheby_string_compare(w[0], w[1]) });
     // SAFETY: a live `Order`.
     let out = unsafe { values::word_to_order(result) };
@@ -554,7 +559,7 @@ fn words_split_at_runs_of_white_space() {
 fn white_space_is_the_table_of_25_code_points() {
     let found: Vec<u32> = (0..=char::MAX as u32)
         .filter_map(char::from_u32)
-        .filter(|&c| super::ops::is_white_space(c))
+        .filter(|&c| ops::is_white_space(c))
         .map(u32::from)
         .collect();
     assert_eq!(found, WHITE_SPACE);
@@ -758,8 +763,8 @@ fn from_byte_range_clamps_and_decodes_lossily() {
 #[test]
 fn code_point_values_round_trip() {
     balanced(|| {
-        // SAFETY: live string arguments.
         let values_of = |a: &str| {
+            // SAFETY: live string arguments.
             take_ints(call(&[a], |w| unsafe {
                 cheby_string_to_code_point_values(w[0])
             }))
@@ -910,28 +915,35 @@ fn shrinking_kernels_work_in_place_at_count_one() {
         type Kernel = fn(Word, Word) -> Word;
         let cases: [(&str, Kernel, &str); 7] = [
             // SAFETY (each): live strings, borrowed.
+            // SAFETY: as above.
             ("  pad  ", |t, _| unsafe { cheby_string_trim(t) }, "pad"),
             (
                 "  pad  ",
+                // SAFETY: as above.
                 |t, _| unsafe { cheby_string_trim_start(t) },
                 "pad  ",
             ),
             (
                 "  pad  ",
+                // SAFETY: as above.
                 |t, _| unsafe { cheby_string_trim_end(t) },
                 "  pad",
             ),
             (
                 "prefix-rest",
+                // SAFETY: as above.
                 |t, p| unsafe { cheby_string_remove_prefix(t, p) },
                 "rest",
             ),
             (
                 "rest-prefix-",
+                // SAFETY: as above.
                 |t, p| unsafe { cheby_string_remove_suffix(t, p) },
                 "rest-",
             ),
+            // SAFETY: as above.
             ("héllo", |t, _| unsafe { cheby_string_slice(t, 1, 3) }, "él"),
+            // SAFETY: as above.
             ("héllo", |t, _| unsafe { cheby_string_slice(t, 0, 2) }, "hé"),
         ];
         let affix = new_string("prefix-");

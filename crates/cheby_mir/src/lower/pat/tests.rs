@@ -325,7 +325,7 @@ fn list_patterns_use_length_get_and_slice() {
 /// List pattern steps: positions read level by level, reads before
 /// spreads (D-908), and an element next to its spread read with it in one
 /// call (D-909).
-const STEPS: &str = r"//! List pattern steps.
+const STEPS: &str = "//! List pattern steps.
 
 import std::list
 
@@ -458,7 +458,7 @@ fn guards_fall_through_to_later_arms() {
 fn a_guard_runs_once_per_arm() {
     RECORDED.with(|r| r.borrow_mut().clear());
     let lowered = lower(
-        r"//! A guard after alternatives.
+        "//! A guard after alternatives.
 
 fn pick(pair: (Int, Int)) -> Int {
   case pair {
@@ -547,7 +547,7 @@ fn irrefutable_alternatives_test_without_a_panic() {
     // The first branch can fail, so the tree has a test, but some branch
     // always matches.
     let lowered = lower(
-        r"//! Alternatives in `let`.
+        "//! Alternatives in `let`.
 
 fn pick(pair: (Int, Int)) -> Int {
   let (0, n) | (n, _) = pair
@@ -567,7 +567,7 @@ fn main() {
 #[test]
 fn tail_position_reaches_every_arm() {
     let lowered = lower(
-        r"//! Calls in arms.
+        "//! Calls in arms.
 
 fn twice(n: Int) -> Int {
   n * 2
@@ -639,7 +639,7 @@ fn main() {
 #[test]
 fn nested_patterns_test_inner_positions() {
     let lowered = lower(
-        r"//! Nested constructors.
+        "//! Nested constructors.
 
 type Tree {
   Leaf,
@@ -666,7 +666,7 @@ fn main() {
 #[test]
 fn parameter_patterns_bind_through_bind_param() {
     let lowered = lower(
-        r"//! Pattern parameters (D-242).
+        "//! Pattern parameters (D-242).
 
 type Point {
   Point { x: Int, y: Int },

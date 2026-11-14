@@ -291,7 +291,7 @@ pub(crate) struct Checked {
 }
 
 impl Frontend {
-    pub fn checked(&self, module: ModuleId) -> Option<&Checked> {
+    pub(crate) fn checked(&self, module: ModuleId) -> Option<&Checked> {
         let found = self.checked_quiet(module);
         if found.is_none() && self.warm.contains_key(&module) {
             self.wanted.store(true, Ordering::Relaxed);
@@ -301,7 +301,7 @@ impl Frontend {
 
     /// [`Frontend::checked`], without noting a warm hit's body as wanted:
     /// for callers that skip a module without one.
-    pub fn checked_quiet(&self, module: ModuleId) -> Option<&Checked> {
+    pub(crate) fn checked_quiet(&self, module: ModuleId) -> Option<&Checked> {
         usize::try_from(module.as_u32())
             .ok()
             .and_then(|n| self.checked.get(n))
@@ -310,13 +310,13 @@ impl Frontend {
 
     /// Whether the build asked for the checked body of a warm hit (D-1250):
     /// the command starts again with every module checked.
-    pub fn wanted_body(&self) -> bool {
+    pub(crate) fn wanted_body(&self) -> bool {
         self.wanted.load(Ordering::Relaxed)
     }
 
     /// The tests of `module`: its checked ones, or a warm hit's from its
     /// warm facts (D-1250), whose bodies are empty and never lowered.
-    pub fn tests_of(&self, module: ModuleId) -> Option<&[thir::TestDef]> {
+    pub(crate) fn tests_of(&self, module: ModuleId) -> Option<&[thir::TestDef]> {
         match self.warm.get(&module) {
             Some(warm) => Some(&warm.tests),
             None => self.checked_quiet(module).map(|c| c.thir.tests.as_slice()),
@@ -325,15 +325,12 @@ impl Frontend {
 
     /// The summaries of warm hit `module` in the walk's form
     /// (`load_set.rs`), `None` for a module that was checked.
-    pub fn warm_summaries(
-        &self,
-        module: ModuleId,
-    ) -> Option<&[crate::cache::front::ReferenceSummary]> {
+    pub(crate) fn warm_summaries(&self, module: ModuleId) -> Option<&[front::ReferenceSummary]> {
         self.warm.get(&module).map(|w| w.summaries.as_slice())
     }
 
     /// The hashes of `module`'s source computed when it was read (D-963).
-    pub fn source_hashes(&self, module: ModuleId) -> Option<crate::SourceHashes> {
+    pub(crate) fn source_hashes(&self, module: ModuleId) -> Option<crate::SourceHashes> {
         usize::try_from(module.as_u32())
             .ok()
             .and_then(|n| self.source_hashes.get(n))
@@ -344,12 +341,12 @@ impl Frontend {
     /// The package libraries a JIT of this build resolves native symbols
     /// in, in build order (D-941): the local package's, if it has native
     /// code.
-    pub fn native_libraries(&self) -> Vec<Arc<cheby_jit::NativeLibrary>> {
+    pub(crate) fn native_libraries(&self) -> Vec<Arc<cheby_jit::NativeLibrary>> {
         self.native.libraries()
     }
 
     /// The local module at `path`, if the package has it.
-    pub fn local_module(&self, path: &ModulePath) -> Option<ModuleId> {
+    pub(crate) fn local_module(&self, path: &ModulePath) -> Option<ModuleId> {
         self.modules.find(path).filter(|&m| {
             self.modules
                 .get(m)
@@ -361,7 +358,7 @@ impl Frontend {
     /// exists on `native`, the target of every build so far: an item marked
     /// for one target exists only there (§12.6, as D-597 has it for tests),
     /// so a module whose `main` is `js`'s has none here (D-464).
-    pub fn main_of(&self, module: ModuleId) -> Option<&thir::FnDef> {
+    pub(crate) fn main_of(&self, module: ModuleId) -> Option<&thir::FnDef> {
         // A warm hit's `main` comes from its warm facts (D-1250).
         let main = match self.warm.get(&module) {
             Some(warm) => warm.main.as_ref()?,
@@ -382,7 +379,7 @@ impl Frontend {
     /// versions of a `:reload` that was rejected: they leave the build
     /// order, so nothing compiles, imports or binds natives through them
     /// (D-625). Their ids and published interfaces stay, unused.
-    pub fn forget_reloaded(&mut self, modules: &[ModuleId]) {
+    pub(crate) fn forget_reloaded(&mut self, modules: &[ModuleId]) {
         self.order.retain(|m| !modules.contains(m));
         for &module in modules {
             let Ok(at) = usize::try_from(module.as_u32()) else {
@@ -2856,11 +2853,11 @@ fn run_inner(
     // D-1358, D-1427: a run that cuts cycles turns every import of one edge per
     // cycle into a failed import, and what is left goes to the arm below
     // as usual.
-    let mut cut_imports = Vec::new();
-    if let Some(cut) = &cut_cycles {
-        cut_imports =
-            cut_import_cycles(cut, &modules, &imports, &mut targets, &implicit, &mut graph)?;
-    }
+    let cut_imports = if let Some(cut) = &cut_cycles {
+        cut_import_cycles(cut, &modules, &imports, &mut targets, &implicit, &mut graph)?
+    } else {
+        Vec::new()
+    };
     let order = match topological_order(&graph) {
         Ok(order) => order,
         Err(cycles) => {
@@ -3301,15 +3298,16 @@ fn run_inner(
     // (D-464). Module order keeps the message the same on any schedule.
     // D-1362: a tolerant run notes the drop and goes on, since a broken tree
     // can drop a body silently and its diagnostics are not the batch's.
-    let mut silent_drop = false;
-    if !diagnostics.iter().any(Diagnostic::is_error)
+    let silent_drop = if !diagnostics.iter().any(Diagnostic::is_error)
         && let Some(ice) = dropped.iter_mut().find_map(Option::take)
     {
         if !retain.tolerant {
             return Err(Stop::Ice(ice));
         }
-        silent_drop = true;
-    }
+        true
+    } else {
+        false
+    };
     if mode == Mode::Check && every_local_built {
         diagnostics.extend(unused_package_items(&modules, &built, &uses)?);
     }
@@ -4357,11 +4355,7 @@ mod tests {
                     "{module}"
                 );
                 assert!(
-                    front
-                        .trees
-                        .get(usize::try_from(id(&front, module).as_u32()).unwrap())
-                        .unwrap()
-                        .is_some()
+                    front.trees[usize::try_from(id(&front, module).as_u32()).unwrap()].is_some()
                 );
             }
             // The module above the cycle keeps its types and its THIR.
@@ -4375,7 +4369,7 @@ mod tests {
                     assert!(checked.thir.fns.is_empty() && checked.resolved.is_none());
                     assert!(checked.facts.is_none());
                     let at = usize::try_from(module.as_u32()).unwrap();
-                    assert!(front.trees.get(at).unwrap().is_none());
+                    assert!(front.trees[at].is_none());
                 }
             }
         }

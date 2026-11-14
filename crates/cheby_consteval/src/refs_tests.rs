@@ -71,10 +71,7 @@ fn const_cache_image_references_refuses_what_it_cannot_read() {
     let mut trailing = plain.clone();
     trailing.push(0);
     assert_eq!(image_references(&trailing), None);
-    assert_eq!(
-        image_references(plain.get(..plain.len() - 1).unwrap()),
-        None
-    );
+    assert_eq!(image_references(&plain[..plain.len() - 1]), None);
     let mut other = plain.clone();
     other[4] = 2;
     assert_eq!(image_references(&other), None);

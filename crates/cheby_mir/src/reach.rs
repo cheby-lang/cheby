@@ -774,7 +774,7 @@ impl Walk<'_, '_> {
             // value carries: what it holds was reached where it was built.
             // A kind added to THIR later is an internal error in lowering
             // until it is lowered (D-554).
-            _ => {}
+            Dict::Param { .. } | Dict::Dyn { .. } => {}
         }
     }
 
@@ -790,7 +790,7 @@ impl Walk<'_, '_> {
             Callee::Ctor { ctor, .. } => self.ctor(*ctor),
             // A `dyn` call uses the receiver's dictionary; a value callee
             // is an expression, walked as one.
-            _ => {}
+            Callee::Dyn { .. } | Callee::Value(_) | _ => {}
         }
     }
 
@@ -869,7 +869,19 @@ impl Walk<'_, '_> {
             // The rest refer to no item; their sub-expressions are walked
             // as children. A variant added to THIR later is an internal
             // error in lowering until the back end supports it (D-554).
-            _ => {}
+            ExprKind::Lit(_)
+            | ExprKind::Local(_)
+            | ExprKind::Block { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::LocalFn { .. }
+            | ExprKind::SelfRef { .. }
+            | ExprKind::Case { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::List { .. }
+            | ExprKind::Not(_)
+            | ExprKind::Panic { .. }
+            | ExprKind::Error
+            | _ => {}
         }
     }
 }

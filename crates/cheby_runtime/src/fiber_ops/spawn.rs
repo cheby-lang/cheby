@@ -70,7 +70,11 @@ use crate::unwind::raise::raise_panic;
 /// `ctx` is the running fiber's context, `owner` a live `Scope` handle and
 /// `f` a live `fn() -> T` closure, both borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_spawn(ctx: *mut ExecCtx, owner: Word, f: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_fiber_sys_spawn(
+    ctx: *mut ExecCtx,
+    owner: Word,
+    f: Word,
+) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe {
         spawn(ctx, owner, f, None, "fiber::spawn")
@@ -226,7 +230,7 @@ fn default_stack(runtime: &Shared) -> usize {
 /// `ctx` is the running fiber's context, `owner` a live `Scope` handle and
 /// `f` a live `fn() -> T` closure, both borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_spawn_with_stack(
+pub(crate) unsafe extern "C" fn cheby_fiber_sys_spawn_with_stack(
     ctx: *mut ExecCtx,
     owner: Word,
     stack_bytes: i64,

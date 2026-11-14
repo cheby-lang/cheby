@@ -385,7 +385,7 @@ fn build_once(
         .zip(&compiled.records)
         .map(|(unit, record)| {
             (
-                unit.path.to_string(),
+                unit.path.to_owned(),
                 crate::cache::seal::record_hash(record),
             )
         })
@@ -685,7 +685,7 @@ fn write_objects(
     for (unit, record) in compiled.code.iter().zip(&compiled.records) {
         let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
         let object = cheby_link::object::replay(record, isa, unit.path).map_err(link_error)?;
-        objects.push((unit.path.to_string(), object));
+        objects.push((unit.path.to_owned(), object));
         module_records.push(mangle::module_record(unit.path));
     }
     let spec = ProgramSpec {

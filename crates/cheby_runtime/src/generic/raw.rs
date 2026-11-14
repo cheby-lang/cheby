@@ -143,9 +143,9 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
         // SAFETY: as above.
         LayoutKind::Bytes => View::Bytes(unsafe { text(word) }),
         LayoutKind::Tuple => {
-            // SAFETY: a live tuple: the arity is the scan count, or the
-            // tagged count at offset 8 when escaped.
             let (count, first) = if scan == abi::SCAN_ESCAPE {
+                // SAFETY: a live tuple: the arity is the scan count, or the
+                // tagged count at offset 8 when escaped.
                 (abi::untag_int(unsafe { read_field(obj, 8) }), 16_usize)
             } else {
                 (i64::from(scan), 8)

@@ -14,6 +14,10 @@
 //!   answers.
 //! - [`completion_points`] and [`signature_points`]: where the examples
 //!   group asks for completion and signature help.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::fmt::Write as _;
 
@@ -68,7 +72,7 @@ pub fn kind_name(kind: Option<u64>) -> &'static str {
 }
 
 /// A completion answer as a client reads it.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Completions {
     /// `isIncomplete` of a `CompletionList`; `false` for a bare list.
     pub incomplete: bool,
@@ -561,7 +565,7 @@ pub fn apply_item(
         let new_text = item
             .get("insertText")
             .and_then(Value::as_str)
-            .unwrap_or(label(item));
+            .unwrap_or_else(|| label(item));
         (
             json!({ "start": start.to_json(), "end": at.to_json() }),
             new_text.to_owned(),

@@ -184,7 +184,23 @@ fn chained_comparison(expr: BinExpr<'_>, out: &mut Vec<Diagnostic>) {
             Expr::Binary(inner) if inner.op().is_some_and(crate::ast::BinOp::is_comparison) => {
                 inner.op_token()
             }
-            _ => None,
+            Expr::Literal(_)
+            | Expr::String(_)
+            | Expr::Path(_)
+            | Expr::Record(_)
+            | Expr::Tuple(_)
+            | Expr::Paren(_)
+            | Expr::List(_)
+            | Expr::Block(_)
+            | Expr::Closure(_)
+            | Expr::Case(_)
+            | Expr::Panic(_)
+            | Expr::Todo(_)
+            | Expr::Binary(_)
+            | Expr::Prefix(_)
+            | Expr::Call(_)
+            | Expr::Hole(_)
+            | Expr::Field(_) => None,
         });
     let Some(inner) = inner else {
         return;

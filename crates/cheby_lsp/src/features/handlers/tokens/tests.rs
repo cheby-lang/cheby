@@ -1,6 +1,10 @@
 //! Tests of semantic tokens (X §5.5, D-1396): each kind of name on clean
 //! text, a type error and a grammar error, `range`, the setting, position
 //! encodings, and every example.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -435,13 +439,7 @@ fn the_setting_turns_them_off() {
     let mut settings = Settings::default();
     settings.semantic_tokens.enabled = false;
     let p = json!({ "textDocument": document(&temp.main()) });
-    let value = ask(
-        &analyzed,
-        &settings,
-        PositionEncoding::Utf16,
-        full,
-        p.clone(),
-    );
+    let value = ask(&analyzed, &settings, PositionEncoding::Utf16, full, p);
     assert_eq!(value, Value::Null);
     let p = json!({
         "textDocument": document(&temp.main()),

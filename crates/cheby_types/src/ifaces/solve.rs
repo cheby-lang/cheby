@@ -81,7 +81,14 @@ impl<'a> IfaceCx<'a> {
     fn interface_def(&self, iface: DefId) -> Result<Option<&'a InterfaceDef>, Ice> {
         Ok(match &self.item(iface)?.sig {
             ItemSig::Interface(def) => Some(def),
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         })
     }
 
@@ -152,7 +159,14 @@ impl<'a> IfaceCx<'a> {
                 params: sig.params.clone(),
                 ret: sig.ret,
             }),
-            _ => None,
+            ItemSig::Fn(_)
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::Test
+            | ItemSig::Error => None,
         })
     }
 
@@ -582,7 +596,11 @@ impl<'a> IfaceCx<'a> {
                 }
                 Err(Ice::new("an interface function is not among its functions"))
             }
-            _ => Ok(self
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Param(_) => Ok(self
                 .satisfy_ty(self_ty, iface, 0)?
                 .map(|dict| Callee::Iface { iface_fn, dict })),
         }
@@ -688,7 +706,11 @@ impl<'a> IfaceCx<'a> {
                     .ok_or_else(|| Ice::new("`Compare` without `compare`"))?;
                 Ok(Ok(OpImpl::Call(Callee::Iface { iface_fn, dict })))
             }
-            _ => fail(Reason::NoModule),
+            TyKind::Error
+            | TyKind::Never
+            | TyKind::Tuple(_)
+            | TyKind::Fn { .. }
+            | TyKind::Dyn { .. } => fail(Reason::NoModule),
         }
     }
 }

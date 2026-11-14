@@ -13,6 +13,10 @@ use crate::parser::recovery::{EXPR_RECOVERY, TYPE_FIRST};
 use crate::parser::{CompletedMarker, Parser};
 
 /// A type. Reports and returns `None` if there is none here.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 pub(super) fn type_(p: &mut Parser<'_>) -> Option<CompletedMarker> {
     if !p.at_ts(TYPE_FIRST) {
         p.expected("a type");

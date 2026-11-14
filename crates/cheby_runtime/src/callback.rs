@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn kernels_call_closures_through_the_entrys_trampolines() {
+    fn kernels_call_closures_through_the_entry_trampolines() {
         let config = EntryConfig {
             callbacks: Callbacks {
                 t0: Some(t0),

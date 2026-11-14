@@ -40,6 +40,10 @@ fn is_header_or_item(node: SyntaxNode<'_>) -> bool {
 /// A `///` documents its parent when it lies in the parent's leading
 /// trivia, as [`Item::doc_comments`] defines. The end of that trivia is
 /// found once per parent, so a long run of doc comments costs linear time.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
 fn doc_comments(file: SourceFile<'_>, out: &mut Vec<Diagnostic>) {
     let root = file.syntax();
     let header_start = root
@@ -192,7 +196,7 @@ fn head_span(node: SyntaxNode<'_>, name: Option<Span>) -> Span {
             SyntaxElement::Token(_) => None,
         })
         .unwrap_or_else(|| node.text_range());
-    let end = name.map_or(first.end(), |span| span.range.end().max(first.end()));
+    let end = name.map_or_else(|| first.end(), |span| span.range.end().max(first.end()));
     Span::new(node.tree().file(), TextRange::new(first.start(), end))
 }
 
@@ -224,7 +228,7 @@ fn only_attrs(node: SyntaxNode<'_>) -> bool {
             SyntaxElement::Node(child) if Attr::can_cast(child.kind()) => any = true,
             SyntaxElement::Token(token)
                 if token.kind().is_trivia() || token.kind() == SyntaxKind::NEWLINE => {}
-            _ => return false,
+            SyntaxElement::Node(_) | SyntaxElement::Token(_) => return false,
         }
     }
     any

@@ -137,7 +137,14 @@ fn qualifier(cx: &CompletionCx<'_>, view: ModuleView<'_>, module: ModuleId) -> O
 fn fn_sig<'s>(cx: &CompletionCx<'s>, def: DefId) -> Option<&'s FnSig> {
     match &cx.item(def)?.sig {
         ItemSig::Fn(sig) => Some(sig),
-        _ => None,
+        ItemSig::Type(_)
+        | ItemSig::Ctor(_)
+        | ItemSig::Alias(_)
+        | ItemSig::Const(_)
+        | ItemSig::Interface(_)
+        | ItemSig::InterfaceFn(_)
+        | ItemSig::Test
+        | ItemSig::Error => None,
     }
 }
 
@@ -219,7 +226,9 @@ fn head_module(cx: &CompletionCx<'_>, left: Ty) -> Option<ModuleId> {
     let def = match cx.snapshot.globals().types.kind(left) {
         TyKind::Named { def, .. } => *def,
         TyKind::Dyn { iface, .. } => *iface,
-        _ => return None,
+        TyKind::Error | TyKind::Never | TyKind::Tuple(_) | TyKind::Fn { .. } | TyKind::Param(_) => {
+            return None;
+        }
     };
     if def.module != ModuleId::BUILTIN {
         return Some(def.module);
@@ -242,7 +251,12 @@ fn imported_by_name(cx: &CompletionCx<'_>, view: ModuleView<'_>) -> BTreeMap<Def
             Res::Def(def) if matches!(entry.source, ScopeSource::Import(_)) => {
                 Some((def, cx.name_text(name).to_owned()))
             }
-            _ => None,
+            Res::Local(_)
+            | Res::Def(_)
+            | Res::Module(_)
+            | Res::TyParam(_)
+            | Res::SelfTy
+            | Res::Err => None,
         })
         .collect()
 }
@@ -324,7 +338,7 @@ pub(super) fn candidates(cx: &CompletionCx<'_>, left: Ty, others: bool) -> Vec<C
                     Some(cx.name_text(name).to_owned()),
                 );
             }
-            _ => {}
+            Res::Local(_) | Res::Def(_) | Res::TyParam(_) | Res::SelfTy | Res::Err => {}
         }
     }
     imported.sort_unstable();
@@ -456,11 +470,12 @@ pub(crate) fn complete(
     // `xs |> Show::show`, so they come as the modules do, whatever the
     // left side's type, those to import capped with the functions
     // (D-1479, D-1546). Before a turbofish none fits (D-1536).
-    let mut needs_import: Vec<(String, String, Entry)> = Vec::new();
-    if !cx.before_turbofish() {
+    let mut needs_import: Vec<(String, String, Entry)> = if cx.before_turbofish() {
+        Vec::new()
+    } else {
         scope_interfaces(cx, out);
-        needs_import = pipe_interfaces(cx, out);
-    }
+        pipe_interfaces(cx, out)
+    };
     let Some(left) = left else {
         push_capped(needs_import, out, |_, _, entry| Some(entry));
         return;

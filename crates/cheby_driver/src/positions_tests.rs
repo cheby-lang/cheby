@@ -4,8 +4,6 @@
 //! records with positions identical from two package paths; and the
 //! records' sizes with positions on and off for CP2 (gate item 25, an
 //! ignored test).
-
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cheby_codegen_clif::record::CodeRecord;
@@ -52,7 +50,7 @@ fn records(root: &Path, mir: MirOptions) -> Vec<(String, CodeRecord)> {
         .code
         .iter()
         .zip(compiled.records)
-        .map(|(unit, record)| (unit.path.to_string(), record))
+        .map(|(unit, record)| (unit.path.to_owned(), record))
         .collect()
 }
 

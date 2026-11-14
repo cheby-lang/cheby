@@ -26,7 +26,7 @@
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env`, `random` (D-656), `runtime_info` (`std::runtime`,
 //!   D-657), `net` (`std::net`'s sockets on the poller, D-984) and
-//!   [`hamt`], each registering its symbols in [`symbols`] (plan
+//!   [`hamt`], each registering its symbols in [`mod@symbols`] (plan
 //!   §4.3.3).
 //!
 //! Every C-ABI entry point is `extern "C"`, so an internal Rust panic

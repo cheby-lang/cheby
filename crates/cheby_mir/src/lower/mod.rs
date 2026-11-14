@@ -221,7 +221,7 @@ impl Pending {
 
     /// The size at which a literal's piece is cut (D-780).
     pub(crate) fn split_size(&self) -> usize {
-        self.split.unwrap_or(split::SPLIT_SIZE)
+        self.split.unwrap_or(SPLIT_SIZE)
     }
 
     /// Adds a function made while lowering the current item, such as a
@@ -757,7 +757,21 @@ fn collect_defs(f: &Function, m: &mut Mentions) {
                 }
                 // A kind of rvalue added later mentions nothing but its
                 // operands unless listed here.
-                _ => {}
+                Rvalue::Use(_)
+                | Rvalue::CallForeign { .. }
+                | Rvalue::CallRuntime { .. }
+                | Rvalue::ReadLayout { .. }
+                | Rvalue::Box { .. }
+                | Rvalue::Unbox { .. }
+                | Rvalue::Checked { .. }
+                | Rvalue::Compare { .. }
+                | Rvalue::FloatArith { .. }
+                | Rvalue::Bitwise { .. }
+                | Rvalue::FloatNeg { .. }
+                | Rvalue::Not(_)
+                | Rvalue::ReadTag { .. }
+                | Rvalue::DropReuse { .. }
+                | Rvalue::AllocReuse { .. } => {}
             }
         }
         match &block.term {

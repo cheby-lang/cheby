@@ -91,7 +91,7 @@ unsafe fn push_bytes(data: Word, piece: &[u8]) -> Word {
 
 /// `bytes::new`: an empty `Bytes`. O(1).
 #[unsafe(no_mangle)]
-pub extern "C" fn cheby_bytes_new() -> Word {
+pub(crate) extern "C" fn cheby_bytes_new() -> Word {
     guarded(None, || string::new_bytes(&[]))
 }
 
@@ -101,7 +101,7 @@ pub extern "C" fn cheby_bytes_new() -> Word {
 ///
 /// `values` is a live `List<U8>`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_from_list(values: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_from_list(values: Word) -> Word {
     guarded(None, || {
         // SAFETY: a live list, borrowed for the call; its elements are `U8`
         // words, always tagged.
@@ -135,7 +135,7 @@ pub unsafe extern "C" fn cheby_bytes_from_list(values: Word) -> Word {
 ///
 /// `text` is a live `String`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_from_string(text: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_from_string(text: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let text = unsafe { string::bytes(text) }
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn cheby_bytes_from_string(text: Word) -> Word {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_length(data: Word) -> i64 {
+pub(crate) unsafe extern "C" fn cheby_bytes_length(data: Word) -> i64 {
     // SAFETY: forwarded from the caller.
     i64::try_from(unsafe { arg(data) }.len()).unwrap_or(i64::MAX)
 }
@@ -166,7 +166,7 @@ pub unsafe extern "C" fn cheby_bytes_length(data: Word) -> i64 {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_get(data: Word, position: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_get(data: Word, position: i64) -> Word {
     // SAFETY: forwarded from the caller.
     let data = unsafe { arg(data) };
     index(position, data.len())
@@ -186,7 +186,7 @@ pub unsafe extern "C" fn cheby_bytes_get(data: Word, position: i64) -> Word {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64) -> i64 {
+pub(crate) unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64) -> i64 {
     // SAFETY: forwarded from the caller.
     let data = unsafe { arg(data) };
     let start = clamp(from, data.len());
@@ -218,7 +218,7 @@ pub(crate) fn find(data: &[u8], part: &[u8], from: i64) -> Option<usize> {
 ///
 /// `data` and `part` are live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_index_of(data: Word, part: Word, from: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_index_of(data: Word, part: Word, from: i64) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (data, part) = unsafe { (arg(data), arg(part)) };
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn cheby_bytes_index_of(data: Word, part: Word, from: i64)
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_slice(data: Word, start: i64, end: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_slice(data: Word, start: i64, end: i64) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let len = unsafe { arg(data) }.len();
@@ -252,7 +252,7 @@ pub unsafe extern "C" fn cheby_bytes_slice(data: Word, start: i64, end: i64) -> 
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_to_list(data: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_to_list(data: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         list::from_iter(
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn cheby_bytes_to_list(data: Word) -> Word {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_push(data: Word, byte: u8) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_push(data: Word, byte: u8) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(None, || unsafe { push_bytes(data, &[byte]) })
 }
@@ -286,7 +286,7 @@ pub unsafe extern "C" fn cheby_bytes_push(data: Word, byte: u8) -> Word {
 ///
 /// `data` and `other` are live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_append(data: Word, other: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_append(data: Word, other: Word) -> Word {
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let piece = unsafe { arg(other) };
@@ -309,7 +309,7 @@ pub unsafe extern "C" fn cheby_bytes_append(data: Word, other: Word) -> Word {
 ///
 /// `parts` is a live `List<Bytes>`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_concat(parts: Word) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_concat(parts: Word) -> Word {
     guarded(None, || {
         let pieces = || {
             // SAFETY: a live list, borrowed for the call.
@@ -333,7 +333,7 @@ pub unsafe extern "C" fn cheby_bytes_concat(parts: Word) -> Word {
             unsafe { rc::dup(only) };
             return only;
         }
-        let mut out = crate::object::ptr_to_word(string::alloc_bytes(size));
+        let mut out = ptr_to_word(string::alloc_bytes(size));
         for (_, piece) in pieces() {
             // SAFETY: `out` is the unique `Bytes` built here, with room for
             // every piece; the pieces lie outside it.
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn cheby_bytes_concat(parts: Word) -> Word {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_push_i8(data: Word, value: i8) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_push_i8(data: Word, value: i8) -> Word {
     // SAFETY: forwarded from the caller.
     guarded(None, || unsafe { push_bytes(data, &value.to_be_bytes()) })
 }
@@ -365,7 +365,7 @@ pub unsafe extern "C" fn cheby_bytes_push_i8(data: Word, value: i8) -> Word {
 ///
 /// `data` is a live `Bytes`, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_bytes_read_i8(data: Word, offset: i64) -> Word {
+pub(crate) unsafe extern "C" fn cheby_bytes_read_i8(data: Word, offset: i64) -> Word {
     // SAFETY: forwarded from the caller.
     let data = unsafe { arg(data) };
     window::<1>(data, offset).map_or_else(values::none, |bytes| {
@@ -384,7 +384,7 @@ macro_rules! ordered {
                             "# Safety\n\n`data` is a live `Bytes`, borrowed."
                         )]
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $push_be(data: Word, value: $ty) -> Word {
+        pub(crate) unsafe extern "C" fn $push_be(data: Word, value: $ty) -> Word {
             // SAFETY: forwarded from the caller.
             guarded(None, || unsafe { push_bytes(data, &value.to_be_bytes()) })
         }
@@ -395,7 +395,7 @@ macro_rules! ordered {
                             "# Safety\n\n`data` is a live `Bytes`, borrowed."
                         )]
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $push_le(data: Word, value: $ty) -> Word {
+        pub(crate) unsafe extern "C" fn $push_le(data: Word, value: $ty) -> Word {
             // SAFETY: forwarded from the caller.
             guarded(None, || unsafe { push_bytes(data, &value.to_le_bytes()) })
         }
@@ -407,7 +407,7 @@ macro_rules! ordered {
                             "# Safety\n\n`data` is a live `Bytes`, borrowed."
                         )]
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $read_be(data: Word, offset: i64) -> Word {
+        pub(crate) unsafe extern "C" fn $read_be(data: Word, offset: i64) -> Word {
             guarded(None, || {
                 // SAFETY: forwarded from the caller.
                 let data = unsafe { arg(data) };
@@ -422,7 +422,7 @@ macro_rules! ordered {
                             "# Safety\n\n`data` is a live `Bytes`, borrowed."
                         )]
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $read_le(data: Word, offset: i64) -> Word {
+        pub(crate) unsafe extern "C" fn $read_le(data: Word, offset: i64) -> Word {
             guarded(None, || {
                 // SAFETY: forwarded from the caller.
                 let data = unsafe { arg(data) };

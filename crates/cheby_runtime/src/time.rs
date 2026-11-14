@@ -16,7 +16,7 @@
 //!   are comparable (D-690).
 //! - **Sleeping** (`sys_sleep`) takes the span as std passes every span,
 //!   whole seconds and nanoseconds (D-682), read by
-//!   [`deadline_after`](crate::sched::deadline_after): a span of zero or
+//!   [`deadline_after`]: a span of zero or
 //!   less returns at once, with or without a scheduler (D-652, D-692). Any
 //!   other span needs the scheduler: without one the program ends with a
 //!   fatal error that names `time::sleep` (D-692, D-714, D-983). With one,
@@ -179,7 +179,7 @@ fn reading((seconds, nanoseconds): (i64, i64)) -> Word {
 ///
 /// None beyond the C ABI: it takes no argument.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_time_sys_now() -> Word {
+pub(crate) unsafe extern "C" fn cheby_time_sys_now() -> Word {
     guarded(None, || reading(since_epoch(SystemTime::now())))
 }
 
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn cheby_time_sys_now() -> Word {
 ///
 /// None beyond the C ABI: it takes no argument.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_time_sys_monotonic() -> Word {
+pub(crate) unsafe extern "C" fn cheby_time_sys_monotonic() -> Word {
     guarded(None, || reading(since_origin(Instant::now())))
 }
 
@@ -225,7 +225,11 @@ impl TimerTarget for SleepTimer {
 ///
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_time_sys_sleep(ctx: *mut ExecCtx, seconds: i64, nanoseconds: i64) {
+pub(crate) unsafe extern "C" fn cheby_time_sys_sleep(
+    ctx: *mut ExecCtx,
+    seconds: i64,
+    nanoseconds: i64,
+) {
     // SAFETY: forwarded from the caller.
     guarded(Some(ctx), || unsafe { sleep(ctx, seconds, nanoseconds) });
 }
@@ -282,6 +286,8 @@ unsafe fn sleep(ctx: *mut ExecCtx, seconds: i64, nanoseconds: i64) {
         WaitState::Claimed => {}
         // The walk won the header: the sleep unwinds at once (D-983).
         WaitState::Cancelled => raise_cancel(Some(ctx)),
-        state => fatal(format_args!("a sleep woke in state {state:?}")),
+        state @ (WaitState::Waiting | WaitState::Closed) => {
+            fatal(format_args!("a sleep woke in state {state:?}"))
+        }
     }
 }

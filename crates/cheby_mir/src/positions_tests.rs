@@ -2,6 +2,10 @@
 //! gives every statement and terminator the line and column (D-421) of the
 //! construct it lowers, the passes keep them, the dumps never show them,
 //! and positions change nothing else in MIR.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::fmt::Write as _;
 

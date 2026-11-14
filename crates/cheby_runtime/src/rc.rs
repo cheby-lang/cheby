@@ -404,7 +404,7 @@ mod mark_shared_tests {
             write_field(obj, 8, value);
             write_field(obj, 16, 0x1000);
         }
-        object::ptr_to_word(obj)
+        ptr_to_word(obj)
     }
 
     /// An object of a uniform layout `id` holding `fields` (owned).
@@ -418,7 +418,7 @@ mod mark_shared_tests {
             // SAFETY: initializing a fresh object's uniform fields.
             unsafe { write_field(obj, index.saturating_add(1).saturating_mul(8), *field) };
         }
-        object::ptr_to_word(obj)
+        ptr_to_word(obj)
     }
 
     /// `map::from_list` of owned pairs.
@@ -703,10 +703,10 @@ mod mark_shared_tests {
             let domain = Arc::clone(&domain);
             move || {
                 with_domain(domain, || {
-                    let before = crate::alloc::quarantine_len();
+                    let before = alloc::quarantine_len();
                     // SAFETY: the last reference.
                     unsafe { drop(value) };
-                    crate::alloc::quarantine_len().saturating_sub(before)
+                    alloc::quarantine_len().saturating_sub(before)
                 })
             }
         });

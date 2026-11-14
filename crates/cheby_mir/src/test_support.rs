@@ -95,7 +95,7 @@ pub(crate) enum Mode {
 
 impl Lowered {
     /// The dump of every unit, separated by blank lines.
-    pub fn dump(&self) -> String {
+    pub(crate) fn dump(&self) -> String {
         self.units
             .iter()
             .map(|u| dump(u).unwrap())
@@ -104,7 +104,7 @@ impl Lowered {
     }
 
     /// The unit of the module at `path` (`app`, `std::io`).
-    pub fn unit(&self, path: &str) -> &MirModule {
+    pub(crate) fn unit(&self, path: &str) -> &MirModule {
         self.units
             .iter()
             .find(|u| &*u.path == path && u.module().is_some())
@@ -113,7 +113,7 @@ impl Lowered {
 
     /// The dump of the function whose key prints as `key` (`app::main`,
     /// `shim app::f`) in the unit of `path`.
-    pub fn function(&self, path: &str, key: &str) -> String {
+    pub(crate) fn function(&self, path: &str, key: &str) -> String {
         let unit = self.unit(path);
         unit.functions
             .iter()
@@ -127,7 +127,7 @@ impl Lowered {
 
     /// The dump of the function whose key prints as `key` (`entry
     /// main(app::main)`, `test app::…`) in any unit.
-    pub fn any_function(&self, key: &str) -> String {
+    pub(crate) fn any_function(&self, key: &str) -> String {
         self.units
             .iter()
             .flat_map(|u| {
@@ -661,7 +661,7 @@ fn back_end(
     // interfaces, and their union (D-969).
     let facts = matches!(mode, Mode::Inferred { .. }).then(|| facts_check(&units, &cx.defs));
     let per_unit = |unit: &MirModule, facts: &BuildFacts| {
-        Ok::<_, cheby_iface::Ice>(infer_unit(unit, facts, checked, set, modules, globals))
+        Ok::<_, Ice>(infer_unit(unit, facts, checked, set, modules, globals))
     };
     let masks = finish(&mut units, mode, &per_unit);
     (units, masks, facts)
@@ -681,7 +681,7 @@ fn facts_check(units: &[MirModule], defs: &Defs<'_>) -> FactsCheck {
             crate::UnitKind::Code(m) => {
                 Some((u.path.to_string(), union.about_module(m, defs).unwrap()))
             }
-            _ => None,
+            crate::UnitKind::Tests(_) | crate::UnitKind::Entries => None,
         })
         .collect();
     FactsCheck {
@@ -697,7 +697,7 @@ fn facts_check(units: &[MirModule], defs: &Defs<'_>) -> FactsCheck {
 fn finish(
     units: &mut [MirModule],
     mode: Mode,
-    per_unit: &dyn Fn(&MirModule, &BuildFacts) -> Result<Masks, cheby_iface::Ice>,
+    per_unit: &dyn Fn(&MirModule, &BuildFacts) -> Result<Masks, Ice>,
 ) -> BTreeMap<String, BorrowMask> {
     let masks = match mode {
         Mode::Inferred { .. } => {
@@ -714,7 +714,9 @@ fn finish(
         Mode::Counted | Mode::Split { .. } | Mode::CountedWith(_) => {
             let options = match mode {
                 Mode::CountedWith(options) => options,
-                _ => MirOptions::default(),
+                Mode::Counted | Mode::Uncounted | Mode::Split { .. } | Mode::Inferred { .. } => {
+                    MirOptions::default()
+                }
             };
             // A build infers borrowing only when its options borrow
             // (D-808).

@@ -456,7 +456,8 @@ fn install_with(
     // outlives the call.
     match unsafe { cheby_runtime::entry::run_task(&config, task) } {
         Ok(EntryOutcome::Returned(_)) => {
-            match result.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            let installed = result.lock().unwrap_or_else(PoisonError::into_inner).take();
+            match installed {
                 Some(Ok(())) => Ok(()),
                 Some(Err(e)) => Err(Ice::new(format!("installing constants: {e}"))),
                 None => Err(Ice::new("installing constants returned no result")),

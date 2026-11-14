@@ -324,7 +324,7 @@ struct DropRef(ExternalDrop);
 
 impl PartialEq for DropRef {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::fn_addr_eq(self.0, other.0)
+        ptr::fn_addr_eq(self.0, other.0)
     }
 }
 
@@ -606,6 +606,10 @@ static CUSTOM: [Slot; CUSTOM_COUNT] = [const { AtomicPtr::new(ptr::null_mut()) }
 
 /// The next user id to hand out. Every registration is serialized by this
 /// lock.
+#[expect(
+    clippy::mutex_integer,
+    reason = "the lock serializes the whole registration, not only the counter"
+)]
 static NEXT_ID: Mutex<LayoutId> = Mutex::new(layout::FIRST_USER);
 
 static BUILTINS: OnceLock<Box<[Option<LayoutInfo>]>> = OnceLock::new();
@@ -939,7 +943,20 @@ pub fn register_builtin(id: LayoutId, info: LayoutInfo) -> Result<(), LayoutErro
     let existing = unsafe { &*current };
     match existing.kind {
         LayoutKind::Custom(other) if ptr::eq(other, kind) => Ok(()),
-        _ => Err(LayoutError::Invalid(format!(
+        LayoutKind::String
+        | LayoutKind::Bytes
+        | LayoutKind::BoxedInt
+        | LayoutKind::BoxedU64
+        | LayoutKind::BoxedFloat
+        | LayoutKind::BoxedF32
+        | LayoutKind::Closure
+        | LayoutKind::Tuple
+        | LayoutKind::Dict
+        | LayoutKind::Dyn
+        | LayoutKind::Desc
+        | LayoutKind::DescNominal
+        | LayoutKind::Ctor { .. }
+        | LayoutKind::Custom(_) => Err(LayoutError::Invalid(format!(
             "id {id} already holds `{}`",
             existing.name
         ))),

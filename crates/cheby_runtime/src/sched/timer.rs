@@ -547,7 +547,6 @@ impl Shared {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
 
     use super::*;
 
@@ -685,7 +684,7 @@ mod tests {
         let timers = timers();
         let probe = Arc::new(Probe::default());
         let at = Instant::now() + Duration::from_secs(3600);
-        let handle = arm(&timers, at, probe.clone());
+        let handle = arm(&timers, at, Arc::<Probe>::clone(&probe));
         // A `now` from the future is capped at the real clock.
         assert_eq!(timers.fire_due(at + Duration::from_secs(1)), 0);
         assert_eq!(probe.fired.load(Ordering::SeqCst), 0);
@@ -699,7 +698,7 @@ mod tests {
         let timers = timers();
         let probe = Arc::new(Probe::default());
         let at = Instant::now();
-        let handle = arm(&timers, at, probe.clone());
+        let handle = arm(&timers, at, Arc::<Probe>::clone(&probe));
         assert_eq!(Arc::strong_count(&probe), 2);
         assert!(handle.cancel());
         // The winning cancel dropped the target and the live count.
@@ -710,7 +709,7 @@ mod tests {
         assert_eq!(probe.fired.load(Ordering::SeqCst), 0);
         // A fired timer cannot be cancelled.
         let fired = Arc::new(Probe::default());
-        let handle = arm(&timers, at, fired.clone());
+        let handle = arm(&timers, at, Arc::<Probe>::clone(&fired));
         assert_eq!(timers.fire_due(at), 1);
         assert!(handle.fired());
         assert!(!handle.cancel());
@@ -723,7 +722,7 @@ mod tests {
             let timers = Arc::new(timers());
             let probe = Arc::new(Probe::default());
             let at = Instant::now();
-            let handle = arm(&timers, at, probe.clone());
+            let handle = arm(&timers, at, Arc::<Probe>::clone(&probe));
             let firing = {
                 let timers = Arc::clone(&timers);
                 std::thread::spawn(move || timers.fire_due(at))
@@ -806,7 +805,11 @@ mod tests {
         impl TimerTarget for Rearm {
             fn fire(&self) {
                 assert!(!self.timers.heap.is_locked());
-                arm(&self.timers, Instant::now(), self.probe.clone());
+                arm(
+                    &self.timers,
+                    Instant::now(),
+                    Arc::<Probe>::clone(&self.probe),
+                );
             }
         }
         let timers = Arc::new(timers());
@@ -817,7 +820,7 @@ mod tests {
             at,
             Arc::new(Rearm {
                 timers: Arc::clone(&timers),
-                probe: probe.clone(),
+                probe: Arc::clone(&probe),
             }),
         );
         assert_eq!(timers.fire_due(at), 1);
@@ -830,7 +833,9 @@ mod tests {
         let timers = timers();
         let probe = Arc::new(Probe::default());
         let at = Instant::now();
-        let handles: Vec<_> = (0..3).map(|_| arm(&timers, at, probe.clone())).collect();
+        let handles: Vec<_> = (0..3)
+            .map(|_| arm(&timers, at, Arc::<Probe>::clone(&probe)))
+            .collect();
         timers.clear();
         assert_eq!(timers.pending(), 0);
         assert_eq!(timers.heap_len(), 0);
@@ -849,7 +854,7 @@ mod tests {
         let timers = timers();
         let probe = Arc::new(Probe::default());
         let at = Instant::now();
-        let (handle, armed) = timers.arm(at, probe.clone(), None, || true);
+        let (handle, armed) = timers.arm(at, Arc::<Probe>::clone(&probe), None, || true);
         assert_eq!(armed, None);
         assert_eq!(Arc::strong_count(&probe), 1);
         assert_eq!(timers.pending(), 0);

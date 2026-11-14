@@ -255,7 +255,7 @@ impl Big {
         }
         match self.top().cmp(&other.top()) {
             Ordering::Equal => {}
-            unequal => return unequal,
+            unequal @ (Ordering::Less | Ordering::Greater) => return unequal,
         }
         let low = self.exp.min(other.exp);
         let len = self.mant.len().max(other.mant.len()).saturating_add(1);

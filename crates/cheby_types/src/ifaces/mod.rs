@@ -28,7 +28,7 @@
 //!   with no expected type, such as `"{panic}"`.
 //! - **`Self` position.** An interface call resolves `Self` from the
 //!   argument in the first parameter that mentions `Self`
-//!   ([`self_param`], D-173). Interface signatures use `ParamIdx` 0 for
+//!   (`self_param`, D-173). Interface signatures use `ParamIdx` 0 for
 //!   `Self`.
 //! - **Type parameters** of the enclosing item satisfy only their bounds
 //!   and the interfaces those embed ([`Dict::Param`],
@@ -123,7 +123,16 @@ impl OpFn {
             BinOpKind::Mul => Self::Mul,
             BinOpKind::Div => Self::Div,
             BinOpKind::Lt | BinOpKind::Le | BinOpKind::Gt | BinOpKind::Ge => Self::Compare,
-            _ => return None,
+            BinOpKind::Or
+            | BinOpKind::And
+            | BinOpKind::Eq
+            | BinOpKind::Ne
+            | BinOpKind::BitOr
+            | BinOpKind::BitXor
+            | BinOpKind::BitAnd
+            | BinOpKind::Shl
+            | BinOpKind::Shr
+            | BinOpKind::Rem => return None,
         })
     }
 
@@ -286,7 +295,7 @@ pub(crate) fn satisfy(
 /// `self_ty` (§8.5, D-173): [`Callee::Fn`] for a nominal type, which must
 /// satisfy the whole interface, [`Callee::Iface`] for a type parameter or
 /// a tuple, [`Callee::Dyn`] for `dyn`. `self_ty` is the type of the
-/// argument in the first `Self` position ([`self_param`]).
+/// argument in the first `Self` position (`self_param`).
 ///
 /// # Errors
 ///

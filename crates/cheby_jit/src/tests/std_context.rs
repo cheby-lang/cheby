@@ -2,7 +2,7 @@
 //! (D-692, D-693). The MIR here is a hand-built copy of what
 //! `cheby_mir`'s lowering tests pin (`lower/intrinsic_tests.rs`).
 
-use cheby_mir::{CType, ForeignSig, LayoutRef, Stage, validate};
+use cheby_mir::{CType, ForeignSig, Stage, validate};
 use cheby_runtime::ExecCtx;
 
 use super::*;

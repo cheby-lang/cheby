@@ -132,6 +132,10 @@ impl Key {
 
     /// The key's hash, which names its file.
     #[must_use]
+    #[expect(
+        clippy::same_name_method,
+        reason = "the hash that names the file; `Hash::hash` feeds hash maps"
+    )]
     pub const fn hash(&self) -> Hash128 {
         self.0
     }

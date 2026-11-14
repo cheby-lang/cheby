@@ -3,6 +3,10 @@
 //! materialized sources.
 //!
 //! Nothing here runs generated code, so every platform runs them.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -354,7 +358,7 @@ fn const_initializer_reads_dropped_trees() {
     )
     .unwrap();
     let mut session = crate::analysis::Session::new(crate::analysis::SessionConfig {
-        root: root.clone(),
+        root,
         kind: crate::analysis::PackageKind::Package,
         target: None,
         globals: Arc::new(Globals::new()),

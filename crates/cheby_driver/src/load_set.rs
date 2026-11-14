@@ -164,7 +164,12 @@ impl<'f> Summaries<'f> {
         let kind = match item.kind {
             DefKind::Fn => MentionerKind::Function,
             DefKind::Const => MentionerKind::Constant,
-            _ => return None,
+            DefKind::Type
+            | DefKind::Alias
+            | DefKind::Interface
+            | DefKind::InterfaceFn
+            | DefKind::Ctor
+            | DefKind::Test => return None,
         };
         let &at = summary.by_name.get(&(kind, name))?;
         Some((summary.entries.get(at)?, kind == MentionerKind::Constant))

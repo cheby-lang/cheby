@@ -5,7 +5,7 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
@@ -238,7 +238,7 @@ fn cache_key_every_setting_enters_the_key() {
     });
     variants.push(Settings {
         target: "x86_64-unknown-linux-gnu".to_owned(),
-        ..base.clone()
+        ..base
     });
     let mut keys: Vec<_> = variants.iter().map(|s| key(s).hash()).collect();
     keys.sort();
@@ -344,7 +344,7 @@ fn cache_store_stale_temporary_files_never_fail_a_write() {
     let root = dir.path().join("cache");
     drop(Store::open(&root, BUILD).unwrap());
     let tmp = root.join("v1/tmp");
-    let first = super::store::next_tmp_number();
+    let first = store::next_tmp_number();
     let planted: Vec<PathBuf> = (first..first + 64)
         .map(|n| tmp.join(format!("{}-{n}", std::process::id())))
         .collect();
@@ -646,7 +646,7 @@ fn cache_location_fallback_sweeps_dead_temporaries() {
         let path = dir.path().join(name);
         fs::create_dir_all(path.join("v1/blob")).unwrap();
         if readme {
-            fs::write(path.join("README"), super::store::README).unwrap();
+            fs::write(path.join("README"), store::README).unwrap();
         }
         path
     };

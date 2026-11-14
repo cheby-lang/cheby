@@ -3,15 +3,13 @@
 //! the CLIF text unchanged, and the wait-frame store before the waiting
 //! kernels (D-868).
 
-use cranelift_codegen::control::ControlPlane;
 use cranelift_jit::{JITBuilder, JITModule};
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};
 use cheby_mir::{
     Abi, AbiSig, Block, CType, Callee, CalleeDecl, Const, DefName, FnKey, ForeignSig, Function,
-    Local, LocalDecl, MirModule, Operand, Repr, RuntimeFn, Rvalue, Stmt, StrId, Terminator,
-    UnitKind,
+    Local, LocalDecl, Operand, Repr, RuntimeFn, Rvalue, Stmt, Terminator, UnitKind,
 };
 
 use crate::*;
@@ -182,9 +180,9 @@ fn unit() -> MirModule {
 
 /// The translated functions of `unit()`, declared in a fresh module, and
 /// the module's declarations.
-fn translated() -> (JITModule, Decls, Vec<cranelift_codegen::ir::Function>) {
+fn translated() -> (JITModule, Decls, Vec<ir::Function>) {
     let mut m = module();
-    let mut decls = Decls::new(cranelift_module::Module::isa(&m)).unwrap();
+    let mut decls = Decls::new(Module::isa(&m)).unwrap();
     let units = [unit()];
     let cx = CodegenCx {
         layouts: &BuiltinLayouts,
@@ -200,13 +198,10 @@ fn translated() -> (JITModule, Decls, Vec<cranelift_codegen::ir::Function>) {
 }
 
 /// Cranelift's own call sites of `func`: every call's return offset.
-fn cranelift_call_sites(m: &JITModule, func: cranelift_codegen::ir::Function) -> Vec<u32> {
+fn cranelift_call_sites(m: &JITModule, func: ir::Function) -> Vec<u32> {
     let mut ctx = cranelift_codegen::Context::for_function(func);
-    ctx.compile(
-        cranelift_module::Module::isa(m),
-        &mut ControlPlane::default(),
-    )
-    .unwrap();
+    ctx.compile(Module::isa(m), &mut ControlPlane::default())
+        .unwrap();
     ctx.compiled_code()
         .unwrap()
         .buffer
@@ -227,7 +222,7 @@ fn call_tags_pair_with_return_offsets_and_leave_the_code_alone() {
     let mut untagged = tagged.clone();
     untagged.debug_tags.clear();
     let all = cranelift_call_sites(&m, tagged.clone());
-    let isa = cranelift_module::Module::isa(&m);
+    let isa = Module::isa(&m);
     let with = compile_function(isa, tagged).unwrap();
     let without = compile_function(isa, untagged).unwrap();
     // Metadata only (D-264): the same bytes and relocations.

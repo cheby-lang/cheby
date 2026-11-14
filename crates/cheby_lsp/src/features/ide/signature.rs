@@ -249,7 +249,14 @@ impl<'s> Cx<'s> {
             ItemSig::Type(t) => Some(&t.generics),
             ItemSig::Ctor(ctor) => match &iface.item(ctor.ty)?.sig {
                 ItemSig::Type(t) => Some(&t.generics),
-                _ => None,
+                ItemSig::Fn(_)
+                | ItemSig::Ctor(_)
+                | ItemSig::Alias(_)
+                | ItemSig::Const(_)
+                | ItemSig::Interface(_)
+                | ItemSig::InterfaceFn(_)
+                | ItemSig::Test
+                | ItemSig::Error => None,
             },
             ItemSig::Alias(_)
             | ItemSig::Const(_)
@@ -277,7 +284,12 @@ impl<'s> Cx<'s> {
         let callable = match &item.sig {
             ItemSig::Fn(_) | ItemSig::InterfaceFn(_) => true,
             ItemSig::Ctor(ctor) => matches!(ctor.fields, CtorFields::Positional(_)),
-            _ => false,
+            ItemSig::Type(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::Test
+            | ItemSig::Error => false,
         };
         if !callable {
             return None;

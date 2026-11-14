@@ -1,5 +1,9 @@
 //! Tests of `case.rs`: subjects, arms, guards, arm types and the
 //! subjectless form (§5.9).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use crate::test_support::{Build, build};
 use crate::thir::ExprKind;

@@ -10,7 +10,7 @@
 //!   unique (§9.3).
 //! - [`compare`]: key hashing and equality, and the order-independent
 //!   equality and hashing of whole maps and sets.
-//! - [`kernels`]: the `std::map` and `std::set` kernels (D-484).
+//! - `kernels`: the `std::map` and `std::set` kernels (D-484).
 //!
 //! **Seeds** (plan §4.3.5, D-538). Every non-empty root records the seed
 //! it was built with. `from_list` and an insertion into an empty
@@ -211,7 +211,7 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
 }
 
 /// Registers the map and set layouts (32-37) once per process, as
-/// [`kernels`] does: an executable's start calls it through
+/// `kernels` does: an executable's start calls it through
 /// `image::install`, since it never builds the symbol table (D-919).
 pub(crate) fn register_kinds() {
     node::register();

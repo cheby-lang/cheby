@@ -2,7 +2,7 @@
 //!
 //! - `test`: runs every Rust test under cargo-nextest with one shared
 //!   build cache and prints the harnesses' pending summary (D-1553,
-//!   D-1554, D-1556; [`test`]).
+//!   D-1554, D-1556; [`mod@test`]).
 //! - `bless`: rewrites the goldens of examples, UI tests and the language
 //!   server's golden tests under `tests/lsp/` from the current `cheby`
 //!   binary, including the goldens beside package UI tests (directories

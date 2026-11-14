@@ -159,7 +159,7 @@
 //! image's records under one code owner that is never unregistered. Then,
 //! when the constants table is not empty, it installs the constants
 //! (D-979) with the one routine every host calls,
-//! [`consteval::image::install`](crate::consteval::image::install): the
+//! [`consteval::image::install`]: the
 //! table's images, in order, each root written into the slot that the
 //! records' constants tables give for its path (D-1189),
 //! each user constructor's type key resolved to the layout id the records
@@ -169,7 +169,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::mem::{offset_of, size_of};
+use std::mem::offset_of;
 use std::ptr;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -495,7 +495,7 @@ impl ProgramImage {
                 .end
                 .addr()
                 .checked_sub(bound.start.addr())
-                .ok_or(malformed.clone())?;
+                .ok_or_else(|| malformed.clone())?;
             let entry = size_of::<FunctionEntry>();
             if bytes.checked_rem(entry) != Some(0) || isize::try_from(bytes).is_err() {
                 return Err(malformed);
@@ -956,7 +956,8 @@ unsafe fn install_constants(
     // the entry runs.
     match unsafe { entry::run_task(config, task) } {
         Ok(EntryOutcome::Returned(_)) => {
-            match result.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            let installed = result.lock().unwrap_or_else(PoisonError::into_inner).take();
+            match installed {
                 Some(installed) => installed.map_err(ImageError::Constants),
                 None => Err(ImageError::Entry("it returned no result".to_owned())),
             }
@@ -980,14 +981,14 @@ fn record_constants(
     let strings = record
         .strings
         .items()
-        .ok_or(malformed("the string table"))?;
+        .ok_or_else(|| malformed("the string table"))?;
     let entries = record
         .constants
         .items()
-        .ok_or(malformed("the constants table"))?;
+        .ok_or_else(|| malformed("the constants table"))?;
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries {
-        let path = string(strings, entry.path).ok_or(malformed("a constant's path"))?;
+        let path = string(strings, entry.path).ok_or_else(|| malformed("a constant's path"))?;
         if entry.slot.is_null() || !entry.slot.is_aligned() {
             return Err(malformed("a constant without its slot"));
         }
@@ -1014,12 +1015,15 @@ pub unsafe fn type_layouts(records: &[&ModuleRecord]) -> Result<TypeLayouts, Ima
     let mut out = TypeLayouts::new();
     for (index, record) in records.iter().enumerate() {
         let malformed = |what| ImageError::malformed(index, what);
-        let types = record.types.items().ok_or(malformed("the type table"))?;
+        let types = record
+            .types
+            .items()
+            .ok_or_else(|| malformed("the type table"))?;
         for ty in types {
             let ctors = ty
                 .ctors
                 .items()
-                .ok_or(malformed("a type's constructor table"))?;
+                .ok_or_else(|| malformed("a type's constructor table"))?;
             let mut layouts = Vec::with_capacity(ctors.len());
             for ctor in ctors {
                 if ctor.layout_word.is_null() || !ctor.layout_word.is_aligned() {
@@ -1063,7 +1067,7 @@ pub unsafe fn type_layouts_at(addresses: &[usize]) -> Result<TypeLayouts, ImageE
         }
         // SAFETY: the caller's contract: a live, registered record.
         let record = unsafe { pointer.as_ref() }
-            .ok_or(ImageError::malformed(index, "a null module record"))?;
+            .ok_or_else(|| ImageError::malformed(index, "a null module record"))?;
         records.push(record);
     }
     // SAFETY: forwarded from the caller.
@@ -1136,9 +1140,9 @@ unsafe fn register_records_with(
         let hooks = record_hooks(index, record, types.len())?;
         let table = match functions {
             None => None,
-            Some(tables) => Some(tables.get(index).map(Vec::as_slice).ok_or(
-                ImageError::malformed(index, "a record without its function table"),
-            )?),
+            Some(tables) => Some(tables.get(index).map(Vec::as_slice).ok_or_else(|| {
+                ImageError::malformed(index, "a record without its function table")
+            })?),
         };
         code_ranges(index, record, table, &mut ranges)?;
         checked.push(CheckedRecord {
@@ -1205,7 +1209,7 @@ fn check_free_shapes(
     let words = record
         .free_shapes
         .items()
-        .ok_or(ImageError::malformed(index, "the free-shape table"))?;
+        .ok_or_else(|| ImageError::malformed(index, "the free-shape table"))?;
     let mut derived = types
         .iter()
         .flat_map(|ty| ty.infos.iter().map(layout::free_shape_word));
@@ -1240,15 +1244,15 @@ fn external_types(
     let strings = record
         .strings
         .items()
-        .ok_or(malformed("the string table"))?;
+        .ok_or_else(|| malformed("the string table"))?;
     let externals = record
         .externals
         .items()
-        .ok_or(malformed("the external type table"))?;
+        .ok_or_else(|| malformed("the external type table"))?;
     let mut out = Vec::with_capacity(externals.len());
     for external in externals {
-        let name =
-            string(strings, external.type_name).ok_or(malformed("an external type's name"))?;
+        let name = string(strings, external.type_name)
+            .ok_or_else(|| malformed("an external type's name"))?;
         out.push((name.to_owned(), external.type_key, external.drop));
     }
     Ok(out)
@@ -1278,16 +1282,19 @@ fn user_types(index: usize, record: &ModuleRecord) -> Result<Vec<CheckedType>, I
     let strings = record
         .strings
         .items()
-        .ok_or(malformed("the string table"))?;
-    let text = |offset: u32, what| string(strings, offset).ok_or(malformed(what));
-    let types = record.types.items().ok_or(malformed("the type table"))?;
+        .ok_or_else(|| malformed("the string table"))?;
+    let text = |offset: u32, what| string(strings, offset).ok_or_else(|| malformed(what));
+    let types = record
+        .types
+        .items()
+        .ok_or_else(|| malformed("the type table"))?;
     let mut out = Vec::with_capacity(types.len());
     for ty in types {
         let type_name = text(ty.name, "a type's name")?;
         let ctors = ty
             .ctors
             .items()
-            .ok_or(malformed("a type's constructor table"))?;
+            .ok_or_else(|| malformed("a type's constructor table"))?;
         if ctors.is_empty() {
             return Err(malformed("a type without constructors"));
         }
@@ -1305,13 +1312,13 @@ fn user_types(index: usize, record: &ModuleRecord) -> Result<Vec<CheckedType>, I
             let entries = ctor
                 .fields
                 .items()
-                .ok_or(malformed("a constructor's field table"))?;
+                .ok_or_else(|| malformed("a constructor's field table"))?;
             let mut fields: Vec<(FieldKind, Option<&str>)> = Vec::with_capacity(entries.len());
             for field in entries {
                 let kind = usize::try_from(field.kind)
                     .ok()
                     .and_then(|kind| FIELD_KINDS.get(kind))
-                    .ok_or(malformed("a field kind"))?;
+                    .ok_or_else(|| malformed("a field kind"))?;
                 let field_name = if field.name == NO_STRING {
                     None
                 } else {
@@ -1401,16 +1408,15 @@ fn record_hooks(
     let hooks = record
         .hooks
         .items()
-        .ok_or(ImageError::malformed(index, "the hook table"))?;
+        .ok_or_else(|| ImageError::malformed(index, "the hook table"))?;
     let mut out: Vec<TypeHooks> = Vec::with_capacity(hooks.len());
     for hook in hooks {
         let type_index = usize::try_from(hook.type_index)
             .ok()
             .filter(|&type_index| type_index < type_count)
-            .ok_or(ImageError::malformed(
-                index,
-                "a hook names a type the record does not list",
-            ))?;
+            .ok_or_else(|| {
+                ImageError::malformed(index, "a hook names a type the record does not list")
+            })?;
         if out.iter().any(|&(seen, _)| seen == type_index) {
             return Err(ImageError::malformed(
                 index,
@@ -1442,11 +1448,11 @@ fn code_ranges(
     let strings = record
         .strings
         .items()
-        .ok_or(ImageError::malformed(index, "the string table"))?;
+        .ok_or_else(|| ImageError::malformed(index, "the string table"))?;
     let own = record
         .functions
         .items()
-        .ok_or(ImageError::malformed(index, "the call-site table"))?;
+        .ok_or_else(|| ImageError::malformed(index, "the call-site table"))?;
     let functions = match linked {
         None => own,
         Some(_) if !own.is_empty() => {
@@ -1468,7 +1474,7 @@ fn code_ranges(
             None
         } else {
             let text = string(strings, function.name)
-                .ok_or(ImageError::malformed(index, "a function's name"))?;
+                .ok_or_else(|| ImageError::malformed(index, "a function's name"))?;
             // SAFETY: `text` lies in the record's string table, which
             // `register_records`' caller keeps valid and unchanged for as
             // long as anything registered may be used: the range this name
@@ -1479,7 +1485,7 @@ fn code_ranges(
         let sites = function
             .sites
             .items()
-            .ok_or(ImageError::malformed(index, "a function's call sites"))?;
+            .ok_or_else(|| ImageError::malformed(index, "a function's call sites"))?;
         let mut descs = Vec::with_capacity(sites.len());
         for site in sites {
             let location = if site.path == NO_STRING {
@@ -1488,7 +1494,7 @@ fn code_ranges(
                 String::new()
             } else {
                 let path = string(strings, site.path)
-                    .ok_or(ImageError::malformed(index, "a call site's path"))?;
+                    .ok_or_else(|| ImageError::malformed(index, "a call site's path"))?;
                 format!("{path}:{}:{}", site.line, site.column)
             };
             descs.push(CallSiteDesc {

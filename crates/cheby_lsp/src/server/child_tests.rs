@@ -2,24 +2,15 @@
 //! with canned documents, on every platform, and with real processes from
 //! a shell script that stands in for `cheby`, where processes are run
 //! (D-545).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use cheby_driver::analysis::{
-    Code, FileReport, Hash128, ModulePath, Report, Symbol, SymbolNs, Target, TextOrigin, exact_key,
-    normalized_key,
-};
-use serde_json::Value;
+use cheby_driver::analysis::{ModulePath, SymbolNs, TextOrigin, exact_key};
 
 use super::*;
-use crate::child::wire::{
-    ConstantsSection, Envelope, FileHash, Front, Section, Sections, Status, SymbolData,
-    WireDiagnostic, WireHash, WireRange, WireSeverity, WireValue,
-};
-use crate::server::progress::Progress;
+use crate::child::wire::{FileHash, Sections, WireHash, WireRange, WireValue};
 
 const MAIN: &str = "pub const limit: Int = 20\npub const boom: Int = 1\n";
 
@@ -1026,7 +1017,7 @@ fn a_value_is_current_only_while_the_modules_it_reaches_are() {
     assert!(!reads_stale(&children, &root, "boom", &added));
     assert_eq!(stale_status(&added), Value::Bool(false));
     // The declaring file edited.
-    let mut own = saved.clone();
+    let mut own = saved;
     own.insert(main_path(&root), Hash128([6; 16]));
     assert!(reads_stale(&children, &root, "boom", &own));
 }
@@ -1061,7 +1052,7 @@ fn a_value_with_no_modules_reaches_every_module() {
     let mut removed = saved.clone();
     removed.remove(&util);
     assert!(reads_stale(&children, &root, "boom", &removed));
-    let mut added = saved.clone();
+    let mut added = saved;
     added.insert(root.join("src").join("extra.cheby"), Hash128([5; 16]));
     assert!(reads_stale(&children, &root, "boom", &added));
 }
@@ -1213,10 +1204,10 @@ mod processes {
     }
 
     fn alive(pid: u32) -> bool {
-        std::process::Command::new("kill")
+        Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
-            .stderr(std::process::Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .unwrap()
             .success()

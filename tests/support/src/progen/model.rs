@@ -1,5 +1,9 @@
 //! The generator's types and declarations: what a generated program can
 //! name.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 /// A type the generator builds values of.
 #[derive(Debug, Clone, PartialEq, Eq)]

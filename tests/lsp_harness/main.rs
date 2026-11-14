@@ -92,6 +92,10 @@
 //! (D-1414), so a golden test whose `@steps` wait for the child is ignored
 //! too. The server process never runs generated code (D-1349), so every
 //! other trial runs there.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -173,7 +177,7 @@ fn main() -> ExitCode {
         );
     }
     let env = Arc::new(Env {
-        root: root.clone(),
+        root,
         cache,
         timeout,
     });

@@ -52,6 +52,10 @@ fn masked(hash: u64) -> u64 {
 }
 
 #[cfg(not(test))]
+#[expect(
+    clippy::cfg_not_test,
+    reason = "the build without tests has no test probe"
+)]
 const fn masked(hash: u64) -> u64 {
     hash
 }

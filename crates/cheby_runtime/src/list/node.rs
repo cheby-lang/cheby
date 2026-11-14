@@ -160,7 +160,7 @@ unsafe fn branch_children(word: Word, visit: &mut dyn FnMut(Word)) {
 /// Equality of two lists (§3.13): the same length, and equal elements in
 /// order, which the walk compares after this call.
 ///
-/// Safety: `a` and `b` are live list roots.
+/// # Safety `a` and `b` are live list roots.
 unsafe fn root_equal(a: Word, b: Word, cx: &mut generic::Cx) -> bool {
     // SAFETY: forwarded from the caller.
     let (xs, ys) = unsafe { (super::iter(a), super::iter(b)) };
@@ -177,7 +177,7 @@ unsafe fn root_equal(a: Word, b: Word, cx: &mut generic::Cx) -> bool {
 
 /// Hashing of a list: its length, then its elements in order.
 ///
-/// Safety: `list` is a live list root.
+/// # Safety `list` is a live list root.
 unsafe fn root_hash(list: Word, h: &mut generic::Hasher) {
     // SAFETY: forwarded from the caller.
     let items = unsafe { super::iter(list) };
@@ -190,7 +190,7 @@ unsafe fn root_hash(list: Word, h: &mut generic::Hasher) {
 
 /// Debug text of a list: `[1, 2, 3]` (§3.13).
 ///
-/// Safety: `list` is a live list root.
+/// # Safety `list` is a live list root.
 unsafe fn root_debug(list: Word, p: &mut generic::Printer) {
     // SAFETY: forwarded from the caller.
     let items = unsafe { super::iter(list) };

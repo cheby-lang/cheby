@@ -3,16 +3,18 @@
 //! and statics fixed by their key are local copies with the same bytes in
 //! every unit, layout words hold no layout id, and slots of borrowing
 //! functions carry their mask.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use cranelift_codegen::binemit::Reloc;
-use cranelift_codegen::control::ControlPlane;
-use cranelift_codegen::ir;
-use cranelift_codegen::isa::{OwnedTargetIsa, TargetIsa};
+use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_module::{
-    DataDescription, DataId, FuncId, Init, Linkage, Module, ModuleDeclarations, ModuleReloc,
-    ModuleRelocTarget, ModuleResult,
+    DataDescription, DataId, FuncId, Init, Linkage, ModuleDeclarations, ModuleRelocTarget,
+    ModuleResult,
 };
 
 use cheby_diag::{FileId, Span, TextRange};
@@ -20,8 +22,8 @@ use cheby_iface::{DefId, DefIndex, Ice, IndexVec, ModuleId};
 use cheby_mir::borrow::BorrowMask;
 use cheby_mir::{
     Abi, AbiSig, Block, Callee, CalleeDecl, Const, DefName, EntryKind, FnKey, Function, LayoutDesc,
-    LayoutRef, Local, LocalDecl, MirModule, Operand, Repr, Rvalue, StaticId, StaticKind,
-    StaticObject, Stmt, StrId, Terminator, UnitKind,
+    LayoutRef, Local, LocalDecl, Operand, Repr, Rvalue, StaticId, StaticKind, StaticObject, Stmt,
+    Terminator, UnitKind,
 };
 use cheby_runtime::abi;
 
@@ -655,7 +657,7 @@ fn alone_data_holds_no_layout_id() {
     let header = |c: &Captured| u64::from_le_bytes(c.bytes[..8].try_into().unwrap());
     let layout_word = header(b.definition("cb$layout$b$Empty"));
     assert_eq!(abi::header_layout(layout_word), 0);
-    assert_eq!(layout_word, crate::decls::ctor_header(abi::RC_UNIQUE, 0, 0));
+    assert_eq!(layout_word, decls::ctor_header(abi::RC_UNIQUE, 0, 0));
     let ctor = header(b.definition("cb$ctor$b$Empty"));
     assert_eq!(ctor, abi::header(abi::RC_STATIC, 0, 0));
     for m in [&a, &b] {
@@ -1097,12 +1099,12 @@ fn alone_check_accepts_only_generated_imports() {
     for (kind, name, what) in [
         (
             Reloc::Abs8,
-            imported.clone(),
+            imported,
             "`Abs8` relocation to `cb$slot$b$get`",
         ),
         (
             pc,
-            ModuleRelocTarget::LibCall(cranelift_codegen::ir::LibCall::Memcpy),
+            ModuleRelocTarget::LibCall(ir::LibCall::Memcpy),
             "libcall",
         ),
         (

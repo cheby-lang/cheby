@@ -379,7 +379,7 @@ impl BodyCx<'_> {
                     .is_some_and(|&ty| matches!(types.kind(ty), TyKind::Dyn { .. }))
                     && !log.unsatisfied.iter().any(|(span, _)| *span == call.span)
             }
-            _ => true,
+            Callee::Ctor { .. } | Callee::Iface { .. } | Callee::Value(_) => true,
         };
         finished.then(|| callee.clone())
     }

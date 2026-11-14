@@ -1,4 +1,4 @@
-//! Structural hashing (§3.13), consistent with [`super::equal`]: equal
+//! Structural hashing (§3.13), consistent with [`mod@super::equal`]: equal
 //! values hash equally.
 //!
 //! The hasher is SipHash-1-3 keyed by a seed: the running entry's (the
@@ -277,7 +277,12 @@ pub unsafe fn hash_with_seed(word: Word, seed: u64) -> Result<u64, Reached> {
             // SAFETY: every word on the stack is borrowed from `word`, or
             // owned by the hasher until it is dropped.
             Task::Value(word) => unsafe { step(word, &mut hasher) }?,
-            control => hasher.control(control),
+            control @ (Task::OpenGroup
+            | Task::Open
+            | Task::CloseKey
+            | Task::CloseValue
+            | Task::CloseElement
+            | Task::CloseGroup) => hasher.control(control),
         }
         stack.push_reversed(&mut hasher.pending);
     }
@@ -380,6 +385,7 @@ unsafe fn step(word: Word, h: &mut Hasher) -> Result<(), Reached> {
             h.write_u64(u64::from(info.tag));
             let obj = word_to_ptr(word);
             // SAFETY (both loops): a live constructor with these fields.
+            // SAFETY: as above.
             let bits = |offset: u32| unsafe { read_field(obj, to_usize(u64::from(offset))) };
             // Raw fields are written as they come, and value fields after
             // them, in order. The leading value fields that are tagged

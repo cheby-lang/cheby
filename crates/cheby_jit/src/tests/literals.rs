@@ -11,8 +11,7 @@
 //! literal releases the rest. Run with `CHEBY_RT_POISON=1` for freed
 //! objects to be poisoned (D-458).
 
-use cheby_codegen_clif::CodegenOptions;
-use cheby_mir::{FunctionBuilder, LayoutRef, Local};
+use cheby_mir::{FunctionBuilder, Local};
 use cheby_runtime::abi::PanicKind as RtPanicKind;
 
 use super::*;

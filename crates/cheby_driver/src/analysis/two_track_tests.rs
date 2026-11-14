@@ -183,7 +183,7 @@ fn typing_in_broken_file_skips_the_strict_run() {
         .analyze_live(&open(&pkg, &[("src/b.cheby", B_BROKEN, 1)]))
         .unwrap();
     assert!(first.report.is_none());
-    assert_eq!(first.phase_a.get(&b).unwrap().version, Some(1));
+    assert_eq!(first.phase_a[&b].version, Some(1));
     let report = strict(&mut s, first);
     assert!(!report.files.contains_key(&b));
     for (version, text) in [(2, B_BROKEN_2), (3, B_BROKEN_3)] {
@@ -192,7 +192,7 @@ fn typing_in_broken_file_skips_the_strict_run() {
             .unwrap();
         assert!(live.plan.is_none(), "version {version} plans a D run");
         assert!(live.report.is_none());
-        let shown = live.phase_a.get(&b).unwrap();
+        let shown = &live.phase_a[&b];
         assert_eq!(shown.version, Some(version));
         assert_eq!(&*shown.text, text);
         assert_ne!(shown.diagnostics.len(), 0);
@@ -241,7 +241,7 @@ fn broken_file_shows_only_phase_a() {
         relative(&pkg, live.phase_a.keys()),
         BTreeSet::from([MANIFEST_FILE.to_owned(), "src/b.cheby".to_owned()])
     );
-    let shown = live.phase_a.get(&b).unwrap();
+    let shown = &live.phase_a[&b];
     assert_eq!(pairs(shown), phase_a_of("src/b.cheby", B_BROKEN));
     assert_eq!(shown.origin, TextOrigin::Editor);
     assert!(live.snapshot.as_ref().unwrap().status().broken.contains(&b));
@@ -268,14 +268,14 @@ fn other_file_stays_real_while_b_is_broken() {
     let f = pkg.at("src/f.cheby");
     let clean = session(&pkg).analyze_live(&Overlay::default()).unwrap();
     let clean = clean.report.unwrap();
-    let expected = pairs(clean.files.get(&f).unwrap());
+    let expected = pairs(&clean.files[&f]);
     assert_ne!(expected.len(), 0, "F has a type error");
     let mut s = session(&pkg);
     let live = s
         .analyze_live(&open(&pkg, &[("src/b.cheby", B_BROKEN, 1)]))
         .unwrap();
     let report = strict(&mut s, live);
-    assert_eq!(pairs(report.files.get(&f).unwrap()), expected);
+    assert_eq!(pairs(&report.files[&f]), expected);
     assert_eq!(
         all_codes(&pkg, &report.files).get("src/main.cheby"),
         Some(&Vec::new())
@@ -314,8 +314,8 @@ fn no_false_errors_from_a_broken_module() {
     let report = strict(&mut s, live);
     for path in [pkg.at("src/main.cheby"), pkg.at("src/f.cheby")] {
         assert_eq!(
-            pairs(report.files.get(&path).unwrap()),
-            pairs(clean.files.get(&path).unwrap()),
+            pairs(&report.files[&path]),
+            pairs(&clean.files[&path]),
             "{}",
             path.display()
         );
@@ -353,7 +353,7 @@ fn stub_holds_dependents_only() {
         codes.keys().cloned().collect::<BTreeSet<_>>(),
         BTreeSet::from([MANIFEST_FILE.to_owned(), "src/g.cheby".to_owned()])
     );
-    assert_ne!(codes.get("src/g.cheby").unwrap().len(), 0);
+    assert_ne!(codes["src/g.cheby"].len(), 0);
     assert!(report.substituted);
     assert!(!report.clean);
 }
@@ -462,10 +462,7 @@ fn validate_error_counts_as_broken() {
         };
         let live = s.analyze_live(&overlay).unwrap();
         assert!(live.report.is_none());
-        assert_eq!(
-            codes_of(live.phase_a.get(&b_path).unwrap()),
-            vec!["E0021".to_owned()]
-        );
+        assert_eq!(codes_of(&live.phase_a[&b_path]), vec!["E0021".to_owned()]);
         let report = strict(&mut s, live);
         assert!(!report.files.contains_key(&b_path));
         let codes: Vec<String> = all_codes(&pkg, &report.files)
@@ -510,7 +507,7 @@ fn manifest_broken_keeps_last_good() {
             .expect("the Q run runs on a manifest");
         // Only the unusable manifest is replaced by the last good one.
         assert_eq!(snapshot.status().manifest_is_last_good, version == 2);
-        let shown = live.phase_a.get(&manifest).unwrap();
+        let shown = &live.phase_a[&manifest];
         assert_eq!(&*shown.text, text);
         assert_eq!(shown.version, Some(version));
         assert_ne!(shown.diagnostics.len(), 0);
@@ -556,7 +553,7 @@ fn manifest_never_good_is_syntax_only() {
     assert_eq!(codes.get(MANIFEST_FILE), Some(&vec!["E0036".to_owned()]));
     assert_eq!(codes.get("src/main.cheby"), Some(&Vec::new()));
     assert_eq!(
-        pairs(live.phase_a.get(&pkg.at("src/b.cheby")).unwrap()),
+        pairs(&live.phase_a[&pkg.at("src/b.cheby")]),
         phase_a_of("src/b.cheby", B_BROKEN)
     );
 }
@@ -636,7 +633,7 @@ fn overlay_only_file_is_a_module() {
             .is_some_and(super::ModuleView::is_local)
     );
     let report = live.report.unwrap();
-    let shown = report.files.get(&fresh_path).unwrap();
+    let shown = &report.files[&fresh_path];
     assert_eq!(shown.version, Some(7));
     assert_ne!(shown.diagnostics.len(), 0, "the type error is reported");
 }
@@ -658,12 +655,12 @@ fn closed_file_reads_disk() {
         .analyze_live(&open(&pkg, &[("src/b.cheby", typed, 2)]))
         .unwrap();
     let report = live.report.unwrap();
-    let shown = report.files.get(&b).unwrap();
+    let shown = &report.files[&b];
     assert_eq!((shown.origin, shown.version), (TextOrigin::Editor, Some(2)));
     assert_ne!(shown.diagnostics.len(), 0);
     let live = s.analyze_live(&Overlay::default()).unwrap();
     let report = live.report.unwrap();
-    let shown = report.files.get(&b).unwrap();
+    let shown = &report.files[&b];
     assert_eq!((shown.origin, shown.version), (TextOrigin::Disk, None));
     assert_eq!(&*shown.text, B);
     assert_eq!(shown.diagnostics.len(), 0);
@@ -717,7 +714,7 @@ fn failed_q_run_still_plans() {
     assert!(live.snapshot.is_none());
     assert!(live.report.is_none());
     assert_eq!(
-        pairs(live.phase_a.get(&b).unwrap()),
+        pairs(&live.phase_a[&b]),
         phase_a_of("src/b.cheby", B_BROKEN)
     );
     assert!(live.plan.is_some());
@@ -742,20 +739,23 @@ fn phase_a_holds_no_tolerant_diagnostic() {
         .unwrap();
     let own = phase_a_of("src/b.cheby", broken);
     assert_ne!(own.len(), 0);
-    assert_eq!(pairs(live.phase_a.get(&b).unwrap()), own);
-    let tolerant: Vec<_> = live
-        .snapshot
-        .as_ref()
-        .unwrap()
-        .baseline()
-        .iter()
-        .filter(|(_, path, _)| path.as_deref() == Some(b.as_path()))
-        .filter(|(code, _, message)| {
-            !own.iter()
-                .any(|(c, m)| *c == code.to_string() && m == message)
-        })
-        .collect();
-    assert_ne!(tolerant.len(), 0, "the Q run reports more for B");
+    assert_eq!(pairs(&live.phase_a[&b]), own);
+
+    assert_ne!(
+        live.snapshot
+            .as_ref()
+            .unwrap()
+            .baseline()
+            .iter()
+            .filter(|(_, path, _)| path.as_deref() == Some(b.as_path()))
+            .filter(|(code, _, message)| {
+                !own.iter()
+                    .any(|(c, m)| *c == code.to_string() && m == message)
+            })
+            .count(),
+        0,
+        "the Q run reports more for B"
+    );
 }
 
 #[test]
@@ -899,7 +899,7 @@ fn held_file_fixed_gets_an_empty_list() {
     let live = s
         .analyze_live(&open(&pkg, &[("src/f.cheby", f_broken, 1)]))
         .unwrap();
-    assert_ne!(live.phase_a.get(&fp).unwrap().diagnostics.len(), 0);
+    assert_ne!(live.phase_a[&fp].diagnostics.len(), 0);
     if let Some(plan) = live.plan {
         let _ = s.analyze_strict(plan).unwrap();
     }
@@ -971,7 +971,7 @@ fn last_good_is_the_newest_live_text() {
         ))
         .unwrap();
     let report = strict(&mut s, live);
-    let shown = report.files.get(&pkg.at("src/main.cheby")).unwrap();
+    let shown = &report.files[&pkg.at("src/main.cheby")];
     assert_eq!(codes_of(shown), Vec::<String>::new());
 }
 
@@ -993,7 +993,7 @@ fn label_into_last_good_is_dropped() {
     );
     let bp = pkg.at("src/b.cheby");
     let into_b = |report: &Report| {
-        let main = report.files.get(&pkg.at("src/main.cheby")).unwrap();
+        let main = &report.files[&pkg.at("src/main.cheby")];
         assert_ne!(main.diagnostics.len(), 0);
         main.diagnostics
             .iter()

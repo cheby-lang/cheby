@@ -3,6 +3,10 @@
 //! and chained, and for each rule of the validator an accepted and a
 //! rejected function. Determinism (D-264): lowering twice gives identical
 //! dumps.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_iface::Idx;
 
@@ -750,7 +754,7 @@ fn unwind_release_validation_accepts_what_the_full_one_does() {
         };
         let mut m = module(vec![function.clone()]);
         count_and_check_with(&mut m, &options).unwrap();
-        dumps.push(dump::dump(&m).unwrap());
+        dumps.push(dump(&m).unwrap());
     }
     assert_eq!(dumps[0], dumps[1]);
     assert!(dumps[0].contains("; unwind bb"), "{}", dumps[0]);
@@ -777,7 +781,7 @@ fn unwind_pipeline_reports_unbalanced_counts_after_reference_counting() {
         "{err}"
     );
     // The pass left the function as it was.
-    assert!(!dump::dump(&m).unwrap().contains("unwind"));
+    assert!(!dump(&m).unwrap().contains("unwind"));
 }
 
 /// A void foreign call of `cheby_io_println`, which never raises
@@ -1025,12 +1029,12 @@ fn unwind_edges_off_validates_counted_without_edges() {
     };
     let mut without = module(vec![function.clone()]);
     count_and_check_with(&mut without, &off).unwrap();
-    let text = dump::dump(&without).unwrap();
+    let text = dump(&without).unwrap();
     assert!(!text.contains("unwind"), "{text}");
     validate(&without, Stage::Counted).unwrap();
     let mut with = module(vec![function]);
     count_and_check_with(&mut with, &MirOptions::default()).unwrap();
-    let text = dump::dump(&with).unwrap();
+    let text = dump(&with).unwrap();
     assert!(text.contains("; unwind bb"), "{text}");
     assert!(text.contains("entry unwind bb"), "{text}");
     // `dup _0; _2 = alloc (_0, _0); _3 = call _1(_2)`: the alloc leaves
@@ -1171,7 +1175,7 @@ fn unwind_direction_newest_first_release_stays_ascending() {
     let plan = planned(n, &sets);
     assert_eq!(plan.direction, Direction::Ascending);
     assert_eq!(plan.blocks.len(), n + 1);
-    let all = *plan.pads.get(n).unwrap();
+    let all = plan.pads[n];
     assert_eq!(plan_drop_order(&plan, all), locals((0..n).rev()));
 }
 
@@ -1302,7 +1306,7 @@ fn unwind_oldest_first_release_is_linear() {
     assert!(pads <= 2 * n + 4, "{pads} pads:\n{}", text(&f));
     // The first release leaves the parameter and the newer results.
     let bb0 = f.blocks.get(bb(0)).unwrap();
-    let (_, pad) = *bb0.unwind.get(n).unwrap();
+    let (_, pad) = bb0.unwind[n];
     let mut held = vec![Local::from_u32(0)];
     held.extend(locals(2..=n));
     assert_eq!(released(&f, pad), held);
@@ -1315,7 +1319,7 @@ fn unwind_newest_first_release_still_shares() {
     assert!(pads <= n + 4, "{pads} pads:\n{}", text(&f));
     // Ascending (D-698's shape): the newest local is dropped first.
     let bb0 = f.blocks.get(bb(0)).unwrap();
-    let (_, pad) = *bb0.unwind.get(n).unwrap();
+    let (_, pad) = bb0.unwind[n];
     let order = drop_order(&f, pad);
     assert_eq!(order.len(), n);
     assert!(order.is_sorted_by(|a, b| a > b), "{order:?}");

@@ -249,7 +249,7 @@ impl Drop for ObjectSink {
     fn drop(&mut self) {
         // SAFETY: the sink owns its `String`, or holds 0, which `drop`
         // skips.
-        unsafe { crate::rc::drop(self.word) };
+        unsafe { rc::drop(self.word) };
     }
 }
 
@@ -448,7 +448,7 @@ impl Ropes {
             };
             match lp.cmp(rp) {
                 std::cmp::Ordering::Equal => (lhs, rhs) = (lr, rr),
-                order => return order,
+                order @ (std::cmp::Ordering::Less | std::cmp::Ordering::Greater) => return order,
             }
         }
     }

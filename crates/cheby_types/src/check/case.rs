@@ -43,7 +43,7 @@ impl BodyCx<'_> {
     /// given (the result is already coerced to it, like
     /// [`BodyCx::check_expr`]), and returns its
     /// [`crate::thir::ExprKind::Case`].
-    pub fn check_case(
+    pub(crate) fn check_case(
         &mut self,
         case: ast::CaseExpr<'_>,
         expected: Option<&Expected>,
@@ -68,7 +68,7 @@ impl BodyCx<'_> {
                 }
                 CaseArmKind::Cond(arm) if subjectless => self.cond_arm(arm, &mut arm_ty)?,
                 // An arm of the other form is a syntax error.
-                _ => {
+                CaseArmKind::Case(_) | CaseArmKind::Cond(_) => {
                     self.errored = true;
                     continue;
                 }

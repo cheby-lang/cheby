@@ -19,7 +19,7 @@
 //! - `cheby fmt [--check] [PATH…]` formats the package's sources, the
 //!   given files, or standard input for `-` (D-1031).
 //! - `cheby new <name>` creates a package in the working directory
-//!   (D-1032, [`new`]).
+//!   (D-1032, [`mod@new`]).
 //! - `cheby lsp` serves the language server over stdio until `exit` or
 //!   the end of input (§13.11, [`cheby_lsp::run`]). It starts the worker
 //!   pool as the commands that build do, and passes this binary's build ID
@@ -346,7 +346,7 @@ fn run_command() -> ExitCode {
         ),
         Command::Fmt { check, paths } => fmt(out, check, &paths),
         // The flag only names the one transport there is.
-        Command::Lsp { stdio: _ } => cheby_lsp::run(cheby_lsp::ServerOptions {
+        Command::Lsp { .. } => cheby_lsp::run(cheby_lsp::ServerOptions {
             build: build_id::build_id(),
             // Without its own path the server runs no child jobs.
             child: std::env::current_exe().ok(),

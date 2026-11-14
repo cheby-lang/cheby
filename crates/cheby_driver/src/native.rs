@@ -197,7 +197,7 @@ const RESERVED_PREFIXES: [&str; 2] = ["cheby_rt_", "cb$"];
 /// (D-925, D-930; the wave-6 review's R-3), and every name with a
 /// [`RESERVED_PREFIXES`] prefix.
 fn check_exports(source: &str, object: &[u8]) -> Result<(), Error> {
-    let defined = cheby_link::shlib::defined_symbols(object).map_err(|e| {
+    let defined = shlib::defined_symbols(object).map_err(|e| {
         Error::from(cheby_iface::Ice::new(format!(
             "the object of `{source}` cannot be read: {e}"
         )))
@@ -237,7 +237,7 @@ fn no_cc(error: CcError) -> Error {
 fn cc_error(error: CcError) -> Error {
     match error {
         CcError::NoCc(_) => no_cc(error),
-        other => Error::new(other.to_string()),
+        other @ (CcError::Failed { .. } | CcError::Io(_)) => Error::new(other.to_string()),
     }
 }
 
@@ -245,7 +245,7 @@ fn cc_error(error: CcError) -> Error {
 fn shlib_error(error: ShlibError) -> Error {
     match error {
         ShlibError::NoCc(message) => no_cc(CcError::NoCc(message)),
-        other => Error::new(other.to_string()),
+        other @ (ShlibError::Failed { .. } | ShlibError::Io(_)) => Error::new(other.to_string()),
     }
 }
 

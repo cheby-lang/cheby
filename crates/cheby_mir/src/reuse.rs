@@ -300,7 +300,12 @@ fn may_pair(module: &MirModule, f: &Function) -> bool {
                 value: Rvalue::Alloc { layout, .. },
                 ..
             } => made.extend(reusable_size(module, *layout)),
-            _ => {}
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => {}
         }
     }
     read.intersection(&made).next().is_some()
@@ -312,7 +317,12 @@ fn reusable_size(module: &MirModule, layout: LayoutRef) -> Option<u64> {
     let shape = match layout {
         LayoutRef::Ctor(_) => !module.layout(layout).is_some_and(|d| d.fields.is_empty()),
         LayoutRef::Tuple(n) => n > 0,
-        _ => false,
+        LayoutRef::Builtin(_)
+        | LayoutRef::Closure(_)
+        | LayoutRef::Dict { .. }
+        | LayoutRef::Dyn
+        | LayoutRef::Desc { .. }
+        | LayoutRef::DescNominal => false,
     };
     shape.then(|| object_size(module, layout)).flatten()
 }
@@ -355,7 +365,12 @@ pub(crate) fn tested_variants(
                         ty,
                     },
             } if dst == on => Some((*base, *ty)),
-            _ => None,
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => None,
         }) else {
             continue;
         };
@@ -426,7 +441,12 @@ pub(crate) fn pins(
                     })
                 })
         }
-        _ => false,
+        LayoutRef::Builtin(_)
+        | LayoutRef::Closure(_)
+        | LayoutRef::Dict { .. }
+        | LayoutRef::Dyn
+        | LayoutRef::Desc { .. }
+        | LayoutRef::DescNominal => false,
     }
 }
 
@@ -590,7 +610,12 @@ impl Facts {
                     Stmt::Eval(Rvalue::InitField { obj, .. }) => {
                         filled.insert(*obj);
                     }
-                    _ => {}
+                    Stmt::Assign { .. }
+                    | Stmt::Eval(_)
+                    | Stmt::Dup(_)
+                    | Stmt::Drop(_)
+                    | Stmt::DropKeep { .. }
+                    | Stmt::ClearUnwind => {}
                 }
             }
         }
@@ -686,7 +711,12 @@ fn pairs(module: &MirModule, f: &Function) -> Result<Vec<Pair>, Ice> {
                         });
                     }
                 }
-                _ => {}
+                Stmt::Assign { .. }
+                | Stmt::Eval(_)
+                | Stmt::Dup(_)
+                | Stmt::Drop(_)
+                | Stmt::DropKeep { .. }
+                | Stmt::ClearUnwind => {}
             }
         }
         open_at_end.extend(open);
@@ -964,7 +994,25 @@ pub fn decisions(module: &MirModule, function: &Function) -> Result<Vec<ReuseDec
             let (layout, token) = match value {
                 Rvalue::Alloc { layout, .. } => (*layout, None),
                 Rvalue::AllocReuse { layout, token, .. } => (*layout, Some(*token)),
-                _ => continue,
+                Rvalue::Use(_)
+                | Rvalue::Call { .. }
+                | Rvalue::CallForeign { .. }
+                | Rvalue::CallRuntime { .. }
+                | Rvalue::AllocPlaceholder { .. }
+                | Rvalue::InitField { .. }
+                | Rvalue::Field { .. }
+                | Rvalue::ReadLayout { .. }
+                | Rvalue::LoadConst(_)
+                | Rvalue::Box { .. }
+                | Rvalue::Unbox { .. }
+                | Rvalue::Checked { .. }
+                | Rvalue::Compare { .. }
+                | Rvalue::FloatArith { .. }
+                | Rvalue::Bitwise { .. }
+                | Rvalue::FloatNeg { .. }
+                | Rvalue::Not(_)
+                | Rvalue::ReadTag { .. }
+                | Rvalue::DropReuse { .. } => continue,
             };
             if let Some(token) = token {
                 out.push(ReuseDecision {

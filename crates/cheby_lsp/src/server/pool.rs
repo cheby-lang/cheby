@@ -76,7 +76,7 @@ pub(crate) struct QueryJob {
     /// Its route.
     pub route: &'static Route,
     /// Its parameters.
-    pub params: serde_json::Value,
+    pub params: Value,
     /// What its handler reads.
     pub target: QueryTarget,
     /// The rest of what it reads.

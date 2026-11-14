@@ -614,9 +614,7 @@ impl Cx<'_, '_> {
             }
         }
         out.targets = target.map_or(Targets::ALL, Targets::only);
-        if let Placement::Fn { has_body: false } = placement
-            && has_external
-        {
+        if placement == (Placement::Fn { has_body: false }) && has_external {
             let externals = external_targets
                 .iter()
                 .fold(Targets::NONE, |acc, &(t, _)| acc.with(t));
@@ -1001,7 +999,12 @@ const fn external_help(placement: Placement) -> &'static str {
             "`@external` on a type names the drop function of an external type, which has no \
              body"
         }
-        _ => "`@external` applies to functions and external types",
+        Placement::Fn { .. }
+        | Placement::Type { .. }
+        | Placement::Alias
+        | Placement::Const
+        | Placement::Interface
+        | Placement::Test => "`@external` applies to functions and external types",
     }
 }
 

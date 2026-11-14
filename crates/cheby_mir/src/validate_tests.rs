@@ -2,6 +2,10 @@
 //! accepted and rejected cases of every new rvalue, layout, constant,
 //! static and key, and the ownership of every runtime helper and of
 //! `box`/`unbox` (D7).
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, IndexVec, ModuleId};

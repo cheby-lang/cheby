@@ -6,8 +6,6 @@
 //!
 //! Every test opens its own store in a fresh directory (D-1128) and reads
 //! the lookups through `CHEBY_CACHE_LOG`'s file (D-973).
-
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
@@ -215,7 +213,7 @@ fn std_cache_warm_run_compiles_no_std_unit() {
         lines(&warm, "code.std").contains(&"code.std std::io hit".to_owned()),
         "{warm:?}"
     );
-    if crate::std_cache::FRONT_HITS {
+    if std_cache::FRONT_HITS {
         assert!(lines(&warm, "parse.std").is_empty(), "{warm:?}");
         assert!(misses(&warm, "front.std").is_empty(), "{warm:?}");
     }
@@ -322,7 +320,7 @@ fn std_cache_keys() {
     assert_eq!(
         std_settings(&Settings {
             kind: BuildKind::Plain,
-            ..command.clone()
+            ..command
         }),
         std
     );
@@ -338,7 +336,7 @@ fn std_cache_keys() {
     assert_ne!(key, std_code_key(BUILD, "std::io", &naive));
     let self_test = Settings {
         kind: BuildKind::StdSelfTest,
-        ..std.clone()
+        ..std
     };
     assert_ne!(key, std_code_key(BUILD, "std::io", &self_test));
     assert_eq!(
@@ -385,10 +383,10 @@ fn std_cache_self_test_kind_is_its_own() {
 /// std's units in any command, and some std function borrows.
 #[test]
 fn std_cache_masks_whole() {
-    let whole = crate::std_cache::whole_std().unwrap();
+    let whole = std_cache::whole_std().unwrap();
     assert!(!whole.named().is_empty(), "no std function borrows");
     assert_eq!(whole.modules().len(), std_lib::STD_MODULES.len());
-    let again = crate::std_cache::whole_std().unwrap();
+    let again = std_cache::whole_std().unwrap();
     assert_eq!(whole.named(), again.named());
 }
 
@@ -408,7 +406,7 @@ fn check_fails_at(f: &mut Fixture, root: &Path, kib: u64) -> bool {
     cache.finish(false).unwrap();
     out.diagnostics
         .iter()
-        .any(|d| d.code == cheby_diag::codes::CONSTANT_LIMIT)
+        .any(|d| d.code == codes::CONSTANT_LIMIT)
 }
 
 /// Whether `cheby run`'s build of `root` under `kib` KiB reports E0076.
@@ -422,7 +420,7 @@ fn run_fails_at(f: &mut Fixture, root: &Path, kib: u64) -> bool {
         Prepared::CompileFailed(out) => out
             .diagnostics
             .iter()
-            .any(|d| d.code == cheby_diag::codes::CONSTANT_LIMIT),
+            .any(|d| d.code == codes::CONSTANT_LIMIT),
     }
 }
 

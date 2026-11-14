@@ -162,7 +162,9 @@ impl Builder<'_> {
         while let Some(event) = events.get(self.next_token_event) {
             match *event {
                 Event::Token { raw } | Event::Split { raw, .. } => return index(raw),
-                _ => self.next_token_event = self.next_token_event.saturating_add(1),
+                Event::Start { .. } | Event::Finish | Event::Tombstone => {
+                    self.next_token_event = self.next_token_event.saturating_add(1);
+                }
             }
         }
         self.lexed.len()

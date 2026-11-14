@@ -27,7 +27,7 @@ use crate::unwind::guard::guarded;
 /// `ctx` is the running fiber's control block and `owner` a live `Scope`
 /// handle, borrowed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_fiber_sys_arm_interrupt(ctx: *mut ExecCtx, owner: Word) {
+pub(crate) unsafe extern "C" fn cheby_fiber_sys_arm_interrupt(ctx: *mut ExecCtx, owner: Word) {
     guarded(Some(ctx), || {
         // SAFETY: forwarded from the caller.
         let me = unsafe { super::running(ctx) };

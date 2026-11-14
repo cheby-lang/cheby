@@ -366,6 +366,10 @@ impl<O: Observer> Sim<'_, O> {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "its matches name every variant (D-1560)"
+    )]
     fn block(&mut self, id: BlockId) -> Result<(), Ice> {
         let f = self.f;
         let block = f.block(id)?;
@@ -414,7 +418,26 @@ impl<O: Observer> Sim<'_, O> {
                             st.set(*dst, 0);
                             let base = match value {
                                 Rvalue::Field { base, .. } => Some(*base),
-                                _ => None,
+                                Rvalue::Use(_)
+                                | Rvalue::Call { .. }
+                                | Rvalue::CallForeign { .. }
+                                | Rvalue::CallRuntime { .. }
+                                | Rvalue::Alloc { .. }
+                                | Rvalue::AllocPlaceholder { .. }
+                                | Rvalue::InitField { .. }
+                                | Rvalue::ReadLayout { .. }
+                                | Rvalue::LoadConst(_)
+                                | Rvalue::Box { .. }
+                                | Rvalue::Unbox { .. }
+                                | Rvalue::Checked { .. }
+                                | Rvalue::Compare { .. }
+                                | Rvalue::FloatArith { .. }
+                                | Rvalue::Bitwise { .. }
+                                | Rvalue::FloatNeg { .. }
+                                | Rvalue::Not(_)
+                                | Rvalue::ReadTag { .. }
+                                | Rvalue::DropReuse { .. }
+                                | Rvalue::AllocReuse { .. } => None,
                             };
                             st.set_borrowed(*dst, base);
                         } else {
@@ -635,6 +658,24 @@ fn unwind_state(f: &Function, st: &Counts, stmt: &Stmt) -> Result<Counts, Ice> {
 fn consumed_on_unwind(value: &Rvalue) -> Vec<(Local, UseKind)> {
     match value {
         Rvalue::Call { .. } | Rvalue::CallRuntime { .. } => value.uses(),
-        _ => Vec::new(),
+        Rvalue::Use(_)
+        | Rvalue::CallForeign { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::AllocPlaceholder { .. }
+        | Rvalue::InitField { .. }
+        | Rvalue::Field { .. }
+        | Rvalue::ReadLayout { .. }
+        | Rvalue::LoadConst(_)
+        | Rvalue::Box { .. }
+        | Rvalue::Unbox { .. }
+        | Rvalue::Checked { .. }
+        | Rvalue::Compare { .. }
+        | Rvalue::FloatArith { .. }
+        | Rvalue::Bitwise { .. }
+        | Rvalue::FloatNeg { .. }
+        | Rvalue::Not(_)
+        | Rvalue::ReadTag { .. }
+        | Rvalue::DropReuse { .. }
+        | Rvalue::AllocReuse { .. } => Vec::new(),
     }
 }

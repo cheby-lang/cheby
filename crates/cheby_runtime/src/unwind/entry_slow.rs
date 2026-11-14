@@ -13,7 +13,7 @@
 //! counted parameters keeps the translated chain.
 //!
 //! The helpers are not guarded themselves. Each calls the guarded slow
-//! path ([`cheby_rt_stack_slow`] or [`cheby_rt_stack_slow_frame`]), which
+//! path (`cheby_rt_stack_slow` or `cheby_rt_stack_slow_frame`), which
 //! runs every interrupt step as before (a cancellation is delivered there,
 //! D-688) and, when it starts an unwinding, sets the fiber's unwind flag
 //! and returns (D-700, D-733). That makes the helpers the one Rust caller
@@ -53,7 +53,7 @@ use crate::rc;
 #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_stack_slow_unwind(
+pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     ctx: *mut ExecCtx,
     location: Word,
     count: u32,
@@ -86,7 +86,7 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_unwind(
 #[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_stack_slow_unwind(
+pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     ctx: *mut ExecCtx,
     location: Word,
     count: u32,
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     not(windows)
 )))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_stack_slow_unwind(
+pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     ctx: *mut ExecCtx,
     location: Word,
     count: u32,
@@ -174,7 +174,7 @@ unsafe extern "C" fn stack_slow_unwind_from(
 #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
+pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     ctx: *mut ExecCtx,
     location: Word,
     frame_size: u64,
@@ -211,7 +211,7 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
 #[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
+pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     ctx: *mut ExecCtx,
     location: Word,
     frame_size: u64,
@@ -247,7 +247,7 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     not(windows)
 )))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
+pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     ctx: *mut ExecCtx,
     location: Word,
     frame_size: u64,

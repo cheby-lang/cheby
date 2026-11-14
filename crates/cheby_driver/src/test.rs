@@ -50,6 +50,10 @@
 //! When a module's batch does not build, each of its tests is built alone,
 //! so the ones that build still run. A module or test that does not build
 //! is counted and reported with its codes; the other modules still run.
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test matches only the variants it checks"
+)]
 
 use std::fmt::Write as _;
 use std::io::Write;
@@ -1669,7 +1673,7 @@ mod stuck_tests {
         };
         program.set_threads(1);
         let host = {
-            let (fifo, marker) = (fifo.clone(), marker.clone());
+            let (fifo, marker) = (fifo, marker);
             std::thread::spawn(move || {
                 let start = Instant::now();
                 while !marker.exists() {

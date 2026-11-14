@@ -200,7 +200,7 @@ pub(crate) fn codegen_options(mir: MirOptions, capture_clif: bool) -> CodegenOpt
 /// `AllFunctions` evaluates nothing. A CLIF dump (`capture_clif`) compiles
 /// with the default options, MIR, code generation and JIT, so dumps do not
 /// depend on the environment (D-264); any other build reads the options
-/// with [`mir_options_from_env`] and [`codegen_options_from_env`]. With
+/// with [`mir_options_from_env`] and `codegen_options_from_env`. With
 /// `CHEBY_DUMP_DIR` set, it writes the determinism dumps (module docs).
 ///
 /// # Errors
@@ -849,7 +849,10 @@ fn reached_units(units: &[MirModule], lowered: &Lowered) -> Vec<MirModule> {
                 | cheby_mir::FnKey::Test(def)
                 | cheby_mir::FnKey::Closure { owner: def, .. }
                 | cheby_mir::FnKey::Continuation { owner: def, .. } => keep(def),
-                _ => true,
+                cheby_mir::FnKey::Entry(_)
+                | cheby_mir::FnKey::Trampoline(_)
+                | cheby_mir::FnKey::TupleDictFn { .. }
+                | cheby_mir::FnKey::DynForward { .. } => true,
             });
             copy
         })
@@ -860,11 +863,14 @@ fn reached_units(units: &[MirModule], lowered: &Lowered) -> Vec<MirModule> {
 fn jit_ice(e: JitError) -> Ice {
     match e {
         JitError::Codegen(cheby_codegen_clif::CodegenError::Ice(ice)) => ice,
-        other => Ice::new(other.to_string()),
+        other @ (JitError::Codegen(_)
+        | JitError::Host(_)
+        | JitError::UnresolvedSymbols(_)
+        | JitError::Runtime(_)) => Ice::new(other.to_string()),
     }
 }
 
-/// What [`lower`] produced.
+/// What `lower` produced.
 pub(crate) struct Lowered {
     pub units: Vec<MirModule>,
     pub reach: Reach,
@@ -1205,7 +1211,7 @@ impl Lowering<'_> {
                 }
                 self.logs.get(&module).map(|l| &l.code)
             }
-            _ => None,
+            UnitKind::Tests(_) | UnitKind::Entries => None,
         };
         unit_masks(self.front, unit, facts, log)
     }
@@ -1250,7 +1256,7 @@ impl StdUnits {
     fn mir_of(&self, front: &Frontend, unit: &MirModule, mir: MirOptions) -> MirOptions {
         match unit.unit {
             UnitKind::Code(module) if self.whole && is_std(front, module) => self.mir,
-            _ => mir,
+            UnitKind::Code(_) | UnitKind::Tests(_) | UnitKind::Entries => mir,
         }
     }
 
@@ -1283,7 +1289,11 @@ impl StdUnits {
 const fn std_options(roots: &Roots<'_>, mir: MirOptions) -> MirOptions {
     match roots {
         Roots::Constants | Roots::Evaluate(_) if mir.reuse => crate::std_cache::std_mir(mir),
-        _ => MirOptions {
+        Roots::Main(_)
+        | Roots::Tests(_)
+        | Roots::Constants
+        | Roots::Evaluate(_)
+        | Roots::AllFunctions => MirOptions {
             record_sites: false,
             ..mir
         },
@@ -1493,7 +1503,7 @@ fn lower_through_cache(
     // counted, since the masks come from the whole build (D-779).
     let mut stored: BTreeMap<At, StoredMasks> = BTreeMap::new();
     let mut inferred = if borrows {
-        let stored_facts: Vec<&cheby_mir::borrow::UnitFacts> = skipped
+        let stored_facts: Vec<&borrow::UnitFacts> = skipped
             .iter()
             .filter_map(|&at| planned(at)?.facts.as_ref())
             .collect();
@@ -1934,7 +1944,7 @@ fn infer_borrowing(
     crate::borrowing::infer(front, units, &|unit, facts| {
         let log = match unit.unit {
             UnitKind::Code(module) => logs.get(&module).map(|l| &l.code),
-            _ => None,
+            UnitKind::Tests(_) | UnitKind::Entries => None,
         };
         unit_masks(front, unit, facts, log)
     })
@@ -2379,7 +2389,6 @@ fn compile_with_libraries(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
 
     use cheby_package::{Manifest, Targets};
 
@@ -2482,7 +2491,7 @@ fn main() {
         assert_eq!(infos.len(), 2);
         let const_modules = lowered.reach.const_modules();
         for info in &infos {
-            let modules = const_modules.get(&info.def).unwrap();
+            let modules = &const_modules[&info.def];
             let mut deps: Vec<(String, u64)> = modules
                 .iter()
                 .map(|&m| {
@@ -3425,7 +3434,7 @@ fn main() {
     fn rc_modes_validate_and_naive_mir_is_the_mir_before_borrowing() {
         let dirs = example_dirs();
         let naive = MirOptions {
-            rc: cheby_mir::RcMode::Naive,
+            rc: RcMode::Naive,
             ..MirOptions::default()
         };
         let before_borrowing = MirOptions::default().perceus_passes_off();
@@ -3458,7 +3467,7 @@ fn main() {
             check(&name, &naive_units);
             check(&name, &perceus_units);
             assert!(
-                !naive_units.iter().any(cheby_mir::borrow::borrows_anything),
+                !naive_units.iter().any(borrow::borrows_anything),
                 "{name}: naive MIR borrows"
             );
             let dump = |units: &[MirModule]| -> Vec<String> {
@@ -3473,10 +3482,7 @@ fn main() {
                 !naive_dump.iter().any(|text| text.contains("drop_reuse")),
                 "{name}: naive MIR reuses"
             );
-            if perceus_units
-                .iter()
-                .any(cheby_mir::borrow::borrows_anything)
-            {
+            if perceus_units.iter().any(borrow::borrows_anything) {
                 borrowing.push(name.clone());
             }
             if dump(&perceus_units)
