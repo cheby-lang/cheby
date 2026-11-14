@@ -965,10 +965,18 @@ fn jits_commit_only_what_they_use() {
             "{memory:?}"
         );
     }
+    // Under the address sanitizer the process's memory also holds what the
+    // sanitizer keeps of freed blocks to catch a use after free, up to
+    // 256 MiB, which fills during this test in a process of its own
+    // (D-1562). The checks of each JIT's own accounting above and below
+    // still run there.
+    #[cfg(not(cheby_sanitize = "address"))]
     if let (Some(before), Some(after)) = (before, process_memory()) {
         let grown = after.saturating_sub(before);
         assert!(grown < 256 << 20, "{JITS} JITs added {grown} bytes");
     }
+    #[cfg(cheby_sanitize = "address")]
+    let _ = before;
     let usage: Vec<_> = jits.iter().map(|jit| Arc::clone(&jit.memory)).collect();
     drop(jits);
     for usage in usage {

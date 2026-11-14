@@ -421,6 +421,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1558    | CI profile: no fail-fast, 2 retries, slow at 60 s, killed after 15 periods, JUnit uploaded          |
 | D-1559    | `xtask junit-report`: the JUnit report as a job summary and an unzipped HTML page per job           |
 | D-1560    | More lints (unsafe docs, hash order, enum wildcards, some `nursery`); CI runs typos, taplo, etc.    |
+| D-1561    | `sanitize-cfg` clippies the workspace and checks fuzz/; a cfg-only build names no runtime            |
+| D-1562    | Under ASan, `jits_commit_only_what_they_use` skips its process-memory bound; per-JIT checks stay     |
 
 ## Open questions
 
