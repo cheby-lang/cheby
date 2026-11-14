@@ -44,7 +44,7 @@ rustls.workspace = true
 siphasher.workspace = true
 
 # The harnesses live under tests/ at the repository root (docs/plan/testing.md),
-# but are test targets of this crate so that `cargo test` builds `cheby` first.
+# but are test targets of this crate so that nextest builds `cheby` first.
 [[test]]
 name = "conformance"
 path = "../../tests/conformance/main.rs"
@@ -65,6 +65,11 @@ harness = false
 [[test]]
 name = "lsp"
 path = "../../tests/lsp_harness/main.rs"
+harness = false
+
+# Colored output, one trial per UI test and per example (D-1557).
+[[test]]
+name = "color"
 harness = false
 
 [lints]

@@ -1526,8 +1526,8 @@ fn cost_lookups_allocate_nothing_and_updates_copy_one_path() {
     });
 }
 
-/// Measured costs for the report: `cargo test -p cheby_runtime --release
-/// -- --ignored --nocapture hamt::tests::measure`.
+/// Measured costs for the report: `cargo nextest run -p cheby_runtime
+/// --release --run-ignored only --no-capture hamt::tests::measure`.
 #[test]
 #[ignore = "a measurement, not a check"]
 fn measure() {

@@ -1,5 +1,6 @@
-//! The client side of the language server harness, `cargo test -p
-//! cheby_cli --test lsp` (D-1352, docs/plan/testing.md).
+//! The client side of the language server harness,
+//! `cargo xtask test -E 'binary_id(cheby_cli::lsp)'` (D-1352,
+//! docs/plan/testing.md).
 //!
 //! - [`frame`]: the `Content-Length` framing of JSON-RPC over stdio, read
 //!   strictly, so that a stray byte on the server's standard output is a

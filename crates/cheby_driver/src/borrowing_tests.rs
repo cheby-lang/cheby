@@ -125,8 +125,8 @@ impl Seen {
 /// union of each unit's own facts (named by path, rebuilt through the
 /// build's interfaces) equals the build's facts, and the masks inferred
 /// from it equal the build's masks, which are today's (the build's facts
-/// are still `collect_facts` over every unit; `cargo test -p cheby_driver
-/// golden` and the gate's CLIF record pin the masks themselves). The
+/// are still `collect_facts` over every unit; `cargo nextest run -p
+/// cheby_driver golden` and the gate's CLIF record pin the masks themselves). The
 /// functions whose masks only the entries unit's facts decide are listed
 /// (D-1194).
 #[test]

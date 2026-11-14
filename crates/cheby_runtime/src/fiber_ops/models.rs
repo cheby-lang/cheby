@@ -6,10 +6,10 @@
 //! lock, a channel's or join cell's lock, a wait node's state and a fiber's
 //! park state, and each step names the function it mirrors. loom 0.7 needs
 //! no `--cfg loom` (its source has no `cfg(loom)` gating), so the models
-//! build in the shared `target/` with plain `cargo test`:
+//! build in the shared `target/` with plain `cargo nextest run`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime fiber_ops::models
+//! cargo nextest run -p cheby_runtime fiber_ops::models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so
@@ -22,7 +22,7 @@
 //! preemptions:
 //!
 //! ```text
-//! cargo test -p cheby_runtime --release fiber_ops::models -- --include-ignored
+//! cargo nextest run -p cheby_runtime --release --run-ignored all fiber_ops::models
 //! ```
 //!
 //! | Model step                                          | Mirrors (path under `crates/cheby_runtime/src/`, function)                                        |
@@ -297,7 +297,7 @@ impl Node {
 enum Search {
     /// At most [`PREEMPTIONS`] preemptions per execution (unless
     /// `LOOM_MAX_PREEMPTIONS` says otherwise): the default run, which
-    /// keeps `cargo test --workspace` fast.
+    /// keeps `cargo xtask test` fast.
     Bounded,
     /// At most [`DEEP_PREEMPTIONS`] preemptions: model (5)'s `#[ignore]`d
     /// `model_5_deep`, for `--release`. Every interleaving of model (5)

@@ -48,7 +48,8 @@
 #   <host>`, `-Zsanitizer=<s>` and `--cfg cheby_sanitize="<s>"`, which turns
 #   on the runtime's annotations: each fiber switch is told to the
 #   sanitizer, and a stack slot is unpoisoned before it is reused. The steps
-#   run their tests one at a time with `CHEBY_HARNESS_SCALE=10` and
+#   run their tests under cargo-nextest (D-1553), one at a time with
+#   `-j 1`, `CHEBY_HARNESS_SCALE=10` and
 #   `CHEBY_RT_TEST_EMULATED=1` (D-725, D-748): the runtime's unit tests with
 #   and without `CHEBY_RT_STRESS_MIGRATE=1`, `cheby_jit`'s tests, the
 #   deadlock UI tests at 4 and 2 threads under migration stress, the 2- and
@@ -237,6 +238,10 @@ jobs:
         with:
           key: sanitize-${{ matrix.sanitizer }}
       - uses: ./.github/actions/c-compiler
+      # `cargo xtask sanitize` runs its tests under cargo-nextest (D-1553).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.151
       - name: Install llvm-symbolizer
         run: |
           sudo apt-get update

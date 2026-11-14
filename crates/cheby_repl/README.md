@@ -17,7 +17,7 @@ The crate is one `lib.rs`: `run`, `Session`, the open-bracket test `is_open`, th
 
 ## Tests
 
-The transcripts under [`tests/repl/`](../../tests/repl/README.md) are run by the `repl` test target of `cheby_cli` (`cargo test -p cheby_cli --test repl`), and `crates/cheby_cli/tests/repl_runtime.rs` covers the runtime behaviour of a session end to end.
+The transcripts under [`tests/repl/`](../../tests/repl/README.md) are run by the `repl` test target of `cheby_cli` (`cargo xtask test -E 'binary_id(cheby_cli::repl)'`), and `crates/cheby_cli/tests/repl_runtime.rs` covers the runtime behaviour of a session end to end.
 
 ## Read more
 

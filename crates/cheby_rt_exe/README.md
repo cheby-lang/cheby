@@ -13,7 +13,7 @@ Everything else an executable needs from the runtime lives in `cheby_runtime`, s
 
 ## Building
 
-`cargo build -p cheby_rt_exe --locked` writes `target/debug/libcheby_rt_exe.a`, and `--release` writes `target/release/libcheby_rt_exe.a`, next to the `cheby` binary of the same profile, where `cheby build` looks for it (D-929). The archive has the profile of the toolchain: a debug archive keeps the leak check, poisoning and guard pages (D-926). A plain `cargo test` of a crate does not rebuild it; `cargo build` does.
+`cargo build -p cheby_rt_exe --locked` writes `target/debug/libcheby_rt_exe.a`, and `--release` writes `target/release/libcheby_rt_exe.a`, next to the `cheby` binary of the same profile, where `cheby build` looks for it (D-929). The archive has the profile of the toolchain: a debug archive keeps the leak check, poisoning and guard pages (D-926). A nextest run does not rebuild it; `cargo build` does.
 
 ## Tests
 

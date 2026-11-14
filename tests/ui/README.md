@@ -15,7 +15,7 @@ Goldens sit next to the test: `.stderr` for diagnostics (required for `check-fai
 
 `// @flags: …` exercises the command-line flags of D-549, D-550 and D-543: `// @flags: --deny-warnings` turns every warning into an error, so a `check-fail` test's `.stderr` shows `error[W…]`, and a run test that warns is `run-fail` with `// @exit: 1` and no `.stdout`; `// @flags: --target js` checks for one target only (`check` modes); `// @flags: --module ui_test::util` selects tests (with `@command: test`). The flags follow the subcommand and come before the program's arguments of a `name.args` file, which are passed after `--`.
 
-`// @flags: --reuse-report` makes `cheby run` or `cheby test` print the reuse report (D-717) to standard error before the program runs, so the test's `.stderr` holds its lines. The report describes Perceus counting, so the harness runs a test whose flags include `--reuse-report` with `CHEBY_RC` removed from its environment. Every other test inherits the harness's `CHEBY_RC`, so `CHEBY_RC=naive cargo test -p cheby_cli --test ui`, which CI's `rc-naive` job runs, checks the suite under naive counting (D-718, D-746).
+`// @flags: --reuse-report` makes `cheby run` or `cheby test` print the reuse report (D-717) to standard error before the program runs, so the test's `.stderr` holds its lines. The report describes Perceus counting, so the harness runs a test whose flags include `--reuse-report` with `CHEBY_RC` removed from its environment. Every other test inherits the harness's `CHEBY_RC`, so `CHEBY_RC=naive cargo xtask test -E 'binary_id(cheby_cli::ui)'`, which CI's `rc-naive` job runs, checks the suite under naive counting (D-718, D-746).
 
 With `// @command: test`, the goldens hold the output of `cheby test` (D-541): its report on standard output, and warnings or compile errors on standard error. A test that fails makes `cheby test` exit with 1, so such a UI test is `run-fail` with `// @exit: 1`; a compile error also exits with 1. A `name.stdin` file works as for `cheby run`; `cheby test` takes no program arguments, so a `name.args` file beside such a test is an error.
 
@@ -56,17 +56,17 @@ tests/ui/07-modules-and-packages/
 - Every `.cheby` file of a package test must parse with both parsers, so a package test cannot be `parse-fail`. Write a syntax error as a single-file test.
 - A file and a directory with the same name are an error, since they would share goldens.
 
-Run with `cargo test --test ui`.
+Run with `cargo xtask test -E 'binary_id(cheby_cli::ui)'` (D-1553).
 
 ## Language server parity
 
-The language server harness (`cargo test -p cheby_cli --test lsp`, [`tests/lsp/README.md`](../lsp/README.md)) reads the `.stderr` golden of every check test as the diagnostics `cheby lsp` must publish for the same package (D-1348). Each one is a trial `parity/ui/<chapter>/<name>` with the test's milestone. So a blessed `.stderr` change is checked by both harnesses.
+The language server harness (`cargo xtask test -E 'binary_id(cheby_cli::lsp)'`, [`tests/lsp/README.md`](../lsp/README.md)) reads the `.stderr` golden of every check test as the diagnostics `cheby lsp` must publish for the same package (D-1348). Each one is a trial `parity/ui/<chapter>/<name>` with the test's milestone. So a blessed `.stderr` change is checked by both harnesses.
 
 Parity compares severity, code, the first line of the message, the file and the start position. It leaves out run tests, tests with `@flags`, and goldens with an error that has no code. Until the server's constants child lands, it also ignores goldens with a back-end code (D-1349). On Windows a parity trial runs only when its golden holds a front-end error, as for the check test itself.
 
 ## Milestones and strict runs
 
-`tests/milestone` names the milestone in progress (D-288). A test of an earlier milestone must pass, a test of the milestone in progress is pending and only reported, and a test of a later milestone must fail. Every harness, this one, the conformance harness (`cargo test --test conformance`), the REPL harness (`cargo test --test repl`) and the language server harness (`cargo test --test lsp`), reads three environment variables, and CI sets none of them (D-544):
+`tests/milestone` names the milestone in progress (D-288). A test of an earlier milestone must pass, a test of the milestone in progress is pending and only reported, and a test of a later milestone must fail. Every harness, this one, the conformance harness (`binary_id(cheby_cli::conformance)`), the REPL harness (`binary_id(cheby_cli::repl)`) and the language server harness (`binary_id(cheby_cli::lsp)`), reads three environment variables, and CI sets none of them (D-544):
 
 | Variable                     | Effect                                                                                                                  |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -78,7 +78,7 @@ Every `cheby` the harnesses start runs with `CHEBY_RT_POISON=1`, so a toolchain 
 
 `CHEBY_HARNESS_SCALE=<n>`, a whole number from 1 to 100 (1 by default), multiplies the timeouts of this harness (180 s), the conformance harness (60 s), the REPL harness (60 s) and each wait of the language server harness (60 s), for slow machines, emulators and sanitizer builds (D-722). Any other value is a harness error, and the harness exits with status 2.
 
-The conformance harness also runs every example's run trial and `::test` trial with `CHEBY_THREADS=1` and `CHEBY_THREADS=2`, as `<name>@threads=1` and `<name>::test@threads=2`, with the same goldens and the same milestone (D-722). The base trial runs with `CHEBY_THREADS` removed from the environment. When the harness itself runs with `CHEBY_THREADS=<n>` and n is neither 1 nor 2, as in `CHEBY_THREADS=4 cargo test -p cheby_cli --test conformance`, every run trial and `::test` trial also runs as `<name>@threads=<n>`. A value that is not a whole number of at least 1 is a harness error, and the harness exits with status 2. The harness prints the thread counts it runs. A `skip-run` example gets no variants, and `cargo xtask bless` ignores the variants, so only the base trial writes goldens. Unless `--test-threads` is given, the conformance harness runs at most half as many trials at once as the machine has hardware threads. An allow-list pattern such as `005_prime_sieve*` covers an example's trials and their variants.
+The conformance harness also runs every example's run trial and `::test` trial with `CHEBY_THREADS=1` and `CHEBY_THREADS=2`, as `<name>@threads=1` and `<name>::test@threads=2`, with the same goldens and the same milestone (D-722). The base trial runs with `CHEBY_THREADS` removed from the environment. When the harness itself runs with `CHEBY_THREADS=<n>` and n is neither 1 nor 2, as in `CHEBY_THREADS=4 cargo xtask test -E 'binary_id(cheby_cli::conformance)'`, every run trial and `::test` trial also runs as `<name>@threads=<n>`. A value that is not a whole number of at least 1 is a harness error, and the harness exits with status 2. The harness prints the thread counts it runs. A `skip-run` example gets no variants, and `cargo xtask bless` ignores the variants, so only the base trial writes goldens. Every harness trial counts as two of nextest's threads (`threads-required = 2` in `.config/nextest.toml`), since it may start several scheduler threads (D-722, D-1555). An allow-list pattern such as `005_prime_sieve*` covers an example's trials and their variants.
 
 Every run trial and `::test` trial of an example that is run also runs under naive reference counting, as `<name>@rc=naive` and `<name>::test@rc=naive`, with `CHEBY_RC=naive`, the same goldens and the same milestone, at the default thread count (D-718). Every other trial removes `CHEBY_RC` from the child's environment, so neither an example's `env` file nor the developer's shell changes how a trial counts. `cargo xtask bless` ignores these variants too.
 
@@ -95,6 +95,7 @@ Only a test pending because its milestone is the one in progress is made strict.
 At the end of a run each harness prints how many pending tests passed, then lists them by outcome: `passed`, `allowed failure` (with the pattern that allowed it), `required, failed` (strict runs only) and `still failing` (report-only). A passing test that is still on the allow list can be removed from it.
 
 ```sh
-CHEBY_PENDING=require CHEBY_PENDING_ALLOW=carried.txt cargo test -p cheby_cli --test ui --test conformance
-CHEBY_MILESTONE=M2 cargo test -p cheby_cli --test conformance
+CHEBY_PENDING=require CHEBY_PENDING_ALLOW=carried.txt cargo xtask test \
+  -E 'binary_id(cheby_cli::ui) | binary_id(cheby_cli::conformance)'
+CHEBY_MILESTONE=M2 cargo xtask test -E 'binary_id(cheby_cli::conformance)'
 ```

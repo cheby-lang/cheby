@@ -1,6 +1,6 @@
 # Language server tests
 
-`cargo test -p cheby_cli --test lsp` runs `cheby lsp` the way an editor does, over stdio, one process per trial (D-1352). The harness is `tests/lsp_harness/main.rs`, and its client is `cheby_test_support::lsp`.
+`cargo xtask test -E 'binary_id(cheby_cli::lsp)'` runs `cheby lsp` the way an editor does, over stdio, one process per trial (D-1352). The harness is `tests/lsp_harness/main.rs`, and its client is `cheby_test_support::lsp`.
 
 ## Trial groups
 
@@ -190,14 +190,14 @@ Whatever the golden says, every item of every completion answer must have an edi
 
 **Inlay hints** print as a list of lines, sorted by position: the compiler's 1-based line and code-point column, the kind (`type`, `parameter` or `-`), and the label in backticks. A label of parts prints each part in backticks, joined by `+`, with a part's location after it as `@path:L:C`. Then, where set, `padding-left`, `padding-right`, `tooltip` and each of `textEdits` as `edit L:C-L:C` with its text in backticks. So `` "3:8 type `: List<Int>` edit 3:8-3:8 `: List<Int>`" ``.
 
-`CHEBY_BLESS=1 cargo test -p cheby_cli --test lsp` writes the goldens, and so does `cargo xtask bless`. Review a blessed change like code (D-292). A test of a later milestone is never blessed, and trials without a golden are ignored under blessing. A missing golden fails with the whole answer in the message, so it can also be written by hand.
+`CHEBY_BLESS=1 cargo xtask test -E 'binary_id(cheby_cli::lsp)'` writes the goldens, and so does `cargo xtask bless`. Review a blessed change like code (D-292). A test of a later milestone is never blessed, and trials without a golden are ignored under blessing. A missing golden fails with the whole answer in the message, so it can also be written by hand.
 
 ## Milestones and platforms
 
 Protocol trials and golden tests use the header default, M1, so they fail CI from the day they land while `tests/milestone` names a later milestone (D-1352). Example trials use the example's milestone, and a `skip-run` example of a later milestone, such as 030, is tolerated. UI parity trials use the UI test's milestone. The strict runs of D-544 apply:
 
 ```sh
-CHEBY_PENDING=require cargo test -p cheby_cli --test lsp
+CHEBY_PENDING=require cargo xtask test -E 'binary_id(cheby_cli::lsp)'
 ```
 
 On Windows, until M6, the `parity/examples/*` trials are ignored, since they run `cheby check`, which builds a JIT for a package that passes the front end, and so are the UI parity trials whose golden has no front-end error, as their check tests are (D-545, D-641). The server evaluates no constant there (D-1414), so a golden test whose `@steps` hold `idle` or `started` is ignored too. The server never runs generated code (D-1349), so every other trial runs there.

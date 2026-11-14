@@ -30,7 +30,7 @@
 //! evaluation (`eval`) are test modules of this one:
 //!
 //! ```text
-//! cargo test -p cheby_runtime --release num::math -- --ignored --nocapture
+//! cargo nextest run -p cheby_runtime --release --run-ignored only --no-capture num::math
 //! ```
 
 use super::Kernel;
@@ -567,7 +567,8 @@ mod timing {
     use super::*;
 
     /// The average time per call of each function over typical inputs.
-    /// `cargo test -p cheby_runtime --release num::math::timing -- --ignored --nocapture`
+    /// `cargo nextest run -p cheby_runtime --release --run-ignored only --no-capture
+    /// num::math::timing`
     #[test]
     #[ignore = "a measurement, not a check"]
     fn time_per_call() {

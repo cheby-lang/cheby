@@ -6,7 +6,7 @@
 //! mirrors:
 //!
 //! ```text
-//! cargo test -p cheby_runtime fiber_ops::cancel_models
+//! cargo nextest run -p cheby_runtime fiber_ops::cancel_models
 //! ```
 //!
 //! | Model step              | Mirrors (path under `crates/cheby_runtime/src/`, function)                              |

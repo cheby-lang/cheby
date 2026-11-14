@@ -1291,7 +1291,7 @@ fn cancel_nested_joiner_while_the_walk_wakes_many() {
 
 /// [`cancel_nested_joiner_while_the_walk_wakes_many`] with 100 rounds of
 /// 400 parked members per setting. Ignored in debug builds; run it with
-/// `cargo test -p cheby_runtime --release cancel_nested_joiner -- --include-ignored`.
+/// `cargo nextest run -p cheby_runtime --release --run-ignored all cancel_nested_joiner`.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 #[cfg_attr(
@@ -1824,7 +1824,7 @@ fn cancel_stress_pool_quick() {
 /// workers with one panicking job, 200 rounds at 1, 2 and 4 threads, with
 /// the migration stress mode off and on (`CHEBY_RT_STRESS_MIGRATE=1`'s
 /// mode). Ignored in debug builds; run it with
-/// `cargo test -p cheby_runtime --release cancel_stress_pool -- --include-ignored`.
+/// `cargo nextest run -p cheby_runtime --release --run-ignored all cancel_stress_pool`.
 #[test]
 #[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
 #[cfg_attr(

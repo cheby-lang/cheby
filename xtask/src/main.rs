@@ -1,5 +1,8 @@
 //! Developer commands (docs/plan/m0-foundation.md, task 0.10):
 //!
+//! - `test`: runs every Rust test under cargo-nextest with one shared
+//!   build cache and prints the harnesses' pending summary (D-1553,
+//!   D-1554, D-1556; [`test`]).
 //! - `bless`: rewrites the goldens of examples, UI tests and the language
 //!   server's golden tests under `tests/lsp/` from the current `cheby`
 //!   binary, including the goldens beside package UI tests (directories
@@ -35,6 +38,8 @@
 //!   against a baseline (D-718, D-702).
 //! - `check-examples`: runs `cheby check` in every example directory and
 //!   compares the outcome with the expected one (G6).
+//! - `junit-report`: renders nextest's `JUnit` report as one HTML page and as
+//!   a Markdown summary, for the CI runs (D-1559; [`junit`]).
 //! - `sanitize`: the thread-sanitizer and address-sanitizer jobs of
 //!   `nightly.yml` and the job of `miri.yml`, step by step, for the workflows
 //!   and for local runs (D-721, D-862, D-1322).
@@ -55,8 +60,10 @@ mod cache;
 mod cross_check;
 mod determinism;
 mod examples;
+mod junit;
 mod native_libs;
 mod sanitize;
+mod test;
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -76,6 +83,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Cmd {
+    /// Run every Rust test with cargo-nextest, with one build cache shared
+    /// by the run (D-1553, D-1554)
+    Test {
+        /// Arguments for `cargo nextest run`, after `--workspace --locked`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Rewrite goldens of examples, UI tests and LSP tests from the current `cheby`
     Bless {
         /// Only bless tests whose name contains this filter
@@ -131,6 +145,9 @@ enum Cmd {
     BenchCompile(bench::Args),
     /// Measure the run time of the programs under `bench/runtime` (D-718)
     BenchRun(Box<bench_run::Args>),
+    /// Render nextest's `JUnit` report as an HTML page and a Markdown summary
+    /// (D-1559)
+    JunitReport(junit::Args),
     /// Run a sanitizer job of nightly.yml or the job of miri.yml, or some of
     /// its steps, on the pinned nightly (D-721, D-862, D-1322)
     Sanitize(sanitize::Args),
@@ -151,6 +168,8 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let root = repo_root();
     let result = match cli.command {
+        // nextest's own exit status, not this command's (D-1554).
+        Cmd::Test { args } => return test::run(&root, &args, &[]),
         Cmd::Bless { filter } => bless(&root, filter.as_deref()),
         Cmd::GenBench {
             lines,
@@ -169,6 +188,7 @@ fn main() -> ExitCode {
         Cmd::TestStd { filter } => test_std(filter.as_deref()),
         Cmd::BenchCompile(args) => bench::run(&root, &args),
         Cmd::BenchRun(args) => bench_run::run(&root, &args),
+        Cmd::JunitReport(args) => junit::run(&root, &args),
         Cmd::Sanitize(args) => sanitize::run(&root, &args),
         Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
@@ -182,27 +202,18 @@ fn main() -> ExitCode {
     }
 }
 
+/// Runs the conformance, UI and LSP harnesses under nextest with
+/// `CHEBY_BLESS=1`, through `cargo xtask test` (D-292, D-1553).
 fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let mut cmd = Command::new(cargo);
-    cmd.current_dir(root)
-        .args([
-            "test",
-            "--package",
-            "cheby_cli",
-            "--test",
-            "conformance",
-            "--test",
-            "ui",
-            "--test",
-            "lsp",
-            "--",
-        ])
-        .env("CHEBY_BLESS", "1");
-    if let Some(filter) = filter {
-        cmd.arg(filter);
-    }
-    let status = cmd.status().map_err(|e| format!("cannot run cargo: {e}"))?;
+    let mut args = vec![
+        "--no-fail-fast".to_owned(),
+        "-E".to_owned(),
+        "binary_id(cheby_cli::conformance) | binary_id(cheby_cli::ui) \
+         | binary_id(cheby_cli::lsp)"
+            .to_owned(),
+    ];
+    args.extend(filter.map(str::to_owned));
+    let status = test::nextest(root, &args, &[("CHEBY_BLESS", "1")])?;
     if status.success() {
         println!("goldens blessed; review the diff like code");
         Ok(())

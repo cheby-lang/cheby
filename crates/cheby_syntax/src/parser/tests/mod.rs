@@ -177,7 +177,7 @@ fn goldens() {
 }
 
 #[test]
-#[ignore = "debugging aid: CHEBY_DUMP=path cargo test -- --ignored dump"]
+#[ignore = "debugging aid: CHEBY_DUMP=path cargo nextest run -p cheby_syntax --run-ignored only dump"]
 fn dump() {
     let path = std::env::var("CHEBY_DUMP").unwrap();
     let text = std::fs::read_to_string(&path).unwrap();

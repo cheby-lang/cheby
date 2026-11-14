@@ -336,7 +336,7 @@ pub(crate) unsafe fn release(obj: *mut u8) -> bool {
 }
 
 /// `mark_shared` (D-705): its own module, so that
-/// `cargo test -p cheby_runtime rc::mark_shared` selects these tests.
+/// `cargo nextest run -p cheby_runtime rc::mark_shared` selects these tests.
 #[cfg(test)]
 mod mark_shared_tests {
     use std::collections::{BTreeSet, HashSet};
@@ -744,7 +744,7 @@ mod mark_shared_tests {
 /// D-765: the walk that `dup_slow` runs when a local count overflows is not
 /// charged to the memory budget, so it never raises, and a refusal of the
 /// system allocator during it ends the process. Its own module, so that
-/// `cargo test -p cheby_runtime rc::overflow_oom` selects these tests.
+/// `cargo nextest run -p cheby_runtime rc::overflow_oom` selects these tests.
 #[cfg(test)]
 mod overflow_oom_tests {
     use std::sync::{Arc, Mutex, PoisonError};

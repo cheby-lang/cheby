@@ -11,7 +11,7 @@
 //! 0.7 needs no `--cfg loom`, so the model builds in the shared `target/`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime fiber_ops::select_models
+//! cargo nextest run -p cheby_runtime fiber_ops::select_models
 //! ```
 //!
 //! loom runs the model on generator coroutines that switch stacks, so it is
@@ -78,9 +78,10 @@ const CHANNEL_ARM: u64 = 0;
 const TIMER_ARM: u64 = 1;
 
 /// The preemption bound of the default run, unless `LOOM_MAX_PREEMPTIONS`
-/// says otherwise: two keeps `cargo test --workspace` quick (four threads
+/// says otherwise: two keeps `cargo xtask test` quick (four threads
 /// race here), and the twin fails within it. A deeper run:
-/// `LOOM_MAX_PREEMPTIONS=3 cargo test -p cheby_runtime --release fiber_ops::select_models`.
+/// `LOOM_MAX_PREEMPTIONS=3 cargo nextest run -p cheby_runtime --release
+/// fiber_ops::select_models`.
 const PREEMPTIONS: usize = 2;
 
 /// How a waker settles the header.

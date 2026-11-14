@@ -11,7 +11,7 @@
 //! shared `target/`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime fiber_ops::sleep_models
+//! cargo nextest run -p cheby_runtime fiber_ops::sleep_models
 //! ```
 //!
 //! | Model step                               | Mirrors (under `crates/cheby_runtime/src/`)                              |
@@ -65,7 +65,8 @@ mod timer {
 
 /// The preemption bound of the default run, unless `LOOM_MAX_PREEMPTIONS`
 /// says otherwise. A deeper run:
-/// `LOOM_MAX_PREEMPTIONS=3 cargo test -p cheby_runtime --release fiber_ops::sleep_models`.
+/// `LOOM_MAX_PREEMPTIONS=3 cargo nextest run -p cheby_runtime --release
+/// fiber_ops::sleep_models`.
 const PREEMPTIONS: usize = 2;
 
 /// A model checker with the default preemption bound.

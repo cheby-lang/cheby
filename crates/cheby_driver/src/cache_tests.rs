@@ -2,7 +2,7 @@
 //! D-956, D-964, D-965), and the cache-hit tests of D-973 that read the
 //! lookups through `CHEBY_CACHE_LOG`'s file.
 //!
-//! D-973's eight cache-hit tests, which `cargo test -p cheby_driver --
+//! D-973's eight cache-hit tests, which `cargo nextest run -p cheby_driver
 //! cache_hit_` runs together (K8; each asserts on the log's lines, never
 //! on a timing, D-1224, D-1263):
 //!

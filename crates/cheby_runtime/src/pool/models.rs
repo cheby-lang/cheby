@@ -11,10 +11,10 @@
 //! the fiber's state word and its mark, a `loom` mutex and condition
 //! variable for the pool's queue (one job slot), and a counter for the
 //! fiber's entries into a run queue (`Shared::schedule`). loom 0.7 needs no
-//! `--cfg loom`, so the models build with plain `cargo test`:
+//! `--cfg loom`, so the models build with plain `cargo nextest run`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime pool::models
+//! cargo nextest run -p cheby_runtime pool::models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so

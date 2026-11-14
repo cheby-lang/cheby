@@ -16,6 +16,8 @@ cheby_link.workspace = true
 cheby_syntax.workspace = true
 cheby_test_support.workspace = true
 clap.workspace = true
+# `junit-report` reads nextest's JUnit XML (D-1559).
+roxmltree.workspace = true
 serde_json.workspace = true
 
 [lints]

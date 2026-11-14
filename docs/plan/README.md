@@ -263,7 +263,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-883     | A stable `ci.yml` step runs clippy on the runtime with each `cheby_sanitize` value                  |
 | D-884     | Miri runs the runtime's pure modules in 15 groups, leaks ignored, with `PROPTEST_CASES=4`           |
 | D-886     | `test.toml`'s `timing` is an optional boolean; a wrong type, or `timing` with `skip-run`, exits 2   |
-| D-887     | The serial group is a second libtest run on one thread, after the parallel batch; one summary line  |
+| ~~D-887~~ | Superseded by D-1555                                                                                |
 | D-888     | Every variant of a `timing` example runs in the serial group: 24 trials, 30 under 4 threads         |
 | D-889     | M2's reading misses D-247 by 9.3% to 9.6% (90.4k-90.7k lines/s per core), from unwinding; reported  |
 | D-890     | mimalloc v3 is the global allocator of `cheby` and AOT executables, not of sanitizer builds         |
@@ -413,6 +413,13 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1416    | Memory facts stop before code generation, through `Roots::Analysis`                                 |
 | D-1517    | `lsp` merges into `main` after checkpoint 2's fixes; later waves follow in groups, one PR each      |
 | D-1518    | The Zed extension stays a dev extension, version 0.2.0 on its `main`, until W18                     |
+| D-1553    | cargo-nextest replaces `cargo test` everywhere; CI pins 0.9.151; doctests do not run                |
+| D-1554    | `cargo xtask test` gives one nextest run one fresh shared cache, deleted at the end                 |
+| D-1555    | Timing trials run alone (`num-cpus` threads); harness trials take 2 threads; one libtest run        |
+| D-1556    | Harnesses write pending verdicts to `CHEBY_TEST_VERDICTS`; `xtask test` prints the summary          |
+| D-1557    | `tests/color.rs` is a libtest-mimic target: one trial per UI test and per example                   |
+| D-1558    | CI profile: no fail-fast, 2 retries, slow at 60 s, killed after 15 periods, JUnit uploaded          |
+| D-1559    | `xtask junit-report`: the JUnit report as a job summary and an unzipped HTML page per job           |
 
 ## Open questions
 

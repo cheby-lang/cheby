@@ -19,8 +19,8 @@
 //! it, and every runner of examples calls it.
 //!
 //! `timing` is an optional boolean, false by default. An example that sets
-//! it runs every one of its trials serially after the parallel batch of
-//! the conformance harness (D-725). Another type, or `timing = true` with
+//! it runs every one of its conformance trials alone, in nextest's `timing`
+//! test group (D-725, D-1555). Another type, or `timing = true` with
 //! `skip-run = true`, is an error, since a check-only example waits for
 //! nothing (D-886).
 
@@ -45,8 +45,8 @@ pub struct TestConfig {
     pub skip_run: bool,
     /// Why the example is not run.
     pub reason: Option<String>,
-    /// The example waits for real time, so its trials run serially after
-    /// the parallel batch (D-725).
+    /// The example waits for real time, so its trials run alone, in
+    /// nextest's `timing` test group (D-725, D-1555).
     pub timing: bool,
 }
 
@@ -153,8 +153,8 @@ impl TestConfig {
     }
 }
 
-/// The names of the examples whose trials run serially after the parallel
-/// batch, in the order of `examples` (D-725).
+/// The names of the examples whose trials run alone, in nextest's `timing`
+/// test group, in the order of `examples` (D-725, D-1555).
 #[must_use]
 pub fn serial_names(examples: &[Example]) -> Vec<&str> {
     examples
@@ -567,6 +567,25 @@ mod tests {
                 "013_dining_philosophers",
                 "019_supervisor"
             ]
+        );
+    }
+
+    /// D-1555: `.config/nextest.toml` puts the trials of exactly the
+    /// `timing` examples in the `timing` group, through one alternation of
+    /// their names.
+    #[test]
+    fn the_nextest_timing_group_names_the_timing_examples() {
+        let root = crate::repo_root();
+        let examples = super::all(&root).unwrap();
+        let config = std::fs::read_to_string(root.join(".config/nextest.toml")).unwrap();
+        let alternation = format!("({})", serial_names(&examples).join("|"));
+        let filter = config
+            .lines()
+            .find(|line| line.starts_with("filter") && line.contains("cheby_cli::conformance"))
+            .filter(|line| line.contains(&alternation));
+        assert!(
+            filter.is_some_and(|_| config.contains("test-group = \"timing\"")),
+            "no conformance filter with `{alternation}` and the `timing` group in .config/nextest.toml"
         );
     }
 }

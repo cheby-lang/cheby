@@ -8,20 +8,26 @@
 //! `--target-dir`, by default `target/sanitize-<s>` (the workflow's); local
 //! runs pass a scratch directory.
 //!
-//! - **address** and **thread**: `cargo +<nightly> test --locked
+//! - **address** and **thread**: `cargo +<nightly> nextest run --locked
 //!   -Zbuild-std --target <host>` with `RUSTFLAGS` and `RUSTDOCFLAGS`
 //!   `-Zsanitizer=<s> --cfg cheby_sanitize="<s>"`. `-Zbuild-std` is
 //!   required by the thread sanitizer and keeps std instrumented like the rest;
 //!   `--target` keeps the flags away from build scripts and proc macros.
 //!   Every step sets `CHEBY_RT_TEST_EMULATED=1` (the runtime's tests keep
 //!   their checks but assert no upper time bound) and `CHEBY_HARNESS_SCALE=10`
-//!   (the harnesses' timeouts, D-748), and runs its tests one at a time
-//!   (D-725). The `loom` models are skipped, since loom switches stacks on
-//!   its own (D-863). The steps are [`STEPS`].
-//! - **miri**: `cargo +<nightly> miri test --locked -p cheby_runtime --lib`
-//!   over the subset of [`MIRI_GROUPS`], one step per group
-//!   (D-884), with [`MIRIFLAGS`] and `PROPTEST_CASES=4`.
-//!   `--jobs <n>` runs n groups at once; Miri interprets each on one core.
+//!   (the harnesses' timeouts, D-748), and runs its tests one at a time,
+//!   `-j 1` (D-725). The `loom` models are skipped, since loom switches
+//!   stacks on its own (D-863). The steps are [`STEPS`]. Each test command
+//!   gets one fresh `CHEBY_TEST_KEEP_CACHE` and `CHEBY_TEST_VERDICTS`, as
+//!   `cargo xtask test` gives a run (D-1554, D-1556), so the harness trials
+//!   of a step share one cache, as when the harness was one process, and
+//!   the step prints the pending summary.
+//! - **miri**: `cargo +<nightly> miri nextest run --locked -p cheby_runtime
+//!   --lib` over the subset of [`MIRI_GROUPS`], one step per group
+//!   (D-884), with [`MIRIFLAGS`] and `PROPTEST_CASES=4`. Each group runs
+//!   `-j 1`, so Miri interprets one test at a time on one core, and
+//!   `--jobs <n>` runs n groups at once. nextest starts one Miri process
+//!   per test (D-1553).
 //!
 //! The harness steps (`ui-deadlock`, `conformance`, `aot`, `repl`) and the
 //! poison-off pass leave `CHEBY_MILESTONE`, `CHEBY_PENDING` and
@@ -62,8 +68,8 @@
 //!
 //! Each step prints one summary line, `sanitize <s> <step>: ...`, with its
 //! status, its build and test times, the sanitizer reports found in its
-//! output, and the summary lines of the test runs (libtest's `test result:`
-//! and a harness's own `... harness:` lines). A report fails a step even if
+//! output, and the summary lines of the test runs (nextest's `Summary`
+//! line and the pending summary's `pending ...` lines). A report fails a step even if
 //! the command exited 0. The last line sums the steps up. `--list` prints
 //! the steps without running anything; `--no-run` only builds what they
 //! need (a local `-Zbuild-std` build takes a lock its test run does not);
@@ -71,7 +77,7 @@
 //! `--build-cheby <path>` runs no step and copies the sanitized `cheby`
 //! there, for `rc_differential`'s `address` leg (D-1338).
 //!
-//! The `aot` step builds the sanitized archive first, since `cargo test`
+//! The `aot` step builds the sanitized archive first, since nextest
 //! does not, and `cheby build` looks for it next to the sanitized `cheby`
 //! (D-929). The sanitized `cheby` adds the sanitizer's runtime to the link
 //! line (`cheby_link::link::SANITIZER_RUNTIME`, D-1337).
@@ -85,7 +91,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use cheby_test_support::milestone::{Expectation, Setting, Verdicts};
+use cheby_test_support::cache::{FreshDir, HarnessCache, KEEP_CACHE_ENV};
+use cheby_test_support::milestone::{Expectation, Setting, VERDICTS_ENV, Verdicts, merged_summary};
 use cheby_test_support::{example, golden, process, threads};
 
 /// The dated nightly of `nightly.yml` and `miri.yml` (D-781, D-721).
@@ -187,15 +194,16 @@ pub struct Args {
     build_cheby: Option<PathBuf>,
 }
 
-/// One test group of the Miri subset: a libtest filter over the runtime's
+/// One test group of the Miri subset: a filter over the runtime's
 /// unit tests and the tests it skips, each with its reason.
 #[derive(Debug, Clone, Copy)]
 pub struct MiriGroup {
     /// The step is `miri-<name>`.
     pub name: &'static str,
-    /// The libtest filter (a substring of the test path).
+    /// A substring of the test path (`test(~…)` in nextest's filterset).
     pub filter: &'static str,
-    /// `--skip` filters with their reasons.
+    /// Substrings of the tests left out (`not test(~…)`, as libtest's
+    /// `--skip`), with their reasons.
     pub skips: &'static [(&'static str, &'static str)],
 }
 
@@ -344,15 +352,15 @@ pub enum Leaks {
 /// What one command of a step does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// `cargo test` with these arguments (package and test selection, then
-    /// `--` and libtest's arguments) and environment.
+    /// `cargo nextest run` with these arguments (package and test
+    /// selection, `-j` and a filterset) and environment.
     Test {
         env: Vec<(&'static str, &'static str)>,
         args: Vec<&'static str>,
     },
     /// Builds the sanitized runtime archive next to the sanitized `cheby`,
-    /// where `cheby build` looks for it (D-929, D-1337): `cargo test` does
-    /// not build it.
+    /// where `cheby build` looks for it (D-929, D-1337): nextest does not
+    /// build it.
     Archive,
     /// Builds the sanitized `cheby` and runs every example's run trial with
     /// `CHEBY_RT_POISON=0`, comparing with the goldens (D-844): the
@@ -390,21 +398,20 @@ pub fn steps() -> Vec<Step> {
         "-p",
         "cheby_runtime",
         "--lib",
-        "--",
-        "--skip",
-        "models::",
-        "--test-threads",
+        "-j",
         "1",
+        "-E",
+        "not test(~models::)",
     ];
     let ui_deadlock_args = vec![
         "-p",
         "cheby_cli",
         "--test",
         "ui",
-        "--",
-        "--test-threads",
+        "-j",
         "1",
-        "10-concurrency/deadlock/",
+        "-E",
+        "test(~10-concurrency/deadlock/)",
     ];
     vec![
         Step {
@@ -434,7 +441,7 @@ pub fn steps() -> Vec<Step> {
             leaks: Leaks::On,
             actions: vec![Action::Test {
                 env: vec![],
-                args: vec!["-p", "cheby_jit", "--", "--test-threads", "1"],
+                args: vec!["-p", "cheby_jit", "-j", "1"],
             }],
         },
         Step {
@@ -467,12 +474,10 @@ pub fn steps() -> Vec<Step> {
                     "cheby_cli",
                     "--test",
                     "conformance",
-                    "--",
-                    "--test-threads",
+                    "-j",
                     "1",
-                    "@threads=",
-                    "--skip",
-                    "@threads=1",
+                    "-E",
+                    "test(~@threads=) & not test(~@threads=1)",
                 ],
             }],
         },
@@ -492,10 +497,10 @@ pub fn steps() -> Vec<Step> {
                         "cheby_cli",
                         "--test",
                         "conformance",
-                        "--",
-                        "--test-threads",
+                        "-j",
                         "1",
-                        "@aot",
+                        "-E",
+                        "test(~@aot)",
                     ],
                 },
             ],
@@ -514,15 +519,7 @@ pub fn steps() -> Vec<Step> {
             leaks: Leaks::Off,
             actions: vec![Action::Test {
                 env: vec![],
-                args: vec![
-                    "-p",
-                    "cheby_cli",
-                    "--test",
-                    "repl",
-                    "--",
-                    "--test-threads",
-                    "1",
-                ],
+                args: vec!["-p", "cheby_cli", "--test", "repl", "-j", "1"],
             }],
         },
     ]
@@ -572,19 +569,39 @@ fn runs_under(step: &Step, sanitizer: Sanitizer) -> bool {
 }
 
 fn describe_miri(group: &MiriGroup) -> String {
-    let mut line = format!("cargo miri test -p cheby_runtime --lib -- {}", group.filter);
+    let mut line = format!(
+        "cargo miri nextest run -p cheby_runtime --lib -j 1 -E '{}'",
+        miri_filterset(group)
+    );
     for (skip, reason) in group.skips {
-        let _ = write!(line, " --skip {skip} ({reason})");
+        let _ = write!(line, " (skips {skip}: {reason})");
     }
     line
+}
+
+/// The filterset of a Miri group: its tests, without its skips.
+fn miri_filterset(group: &MiriGroup) -> String {
+    let mut filter = format!("test(~{})", group.filter);
+    for (skip, _) in group.skips {
+        let _ = write!(filter, " & not test(~{skip})");
+    }
+    filter
 }
 
 fn describe_action(action: &Action, sanitizer: Sanitizer) -> String {
     match action {
         Action::Test { env, args } => {
             let mut words: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            words.push("cargo test".to_owned());
-            words.extend(test_args(args, sanitizer).iter().map(|a| (*a).to_owned()));
+            words.push("cargo nextest run".to_owned());
+            // Quoted where a shell would read a character of the argument,
+            // such as a filterset's parentheses, so a line can be pasted.
+            words.extend(test_args(args, sanitizer).into_iter().map(|arg| {
+                if arg.contains([' ', '(', ')', '&', '|', '!', ';', '*', '$']) {
+                    format!("'{arg}'")
+                } else {
+                    arg
+                }
+            }));
             words.join(" ")
         }
         Action::Archive => "cargo build -p cheby_rt_exe".to_owned(),
@@ -596,14 +613,27 @@ fn describe_action(action: &Action, sanitizer: Sanitizer) -> String {
     }
 }
 
-/// `args` with the skips of [`THREAD_TIMING_SKIPS`] appended to the
-/// conformance step's libtest arguments under the thread sanitizer.
-fn test_args(args: &[&'static str], sanitizer: Sanitizer) -> Vec<&'static str> {
-    let mut out = args.to_vec();
-    if sanitizer == Sanitizer::Thread && args.contains(&"conformance") {
-        for example in THREAD_TIMING_SKIPS {
-            out.push("--skip");
-            out.push(example);
+/// `args`, with the skips of [`THREAD_TIMING_SKIPS`] added to the
+/// conformance step's filterset under the thread sanitizer. nextest takes
+/// the union of several `-E`, so the skips join the step's own filterset.
+fn test_args(args: &[&'static str], sanitizer: Sanitizer) -> Vec<String> {
+    let mut out: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+    if sanitizer == Sanitizer::Thread
+        && args.contains(&"conformance")
+        && !THREAD_TIMING_SKIPS.is_empty()
+    {
+        let skips = THREAD_TIMING_SKIPS
+            .iter()
+            .map(|example| format!("not test(~{example})"))
+            .collect::<Vec<_>>()
+            .join(" & ");
+        match out.iter().position(|a| a == "-E") {
+            Some(at) => {
+                if let Some(filter) = out.get_mut(at.saturating_add(1)) {
+                    *filter = format!("({filter}) & {skips}");
+                }
+            }
+            None => out.extend(["-E".to_owned(), skips]),
         }
     }
     out
@@ -678,16 +708,7 @@ fn with_caller(ours: &str, caller: Option<String>, separator: char) -> String {
 #[must_use]
 pub fn is_summary_line(line: &str) -> bool {
     let line = line.trim_start();
-    line.starts_with("test result:")
-        || [
-            "conformance harness:",
-            "UI harness:",
-            "REPL harness:",
-            "ui harness:",
-            "repl harness:",
-        ]
-        .iter()
-        .any(|prefix| line.starts_with(prefix))
+    line.starts_with("Summary [") || line.starts_with("pending ")
 }
 
 /// Whether a line starts a sanitizer report or a Miri error.
@@ -848,14 +869,15 @@ impl Context {
         cmd
     }
 
-    /// `cargo +<nightly> <subcommand> --locked -Zbuild-std --target <host>
+    /// `cargo +<nightly> <subcommand…> --locked -Zbuild-std --target <host>
     /// --target-dir <dir>` with the sanitizer's flags and the step's
     /// environment.
-    fn sanitized(&self, subcommand: &str, leaks: Leaks) -> Command {
+    fn sanitized(&self, subcommand: &[&str], leaks: Leaks) -> Command {
         let mut cmd = self.cargo();
         let name = self.sanitizer.name();
         let flags = format!("-Zsanitizer={name} --cfg cheby_sanitize=\"{name}\"");
-        cmd.args([subcommand, "--locked", "-Zbuild-std", "--target"])
+        cmd.args(subcommand)
+            .args(["--locked", "-Zbuild-std", "--target"])
             .arg(&self.host)
             .arg("--target-dir")
             .arg(&self.target_dir)
@@ -874,14 +896,22 @@ impl Context {
 
     fn miri(&self) -> Command {
         let mut cmd = self.cargo();
-        cmd.args(["miri", "test", "--locked", "-p", "cheby_runtime", "--lib"])
-            .arg("--target-dir")
-            .arg(&self.target_dir)
-            .env(
-                "MIRIFLAGS",
-                with_caller(MIRIFLAGS, std::env::var("MIRIFLAGS").ok(), ' '),
-            )
-            .env("PROPTEST_CASES", PROPTEST_CASES);
+        cmd.args([
+            "miri",
+            "nextest",
+            "run",
+            "--locked",
+            "-p",
+            "cheby_runtime",
+            "--lib",
+        ])
+        .arg("--target-dir")
+        .arg(&self.target_dir)
+        .env(
+            "MIRIFLAGS",
+            with_caller(MIRIFLAGS, std::env::var("MIRIFLAGS").ok(), ' '),
+        )
+        .env("PROPTEST_CASES", PROPTEST_CASES);
         cmd
     }
 }
@@ -1033,10 +1063,9 @@ fn run_step(cx: &Context, step: &Step) -> Outcome {
         match action {
             Action::Test { env, args } => {
                 let args = test_args(args, cx.sanitizer);
-                let (selection, libtest) = split_args(&args);
                 let started = Instant::now();
-                let mut no_run = cx.sanitized("test", step.leaks);
-                no_run.args(selection).arg("--no-run");
+                let mut no_run = cx.sanitized(&["nextest", "run"], step.leaks);
+                no_run.args(&args).arg("--no-run");
                 let built = run_scanned(no_run, Output::Live, log.as_deref());
                 build_time = build_time.saturating_add(started.elapsed());
                 match built {
@@ -1056,12 +1085,40 @@ fn run_step(cx: &Context, step: &Step) -> Outcome {
                     continue;
                 }
                 let started = Instant::now();
-                let mut test = cx.sanitized("test", step.leaks);
-                test.args(selection).arg("--").args(libtest);
+                // One cache and one verdict directory per command, as one
+                // harness process had (D-1554, D-1556).
+                let dirs = HarnessCache::create("sanitize").and_then(|cache| {
+                    FreshDir::create("cheby-sanitize-verdicts").map(|verdicts| (cache, verdicts))
+                });
+                let (cache, verdicts) = match dirs {
+                    Ok(dirs) => dirs,
+                    Err(e) => {
+                        success = false;
+                        notes.push(e);
+                        continue;
+                    }
+                };
+                let mut test = cx.sanitized(&["nextest", "run"], step.leaks);
+                test.args(&args)
+                    .env(KEEP_CACHE_ENV, cache.path())
+                    .env(VERDICTS_ENV, verdicts.path());
                 for (key, value) in env {
                     test.env(key, value);
                 }
-                match run_scanned(test, Output::Live, log.as_deref()) {
+                let ran = run_scanned(test, Output::Live, log.as_deref());
+                match merged_summary(verdicts.path()) {
+                    Ok(pending) => {
+                        print!("{pending}");
+                        summary.extend(
+                            pending
+                                .lines()
+                                .filter(|line| line.starts_with("pending "))
+                                .map(str::to_owned),
+                        );
+                    }
+                    Err(e) => notes.push(e),
+                }
+                match ran {
                     Ok(seen) => {
                         success &= seen.success && seen.reports == 0;
                         reports = reports.saturating_add(seen.reports);
@@ -1128,22 +1185,10 @@ fn run_step(cx: &Context, step: &Step) -> Outcome {
     }
 }
 
-/// `args` split at `--`: cargo's package and test selection, then
-/// libtest's arguments.
-fn split_args<'a>(args: &'a [&'static str]) -> (&'a [&'static str], &'a [&'static str]) {
-    match args.iter().position(|a| *a == "--") {
-        Some(at) => (
-            args.get(..at).unwrap_or_default(),
-            args.get(at.saturating_add(1)..).unwrap_or_default(),
-        ),
-        None => (args, &[]),
-    }
-}
-
 /// Builds the sanitized runtime archive next to the sanitized `cheby`
 /// (D-929, D-1337).
 fn build_archive(cx: &Context, leaks: Leaks, log: Option<&Path>) -> Result<(), String> {
-    let mut cmd = cx.sanitized("build", leaks);
+    let mut cmd = cx.sanitized(&["build"], leaks);
     cmd.args(["-p", "cheby_rt_exe"]);
     if run_scanned(cmd, Output::Live, log)?.success {
         Ok(())
@@ -1155,7 +1200,7 @@ fn build_archive(cx: &Context, leaks: Leaks, log: Option<&Path>) -> Result<(), S
 /// Builds the sanitized `cheby` and returns its path, from cargo's JSON
 /// messages (the layout of the target directory is cargo's business).
 fn build_cheby(cx: &Context, leaks: Leaks) -> Result<PathBuf, String> {
-    let mut cmd = cx.sanitized("build", leaks);
+    let mut cmd = cx.sanitized(&["build"], leaks);
     cmd.args([
         "-p",
         "cheby_cli",
@@ -1357,12 +1402,9 @@ fn run_miri_group(cx: &Context, group: &MiriGroup, output: Output) -> Outcome {
     }
     let started = Instant::now();
     let mut cmd = cx.miri();
-    // Each test's time (the nightly's libtest), so a test that outgrows
-    // Miri shows in the log.
-    cmd.args(["--", "-Zunstable-options", "--report-time", group.filter]);
-    for (skip, _) in group.skips {
-        cmd.args(["--skip", skip]);
-    }
+    // nextest prints each test's time, so a test that outgrows Miri shows
+    // in the log. One test at a time: `--jobs` runs groups at once.
+    cmd.args(["-j", "1", "-E"]).arg(miri_filterset(group));
     let seen = run_scanned(cmd, output, cx.log(group.name).as_deref());
     let elapsed = started.elapsed();
     let (success, mut line) = match &seen {
@@ -1492,39 +1534,39 @@ mod tests {
         let runtime = &thread[0].commands;
         assert_eq!(
             runtime,
-            &["cargo test -p cheby_runtime --lib -- --skip models:: --test-threads 1"]
+            &["cargo nextest run -p cheby_runtime --lib -j 1 -E 'not test(~models::)'"]
         );
         assert_eq!(
             thread[1].commands,
             [
-                "CHEBY_RT_STRESS_MIGRATE=1 cargo test -p cheby_runtime --lib -- --skip models:: \
-              --test-threads 1"
+                "CHEBY_RT_STRESS_MIGRATE=1 cargo nextest run -p cheby_runtime --lib -j 1 \
+                 -E 'not test(~models::)'"
             ]
         );
         assert_eq!(
             thread[3].commands,
             [
-                "CHEBY_THREADS=4 CHEBY_RT_STRESS_MIGRATE=1 cargo test -p cheby_cli --test ui -- \
-                 --test-threads 1 10-concurrency/deadlock/",
-                "CHEBY_THREADS=2 CHEBY_RT_STRESS_MIGRATE=1 cargo test -p cheby_cli --test ui -- \
-                 --test-threads 1 10-concurrency/deadlock/"
+                "CHEBY_THREADS=4 CHEBY_RT_STRESS_MIGRATE=1 cargo nextest run -p cheby_cli \
+                 --test ui -j 1 -E 'test(~10-concurrency/deadlock/)'",
+                "CHEBY_THREADS=2 CHEBY_RT_STRESS_MIGRATE=1 cargo nextest run -p cheby_cli \
+                 --test ui -j 1 -E 'test(~10-concurrency/deadlock/)'"
             ]
         );
         assert!(
             thread[4].commands[0]
-                .ends_with("--test conformance -- --test-threads 1 @threads= --skip @threads=1")
+                .ends_with("--test conformance -j 1 -E 'test(~@threads=) & not test(~@threads=1)'")
         );
         assert_eq!(
             thread[5].commands,
             [
                 "cargo build -p cheby_rt_exe",
-                "CHEBY_THREADS=4 CHEBY_RT_STRESS_MIGRATE=1 cargo test -p cheby_cli --test \
-                 conformance -- --test-threads 1 @aot"
+                "CHEBY_THREADS=4 CHEBY_RT_STRESS_MIGRATE=1 cargo nextest run -p cheby_cli \
+                 --test conformance -j 1 -E 'test(~@aot)'"
             ]
         );
         assert_eq!(
             thread[6].commands,
-            ["cargo test -p cheby_cli --test repl -- --test-threads 1"]
+            ["cargo nextest run -p cheby_cli --test repl -j 1"]
         );
     }
 
@@ -1693,9 +1735,13 @@ mod tests {
 
     #[test]
     fn output_lines_are_recognized() {
-        assert!(is_summary_line("test result: ok. 3 passed; 0 failed"));
-        assert!(is_summary_line("conformance harness: 120 passed, 0 failed"));
-        assert!(!is_summary_line("test foo ... ok"));
+        assert!(is_summary_line(
+            "     Summary [  12.304s] 3 tests run: 3 passed, 0 skipped"
+        ));
+        assert!(is_summary_line("pending examples: 0 of 2 pass"));
+        assert!(!is_summary_line(
+            "        PASS [   0.040s] cheby_runtime foo"
+        ));
         assert!(is_report_line(
             "==123==ERROR: AddressSanitizer: stack-buffer-overflow"
         ));
@@ -1714,13 +1760,36 @@ mod tests {
         assert!(!is_report_line("test sched::deadlock_tests::x ... ok"));
     }
 
+    /// nextest takes the union of several `-E`, so the thread sanitizer's
+    /// skips join the conformance step's own filterset.
     #[test]
-    fn arguments_split_at_the_separator() {
-        let args = ["-p", "x", "--", "--test-threads", "1"];
+    fn timing_skips_join_the_filterset() {
+        let args = [
+            "-p",
+            "cheby_cli",
+            "--test",
+            "conformance",
+            "-E",
+            "test(~@aot)",
+        ];
+        let out = test_args(&args, Sanitizer::Thread);
+        if THREAD_TIMING_SKIPS.is_empty() {
+            assert_eq!(out, args);
+        } else {
+            assert_eq!(out.iter().filter(|a| *a == "-E").count(), 1);
+            assert!(out[5].starts_with("(test(~@aot)) & not test(~"), "{out:?}");
+        }
+        assert_eq!(test_args(&args, Sanitizer::Address), args);
+    }
+
+    #[test]
+    fn miri_groups_filter_out_their_skips() {
+        let num = MIRI_GROUPS.iter().find(|g| g.name == "num").unwrap();
         assert_eq!(
-            split_args(&args),
-            (&["-p", "x"][..], &["--test-threads", "1"][..])
+            miri_filterset(num),
+            "test(~num::) & not test(~num::math::reference::tests::\
+             exact_midpoints_of_pow_round_to_even) & not test(~num::math::accurate::tests::\
+             constants_have_their_known_bits)"
         );
-        assert_eq!(split_args(&["-p", "x"]), (&["-p", "x"][..], &[][..]));
     }
 }

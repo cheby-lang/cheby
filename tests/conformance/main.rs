@@ -49,27 +49,22 @@
 //! 2; the harness prints the thread counts it runs. A variant has its base
 //! trial's expectation and goldens; blessing writes goldens from the base
 //! trial only, so the variants are ignored when `CHEBY_BLESS=1`. A
-//! `skip-run` example gets no variants. Unless `--test-threads` is given,
-//! the harness runs at most half as many trials at once as the machine
-//! has hardware threads, at least one, since every trial may start
-//! several scheduler threads. `CHEBY_HARNESS_SCALE` multiplies the
-//! timeout (`cheby_test_support::process`).
+//! `skip-run` example gets no variants. Every trial may start several
+//! scheduler threads, so `.config/nextest.toml` gives each one
+//! `threads-required = 2` (D-722, D-1555). `CHEBY_HARNESS_SCALE` multiplies
+//! the timeout (`cheby_test_support::process`).
 //!
-//! The serial group (D-725): every run trial and `::test` trial of an
-//! example whose `test.toml` sets `timing = true`, at every variant, the
-//! base trial included, runs one at a time after the parallel batch, so
-//! the real-time waits of 009, 013 and 019 do not compete with other
-//! trials (D-888). The serial group is a second
-//! libtest run on one thread, made only when some example sets `timing`.
-//! Filters, `--exact`, `--skip`, `--ignored` and `--list` apply to each
-//! batch, and each batch prints its own `running N tests` and
-//! `test result:` lines. After both, the harness prints one combined line,
-//! `conformance harness: <p> passed; <f> failed; <i> ignored; <x> filtered
-//! out (serial after the parallel batch: <n>)`, which counts every trial,
-//! and then the pending summary once (D-887). The
-//! harness prints the serial examples next to its thread counts. D-725
-//! orders the trials, the `cheby` processes; the tests inside one `cheby
-//! test` still run in parallel (D-723).
+//! Timing examples (D-725, D-888, D-1555): every run trial and `::test`
+//! trial of an example whose `test.toml` sets `timing = true`, at every
+//! variant, the base trial and its `@aot` trial included, is in nextest's
+//! test group `timing`, where it runs with no other test beside it, so the
+//! real-time waits of 009, 013 and 019 do not compete with other trials.
+//! `.config/nextest.toml` names the examples, and the harness prints them
+//! next to its thread counts; `the_timing_examples_are_the_three_of_d725`
+//! keeps the two lists equal. D-725 orders the trials, the `cheby`
+//! processes; the tests inside one `cheby test` still run in parallel
+//! (D-723). The harness makes one `libtest_mimic` run, and the pending
+//! summary follows it (D-288, D-1556).
 //!
 //! The naive-counting variant (D-718, D-853): the run
 //! trial and the `::test` trial of every example that is run also run as
@@ -91,7 +86,7 @@
 //! nothing runs: that is the result of a program `cheby build` cannot
 //! build yet (constants: a "not available yet" tool error,
 //! D-924). `cheby build` links the runtime archive next to `cheby`, which
-//! `cargo build -p cheby_rt_exe` builds and `cargo test` does not: build
+//! `cargo build -p cheby_rt_exe` builds and nextest does not: build
 //! it first. No trial skips because the archive is missing or stale; the
 //! build's tool error is then the result (D-929, D-930). Then the trial runs `<tmp>/<name>` with the example's `args`,
 //! `stdin` and `env`, the example's directory as working directory
@@ -104,7 +99,7 @@
 //! and each run get the scaled timeout of their own. The trial's milestone
 //! is M3 for an example of M3 or earlier and the example's own otherwise,
 //! so `CHEBY_MILESTONE=M4 CHEBY_PENDING=require` checks M3's exit
-//! criterion. It runs in the serial group of a `timing` example (D-725,
+//! criterion. It runs in the `timing` group of a `timing` example (D-725,
 //! D-888), is never blessed, and is ignored under `CHEBY_BLESS=1` (D-853)
 //! and on Windows until M6 (D-935).
 //!
@@ -153,7 +148,7 @@ struct Run {
 }
 
 fn main() -> ExitCode {
-    let mut args = Arguments::from_args();
+    let args = Arguments::from_args();
     let root = repo_root();
     let setup = Setting::read(&root).and_then(|m| {
         Ok((
@@ -185,7 +180,8 @@ fn main() -> ExitCode {
     let serial_names = example::serial_names(&examples).join(", ");
     if !serial_names.is_empty() {
         eprintln!(
-            "conformance harness: run serially after the parallel batch (D-725): {serial_names}"
+            "conformance harness: run alone, in nextest's `timing` group (D-725, D-1555): \
+             {serial_names}"
         );
     }
     eprintln!("conformance harness: {}", cache.describe());
@@ -195,59 +191,11 @@ fn main() -> ExitCode {
     if let Some(reason) = platform::executable_skip_reason() {
         eprintln!("conformance harness: the `@aot` trials are ignored: {reason}");
     }
-    // D-722: the trials' scheduler threads compete for the machine.
-    args.test_threads = Some(threads::capped_test_threads(
-        args.test_threads,
-        std::thread::available_parallelism().ok().map(Into::into),
-    ));
-
-    // D-888: every trial of a `timing` example,
-    // at every variant, goes to the serial group (D-725).
-    let mut parallel = Vec::new();
-    let mut serial = Vec::new();
-    for ex in examples {
-        let batch = if ex.config.timing {
-            &mut serial
-        } else {
-            &mut parallel
-        };
-        batch.extend(example_trials(
-            &ex, current, &verdicts, bless, timeout, &variants, &cache,
-        ));
-    }
-
-    let mut conclusion = libtest_mimic::run(&args, parallel);
-    // D-887: the serial group runs after the
-    // parallel batch, one trial at a time on this thread, and the two
-    // conclusions are merged. No second run when no example sets `timing`.
-    let mut serial_run = 0;
-    if !serial.is_empty() {
-        let one_at_a_time = Arguments {
-            test_threads: Some(1),
-            ..args.clone()
-        };
-        let second = libtest_mimic::run(&one_at_a_time, serial);
-        serial_run = second
-            .num_passed
-            .saturating_add(second.num_failed)
-            .saturating_add(second.num_ignored);
-        let add = |a: &mut u64, b: u64| *a = a.saturating_add(b);
-        add(&mut conclusion.num_filtered_out, second.num_filtered_out);
-        add(&mut conclusion.num_passed, second.num_passed);
-        add(&mut conclusion.num_failed, second.num_failed);
-        add(&mut conclusion.num_ignored, second.num_ignored);
-        add(&mut conclusion.num_measured, second.num_measured);
-    }
-    if !args.list {
-        println!(
-            "conformance harness: {} passed; {} failed; {} ignored; {} filtered out \
-             (serial after the parallel batch: {serial_run})",
-            conclusion.num_passed,
-            conclusion.num_failed,
-            conclusion.num_ignored,
-            conclusion.num_filtered_out,
-        );
-    }
+    let trials = examples
+        .iter()
+        .flat_map(|ex| example_trials(ex, current, &verdicts, bless, timeout, &variants, &cache))
+        .collect();
+    let conclusion = libtest_mimic::run(&args, trials);
     verdicts.report("examples");
     conclusion.exit_code()
 }

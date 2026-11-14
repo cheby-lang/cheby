@@ -3,15 +3,20 @@
 //! test and every example. And the environment decides `auto` as
 //! `src/color.rs` documents.
 //!
+//! A `libtest_mimic` target (D-1557): one trial per UI test,
+//! `ui/<name>`, one per example, `examples/<name>`, and four more, so that
+//! nextest spreads the checks over its workers instead of running 900 of
+//! them in one test.
+//!
 //! `cheby check` evaluates constants with the JIT once the front end
-//! reports no error, so on Windows the checks of such packages are skipped
+//! reports no error, so on Windows the checks of such packages are ignored
 //! until M6 (D-545): the examples, and the UI tests that the UI harness
 //! ignores there too ([`ui::UiTest::builds_a_jit`]). The other UI tests
 //! and the test of quoted escapes, which stops in the front end, still
 //! run.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use cheby_diag::strip_colors;
@@ -19,6 +24,7 @@ use cheby_test_support::cache::HarnessCache;
 use cheby_test_support::process::{self, RunOutput};
 use cheby_test_support::ui::{self, Layout};
 use cheby_test_support::{platform, repo_root};
+use libtest_mimic::{Arguments, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
 const TMP: &str = env!("CARGO_TARGET_TMPDIR");
@@ -108,45 +114,111 @@ fn package(test: &ui::UiTest) -> PathBuf {
     dir
 }
 
-/// Every UI test: color adds escapes and changes nothing else. Where
-/// programs do not run, only the tests that build no JIT.
-#[test]
-fn ui_tests_strip_to_plain() {
-    let tests = ui::all(&repo_root()).unwrap();
-    assert_ne!(tests.len(), 0);
-    for test in &tests {
-        if platform::runs_skipped() && test.builds_a_jit() {
-            continue;
-        }
-        compare(&package(test), &test.name);
+fn main() -> ExitCode {
+    let args = Arguments::from_args();
+    if let Some(reason) = platform::run_skip_reason() {
+        eprintln!("color tests: the checks that build a JIT are ignored: {reason}");
     }
+    let trials = match trials() {
+        Ok(trials) => trials,
+        Err(message) => {
+            eprintln!("color tests: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    libtest_mimic::run(&args, trials).exit_code()
 }
 
-/// Every example: color adds escapes and changes nothing else.
-#[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
-)]
-fn examples_strip_to_plain() {
-    let dir = repo_root().join("docs/examples");
-    let mut examples: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.join("cheby.toml").is_file())
-        .collect();
-    examples.sort();
-    assert_ne!(examples.len(), 0);
-    for example in &examples {
-        compare(example, &example.display().to_string());
+/// Every trial, in a fixed order: the UI tests, the examples, then the
+/// tests of the environment, the REPL and tool errors.
+fn trials() -> Result<Vec<Trial>, String> {
+    let root = repo_root();
+    let tests = ui::all(&root)?;
+    if tests.is_empty() {
+        return Err("no UI tests".to_owned());
     }
+    let examples = example_dirs(&root.join("docs/examples"))?;
+    if examples.is_empty() {
+        return Err("no examples".to_owned());
+    }
+    let jit_skip = platform::run_skip_reason();
+    let mut trials = Vec::new();
+    // Every UI test: color adds escapes and changes nothing else. Where
+    // programs do not run, the tests that build a JIT are ignored.
+    for test in tests {
+        let ignore = jit_skip.filter(|_| test.builds_a_jit());
+        let trial = Trial::test(format!("ui/{}", test.name), move || {
+            compare(&package(&test), &test.name);
+            Ok(())
+        });
+        trials.push(ignore_on(trial, ignore));
+    }
+    // Every example: color adds escapes and changes nothing else.
+    for dir in examples {
+        let name = dir
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let trial = Trial::test(format!("examples/{name}"), move || {
+            compare(&dir, &dir.display().to_string());
+            Ok(())
+        });
+        trials.push(ignore_on(trial, jit_skip));
+    }
+    let plain: [(&str, fn()); 3] = [
+        (
+            "quoted_escapes_are_shown_as_pictures",
+            quoted_escapes_are_shown_as_pictures,
+        ),
+        (
+            "environment_and_flag_precedence",
+            environment_and_flag_precedence,
+        ),
+        (
+            "tool_and_usage_errors_follow_the_flag",
+            tool_and_usage_errors_follow_the_flag,
+        ),
+    ];
+    for (name, body) in plain {
+        trials.push(Trial::test(name, move || {
+            body();
+            Ok(())
+        }));
+    }
+    let repl = Trial::test("repl_follows_the_flag", || {
+        repl_follows_the_flag();
+        Ok(())
+    });
+    trials.push(ignore_on(repl, jit_skip));
+    Ok(trials)
+}
+
+/// `trial`, ignored when there is a `reason`, which `main` prints.
+fn ignore_on(trial: Trial, reason: Option<&str>) -> Trial {
+    trial.with_ignored_flag(reason.is_some())
+}
+
+/// Every example directory under `dir`, sorted.
+fn example_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut examples = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        if path.join("cheby.toml").is_file() {
+            examples.push(path);
+        }
+    }
+    examples.sort();
+    Ok(examples)
 }
 
 /// Source text quoted in a message cannot write a terminal escape: an ESC
 /// in a native symbol shows as its control picture, colored or not. The
 /// package stops in the front end (E0054), so it builds no JIT and runs on
 /// every platform.
-#[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a trial: failing to write the package fails it"
+)]
 fn quoted_escapes_are_shown_as_pictures() {
     let dir = Path::new(TMP).join("color/quoted_escape");
     std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -190,7 +262,6 @@ fn failing_package() -> PathBuf {
 
 /// The flag beats the environment, `NO_COLOR` beats `CLICOLOR_FORCE`, and
 /// `CLICOLOR_FORCE` beats `CLICOLOR=0`, `TERM=dumb` and a pipe.
-#[test]
 fn environment_and_flag_precedence() {
     let dir = failing_package();
     let colored = |args: &[&str], env: &[(&str, &str)]| {
@@ -232,9 +303,13 @@ fn environment_and_flag_precedence() {
     assert!(colored(&["--color=never", "check", "--color=always"], &[]));
 }
 
-/// The REPL's diagnostics and tool errors follow `--color` too.
-#[test]
-#[cfg_attr(windows, ignore = "the REPL does not run on Windows until M6 (D-545)")]
+/// The REPL's diagnostics and tool errors follow `--color` too. Ignored
+/// where programs do not run: the REPL does not run on Windows until M6
+/// (D-545).
+#[expect(
+    clippy::unwrap_used,
+    reason = "a trial: failing to start `cheby` fails it"
+)]
 fn repl_follows_the_flag() {
     let dir = Path::new(TMP);
     let input: &[u8] = b"let x: Int = \"a\"\n:bogus\n:quit\n";
@@ -260,7 +335,6 @@ fn repl_follows_the_flag() {
 
 /// Tool errors without a code follow the same choice, and clap's usage
 /// errors do too.
-#[test]
 fn tool_and_usage_errors_follow_the_flag() {
     let dir = Path::new(TMP);
     let build = cheby(dir, &["--color=always", "build", "--target", "js"], &[]);

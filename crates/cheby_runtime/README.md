@@ -39,7 +39,7 @@ Rules that hold across the crate:
 ## Tests
 
 - Unit tests sit next to the code, and `proptest-regressions/` keeps the failing cases of the property tests of `generic`, `num` and `text`.
-- The `models.rs`, `cancel_models.rs`, `select_models.rs`, `park_models.rs`, `retire_models.rs` and `ffi_models.rs` files are `loom` models of the protocols, not of the runtime's code. They build with plain `cargo test -p cheby_runtime`.
+- The `models.rs`, `cancel_models.rs`, `select_models.rs`, `park_models.rs`, `retire_models.rs` and `ffi_models.rs` files are `loom` models of the protocols, not of the runtime's code. They build with plain `cargo nextest run -p cheby_runtime`.
 - The `dev` profile builds this crate with `opt-level = 2`, so the debug toolchain runs Cheby code on an optimized runtime while the leak check and poisoning stay on.
 - `runtime_id_tests.rs` recomputes the runtime ID on temporary copies of its inputs, `image_tests.rs` installs synthetic images and locates return addresses through the call-site map, and `rt_main_tests.rs` runs `cheby_rt_main` with entry thunks written in Rust, re-executing the test binary for closed descriptors and a bad `CHEBY_THREADS`.
 - Until M6 the crate builds with stubs on Windows, and entries run on dedicated threads there (D-714).

@@ -13,10 +13,10 @@
 //! sequentially consistent fence between each side's store and load, as
 //! the runtime has (loom checks `SeqCst` fences, not `SeqCst` accesses).
 //! loom 0.7 needs no `--cfg loom`, so the models build with plain
-//! `cargo test`:
+//! `cargo nextest run`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime sched::park_models
+//! cargo nextest run -p cheby_runtime sched::park_models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so
