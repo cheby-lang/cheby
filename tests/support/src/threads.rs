@@ -16,13 +16,14 @@
 //!
 //! A `CHEBY_THREADS=N` in the harness's own environment adds the variant
 //! `@threads=N` when N is neither 1 nor 2 ([`variants`]), so a run such as
-//! `CHEBY_THREADS=4 cargo test -p cheby_cli --test conformance` (the
-//! migration stress run) runs every trial at 4 threads as well, instead of
-//! ignoring the setting. A value that is not a whole number of at least 1
+//! `CHEBY_THREADS=4 cargo xtask test -E 'binary_id(cheby_cli::conformance)'`
+//! (the migration stress run) runs every trial at 4 threads as well,
+//! instead of ignoring the setting. A value that is not a whole number of at least 1
 //! is a harness error, never ignored (D-444).
 //!
-//! The scheduler threads of the trials compete with each other, so the
-//! harness bounds its own parallelism ([`capped_test_threads`]).
+//! The scheduler threads of the trials compete with each other, so
+//! `.config/nextest.toml` gives every harness trial `threads-required = 2`
+//! (D-722, D-1555).
 //!
 //! The naive-counting variant (D-718, D-853): every run
 //! and `::test` trial also runs as `<name>@rc=naive` and
@@ -202,16 +203,6 @@ pub fn apply(cmd: &mut Command, changes: &[EnvChange]) {
     }
 }
 
-/// How many trials the conformance harness runs at once: `explicit`, the
-/// value of `--test-threads`, when the command line gives one, and
-/// otherwise half of `available` (the machine's parallelism), at least 1.
-/// `None` for `available` means it is unknown, and the harness then runs
-/// one trial at a time (D-722).
-#[must_use]
-pub fn capped_test_threads(explicit: Option<usize>, available: Option<usize>) -> usize {
-    explicit.unwrap_or_else(|| available.map_or(1, |n| n / 2).max(1))
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
@@ -380,16 +371,5 @@ mod tests {
             let error = parse(Some(bad)).unwrap_err();
             assert!(error.starts_with("CHEBY_THREADS: "), "{error}");
         }
-    }
-
-    #[test]
-    fn test_threads_are_capped_unless_explicit() {
-        assert_eq!(capped_test_threads(None, Some(8)), 4);
-        assert_eq!(capped_test_threads(None, Some(3)), 1);
-        assert_eq!(capped_test_threads(None, Some(1)), 1);
-        assert_eq!(capped_test_threads(None, Some(0)), 1);
-        assert_eq!(capped_test_threads(None, None), 1);
-        assert_eq!(capped_test_threads(Some(16), Some(8)), 16);
-        assert_eq!(capped_test_threads(Some(1), Some(8)), 1);
     }
 }

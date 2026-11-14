@@ -41,7 +41,7 @@
 //! blessed: `CHEBY_BLESS=1` ignores it, and its goldens are written by
 //! hand. It is ignored on Windows until M6 (D-935). `cheby build` needs
 //! the runtime archive next to `cheby` (`cargo build -p cheby_rt_exe`,
-//! which `cargo test` does not run); a missing or stale archive fails the
+//! which nextest does not run); a missing or stale archive fails the
 //! test with the build's tool error and never skips it (D-929, D-930).
 //!
 //! Every child, `cheby` or an executable, gets `CHEBY_CACHE` set to one
@@ -54,7 +54,8 @@
 //! (D-1144).
 //!
 //! Every `cheby` inherits the harness's `CHEBY_RC`, so
-//! `CHEBY_RC=naive cargo test --test ui` runs the suite under naive
+//! `CHEBY_RC=naive cargo xtask test -E 'binary_id(cheby_cli::ui)'` runs the
+//! suite under naive
 //! counting (D-718), except a test whose flags include `--reuse-report`:
 //! its report describes Perceus, so it runs with `CHEBY_RC` removed
 //! (D-853).

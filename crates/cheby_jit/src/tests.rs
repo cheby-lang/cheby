@@ -1141,7 +1141,7 @@ fn isa_fixed_the_jit_uses_the_fixed_isa() {
 
 /// Compile speed of the debug toolchain (plan §4.4): translates and
 /// compiles 400 functions of 40 blocks each and prints the time. Run with
-/// `cargo test -p cheby_jit -- --ignored compile_speed_probe --nocapture`.
+/// `cargo nextest run -p cheby_jit --run-ignored only --no-capture compile_speed_probe`.
 #[test]
 #[ignore = "a timing probe, not a check"]
 fn compile_speed_probe() {

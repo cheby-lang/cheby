@@ -22,10 +22,10 @@
 //! store as a release store), so each side here has a `SeqCst` fence
 //! between its store and its load, as `sched/park_models.rs`' model (4)
 //! has. loom 0.7 needs no `--cfg loom`, so the models build with plain
-//! `cargo test`:
+//! `cargo nextest run`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime sched::retire_models
+//! cargo nextest run -p cheby_runtime sched::retire_models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so

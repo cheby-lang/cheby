@@ -678,7 +678,8 @@ mod tests {
     /// The fast phase against the accurate one on many random inputs per
     /// function (`CHEBY_MATH_FAST_INPUTS`, 100,000 by default), with the
     /// share that falls back. Run in release:
-    /// `cargo test -p cheby_runtime --release fast_phase_agrees -- --ignored --nocapture`.
+    /// `cargo nextest run -p cheby_runtime --release --run-ignored only --no-capture
+    /// fast_phase_agrees`.
     #[test]
     #[ignore = "a long check, about a minute in release"]
     #[expect(

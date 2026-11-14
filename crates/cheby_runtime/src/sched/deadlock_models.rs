@@ -22,10 +22,10 @@
 //! detector's reads have the orderings of `deadlock.rs`: the state and the
 //! mark `SeqCst`, the resume count and the wait site `Relaxed`, the counts
 //! `SeqCst`. loom 0.7 needs no `--cfg loom`, so the models build with plain
-//! `cargo test`:
+//! `cargo nextest run`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime sched::deadlock_models
+//! cargo nextest run -p cheby_runtime sched::deadlock_models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so

@@ -513,7 +513,7 @@ fn field_of(desc: &LayoutDesc, index: u32) -> Result<&crate::layout::FieldDesc, 
 
 /// Lowering tests of this file, `list.rs` and `interp.rs` (D2), from
 /// source through `test_support::lower_source`, pinned by goldens under
-/// `tests/golden/data/`. `cargo test -p cheby_mir data` runs them.
+/// `tests/golden/data/`. `cargo nextest run -p cheby_mir data` runs them.
 #[cfg(test)]
 mod tests {
     use crate::golden_tests::check_golden;

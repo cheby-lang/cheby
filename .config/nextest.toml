@@ -1,0 +1,34 @@
+# cargo-nextest runs every Rust test of the workspace (D-1553). Run it
+# through `cargo xtask test`, which gives the run one shared build cache
+# and prints the harnesses' pending summary (D-1554, D-1556). Trial names
+# of the harnesses start with their expectation, `[pass]`, `[pending]` or
+# another, which changes with `tests/milestone`, so filters match `\[\w+\]`.
+
+[test-groups]
+# D-725, D-1555: one timing trial at a time.
+timing = { max-threads = 1 }
+
+# Overrides apply in order, and the first that sets a setting wins.
+
+# D-725, D-888, D-1555: every trial of a `timing = true` example, at every
+# variant, runs alone. `the_nextest_timing_group_names_the_timing_examples`
+# keeps the alternation equal to the examples that set `timing`.
+[[profile.default.overrides]]
+filter = 'binary_id(cheby_cli::conformance) & test(/^\[\w+\] (009_counter_actor|013_dining_philosophers|019_supervisor)(::test)?(@.*)?$/)'
+test-group = "timing"
+threads-required = "num-cpus"
+
+# D-722, D-1555: a harness trial may start several scheduler threads.
+[[profile.default.overrides]]
+filter = 'binary_id(cheby_cli::conformance) | binary_id(cheby_cli::ui) | binary_id(cheby_cli::repl) | binary_id(cheby_cli::lsp)'
+threads-required = 2
+
+# D-1558: CI runs `cargo xtask test --profile ci`. A test that passes on a
+# retry is reported as flaky, so it is fixed, never hidden (D-725).
+[profile.ci]
+fail-fast = false
+retries = 2
+slow-timeout = { period = "60s", terminate-after = 15 }
+
+[profile.ci.junit]
+path = "junit.xml"

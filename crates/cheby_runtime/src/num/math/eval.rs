@@ -12,7 +12,7 @@
 //! Run it with
 //!
 //! ```text
-//! cargo test -p cheby_runtime --release num::math::eval -- --ignored --nocapture
+//! cargo nextest run -p cheby_runtime --release --run-ignored only --no-capture num::math::eval
 //! ```
 //!
 //! (`CHEBY_MATH_EVAL_ALL=1` also lists every failure as bits.) The

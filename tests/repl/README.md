@@ -1,7 +1,7 @@
 # REPL transcripts
 
 Each `<name>.repl` file is the output of a piped `cheby repl` session (plan §8.3, D-546, D-548),
-which the harness `tests/repl_harness/main.rs` (`cargo test -p cheby_cli --test repl`)
+which the harness `tests/repl_harness/main.rs` (`cargo xtask test -E 'binary_id(cheby_cli::repl)'`)
 replays and compares:
 
 - A line that starts with `> ` is the first line of an entry, after its prompt, and a line that
@@ -36,6 +36,6 @@ runs in an empty directory, unless a directory `<name>/` next to the transcript 
 modules it can import. An entry may change the copy's files, as `reload.repl` does before
 `:reload`.
 
-`CHEBY_BLESS=1 cargo test -p cheby_cli --test repl` rewrites every transcript with the actual
+`CHEBY_BLESS=1 cargo xtask test -E 'binary_id(cheby_cli::repl)'` rewrites every transcript with the actual
 output, keeping its `< ` lines; read each diff before keeping it. `cargo xtask cross-check`
 parses every entry with both parsers (D-272).

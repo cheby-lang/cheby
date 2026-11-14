@@ -17,6 +17,12 @@
 //! - `CHEBY_RT_POISON=1` is set by the harnesses for every `cheby` they
 //!   start ([`POISON_ENV`]), so freed objects are poisoned.
 //!
+//! Under cargo-nextest every trial is a process of its own, so no process
+//! sees the whole run. `cargo xtask test` sets `CHEBY_TEST_VERDICTS` to a
+//! directory, each harness process writes its pending verdicts there
+//! ([`Verdicts::report`]), and `xtask` prints the summary of every harness
+//! once nextest ends ([`merged_summary`], D-1556).
+//!
 //! Only a test pending because its milestone is the one in progress is
 //! made strict ([`Expectation::Pending`]). A test that is pending by a
 //! rule that holds at every milestone, such as a `skip-run` example's
@@ -40,6 +46,9 @@ pub const PENDING_ENV: &str = "CHEBY_PENDING";
 pub const PENDING_ALLOW_ENV: &str = "CHEBY_PENDING_ALLOW";
 /// Set to `1` for every `cheby` the harnesses start (D-544).
 pub const POISON_ENV: &str = "CHEBY_RT_POISON";
+/// Names the directory where harness processes write their pending
+/// verdicts for `cargo xtask test` to summarize (D-1556).
+pub const VERDICTS_ENV: &str = "CHEBY_TEST_VERDICTS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Milestone {
@@ -346,6 +355,26 @@ enum Outcome {
 }
 
 impl Outcome {
+    /// The outcome as one field of a verdict file's line ([`Verdicts::write_to`]).
+    fn encode(&self) -> String {
+        match self {
+            Self::Passed => "passed".to_owned(),
+            Self::StillFailing => "still-failing".to_owned(),
+            Self::Allowed(pattern) => format!("allowed:{pattern}"),
+            Self::Required => "required".to_owned(),
+        }
+    }
+
+    /// The inverse of [`Outcome::encode`].
+    fn decode(text: &str) -> Option<Self> {
+        Some(match text {
+            "passed" => Self::Passed,
+            "still-failing" => Self::StillFailing,
+            "required" => Self::Required,
+            other => Self::Allowed(other.strip_prefix("allowed:")?.to_owned()),
+        })
+    }
+
     /// The position of the outcome's group in the summary.
     const fn rank(&self) -> u8 {
         match self {
@@ -448,51 +477,177 @@ impl Verdicts {
     /// Prints how many pending tests passed, then lists the pending tests
     /// that passed, the failures the allow list accepted, the failures a
     /// strict run rejected, and the failures that are only reported.
+    /// When `CHEBY_TEST_VERDICTS` names a directory, also writes the
+    /// verdicts there for `cargo xtask test` (D-1556); a file that cannot
+    /// be written is reported on standard error and fails nothing.
     pub fn report(&self, what: &str) {
         print!("{}", self.summary(what));
+        if let Some(dir) = std::env::var_os(VERDICTS_ENV).filter(|v| !v.is_empty())
+            && let Err(message) = self.write_to(Path::new(&dir), what)
+        {
+            eprintln!("{VERDICTS_ENV}: {message}");
+        }
     }
 
     /// The text [`Verdicts::report`] prints, empty when nothing was pending.
     #[must_use]
     pub fn summary(&self, what: &str) -> String {
-        use std::fmt::Write as _;
-        let mut pending = self
-            .pending
+        summarize(what, self.policy.require, self.recorded())
+    }
+
+    /// The pending verdicts recorded so far.
+    fn recorded(&self) -> Vec<(String, Outcome)> {
+        self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if pending.is_empty() {
-            return String::new();
-        }
-        // Grouped by outcome, in the order of `Outcome`, then by name.
-        pending.sort_by(|(a, x), (b, y)| x.rank().cmp(&y.rank()).then_with(|| a.cmp(b)));
-        let passed = pending
-            .iter()
-            .filter(|(_, o)| *o == Outcome::Passed)
-            .count();
-        let mut out = String::new();
-        let mode = if self.policy.require {
-            format!(" ({PENDING_ENV}=require)")
-        } else {
-            String::new()
-        };
-        let _ = writeln!(
-            out,
-            "pending {what}{mode}: {passed} of {} pass",
-            pending.len()
-        );
-        for (name, outcome) in &pending {
-            let _ = match outcome {
-                Outcome::Passed => writeln!(out, "  passed: {name}"),
-                Outcome::Allowed(pattern) => {
-                    writeln!(out, "  allowed failure: {name} (allowed by `{pattern}`)")
-                }
-                Outcome::Required => writeln!(out, "  required, failed: {name}"),
-                Outcome::StillFailing => writeln!(out, "  still failing: {name}"),
-            };
-        }
-        out
+            .clone()
     }
+
+    /// Writes the recorded verdicts to a new file in `dir`, one line each:
+    /// `what`, `strict` or `lenient`, the outcome and the test's name,
+    /// separated by tabs. Nothing is written when nothing was pending.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if a field holds a tab or a line break, or if the
+    /// file cannot be written.
+    pub fn write_to(&self, dir: &Path, what: &str) -> Result<(), String> {
+        use std::fmt::Write as _;
+        let recorded = self.recorded();
+        if recorded.is_empty() {
+            return Ok(());
+        }
+        let mode = if self.policy.require {
+            "strict"
+        } else {
+            "lenient"
+        };
+        let mut text = String::new();
+        for (name, outcome) in &recorded {
+            let outcome = outcome.encode();
+            if [what, name.as_str(), outcome.as_str()]
+                .iter()
+                .any(|field| field.contains(['\t', '\n', '\r']))
+            {
+                return Err(format!("`{name}`: a tab or a line break in a verdict"));
+            }
+            let _ = writeln!(text, "{what}\t{mode}\t{outcome}\t{name}");
+        }
+        let file = crate::cache::FreshDir::create_in(dir, "verdicts")?;
+        let path = file.path().join("verdicts.tsv");
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        // The directory outlives this process: `xtask` reads and deletes it.
+        std::mem::forget(file);
+        Ok(())
+    }
+}
+
+/// The summary of one harness's pending verdicts: how many passed, then
+/// the tests grouped by outcome and sorted by name. Empty when nothing
+/// was pending.
+fn summarize(what: &str, strict: bool, mut pending: Vec<(String, Outcome)>) -> String {
+    use std::fmt::Write as _;
+    if pending.is_empty() {
+        return String::new();
+    }
+    // Grouped by outcome, in the order of `Outcome`, then by name.
+    pending.sort_by(|(a, x), (b, y)| x.rank().cmp(&y.rank()).then_with(|| a.cmp(b)));
+    let passed = pending
+        .iter()
+        .filter(|(_, o)| *o == Outcome::Passed)
+        .count();
+    let mut out = String::new();
+    let mode = if strict {
+        format!(" ({PENDING_ENV}=require)")
+    } else {
+        String::new()
+    };
+    let _ = writeln!(
+        out,
+        "pending {what}{mode}: {passed} of {} pass",
+        pending.len()
+    );
+    for (name, outcome) in &pending {
+        let _ = match outcome {
+            Outcome::Passed => writeln!(out, "  passed: {name}"),
+            Outcome::Allowed(pattern) => {
+                writeln!(out, "  allowed failure: {name} (allowed by `{pattern}`)")
+            }
+            Outcome::Required => writeln!(out, "  required, failed: {name}"),
+            Outcome::StillFailing => writeln!(out, "  still failing: {name}"),
+        };
+    }
+    out
+}
+
+/// The harnesses in the order their summaries are printed; another `what`
+/// follows them, sorted.
+const HARNESS_ORDER: [&str; 4] = ["examples", "UI tests", "REPL transcripts", "LSP trials"];
+
+/// The summary of every verdict file that harness processes wrote under
+/// `dir` ([`Verdicts::write_to`]): one block per harness, as one harness
+/// process would print it after a whole run (D-544, D-1556). A trial
+/// that nextest retried counts once, as passed if any attempt passed.
+///
+/// # Errors
+///
+/// Returns a message if `dir` or a file in it cannot be read, or if a line
+/// is not a verdict.
+pub fn merged_summary(dir: &Path) -> Result<String, String> {
+    use std::collections::BTreeMap;
+    let read_dir = |path: &Path| {
+        let mut entries = std::fs::read_dir(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        entries.sort();
+        Ok::<_, String>(entries)
+    };
+    // what -> (strict, name -> outcome). Each attempt of a trial is a
+    // process with a file of its own, and nextest passes a retried trial
+    // when any attempt passes, so a pass wins over a failure.
+    let mut harnesses: BTreeMap<String, (bool, BTreeMap<String, Outcome>)> = BTreeMap::new();
+    for sub in read_dir(dir)? {
+        let path = sub.join("verdicts.tsv");
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        for line in text.lines() {
+            let fields: Vec<&str> = line.splitn(4, '\t').collect();
+            let [what, mode, outcome, name] = fields.as_slice() else {
+                return Err(format!("{}: not a verdict: `{line}`", path.display()));
+            };
+            let outcome = Outcome::decode(outcome)
+                .ok_or_else(|| format!("{}: unknown outcome in `{line}`", path.display()))?;
+            let entry = harnesses.entry((*what).to_owned()).or_default();
+            entry.0 |= *mode == "strict";
+            let slot = entry.1.entry((*name).to_owned()).or_insert(outcome.clone());
+            if outcome == Outcome::Passed {
+                *slot = outcome;
+            }
+        }
+    }
+    let mut order: Vec<&String> = harnesses.keys().collect();
+    order.sort_by_key(|what| {
+        (
+            HARNESS_ORDER
+                .iter()
+                .position(|h| h == what)
+                .unwrap_or(HARNESS_ORDER.len()),
+            (*what).clone(),
+        )
+    });
+    Ok(order
+        .into_iter()
+        .filter_map(|what| {
+            let (strict, verdicts) = harnesses.get(what)?;
+            Some(summarize(
+                what,
+                *strict,
+                verdicts.clone().into_iter().collect(),
+            ))
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -776,6 +931,50 @@ mod tests {
         assert_eq!(
             v.summary("UI tests"),
             "pending UI tests: 1 of 2 pass\n  passed: a\n  still failing: b\n"
+        );
+    }
+
+    /// D-1556: verdicts written by several processes, one trial each, read
+    /// back as one summary per harness, in the harnesses' order; a pass on
+    /// a retry wins over the failed attempt.
+    #[test]
+    fn verdict_files_merge_into_one_summary() {
+        let dir = crate::cache::FreshDir::create("cheby-verdicts-test").unwrap();
+        let write = |what: &str, name: &str, result: Result<(), String>| {
+            let v = Verdicts::default();
+            v.judge(name, Milestone::M1, Expectation::Pending, result)
+                .unwrap();
+            v.write_to(dir.path(), what).unwrap();
+        };
+        write("UI tests", "b", Err("x".into()));
+        write("examples", "002_b", Ok(()));
+        write("UI tests", "a", Ok(()));
+        write("examples", "001_a", Err("x".into()));
+        write("examples", "001_a", Ok(()));
+        // A process with nothing pending writes no file.
+        Verdicts::default()
+            .write_to(dir.path(), "LSP trials")
+            .unwrap();
+        assert_eq!(
+            merged_summary(dir.path()).unwrap(),
+            "pending examples: 2 of 2 pass\n  passed: 001_a\n  passed: 002_b\n\
+             pending UI tests: 1 of 2 pass\n  passed: a\n  still failing: b\n"
+        );
+    }
+
+    #[test]
+    fn a_strict_verdict_file_keeps_its_mode() {
+        let dir = crate::cache::FreshDir::create("cheby-verdicts-test").unwrap();
+        let v = Verdicts::new(Policy::from_vars(Some("require".into()), None).unwrap());
+        assert!(
+            v.judge("a", Milestone::M1, Expectation::Pending, Err("x".into()))
+                .is_err()
+        );
+        v.write_to(dir.path(), "REPL transcripts").unwrap();
+        assert_eq!(
+            merged_summary(dir.path()).unwrap(),
+            "pending REPL transcripts (CHEBY_PENDING=require): 0 of 1 pass\n  \
+             required, failed: a\n"
         );
     }
 }

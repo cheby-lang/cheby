@@ -18,6 +18,12 @@
 //! the UI suite writes no new record does (D-1144).
 //! `cargo xtask` and the `cheby_cli` tests that start `cheby` use
 //! [`HarnessCache`] too (D-1128).
+//!
+//! Under cargo-nextest every trial is a process of its own, so a fresh
+//! cache per process would compile `std` once per trial. `cargo xtask test`
+//! creates one fresh directory, sets `CHEBY_TEST_KEEP_CACHE` to it for the
+//! whole run and deletes it at the end, so every harness trial and every
+//! test that calls [`HarnessCache::create`] shares it (D-1554).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -228,8 +234,10 @@ mod tests {
 
     #[test]
     fn cache_dirs_are_fresh_absolute_and_removed_on_drop() {
-        let first = HarnessCache::create("unit").unwrap();
-        let second = HarnessCache::create("unit").unwrap();
+        // Not `create`: `cargo xtask test` sets `CHEBY_TEST_KEEP_CACHE` for
+        // the whole run (D-1554), and both would get that directory.
+        let first = HarnessCache::create_with("unit", None).unwrap();
+        let second = HarnessCache::create_with("unit", None).unwrap();
         assert_ne!(first.path(), second.path());
         for cache in [&first, &second] {
             assert!(cache.path().is_absolute(), "{}", cache.path().display());

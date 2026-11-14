@@ -20,7 +20,7 @@
 //! a lost wake instead of blocking. loom 0.7 needs no `--cfg loom`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime sched::blocking_models
+//! cargo nextest run -p cheby_runtime sched::blocking_models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so

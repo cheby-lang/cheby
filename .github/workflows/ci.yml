@@ -2,7 +2,12 @@
 #
 # - `test`: build, clippy and every test, including the conformance, UI,
 #   REPL and language server (`--test lsp`, D-1352) harnesses, on every
-#   platform of D-074 and D-892. The macOS job
+#   platform of D-074 and D-892. The tests run under cargo-nextest 0.9.151,
+#   installed by `taiki-e/install-action`, through `cargo xtask test
+#   --profile ci`: one shared build cache, no fail-fast, two retries with
+#   a test that passes on one reported as flaky, a test stopped after 15
+#   minutes, and a JUnit report uploaded as `junit-<platform>`, also after
+#   a failure (D-1553, D-1554, D-1558). Doctests do not run. The macOS job
 #   runs them at `CHEBY_HARNESS_SCALE=5`, because the hosted macOS VMs
 #   stretch 10 ms waits to 30 to 90 ms, past the runtime's preemption
 #   bounds (D-872, D-892). M1 is judged on Linux and macOS (D-545).
@@ -42,7 +47,8 @@
 # - `std-tests`: checks and runs the standard library's own tests, one module
 #   at a time (D-479, D-542). Every std module builds and every test passes,
 #   so a failure fails CI.
-# - `rc-naive`: the UI tests and the standard library's tests under M1's
+# - `rc-naive`: the UI tests (under nextest's `ci` profile, D-1558) and the
+#   standard library's tests under M1's
 #   naive reference counting, `CHEBY_RC=naive` (D-718, D-746), so reuse and
 #   the other Perceus passes never change what a program does. The UI tests
 #   of `--reuse-report` still run under Perceus (tests/ui/README.md). The
@@ -132,15 +138,26 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.151
       - run: cargo build --workspace --all-targets --locked
       # `cheby build` links the runtime archive next to `cheby`, which
-      # `cargo test` does not build (D-929).
+      # nextest does not build (D-929).
       - name: The runtime archive
         run: cargo build -p cheby_rt_exe --locked
       - run: cargo clippy --workspace --all-targets --locked
-      - run: cargo test --workspace --locked --no-fail-fast
+      - name: Every test under cargo-nextest (D-1553, D-1558)
+        run: cargo xtask test --profile ci
         env:
           CHEBY_HARNESS_SCALE: ${{ matrix.scale || 1 }}
+      - name: Upload the JUnit report
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-${{ matrix.name }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
       - name: D-number coverage
         run: cargo xtask coverage
       - name: The runtime archive's system libraries
@@ -192,11 +209,14 @@ jobs:
           toolchain: "1.99.0"
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.151
       # The UI run builds executables (`@command: build`, D-929).
       - name: The runtime archive
         run: cargo build -p cheby_rt_exe --locked
       - name: UI tests under naive reference counting
-        run: CHEBY_RC=naive cargo test -p cheby_cli --test ui
+        run: CHEBY_RC=naive cargo xtask test --profile ci -E 'binary_id(cheby_cli::ui)'
       - name: The standard library's tests under naive reference counting
         run: CHEBY_RC=naive cargo xtask test-std
 

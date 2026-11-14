@@ -30,7 +30,7 @@
 //! interleaving the model names with `try_lock` rather than hang in).
 //!
 //! ```text
-//! cargo test -p cheby_runtime ffi::models
+//! cargo nextest run -p cheby_runtime ffi::models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so

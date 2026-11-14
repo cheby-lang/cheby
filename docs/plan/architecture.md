@@ -440,7 +440,7 @@ A panicking or cancelled fiber unwinds its stack and releases each frame's refer
 - **Handles:** the driver's generation handles stay out of the server's state. The crate's `clippy.toml` bans their types, and only the request handlers, in the `features` module, read a snapshot (D-1366).
 - **Capabilities:** the server advertises only what it serves, and a test checks that the advertised requests are exactly the routed ones (D-1379). Today that is `positionEncoding`, `textDocumentSync`, `documentSymbol`, `foldingRange`, `selectionRange`, `formatting`, `rangeFormatting`, `hover`, completion on `.`, `:`, `@` and `>` with resolve, signature help on `(` and `,`, `definition`, `declaration`, `typeDefinition`, `references`, `documentHighlight`, call hierarchy, `documentLink`, `workspace/symbol`, semantic tokens `full` and `range`, inlay hints without resolve, and `workspace.workspaceFolders`. File watchers are registered dynamically when the client allows it.
 
-The harness `cargo test -p cheby_cli --test lsp` runs the built server as an editor would ([testing.md](testing.md#10-language-server-tests)).
+The harness `cargo xtask test -E 'binary_id(cheby_cli::lsp)'` runs the built server as an editor would ([testing.md](testing.md#10-language-server-tests)).
 
 ## 5. Standard library location
 

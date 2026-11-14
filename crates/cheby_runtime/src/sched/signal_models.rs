@@ -7,7 +7,7 @@
 //! process's disposition, and each step names the function it mirrors:
 //!
 //! ```text
-//! cargo test -p cheby_runtime until_interrupted_model_
+//! cargo nextest run -p cheby_runtime until_interrupted_model_
 //! ```
 //!
 //! | Model step                    | Mirrors (path under `crates/cheby_runtime/src/`, function)                     |

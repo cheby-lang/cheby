@@ -17,7 +17,7 @@
 //! with a condition variable. loom 0.7 needs no `--cfg loom`:
 //!
 //! ```text
-//! cargo test -p cheby_runtime sched::io_models
+//! cargo nextest run -p cheby_runtime sched::io_models
 //! ```
 //!
 //! loom runs each model on generator coroutines that switch stacks, so

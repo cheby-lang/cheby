@@ -6,7 +6,7 @@
 //! a job to its end; `ffi_pool_abandon_…` abandon one by a give-up or a
 //! halt, most of them in a child process, since they leave a fiber parked
 //! for good (as `pool::tests` does). Every name holds `pool_`, so
-//! `cargo test -p cheby_runtime pool_` runs them all. The protocol is
+//! `cargo nextest run -p cheby_runtime pool_` runs them all. The protocol is
 //! modelled in `ffi_models.rs` (`ffi_pool_model_*`).
 
 use std::ffi::c_void;

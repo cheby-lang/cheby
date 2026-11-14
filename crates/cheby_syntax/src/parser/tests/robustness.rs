@@ -358,7 +358,7 @@ fn long_runs_of_blank_and_comment_lines() {
 }
 
 #[test]
-#[ignore = "timing aid: cargo test --release -p cheby_syntax -- --ignored parse_speed --nocapture"]
+#[ignore = "timing aid: cargo nextest run --release -p cheby_syntax --run-ignored only --no-capture parse_speed"]
 fn parse_speed() {
     let mut text = String::new();
     for path in example_files() {
