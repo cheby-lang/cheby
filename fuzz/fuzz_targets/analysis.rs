@@ -30,7 +30,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use cheby_driver::analysis::{FileReport, Globals, Overlay, OverlayFile, Session, SessionConfig};
+use cheby_driver::analysis::{
+    FileReport, Globals, Overlay, OverlayFile, PackageKind, Session, SessionConfig,
+};
 use libfuzzer_sys::fuzz_target;
 
 /// The stack of the analysis thread: a quarter of the usual main thread.
@@ -117,6 +119,7 @@ fn analyze(root: &Path, text: &str) {
     let main = root.join("src/main.cheby");
     let mut session = Session::new(SessionConfig {
         root: root.to_path_buf(),
+        kind: PackageKind::Package,
         target: None,
         globals: Arc::new(Globals::new()),
     });

@@ -93,20 +93,25 @@
 #   summary. A non-merge commit of the change with the trailer
 #   `Accepted-Slowdown: D-NNN`, naming a live decision that the change
 #   itself adds, turns a failure into a note (D-896).
-# - `sanitize-cfg`: clippy of the runtime with each value of
+# - `sanitize-cfg`: clippy of the workspace with each value of
 #   `--cfg cheby_sanitize` (`address`, `thread`) on stable, on Linux x86-64
-#   and macOS arm64, so the sanitizer annotations that only the nightly
-#   workflow runs (D-721, nightly.yml) cannot rot between its runs
-#   (D-883). Only this step and nightly.yml pass the cfg.
+#   and macOS arm64, and `cargo check` of the fuzz targets, which are
+#   outside the workspace, with the `address` value and `--locked`, so the
+#   code that only the nightly workflow builds (D-721, nightly.yml) cannot
+#   rot between its runs (D-883, D-1561). A build that sets the cfg without
+#   `-Zsanitizer=` links no sanitizer runtime, which stable does not ship
+#   (crates/cheby_link/build.rs). Only this job and nightly.yml pass the
+#   cfg.
 # - The C compiler: `cheby_cli` links mimalloc as its global allocator
 #   (D-890), which libmimalloc-sys compiles from C during the build, as
 #   C++17 under MSVC. Every job that builds `cheby_cli` (`test`, `rc-naive`,
-#   `examples`, `bench` and `bench-gate`) first runs `.github/actions/c-compiler`. It
+#   `examples`, `bench`, `bench-gate` and `sanitize-cfg`) first runs
+#   `.github/actions/c-compiler`. It
 #   installs nothing: it names the image's compiler (gcc on Ubuntu, Xcode's
 #   clang on macOS, MSVC's `cl.exe` for the runner's architecture on
 #   Windows, found through vswhere as the `cc` crate finds it) and fails
-#   before the build when there is none. `fmt`, `cross-check`, `std-tests`
-#   and `sanitize-cfg` build no `cheby_cli`.
+#   before the build when there is none. `fmt`, `cross-check` and
+#   `std-tests` build no `cheby_cli`.
 
 name: CI
 
@@ -459,11 +464,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: sanitize-cfg
-      - name: Clippy of the runtime with each cheby_sanitize value
+          workspaces: |
+            . -> target
+            fuzz -> target
+      - uses: ./.github/actions/c-compiler
+      - name: Clippy of the workspace with each cheby_sanitize value
         run: |
           for s in address thread; do
             echo "::group::cheby_sanitize=\"$s\""
             RUSTFLAGS="-D warnings --cfg cheby_sanitize=\"$s\"" \
-              cargo clippy -p cheby_runtime --all-targets --locked
+              cargo clippy --workspace --all-targets --locked
             echo "::endgroup::"
           done
+      # Outside the workspace (fuzz/Cargo.toml); cargo-fuzz builds them with
+      # the address cfg. `--locked` keeps fuzz/Cargo.lock up to date.
+      - name: The fuzz targets with cheby_sanitize="address"
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins --locked
+        env:
+          RUSTFLAGS: -D warnings --cfg cheby_sanitize="address"

@@ -7,6 +7,11 @@
 //! a staticlib, so `libcheby_rt_exe.a` does not hold it, and `cheby build`
 //! has to name it. The toolchain's own runtime is the one that matches the
 //! instrumentation; a C compiler's `-fsanitize=` would bring another.
+//!
+//! A build that sets the cfg without `-Zsanitizer=` is not instrumented:
+//! it only compiles the cfg's code, as CI's `sanitize-cfg` job does on a
+//! stable toolchain, which ships no sanitizer runtime (D-1561). It sets
+//! nothing too, so its `cheby` links as a shipped one.
 
 use std::env;
 use std::error::Error;
@@ -18,6 +23,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let Ok(sanitizer) = env::var("CARGO_CFG_CHEBY_SANITIZE") else {
         return Ok(());
     };
+    if !instrumented() {
+        return Ok(());
+    }
     let short = match sanitizer.as_str() {
         "address" => "asan",
         "thread" => "tsan",
@@ -47,4 +55,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         runtime.display()
     );
     Ok(())
+}
+
+/// Whether rustc instruments this crate: its flags hold `-Zsanitizer=<s>`,
+/// as one argument or as `-Z` and `sanitizer=<s>`.
+fn instrumented() -> bool {
+    let flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    let mut previous = "";
+    flags.split('\x1f').any(|flag| {
+        let found = flag.starts_with("-Zsanitizer=")
+            || (previous == "-Z" && flag.starts_with("sanitizer="));
+        previous = flag;
+        found
+    })
 }

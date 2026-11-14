@@ -17,7 +17,7 @@
 #[inline]
 pub(crate) fn intended<T: ?Sized>(leaked: &'static T) {
     #[cfg(cheby_sanitize = "address")]
-    if std::mem::size_of_val(leaked) != 0 {
+    if size_of_val(leaked) != 0 {
         // SAFETY: `__lsan_ignore_object` only reads the allocator's
         // metadata for the heap block that starts at the pointer, and
         // `leaked` is the start of a live `Box` allocation that is never
