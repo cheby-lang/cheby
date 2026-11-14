@@ -69,6 +69,8 @@ rayon = "1.12"
 # HTTPS for `std::http`'s client (D-1011, D-1036): only on targets other
 # than Windows until M6.
 ring = "0.17.14"
+# `cargo xtask junit-report` reads nextest's JUnit XML (D-1559).
+roxmltree = "0.21"
 rustc-hash = "2.1"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustyline = { version = "18.0", default-features = false }

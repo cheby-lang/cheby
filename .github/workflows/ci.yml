@@ -7,7 +7,10 @@
 #   --profile ci`: one shared build cache, no fail-fast, two retries with
 #   a test that passes on one reported as flaky, a test stopped after 15
 #   minutes, and a JUnit report uploaded as `junit-<platform>`, also after
-#   a failure (D-1553, D-1554, D-1558). Doctests do not run. The macOS job
+#   a failure (D-1553, D-1554, D-1558). `cargo xtask junit-report` renders
+#   that report as the job's summary and as one HTML page, uploaded
+#   unzipped as `junit-<platform>.html`, so it opens in the browser from
+#   the run's artifacts (D-1559). Doctests do not run. The macOS job
 #   runs them at `CHEBY_HARNESS_SCALE=5`, because the hosted macOS VMs
 #   stretch 10 ms waits to 30 to 90 ms, past the runtime's preemption
 #   bounds (D-872, D-892). M1 is judged on Linux and macOS (D-545).
@@ -47,7 +50,8 @@
 # - `std-tests`: checks and runs the standard library's own tests, one module
 #   at a time (D-479, D-542). Every std module builds and every test passes,
 #   so a failure fails CI.
-# - `rc-naive`: the UI tests (under nextest's `ci` profile, D-1558) and the
+# - `rc-naive`: the UI tests (under nextest's `ci` profile, D-1558, with
+#   their report rendered as `junit-rc-naive.html`, D-1559) and the
 #   standard library's tests under M1's
 #   naive reference counting, `CHEBY_RC=naive` (D-718, D-746), so reuse and
 #   the other Perceus passes never change what a program does. The UI tests
@@ -158,6 +162,26 @@ jobs:
           name: junit-${{ matrix.name }}
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
+      # The report as this job's summary and as one HTML page (D-1559).
+      # Skipped when the job failed before nextest wrote a report. `bash`
+      # on every platform, for `$GITHUB_STEP_SUMMARY`.
+      - name: Render the JUnit report
+        id: render
+        if: (success() || failure()) && hashFiles('target/nextest/ci/junit.xml') != ''
+        shell: bash
+        run: >
+          cargo xtask junit-report
+          --title '${{ matrix.name }}'
+          --html 'target/nextest/ci/junit-${{ matrix.name }}.html'
+          --summary "$GITHUB_STEP_SUMMARY"
+      # Unzipped, so a browser opens the page from the run's artifacts. An
+      # unzipped artifact is one file and takes the file's name.
+      - name: Upload the HTML report
+        if: (success() || failure()) && steps.render.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/nextest/ci/junit-${{ matrix.name }}.html
+          archive: false
       - name: D-number coverage
         run: cargo xtask coverage
       - name: The runtime archive's system libraries
@@ -217,6 +241,21 @@ jobs:
         run: cargo build -p cheby_rt_exe --locked
       - name: UI tests under naive reference counting
         run: CHEBY_RC=naive cargo xtask test --profile ci -E 'binary_id(cheby_cli::ui)'
+      # As in the `test` jobs (D-1559).
+      - name: Render the JUnit report
+        id: render
+        if: (success() || failure()) && hashFiles('target/nextest/ci/junit.xml') != ''
+        run: >
+          cargo xtask junit-report
+          --title rc-naive
+          --html target/nextest/ci/junit-rc-naive.html
+          --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload the HTML report
+        if: (success() || failure()) && steps.render.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/nextest/ci/junit-rc-naive.html
+          archive: false
       - name: The standard library's tests under naive reference counting
         run: CHEBY_RC=naive cargo xtask test-std
 

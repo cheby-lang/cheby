@@ -25,6 +25,9 @@ threads-required = 2
 
 # D-1558: CI runs `cargo xtask test --profile ci`. A test that passes on a
 # retry is reported as flaky, so it is fixed, never hidden (D-725).
+# `cargo xtask junit-report` renders the JUnit report, and takes a test
+# for slow from `slow-timeout`'s period, which a test of `xtask` pins
+# (D-1559).
 [profile.ci]
 fail-fast = false
 retries = 2

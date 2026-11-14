@@ -2564,3 +2564,14 @@ Goal: run every Rust test with cargo-nextest instead of `cargo test`, as the use
 Open:
 
 - The longest single tests are now `cheby_driver`'s loops over every UI test or example (`live_matches_check` 413 s, `run_never_fails_internally_on_ui_tests` 320 s, `concurrent_runs_share_globals` 257 s, `sweep_sample` 245 s) and `cheby_mir`'s `no_path_tests_a_position_twice` (246 s). Splitting them as D-1557 does is left for later.
+
+## 2026-11-14: JUnit reports in CI runs
+
+Goal: show nextest's JUnit report in a CI run, as the user asked, instead of only uploading the XML.
+
+- **D-1559 The JUnit report as a job summary and an HTML page**: `cargo xtask junit-report` reads nextest's JUnit report and writes one self-contained HTML page, with no script and nothing linked, and appends a Markdown summary to a file. Every `test` job and `rc-naive` run it after the tests, also after a failure, with `$GITHUB_STEP_SUMMARY` as the summary's file, and upload the page unzipped as `junit-<job>.html`, so a browser opens it from the run's artifacts. The page lists the tests that failed or timed out with the output of every attempt, the flaky tests, the slow ones, and then every test per binary. The summary has the counts, the first 30 failures with the end of their output, the flaky tests and the 20 slowest. A test is slow when it took 60 s or more, the `ci` profile's period, since the report does not mark slow tests, and a test of `xtask` keeps the two equal. The command fails only on a report it cannot read or a file it cannot write. The XML is still uploaded as `junit-<platform>`. `xtask` gains the dependency `roxmltree`. Why: the user asked for it. A zipped XML file shows nothing in a run, while the summary shows a failure where the run is read, and the page is one click away. A command in `xtask` follows D-292 and reads nextest's flaky and timeout entries. Rejected: an action that posts a check run, which needs `checks: write` and fails on pull requests from forks; a converter installed through Python or npm on five platforms; one job that combines the platforms, which builds `xtask` again and has nothing to show when a job is cancelled. Refines D-1558.
+
+Open:
+
+- The new steps have not run in CI yet. The first run shows whether the unzipped page opens in the browser from the run's artifacts, on the Windows jobs too, where the step runs under `bash`.
+- The report has no pending verdicts (D-1556): nextest's JUnit report does not carry them, so they stay in the log of `cargo xtask test`.

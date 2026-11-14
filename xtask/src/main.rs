@@ -38,6 +38,8 @@
 //!   against a baseline (D-718, D-702).
 //! - `check-examples`: runs `cheby check` in every example directory and
 //!   compares the outcome with the expected one (G6).
+//! - `junit-report`: renders nextest's `JUnit` report as one HTML page and as
+//!   a Markdown summary, for the CI runs (D-1559; [`junit`]).
 //! - `sanitize`: the thread-sanitizer and address-sanitizer jobs of
 //!   `nightly.yml` and the job of `miri.yml`, step by step, for the workflows
 //!   and for local runs (D-721, D-862, D-1322).
@@ -58,6 +60,7 @@ mod cache;
 mod cross_check;
 mod determinism;
 mod examples;
+mod junit;
 mod native_libs;
 mod sanitize;
 mod test;
@@ -142,6 +145,9 @@ enum Cmd {
     BenchCompile(bench::Args),
     /// Measure the run time of the programs under `bench/runtime` (D-718)
     BenchRun(Box<bench_run::Args>),
+    /// Render nextest's `JUnit` report as an HTML page and a Markdown summary
+    /// (D-1559)
+    JunitReport(junit::Args),
     /// Run a sanitizer job of nightly.yml or the job of miri.yml, or some of
     /// its steps, on the pinned nightly (D-721, D-862, D-1322)
     Sanitize(sanitize::Args),
@@ -182,6 +188,7 @@ fn main() -> ExitCode {
         Cmd::TestStd { filter } => test_std(filter.as_deref()),
         Cmd::BenchCompile(args) => bench::run(&root, &args),
         Cmd::BenchRun(args) => bench_run::run(&root, &args),
+        Cmd::JunitReport(args) => junit::run(&root, &args),
         Cmd::Sanitize(args) => sanitize::run(&root, &args),
         Cmd::BenchBuild { jobs, dir } => bench_build(jobs, &dir),
     };
