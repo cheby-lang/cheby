@@ -18,8 +18,8 @@
 //!    [`Section::Skipped`]. Constants are evaluated only when the front end
 //!    has no error, as in `check_inner` (D-459, D-534).
 //! 3. `backend::build` with `Roots::Constants`. On `Err`, the sorted
-//!    diagnostics (E0069 from evaluation, E0075 to E0078) and no values,
-//!    since `build` gives none on `Err` (D-1413). On `Ok`, every local
+//!    diagnostics (E0069 from evaluation, E0075 to E0078, E0081) and no
+//!    values, since `build` gives none on `Err` (D-1413). On `Ok`, every local
 //!    constant's text from `cheby_consteval::debug_texts`, cut at
 //!    [`BackendRequest::max_text`] characters (D-1413's 4,096), with the
 //!    package's module files its initializer reaches, as D-538's seed
@@ -121,7 +121,7 @@ pub enum Section<T> {
 /// The constants section (A §11.2, D-1413).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConstantsOut {
-    /// E0069 and E0075 to E0078, sorted as `cheby check` prints them.
+    /// E0069, E0075 to E0078 and E0081, sorted as `cheby check` prints them.
     pub diagnostics: Vec<ConstDiagnostic>,
     /// The value of every evaluated local constant. Empty when evaluation
     /// failed, since `backend::build` gives no values on `Err` (D-1413).

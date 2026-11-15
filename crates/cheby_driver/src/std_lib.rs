@@ -352,21 +352,6 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     // `channel::receive_now` (D-1099).
     ("fiber", "a loop that yields lets other fibers run", "M4"),
     ("fiber", "a cancellation is delivered at yield_now", "M4"),
-    // The clocks in context of `std::time` (`Clock`, the key `time::clock`,
-    // `fixed_clock` and `custom_clock`) need `std::context`, M4's
-    // workstream 4.6 (D-1047, D-1049).
-    ("time", "a fixed clock fixes now", "M4"),
-    ("time", "a clock in context does not change sleep", "M4"),
-    ("time", "a custom clock calls its functions", "M4"),
-    // `time::now_on` and `time::monotonic_on` read a given clock, and
-    // come with the clocks in context (D-1570).
-    ("time", "now_on reads the clock it is given", "M4"),
-    (
-        "time",
-        "a custom clock builds on the system clock with now_on",
-        "M4",
-    ),
-    ("time", "monotonic_on reads the clock it is given", "M4"),
 ];
 
 include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));

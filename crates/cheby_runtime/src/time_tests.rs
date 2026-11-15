@@ -21,8 +21,8 @@ use crate::fiber_ops::detached_tests::{self, close_scope, release, root_outcome,
 use crate::fiber_ops::scope::cheby_rt_scope_open;
 use crate::sched::testing;
 use crate::time::{
-    CONTEXT_KERNELS, cheby_time_sys_monotonic, cheby_time_sys_now, cheby_time_sys_sleep, origin,
-    signatures, since_epoch, since_origin,
+    ASYNC_KERNELS, CONTEXT_KERNELS, cheby_time_sys_monotonic, cheby_time_sys_now,
+    cheby_time_sys_sleep, origin, signatures, since_epoch, since_origin,
 };
 use crate::values;
 
@@ -180,12 +180,59 @@ fn time_kernel_monotonic_counts_from_one_process_origin() {
     assert!((0..BILLION).contains(&first.1), "{first:?}");
 }
 
-/// Each kernel has the C signature, the `@std_context` and the bindings of
-/// its declaration in `std/time.cheby` (D-985, D-986, D-692): `sys_now`
-/// and `sys_monotonic` are ordinary kernels returning a pair, `sys_sleep`
-/// takes the context and is `@async` on JS; every binding is to
-/// `./time.mjs`. `std/time/instant.cheby` imports only `std::duration` and
-/// declares no kernel (D-1057).
+/// The parameter list and the rest of a `fn` line after its name: the
+/// list ends at the `)` that closes its `(`, so a tuple type inside it
+/// stays in it.
+fn split_params(after_name: &str) -> (&str, &str) {
+    let mut depth = 0_u32;
+    for (i, c) in after_name.char_indices() {
+        match c {
+            '(' => depth = depth.saturating_add(1),
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let params = after_name.get(1..i).unwrap();
+                    let rest = after_name.get(i.saturating_add(1)..).unwrap();
+                    return (params, rest);
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced parameters: {after_name}");
+}
+
+/// The parameters of a list, split at the commas outside parentheses.
+fn top_level_params(params: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0_u32;
+    let mut start = 0;
+    for (i, c) in params.char_indices() {
+        match c {
+            '(' => depth = depth.saturating_add(1),
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(params.get(start..i).unwrap());
+                start = i.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    out.push(params.get(start..).unwrap());
+    out.into_iter()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Each kernel has the C signature, the `@std_context`, the `@async` and
+/// the bindings of its declaration in `std/time.cheby` (D-985, D-986,
+/// D-692): `sys_now` and `sys_monotonic` are ordinary kernels returning a
+/// pair; `sys_now_unless_provided` and `sys_monotonic_unless_provided`
+/// take the context and the clock key's identity, one word, and return a
+/// pair (D-1597); `sys_sleep` takes the context and is `@async` on JS;
+/// every binding is to `./time.mjs`. `std/time/instant.cheby` imports only
+/// `std::duration` and declares no kernel (D-1057).
 #[test]
 fn time_kernel_declarations_match_std() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
@@ -206,19 +253,15 @@ fn time_kernel_declarations_match_std() {
                 .and_then(|r| r.strip_suffix("\")"))
         });
         if let Some(native) = native {
-            let name = rest.split_once('(').unwrap().0;
+            let open = rest.find('(').unwrap();
+            let name = rest.get(..open).unwrap();
             let js = format!("@external(js, \"./time.mjs\", \"{name}\")");
             assert!(attributes.contains(&js.as_str()), "{name}: {attributes:?}");
             let context = attributes.contains(&"@std_context");
             let asynchronous = attributes.contains(&"@async");
-            let (params, result) = rest.split_once(')').unwrap();
-            let params: Vec<&str> = params
-                .split_once('(')
-                .unwrap()
-                .1
-                .split(',')
-                .map(str::trim)
-                .filter(|p| !p.is_empty())
+            let (params, result) = split_params(rest.get(open..).unwrap());
+            let params: Vec<&str> = top_level_params(params)
+                .into_iter()
                 .map(|p| match p.split_once(':').unwrap().1.trim() {
                     "Int" => "i64",
                     _ => "Word",
@@ -236,10 +279,18 @@ fn time_kernel_declarations_match_std() {
         .into_iter()
         .map(|(name, params, result)| {
             let context = CONTEXT_KERNELS.contains(&name);
-            (name.to_owned(), params.to_vec(), result, context, context)
+            let asynchronous = ASYNC_KERNELS.contains(&name);
+            (
+                name.to_owned(),
+                params.to_vec(),
+                result,
+                context,
+                asynchronous,
+            )
         })
         .collect();
     assert_eq!(declared, registered);
+    assert_eq!(registered.len(), 5);
     let instant = std::fs::read_to_string(root.join("time/instant.cheby")).unwrap();
     assert!(!instant.contains("@external"));
     let imports: Vec<&str> = instant

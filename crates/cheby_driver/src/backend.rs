@@ -195,7 +195,7 @@ pub(crate) fn codegen_options(mir: MirOptions, capture_clif: bool) -> CodegenOpt
 
 /// Lowers what the roots reach (D-510), compiles it in one JIT, and
 /// evaluates the reachable constants in that JIT (E6). `Err` holds E0053,
-/// E0069 or E0075-E0078 diagnostics, sorted. `Constants` builds
+/// E0069, E0075-E0078 or E0081 diagnostics, sorted. `Constants` builds
 /// with `stub_unresolved` (plan §4.4) and never reports E0053 (D-532);
 /// `AllFunctions` evaluates nothing. A CLIF dump (`capture_clif`) compiles
 /// with the default options, MIR, code generation and JIT, so dumps do not

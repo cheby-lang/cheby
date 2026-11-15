@@ -173,6 +173,21 @@ pub(crate) unsafe fn get(me: &ExecCtx, identity: Word, default: Word) -> Word {
     value
 }
 
+/// Whether the fiber's context binds `identity` (D-1597): for the empty
+/// context one load of the field and one test, otherwise one probe of the
+/// map. It allocates no object and takes no reference, but it may raise
+/// `out of memory` as [`get`] does, with nothing to release.
+///
+/// # Safety
+///
+/// `identity` is a live key identity, borrowed.
+pub(crate) unsafe fn binds(me: &ExecCtx, identity: Word) -> bool {
+    let map = bindings_of(me);
+    // SAFETY: the fiber's map is live while it holds it; the identity is
+    // forwarded from the caller.
+    map != 0 && unsafe { bindings::lookup(map, identity) }.is_some()
+}
+
 /// Binds `identity` to `value` on top of the fiber's context (D-1571):
 /// the fiber gets a new map, and the outer one is returned, owned (the
 /// fiber's reference passes to the caller), as the static empty map when

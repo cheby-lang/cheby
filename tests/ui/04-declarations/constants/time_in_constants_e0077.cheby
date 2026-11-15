@@ -1,11 +1,12 @@
 // @mode: check-fail
 // @milestone: M3
-// @decisions: D-991, D-537, D-1057
+// @decisions: D-991, D-537, D-1057, D-1597
 //! The functions of `std::time` that read a clock or wait reach a kernel:
-//! `now` and `monotonic` directly, `elapsed` and `until` through
-//! `monotonic`, and the sleeps through `sys_sleep`, even for a span of
-//! zero. So a constant that calls one is E0077, while the pure functions
-//! beside them run at compile time (§4.5).
+//! `now` and `monotonic` the kernels that look for a clock in the fiber's
+//! context, `elapsed` and `until` the second through `monotonic`,
+//! `sleep_until` the runtime's monotonic clock, and `sleep` its sleep, even
+//! for a span of zero. So a constant that calls one is E0077, while the
+//! pure functions beside them run at compile time (§4.5).
 
 import std::duration
 import std::io

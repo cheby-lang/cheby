@@ -34,9 +34,16 @@
 //!    function entry or tail call once its deadline passes, and an
 //!    allocation that would take the bytes this evaluation keeps live past
 //!    the memory limit ends it before memory is requested (D-617).
-//! 4. When everything evaluated, each constant that exists on `js` is
-//!    walked by its type for an `Int` outside ±(2⁵³ − 1) (E0078, D-540),
-//!    if the caller passed the types ([`evaluate_with`]).
+//! 4. When everything evaluated, each constant's value is walked for a
+//!    function or a handle, which only a context key's default can hold,
+//!    since §4.5's type check does not look inside `context::Key<T>`'s
+//!    argument: E0081 at each constant that holds one, an alias of another
+//!    key constant included (D-1578, D-1591). The walk needs no type, so
+//!    the REPL's evaluation runs it too, and the image writer's own
+//!    question decides it, so the images that follow never meet such a
+//!    value. Then each constant that exists on `js` is walked by its type
+//!    for an `Int` outside ±(2⁵³ − 1) (E0078, D-540), if the caller passed
+//!    the types ([`evaluate_with`]).
 //! 5. When a constant failed, every result is frozen in place (count 0,
 //!    out of the build's accounting domain, D-539, D-564). Otherwise the
 //!    results stay counted in the JIT's domain, each slot owning its
@@ -132,7 +139,8 @@ pub struct ConstInfo {
 }
 
 /// Evaluates `order` (from `Reach::constant_order`) in `jit`, storing each
-/// result in its slot; returns the diagnostics (E0069, E0075-E0077). With
+/// result in its slot; returns the diagnostics (E0069, E0075-E0077, and
+/// E0081 for a key whose default holds a function or a handle). With
 /// no diagnostic, each slot owns its result, counted in `jit`'s domain:
 /// the caller writes the [`images`], then calls [`release`], [`freeze`]
 /// or [`replace_with_images`]. With diagnostics, every result is frozen.
@@ -220,7 +228,13 @@ pub fn evaluate_with(
             }
         }
     }
-    if diagnostics.is_empty()
+    let evaluated = diagnostics.is_empty();
+    if evaluated {
+        for (info, &slot) in order.iter().zip(&slots) {
+            diagnostics.extend(undescribed(info, slot));
+        }
+    }
+    if evaluated
         && let Some(types) = types
         && config.targets.contains(Target::Js)
     {
@@ -349,7 +363,8 @@ pub fn replace_with_images(jit: &Jit, order: &[ConstInfo]) -> Result<(), Ice> {
 /// # Errors
 ///
 /// An [`Ice`] if a constant has no slot or no value, or its value holds
-/// something no image describes (E0068 keeps closures and handles out).
+/// something no image describes (E0068 and E0081 keep closures and
+/// handles out).
 pub fn images(jit: &Jit, order: &[ConstInfo]) -> Result<Vec<ConstImage>, Ice> {
     let mut roots: Vec<(&str, u64)> = Vec::with_capacity(order.len());
     for info in order {
@@ -529,6 +544,33 @@ pub fn debug_texts(jit: &Jit, defs: &[DefId]) -> Result<Vec<Option<String>>, Ice
         }
         Err(e) => Err(Ice::new(format!("printing constants: {e}"))),
     }
+}
+
+/// E0081 for `info`'s value if it holds a function or a handle (D-1578,
+/// D-1591): only a context key's default can, since §4.5's type check does
+/// not look inside `context::Key<T>`'s argument.
+fn undescribed(info: &ConstInfo, slot: *mut u64) -> Option<Diagnostic> {
+    // SAFETY: the slot of an evaluated constant holds its live value, which
+    // no entry changes meanwhile.
+    let what = unsafe { cheby_runtime::consteval::find_undescribed(slot.read()) }?;
+    Some(
+        Diagnostic::new(
+            codes::KEY_DEFAULT_NOT_STATIC,
+            format!(
+                "the constant `{}` holds a key whose default value holds a function or a handle",
+                info.name
+            ),
+        )
+        .with_primary(info.name_span, "this constant is computed at compile time")
+        .with_note(format!(
+            "its value holds {what}, which a program cannot embed; a key's value type may \
+             hold functions and handles, but its default may not"
+        ))
+        .with_help(
+            "make the key with `context::key_without_default()` and provide the value at run \
+             time, or give it a default that holds no function or handle",
+        ),
+    )
 }
 
 /// E0078 for `info`'s value if it holds an `Int` that JS cannot represent

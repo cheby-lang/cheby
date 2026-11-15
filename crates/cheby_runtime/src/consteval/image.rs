@@ -499,7 +499,47 @@ unsafe fn leaf_ref(word: Word, in_process: bool) -> Option<Ref> {
     (in_process && unsafe { is_static(word) }).then_some(Ref::Address(word))
 }
 
-/// The shape and the children of the object `word`.
+/// What E0081's walk learns of one word of a constant's value
+/// ([`super::find_undescribed`], D-1578): the image writer's own answer.
+#[derive(Debug)]
+pub(super) enum Look {
+    /// No object of an image: a tagged integer, 0 or a runtime static, or
+    /// a malformed word, which the writer reports.
+    Leaf,
+    /// An object an image describes, with its children.
+    Children(Vec<Word>),
+    /// An object no image describes, as [`ConstImageError::Unsupported`]
+    /// names it: `a function`, or a handle's or external type's name.
+    Undescribed(String),
+}
+
+/// What [`serialize`] would make of `word`: [`leaf_ref`] and [`shape_of`],
+/// the one predicate of what a constant may hold, so E0081's check and
+/// the writer cannot disagree (D-1578).
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0 or a live object.
+pub(super) unsafe fn look(word: Word) -> Look {
+    // SAFETY: forwarded from the caller.
+    if word == 0 || unsafe { leaf_ref(word, false) }.is_some() {
+        return Look::Leaf;
+    }
+    // SAFETY: as above, an object that is no runtime static.
+    match unsafe { shape_of("", word) } {
+        Ok((_, children)) => Look::Children(children),
+        Err(ConstImageError::Unsupported { what, .. }) => Look::Undescribed(what),
+        Err(
+            ConstImageError::Malformed { .. }
+            | ConstImageError::UnknownTypeKey { .. }
+            | ConstImageError::NoSlot { .. },
+        ) => Look::Leaf,
+    }
+}
+
+/// The shape and the children of the object `word`, or
+/// [`ConstImageError::Unsupported`] for an object that no image describes:
+/// a function, a handle, a value of an external type.
 ///
 /// # Safety
 ///
@@ -560,6 +600,9 @@ unsafe fn shape_of(path: &str, word: Word) -> Result<(Shape, Vec<Word>), ConstIm
             let Some(info) = layout::get(id) else {
                 return Err(unsupported(format!("an object of the unknown layout {id}")));
             };
+            if info.kind == LayoutKind::Closure {
+                return Err(unsupported("a function".to_owned()));
+            }
             let LayoutKind::Ctor { tag, .. } = info.kind else {
                 return Err(unsupported(format!("a `{}`", info.name)));
             };

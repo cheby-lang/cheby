@@ -30,6 +30,8 @@
 //!   results with the per-process seed before code runs (D-196, D-539).
 //! - [`find_out_of_js_range`]: the JS range check of a result (E0078,
 //!   D-540), walking the value by its type.
+//! - [`find_undescribed`]: the check that a result holds no function and
+//!   no handle, which only a context key's default can (E0081, D-1578).
 //!
 //! Freezing results in place is [`crate::alloc::freeze`] (D-539); it
 //! stays inside evaluation. Results reach running code only as images
@@ -584,6 +586,47 @@ pub unsafe fn find_out_of_js_range(value: Word, nodes: &[RangeNode], root: usize
     None
 }
 
+/// What `value`, a constant's evaluated result, holds first that no
+/// constant image describes, such as `a function` or `` a `Sender` ``, or
+/// `None` (E0081, D-1578, D-1591). §4.5's type check keeps functions and
+/// handles out of every constant's type except a context key's argument,
+/// so this finds a key's default that cannot be static data. It asks each
+/// object the image writer's own question ([`image::look`]), so the
+/// two cannot disagree, and it needs no type, so the REPL's evaluation
+/// runs it too. A runtime static is a leaf, and a static object is asked
+/// but not entered: a function value's static closure is one, and a
+/// constant installed earlier was checked when its image was written.
+/// Each object is visited once, with a worklist on the heap (plan §0,
+/// deep data).
+///
+/// # Safety
+///
+/// `value` is a tagged integer or a live value, not changed during the
+/// call.
+#[must_use]
+pub unsafe fn find_undescribed(value: Word) -> Option<String> {
+    let mut work: Vec<Word> = vec![value];
+    let mut seen: HashSet<Word> = HashSet::new();
+    while let Some(word) = work.pop() {
+        if !seen.insert(word) {
+            continue;
+        }
+        // SAFETY: a tagged integer, 0 (a map entry's missing value) or a
+        // live object of the caller's value.
+        match unsafe { image::look(word) } {
+            image::Look::Leaf => {}
+            image::Look::Children(children) => {
+                // SAFETY: as above, an object.
+                if !unsafe { image::is_static(word) } {
+                    work.extend(children);
+                }
+            }
+            image::Look::Undescribed(what) => return Some(what),
+        }
+    }
+    None
+}
+
 /// The SipHash-1-3 with a zero key of a module's source bytes, its part of
 /// a constant's seed (D-538).
 #[must_use]
@@ -897,6 +940,43 @@ mod tests {
                 assert_eq!(find_out_of_js_range(some, &nodes, 6), Some(big));
                 assert_eq!(find_out_of_js_range(values::none(), &nodes, 6), None);
                 for word in [unsafe_word, list, set, map, pair, some] {
+                    crate::rc::drop(word);
+                }
+            }
+            assert_eq!(domain.live_objects(), 0);
+        });
+    }
+
+    /// E0081's walk (D-1578, D-1591): plain data holds nothing it reports;
+    /// a handle is found with its kind's name wherever it is, in a tuple,
+    /// in `Some` and as a map's value, the one object the image writer
+    /// refuses (`image::look`).
+    #[test]
+    fn undescribed_finds_a_handle_inside_plain_data() {
+        let domain = alloc::Domain::new();
+        alloc::with_domain(Arc::clone(&domain), || {
+            let finalized = Arc::default();
+            let sender = crate::handles::tests::counted(
+                crate::handles::HandleKind::Sender,
+                &finalized,
+                Vec::new(),
+            );
+            // SAFETY: live values built here, dropped once.
+            unsafe {
+                let plain = values::tuple(&[values::int_word(1), values::string("text")]);
+                assert_eq!(find_undescribed(plain), None);
+                assert_eq!(find_undescribed(values::int_word(7)), None);
+                assert_eq!(find_undescribed(values::none()), None);
+                crate::rc::dup(sender);
+                let nested = values::some(values::tuple(&[values::string("a"), sender]));
+                assert_eq!(find_undescribed(nested).as_deref(), Some("a `Sender`"));
+                let empty = hamt::cheby_map_new();
+                let key = values::string("k");
+                let map = hamt::cheby_map_insert(empty, key, sender);
+                assert_eq!(find_undescribed(map).as_deref(), Some("a `Sender`"));
+                let plain_map = hamt::cheby_map_insert(empty, key, values::int_word(3));
+                assert_eq!(find_undescribed(plain_map), None);
+                for word in [plain, nested, empty, key, map, plain_map, sender] {
                     crate::rc::drop(word);
                 }
             }

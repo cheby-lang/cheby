@@ -1,7 +1,23 @@
 //! The kernels of `std::time` (D-985, D-1018 to D-1021, D-1057, D-1058):
-//! `sys_now` and `sys_monotonic`, ordinary kernels that read a clock, and
-//! the `@std_context` kernel `sys_sleep`, which waits on the runtime's
-//! timer heap. `std::time::instant` has no kernel (D-1057).
+//! `sys_now` and `sys_monotonic`, ordinary kernels that read a clock, the
+//! `@std_context` kernels `sys_now_unless_provided` and
+//! `sys_monotonic_unless_provided`, which read it unless the fiber's
+//! context provides a clock, and the `@std_context` kernel `sys_sleep`,
+//! which waits on the runtime's timer heap. `std::time::instant` has no
+//! kernel (D-1057).
+//!
+//! - **The clock in context** (D-1047, D-1597): `time::now` and
+//!   `time::monotonic` call `sys_now_unless_provided` and
+//!   `sys_monotonic_unless_provided` with the identity of the key
+//!   `time::clock`. With the empty context the kernel tests one word of the
+//!   fiber and reads the system's clock at once; with other bindings it
+//!   probes the map once ([`context::binds`]). When the key is bound, it
+//!   reads no clock and returns [`PROVIDED`], a reading whose nanoseconds
+//!   are negative, which no reading has, and Cheby goes on with
+//!   `now_on(context::get(clock))` or `monotonic_on(context::get(clock))`:
+//!   a kernel never calls the provided clock's functions (D-484, D-675).
+//!   Timers never read the clock in context: `sleep` and `sleep_until`
+//!   read `sys_monotonic` (D-1047, I-K).
 //!
 //! - **The wall clock** (`sys_now`) is the system's real-time clock,
 //!   Rust's `SystemTime`, read as the whole seconds since the Unix epoch
@@ -50,6 +66,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::abi::Word;
+use crate::context;
 use crate::ctx::ExecCtx;
 use crate::fiber_ops::{cancel, needs_scheduler, running};
 use crate::panic::fatal;
@@ -81,7 +98,7 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 3] {
+fn all() -> [Entry; 5] {
     [
         (
             "cheby_time_sys_now",
@@ -93,6 +110,18 @@ fn all() -> [Entry; 3] {
             "cheby_time_sys_monotonic",
             cheby_time_sys_monotonic as *const u8,
             &[],
+            "Word",
+        ),
+        (
+            "cheby_time_sys_now_unless_provided",
+            cheby_time_sys_now_unless_provided as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_time_sys_monotonic_unless_provided",
+            cheby_time_sys_monotonic_unless_provided as *const u8,
+            &["Word"],
             "Word",
         ),
         (
@@ -121,9 +150,23 @@ pub(crate) fn signatures() -> Vec<(&'static str, &'static [&'static str], &'stat
 }
 
 /// The kernels that take the running fiber's context (`@std_context`,
-/// D-692).
+/// D-692): the two that look for a clock in it (D-1597) and the sleep.
 #[cfg(test)]
-pub(crate) const CONTEXT_KERNELS: [&str; 1] = ["cheby_time_sys_sleep"];
+pub(crate) const CONTEXT_KERNELS: [&str; 3] = [
+    "cheby_time_sys_now_unless_provided",
+    "cheby_time_sys_monotonic_unless_provided",
+    "cheby_time_sys_sleep",
+];
+
+/// The kernels that are `@async` on JS (D-986): the sleep only.
+#[cfg(test)]
+pub(crate) const ASYNC_KERNELS: [&str; 1] = ["cheby_time_sys_sleep"];
+
+/// The reading the two kernels of the clock in context return when the
+/// fiber's context binds `time::clock` (D-1597): its nanoseconds are
+/// negative, which no reading's are (D-650), so `std/time.cheby` tells it
+/// from a reading with one comparison.
+pub(crate) const PROVIDED: (i64, i64) = (0, -1);
 
 /// The monotonic clock's origin: one per process, taken the first time a
 /// kernel reads the clock (D-1021).
@@ -193,6 +236,69 @@ pub(crate) unsafe extern "C" fn cheby_time_sys_now() -> Word {
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_time_sys_monotonic() -> Word {
     guarded(None, || reading(since_origin(Instant::now())))
+}
+
+/// `read`'s reading, or [`PROVIDED`] when the context of the fiber `ctx`
+/// binds the key whose identity is `clock` (D-1597).
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context and `clock` a live key identity,
+/// borrowed.
+unsafe fn unless_provided(
+    ctx: *mut ExecCtx,
+    clock: Word,
+    read: impl FnOnce() -> (i64, i64),
+) -> Word {
+    // SAFETY: forwarded from the caller.
+    let me = unsafe { running(ctx) };
+    // SAFETY: as above.
+    if unsafe { context::binds(me, clock) } {
+        reading(PROVIDED)
+    } else {
+        reading(read())
+    }
+}
+
+/// `time::now`'s kernel (`sys_now_unless_provided`): the wall clock now,
+/// as [`cheby_time_sys_now`] reads it, unless the fiber's context binds
+/// the key `time::clock`, whose identity is `clock`; then [`PROVIDED`]
+/// (D-1597). It may raise `out of memory` while it compares keys
+/// ([`context::binds`]), with nothing to release.
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context and `clock` a live key identity,
+/// borrowed.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_time_sys_now_unless_provided(
+    ctx: *mut ExecCtx,
+    clock: Word,
+) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        unsafe { unless_provided(ctx, clock, || since_epoch(SystemTime::now())) }
+    })
+}
+
+/// `time::monotonic`'s kernel (`sys_monotonic_unless_provided`): the
+/// monotonic clock now, as [`cheby_time_sys_monotonic`] reads it, unless
+/// the fiber's context binds the key `time::clock`, whose identity is
+/// `clock`; then [`PROVIDED`] (D-1597). It may raise `out of memory` as
+/// [`cheby_time_sys_now_unless_provided`] does.
+///
+/// # Safety
+///
+/// As for [`cheby_time_sys_now_unless_provided`].
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_time_sys_monotonic_unless_provided(
+    ctx: *mut ExecCtx,
+    clock: Word,
+) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        unsafe { unless_provided(ctx, clock, || since_origin(Instant::now())) }
+    })
 }
 
 /// The timer of a sleep: when it fires first, it settles the sleep's

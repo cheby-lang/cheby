@@ -22,7 +22,9 @@ use crate::frontend::{Retain, RunExtras, run_analysis};
 
 /// The codes the back end reports, which a session never does (the UI
 /// harness's list).
-const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
+const BACK_END_CODES: [&str; 7] = [
+    "E0053", "E0069", "E0075", "E0076", "E0077", "E0078", "E0081",
+];
 
 const MANIFEST: &str = "name = \"app\"\nversion = \"0.1.0\"\n";
 const UI_MANIFEST: &str = "name = \"ui_test\"\nversion = \"0.1.0\"\n";

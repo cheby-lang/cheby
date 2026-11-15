@@ -357,15 +357,18 @@ impl UiTest {
 }
 
 /// The codes that only the back end reports: an unresolved native symbol
-/// and the constant-evaluation errors. `cheby check` reports them after it
-/// has built a JIT for the package's constants. E0069 is also a front-end
-/// code; counting it here only ignores a few more tests on Windows.
-/// `cheby check` never reports E0053 (D-532). The language server reports
-/// E0069 from evaluation and E0075 to E0078 from its constants child, so
-/// its parity trials compare them after `cheby/idle`, and ignore them on
-/// Windows, where the server evaluates no constant until M6 (D-1348,
-/// D-1349, D-1414).
-pub const BACK_END_CODES: [&str; 6] = ["E0053", "E0069", "E0075", "E0076", "E0077", "E0078"];
+/// and the constant-evaluation errors, a key whose default holds a
+/// function or a handle among them (E0081, D-1578). `cheby check` reports
+/// them after it has built a JIT for the package's constants. E0069 is
+/// also a front-end code; counting it here only ignores a few more tests
+/// on Windows. `cheby check` never reports E0053 (D-532). The language
+/// server reports E0069 from evaluation and E0075 to E0078 and E0081 from
+/// its constants child, so its parity trials compare them after
+/// `cheby/idle`, and ignore them on Windows, where the server evaluates no
+/// constant until M6 (D-1348, D-1349, D-1414).
+pub const BACK_END_CODES: [&str; 7] = [
+    "E0053", "E0069", "E0075", "E0076", "E0077", "E0078", "E0081",
+];
 
 /// The extensions of the input files of a run test (D-543), and its
 /// environment file (D-1043).
