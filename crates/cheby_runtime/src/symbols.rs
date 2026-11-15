@@ -5,9 +5,10 @@
 //! [`symbols`] lists the runtime's own symbols first, in the order of
 //! [`sym::ALL`], then every kernel module's kernels. Each kernel module
 //! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`,
-//! `fiber_ops`, `random`, `runtime_info`) registers its kernels through its own `kernels` function
-//! and names the std modules it implements completely in its `COMPLETE`,
-//! so kernel packages never edit this file.
+//! `fiber_ops`, `random`, `runtime_info`, `time`, `net`, `file`, `http`,
+//! `process`, `context`) registers its kernels through its own `kernels`
+//! function and names the std modules it implements completely in its
+//! `COMPLETE`, so kernel packages never edit this file.
 //!
 //! A module that defines runtime kinds (`layout::register_builtin`, ids
 //! 26-63) also registers them from its `kernels` function: the JIT calls
@@ -44,8 +45,8 @@ use crate::reuse::{
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
 use crate::{
-    bytes, consteval, desc, env, fiber_ops, file, hamt, io, list, net, num, random, runtime_info,
-    text, time,
+    bytes, consteval, context, desc, env, fiber_ops, file, hamt, io, list, net, num, random,
+    runtime_info, text, time,
 };
 
 /// The address of a static object.
@@ -160,6 +161,7 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     file::kernels(&mut out);
     crate::http::kernels(&mut out);
     crate::process::kernels(&mut out);
+    context::kernels(&mut out);
     // `cheby.h`'s functions, which C code calls (D-945): runtime exports,
     // so E0055 and the C-object check reserve them (D-944, D-1204).
     crate::ffi::kernels(&mut out);
@@ -187,6 +189,7 @@ pub fn complete_modules() -> Vec<&'static str> {
         file::COMPLETE,
         crate::http::COMPLETE,
         crate::process::COMPLETE,
+        context::COMPLETE,
     ]
     .concat()
 }
@@ -408,8 +411,8 @@ mod tests {
         let (params, result) = rest.split_at(close);
         // A local `fn` of a test block may leave its parameter types to
         // inference: it declares no kernel.
-        let params = params
-            .split(',')
+        let params = top_level_parts(params)
+            .into_iter()
             .map(str::trim)
             .filter(|param| !param.is_empty())
             .map(|param| Some(c_type(param.split_once(':')?.1.trim())))
@@ -422,6 +425,34 @@ mod tests {
             .trim();
         let result = result.strip_suffix('{').unwrap_or(result).trim();
         Some((params, c_type(result)))
+    }
+
+    /// `params` split at each comma outside parentheses and angle
+    /// brackets, so a tuple type `(U64, String)`, a generic type
+    /// `Result<A, B>` and a function type `fn(A, B) -> R` stay one
+    /// parameter. The `>` of `->` closes no angle bracket.
+    fn top_level_parts(params: &str) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut parens = 0_u32;
+        let mut angles = 0_u32;
+        let mut start = 0;
+        let mut previous = ' ';
+        for (i, c) in params.char_indices() {
+            match c {
+                '(' => parens = parens.saturating_add(1),
+                ')' => parens = parens.saturating_sub(1),
+                '<' => angles = angles.saturating_add(1),
+                '>' if previous != '-' => angles = angles.saturating_sub(1),
+                ',' if parens == 0 && angles == 0 => {
+                    parts.push(params.get(start..i).unwrap_or_default());
+                    start = i.saturating_add(1);
+                }
+                _ => {}
+            }
+            previous = c;
+        }
+        parts.push(params.get(start..).unwrap_or_default());
+        parts
     }
 
     /// Every kernel of `std::string`, `std::bytes`, `std::io` and
@@ -722,6 +753,60 @@ mod tests {
             Some((vec!["Word"], "i64"))
         );
         assert_eq!(c_signature("pub type Error {"), None);
+        // A comma inside a tuple, a generic type or a function type does
+        // not end a parameter.
+        assert_eq!(
+            c_signature("fn sys_get<T>(identity: (U64, String, String), default: T) -> T"),
+            Some((vec!["Word", "Word"], "Word"))
+        );
+        assert_eq!(
+            c_signature("fn f(outcome: Result<Int, String>, n: Int) -> Bool"),
+            Some((vec!["Word", "i64"], "bool"))
+        );
+        assert_eq!(
+            c_signature("fn g<A, B, R>(apply: fn(A, B) -> R, n: U64) -> Map<A, B>"),
+            Some((vec!["Word", "u64"], "Word"))
+        );
+        assert_eq!(
+            c_signature("fn h(apply: fn(Result<A, B>) -> Option<R>, last: I32)"),
+            Some((vec!["Word", "i32"], "()"))
+        );
+    }
+
+    /// `std::context`'s kernels have the C signatures of their `@external`
+    /// declarations in `std/context.cheby`, after the context pointer, and
+    /// every one is `@std_context` (D-692, D-1573): `sys_get` and
+    /// `sys_bind`, whose tuple-typed identity is one word, and
+    /// `sys_restore`.
+    #[test]
+    fn context_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("context.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        let mut declared_context = BTreeSet::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            if context {
+                declared_context.insert(symbol.clone());
+            }
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> = context::signatures()
+            .into_iter()
+            .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+            .collect();
+        assert_eq!(registered, declared);
+        let registered_context: BTreeSet<String> = context::CONTEXT_KERNELS
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect();
+        assert_eq!(
+            registered_context, declared_context,
+            "the kernels that take the context pointer and the `@std_context` declarations differ"
+        );
+        assert_eq!(registered.len(), 3);
     }
 
     #[test]

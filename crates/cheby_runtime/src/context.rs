@@ -18,7 +18,8 @@
 //! returns. A bind never updates a map in place, so the outer map keeps
 //! what it held (I-D). [`cheby_context_sys_get`] reads a binding, or the
 //! key's default. None of them waits, so they work on an isolated entry
-//! too (D-692).
+//! too (D-692). [`kernels`] registers the three, and [`COMPLETE`] names
+//! `std::context`, which declares them (I-L).
 //!
 //! **Scopes.** When `body` unwinds, the swap back does not run: the
 //! catch point puts the context back instead. The only catch point after
@@ -52,6 +53,73 @@ use crate::object::{load_rc, word_to_ptr};
 use crate::panic::fatal;
 use crate::rc;
 use crate::unwind::guard::guarded;
+
+/// The std modules whose every kernel is registered here.
+pub(crate) const COMPLETE: &[&str] = &["context"];
+
+/// One kernel: symbol, address, C parameter types (after the context
+/// pointer of a `@std_context` kernel) and C result type.
+type Entry = (
+    &'static str,
+    *const u8,
+    &'static [&'static str],
+    &'static str,
+);
+
+/// The kernels of `std::context`, every one `@std_context` (D-692,
+/// D-1573). A key's identity, the tuple `(U64, String, String)`, is one
+/// word.
+#[expect(
+    clippy::as_conversions,
+    reason = "taking the address of a function needs an `as` cast"
+)]
+fn all() -> [Entry; 3] {
+    [
+        (
+            "cheby_context_sys_get",
+            cheby_context_sys_get as *const u8,
+            &["Word", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_context_sys_bind",
+            cheby_context_sys_bind as *const u8,
+            &["Word", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_context_sys_restore",
+            cheby_context_sys_restore as *const u8,
+            &["Word"],
+            "()",
+        ),
+    ]
+}
+
+/// Appends every `std::context` kernel symbol and its address to `out`
+/// (plan §4.3.3).
+pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
+    out.extend(all().iter().map(|kernel| (kernel.0, kernel.1)));
+}
+
+/// The C signatures of the kernels, without the context pointer, for the
+/// cross-check against `std/context.cheby` (`symbols.rs`).
+#[cfg(test)]
+pub(crate) fn signatures() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
+    all()
+        .iter()
+        .map(|kernel| (kernel.0, kernel.2, kernel.3))
+        .collect()
+}
+
+/// The kernels that take the running fiber's context (`@std_context`,
+/// D-692): all of them.
+#[cfg(test)]
+pub(crate) const CONTEXT_KERNELS: [&str; 3] = [
+    "cheby_context_sys_get",
+    "cheby_context_sys_bind",
+    "cheby_context_sys_restore",
+];
 
 /// A fiber's context (D-1571, D-1574). Owner-written, `Relaxed`.
 #[derive(Debug, Default)]
