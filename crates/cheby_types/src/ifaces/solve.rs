@@ -8,6 +8,7 @@ use cheby_iface::{
 
 use super::tyutil::{match_ty, mentions, params_of, subst};
 use super::{IfaceCx, OpFn, Reason, SELF, Unsatisfied, Want, is_builtin_numeric};
+use crate::check::key_fn;
 use crate::infer::contains_error;
 use crate::thir::{Callee, Dict, DictFn, OpImpl};
 
@@ -282,6 +283,16 @@ impl<'a> IfaceCx<'a> {
             // at its declaration.
             return Ok(Ok(silent));
         };
+        // The key functions of `std::context` never count, whatever their
+        // signature, so no dictionary of a program that compiles holds one
+        // (D-1593). The two cases above are errors reported elsewhere, and
+        // stay silent for a key function too.
+        if key_fn(self.input, self.own, found)?.is_some() {
+            return Ok(Err(Reason::KeyFunction {
+                found,
+                func: req.func,
+            }));
+        }
         let (Some(pattern), Some(&target)) = (sig.params.get(k), want_params.get(k)) else {
             return Ok(Err(mismatch));
         };

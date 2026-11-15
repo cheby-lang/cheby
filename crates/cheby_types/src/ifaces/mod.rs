@@ -8,6 +8,7 @@
 //! that is at least as visible as the type (D-061, D-164). Builtin types
 //! look in their home module (D-447), tuples follow the built-in rule
 //! (D-167), and `dyn J` satisfies `J` and the interfaces it embeds (§8.6).
+//! The key functions of `std::context` never count (D-1593).
 //! A builtin type's home module that the checked module cannot read gives
 //! E0063 with a note naming the module to import (D-489).
 //!
@@ -188,6 +189,15 @@ pub enum Reason {
         func: Option<DefId>,
         /// The type's visibility.
         type_vis: Vis,
+    },
+    /// `found` is `std::context::key` or `std::context::key_without_default`,
+    /// which never counts: a key is made only by the call that is a
+    /// constant's whole initializer (D-1593).
+    KeyFunction {
+        /// The key function of that name.
+        found: DefId,
+        /// The interface function, if any.
+        func: Option<DefId>,
     },
     /// `found` has the wrong signature: `actual` instead of `required`.
     Signature {

@@ -21,8 +21,10 @@
 //!   [`stats`] (counters of allocations and in-place updates), the private
 //!   `tls` (every thread-local of the crate, D-686), `unwind` (unwinding
 //!   by the return flag, D-733), the private `fiber_ops`
-//!   (scopes, fibers and channels) and the private `pool` (the blocking
-//!   pool, D-683, whose fiber side is `sched::blocking`).
+//!   (scopes, fibers and channels), the private `context` (a fiber's
+//!   context bindings, D-1571, D-1573, whose kernels `std::context`
+//!   declares) and the private `pool` (the blocking pool, D-683, whose
+//!   fiber side is `sched::blocking`).
 //! - Kernels, by std module: [`io`], and the private modules `num`, `list`,
 //!   `text`, `bytes`, `env`, `random` (D-656), `runtime_info` (`std::runtime`,
 //!   D-657), `net` (`std::net`'s sockets on the poller, D-984) and
@@ -42,6 +44,9 @@ pub mod callback;
 pub mod capture;
 #[doc(hidden)]
 pub mod consteval;
+mod context;
+#[cfg(test)]
+mod context_tests;
 pub mod ctx;
 pub mod desc;
 pub mod entry;

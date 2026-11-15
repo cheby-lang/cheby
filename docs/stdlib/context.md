@@ -30,7 +30,7 @@ pub type Context
 pub fn key<T>(default: T) -> Key<T>
 ```
 
-Returns a key whose [`get`](#get) gives `default` when no value is provided. It must be the whole initializer of a `const`, and `key` cannot be used in any other way (D-1045, D-1565).
+Returns a key whose [`get`](#get) gives `default` when no value is provided. It must be the whole initializer of a `const`, and `key` cannot be used in any other way (D-1045, D-1565). It never counts toward satisfying an interface, so a type of this module does not satisfy an interface through it (§8.2, D-1593).
 
 ```cheby
 const greeting: context::Key<String> = context::key("hello")

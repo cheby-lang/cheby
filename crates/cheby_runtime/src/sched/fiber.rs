@@ -819,6 +819,9 @@ unsafe extern "C" fn fiber_start(arg: *mut c_void) -> ! {
     if let Some(start) = start {
         start(fcb);
     }
+    // A base frame released the fiber's context; a test fiber without one
+    // is released here, while it is still current (I-A).
+    crate::context::release_at_exit(ctx);
     park(ctx, AfterSwitch::Exit);
     fatal(format_args!("a finished fiber was resumed"))
 }

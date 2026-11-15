@@ -990,10 +990,11 @@ pub(crate) fn spawn_fiber(
 /// slot of `stack_size` bytes (D-677), without queueing it: the caller
 /// records it where it must be known before it can run, then calls
 /// [`schedule_new`]. Its control block takes the spawner's entry mode,
-/// hash seed, accounting domain (D-691), trampolines (D-526) and whether
-/// its code has unwind edges (D-770); it has no host to
+/// hash seed, accounting domain (D-691), trampolines (D-526), whether
+/// its code has unwind edges (D-770) and its context's bindings (D-1044,
+/// D-1571), which the spawn kernels marked shared; it has no host to
 /// report to. On an error, `start` is dropped
-/// without running.
+/// without running, and nothing was taken from the spawner.
 ///
 /// # Errors
 ///
@@ -1038,7 +1039,10 @@ pub(crate) fn create_fiber(
         .unwrap_or_else(|| Arc::clone(shared.default_group()));
     // SAFETY: the fiber was just created and is not queued yet: nothing
     // else knows it.
-    unsafe { fiber.ctx() }.conc.set_group(Some(group));
+    let new = unsafe { fiber.ctx() };
+    new.conc.set_group(Some(group));
+    // The spawner's context, as its group.
+    crate::context::inherit(spawner, new);
     Ok(fiber)
 }
 
@@ -1352,6 +1356,7 @@ impl Runtime {
         let start: StartFn = Box::new(move |ctx| {
             // SAFETY: `ctx` is this fiber's live control block.
             let me = unsafe { &*ctx };
+            crate::context::set_based(me);
             // The base frame (D-859): the base scope opens before the body.
             let base = crate::fiber_ops::scope::open_root_base(me);
             entry.start(FiberRef::from_ctx(me), base);
@@ -1359,6 +1364,9 @@ impl Runtime {
             // ... and ends, under its lock, before the root reports,
             // unregisters and retires (critique C5, RISK-3).
             crate::fiber_ops::scope::close_root_base(me);
+            // What a `provide` that unwound to here left (I-A, D-1573):
+            // released before the host counts the domain's objects.
+            crate::context::release(me);
             // The root's catch point (D-699, D-701, D-859): an entry that
             // unwound returns with the record in its control block, never
             // told apart by the thunk's word (`main`'s 0 is success).

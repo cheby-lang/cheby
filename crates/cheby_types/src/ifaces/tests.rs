@@ -1933,6 +1933,27 @@ fn reason_text_is_one_line_per_kind_of_reason() {
     }
 }
 
+/// The one-line text of D-1593's reason. Only the text is under test, so the
+/// reason is built by hand over a function this probe has: the solver gives
+/// it for the key functions of `std::context` alone.
+#[test]
+fn the_key_function_reason_is_one_line() {
+    let p = probe(PROBE);
+    let generics = p.generics(&[&[]]);
+    let err = Unsatisfied {
+        ty: p.param(0),
+        want: Want::Iface(p.type_def("shapes", "Shape")),
+        reason: Reason::KeyFunction {
+            found: p.func("std::list", "show"),
+            func: None,
+        },
+    };
+    assert_eq!(
+        p.reason(&generics, &Verdict::No(err)),
+        "`list::show` does not count, because a key is made only by a constant's whole initializer"
+    );
+}
+
 #[test]
 fn a_home_module_outside_the_view_is_not_loaded() {
     let p = probe_with(PackageId::LOCAL, Some(&["std::int"]), PROBE);

@@ -34,8 +34,9 @@ use cheby_resolve::{
 };
 use cheby_syntax::SyntaxTree;
 
+use crate::facts::ModuleFacts;
 use crate::thir;
-use crate::{Tests, TypesInput, build_interface, check_bodies_with};
+use crate::{Tests, TypesInput, build_interface, check_bodies_recording, check_bodies_with};
 
 /// A small `std::io` with the four printing functions, `Error`, `read_line`
 /// and `read_file`, so builds that need nothing else from std stay small
@@ -79,6 +80,47 @@ pub fn read_line() -> Result<Option<String>, Error>
 @external(native, "cheby_io_read_file")
 @external(js, "./io.mjs", "read_file")
 pub fn read_file(path: String) -> Result<String, Error>
+"#;
+
+/// A small `std::context` with what the checker's key rules read: the type
+/// `Key`, the functions `key` and `key_without_default`, and their
+/// package-visible constructors (D-1572, D-1587), plus a stand-in for the
+/// type `Context`, a second type of the module (D-1593). Given to
+/// [`build_with_std`] as `("context", STD_CONTEXT)`, it ships, so the
+/// module is no longer planned in that build.
+pub(crate) const STD_CONTEXT: &str = r#"//! Context keys, for the checker's tests.
+
+/// A key: its constant's path and type as text, their hash, and the
+/// default.
+pub type Key<T> {
+  Key { path: String, type_text: String, hash: U64, default: T },
+}
+
+/// A captured context; std's is a handle.
+pub type Context {
+  Context(Int),
+}
+
+/// A key whose default is `default`.
+pub fn key<T>(default: T) -> Key<T> {
+  key_at(default, "", "")
+}
+
+/// A key whose default is `None`.
+pub fn key_without_default<T>() -> Key<Option<T>> {
+  key_without_default_at("", "")
+}
+
+fn key_at<T>(default: T, path: String, type_text: String) -> Key<T> {
+  Key { path: path, type_text: type_text, hash: 0, default: default }
+}
+
+fn key_without_default_at<T>(path: String, type_text: String) -> Key<Option<T>> {
+  key_at(None, path, type_text)
+}
+
+/// A key of this module, made with a bare `key`.
+pub const own_key: Key<Int> = key(0)
 "#;
 
 /// Standard-library modules the spec plans, by path under `std`.
@@ -176,6 +218,9 @@ pub(crate) struct Build {
     pub thir: BTreeMap<ModuleId, thir::Module>,
     /// Every diagnostic, in the order the phases produced them.
     pub diags: Vec<Diagnostic>,
+    /// Each checked module's facts, in a recording build
+    /// ([`build_recording`]); empty otherwise.
+    pub facts: BTreeMap<ModuleId, ModuleFacts>,
 }
 
 impl Build {
@@ -290,15 +335,31 @@ pub(crate) fn build_with_std(std: &[(&str, &str)], local: &[(&str, &str)]) -> Bu
     build_package("app", std, local)
 }
 
+/// [`build_with_std`] as a recording run (D-1380), which also keeps each
+/// module's facts in [`Build::facts`].
+pub(crate) fn build_recording(std: &[(&str, &str)], local: &[(&str, &str)]) -> Build {
+    build_package_with("app", std, local, true)
+}
+
 /// The whole front end of a build of package `package`, as the driver
 /// runs it (G1): imports, the graph with the implicit home-module edges
 /// (D-447), then per module in order resolution, `build_interface` and
 /// `check_bodies`.
+pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str, &str)]) -> Build {
+    build_package_with(package, std, local, false)
+}
+
+/// [`build_package`], as a recording run when `record` is set.
 #[expect(
     clippy::too_many_lines,
     reason = "the whole front end of a build, in order"
 )]
-pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str, &str)]) -> Build {
+fn build_package_with(
+    package: &str,
+    std: &[(&str, &str)],
+    local: &[(&str, &str)],
+    record: bool,
+) -> Build {
     let globals = Globals::new();
     let mut modules = ModuleTable::new();
     let mut sources = SourceMap::new();
@@ -405,6 +466,7 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
     let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
     let mut set = InterfaceSet::new(builtin::interface(&globals));
     let mut thir = BTreeMap::new();
+    let mut facts = BTreeMap::new();
     for node in order {
         let id = ModuleId::from_u32(node);
         if id == ModuleId::BUILTIN {
@@ -440,7 +502,14 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
         };
         let (iface, d) = build_interface(&types).unwrap();
         diags.extend(d);
-        let (module, d) = check_bodies_with(&types, &iface, Tests::All).unwrap();
+        let (module, d) = if record {
+            let (module, d, module_facts) =
+                check_bodies_recording(&types, &iface, Tests::All).unwrap();
+            facts.insert(id, module_facts);
+            (module, d)
+        } else {
+            check_bodies_with(&types, &iface, Tests::All).unwrap()
+        };
         diags.extend(d);
         thir.insert(id, module);
         set.insert(Arc::new(iface)).unwrap();
@@ -452,6 +521,7 @@ pub(crate) fn build_package(package: &str, std: &[(&str, &str)], local: &[(&str,
         sources,
         thir,
         diags,
+        facts,
     }
 }
 

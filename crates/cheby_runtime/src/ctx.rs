@@ -43,8 +43,12 @@
 //! with the scheduler's fields (`sched`), the structured-concurrency part
 //! (`conc`: its scopes and the fiber lock over its cancellation target and
 //! wait node, the only state other fibers touch, D-706) and the record of
-//! the unwinding in flight (`unwinding`). An isolated entry's block is on
-//! the heap and has no runtime.
+//! the unwinding in flight (`unwinding`). Every block also holds its
+//! fiber's context (`context`, D-1571): an owned reference to its bindings
+//! map, empty for a new block, inherited by a spawned fiber from its
+//! spawner and released by the fiber's base frame, never by dropping the
+//! block (`crate::context`). An isolated entry's block is on the heap and
+//! has no runtime.
 //!
 //! # Stack limits
 //!
@@ -65,6 +69,7 @@ use std::sync::mpsc::Sender;
 use crate::abi;
 use crate::alloc::{BlockCache, Domain};
 use crate::consteval::ConstTable;
+use crate::context::FiberContext;
 use crate::entry::{Callbacks, EntryMode, EntryOutcome};
 use crate::fiber_ops::FiberConc;
 use crate::sched::FiberSched;
@@ -172,6 +177,11 @@ pub struct ExecCtx {
     pub(crate) conc: FiberConc,
     /// The unwinding in flight (plan §2.4).
     pub(crate) unwinding: UnwindState,
+    /// The fiber's context (D-1571, D-1573): empty for a new block. Its
+    /// base frame releases it while the fiber is current
+    /// (`crate::context::release`), so dropping the block releases
+    /// nothing.
+    pub(crate) context: FiberContext,
 }
 
 const _: () = assert!(offset_of!(ExecCtx, stack_limit) == 0 && abi::CTX_STACK_LIMIT == 0);
@@ -268,6 +278,7 @@ impl ExecCtx {
             sched: init.sched,
             conc: FiberConc::default(),
             unwinding: UnwindState::default(),
+            context: FiberContext::default(),
         }
     }
 

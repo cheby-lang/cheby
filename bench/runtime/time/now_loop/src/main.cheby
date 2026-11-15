@@ -1,0 +1,56 @@
+//! Runtime benchmark of the time group: reading the wall clock.
+//!
+//! Each step calls `time::now` and counts the reading when it is after
+//! the Unix epoch, which every reading is. A reading cannot reach the
+//! checksum, since it changes from run to run, so the checksum is the
+//! count, the number of calls. That number is the first program
+//! argument.
+
+import std::duration
+import std::env
+import std::int
+import std::io
+import std::time
+
+/// The number of readings when no argument is given.
+const default_size: Int = 20_000_000
+
+fn main() {
+  let n = size(env::args())
+  let checksum = count_readings(n)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// Reads the wall clock `count` times and returns how many readings are
+/// after the Unix epoch.
+fn count_readings(count: Int) -> Int {
+  let epoch = time::from_unix(duration::zero)
+  fn step(i, after) {
+    case {
+      i == count => after
+      time::now() > epoch => step(i + 1, after + 1)
+      _ => step(i + 1, after)
+    }
+  }
+  step(0, 0)
+}
+
+test "every reading is after the epoch" {
+  assert count_readings(3) == 3
+}
+
+test "no reading counts zero" {
+  assert count_readings(0) == 0
+}

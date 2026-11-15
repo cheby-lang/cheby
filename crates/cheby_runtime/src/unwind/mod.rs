@@ -1379,6 +1379,260 @@ mod tests {
         );
     }
 
+    /// Every function outside tests that takes an unwinding's record or
+    /// stops a Rust unwinding, by file (relative to `src/`) and name, with
+    /// what happens on its fiber after it (D-1573, I-C). Only the close of
+    /// a scope lets Cheby code run again on the same fiber, and it puts
+    /// the context of its open back first.
+    const CATCH_POINTS: &[(&str, &str, &str)] = &[
+        (
+            "alloc.rs",
+            "run_finalizer",
+            "a finalizer that unwinds ends the process",
+        ),
+        (
+            "callback.rs",
+            "call",
+            "rethrows at once, through the kernel to its guard",
+        ),
+        ("consteval.rs", "cheby_rt_const_missing", "rethrows at once"),
+        (
+            "entry.rs",
+            "catch_unwinding",
+            "an isolated entry's catch point: the entry ends",
+        ),
+        (
+            "entry.rs",
+            "spawn_entry",
+            "an isolated entry's end: releases the context, then the entry ends",
+        ),
+        (
+            "ffi.rs",
+            "cheby_rt_ffi_external",
+            "releases the foreign handle and resumes the unwinding",
+        ),
+        (
+            "ffi.rs",
+            "ffi_guarded",
+            "sets the flag and returns to a cleanup pad",
+        ),
+        ("fiber_ops/base.rs", "fiber_main", "the fiber ends"),
+        ("fiber_ops/base.rs", "share_result", "the fiber ends failed"),
+        ("fiber_ops/detached.rs", "detached_main", "the fiber ends"),
+        (
+            "fiber_ops/scope.rs",
+            "cheby_rt_scope_close",
+            "restores the context of the open, then returns to Cheby or re-raises",
+        ),
+        ("pool/mod.rs", "run_job", "a Rust pool thread, no fiber"),
+        (
+            "sched/mod.rs",
+            "spawn_root_in",
+            "a root's end: releases the context, then the fiber ends",
+        ),
+        (
+            "unwind/guard.rs",
+            "deliver",
+            "edgeless code: the process ends (D-770)",
+        ),
+        (
+            "unwind/guard.rs",
+            "guarded",
+            "sets the flag and returns to a cleanup pad",
+        ),
+        (
+            "unwind/record.rs",
+            "finish_entry",
+            "a root's or an isolated entry's end",
+        ),
+        (
+            "unwind/record.rs",
+            "take_unwound",
+            "the helper of the catch points",
+        ),
+    ];
+
+    /// The `.rs` files under `src/` outside tests, by path relative to
+    /// `src/`, sorted, with their code: comments and string literals
+    /// blanked, and `#[cfg(test)]` modules too.
+    fn non_test_code() -> Vec<(String, Vec<u8>)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut dirs = vec![root.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        let mut out = Vec::new();
+        for path in files {
+            let relative = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let name = relative.rsplit('/').next().unwrap_or_default();
+            if name == "tests.rs"
+                || name == "testing.rs"
+                || name.ends_with("_tests.rs")
+                || relative.contains("/tests/")
+            {
+                continue;
+            }
+            let mut code = blank(&std::fs::read_to_string(&path).unwrap(), true);
+            for range in test_modules(&code) {
+                for byte in code.get_mut(range).into_iter().flatten() {
+                    *byte = b' ';
+                }
+            }
+            out.push((relative, code));
+        }
+        out
+    }
+
+    /// The functions with a body in `code`: name and the range from `fn`
+    /// to the brace that closes the body. The signature ends at the first
+    /// `{` or `;` outside parentheses and brackets, so an array type
+    /// `[T; N]` in it does not end it.
+    fn functions(code: &[u8]) -> Vec<(String, std::ops::Range<usize>)> {
+        let text = String::from_utf8_lossy(code);
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mut out = Vec::new();
+        for (at, _) in text.match_indices("fn ") {
+            if text
+                .get(..at)
+                .and_then(|before| before.chars().next_back())
+                .is_some_and(ident)
+            {
+                continue;
+            }
+            let start = at.saturating_add(3);
+            let rest = text.get(start..).unwrap_or_default();
+            let name: String = rest.chars().take_while(|&c| ident(c)).collect();
+            let mut depth = 0_usize;
+            let end = rest.bytes().position(|byte| {
+                match byte {
+                    b'(' | b'[' => depth = depth.saturating_add(1),
+                    b')' | b']' => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                depth == 0 && (byte == b'{' || byte == b';')
+            });
+            let Some(end) = end else {
+                continue;
+            };
+            if name.is_empty() || rest.as_bytes().get(end) != Some(&b'{') {
+                continue;
+            }
+            out.push((name, at..closing(code, start.saturating_add(end))));
+        }
+        out
+    }
+
+    /// The `use` declarations in `code`: the ranges from `use` to its `;`.
+    fn imports(code: &[u8]) -> Vec<std::ops::Range<usize>> {
+        let text = String::from_utf8_lossy(code);
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        text.match_indices("use ")
+            .filter(|(at, _)| {
+                !text
+                    .get(..*at)
+                    .and_then(|before| before.chars().next_back())
+                    .is_some_and(ident)
+            })
+            .filter_map(|(at, _)| {
+                let end = text.get(at..)?.find(';')?;
+                Some(at..at.saturating_add(end))
+            })
+            .collect()
+    }
+
+    /// D-1573, I-C: the catch points of the runtime are the pinned list.
+    /// A new one after which Cheby code runs on the same fiber must
+    /// restore the fiber's context, as a scope's close does.
+    #[test]
+    fn catch_points_are_pinned() {
+        // The primitives, and the two wrappers a new root or entry loop
+        // would call (`finish_entry` takes the record, `catch_unwinding`
+        // stops a Rust unwinding).
+        const NAMES: [&str; 6] = [
+            "take_record",
+            "take_unwound",
+            "catch_unwind",
+            "rethrow_if_unwinding",
+            "finish_entry",
+            "catch_unwinding",
+        ];
+        let ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+        let mut found = std::collections::BTreeSet::new();
+        let mut outside = Vec::new();
+        for (relative, code) in non_test_code() {
+            let text = String::from_utf8_lossy(&code).into_owned();
+            let functions = functions(&code);
+            let imports = imports(&code);
+            for name in NAMES {
+                for (at, _) in text.match_indices(name) {
+                    let end = at.saturating_add(name.len());
+                    let before = at.checked_sub(1).and_then(|i| code.get(i)).copied();
+                    if before.is_some_and(ident) || code.get(end).copied().is_some_and(ident) {
+                        continue;
+                    }
+                    // A definition is not a call.
+                    let head = text.get(..at).unwrap_or_default().trim_end();
+                    if head
+                        .strip_suffix("fn")
+                        .is_some_and(|head| !head.bytes().next_back().is_some_and(ident))
+                    {
+                        continue;
+                    }
+                    let enclosing = functions
+                        .iter()
+                        .filter(|(_, range)| range.contains(&at))
+                        .max_by_key(|(_, range)| range.start);
+                    match enclosing {
+                        Some((function, _)) => {
+                            found.insert((relative.clone(), function.clone()));
+                        }
+                        // An import has no function around it; anything
+                        // else the scan cannot place.
+                        None if imports.iter().any(|range| range.contains(&at)) => {}
+                        None => outside.push(format!("{relative}: {name} at byte {at}")),
+                    }
+                }
+            }
+        }
+        assert!(
+            outside.is_empty(),
+            "occurrences of a catch primitive outside any function and any `use` (D-1573, I-C), \
+             which the scan cannot pin: {outside:#?}"
+        );
+        let pinned: std::collections::BTreeSet<(String, String)> = CATCH_POINTS
+            .iter()
+            .map(|(file, function, after)| {
+                assert!(
+                    !after.is_empty(),
+                    "{file}: {function} needs what follows it"
+                );
+                ((*file).to_owned(), (*function).to_owned())
+            })
+            .collect();
+        let new: Vec<_> = found.difference(&pinned).collect();
+        let gone: Vec<_> = pinned.difference(&found).collect();
+        assert!(
+            new.is_empty() && gone.is_empty(),
+            "the runtime's catch points changed (D-1573, I-C): a new catch point after which \
+             Cheby code runs on the same fiber must restore the fiber's context, as \
+             `cheby_rt_scope_close` does; then list it in CATCH_POINTS. New: {new:#?}; \
+             no longer found: {gone:#?}"
+        );
+    }
+
     /// The symbols of `cheby_mir::never_raise::NEVER_RAISE_KERNELS`, read
     /// from its source at run time (the MIR crate is not a dependency, and
     /// `include_str!` would stop this crate from compiling without the

@@ -54,7 +54,7 @@ pub use set::{DepView, InterfaceSet, ReadLog, def_path};
 pub use sigprint::{SigOpts, item_signature};
 pub use ty::{
     DisplayCx, GenericParam, Generics, ImportNames, Ty, TyInterner, TyKind, display,
-    missing_imports,
+    missing_imports, path_text,
 };
 
 /// The process-wide tables every phase shares, as `Arc<Globals>`.
