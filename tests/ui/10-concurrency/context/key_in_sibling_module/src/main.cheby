@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-1045, D-1049, D-1563
+// @decisions: D-1045, D-1049, D-1563, D-1587
 //! A `pub` key of a sibling module is read and provided from `main`, and
 //! the module's own reader sees the value. Its debug text names the
 //! constant's full path, `Key(app::db::pool)` (§10.11).

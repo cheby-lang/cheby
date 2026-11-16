@@ -65,11 +65,9 @@ pub(crate) extern "C" fn cheby_random_host_bits() -> u64 {
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_random_sys_stream_on(ctx: *mut ExecCtx) -> bool {
-    guarded(Some(ctx), || {
-        // SAFETY: forwarded from the caller.
-        let me = unsafe { running(ctx) };
-        context::stream_on(me)
-    })
+    // SAFETY: forwarded from the caller.
+    let me = unsafe { running(ctx) };
+    context::stream_on(me)
 }
 
 /// `random::sys_stream_state`, private: the state of the calling fiber's
@@ -81,11 +79,9 @@ pub(crate) unsafe extern "C" fn cheby_random_sys_stream_on(ctx: *mut ExecCtx) ->
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_random_sys_stream_state(ctx: *mut ExecCtx) -> u64 {
-    guarded(Some(ctx), || {
-        // SAFETY: forwarded from the caller.
-        let me = unsafe { running(ctx) };
-        context::stream_state(me)
-    })
+    // SAFETY: forwarded from the caller.
+    let me = unsafe { running(ctx) };
+    context::stream_state(me)
 }
 
 /// `random::sys_stream_set`, private: stores `state`, the state a draw
@@ -98,11 +94,9 @@ pub(crate) unsafe extern "C" fn cheby_random_sys_stream_state(ctx: *mut ExecCtx)
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_random_sys_stream_set(ctx: *mut ExecCtx, state: u64) {
-    guarded(Some(ctx), || {
-        // SAFETY: forwarded from the caller.
-        let me = unsafe { running(ctx) };
-        context::set_stream(me, state);
-    });
+    // SAFETY: forwarded from the caller.
+    let me = unsafe { running(ctx) };
+    context::set_stream(me, state);
 }
 
 /// `random::sys_stream_push`, private, which `with_generator` calls before
@@ -114,11 +108,9 @@ pub(crate) unsafe extern "C" fn cheby_random_sys_stream_set(ctx: *mut ExecCtx, s
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_random_sys_stream_push(ctx: *mut ExecCtx, state: u64) {
-    guarded(Some(ctx), || {
-        // SAFETY: forwarded from the caller.
-        let me = unsafe { running(ctx) };
-        context::push_stream(me, true, state);
-    });
+    // SAFETY: forwarded from the caller.
+    let me = unsafe { running(ctx) };
+    context::push_stream(me, true, state);
 }
 
 /// `random::sys_stream_pop`, private, which `with_generator` calls after
@@ -130,11 +122,9 @@ pub(crate) unsafe extern "C" fn cheby_random_sys_stream_push(ctx: *mut ExecCtx, 
 /// `ctx` is the running fiber's context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_random_sys_stream_pop(ctx: *mut ExecCtx) {
-    guarded(Some(ctx), || {
-        // SAFETY: forwarded from the caller.
-        let me = unsafe { running(ctx) };
-        context::pop_stream(me);
-    });
+    // SAFETY: forwarded from the caller.
+    let me = unsafe { running(ctx) };
+    context::pop_stream(me);
 }
 
 /// One kernel: symbol, address, C parameter types (after the context

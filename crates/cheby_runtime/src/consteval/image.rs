@@ -56,7 +56,8 @@
 //! an earlier constant of the same [`serialize`] call holds is stored only
 //! in that constant's image and referenced from the later ones by (path,
 //! index), so sharing survives across constants (D-539). Results hold no
-//! closures or handles (E0068); a value that holds one is refused.
+//! functions, `dyn` values or handles (E0068, and E0081 for a key's
+//! default, D-1578); a value that holds one is refused.
 //!
 //! # Installing
 //!
@@ -122,8 +123,10 @@ pub enum ConstImageError {
         /// What is wrong.
         what: &'static str,
     },
-    /// The value of `path` holds something no image describes (a closure
-    /// or a handle, which E0068 keeps out of constants).
+    /// The value of `path` holds something no image describes: a function,
+    /// a `dyn` value, a handle or a value of an external type. E0068 keeps
+    /// them out of a constant's type, and E0081 out of a key's default,
+    /// which that check does not look into (D-1578, D-1600).
     Unsupported {
         /// The constant's path.
         path: Box<str>,

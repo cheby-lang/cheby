@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-1578, D-1600, D-139
+// @decisions: D-1578, D-1589, D-1600, D-139
 //! A key's value type may hold functions and `dyn` values, but its default
 //! is computed at compile time and embedded in the program, so a default
 //! that holds a function or a `dyn` value is E0081 when the constant is

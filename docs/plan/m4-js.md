@@ -46,18 +46,18 @@ Detail level: workstreams with outcomes. This file is refined into tasks when M4
 
 ### 4.6 Context values (tier 4)
 
-This workstream is built on native first, as one piece of work, before the JS backend exists. Its JS side follows with 4.3 and passes the same spec tests (D-1563). Its design is settled in D-1563 to D-1577, and the gaps found before the code in D-1578 to D-1590.
+This workstream is built on native first, as one piece of work, before the JS backend exists. Its JS side follows with 4.3 and passes the same spec tests (D-1563). Its design is settled in D-1563 to D-1577, and the gaps found before the code in D-1578 to D-1602.
 
 - `std::context`: a context per fiber, empty at `main`, each test and each REPL entry (D-1044, ADR-0068). A fiber's bindings are a persistent map in the runtime's HAMT, behind one pointer, so a spawn and a capture copy it in O(1) (D-1571).
-- Keys: a `Key<T>` holds its constant's path, its type's text with each type's internal path, a 64-bit FNV-1a hash of both, and the default. The compiler passes the texts to the package-visible constructors `key_at` and `key_without_default_at` at the call that is a constant's whole initializer, and a lookup compares the hash, then the texts. At the REPL prompt the path is the bare name, and after `:reload` the unmarked path (D-1564, D-1572, D-1580, D-1587, D-1590).
-- E0080, the compile error for every other mention of `context::key` or `context::key_without_default` in an expression, a call elsewhere, a function value or a pipe stage, with its explanation and its UI test. E0081, the evaluation error for a key whose default value holds a function or a handle, which E0068 no longer covers, with its explanation and its UI test (D-1045, D-1565, D-1578, D-1581, D-1589).
+- Keys: a `Key<T>` holds its constant's path, its type's text with each type's internal path, a 64-bit FNV-1a hash of both, and the default. The compiler passes the texts to the package-visible constructors `key_at` and `key_without_default_at` at the call that is a constant's whole initializer, and a lookup compares the hash, then the texts. At the REPL prompt the path is the bare name, and after `:reload` the unmarked path (D-1564, D-1572, D-1580, D-1587, D-1590). The std-only attribute `@std_initializer` marks `key` and `key_without_default`, names their constructors and drives the replacement, E0080, the rule that they never satisfy an interface, and completion (D-1593, D-1599, D-1601, D-1602).
+- E0080, the compile error for every other mention of `context::key` or `context::key_without_default` in an expression, a call elsewhere, a function value or a pipe stage, with its explanation and its UI test. E0081, the evaluation error for a key whose default value holds a function, a `dyn` value or a handle, which E0068 no longer covers, with its explanation and its UI test (D-1045, D-1565, D-1578, D-1581, D-1589, D-1591, D-1600).
 - `provide`, `with` and `random::with_generator` in Cheby over `@std_context` swap kernels. A scope records the fiber's bindings and stream when it opens and its close restores them, every entry starts from its own context, and the outer streams of `with_generator` and `with` live in the fiber. A test pins that every catch point after which Cheby code runs restores the context (D-1573).
 - Captured contexts: the external type `Context` with `capture`, `with`, which replaces the fiber's context while its body runs, and `empty` (D-1566, D-1568, ADR-0080).
-- `std::time`'s clocks in context, with timers left on the runtime's monotonic clock, and the readers `now_on` and `monotonic_on` (D-1047, D-1570).
+- `std::time`'s clocks in context, with timers left on the runtime's monotonic clock, and the readers `now_on` and `monotonic_on` (D-1047, D-1570). `now` and `monotonic` read the system clock through a kernel that looks at the context, with no lookup in Cheby unless a clock is provided (D-1597).
 - `std::random`'s seeded stream per fiber, held in fiber fields beside the bindings, advanced by each host draw, and derived for a spawned fiber and for a capture from the fiber's state and spawn number without advancing the fiber's stream (D-1048, D-1567, D-1574).
 - `std::log` replaces `std::context` in the compiler's list of planned std modules, and E0038's probes and `E0038.md` import it (D-1575).
 - The example `request_context`, under the next free number, whose `test.toml` names M3, so it binds at once, as the new UI tests and REPL transcripts do (D-1576, D-1582).
-- The cost gate: the fiber group of `bench/runtime` and a loop of `time::now` calls in a new group `bench/runtime/time/`, timed before and after on one machine. Any one benchmark whose median run time of `main` reaches a ratio of 1.05, after a rerun, stops the work (D-1577, D-1586).
+- The cost gate: the fiber group of `bench/runtime` and a loop of `time::now` calls in a new group `bench/runtime/time/`, timed before and after on one machine. Any one benchmark whose median run time of `main` reaches a ratio of 1.05, after a rerun, stops the work (D-1577, D-1586). The gate also reads `rc/map_updates` and the `collections` group, and the final measurement reports the new build under three provided values against an empty context, with no stop line (D-1592, D-1596).
 - The tests of these parts in `context.md`, `time.md` and `random.md` leave `PENDING_SPEC_TESTS` when the native side passes them (D-741, D-1049, D-1563).
 - On JS, with 4.3: the same module over `map.mjs`, and a Cheby function passed to foreign code takes the passing fiber's context with it for its callbacks' fibers (D-1569). Which stream state each call of one callback starts from is open.
 
@@ -86,6 +86,19 @@ This workstream is built on native first, as one piece of work, before the JS ba
 - A same-window A/B of M2's `xtask` against M3's reads the fall of 13% to 21% against M2's exit, which sits in the back end with no cause read. Each `xtask` is built for its own tree, since a binary bakes in its repository root. It runs in a quiet window, on AC power with the lid open, since `caffeinate -ims` does not hold off clamshell sleep.
 - What a plain `fn main` does on native in a package with `targets = ["js"]`: nothing says yet, and it runs. `main_of` reads `native` only (D-1333), so it takes a target when `--target js` lands, and the rule is settled with it.
 - Doc examples as tests, from `docs/plan/m5-tooling.md`, are generated bodies, so that slice looks at D-1328's rule.
+
+## Status
+
+The JS work, 4.1 to 4.4, has not started. Two workstreams run ahead of it. The LSP core, 4.5, has its own status in [m5-tooling.md](m5-tooling.md#status). The native side of 4.6 is implemented:
+
+- `std::context` with keys, `get`, `provide`, `Context`, `capture`, `with` and `empty`, over seven `@std_context` kernels. A fiber's bindings are a map in the runtime's HAMT, and a captured context is runtime kind 48 (D-1566, D-1571, D-1583).
+- The key rewrite through `@std_initializer`, E0080 and E0081 with their explanations and UI tests, and the key's identity in the REPL and after `:reload` (D-1580, D-1589, D-1599, D-1600).
+- Scopes and entries restore the context, and a test pins the runtime's catch points (D-1573, D-1594).
+- `std::time`'s clocks in context, with D-1597's kernels, and `std::random`'s seeded streams, where a spawn takes its number once the fiber exists and a capture once its object is allocated (D-1047, D-1048, D-1567, D-1585, D-1597).
+- `std::log` is the planned std module, and E0038's probes import it (D-1575).
+- The tests of `context.md`, `time.md` and `random.md` run, so none of them is in `PENDING_SPEC_TESTS`. Example 033, `request_context`, passes as an M3 example (D-1582).
+
+Still to come for 4.6: the final reading of the cost gate (D-1577, D-1586, D-1592, D-1596) and the full CI run, then, with 4.3, the JS side: `context.mjs` over `map.mjs`, the stream and clock kernels of `random.mjs` and `time.mjs`, and the context of a foreign callback's fiber, whose stream state per call is still open (D-1569).
 
 ## Exit criteria
 

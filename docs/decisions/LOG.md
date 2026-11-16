@@ -1620,8 +1620,8 @@ Goal: log the user's choice of `std::context` for dependency injection, after a 
 
 Open:
 
-- The compile error for a call of `context::key` or `context::key_without_default` that is not a constant's whole initializer (D-1045) gets its code, its explanation and its UI test when M4 implements it (D-420, D-476).
-- `time.md` gains tests for clocks in context (D-1047). `std::time` ships in M3, and when it does, those tests go into `PENDING_SPEC_TESTS` for M4 (D-741).
+- ~~The compile error for a call of `context::key` or `context::key_without_default` that is not a constant's whole initializer (D-1045) gets its code, its explanation and its UI test when M4 implements it (D-420, D-476).~~ Done: E0080 (D-1589), with `docs/diagnostics/E0080.md` and the UI tests in `tests/ui/10-concurrency/context/`.
+- ~~`time.md` gains tests for clocks in context (D-1047). `std::time` ships in M3, and when it does, those tests go into `PENDING_SPEC_TESTS` for M4 (D-741).~~ Done: the tests are in `std/time.cheby` and run on native, so none is pending (D-1563).
 - `std::log` is not specified. D-1046 settles only where its logger comes from. The discussion that led here also raised message templates whose holes become fields (`Template<T>`), caller locations (`@track_caller`), argument source text (`Source<T>`), build constants and embedded files. None of them is decided.
 - ~~Context follows spawns, not channel messages (D-1044), so an actor or a worker pool spawned earlier never sees its senders' context. A sender passes a value with the message today. Whether `std::context` should also capture a fiber's whole context as a value and provide it again elsewhere, for such servers, needs a decision of its own.~~ → D-1566
 - ~~How a fiber's context is stored and restored on unwinding, and what a spawn copies, are M4's implementation work. A persistent map per fiber makes a spawn O(1).~~ → D-1571, D-1573, D-1574
@@ -2613,12 +2613,12 @@ Only the design is written in this session, as the user chose. The code is a lat
 
 Open:
 
-- Only the design is written. The code, its tests, the key error's page and UI test, and the example are a later session's, which starts from workstream 4.6 of `m4-js.md`.
-- The key error's code (D-1565) gets its number, its explanation and its UI test when the check lands (D-419, D-420, D-476).
+- ~~Only the design is written. The code, its tests, the key error's page and UI test, and the example are a later session's, which starts from workstream 4.6 of `m4-js.md`.~~ Done on native: workstream 4.6's code and tests, E0080's page and UI tests, and example 033 (D-1578 to D-1602). The JS side follows with workstream 4.3.
+- ~~The key error's code (D-1565) gets its number, its explanation and its UI test when the check lands (D-419, D-420, D-476).~~ Done: E0080 (D-1589), with its explanation and UI tests.
 - Which stream state each call of one foreign callback starts from on JS (D-1569): the same one every time, as with `with` (D-1567), or one per call number. It is settled with workstream 4.3.
 - `std::log` is still not specified (D-1046, D-1575).
-- E0038's probes and `E0038.md` move to `std::log` in the change that ships `std::context` (D-1575), not before, since the compiler's list changes there.
-- The new tests of `time.md`, for `now_on` and `monotonic_on`, and of `random.md`, for captures, are in the pending list for M4 (D-741).
+- ~~E0038's probes and `E0038.md` move to `std::log` in the change that ships `std::context` (D-1575), not before, since the compiler's list changes there.~~ Done: `PLANNED_STD_MODULES` holds `log`, and the probes and `E0038.md` import `std::log`.
+- ~~The new tests of `time.md`, for `now_on` and `monotonic_on`, and of `random.md`, for captures, are in the pending list for M4 (D-741).~~ Done: they run on native, and `PENDING_SPEC_TESTS` holds none of them (D-1563).
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
 
 ## 2026-11-15: std::context, gaps found before the code
@@ -2653,6 +2653,6 @@ Goal: settle the twelve gaps that the plan of workstream 4.6 found in D-1563 to 
 
 Open:
 
-- E0080's and E0081's explanations and UI tests land with their checks (D-420, D-476), ~~and E0081's summary is written then~~ → D-1595, then D-1600.
-- `time.md`'s "so they can be built in constants" is read as D-1578 says. The page's wording follows with the documents of this work.
+- ~~E0080's and E0081's explanations and UI tests land with their checks (D-420, D-476), and E0081's summary is written then~~ → D-1595, then D-1600. Done: `docs/diagnostics/E0080.md`, `E0081.md` and the UI tests under `tests/ui/10-concurrency/context/` and `tests/ui/04-declarations/constants/`.
+- ~~`time.md`'s "so they can be built in constants" is read as D-1578 says. The page's wording follows with the documents of this work.~~ Done: `time.md`'s "Written in Cheby" bullet.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

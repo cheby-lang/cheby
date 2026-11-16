@@ -1058,6 +1058,10 @@ mod tests {
                         or a plain function calling that body";
     const SLOW_BODY: &str = "runs the slow path in its guard (`stack_slow_at`), which sets the flag \
                              and returns (D-700)";
+    const STREAM: &str = "loads and stores of the fiber's stream fields under its own lock; a \
+                          missing context, a failed growth of the frame stack (Rust aborts) or, \
+                          in debug builds, a missing stream frame ends the process (D-1048, \
+                          D-1573)";
     const SIGNAL_HANDLER: &str = "a signal handler (D-1073): one atomic store, one atomic load, \
                                   `write` and `errno`, nothing that can panic, and never an entry \
                                   from Cheby code";
@@ -1108,6 +1112,11 @@ mod tests {
         ("hamt/kernels.rs", "cheby_set_new", STATIC),
         ("hamt/kernels.rs", "cheby_set_size", READS),
         ("hamt/kernels.rs", "cheby_set_is_empty", READS),
+        ("random.rs", "cheby_random_sys_stream_on", STREAM),
+        ("random.rs", "cheby_random_sys_stream_state", STREAM),
+        ("random.rs", "cheby_random_sys_stream_set", STREAM),
+        ("random.rs", "cheby_random_sys_stream_push", STREAM),
+        ("random.rs", "cheby_random_sys_stream_pop", STREAM),
         ("text/kernels.rs", "cheby_string_length", READS),
         ("text/kernels.rs", "cheby_string_grapheme_length", READS),
         ("text/kernels.rs", "cheby_string_starts_with", READS),
