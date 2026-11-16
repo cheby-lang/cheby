@@ -102,11 +102,13 @@ pub type Context {
 }
 
 /// A key whose default is `default`.
+@std_initializer(key_at)
 pub fn key<T>(default: T) -> Key<T> {
   key_at(default, "", "")
 }
 
 /// A key whose default is `None`.
+@std_initializer(key_without_default_at)
 pub fn key_without_default<T>() -> Key<Option<T>> {
   key_without_default_at("", "")
 }

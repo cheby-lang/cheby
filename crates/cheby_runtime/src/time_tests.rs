@@ -1,5 +1,6 @@
 //! The tests of `std::time`'s kernels (`time.rs`, D-985, D-1021, D-1058):
-//! `time_kernel_*` for the clocks and the declarations in `std/time.cheby`,
+//! `time_kernel_*` for the clocks, the clock in context (D-1597) and the
+//! declarations in `std/time.cheby`,
 //! `time_sleep_*` for `sys_sleep` on Rust-level fibers of a runtime (the
 //! harness of `fiber_ops::detached_tests`, no JIT). The deadlock report of
 //! an endless sleep is tested by `sched::deadlock_tests`'s
@@ -15,14 +16,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::abi::Word;
 use crate::alloc::Domain;
+use crate::context::{cheby_context_sys_bind, cheby_context_sys_restore};
 use crate::ctx::ExecCtx;
 use crate::entry::{EntryOutcome, run_entry};
 use crate::fiber_ops::detached_tests::{self, close_scope, release, root_outcome, unwinding};
 use crate::fiber_ops::scope::cheby_rt_scope_open;
 use crate::sched::testing;
 use crate::time::{
-    ASYNC_KERNELS, CONTEXT_KERNELS, cheby_time_sys_monotonic, cheby_time_sys_now,
-    cheby_time_sys_sleep, origin, signatures, since_epoch, since_origin,
+    ASYNC_KERNELS, CONTEXT_KERNELS, PROVIDED, cheby_time_sys_monotonic,
+    cheby_time_sys_monotonic_unless_provided, cheby_time_sys_now,
+    cheby_time_sys_now_unless_provided, cheby_time_sys_sleep, origin, signatures, since_epoch,
+    since_origin,
 };
 use crate::values;
 
@@ -178,6 +182,96 @@ fn time_kernel_monotonic_counts_from_one_process_origin() {
     assert!(second.0 <= second.1, "{second:?}");
     assert!(second.1 <= last, "{second:?} {last:?}");
     assert!((0..BILLION).contains(&first.1), "{first:?}");
+}
+
+// ---------------------------------------------------------------------
+// The clock in context (D-1597)
+// ---------------------------------------------------------------------
+
+/// A key identity `(hash, path, type)`, owned, as a key constant holds it.
+fn identity(hash: u64, path: &str, ty: &str) -> Word {
+    values::tuple(&[
+        values::u64_word(hash),
+        values::string(path),
+        values::string(ty),
+    ])
+}
+
+/// What both clock kernels read, in this order, `now` then `monotonic`,
+/// with `clock` as the clock key's identity.
+fn both_readings(me: &ExecCtx, clock: Word) -> [(i64, i64); 2] {
+    // SAFETY: the running fiber's context and a live identity, borrowed.
+    unsafe {
+        [
+            pair(cheby_time_sys_now_unless_provided(ctx_ptr(me), clock)),
+            pair(cheby_time_sys_monotonic_unless_provided(ctx_ptr(me), clock)),
+        ]
+    }
+}
+
+/// D-1597: both kernels that `time::now` and `time::monotonic` call read
+/// their clock on the empty context and with an unrelated key bound, and
+/// return exactly [`PROVIDED`] and read nothing once the clock's key is
+/// bound, by an equal identity at another address too; after the
+/// bindings are restored, with the unrelated key still bound and then
+/// with none, they read the clock again. The unrelated key has the
+/// clock's hash, so the probe compares the texts.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn time_kernel_clock_in_context_reads_unless_the_clock_is_provided() {
+    for threads in THREADS {
+        let readings = on_root(threads, |me| {
+            let clock = identity(0x5EED_C10C, "std::time::clock", "std::time::Clock");
+            let unrelated = identity(0x5EED_C10C, "app::port", "Int");
+            let empty = both_readings(me, clock);
+            // SAFETY: the running fiber's context and live words, borrowed;
+            // each outer bindings word is restored and then released.
+            let (with_unrelated, with_clock, with_equal_clock, restored) = unsafe {
+                let ctx = ctx_ptr(me);
+                let outer = cheby_context_sys_bind(ctx, unrelated, values::int_word(8080));
+                let with_unrelated = both_readings(me, clock);
+                let middle = cheby_context_sys_bind(ctx, clock, values::int_word(1));
+                let with_clock = both_readings(me, clock);
+                let equal = identity(0x5EED_C10C, "std::time::clock", "std::time::Clock");
+                let with_equal_clock = both_readings(me, equal);
+                release(equal);
+                cheby_context_sys_restore(ctx, middle);
+                release(middle);
+                let after_one = both_readings(me, clock);
+                cheby_context_sys_restore(ctx, outer);
+                release(outer);
+                let restored = both_readings(me, clock);
+                (
+                    with_unrelated,
+                    with_clock,
+                    with_equal_clock,
+                    [after_one, restored],
+                )
+            };
+            release(clock);
+            release(unrelated);
+            (
+                empty,
+                with_unrelated,
+                with_clock,
+                with_equal_clock,
+                restored,
+            )
+        });
+        let (empty, with_unrelated, with_clock, with_equal_clock, restored) = readings;
+        let [after_one, restored] = restored;
+        for reading in [empty, with_unrelated, after_one, restored]
+            .into_iter()
+            .flatten()
+        {
+            assert!((0..BILLION).contains(&reading.1), "{reading:?}");
+        }
+        assert_eq!(with_clock, [PROVIDED, PROVIDED]);
+        assert_eq!(with_equal_clock, [PROVIDED, PROVIDED]);
+        // The monotonic readings never go back, across the branches.
+        let monotonic = [empty[1], with_unrelated[1], after_one[1], restored[1]];
+        assert!(monotonic.is_sorted(), "{monotonic:?}");
+    }
 }
 
 /// The parameter list and the rest of a `fn` line after its name: the

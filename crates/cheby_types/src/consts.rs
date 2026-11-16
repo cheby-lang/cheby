@@ -9,8 +9,8 @@
 //! rejected like `Db` and `fn() -> Int`. A type argument that no field
 //! uses holds no value, so it is not looked at (D-511). Nor is the type
 //! argument of a `context::Key<T>`, wherever the key appears: a default
-//! that holds a function or a handle is found when the constant is
-//! evaluated, as E0081 (D-1578, D-1591).
+//! that holds a function, a `dyn` value or a handle is found when the
+//! constant is evaluated, as E0081 (D-1578, D-1591, D-1600).
 //! Handle types other than external types (channels, fibers) arrive with
 //! the tier-2 standard library and join the check then.
 //!

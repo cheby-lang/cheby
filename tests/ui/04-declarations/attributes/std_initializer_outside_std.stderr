@@ -1,0 +1,8 @@
+error[E0045]: unknown attribute `@std_initializer`
+  --> tests/ui/04-declarations/attributes/std_initializer_outside_std.cheby:11:1
+   |
+11 | @std_initializer(tag_at)
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+

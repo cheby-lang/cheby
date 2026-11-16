@@ -1,0 +1,33 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a name to import, found `}`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 5
+        },
+        "start": {
+          "character": 22,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:23 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "Key | Struct | pub type Key<T> | (context)",
+    "get(what) | Function | pub fn get<T>(what: context::Key<T>) -> T | (context)",
+    "key(default) | Function | pub fn key<T>(default: T) -> context::Key<T> | (context)",
+    "key_without_default() | Function | pub fn key_without_default<T>() -> context::Key<Option<T>> | (context)",
+    "provide(what, value, body) | Function | pub fn provide<T, R>(what: context::Key<T>, value: T, body: fn() -> R) -> R | (context)"
+  ]
+}

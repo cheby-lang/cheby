@@ -245,6 +245,7 @@ mod tests {
                 .collect(),
             ret,
             clamped: Box::new([]),
+            initializer: None,
         }
     }
 

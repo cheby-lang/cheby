@@ -283,10 +283,11 @@ impl<'a> IfaceCx<'a> {
             // at its declaration.
             return Ok(Ok(silent));
         };
-        // The key functions of `std::context` never count, whatever their
+        // A function that carries `@std_initializer`, today the key
+        // functions of `std::context`, never counts, whatever its
         // signature, so no dictionary of a program that compiles holds one
-        // (D-1593). The two cases above are errors reported elsewhere, and
-        // stay silent for a key function too.
+        // (D-1593, D-1599). The two cases above are errors reported
+        // elsewhere, and stay silent for such a function too.
         if key_fn(self.input, self.own, found)?.is_some() {
             return Ok(Err(Reason::KeyFunction {
                 found,

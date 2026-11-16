@@ -1,0 +1,20 @@
+// @decisions: D-1581, D-1599
+//! An imported `key` is offered bare where the completed call is a
+//! constant's whole initializer, and not in a function body or nested in
+//! an initializer.
+
+import std::context::{Key, key}
+
+const a: Key<Int> = ke
+//                    ^ completion key
+
+const b: Key<Int> = ke(1)
+//                    ^ completion key
+
+const c: Option<Key<Int>> = Some(ke)
+//                                 ^ completion key
+
+fn main() {
+  let d = ke
+  //        ^ completion key
+}

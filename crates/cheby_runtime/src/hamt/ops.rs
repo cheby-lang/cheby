@@ -168,6 +168,19 @@ pub(super) struct Path {
 impl Path {
     /// Walks down from `top` (read-only) towards `key`.
     fn walk(top: Bitmap, coll: Collection, key: Word, hash: u64) -> Self {
+        Self::walk_by(top, coll, key, hash, &keys_equal)
+    }
+
+    /// [`Path::walk`] with `same` comparing a stored key (first) with
+    /// `key`: a context's bindings compare identities by address first
+    /// ([`insert_hashed`]).
+    fn walk_by(
+        top: Bitmap,
+        coll: Collection,
+        key: Word,
+        hash: u64,
+        same: &impl Fn(Word, Word) -> bool,
+    ) -> Self {
         let stride = coll.stride();
         let mut path = Self {
             hash,
@@ -182,7 +195,7 @@ impl Path {
                 let leaf = Collision(node);
                 path.spot = (0..leaf.len())
                     .map(|e| e.wrapping_mul(stride))
-                    .find(|&s| keys_equal(leaf.get(s), key))
+                    .find(|&s| same(leaf.get(s), key))
                     .map_or(Spot::Appended, Spot::Found);
                 break;
             }
@@ -191,7 +204,7 @@ impl Path {
             let (data, nodes) = here.maps();
             if data & bit != 0 {
                 let s = index(data, bit).wrapping_mul(stride);
-                path.spot = if keys_equal(here.get(s), key) {
+                path.spot = if same(here.get(s), key) {
                     Spot::Found(s)
                 } else {
                     Spot::Clash(bit, s)
@@ -511,7 +524,8 @@ fn fresh_root(root: Root, coll: Collection, top: Bitmap) -> Root {
 /// hash of a stored key. Never in place, whatever `root`'s count: the
 /// result is a new root and `root` keeps exactly what it held, so the
 /// outer map of a `provide` never changes (D-1571). A new root has seed 0,
-/// which nothing reads.
+/// which nothing reads. `same` compares a stored key (first) with `key`
+/// in place of [`keys_equal`].
 ///
 /// Running out of memory (D-642) leaves no reference behind: the nodes
 /// are allocated before the key and the value gain theirs, and the new
@@ -524,6 +538,7 @@ pub(super) fn insert_hashed(
     hash: u64,
     value: Option<Word>,
     rehash: &impl Fn(Word) -> u64,
+    same: &impl Fn(Word, Word) -> bool,
 ) -> Root {
     let Some(top) = root.node() else {
         let node = Bitmap::alloc(coll, coll.stride());
@@ -540,7 +555,7 @@ pub(super) fn insert_hashed(
         node.set_maps(bit_at(hash, 0), 0);
         return fresh;
     };
-    let mut path = Path::walk(top, coll, key, hash);
+    let mut path = Path::walk_by(top, coll, key, hash, same);
     let target = fresh_root(root, coll, top);
     // Every node on the path is shared with `root` here, so each is copied
     // and none is written in place.

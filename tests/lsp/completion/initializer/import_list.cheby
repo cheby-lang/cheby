@@ -1,0 +1,9 @@
+// @decisions: D-1581, D-1602
+//! The item list of an import offers std::context's `key` and
+//! `key_without_default`, which an import may name, with the rest of the
+//! module's items.
+
+import std::context::{}
+//                    ^ completion
+
+fn main() {}

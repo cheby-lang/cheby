@@ -553,13 +553,15 @@ fn check_const(
     let Some(mut body) = body.filter(|_| sig_ok) else {
         return Ok((None, diags, facts));
     };
-    if cx.key_site.is_some() {
-        key::rewrite(
+    if cx.key_site.is_some()
+        && !key::rewrite(
             input,
             own,
             input.name_of(own, input.def_id(index)),
             &mut body,
-        )?;
+        )?
+    {
+        return Ok((None, diags, facts));
     }
     deps.sort_by_cached_key(|&dep| {
         let path = input.modules.get(dep.module).map(|m| m.path.clone());

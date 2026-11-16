@@ -6,7 +6,9 @@
 //! the call of `key` or `key_without_default` that is a constant's whole
 //! initializer, which the compiler replaces with a call of `key_at` or
 //! `key_without_default_at` that also passes the constant's path and the
-//! text of its value type (D-1045, D-1565, D-1572, D-1587). A key's
+//! text of its value type (D-1045, D-1565, D-1572, D-1587). The two
+//! functions name their constructors with `@std_initializer`, which is
+//! where the compiler learns all of this (D-1599). A key's
 //! identity is the pair of texts with their FNV-1a hash, computed here in
 //! Cheby, so a key is built in a constant on every target (D-1590).
 //!
@@ -112,20 +114,27 @@ fn key_without_default_at<T>(path: String, type_text: String) -> Key<Option<T>> 
 
 /// Returns a key whose `get` gives `default` when no value is provided.
 /// It must be the whole initializer of a `const`, and every other mention
-/// of it in an expression is E0080 (D-1045, D-1565, D-1581). The compiler
-/// replaces that one call with a call of `key_at`, so this body is never
-/// reached. `key` never counts toward satisfying an interface (D-1593).
+/// of it in an expression is E0080 (D-1045, D-1565, D-1581). The attribute
+/// `@std_initializer(key_at)` says so to the compiler, which replaces that
+/// one call with a call of `key_at` that also passes the constant's path
+/// and the text of its value type (D-1572, D-1599). `key` never counts
+/// toward satisfying an interface (D-1593). So no program reaches this
+/// body, and it panics if a fault of the compiler ever lets one reach it
+/// (D-1598).
+@std_initializer(key_at)
 pub fn key<T>(default: T) -> Key<T> {
-  key_at(default, "", "")
+  let _ = default
+  panic as "the compiler did not replace this call of `context::key` (D-1598)"
 }
 
 /// Returns a key whose default is `None`, for a dependency that has no
 /// sensible default. It must be the whole initializer of a `const`, as
-/// `key` must (D-1045, D-1565). The compiler replaces that one call with
-/// a call of `key_without_default_at`, so this body is never reached
-/// (D-1593).
+/// `key` must (D-1045, D-1565). Through `@std_initializer`, the compiler
+/// replaces that one call with a call of `key_without_default_at` (D-1599).
+/// So no program reaches this body, which panics as `key`'s does (D-1598).
+@std_initializer(key_without_default_at)
 pub fn key_without_default<T>() -> Key<Option<T>> {
-  key_without_default_at("", "")
+  panic as "the compiler did not replace this call of `context::key_without_default` (D-1598)"
 }
 
 /// A key of the tests below, with the identity the compiler would give

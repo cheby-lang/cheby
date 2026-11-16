@@ -217,7 +217,8 @@ impl BodyCx<'_> {
                 if let Some(which) = key::key_fn(self.input, self.own, def)?
                     && p.path().map(|path| path.syntax().id()) != self.key_site
                 {
-                    self.report(key::mention_error(which, spans.callee, true));
+                    let diag = key::mention_error(self.input, self.own, which, spans.callee, true)?;
+                    self.report(diag);
                 }
                 let params = item_params(&sig.generics);
                 let Some(inst) = self.instance(def, &params, p.type_args(), spans.callee)? else {

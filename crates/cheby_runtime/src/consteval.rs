@@ -30,8 +30,9 @@
 //!   results with the per-process seed before code runs (D-196, D-539).
 //! - [`find_out_of_js_range`]: the JS range check of a result (E0078,
 //!   D-540), walking the value by its type.
-//! - [`find_undescribed`]: the check that a result holds no function and
-//!   no handle, which only a context key's default can (E0081, D-1578).
+//! - [`find_undescribed`]: the check that a result holds no function, no
+//!   `dyn` value and no handle, which only a context key's default can
+//!   (E0081, D-1578, D-1600).
 //!
 //! Freezing results in place is [`crate::alloc::freeze`] (D-539); it
 //! stays inside evaluation. Results reach running code only as images
@@ -52,7 +53,7 @@ use crate::abi::{self, PanicKind, Word};
 use crate::ctx::ExecCtx;
 use crate::entry::{self, EntryFn};
 use crate::layout::{self, FieldKind, LayoutKind};
-use crate::object::{load_rc, read_field, word_to_ptr};
+use crate::object::{load_rc, read_field, scan_and_layout, word_to_ptr};
 use crate::panic::{fatal, report_of};
 use crate::unwind::guard::guarded;
 use crate::unwind::raise::{raise, raise_panic, rethrow_if_unwinding};
@@ -587,17 +588,21 @@ pub unsafe fn find_out_of_js_range(value: Word, nodes: &[RangeNode], root: usize
 }
 
 /// What `value`, a constant's evaluated result, holds first that no
-/// constant image describes, such as `a function` or `` a `Sender` ``, or
-/// `None` (E0081, D-1578, D-1591). §4.5's type check keeps functions and
-/// handles out of every constant's type except a context key's argument,
-/// so this finds a key's default that cannot be static data. It asks each
-/// object the image writer's own question ([`image::look`]), so the
-/// two cannot disagree, and it needs no type, so the REPL's evaluation
-/// runs it too. A runtime static is a leaf, and a static object is asked
-/// but not entered: a function value's static closure is one, and a
-/// constant installed earlier was checked when its image was written.
-/// Each object is visited once, with a worklist on the heap (plan §0,
-/// deep data).
+/// constant image describes, as E0081 names it: `a function`,
+/// ``a `dyn` value`` or a handle's kind such as `` a `Sender` ``, or
+/// `None` (E0081, D-1578, D-1591, D-1600). §4.5's type check keeps
+/// functions, `dyn` values and handles out of every constant's type
+/// except a context key's argument, so this finds a key's default that
+/// cannot be static data. It asks each object the image writer's own
+/// question ([`image::look`]), so the two cannot disagree, and it needs no
+/// type, so the REPL's evaluation runs it too. Only the naming of a `dyn`
+/// value is this function's own. A runtime static is a leaf, and a static
+/// object is asked but not entered: a function value's static closure is
+/// one, and a constant installed earlier was checked when its image was
+/// written. Each object is visited once, with a worklist on the heap (plan
+/// §0, deep data); tagged integers and 0 never reach the worklist or the
+/// seen-set, so a list of a million integers costs no set entry per
+/// element.
 ///
 /// # Safety
 ///
@@ -605,23 +610,34 @@ pub unsafe fn find_out_of_js_range(value: Word, nodes: &[RangeNode], root: usize
 /// call.
 #[must_use]
 pub unsafe fn find_undescribed(value: Word) -> Option<String> {
-    let mut work: Vec<Word> = vec![value];
+    let may_be_object = |word: Word| word != 0 && !abi::is_tagged_int(word);
+    let mut work: Vec<Word> = Vec::new();
+    if may_be_object(value) {
+        work.push(value);
+    }
     let mut seen: HashSet<Word> = HashSet::new();
     while let Some(word) = work.pop() {
         if !seen.insert(word) {
             continue;
         }
-        // SAFETY: a tagged integer, 0 (a map entry's missing value) or a
-        // live object of the caller's value.
+        // SAFETY: a live object of the caller's value.
         match unsafe { image::look(word) } {
             image::Look::Leaf => {}
             image::Look::Children(children) => {
                 // SAFETY: as above, an object.
                 if !unsafe { image::is_static(word) } {
-                    work.extend(children);
+                    work.extend(children.into_iter().filter(|&child| may_be_object(child)));
                 }
             }
-            image::Look::Undescribed(what) => return Some(what),
+            image::Look::Undescribed(what) => {
+                // SAFETY: as above, an object.
+                let (_, id) = unsafe { scan_and_layout(word_to_ptr(word)) };
+                return Some(if id == abi::layout::DYN {
+                    "a `dyn` value".to_owned()
+                } else {
+                    what
+                });
+            }
         }
     }
     None
@@ -977,6 +993,44 @@ mod tests {
                 let plain_map = hamt::cheby_map_insert(empty, key, values::int_word(3));
                 assert_eq!(find_undescribed(plain_map), None);
                 for word in [plain, nested, empty, key, map, plain_map, sender] {
+                    crate::rc::drop(word);
+                }
+            }
+            assert_eq!(domain.live_objects(), 0);
+        });
+    }
+
+    /// A `dyn` value, header, dictionary, value (D-524), here with two
+    /// integers in place of the dictionary and the value, which E0081's
+    /// walk never reads.
+    fn dyn_value() -> Word {
+        let obj = alloc::alloc_object(24, abi::header(1, 2, abi::layout::DYN));
+        // SAFETY: initializing a fresh `dyn` value.
+        unsafe {
+            crate::object::write_field(obj, 8, values::int_word(0));
+            crate::object::write_field(obj, 16, values::int_word(1));
+        }
+        crate::object::ptr_to_word(obj)
+    }
+
+    /// D-1600: E0081's walk names a `dyn` value as one, alone or inside a
+    /// list, and an empty list or a list of integers holds nothing.
+    #[test]
+    fn undescribed_names_a_dyn_value() {
+        let domain = alloc::Domain::new();
+        alloc::with_domain(Arc::clone(&domain), || {
+            // SAFETY: live values built here, dropped once.
+            unsafe {
+                let pet = dyn_value();
+                assert_eq!(find_undescribed(pet).as_deref(), Some("a `dyn` value"));
+                crate::rc::dup(pet);
+                let pets = list::from_iter([values::int_word(1), pet]);
+                assert_eq!(find_undescribed(pets).as_deref(), Some("a `dyn` value"));
+                let empty = list::from_iter(Vec::<Word>::new());
+                assert_eq!(find_undescribed(empty), None);
+                let numbers = list::from_iter((0..1_000).map(values::int_word));
+                assert_eq!(find_undescribed(numbers), None);
+                for word in [pet, pets, empty, numbers] {
                     crate::rc::drop(word);
                 }
             }

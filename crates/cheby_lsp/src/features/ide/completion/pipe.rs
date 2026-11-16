@@ -565,25 +565,25 @@ fn unloaded(
         } else {
             rank::NOT_IMPORTED.saturating_add(ranks::LATER)
         };
-        found.push((
-            name.to_owned(),
-            item.module.clone(),
-            std_call(cx, item, rank, plan, hole),
-        ));
+        let Some(entry) = std_call(cx, item, rank, plan, hole) else {
+            continue;
+        };
+        found.push((name.to_owned(), item.module.clone(), entry));
     }
 }
 
 /// The entry of `item`, a function of std's index, piped at `hole` and
 /// qualified as `plan` says: labelled by that path, matched by its name
-/// (D-1508), with the module's whole path as auto-import has it.
+/// (D-1508), with the module's whole path as auto-import has it. `None`
+/// where [`CompletionCx::std_entry`] offers nothing (D-1599).
 fn std_call(
     cx: &CompletionCx<'_>,
     item: &StdItem,
     rank: u8,
     plan: &ImportPlan,
     hole: usize,
-) -> Entry {
-    let mut entry = cx.std_entry(item, rank);
+) -> Option<Entry> {
+    let mut entry = cx.std_entry(item, rank)?;
     let params: Vec<&str> = item.param_names.iter().map(String::as_str).collect();
     entry.label_detail = Some(format!("({})", params.join(", ")));
     entry.description = Some(item.module.clone());
@@ -596,7 +596,7 @@ fn std_call(
         insert_at(cx, cx.partial(), call_text(&path, &params, hole, None))
     };
     entry.additional = plan.edit.clone().into_iter().collect();
-    entry
+    Some(entry)
 }
 
 /// Whether the run loaded the module at `path`, so its items come from

@@ -190,9 +190,10 @@ pub enum Reason {
         /// The type's visibility.
         type_vis: Vis,
     },
-    /// `found` is `std::context::key` or `std::context::key_without_default`,
-    /// which never counts: a key is made only by the call that is a
-    /// constant's whole initializer (D-1593).
+    /// `found` is a function that carries `@std_initializer`, today
+    /// `std::context::key` and `std::context::key_without_default`, which
+    /// never counts: a key is made only by the call that is a constant's
+    /// whole initializer (D-1593, D-1599).
     KeyFunction {
         /// The key function of that name.
         found: DefId,

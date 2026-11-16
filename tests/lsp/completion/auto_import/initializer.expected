@@ -1,0 +1,114 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `key_with` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 6
+        },
+        "start": {
+          "character": 15,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `b`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_b`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 10
+        },
+        "start": {
+          "character": 6,
+          "line": 10
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `key_with` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 10
+        },
+        "start": {
+          "character": 10,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:24 completion context::key_without_default
+{
+  "count": 19,
+  "isIncomplete": false,
+  "items": [
+    {
+      "additionalTextEdits": [
+        {
+          "newText": "import std::context\n\n",
+          "range": {
+            "end": {
+              "character": 0,
+              "line": 6
+            },
+            "start": {
+              "character": 0,
+              "line": 6
+            }
+          }
+        }
+      ],
+      "detail": "pub fn key_without_default<T>() -> Key<Option<T>>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose default is `None`, for a dependency that has no\nsensible default. It must be the whole initializer of a `const`, as\n`key` must (D-1045, D-1565). Through `@std_initializer`, the compiler\nreplaces that one call with a call of `key_without_default_at` (D-1599).\nSo no program reaches this body, which panics as `key`'s does (D-1598)."
+      },
+      "filterText": "key_without_default",
+      "kind": 3,
+      "label": "context::key_without_default",
+      "labelDetails": {
+        "description": "std::context",
+        "detail": "()"
+      },
+      "sortText": "60context::key_without_default",
+      "textEdit": {
+        "newText": "context::key_without_default()",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 6
+          },
+          "start": {
+            "character": 15,
+            "line": 6
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:11:19 completion context::key_without_default
+{
+  "absent": [
+    "context::key_without_default"
+  ],
+  "count": 18,
+  "isIncomplete": false,
+  "items": []
+}

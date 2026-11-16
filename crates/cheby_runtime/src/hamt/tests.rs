@@ -1772,6 +1772,53 @@ fn bindings_with_one_hash_share_a_collision_node() {
     });
 }
 
+/// A lookup and a rebind compare identities by address first: the stored
+/// word itself is a hit with no comparison, an equal identity at another
+/// address is a hit by `generic::equal`, and one with the same hash and
+/// another path is a miss.
+#[test]
+fn bindings_compare_identities_by_address_first() {
+    balanced(|| {
+        let key = identity(9, "app::port", "Int");
+        let equal = identity(9, "app::port", "Int");
+        let other_path = identity(9, "app::host", "Int");
+        let map = bind(0, key, 1);
+        assert_ne!(key, equal);
+        assert_eq!(bound(map, key), Some(1), "the same word");
+        assert_eq!(bound(map, equal), Some(1), "an equal identity");
+        assert_eq!(bound(map, other_path), None, "the same hash, another path");
+        let rebound = bind(map, equal, 2);
+        // SAFETY: live maps.
+        assert_eq!(unsafe { size(rebound) }, 1);
+        assert_eq!(bound(rebound, key), Some(2));
+        assert_eq!(bound(map, key), Some(1), "the outer map is unchanged");
+        for word in [map, rebound, key, equal, other_path] {
+            drop_word(word);
+        }
+    });
+}
+
+/// The address test is observable: an identity whose third element is a
+/// function would panic in `generic::equal` (D-233), yet looking it up and
+/// rebinding it by its own word compare nothing, as a key constant's one
+/// static identity is looked up.
+#[test]
+fn bindings_find_the_same_word_without_comparing() {
+    balanced(|| {
+        let function = generic::tests::closure(&[]);
+        let key = values::tuple(&[values::u64_word(11), new_string("app::f"), function]);
+        let map = bind(0, key, 1);
+        assert_eq!(bound(map, key), Some(1));
+        let rebound = bind(map, key, 2);
+        // SAFETY: a live map.
+        assert_eq!(unsafe { size(rebound) }, 1);
+        assert_eq!(bound(rebound, key), Some(2));
+        for word in [map, rebound, key] {
+            drop_word(word);
+        }
+    });
+}
+
 /// The hash a stored identity carries places it again when a new one
 /// clashes with it (`rehash`): hashes that share their first 5 or 10 bits
 /// split into a child node one or two levels down.

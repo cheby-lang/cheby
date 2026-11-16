@@ -67,6 +67,9 @@ impl Ref {
 enum AttrRef {
     /// A function of `@std_hooks(…)`.
     Hook,
+    /// The constructor of `@std_initializer(…)`, a function of the module
+    /// (D-1599).
+    Initializer,
     /// A parameter of the function `@std_clamped(…)` is on.
     Clamp(DefIndex),
 }
@@ -372,6 +375,9 @@ impl<'s> Cx<'s> {
             }
             for (_, span) in &item.attrs.clamped {
                 self.attrs.insert(span.range, AttrRef::Clamp(index));
+            }
+            if let Some((_, span)) = item.attrs.initializer {
+                self.attrs.insert(span.range, AttrRef::Initializer);
             }
         }
         for (n, request) in self.view.import_requests().iter().enumerate() {
@@ -978,13 +984,14 @@ impl<'s> Cx<'s> {
         }
     }
 
-    /// A name in an attribute's arguments: a function of `@std_hooks`, a
-    /// parameter of `@std_clamped`, or nothing.
+    /// A name in an attribute's arguments: a function of `@std_hooks`, the
+    /// constructor of `@std_initializer`, a parameter of `@std_clamped`, or
+    /// nothing.
     fn attr_arg(&self, token: SyntaxToken<'_>) -> Outcome {
         let text = token.text();
         match self.attrs.get(&token.text_range()) {
             None => Outcome::Unnamed(Unnamed::AttrArg),
-            Some(AttrRef::Hook) => single(
+            Some(AttrRef::Hook | AttrRef::Initializer) => single(
                 self.scope_ref(text)
                     .and_then(|found| self.target_of(found, text)),
                 Role::Attr,

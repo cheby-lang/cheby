@@ -1,0 +1,440 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "range": {
+        "end": {
+          "character": 40,
+          "line": 8
+        },
+        "start": {
+          "character": 38,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 36,
+                "line": 8
+              },
+              "start": {
+                "character": 29,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::context`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "range": {
+        "end": {
+          "character": 41,
+          "line": 11
+        },
+        "start": {
+          "character": 39,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 37,
+                "line": 11
+              },
+              "start": {
+                "character": 30,
+                "line": 11
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::context`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "range": {
+        "end": {
+          "character": 47,
+          "line": 14
+        },
+        "start": {
+          "character": 45,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 43,
+                "line": 14
+              },
+              "start": {
+                "character": 36,
+                "line": 14
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::context`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 18
+        },
+        "start": {
+          "character": 11,
+          "line": 18
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 18
+              },
+              "start": {
+                "character": 2,
+                "line": 18
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::context`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `e`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_e`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 23
+        },
+        "start": {
+          "character": 6,
+          "line": 23
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "range": {
+        "end": {
+          "character": 21,
+          "line": 23
+        },
+        "start": {
+          "character": 19,
+          "line": 23
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 17,
+                "line": 23
+              },
+              "start": {
+                "character": 10,
+                "line": 23
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::context`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `f`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_f`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 28
+        },
+        "start": {
+          "character": 6,
+          "line": 28
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "range": {
+        "end": {
+          "character": 21,
+          "line": 28
+        },
+        "start": {
+          "character": 19,
+          "line": 28
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 17,
+                "line": 28
+              },
+              "start": {
+                "character": 10,
+                "line": 28
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::context`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:41 completion key key_without_default
+{
+  "count": 5,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn key<T>(default: T) -> context::Key<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose `get` gives `default` when no value is provided.\nIt must be the whole initializer of a `const`, and every other mention\nof it in an expression is E0080 (D-1045, D-1565, D-1581). The attribute\n`@std_initializer(key_at)` says so to the compiler, which replaces that\none call with a call of `key_at` that also passes the constant's path\nand the text of its value type (D-1572, D-1599). `key` never counts\ntoward satisfying an interface (D-1593). So no program reaches this\nbody, and it panics if a fault of the compiler ever lets one reach it\n(D-1598)."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "key",
+      "labelDetails": {
+        "description": "context",
+        "detail": "(default)"
+      },
+      "sortText": "20key",
+      "textEdit": {
+        "newText": "key(${1:default})$0",
+        "range": {
+          "end": {
+            "character": 40,
+            "line": 8
+          },
+          "start": {
+            "character": 38,
+            "line": 8
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn key_without_default<T>() -> context::Key<Option<T>>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose default is `None`, for a dependency that has no\nsensible default. It must be the whole initializer of a `const`, as\n`key` must (D-1045, D-1565). Through `@std_initializer`, the compiler\nreplaces that one call with a call of `key_without_default_at` (D-1599).\nSo no program reaches this body, which panics as `key`'s does (D-1598)."
+      },
+      "kind": 3,
+      "label": "key_without_default",
+      "labelDetails": {
+        "description": "context",
+        "detail": "()"
+      },
+      "sortText": "20key_without_default",
+      "textEdit": {
+        "newText": "key_without_default()",
+        "range": {
+          "end": {
+            "character": 40,
+            "line": 8
+          },
+          "start": {
+            "character": 38,
+            "line": 8
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:12:42 completion key key_without_default
+{
+  "count": 5,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn key<T>(default: T) -> context::Key<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose `get` gives `default` when no value is provided.\nIt must be the whole initializer of a `const`, and every other mention\nof it in an expression is E0080 (D-1045, D-1565, D-1581). The attribute\n`@std_initializer(key_at)` says so to the compiler, which replaces that\none call with a call of `key_at` that also passes the constant's path\nand the text of its value type (D-1572, D-1599). `key` never counts\ntoward satisfying an interface (D-1593). So no program reaches this\nbody, and it panics if a fault of the compiler ever lets one reach it\n(D-1598)."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "key",
+      "labelDetails": {
+        "description": "context",
+        "detail": "(default)"
+      },
+      "sortText": "20key",
+      "textEdit": {
+        "newText": "key(${1:default})$0",
+        "range": {
+          "end": {
+            "character": 41,
+            "line": 11
+          },
+          "start": {
+            "character": 39,
+            "line": 11
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub fn key_without_default<T>() -> context::Key<Option<T>>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose default is `None`, for a dependency that has no\nsensible default. It must be the whole initializer of a `const`, as\n`key` must (D-1045, D-1565). Through `@std_initializer`, the compiler\nreplaces that one call with a call of `key_without_default_at` (D-1599).\nSo no program reaches this body, which panics as `key`'s does (D-1598)."
+      },
+      "kind": 3,
+      "label": "key_without_default",
+      "labelDetails": {
+        "description": "context",
+        "detail": "()"
+      },
+      "sortText": "20key_without_default",
+      "textEdit": {
+        "newText": "key_without_default()",
+        "range": {
+          "end": {
+            "character": 41,
+            "line": 11
+          },
+          "start": {
+            "character": 39,
+            "line": 11
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:15:48 completion key key_without_default get
+{
+  "absent": [
+    "key",
+    "key_without_default"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn get<T>(what: context::Key<T>) -> T",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns the innermost value that the calling fiber has for the key\n`what`, or its default when it has none (D-1044). The parameter is\n`what` because `key` names the function that makes keys (D-062,\nD-1579)."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "get",
+      "labelDetails": {
+        "description": "context",
+        "detail": "(what)"
+      },
+      "sortText": "20get",
+      "textEdit": {
+        "newText": "get(${1:what})$0",
+        "range": {
+          "end": {
+            "character": 47,
+            "line": 14
+          },
+          "start": {
+            "character": 45,
+            "line": 14
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:19:14 completion key key_without_default
+{
+  "absent": [
+    "key",
+    "key_without_default"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:24:22 completion key key_without_default
+{
+  "absent": [
+    "key",
+    "key_without_default"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:29:22 completion key key_without_default
+{
+  "absent": [
+    "key",
+    "key_without_default"
+  ],
+  "count": 3,
+  "isIncomplete": false,
+  "items": []
+}

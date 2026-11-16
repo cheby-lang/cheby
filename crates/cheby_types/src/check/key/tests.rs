@@ -542,3 +542,271 @@ fn a_users_own_key_function_still_satisfies() {
     }
     assert!(thir_names(&b, b.def("app::mykeys", "key")));
 }
+
+/// A std module whose function carries `@std_initializer` under another
+/// name than the key functions' (D-1599).
+const STD_TAGS: &str = r#"//! Tags, for the checker's tests.
+
+/// A tag: its constant's path and type as text, and a value.
+pub type Tag<T> {
+  Tag { path: String, type_text: String, value: T },
+}
+
+/// A tag of `value`.
+@std_initializer(make_here)
+pub fn make<T>(value: T) -> Tag<T> {
+  make_here(value, "", "")
+}
+
+fn make_here<T>(value: T, path: String, type_text: String) -> Tag<T> {
+  Tag { path: path, type_text: type_text, value: value }
+}
+"#;
+
+const TAGGED: &str = "//! Tags.
+
+import std::tags
+
+pub const t: tags::Tag<Int> = tags::make(1)
+
+pub fn body() -> tags::Tag<Int> {
+  tags::make(2)
+}
+
+interface Wrap {
+  fn make(Self) -> tags::Tag<Self>
+}
+
+fn direct(base: tags::Tag<Int>) -> tags::Tag<tags::Tag<Int>> {
+  Wrap::make(base)
+}
+";
+
+/// The rules follow the attribute, not a name: a function of another std
+/// module that carries it is rewritten as a constant's whole initializer,
+/// is E0080 elsewhere, with a message and an example built from its own
+/// path, and never satisfies an interface (D-1565, D-1593, D-1599).
+#[test]
+fn any_function_with_the_attribute_follows_the_key_rules() {
+    let b = build_with_std(&[("tags", STD_TAGS)], &[("", TAGGED)]);
+    let rendered = b.rendered();
+    assert_eq!(errors(&b), ["E0063", "E0080"], "{rendered}");
+    let (def, ty_args, texts) = key_call(&b, "app", "t");
+    assert_eq!(def, b.def("std::tags", "make_here"));
+    assert_eq!(ty_args, 1);
+    assert_eq!(texts, ["app::t", "Int"]);
+    let messages = b.messages();
+    assert!(
+        messages.iter().any(|m| m.starts_with(
+            "E0080: `tags::make` may only be called as the whole initializer of a constant"
+        )),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "help: make the call the whole initializer of a `const`, as in `const name: tags::Tag<Int> = tags::make(0)`"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "`tags::make` exists but does not count, because a key is made only by the call that is a constant's whole initializer"
+        ),
+        "{rendered}"
+    );
+    for name in ["body", "direct"] {
+        assert!(b.thir_fn("app", name).is_none(), "`{name}` was accepted");
+    }
+    assert!(!thir_names(&b, b.def("std::tags", "make")));
+}
+
+const PLAIN_KEYS: &str = "//! Keys without the attribute.
+
+import std::context
+
+pub const k: context::Key<Int> = context::key(1)
+
+pub fn body() -> context::Key<Int> {
+  context::key(2)
+}
+
+pub fn value() -> fn(Int) -> context::Key<Int> {
+  context::key
+}
+
+interface Wrap {
+  fn key(Self) -> context::Key<Self>
+}
+
+fn direct(base: context::Key<Int>) -> context::Key<context::Key<Int>> {
+  Wrap::key(base)
+}
+";
+
+/// A function named `key` in `std::context` without `@std_initializer` is
+/// an ordinary function: no rewrite, no E0080, and it satisfies an
+/// interface (D-1599).
+#[test]
+fn a_key_function_without_the_attribute_is_ordinary() {
+    let plain = STD_CONTEXT
+        .replace("@std_initializer(key_at)\n", "")
+        .replace("@std_initializer(key_without_default_at)\n", "");
+    assert!(!plain.contains("@std_initializer"));
+    let b = build_with_std(&[("context", &plain)], &[("", PLAIN_KEYS)]);
+    assert_eq!(errors(&b), Vec::<String>::new(), "{}", b.rendered());
+    let (def, _, texts) = key_call(&b, "app", "k");
+    assert_eq!(def, b.def("std::context", "key"));
+    assert_eq!(texts, Vec::<String>::new());
+    for name in ["body", "value", "direct"] {
+        assert!(b.thir_fn("app", name).is_some(), "`{name}` was rejected");
+    }
+}
+
+/// A std module whose constructors are unusable: `broken_at`'s signature
+/// names an unknown type, and `short_at` lacks the type text's parameter.
+const STD_BROKEN: &str = "//! Tags with faulty constructors, for the checker's tests.
+
+/// A tag.
+pub type Tag<T> {
+  Tag { value: T },
+}
+
+/// A tag whose constructor has an error in its signature.
+@std_initializer(broken_at)
+pub fn broken<T>(value: T) -> Tag<T> {
+  Tag { value: value }
+}
+
+fn broken_at<T>(value: T, path: Strng, type_text: String) -> Tag<T> {
+  Tag { value: value }
+}
+
+/// A tag whose constructor has the wrong shape.
+@std_initializer(short_at)
+pub fn short<T>(value: T) -> Tag<T> {
+  Tag { value: value }
+}
+
+fn short_at<T>(value: T, path: String) -> Tag<T> {
+  Tag { value: value }
+}
+
+/// A tag whose constructor is `priv`.
+@std_initializer(hidden_at)
+pub fn hidden<T>(value: T) -> Tag<T> {
+  Tag { value: value }
+}
+
+priv fn hidden_at<T>(value: T, path: String, type_text: String) -> Tag<T> {
+  Tag { value: value }
+}
+";
+
+const USES_BROKEN: &str = "//! Uses of faulty constructors.
+
+import std::tags
+
+pub const a: tags::Tag<Int> = tags::broken(1)
+
+pub const b: tags::Tag<Int> = tags::short(2)
+
+pub const c: tags::Tag<Int> = tags::hidden(3)
+";
+
+/// A constructor that its own module reports, for an error in its
+/// signature or as E0045 for its shape or a `priv` visibility, makes a whole initializer that
+/// uses it silent and bodiless, never an internal error or an ill-typed
+/// call (D-1599).
+#[test]
+fn a_faulty_constructor_is_reported_once_in_its_module() {
+    let b = build_with_std(&[("tags", STD_BROKEN)], &[("", USES_BROKEN)]);
+    let rendered = b.rendered();
+    assert_eq!(count(&b, "E0045"), 2, "{rendered}");
+    assert!(
+        b.messages()
+            .iter()
+            .any(|m| m
+                .starts_with("E0045: `short_at` cannot be the initializer constructor of `short`")),
+        "{rendered}"
+    );
+    assert!(
+        b.messages()
+            .iter()
+            .any(|m| m.starts_with("E0045: the initializer constructor `hidden_at` of `hidden`")),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Strng"), "{rendered}");
+    assert!(!rendered.contains("E0080"), "{rendered}");
+    let consts = &b.thir_of("app").consts;
+    for name in ["a", "b", "c"] {
+        let def = b.def("app", name);
+        assert!(consts.iter().all(|c| c.def != def), "`{name}` has a body");
+    }
+}
+
+const STD_RESULTS: &str = "//! Initializer functions whose results have not one type argument.
+
+/// A tag without a type argument.
+pub type Tag {
+  Tag,
+}
+
+/// A pair with two.
+pub type Pair<A, B> {
+  Pair(A, B),
+}
+
+@std_initializer(int_at)
+pub fn int(value: Int) -> Int {
+  value
+}
+
+fn int_at(value: Int, path: String, type_text: String) -> Int {
+  value
+}
+
+@std_initializer(tag_at)
+pub fn tag() -> Tag {
+  Tag
+}
+
+fn tag_at(path: String, type_text: String) -> Tag {
+  Tag
+}
+
+@std_initializer(pair_at)
+pub fn pair<A, B>(a: A, b: B) -> Pair<A, B> {
+  Pair(a, b)
+}
+
+fn pair_at<A, B>(a: A, b: B, path: String, type_text: String) -> Pair<A, B> {
+  Pair(a, b)
+}
+";
+
+const USES_RESULTS: &str = "//! Uses of initializer functions with the wrong results.
+
+import std::results
+
+pub const a: Int = results::int(1)
+
+pub const b: results::Tag = results::tag()
+
+pub const c: results::Pair<Int, Bool> = results::pair(1, True)
+";
+
+/// A function whose result has not one type argument is reported once, as
+/// E0045 at its attribute (D-1601), and a whole initializer that calls it
+/// in another module is silent and bodiless, never an internal error.
+#[test]
+fn a_result_without_one_type_argument_is_reported_once_in_its_module() {
+    let b = build_with_std(&[("results", STD_RESULTS)], &[("", USES_RESULTS)]);
+    let rendered = b.rendered();
+    assert_eq!(count(&b, "E0045"), 3, "{rendered}");
+    assert_eq!(b.messages().len(), 3, "{rendered}");
+    let consts = &b.thir_of("app").consts;
+    for name in ["a", "b", "c"] {
+        let def = b.def("app", name);
+        assert!(consts.iter().all(|c| c.def != def), "`{name}` has a body");
+    }
+}

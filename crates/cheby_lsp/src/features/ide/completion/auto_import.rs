@@ -185,7 +185,7 @@ pub(crate) fn complete(cx: &CompletionCx<'_>, ns: Namespace, as_value: bool, out
         let plan = plan.as_ref()?;
         match item {
             Found::Loaded { def, .. } => loaded_entry(cx, def, name, path, plan, want, as_value),
-            Found::Indexed(item) => Some(indexed_entry(cx, item, plan, want, as_value)),
+            Found::Indexed(item) => indexed_entry(cx, item, plan, want, as_value),
         }
     });
 }
@@ -293,7 +293,7 @@ pub(crate) fn pipe_interfaces(
                     entry
                 })
             }
-            Found::Indexed(item) => Some(indexed_entry(cx, item, plan, want, false)),
+            Found::Indexed(item) => indexed_entry(cx, item, plan, want, false),
         };
         if let Some(entry) = entry {
             entries.push((name, path, entry));
@@ -573,15 +573,16 @@ fn loaded_entry(
 
 /// The entry of `item`, of std's index, qualified as `plan` says, and
 /// written bare with `as_value`. An interface is written with its `::`
-/// when `want` says (D-1546).
+/// when `want` says (D-1546). `None` where [`CompletionCx::std_entry`]
+/// offers nothing (D-1599).
 fn indexed_entry(
     cx: &CompletionCx<'_>,
     item: &StdItem,
     plan: &ImportPlan,
     want: Want,
     as_value: bool,
-) -> Entry {
-    let mut entry = cx.std_entry(item, rank::NOT_IMPORTED);
+) -> Option<Entry> {
+    let mut entry = cx.std_entry(item, rank::NOT_IMPORTED)?;
     entry.description = Some(item.module.clone());
     let qualified = format!("{}::{}", plan.name, item.key.text());
     entry.label.clone_from(&qualified);
@@ -600,7 +601,7 @@ fn indexed_entry(
         cx.insert(qualified)
     };
     entry.additional = plan.edit.clone().into_iter().collect();
-    entry
+    Some(entry)
 }
 
 /// A call of `path` with every parameter a placeholder: the snippet, and

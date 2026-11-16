@@ -358,7 +358,8 @@ impl UiTest {
 
 /// The codes that only the back end reports: an unresolved native symbol
 /// and the constant-evaluation errors, a key whose default holds a
-/// function or a handle among them (E0081, D-1578). `cheby check` reports
+/// function, a `dyn` value or a handle among them (E0081, D-1578, D-1600).
+/// `cheby check` reports
 /// them after it has built a JIT for the package's constants. E0069 is
 /// also a front-end code; counting it here only ignores a few more tests
 /// on Windows. `cheby check` never reports E0053 (D-532). The language

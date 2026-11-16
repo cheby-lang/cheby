@@ -1208,6 +1208,7 @@ fn same_fn(a: &FnSig, b: &FnSig) -> bool {
     a.generics == b.generics
         && a.ret == b.ret
         && a.clamped == b.clamped
+        && a.initializer == b.initializer
         && a.params.len() == b.params.len()
         && a.params.iter().zip(&b.params).all(|(x, y)| x.ty == y.ty)
 }
@@ -1552,6 +1553,7 @@ fn make_body(
             params: Box::new([]),
             ret: tuple_ty,
             clamped: Box::new([]),
+            initializer: None,
         }),
     )?;
     Ok(MadeBody {
@@ -2316,6 +2318,7 @@ mod tests {
             }]),
             ret: Ty::STRING,
             clamped: Box::new([]),
+            initializer: None,
         };
         let span = Span::new(FileId::new(1), TextRange::empty(0));
         let target = show.defines[0].def;

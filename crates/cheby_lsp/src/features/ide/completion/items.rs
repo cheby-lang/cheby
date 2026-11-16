@@ -22,7 +22,7 @@ use cheby_driver::analysis::{
 };
 use cheby_syntax::{SyntaxKind as K, SyntaxNode, SyntaxToken};
 
-use super::context::{Context, ExprSite, PathNs, Subject};
+use super::context::{Context, ExprSite, PathNs, Subject, whole_initializer};
 use super::{CompletionCx, Completions, auto_import, dot, pipe};
 use crate::features::ide::cursor::prev_significant;
 use crate::features::ide::scope;
@@ -253,11 +253,13 @@ const ATTRIBUTES: &[(&str, &str)] = &[
     ("external", "external($1)$0"),
     ("target", "target($1)$0"),
 ];
-/// The attributes only package `std` may write (§4.8, D-482, D-692).
+/// The attributes only package `std` may write (§4.8, D-482, D-692,
+/// D-1599).
 const STD_ATTRIBUTES: &[(&str, &str)] = &[
     ("std_clamped", "std_clamped($1)$0"),
     ("std_context", "std_context"),
     ("std_hooks", "std_hooks($1)$0"),
+    ("std_initializer", "std_initializer($1)$0"),
 ];
 
 /// Pushes the items of `cx`'s context into `out`.
@@ -585,9 +587,16 @@ impl<'s> CompletionCx<'s> {
     /// The entry of item `def` under `label`: its kind, its header as
     /// detail, its parameters and module as label details, its deprecation
     /// and its key. The edit writes `label`; a caller that writes a call
-    /// replaces it.
+    /// replaces it. `None` for a function with `@std_initializer` where
+    /// it is not offered ([`Self::offers_initializers`]).
     pub(crate) fn def_entry(&self, def: DefId, label: &str, rank: u8) -> Option<Entry> {
         let item = self.item(def)?;
+        if let ItemSig::Fn(f) = &item.sig
+            && f.initializer.is_some()
+            && !self.offers_initializers()
+        {
+            return None;
+        }
         let mut entry = Entry::new(label, entry_kind(self, def, item), rank, self.insert(label));
         entry.detail = self.printer.as_ref().and_then(|p| p.item_header(def));
         if let ItemSig::Fn(f) = &item.sig {
@@ -611,9 +620,23 @@ impl<'s> CompletionCx<'s> {
         Some(entry)
     }
 
+    /// Whether a function with `@std_initializer` is offered here: in the
+    /// item list of an import, which may name it (D-1581, D-1602), and
+    /// where the call a completion writes would be a constant's whole
+    /// initializer (D-1599). Nowhere else.
+    pub(crate) fn offers_initializers(&self) -> bool {
+        matches!(self.found.context, Context::ImportItems { .. })
+            || whole_initializer(self.tree.root(), &self.found)
+    }
+
     /// The entry of `item` of std's index, for a module the run did not
     /// load: its name, its signature as detail. The edit writes the name.
-    pub(crate) fn std_entry(&self, item: &StdItem, rank: u8) -> Entry {
+    /// `None` for a function with `@std_initializer` where it is not
+    /// offered ([`Self::offers_initializers`]).
+    pub(crate) fn std_entry(&self, item: &StdItem, rank: u8) -> Option<Entry> {
+        if item.std_initializer && !self.offers_initializers() {
+            return None;
+        }
         let label = item.key.name.to_string();
         let kind = match item.kind {
             DefKind::Fn => EntryKind::Function,
@@ -629,7 +652,7 @@ impl<'s> CompletionCx<'s> {
         entry.detail = Some(item.signature.clone());
         entry.deprecated = item.deprecated.is_some();
         entry.key = Some(item.key.clone());
-        entry
+        Some(entry)
     }
 
     /// The type an expression at `site` should have (X §4.1's rank 00):
@@ -1602,7 +1625,9 @@ fn module_defs(
                 .iter()
                 .filter(|i| i.module == text && fits(i.kind))
             {
-                out.push(cx.std_entry(item, rank::MODULE));
+                if let Some(entry) = cx.std_entry(item, rank::MODULE) {
+                    out.push(entry);
+                }
             }
         }
         return;
@@ -1731,8 +1756,10 @@ fn import_items(cx: &CompletionCx<'_>, module: &[String], written: &[String], ou
                 .iter()
                 .filter(|i| i.module == text && fits(i.kind))
             {
-                if !written.iter().any(|w| **w == *item.key.name) {
-                    out.push(cx.std_entry(item, rank::MODULE));
+                if !written.iter().any(|w| **w == *item.key.name)
+                    && let Some(entry) = cx.std_entry(item, rank::MODULE)
+                {
+                    out.push(entry);
                 }
             }
         }

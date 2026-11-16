@@ -167,6 +167,7 @@ fn fn_sig(params: &[Ty], ret: Ty) -> ItemSig {
             .collect(),
         ret,
         clamped: Box::new([]),
+        initializer: None,
     })
 }
 

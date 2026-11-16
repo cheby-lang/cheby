@@ -187,6 +187,7 @@ impl Compare<'_> {
                         .all(|(a, b)| a.name == b.name && self.ty(a.ty, b.ty))
                     && self.ty(a.ret, b.ret)
                     && a.clamped == b.clamped
+                    && a.initializer == b.initializer
             }
             (ItemSig::Type(a), ItemSig::Type(b)) => {
                 self.generics(&a.generics, &b.generics)

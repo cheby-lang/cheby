@@ -1,35 +1,39 @@
-//! Context keys (§10.11): the rules the checker knows about
-//! `std::context::key` and `std::context::key_without_default`.
+//! Context keys (§10.11): the rules of a function that carries the
+//! standard library's `@std_initializer(constructor)`, today
+//! `std::context::key` and `std::context::key_without_default` (D-1599).
+//! The attribute is the one source of these rules: no function is known by
+//! its name, and the constructor is read from the function's signature in
+//! its module's interface ([`cheby_iface::FnSig::initializer`], D-246).
 //!
 //! - The call that is a constant's whole initializer, parentheses around it
-//!   included, becomes a call of the key's constructor, `key_at` or
+//!   included, becomes a call of the constructor, `key_at` or
 //!   `key_without_default_at`, with the constant's path text and its type
-//!   text as two more arguments (D-1565, D-1572, D-1581). The constructors
-//!   are package-visible functions of `std::context` with the generics of
-//!   the functions they stand for (D-1587), so the recorded type arguments
-//!   fit them unchanged. The swap is made in the finished body, so the
-//!   language server's facts keep the function that is written.
-//! - Every other mention of the two functions in an expression is E0080
+//!   text as two more arguments (D-1565, D-1572, D-1581). A constructor has
+//!   the generics of the function it stands for, which `decl::initializer`
+//!   checks in std's own module (D-1587, D-1599), so the recorded type
+//!   arguments fit it unchanged. The swap is made in the finished body, so
+//!   the language server's facts keep the function that is written.
+//! - Every other mention of such a function in an expression is E0080
 //!   (D-1565, D-1589). An import is not a mention (D-1581).
 //! - The type check of §4.5 does not look inside the type argument of a
-//!   `context::Key<T>` ([`is_key_type`], D-1578, D-1591).
-//! - The two functions never count toward satisfying an interface, so no
-//!   interface call, bound or `dyn` conversion reaches them: `ifaces::solve`
+//!   `context::Key<T>` ([`is_key_type`], D-1578, D-1591). That rule is
+//!   about the type, which is found by module path and name.
+//! - Such a function never counts toward satisfying an interface, so no
+//!   interface call, bound or `dyn` conversion reaches it: `ifaces::solve`
 //!   asks [`key_fn`] where it picks a type's module function (D-1593).
-//!
-//! Std items are found by module path and name, as `std::ops`'s are
-//! (`ifaces::solve`), and only through interfaces (D-246).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
-    DefId, DefKind, Ice, ItemSig, ModuleInterface, Namespace, PackageId, Ty, TyKind, builtin,
-    path_text,
+    DefId, DefKind, Ice, ItemSig, ModuleInterface, Name, Namespace, PackageId, Ty, TyKind, Vis,
+    display, path_text,
 };
 use cheby_resolve::{BodyRes, Res};
 use cheby_syntax::NodeId;
 use cheby_syntax::ast::{Arg, AstNode, Expr};
 
 use crate::TypesInput;
+use crate::decl::initializer::fits;
+use crate::infer::substitute;
 use crate::thir::{self, Callee, ExprKind, Lit};
 
 /// The module segment of `std::context` under `std`.
@@ -38,46 +42,20 @@ const CONTEXT: &str = "context";
 /// The start of a REPL entry's module, `<repl:N>` or `<repl:N:G>`.
 const REPL_MODULE_PREFIX: &str = "<repl:";
 
-/// One of the two functions that make keys.
+/// A function that carries `@std_initializer(constructor)` (D-1599):
+/// `context::key` or `context::key_without_default` today.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeyFn {
-    /// `context::key(default)`.
-    Key,
-    /// `context::key_without_default()`.
-    WithoutDefault,
-}
-
-impl KeyFn {
-    /// The function's name in `std::context`.
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Key => "key",
-            Self::WithoutDefault => "key_without_default",
-        }
-    }
-
-    /// The name of the constructor a whole initializer calls instead.
-    const fn ctor_name(self) -> &'static str {
-        match self {
-            Self::Key => "key_at",
-            Self::WithoutDefault => "key_without_default_at",
-        }
-    }
-
-    /// A call of it as a constant's whole initializer, for E0080's help.
-    const fn example(self) -> &'static str {
-        match self {
-            Self::Key => "const name: context::Key<Int> = context::key(0)",
-            Self::WithoutDefault => {
-                "const name: context::Key<Option<Int>> = context::key_without_default()"
-            }
-        }
-    }
+pub(crate) struct KeyFn {
+    /// The function.
+    def: DefId,
+    /// The name of the constructor a whole initializer calls instead, a
+    /// function of the same module.
+    ctor: Name,
 }
 
 /// Whether `def` is an item of the standard library's `std::context`.
-/// It runs for every function a body names, so it compares the segments of
-/// `builtin::home_path(CONTEXT)` without building that path.
+/// It runs for every type a constant's type names, so it compares the
+/// segments of `std::context` without building that path.
 fn in_context(input: &TypesInput<'_>, def: DefId) -> bool {
     input.modules.get(def.module).is_some_and(|info| {
         info.package == PackageId::STD
@@ -85,7 +63,9 @@ fn in_context(input: &TypesInput<'_>, def: DefId) -> bool {
     })
 }
 
-/// Which key function `def` is, if it is one.
+/// The function `def` with its initializer constructor, when its
+/// signature records one (D-1599). It runs for every function a body
+/// names, so it reads only the item.
 ///
 /// # Errors
 ///
@@ -95,18 +75,14 @@ pub(crate) fn key_fn(
     own: &ModuleInterface,
     def: DefId,
 ) -> Result<Option<KeyFn>, Ice> {
-    if !in_context(input, def) {
-        return Ok(None);
-    }
     let item = input.item(own, def)?;
     if item.kind != DefKind::Fn {
         return Ok(None);
     }
-    Ok(match input.globals.names.get(item.name) {
-        "key" => Some(KeyFn::Key),
-        "key_without_default" => Some(KeyFn::WithoutDefault),
-        _ => None,
-    })
+    let ItemSig::Fn(sig) = &item.sig else {
+        return Ok(None);
+    };
+    Ok(sig.initializer.map(|ctor| KeyFn { def, ctor }))
 }
 
 /// Whether `def` is the type `std::context::Key`, whose type argument
@@ -127,56 +103,70 @@ pub(crate) fn is_key_type(
     Ok(item.kind == DefKind::Type && input.globals.names.get(item.name) == "Key")
 }
 
-/// The constructor that stands for `which` (D-1587): from `own` when this
-/// module is `std::context` itself, else through the dependencies.
+/// The constructor that stands for `which` (D-1587, D-1599): from `own`
+/// when this module is the function's own, else through the
+/// dependencies. `None` when the constructor's signature has errors or
+/// does not have the shape the function gives it ([`fits`]): its own
+/// module reports both, the first where the signature is written and the
+/// second as E0045 at the attribute (`decl::initializer`), so the use is
+/// silent and is never rewritten into an ill-typed call.
 ///
 /// # Errors
 ///
-/// An [`Ice`] if `std::context` is not readable or has no such function
-/// with the generics of `which`: a mention of `which` needs its module, and
-/// std declares both.
-fn key_ctor(input: &TypesInput<'_>, own: &ModuleInterface, which: KeyFn) -> Result<DefId, Ice> {
+/// An [`Ice`] if the function's module is not readable or has no such
+/// function: a mention of `which` needs its module, and a module whose
+/// signature records a constructor declares it.
+fn key_ctor(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    which: KeyFn,
+) -> Result<Option<DefId>, Ice> {
     let missing = || {
         Ice::new(format!(
-            "`std::context` has no constructor `{}` for `{}`",
-            which.ctor_name(),
-            which.name()
+            "no initializer constructor `{}` for `{}`",
+            input.globals.names.get(which.ctor),
+            input.name_of(own, which.def)
         ))
     };
-    let module = input
-        .modules
-        .find(&builtin::home_path(CONTEXT))
-        .ok_or_else(missing)?;
+    let ItemSig::Fn(sig) = &input.item(own, which.def)?.sig else {
+        return Err(Ice::new(
+            "an initializer function without a function signature",
+        ));
+    };
+    let module = which.def.module;
     let iface = if module == input.module {
         own
     } else {
         input.deps.get(module).ok_or_else(missing)?
     };
-    let generics = |name: &str| -> Option<(DefId, usize)> {
-        let name = input.globals.names.lookup(name)?;
-        let index = iface.lookup(Namespace::Value, name)?;
-        match &iface.item(index)?.sig {
-            ItemSig::Fn(sig) => Some((DefId::new(module, index), sig.generics.len())),
-            ItemSig::Error
-            | ItemSig::Type(_)
-            | ItemSig::Ctor(_)
-            | ItemSig::Alias(_)
-            | ItemSig::Const(_)
-            | ItemSig::Interface(_)
-            | ItemSig::InterfaceFn(_)
-            | ItemSig::Test => None,
-        }
+    // The module's interface records a constructor only when it names a
+    // function of the module, so a name a dependency's interface does not
+    // hold is a `priv` function that the encoding left out. Its module
+    // reports it as E0045, cold or warm, and the use stays silent (D-1587).
+    let Some(index) = iface.lookup(Namespace::Value, which.ctor) else {
+        return if module == input.module {
+            Err(missing())
+        } else {
+            Ok(None)
+        };
     };
-    let (ctor, ctor_generics) = generics(which.ctor_name()).ok_or_else(missing)?;
-    let (_, fn_generics) = generics(which.name()).ok_or_else(missing)?;
-    if ctor_generics != fn_generics {
-        return Err(Ice::new(format!(
-            "`std::context::{}` and `{}` have different generics",
-            which.ctor_name(),
-            which.name()
-        )));
+    let item = iface.item(index).ok_or_else(missing)?;
+    if item.vis == Vis::Priv {
+        return Ok(None);
     }
-    Ok(ctor)
+    match &item.sig {
+        ItemSig::Fn(ctor) => {
+            Ok(fits(&input.globals.types, ctor, sig).then(|| DefId::new(module, index)))
+        }
+        ItemSig::Error => Ok(None),
+        ItemSig::Type(_)
+        | ItemSig::Ctor(_)
+        | ItemSig::Alias(_)
+        | ItemSig::Const(_)
+        | ItemSig::Interface(_)
+        | ItemSig::InterfaceFn(_)
+        | ItemSig::Test => Err(missing()),
+    }
 }
 
 /// The path text of the constant `name` of the module whose internal path
@@ -259,25 +249,86 @@ pub(crate) fn key_site(
 
 /// E0080 at a mention of `which` that is not a constant's whole
 /// initializer; `called` when the mention is the callee of a call or a
-/// pipe stage.
-pub(crate) fn mention_error(which: KeyFn, span: Span, called: bool) -> Diagnostic {
+/// pipe stage. The message names the function as a user writes it,
+/// `context::key`, and the help shows a constant initialized by a call of
+/// it ([`example`]).
+///
+/// # Errors
+///
+/// An [`Ice`] if the function's item or module is unreadable.
+pub(crate) fn mention_error(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    which: KeyFn,
+    span: Span,
+    called: bool,
+) -> Result<Diagnostic, Ice> {
     let label = if called {
         "this call is not the whole initializer of a constant"
     } else {
         "this uses it as a value"
     };
-    Diagnostic::new(
+    let written = written_name(input, own, which.def)?;
+    Ok(Diagnostic::new(
         codes::KEY_OUTSIDE_CONSTANT,
-        format!(
-            "`context::{}` may only be called as the whole initializer of a constant",
-            which.name()
-        ),
+        format!("`{written}` may only be called as the whole initializer of a constant"),
     )
     .with_primary(span, label)
     .with_note("a key is identified by the path of the constant it initializes")
     .with_help(format!(
         "make the call the whole initializer of a `const`, as in `{}`",
-        which.example()
+        example(input, own, which.def, &written)?
+    )))
+}
+
+/// The function `def` as a user writes it: the last segment of its
+/// module's path and its name, `context::key` (D-463).
+fn written_name(input: &TypesInput<'_>, own: &ModuleInterface, def: DefId) -> Result<String, Ice> {
+    let module = input.modules.try_get(def.module)?;
+    let name = input.name_of(own, def);
+    Ok(match module.path.segments().last() {
+        Some(last) => format!("{last}::{name}"),
+        None => name.to_owned(),
+    })
+}
+
+/// A constant initialized by a call of `def`, written `written`, for
+/// E0080's help: every type parameter is `Int`, a parameter of type `Int`
+/// is `0` and any other is written by its name, as in
+/// `const name: context::Key<Int> = context::key(0)` and
+/// `const name: context::Key<Option<Int>> = context::key_without_default()`.
+fn example(
+    input: &TypesInput<'_>,
+    own: &ModuleInterface,
+    def: DefId,
+    written: &str,
+) -> Result<String, Ice> {
+    let item = input.item(own, def)?;
+    let ItemSig::Fn(sig) = &item.sig else {
+        return Err(Ice::new(
+            "an initializer function without a function signature",
+        ));
+    };
+    let types = &input.globals.types;
+    let ints = vec![Ty::INT; sig.generics.len()];
+    let args: Vec<String> = sig
+        .params
+        .iter()
+        .map(|p| {
+            if substitute(types, p.ty, &ints) == Ty::INT {
+                "0".to_owned()
+            } else {
+                input.globals.names.get(p.name).to_owned()
+            }
+        })
+        .collect();
+    let ret = display(
+        substitute(types, sig.ret, &ints),
+        &input.display_cx(own, None),
+    );
+    Ok(format!(
+        "const name: {ret} = {written}({})",
+        args.join(", ")
     ))
 }
 
@@ -286,7 +337,9 @@ pub(crate) fn mention_error(which: KeyFn, span: Span, called: bool) -> Diagnosti
 /// becomes the key's constructor, and the path text and the type text are
 /// appended to the arguments as string literals (D-1572). A conversion to
 /// `dyn` around the call is looked through: such a constant is E0068 and
-/// never evaluated, but its body is still returned.
+/// never evaluated, but its body is still returned. `false`, with `body`
+/// unchanged, when the constructor is unusable ([`key_ctor`]): the
+/// constant then has no body, as one whose signature has an error.
 ///
 /// # Errors
 ///
@@ -297,7 +350,7 @@ pub(crate) fn rewrite(
     own: &ModuleInterface,
     name: &str,
     body: &mut thir::Body,
-) -> Result<(), Ice> {
+) -> Result<bool, Ice> {
     let mut call = body.value;
     while let ExprKind::DynCoerce { value, .. } = body.exprs.try_get(call, "expression")?.kind {
         call = value;
@@ -314,6 +367,9 @@ pub(crate) fn rewrite(
         return Err(Ice::new(
             "a key site whose finished value calls another function",
         ));
+    };
+    let Some(ctor) = key_ctor(input, own, which)? else {
+        return Ok(false);
     };
     let span = root.span;
     // `Key<T>`: the type of either function's result, which is the
@@ -333,7 +389,6 @@ pub(crate) fn rewrite(
     )?;
     let module = input.modules.try_get(input.module)?;
     let path = key_path_text(module.path.segments(), name);
-    let ctor = key_ctor(input, own, which)?;
     let mut text_arg = |text: String| {
         body.exprs.push(thir::Expr {
             kind: ExprKind::Lit(Lit::Str(text.into())),
@@ -358,7 +413,7 @@ pub(crate) fn rewrite(
     let mut all = std::mem::take(args).into_vec();
     all.extend([path_id, type_id]);
     *args = all.into();
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

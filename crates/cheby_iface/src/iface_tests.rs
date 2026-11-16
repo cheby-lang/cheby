@@ -167,6 +167,7 @@ fn rich(f: &Fixture) -> ModuleInterface {
                 params: Box::new([]),
                 ret: Ty::NIL,
                 clamped: Box::new([]),
+                initializer: None,
             }),
         ),
         // 1: a test, left out.
@@ -269,6 +270,7 @@ fn rich(f: &Fixture) -> ModuleInterface {
                     ]),
                     ret: t.named(builtin::OPTION, [point]),
                     clamped: Box::new([2]),
+                    initializer: Some(g.names.intern("paint")),
                 }),
             )
         },
@@ -314,6 +316,7 @@ fn rich(f: &Fixture) -> ModuleInterface {
                 ]),
                 ret: Ty::NIL,
                 clamped: Box::new([]),
+                initializer: None,
             }),
         ),
         // 11: a function whose signature had an error.
