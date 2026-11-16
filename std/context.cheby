@@ -30,6 +30,7 @@
 import std::bytes
 import std::fiber
 import std::map
+import std::random
 import std::set
 import std::u64
 
@@ -356,6 +357,14 @@ test "a fiber spawned under with inherits the captured context" {
   assert outcome == Ok("hi")
 }
 
+test "two bodies under one captured context draw the same numbers" {
+  use <- random::with_generator(random::from_seed(7))
+  let captured = capture()
+  let first = with(captured, fn() { random::fraction() })
+  let again = with(captured, fn() { random::fraction() })
+  assert first == again
+}
+
 /// Returns the context in which every key has its default and no seeded
 /// stream is set, the context of `main` when it starts. It is a function,
 /// not a constant, because a constant may not hold a handle (D-1568).
@@ -367,4 +376,26 @@ test "the empty context has every default" {
   use <- provide(greeting, "hi")
   let inside = with(empty(), fn() { get(greeting) })
   assert inside == "hello"
+}
+
+// Tests of `std::random` that need this module.
+
+test "a capture derives its stream as a spawn does" {
+  let spawned = random::with_generator(random::from_seed(42), fn() {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { random::fraction() }))
+  })
+  let captured = random::with_generator(random::from_seed(42), fn() {
+    with(capture(), fn() { random::fraction() })
+  })
+  assert spawned == Ok(captured)
+}
+
+test "a capture leaves the stream alone" {
+  let alone = random::with_generator(random::from_seed(42), fn() { random::fraction() })
+  let after_capture = random::with_generator(random::from_seed(42), fn() {
+    let _ = capture()
+    random::fraction()
+  })
+  assert alone == after_capture
 }

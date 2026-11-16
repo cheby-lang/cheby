@@ -31,7 +31,8 @@
 //! **Spawns.** A spawned fiber starts with its spawner's bindings
 //! (D-1044, D-1571): the spawn kernels mark them shared before anything is
 //! reserved ([`share_bindings`], I-E), and `sched::create_fiber` copies
-//! the pointer once the fiber exists ([`inherit`]).
+//! the pointer once the fiber exists ([`inherit`]), where a seeded stream
+//! is derived for the child as well (D-1048).
 //!
 //! **Captured contexts.** `capture`, `with` and `empty` (D-1566, D-1568)
 //! are Cheby over four more kernels. [`cheby_context_sys_capture`] copies
@@ -50,13 +51,18 @@
 //! state it has reached since (D-1573): the open records the stack's
 //! depth, and the close cuts the stack back to it. A capture under a
 //! stream counts as a spawn and holds the state a child would start from
-//! ([`derive`](fn@derive), D-1567). Nothing sets a stream outside the Rust tests yet:
-//! `std::random`'s kernels come with the seeded streams. On the paths
-//! every fiber takes, the stream halves cost little when no stream or
-//! frame is set: a scope's open copies the frame depth (a load and a
-//! store), its close compares it (two loads and a branch), and a release
-//! tests two fields (two loads and a branch); the work behind each branch
-//! is out of line.
+//! ([`derive`](fn@derive), D-1567). `std::random`'s kernels read the
+//! stream ([`stream_on`], [`stream_state`]), write a draw's advanced state
+//! back ([`set_stream`], which starts the spawn count again), and push and
+//! pop the frames of `with_generator` (`random.rs`). A spawn under a
+//! stream takes the next spawn number once the fiber exists (D-1585), and
+//! the child starts from the derived state with no frames ([`inherit`]).
+//! On the paths every fiber takes, the stream halves cost little when no
+//! stream or frame is set: a spawn tests the stream flag (a load and a
+//! branch), a scope's open copies the frame depth (a load and a store),
+//! its close compares it (two loads and a branch), and a release tests two
+//! fields (two loads and a branch); the work behind each branch is out of
+//! line.
 //!
 //! **Release.** The field cannot be released by dropping the control
 //! block, which happens with no fiber current (I-A). Every base frame
@@ -269,6 +275,27 @@ pub(crate) fn stream_parts(me: &ExecCtx) -> ((bool, u64, u64), usize) {
     )
 }
 
+/// Whether the fiber has a seeded stream (D-1574): the first thing each
+/// host function of `std::random` asks. One load.
+pub(crate) fn stream_on(me: &ExecCtx) -> bool {
+    me.context.stream_on.load(Ordering::Relaxed)
+}
+
+/// The state of the fiber's seeded stream, which a draw starts from
+/// (D-1048). Meaningful only while [`stream_on`] holds. One load.
+pub(crate) fn stream_state(me: &ExecCtx) -> u64 {
+    me.context.stream_state.load(Ordering::Relaxed)
+}
+
+/// Stores `state`, the state a draw advanced the stream to, and starts
+/// the count of spawns and captures since the last draw again (D-1048,
+/// D-1567). Two stores. Called only while [`stream_on`] holds.
+pub(crate) fn set_stream(me: &ExecCtx, state: u64) {
+    let fields = &me.context;
+    fields.stream_state.store(state, Ordering::Relaxed);
+    fields.stream_spawns.store(0, Ordering::Relaxed);
+}
+
 /// Puts the fiber's current stream aside, on top of its frames, and sets
 /// the stream `(on, state)` with no spawns since a draw (D-1573): `with`
 /// and `random::with_generator` call it before their body. Never raises.
@@ -475,9 +502,12 @@ pub(crate) fn share_bindings(me: &ExecCtx) {
 }
 
 /// Gives the new fiber `child` its spawner's bindings (D-1044), one
-/// reference added: `sched::create_fiber`, once the fiber exists and
-/// before it is queued, so nothing else knows it. The spawn kernels have
-/// marked the map shared ([`share_bindings`]); debug builds check that.
+/// reference added, and, under a seeded stream, a stream of its own
+/// ([`inherit_stream`]): `sched::create_fiber`, once the fiber exists and
+/// before it is queued, so nothing else knows it, and a spawn that fails
+/// takes no spawn number (D-1585). The spawn kernels have marked the map
+/// shared ([`share_bindings`]); debug builds check that. With no stream,
+/// the stream half is one load of the spawner's flag and a branch.
 pub(crate) fn inherit(spawner: &ExecCtx, child: &ExecCtx) {
     let word = bindings_of(spawner);
     if word != 0 {
@@ -491,6 +521,29 @@ pub(crate) fn inherit(spawner: &ExecCtx, child: &ExecCtx) {
         unsafe { rc::dup(word) };
     }
     drop_bindings(swap_bindings(child, word));
+    if spawner.context.stream_on.load(Ordering::Relaxed) {
+        inherit_stream(spawner, child);
+    }
+}
+
+/// The stream half of [`inherit`] under a seeded stream (D-1048): the
+/// spawn takes the spawner's next spawn number `n`, and the child's
+/// stream starts from `derive(state, n)` with no spawns and no frames,
+/// while the spawner's state stays where it was. The spawner is the
+/// running fiber, so it writes its own fields; the child is not queued
+/// yet and has no frames, being new.
+#[cold]
+#[inline(never)]
+fn inherit_stream(spawner: &ExecCtx, child: &ExecCtx) {
+    let fields = &spawner.context;
+    let stream = fields.stream();
+    let n = stream.spawns.wrapping_add(1);
+    fields.stream_spawns.store(n, Ordering::Relaxed);
+    child.context.set_stream_frame(StreamFrame {
+        on: true,
+        state: derive(stream.state, n),
+        spawns: 0,
+    });
 }
 
 /// Marks the fiber as run by a base frame that calls [`release`] itself,

@@ -992,9 +992,11 @@ pub(crate) fn spawn_fiber(
 /// [`schedule_new`]. Its control block takes the spawner's entry mode,
 /// hash seed, accounting domain (D-691), trampolines (D-526), whether
 /// its code has unwind edges (D-770) and its context's bindings (D-1044,
-/// D-1571), which the spawn kernels marked shared; it has no host to
-/// report to. On an error, `start` is dropped
-/// without running, and nothing was taken from the spawner.
+/// D-1571), which the spawn kernels marked shared, with a stream derived
+/// from the spawner's seeded stream if it has one (D-1048); it has no
+/// host to report to. On an error, `start` is dropped without running,
+/// and nothing was taken from the spawner: not even a spawn number
+/// (D-1585).
 ///
 /// # Errors
 ///
@@ -1041,7 +1043,8 @@ pub(crate) fn create_fiber(
     // else knows it.
     let new = unsafe { fiber.ctx() };
     new.conc.set_group(Some(group));
-    // The spawner's context, as its group.
+    // The spawner's context, as its group, and the spawn's number under a
+    // seeded stream, now that the fiber exists (D-1585).
     crate::context::inherit(spawner, new);
     Ok(fiber)
 }

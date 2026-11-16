@@ -1,8 +1,10 @@
 //! Tests of a fiber's context (D-1571, D-1573, `crate::context`): the
 //! swap kernels on a root and on an isolated entry, a scope's save and
 //! restore, inheritance by scoped, detached and test fibers, the release
-//! at every base frame, running out of memory in a bind or a spawn, and
-//! captured contexts with the stream's frames (D-1566, D-1567, D-1574).
+//! at every base frame, running out of memory in a bind or a spawn,
+//! captured contexts with the stream's frames (D-1566, D-1567, D-1574),
+//! and the kernels of `std::random`'s seeded stream with the streams that
+//! spawned fibers start from (D-1048, D-1585).
 //! Rust-level fibers on a `Runtime`, no JIT, with the return flag
 //! (D-733), as `fiber_ops::tests`; poisoning is on, and every test finds
 //! its domain's live count at its baseline at the end.
@@ -36,6 +38,11 @@ use crate::generic::tests::{captures, closure};
 use crate::hamt;
 use crate::handles::{self, HandleKind};
 use crate::panic::cheby_rt_panic;
+use crate::random::tests::Reference;
+use crate::random::{
+    cheby_random_sys_stream_on, cheby_random_sys_stream_pop, cheby_random_sys_stream_push,
+    cheby_random_sys_stream_set, cheby_random_sys_stream_state,
+};
 use crate::rc;
 use crate::sched::{AfterSwitch, park, testing};
 use crate::unwind::record::{UnwindRecord, take_unwound};
@@ -56,6 +63,9 @@ mod op {
     pub(super) const PANIC: i64 = 2;
     /// `[op, value]`: returns `value`.
     pub(super) const RETURN: i64 = 3;
+    /// `[op]`: returns the state of the fiber's seeded stream as a `U64`,
+    /// owned, or `Nil` when it has none.
+    pub(super) const STREAM: i64 = 4;
 }
 
 /// What the last `GET_INTO_SEEN` read, or -1.
@@ -85,6 +95,13 @@ unsafe extern "C" fn t0(ctx: *mut ExecCtx, function: u64) -> u64 {
             op::RETURN => {
                 rc::dup(word(1));
                 word(1)
+            }
+            op::STREAM => {
+                if cheby_random_sys_stream_on(ctx) {
+                    values::u64_word(cheby_random_sys_stream_state(ctx))
+                } else {
+                    values::nil()
+                }
             }
             _ => values::nil(),
         }
@@ -1175,5 +1192,183 @@ fn release_clears_the_stream_and_its_frames() {
         drop_word(entered);
         drop_word(captured);
         drop_word(key);
+    });
+}
+
+// ---------------------------------------------------------------------
+// The seeded stream of `std::random`
+
+/// `random::sys_stream_push`, as `with_generator` calls it.
+fn stream_push(me: &ExecCtx, state: u64) {
+    // SAFETY: the running fiber's context.
+    unsafe { cheby_random_sys_stream_push(ctx_of(me), state) };
+}
+
+/// `random::sys_stream_pop`, as `with_generator` calls it.
+fn stream_pop(me: &ExecCtx) {
+    // SAFETY: the running fiber's context.
+    unsafe { cheby_random_sys_stream_pop(ctx_of(me)) };
+}
+
+/// `random::sys_stream_set`, as a draw calls it.
+fn stream_set(me: &ExecCtx, state: u64) {
+    // SAFETY: the running fiber's context.
+    unsafe { cheby_random_sys_stream_set(ctx_of(me), state) };
+}
+
+/// `random::sys_stream_on` and `random::sys_stream_state`, as the host
+/// functions read them: the state, or `None` with no stream.
+fn stream_read(me: &ExecCtx) -> Option<u64> {
+    // SAFETY: the running fiber's context.
+    unsafe {
+        cheby_random_sys_stream_on(ctx_of(me)).then(|| cheby_random_sys_stream_state(ctx_of(me)))
+    }
+}
+
+/// A test closure that returns its fiber's stream state ([`op::STREAM`]).
+fn reading_the_stream() -> Word {
+    closure(&[values::int_word(op::STREAM)])
+}
+
+/// The stream state that a fiber spawned into `scope` with
+/// [`reading_the_stream`] starts from, or `None`: spawned through the
+/// kernel of `fiber::spawn` and joined.
+fn spawned_stream(me: &ExecCtx, scope: Word) -> Option<u64> {
+    let fiber = spawn(me, scope, &[values::int_word(op::STREAM)]);
+    // SAFETY: the running fiber's context and a live `Fiber`.
+    let value = unsafe { cheby_fiber_sys_join(ctx_of(me), fiber) };
+    drop_word(fiber);
+    let state = (value != values::nil()).then(|| {
+        // SAFETY: a live `U64`, borrowed.
+        unsafe { values::word_to_u64(value) }
+    });
+    drop_word(value);
+    state
+}
+
+/// D-1048, D-1574: the stream's readers and its writer. With no stream
+/// the readers say so; a push sets a stream with no spawns; a draw's
+/// write stores the state and starts the count of spawns and captures
+/// again, so the next capture takes number 1 of the new state.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_draw_starts_the_spawn_count_again() {
+    on_a_root(1, |me| {
+        assert_eq!(stream_read(me), None);
+        stream_push(me, 42);
+        assert_eq!(stream_read(me), Some(42));
+        assert_eq!(stream_parts(me), ((true, 42, 0), 1));
+        drop_word(capture(me));
+        drop_word(capture(me));
+        assert_eq!(stream_parts(me), ((true, 42, 2), 1));
+        stream_set(me, 7);
+        assert_eq!(stream_parts(me), ((true, 7, 0), 1));
+        assert_eq!(stream_read(me), Some(7));
+        let captured = capture(me);
+        assert_eq!(parts(captured), (0, Some(derive(7, 1))));
+        drop_word(captured);
+        stream_pop(me);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+        assert_eq!(stream_read(me), None);
+    });
+}
+
+/// D-1048, D-1573: nested streams. The inner push puts the outer stream
+/// aside as far as it had advanced, the inner draws leave it alone, and
+/// each pop makes the stream put aside current again: the outer one with
+/// its spawn count, then none.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn nested_streams_push_and_pop() {
+    on_a_root(1, |me| {
+        stream_push(me, 1);
+        stream_set(me, 2);
+        drop_word(capture(me));
+        stream_push(me, 10);
+        assert_eq!(stream_parts(me), ((true, 10, 0), 2));
+        stream_set(me, 11);
+        drop_word(capture(me));
+        assert_eq!(stream_parts(me), ((true, 11, 1), 2));
+        stream_pop(me);
+        assert_eq!(stream_parts(me), ((true, 2, 1), 1));
+        assert_eq!(stream_read(me), Some(2));
+        stream_pop(me);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+    });
+}
+
+/// D-1048, I-J: under a stream, the n-th spawn since the last draw starts
+/// its child from the state random.md derives, checked against the
+/// reference `SplitMix64` of `random.rs`: n = 1 and 2 through the kernel
+/// of `fiber::spawn`, then 1 again after a draw. The spawner's state stays
+/// where it was and only its count moves; the child has no spawns and no
+/// frames. A fiber spawned with no stream has none.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn spawned_fibers_start_from_the_derived_streams() {
+    on_a_root(2, |me| {
+        let scope = open(me);
+        assert_eq!(spawned_stream(me, scope), None);
+        stream_push(me, 42);
+        let parent = Reference::from_seed(42);
+        assert_eq!(spawned_stream(me, scope), Some(parent.derived(1).0));
+        assert_eq!(stream_parts(me), ((true, 42, 1), 1));
+        assert_eq!(spawned_stream(me, scope), Some(parent.derived(2).0));
+        assert_eq!(stream_parts(me), ((true, 42, 2), 1));
+        assert_eq!(parent.derived(1).0, 814_261_035_509_592_648);
+        // A draw: one step, then the count starts again.
+        let mut drawn = parent;
+        let _ = drawn.step();
+        stream_set(me, drawn.0);
+        assert_eq!(spawned_stream(me, scope), Some(drawn.derived(1).0));
+        assert_eq!(stream_parts(me), ((true, drawn.0, 1), 1));
+        // A test fiber's whole stream: no spawns, no frames.
+        let (tx, rx) = std::sync::mpsc::channel();
+        testing::spawn(me, true, move |child| {
+            tx.send(stream_parts(child)).unwrap();
+        });
+        let child = loop {
+            match rx.try_recv() {
+                Ok(parts) => break parts,
+                Err(_) => yield_now(me),
+            }
+        };
+        assert_eq!(child, ((true, drawn.derived(2).0, 0), 0));
+        stream_pop(me);
+        assert!(close(me, scope));
+    });
+}
+
+/// D-1585, I-E: a spawn that fails takes no spawn number. Under a stream
+/// and four bindings whose marking runs out of memory, the spawn raises
+/// in the marking, before `fiber::create`, and the count stays at 0; the
+/// next spawn takes number 1. A failure inside `fiber::create` is not
+/// forced here: `inherit` runs only after it returned a fiber.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_spawn_that_fails_takes_no_spawn_number() {
+    on_a_root(1, |me| {
+        let bound = bind_marked(me);
+        stream_push(me, 42);
+        let scope = open(me);
+        let function = reading_the_stream();
+        limit_to(me, ONE_WORKLIST);
+        // SAFETY: the running fiber's context, a live scope and closure.
+        let fiber = unsafe { cheby_fiber_sys_spawn(ctx_of(me), scope, function) };
+        me.set_budget(u64::MAX);
+        assert_eq!(fiber, 0, "the bindings' walk fitted");
+        drop_word(function);
+        assert!(!close_unwound(me, scope));
+        assert_eq!(
+            failure_message(me),
+            crate::consteval::Limit::Memory.message()
+        );
+        assert_eq!(stream_parts(me), ((true, 42, 0), 1));
+        let scope = open(me);
+        assert_eq!(spawned_stream(me, scope), Some(derive(42, 1)));
+        assert!(close(me, scope));
+        assert_eq!(stream_parts(me), ((true, 42, 1), 1));
+        stream_pop(me);
+        unbind_marked(me, bound);
     });
 }

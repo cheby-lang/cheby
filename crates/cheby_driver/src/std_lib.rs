@@ -259,35 +259,6 @@ pub const PLANNED_STD_MODULES: &[&str] = &["log"];
 /// since (D-728). An entry's comment names what its test needs and the
 /// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // A seeded stream in a captured context needs `std::random`'s seeded
-    // streams, package R2b of workstream 4.6 (D-1566, D-1567, D-1563).
-    (
-        "context",
-        "two bodies under one captured context draw the same numbers",
-        "M4",
-    ),
-    // Seeded random streams need `std::context`, M4's workstream 4.6
-    // (D-1048, D-1049).
-    (
-        "random",
-        "with_generator makes host draws follow the seeded draws",
-        "M4",
-    ),
-    (
-        "random",
-        "with_generator gives the same draws for the same generator",
-        "M4",
-    ),
-    ("random", "a spawn leaves the parent's stream alone", "M4"),
-    ("random", "spawned fibers draw reproducibly and apart", "M4"),
-    // A captured context counts as a spawn for the seeded stream
-    // (D-1567).
-    (
-        "random",
-        "a capture derives its stream as a spawn does",
-        "M4",
-    ),
-    ("random", "a capture leaves the stream alone", "M4"),
     // `fiber::raise` needs the private kernel `sys_raise` (D-1097), and
     // `fiber::map` and `try_map` need it and S5's `fiber::cancel` (D-1098).
     // Both are built after M3.

@@ -588,10 +588,10 @@ mod tests {
     /// of its `@external` declaration in `std/`, after the context pointer
     /// for a `@std_context` kernel, and carries `@std_context` exactly when
     /// its native function takes that pointer (plan §2.5 and checkpoint 3's
-    /// §2.1, D-692): every kernel of `fiber_ops` and `runtime`'s
-    /// `thread_count` and `set_thread_count` do; `random`'s `host_bits` and
-    /// `runtime`'s `cpu_count` do not. The intrinsic `scope_run` has no
-    /// kernel (D-693).
+    /// §2.1, D-692): every kernel of `fiber_ops`, `random`'s five kernels
+    /// of the seeded stream (D-1574) and `runtime`'s `thread_count` and
+    /// `set_thread_count` do; `random`'s `host_bits` and `runtime`'s
+    /// `cpu_count` do not. The intrinsic `scope_run` has no kernel (D-693).
     #[test]
     fn tier2_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
@@ -619,6 +619,7 @@ mod tests {
         registered_context.extend(
             runtime_info::CONTEXT_KERNELS
                 .iter()
+                .chain(random::CONTEXT_KERNELS.iter())
                 .map(|&name| name.to_owned()),
         );
         for (name, params, result) in [
@@ -643,9 +644,10 @@ mod tests {
         );
         // channel and fiber 10 (`fiber::cancel`'s `sys_cancel`, D-1060, and
         // `fiber::interruptible`'s `sys_arm_interrupt`, D-1073), selector 5,
-        // random 1, runtime 3.
-        assert_eq!(registered.len(), 10 + 5 + 1 + 3);
-        assert_eq!(registered_context.len(), 10 + 5 + 2);
+        // random 6 (`host_bits` and the seeded stream's five, D-1574),
+        // runtime 3.
+        assert_eq!(registered.len(), 10 + 5 + 6 + 3);
+        assert_eq!(registered_context.len(), 10 + 5 + 5 + 2);
     }
 
     /// Every kernel of `std::net` has the C signature of its `@external`
