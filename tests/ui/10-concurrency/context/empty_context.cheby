@@ -1,0 +1,67 @@
+// @mode: run-pass
+// @decisions: D-1568, D-1567
+//! `context::empty()` is the context of `main` when it starts: under
+//! `with(context::empty(), …)` every key has its default, also under a
+//! provider and in a fiber spawned there, and no seeded stream is set, so
+//! the host functions of `std::random` draw from the host under an outer
+//! stream, which `with` leaves where it stood (§10.11).
+
+import std::context
+import std::fiber
+import std::io
+import std::random
+
+const greeting: context::Key<String> = context::key("hello")
+
+const port: context::Key<Option<Int>> = context::key_without_default()
+
+/// What the calling fiber reads for both keys.
+fn show() -> String {
+  let text = context::get(greeting)
+  let number = context::get(port)
+  "{text} {number:?}"
+}
+
+fn main() {
+  let at_start = show()
+  let empty_at_start = context::with(context::empty(), show)
+  io::println("main starts empty: {at_start} and {empty_at_start}")
+  let under_provider = context::provide(greeting, "hi", fn() {
+    context::provide(port, Some(8080), fn() {
+      let inside = context::with(context::empty(), show)
+      let outside = show()
+      "{inside}, then {outside}"
+    })
+  })
+  io::println("under a provider: {under_provider}")
+  let spawned = context::provide(greeting, "hi", fn() {
+    use <- context::with(context::empty())
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, show))
+  })
+  io::println("a fiber spawned under the empty context: {spawned:?}")
+  let seed = random::from_seed(7)
+  let (first, after_first) = random::next_fraction(seed)
+  let (second, _) = random::next_fraction(after_first)
+  let (inside, outside, again) = random::with_generator(seed, fn() {
+    let inside = context::with(context::empty(), fn() { random::fraction() })
+    let outside = random::fraction()
+    let again = context::with(context::empty(), fn() { random::fraction() })
+    (inside, outside, again)
+  })
+  let from_host = inside != first && again != second
+  io::println("the empty context draws from the host: {from_host}")
+  let unmoved = outside == first
+  io::println("the outer stream did not move: {unmoved}")
+  let child = random::with_generator(seed, fn() {
+    use <- context::with(context::empty())
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { random::fraction() }))
+  })
+  let derived = random::with_generator(seed, fn() {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { random::fraction() }))
+  })
+  let apart = child != derived
+  io::println("a fiber spawned there draws from the host too: {apart}")
+}

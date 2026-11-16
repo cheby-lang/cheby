@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-711, D-784, D-1208, D-1583
+//! A captured context keeps its values alive. This test leaks on purpose:
+//! it provides a channel's receiver, captures that context and sends it
+//! into the same channel, so the channel keeps itself alive through the
+//! context, a leak §9.6 documents. The leak check names `<Context>` among
+//! the runtime kinds it counts, beside the receiver.
+
+import std::channel
+import std::context
+
+const inbox: context::Key<Option<channel::Receiver<context::Context>>> =
+  context::key_without_default()
+
+test "leaks a captured context" {
+  let (tx, rx) = channel::new::<context::Context>(1)
+  let sent = context::provide(inbox, Some(rx), fn() { channel::send(tx, context::capture()) })
+  let assert Ok(Nil) = sent
+  assert True
+}
+
+test "leaks nothing" {
+  let captured = context::provide(inbox, None, fn() { context::capture() })
+  let inside = context::with(captured, fn() { context::get(inbox) })
+  let assert None = inside
+  assert True
+}

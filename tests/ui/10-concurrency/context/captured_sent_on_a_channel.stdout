@@ -1,0 +1,8 @@
+tick: request None, user guest
+  worker: request None, user worker
+load: request Some("r-7"), user guest
+  worker: request None, user worker
+save: request Some("r-8"), user ann
+  worker: request None, user worker
+clean: request None, user guest
+  worker: request None, user worker

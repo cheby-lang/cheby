@@ -1,0 +1,31 @@
+// @mode: run-pass
+// @decisions: D-1566, D-647
+//! A captured context is a handle: it debug-prints as `<Context>`, alone
+//! and inside other values, and never shows its bindings (§3.13, §9.5,
+//! §10.11).
+
+import std::context
+import std::io
+import std::random
+
+const greeting: context::Key<String> = context::key("hello")
+
+pub type Job {
+  Job(String, context::Context),
+}
+
+fn main() {
+  let captured = context::provide(greeting, "secret", fn() { context::capture() })
+  io::println("{captured:?}")
+  let empty = context::empty()
+  io::println("{empty:?}")
+  let pair = ("job", captured)
+  io::println("{pair:?}")
+  let both = [captured, empty]
+  io::println("{both:?}")
+  let job = Job("load", captured)
+  io::println("{job:?}")
+  let seeded = random::with_generator(random::from_seed(7), fn() { context::capture() })
+  let maybe = Some(seeded)
+  io::println("{maybe:?}")
+}

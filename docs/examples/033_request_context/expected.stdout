@@ -1,0 +1,7 @@
+Jobs read Key(request_context::request_id) from their captured contexts.
+a17: load cart at 2026-11-16T09:30:00Z, sample 515
+a17: apply coupon at 2026-11-16T09:30:00Z, sample 627
+b42: load cart at 2026-11-16T09:30:00Z, sample 97
+c08: search at 2026-11-16T09:30:00Z, sample 463
+c08: rank at 2026-11-16T09:30:00Z, sample 684
+c08: render page at 2026-11-16T09:30:00Z, sample 130

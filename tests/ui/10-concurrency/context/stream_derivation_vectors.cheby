@@ -1,0 +1,79 @@
+// @mode: run-pass
+// @decisions: D-1046, D-1048
+//! Under a seeded stream, the n-th fiber spawned since the last draw
+//! starts from the stream derived from the spawner's state `s` and `n`:
+//! SplitMix64's output function of `s + n × 0xD1B54A32D192ED03`, modulo
+//! 2⁶⁴. So its first draw is `next_fraction` of that generator, derived
+//! here by hand, for scoped and detached children and for a grandchild
+//! spawned before its parent's first draw, while the spawner's own draws
+//! stay those of the seed (§10.11).
+
+import std::channel
+import std::fiber
+import std::int
+import std::io
+import std::random
+import std::u64
+
+/// What D-1048 adds to a state once per spawn.
+const stream_increment: U64 = 0xD1B5_4A32_D192_ED03
+
+/// SplitMix64's output function.
+fn mix(z: U64) -> U64 {
+  let mixed = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9)
+  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), 0x94D0_49BB_1331_11EB)
+  remixed ^ (remixed >> 31)
+}
+
+/// The state of the n-th child of a stream at `state`.
+fn derived(state: U64, n: U64) -> U64 {
+  mix(u64::wrapping_add(state, u64::wrapping_mul(n, stream_increment)))
+}
+
+/// The first fraction a stream at `state` draws.
+fn first_draw(state: U64) -> Float {
+  let (x, _) = random::next_fraction(random::from_seed(int::wrapping_from_u64(state)))
+  x
+}
+
+fn main() {
+  let seed = 42
+  let state = u64::wrapping_from_int(seed)
+  let one = derived(state, 1)
+  let grandchild = derived(one, 1)
+  io::println("derived states: {one}, {grandchild}")
+  let (tx, rx) = channel::new::<Float>(1)
+  let (children, detached, own) = random::with_generator(random::from_seed(seed), fn() {
+    let children = {
+      use owner <- fiber::scope()
+      let first = fiber::spawn(owner, fn() {
+        let below = {
+          use inner <- fiber::scope()
+          fiber::join(fiber::spawn(inner, random::fraction))
+        }
+        (random::fraction(), below)
+      })
+      let second = fiber::spawn(owner, random::fraction)
+      let third = fiber::spawn(owner, random::fraction)
+      (fiber::join(first), fiber::join(second), fiber::join(third))
+    }
+    fiber::spawn_detached(fn() {
+      let _ = channel::send(tx, random::fraction())
+      Nil
+    })
+    let detached = channel::receive(rx)
+    (children, detached, random::fraction())
+  })
+  io::println("children: {children:?}")
+  io::println("detached: {detached:?}")
+  let expected_first = first_draw(one)
+  let expected_below = first_draw(grandchild)
+  let expected_second = first_draw(derived(state, 2))
+  let expected_third = first_draw(derived(state, 3))
+  let expected_detached = first_draw(derived(state, 4))
+  let expected = Ok(((expected_first, Ok(expected_below)), expected_second, expected_third))
+  let by_hand = children == expected && detached == Ok(expected_detached)
+  io::println("each child's first draw is the one derived by hand: {by_hand}")
+  let unchanged = own == first_draw(state)
+  io::println("the spawner draws the seed's first number: {unchanged}")
+}

@@ -1,0 +1,104 @@
+// @mode: run-pass
+// @decisions: D-1566, D-1573
+//! A scope or a timeout that catches a failure of a body inside
+//! `context::with` continues with the context it was opened with: the
+//! caller's bindings and its seeded stream are back, and the stream is in
+//! the state the caller's own draws left it in. This holds for a captured
+//! context with a stream and for one without (§10.3, §10.8, §10.11).
+
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::list
+import std::random
+import std::time
+
+const greeting: context::Key<String> = context::key("hello")
+
+/// The text of a scope's outcome.
+fn scope_text(outcome: Result<Float, fiber::Panic>) -> String {
+  case outcome {
+    Ok(_) => "Ok"
+    Err(failure) => {
+      let text = fiber::message(failure)
+      "Err: {text}"
+    }
+  }
+}
+
+/// The text of a timeout's outcome.
+fn timeout_text(outcome: Result<Float, fiber::Timeout>) -> String {
+  case outcome {
+    Ok(_) => "Ok"
+    Err(fiber::TimedOut) => "Err(TimedOut)"
+    Err(fiber::Panicked(failure)) => {
+      let text = fiber::message(failure)
+      "Err(Panicked): {text}"
+    }
+  }
+}
+
+/// Draws once inside `with`, then panics.
+fn draw_and_fail(captured: context::Context) -> Float {
+  context::with(captured, fn() {
+    let _ = random::fraction()
+    let text = context::get(greeting)
+    panic as "boom under {text}"
+  })
+}
+
+/// The first `count` fractions that `generator` draws, in order.
+fn draws(generator: random::Generator, count: Int, drawn: List<Float>) -> List<Float> {
+  case count {
+    0 => drawn
+    _ => {
+      let (x, next) = random::next_fraction(generator)
+      draws(next, count - 1, [..drawn, x])
+    }
+  }
+}
+
+fn main() {
+  let seed = random::from_seed(11)
+  let plain = context::provide(greeting, "plain", fn() { context::capture() })
+  let (texts, drawn) = random::with_generator(seed, fn() {
+    let seeded = context::provide(greeting, "seeded", fn() { context::capture() })
+    use <- context::provide(greeting, "outer")
+    let first = random::fraction()
+    let in_scope = {
+      use _ <- fiber::scope()
+      draw_and_fail(seeded)
+    }
+    let after_scope = context::get(greeting)
+    let second = random::fraction()
+    let in_timeout = fiber::timeout(duration::seconds(10), fn() { draw_and_fail(plain) })
+    let after_timeout = context::get(greeting)
+    let third = random::fraction()
+    let timed_out = fiber::timeout(duration::milliseconds(10), fn() {
+      context::with(seeded, fn() {
+        let _ = random::fraction()
+        time::sleep(duration::hours(1))
+        random::fraction()
+      })
+    })
+    let after_timed_out = context::get(greeting)
+    let fourth = random::fraction()
+    let scope_line = scope_text(in_scope)
+    let timeout_line = timeout_text(in_timeout)
+    let timed_out_line = timeout_text(timed_out)
+    let texts = [
+      "scope: {scope_line}, then {after_scope}",
+      "timeout: {timeout_line}, then {after_timeout}",
+      "timed out: {timed_out_line}, then {after_timed_out}",
+    ]
+    (texts, [first, second, third, fourth])
+  })
+  list::each(texts, io::println)
+  let continued = drawn == draws(seed, 4, [])
+  io::println("the caller's stream continued: {continued}")
+  let after = context::get(greeting)
+  let host = random::fraction()
+  let unseeded = !list::contains(drawn, host)
+  io::println("after the stream: {after}, host draws {unseeded}")
+}

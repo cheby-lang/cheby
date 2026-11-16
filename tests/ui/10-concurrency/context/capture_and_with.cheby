@@ -1,0 +1,81 @@
+// @mode: run-pass
+// @decisions: D-1566
+//! `context::with` runs a body under a captured context in place of the
+//! caller's. The caller's own bindings are hidden, later calls of
+//! `provide` do not change the captured context, `provide` binds on top of
+//! it, a fiber spawned under `with` inherits what the body has then, and
+//! the caller's context is back when `with` returns (§10.11).
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+
+const greeting: context::Key<String> = context::key("hello")
+
+const user: context::Key<Option<String>> = context::key_without_default()
+
+/// What the calling fiber reads for both keys.
+fn show() -> String {
+  let text = context::get(greeting)
+  let who = context::get(user)
+  "{text} {who:?}"
+}
+
+/// Spawns a scoped fiber under the current context and returns what it
+/// reads.
+fn spawned() -> String {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, show))
+  }
+  case outcome {
+    Ok(text) => text
+    Err(failure) => fiber::show(failure)
+  }
+}
+
+fn main() {
+  let captured = context::provide(greeting, "hi", fn() { context::capture() })
+  let later = context::provide(greeting, "hi", fn() {
+    let taken = context::capture()
+    context::provide(greeting, "later", fn() { context::with(taken, show) })
+  })
+  io::println("a capture is not changed by a later provide: {later}")
+  use <- context::provide(greeting, "outer")
+  use <- context::provide(user, Some("ann"))
+  let before = show()
+  io::println("caller before: {before}")
+  let hidden = context::with(captured, show)
+  io::println("with hides the caller's bindings: {hidden}")
+  let on_top = context::with(captured, fn() {
+    let inner = context::provide(user, Some("bob"), show)
+    let after = show()
+    "{inner}, then {after}"
+  })
+  io::println("provide binds on top: {on_top}")
+  let child = context::with(captured, spawned)
+  io::println("a scoped spawn under with: {child}")
+  let child_on_top = context::with(captured, fn() { context::provide(user, Some("cy"), spawned) })
+  io::println("a scoped spawn under with and provide: {child_on_top}")
+  let (release, wait) = channel::new::<Nil>(0)
+  let (tell, heard) = channel::new::<String>(1)
+  context::with(captured, fn() {
+    fiber::spawn_detached(fn() {
+      let _ = channel::receive(wait)
+      let _ = channel::send(tell, show())
+      Nil
+    })
+  })
+  let assert Ok(Nil) = channel::send(release, Nil)
+  let detached = channel::receive(heard)
+  io::println("a detached spawn under with, read after with returned: {detached:?}")
+  let empty_inside = context::with(context::empty(), fn() { context::with(captured, show) })
+  let back_to_empty = context::with(context::empty(), fn() {
+    let _ = context::with(captured, show)
+    show()
+  })
+  io::println("nested with: {empty_inside}, then {back_to_empty}")
+  let after = show()
+  io::println("caller after: {after}")
+}

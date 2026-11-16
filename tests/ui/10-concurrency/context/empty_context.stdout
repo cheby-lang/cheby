@@ -1,0 +1,6 @@
+main starts empty: hello None and hello None
+under a provider: hello None, then hi Some(8080)
+a fiber spawned under the empty context: Ok("hello None")
+the empty context draws from the host: True
+the outer stream did not move: True
+a fiber spawned there draws from the host too: True

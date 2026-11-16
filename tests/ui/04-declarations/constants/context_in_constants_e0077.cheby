@@ -1,0 +1,46 @@
+// @mode: check-fail
+// @decisions: D-1045, D-1566, D-533
+//! `context::get`, `context::provide`, `context::capture`, `context::with`,
+//! `context::empty` and `random::with_generator` reach `@std_context`
+//! kernels, so a constant whose computation reaches one is E0077, while a
+//! key constant beside them runs at compile time. A constant of type
+//! `context::Context` is E0068 first, so `capture`, `with` and `empty` are
+//! reached through functions that return another type. The note names
+//! the first kernel reached: `with` evaluates its captured context first
+//! (§4.5).
+
+import std::context
+import std::io
+import std::random
+
+const greeting: context::Key<String> = context::key("hello")
+
+const read: String = context::get(greeting)
+
+const provided: Int = context::provide(greeting, "hi", fn() { 1 })
+
+fn after_capture() -> Int {
+  let _ = context::capture()
+  1
+}
+
+const captured: Int = after_capture()
+
+fn under_with() -> Int {
+  context::with(context::empty(), fn() { 2 })
+}
+
+const with_empty: Int = under_with()
+
+fn after_empty() -> Int {
+  let _ = context::empty()
+  3
+}
+
+const emptied: Int = after_empty()
+
+const seeded: Float = random::with_generator(random::from_seed(1), fn() { 0.5 })
+
+fn main() {
+  io::println("{greeting:?} {read} {provided} {captured} {with_empty} {emptied} {seeded}")
+}

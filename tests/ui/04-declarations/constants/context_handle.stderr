@@ -1,0 +1,18 @@
+error[E0068]: the constant `nothing` has a type that contains the external type `context::Context`
+ --> tests/ui/04-declarations/constants/context_handle.cheby:9:20
+  |
+9 | pub const nothing: context::Context = context::empty()
+  |                    ^^^^^^^^^^^^^^^^
+  |
+  = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+  = help: create the value at run time, in a function
+
+error[E0068]: the constant `maybe` has a type that contains the external type `context::Context`
+  --> tests/ui/04-declarations/constants/context_handle.cheby:11:18
+   |
+11 | pub const maybe: Option<context::Context> = None
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^ this type contains `context::Context`
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+

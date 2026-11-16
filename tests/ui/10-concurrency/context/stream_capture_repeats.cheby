@@ -1,0 +1,63 @@
+// @mode: run-pass
+// @decisions: D-1567
+//! Every `with` of one captured context starts its stream from the state
+//! the capture holds, so two of them draw the same numbers, and a fiber
+//! spawned in each starts from the same derived stream. A context
+//! captured with no stream holds none: under it the host functions draw
+//! from the host, also inside a fiber that has a stream of its own, whose
+//! stream does not move (§10.11).
+
+import std::context
+import std::fiber
+import std::io
+import std::random
+
+/// What a body draws.
+type Draws {
+  fractions: List<Float>,
+  die: Int,
+  child: Float,
+}
+
+/// Two fractions, a number up to 1000, then the first draw of a fiber
+/// spawned after them.
+fn draws() -> Draws {
+  let a = random::fraction()
+  let b = random::fraction()
+  let c = random::int_between(1, 1000)
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, random::fraction))
+  }
+  let assert Ok(d) = outcome
+  Draws { fractions: [a, b], die: c, child: d }
+}
+
+fn main() {
+  let seeded = random::with_generator(random::from_seed(3), fn() { context::capture() })
+  let first = context::with(seeded, draws)
+  let again = context::with(seeded, draws)
+  io::println("{first:?}")
+  let same = first == again
+  io::println("two bodies under one capture draw the same numbers: {same}")
+  let elsewhere = random::with_generator(random::from_seed(99), fn() {
+    context::with(seeded, draws)
+  })
+  let carried = elsewhere == first
+  io::println("also under another stream: {carried}")
+  let unseeded = context::capture()
+  let seed = random::from_seed(3)
+  let (x, after_x) = random::next_fraction(seed)
+  let (y, _) = random::next_fraction(after_x)
+  let (inside, outer_first, inside_again, outer_second) = random::with_generator(seed, fn() {
+    let inside = context::with(unseeded, random::fraction)
+    let outer_first = random::fraction()
+    let inside_again = context::with(unseeded, random::fraction)
+    let outer_second = random::fraction()
+    (inside, outer_first, inside_again, outer_second)
+  })
+  let from_host = inside != x && inside_again != y && inside != inside_again
+  io::println("a capture with no stream draws from the host: {from_host}")
+  let outer = (outer_first, outer_second) == (x, y)
+  io::println("the fiber's own stream did not move: {outer}")
+}

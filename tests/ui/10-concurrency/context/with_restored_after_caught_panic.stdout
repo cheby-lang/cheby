@@ -1,0 +1,5 @@
+scope: Err: boom under seeded, then outer
+timeout: Err(Panicked): boom under plain, then outer
+timed out: Err(TimedOut), then outer
+the caller's stream continued: True
+after the stream: hello, host draws True

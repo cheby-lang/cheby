@@ -24,7 +24,7 @@ The plan is a living document. When a milestone starts, its file is refined into
 1. A reference implementation of the whole spec, shipping as one `cheby` binary with every tool of [§13.1](../spec/13-tooling.md#131-the-cheby-command) (D-031).
 2. The build order of D-099: the single-fiber core first, because the REPL gives the fastest feedback on the language design itself.
 3. Compile speed from the first milestone: the locality rule (D-246) shapes the compiler's structure, and the budgets of D-247 and D-267 are measured in CI from M1.
-4. The 32 examples in [`../examples/`](../examples/) become the end-to-end conformance suite, and every milestone is defined by which of them run.
+4. The 33 examples in [`../examples/`](../examples/) become the end-to-end conformance suite, and every milestone is defined by which of them run.
 5. Spec gaps found while implementing go back into the decision log, never into ad-hoc compiler behavior.
 
 ## Milestones

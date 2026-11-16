@@ -1,0 +1,119 @@
+//! Handles the jobs of a few requests on a pool of worker fibers (see
+//! `pool.cheby`), where each job reads its request's id, the time and a
+//! random sample from its context instead of from its arguments.
+//!
+//! The pool's workers are spawned first. Then `main` provides a fixed
+//! clock and a seeded random stream, and provides each request's id while
+//! it submits that request's jobs. The workers were spawned before any
+//! of this and keep their own context, so each job is sent with the
+//! context it was submitted in, and runs under it. Each submission
+//! counts as a spawn of the seeded stream, so each job draws its own
+//! sample, and the same one whichever worker takes it. The output is the
+//! same on every run.
+
+import request_context::pool
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::list
+import std::random
+import std::string
+import std::time
+
+/// The id of the request that a job belongs to. Code outside a request
+/// has none.
+const request_id: context::Key<Option<String>> = context::key_without_default()
+
+/// How many workers share the jobs.
+const worker_count: Int = 3
+
+/// The time that the clock in context gives: 2026-11-16T09:30:00Z.
+const opening: time::Timestamp = time::from_unix(duration::seconds(1_794_821_400))
+
+/// The seed of the random stream that every sample comes from.
+const seed: Int = 42
+
+/// Each request's id and the names of its jobs.
+const requests: List<(String, List<String>)> = [
+  ("a17", ["load cart", "apply coupon"]),
+  ("b42", ["load cart"]),
+  ("c08", ["search", "rank", "render page"]),
+]
+
+fn main() {
+  io::println("Jobs read {request_id:?} from their captured contexts.")
+  // The workers are spawned first, outside everything provided below.
+  let outcome = pool::serve(worker_count, fn(submit) {
+    use <- context::provide(time::clock, time::fixed_clock(opening))
+    use <- random::with_generator(random::from_seed(seed))
+    submit_requests(requests, submit)
+  })
+  case outcome {
+    Ok(lines) => list::each(lines, io::println)
+    Err(failure) => {
+      let message = fiber::message(failure)
+      io::println("a job failed: {message}")
+    }
+  }
+}
+
+/// Submits the jobs of every request, each with its own tag counted from
+/// 0, while the request's id is provided.
+fn submit_requests(all: List<(String, List<String>)>, submit: fn(Int, fn() -> String)) {
+  let _ = list::fold(all, 0, fn(tag, (id, names)) {
+    use <- context::provide(request_id, Some(id))
+    list::fold(names, tag, fn(next, name) {
+      submit(next, fn() { handle(name) })
+      next + 1
+    })
+  })
+}
+
+/// The job named `name`: reports what it reads from its context.
+fn handle(name: String) -> String {
+  let id = case context::get(request_id) {
+    Some(id) => id
+    None => "none"
+  }
+  let at = time::show(time::now())
+  let sample = random::int_between(1, 1000)
+  "{id}: {name} at {at}, sample {sample}"
+}
+
+test "a job reads the id of its request" {
+  use <- context::provide(request_id, Some("t1"))
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  use <- random::with_generator(random::from_seed(seed))
+  let line = handle("ping")
+  assert string::starts_with(line, "t1: ping at 2026-11-16T09:30:00Z, sample ")
+}
+
+test "a job outside a request has no id" {
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  let line = handle("ping")
+  assert string::starts_with(line, "none: ping at 2026-11-16T09:30:00Z")
+}
+
+test "the same seed gives the same samples, whatever the workers do" {
+  let run = fn(workers) {
+    pool::serve(workers, fn(submit) {
+      use <- context::provide(time::clock, time::fixed_clock(opening))
+      use <- random::with_generator(random::from_seed(seed))
+      submit_requests(requests, submit)
+    })
+  }
+  let first = run(worker_count)
+  assert first == run(1)
+  assert first == run(6)
+}
+
+test "each job draws its own sample" {
+  let assert Ok(lines) = pool::serve(2, fn(submit) {
+    use <- random::with_generator(random::from_seed(seed))
+    submit(0, fn() { random::int_between(1, 1_000_000) })
+    submit(1, fn() { random::int_between(1, 1_000_000) })
+  })
+  let assert [first, second] = lines
+  assert first != second
+}

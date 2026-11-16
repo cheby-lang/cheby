@@ -1,0 +1,62 @@
+// @mode: run-pass
+// @decisions: D-1048, D-665, D-675
+//! The body of a scope, the function of a timeout and a selector's mapping
+//! function run on the calling fiber, so under a seeded stream they draw
+//! from the caller's stream and advance it, and it stays advanced after
+//! each returns (§10.3, §10.6, §10.8, §10.11).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::random
+import std::selector
+
+/// The first `count` fractions that `generator` draws, in order.
+fn draws(generator: random::Generator, count: Int, drawn: List<Float>) -> List<Float> {
+  case count {
+    0 => drawn
+    _ => {
+      let (x, next) = random::next_fraction(generator)
+      draws(next, count - 1, [..drawn, x])
+    }
+  }
+}
+
+fn main() {
+  let seed = random::from_seed(17)
+  let drawn = random::with_generator(seed, fn() {
+    let in_scope = {
+      use _ <- fiber::scope()
+      random::fraction()
+    }
+    let after_scope = random::fraction()
+    let in_timeout = fiber::timeout(duration::seconds(10), random::fraction)
+    let after_timeout = random::fraction()
+    let (tx, rx) = channel::new::<Int>(1)
+    let assert Ok(Nil) = channel::send(tx, 1)
+    let in_receive_arm = selector::new()
+      |> selector::receive(_, rx, fn(_) { random::fraction() })
+      |> selector::select
+    let after_receive_arm = random::fraction()
+    let in_timer_arm = selector::new()
+      |> selector::after(_, duration::zero, random::fraction)
+      |> selector::select
+    let after_timer_arm = random::fraction()
+    let assert Ok(scoped) = in_scope
+    let assert Ok(timed) = in_timeout
+    [
+      scoped,
+      after_scope,
+      timed,
+      after_timeout,
+      in_receive_arm,
+      after_receive_arm,
+      in_timer_arm,
+      after_timer_arm,
+    ]
+  })
+  io::println("{drawn:?}")
+  let continued = drawn == draws(seed, 8, [])
+  io::println("each draw continued the caller's stream: {continued}")
+}

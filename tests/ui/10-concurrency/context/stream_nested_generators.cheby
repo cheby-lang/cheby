@@ -1,0 +1,88 @@
+// @mode: run-pass
+// @decisions: D-1048, D-1573
+//! An inner `random::with_generator` sets a stream of its own while its
+//! body runs. When the body returns, the outer stream continues where it
+//! stood: its next draw is the one after the outer stream's last draw,
+//! and its next spawn takes the number after the spawns it counted before
+//! the inner stream (§10.11).
+
+import std::fiber
+import std::int
+import std::io
+import std::list
+import std::random
+import std::u64
+
+/// What D-1048 adds to a state once per spawn.
+const stream_increment: U64 = 0xD1B5_4A32_D192_ED03
+
+/// What SplitMix64 adds to its state at each step.
+const increment: U64 = 0x9E37_79B9_7F4A_7C15
+
+/// SplitMix64's output function.
+fn mix(z: U64) -> U64 {
+  let mixed = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9)
+  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), 0x94D0_49BB_1331_11EB)
+  remixed ^ (remixed >> 31)
+}
+
+/// The first fraction drawn by the n-th child of a stream at `state`.
+fn child_draw(state: U64, n: U64) -> Float {
+  let child = mix(u64::wrapping_add(state, u64::wrapping_mul(n, stream_increment)))
+  let (x, _) = random::next_fraction(random::from_seed(int::wrapping_from_u64(child)))
+  x
+}
+
+/// The first `count` fractions that `generator` draws, in order.
+fn draws(generator: random::Generator, count: Int, drawn: List<Float>) -> List<Float> {
+  case count {
+    0 => drawn
+    _ => {
+      let (x, next) = random::next_fraction(generator)
+      draws(next, count - 1, [..drawn, x])
+    }
+  }
+}
+
+/// Spawns a scoped fiber that draws once, and returns its draw.
+fn spawn_draw() -> Float {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, random::fraction))
+  }
+  let assert Ok(x) = outcome
+  x
+}
+
+fn main() {
+  let outer = random::from_seed(1)
+  let inner = random::from_seed(2)
+  let innermost = random::from_seed(3)
+  let (outer_draws, inner_draws, innermost_draws, spawned) = random::with_generator(outer, fn() {
+    let a = random::fraction()
+    let first_child = spawn_draw()
+    let (inner_draws, innermost_draws) = random::with_generator(inner, fn() {
+      let x = random::fraction()
+      let _ = spawn_draw()
+      let deepest = random::with_generator(innermost, fn() { [random::fraction()] })
+      let y = random::fraction()
+      ([x, y], deepest)
+    })
+    let second_child = spawn_draw()
+    let b = random::fraction()
+    ([a, b], inner_draws, innermost_draws, [first_child, second_child])
+  })
+  io::println("outer {outer_draws:?}")
+  io::println("inner {inner_draws:?}")
+  io::println("innermost {innermost_draws:?}")
+  let continued = outer_draws == draws(outer, 2, [])
+  io::println("the outer stream continued where it stood: {continued}")
+  let own = inner_draws == draws(inner, 2, []) && innermost_draws == draws(innermost, 1, [])
+  io::println("each inner stream drew its own numbers: {own}")
+  let after_a = u64::wrapping_add(u64::wrapping_from_int(1), increment)
+  let counted = spawned == [child_draw(after_a, 1), child_draw(after_a, 2)]
+  io::println("the outer spawn count continued too: {counted}")
+  let host = random::fraction()
+  let gone = !list::contains(outer_draws, host)
+  io::println("no stream after the outer one: {gone}")
+}

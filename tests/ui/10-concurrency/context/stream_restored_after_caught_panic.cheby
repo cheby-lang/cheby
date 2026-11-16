@@ -1,0 +1,130 @@
+// @mode: run-pass
+// @decisions: D-1048, D-1573
+//! When an inner `random::with_generator` fails inside an outer stream, the
+//! scope or the timeout that catches the failure makes the outer stream
+//! current again, in the state it had reached when the inner one started:
+//! the draws and the spawns the body made before it count, the inner
+//! stream's do not. This holds when the inner body panics and when a
+//! member's panic cancels it (§10.3, §10.8, §10.11).
+
+import std::channel
+import std::duration
+import std::fiber
+import std::int
+import std::io
+import std::random
+import std::u64
+
+/// What D-1048 adds to a state once per spawn.
+const stream_increment: U64 = 0xD1B5_4A32_D192_ED03
+
+/// What SplitMix64 adds to its state at each step.
+const increment: U64 = 0x9E37_79B9_7F4A_7C15
+
+/// SplitMix64's output function.
+fn mix(z: U64) -> U64 {
+  let mixed = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9)
+  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), 0x94D0_49BB_1331_11EB)
+  remixed ^ (remixed >> 31)
+}
+
+/// The first fraction drawn by the n-th child of a stream at `state`.
+fn child_draw(state: U64, n: U64) -> Float {
+  let child = mix(u64::wrapping_add(state, u64::wrapping_mul(n, stream_increment)))
+  let (x, _) = random::next_fraction(random::from_seed(int::wrapping_from_u64(child)))
+  x
+}
+
+/// The state of a stream that started at `seed` after `count` draws.
+fn after(seed: Int, count: Int) -> U64 {
+  case count {
+    0 => u64::wrapping_from_int(seed)
+    _ => u64::wrapping_add(after(seed, count - 1), increment)
+  }
+}
+
+/// The first `count` fractions that `generator` draws, in order.
+fn draws(generator: random::Generator, count: Int, drawn: List<Float>) -> List<Float> {
+  case count {
+    0 => drawn
+    _ => {
+      let (x, next) = random::next_fraction(generator)
+      draws(next, count - 1, [..drawn, x])
+    }
+  }
+}
+
+/// Spawns a fiber into `owner` that draws once and is not joined.
+fn spawn_into(owner: fiber::Scope) -> Nil {
+  let _ = fiber::spawn(owner, random::fraction)
+  Nil
+}
+
+/// Spawns a scoped fiber that draws once, and returns its draw.
+fn spawn_draw() -> Float {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, random::fraction))
+  }
+  let assert Ok(x) = outcome
+  x
+}
+
+/// An inner stream whose body draws, spawns and then panics.
+fn inner_fails() -> Float {
+  random::with_generator(random::from_seed(1000), fn() {
+    let _ = random::fraction()
+    let _ = spawn_draw()
+    panic as "inner"
+  })
+}
+
+fn main() {
+  let (keep, never) = channel::new::<Float>(1)
+  let (drawn, spawned) = random::with_generator(random::from_seed(9), fn() {
+    let first = random::fraction()
+    let _ = {
+      use owner <- fiber::scope()
+      let _ = random::fraction()
+      spawn_into(owner)
+      inner_fails()
+    }
+    let after_scope = spawn_draw()
+    let third = random::fraction()
+    let _ = fiber::timeout(duration::seconds(10), fn() {
+      let _ = random::fraction()
+      let _ = spawn_draw()
+      let _ = spawn_draw()
+      inner_fails()
+    })
+    let after_timeout = spawn_draw()
+    let fifth = random::fraction()
+    let _ = {
+      use owner <- fiber::scope()
+      let _ = fiber::spawn(owner, fn() { panic as "member" })
+      random::with_generator(random::from_seed(2000), fn() {
+        let _ = random::fraction()
+        case channel::receive(never) {
+          Ok(x) => x
+          Err(Nil) => 0.0
+        }
+      })
+    }
+    let after_cancel = spawn_draw()
+    let sixth = random::fraction()
+    ([first, third, fifth, sixth], [after_scope, after_timeout, after_cancel])
+  })
+  let _ = channel::send(keep, 0.0)
+  io::println("outer draws {drawn:?}")
+  io::println("spawns after each catch {spawned:?}")
+  let assert [d1, _, d3, _, d5, d6] = draws(random::from_seed(9), 6, [])
+  let draws_continued = drawn == [d1, d3, d5, d6]
+  io::println("the outer stream's draws continued: {draws_continued}")
+  let expected = [
+    child_draw(after(9, 2), 2),
+    child_draw(after(9, 4), 3),
+    child_draw(after(9, 5), 2),
+  ]
+  let spawns_continued = spawned == expected
+  io::println("the outer stream's spawn count continued: {spawns_continued}")
+}

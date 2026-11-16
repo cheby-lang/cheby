@@ -1,0 +1,43 @@
+// @decisions: D-1044, D-1573
+> import std::context
+> import std::random
+> const k: context::Key<Int> = context::key(1)
+> context::get(k)
+1 : Int
+> context::provide(k, 5, fn() { panic as "boom" })
+panicked at <repl:5>:1:31:
+boom
+> context::get(k)
+1 : Int
+> let captured = context::provide(k, 7, fn() { context::capture() })
+> context::with(captured, fn() { context::get(k) })
+7 : Int
+> context::with(captured, fn() { panic as "boom under with" })
+panicked at <repl:9>:1:32:
+boom under with
+> context::get(k)
+1 : Int
+> context::provide(k, 5, fn() {
+.   context::with(captured, fn() { panic as "boom inside both" })
+. })
+panicked at <repl:11>:2:34:
+boom inside both
+> context::get(k)
+1 : Int
+> let first = random::with_generator(random::from_seed(7), fn() { random::fraction() })
+> first == random::with_generator(random::from_seed(7), fn() { random::fraction() })
+True : Bool
+> random::with_generator(random::from_seed(7), fn() { panic as "boom under a stream" })
+panicked at <repl:15>:1:53:
+boom under a stream
+> random::fraction() == first
+False : Bool
+> let seeded = random::with_generator(random::from_seed(7), fn() { context::capture() })
+> let in_seeded = context::with(seeded, fn() { random::fraction() })
+> in_seeded == context::with(seeded, fn() { random::fraction() })
+True : Bool
+> context::with(seeded, fn() { panic as "boom under a captured stream" })
+panicked at <repl:20>:1:30:
+boom under a captured stream
+> random::fraction() == in_seeded
+False : Bool
