@@ -1,2 +1,14 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+# On macOS, cargo's dev profile passes `-Csplit-debuginfo=unpacked`, and
+# rustc then keeps every object file in `target/debug/deps` under a name
+# that is new on each run. Nothing deletes them, and every rustc lists that
+# directory before it compiles: with three million of them, a one-line
+# program took 28 s. `off` keeps none. A backtrace still has the lines of
+# frames in library crates, and only function names for frames of the
+# binary or test crate itself. This is a flag and not a profile setting
+# because Windows rejects `off`. A `RUSTFLAGS` variable replaces it, as CI's
+# does.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-Csplit-debuginfo=off"]
