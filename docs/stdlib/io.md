@@ -92,6 +92,47 @@ fn warn(message: String) {
 }
 ```
 
+### `debug`
+
+```cheby
+pub fn debug<T>(value: T) -> T
+```
+
+Writes the debug text of `value` ([§3.13](../spec/03-types.md#313-equality-hashing-and-debug-printing)) and the line ending `\n` to standard error, at once, then returns `value` (D-1603). `T` has no bound, because debug printing works for every type (D-233). Because it returns its argument, a call can wrap any expression or stand as a stage of a pipeline, and it can be removed later without changing the code around it. Standard error keeps the text out of the program's own output.
+
+- **Cost:** O(n) in the size of the debug text, plus the write. Informative.
+
+_Example_, not a `test` because it writes to standard error. It writes `[3, 1, 2]` and returns 3:
+
+```cheby
+fn count_scores() -> Int {
+  [3, 1, 2]
+  |> io::debug
+  |> list::length
+}
+```
+
+### `debug_as`
+
+```cheby
+pub fn debug_as<T>(value: T, label: String) -> T
+```
+
+Writes `label`, `: `, the debug text of `value` and the line ending `\n` to standard error, at once, then returns `value` (D-1603). The label tells several such lines apart, since none of them names the place in the source that wrote it. The value comes first, so a pipeline stage needs a hole: `|> io::debug_as(_, "parsed")`.
+
+- **Cost:** O(n) in the length of `label` and the size of the debug text, plus the write. Informative.
+
+_Example_, not a `test` because it writes to standard error. It writes `sorted: [1, 2, 3]`:
+
+```cheby
+fn lowest(scores: List<Int>) -> Option<Int> {
+  scores
+  |> list::sort
+  |> io::debug_as(_, "sorted")
+  |> list::first
+}
+```
+
 ### `write_stdout`
 
 ```cheby

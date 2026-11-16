@@ -1,0 +1,26 @@
+// @mode: run-pass
+// @decisions: D-1603
+//! `io::debug` and `io::debug_as` write the debug text of a value, with a
+//! label for `debug_as`, to standard error and return the value unchanged,
+//! so they stand inside pipelines and around expressions.
+
+import std::io
+import std::list
+
+type Point {
+  x: Float,
+  y: Float,
+}
+
+fn main() {
+  let count = [3, 1, 2]
+    |> io::debug
+    |> list::sort
+    |> io::debug_as(_, "sorted")
+    |> list::length
+  let point = io::debug(Point { x: 1.0, y: 2.0 })
+  let text = io::debug_as("a\nb", "text")
+  let increment = io::debug(fn(n: Int) { n + 1 })
+  let next = increment(count)
+  io::println("{count} {next} {point.x} {text}")
+}

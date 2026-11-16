@@ -1720,8 +1720,8 @@ block6 cold:
     return v170  ; v170 = 0
 }
 
-; cb$fn$std$io$debug
-; userextname0 = cb$str$fn$std$io$debug$0
+; cb$fn$std$io$debug_error
+; userextname0 = cb$str$fn$std$io$debug_error$0
 ; userextname1 = cb$imp$cheby_rt_stack_slow_unwind
 ; userextname2 = cb$slot$std$io$show
 function u0:26(i64, i64) -> i64 tail {
@@ -2580,11 +2580,11 @@ block1 cold:
     return v26  ; v26 = 0
 }
 
-; cb$shim$std$io$debug
-; userextname0 = cb$str$shim$std$io$debug$0
+; cb$shim$std$io$debug_error
+; userextname0 = cb$str$shim$std$io$debug_error$0
 ; userextname1 = cb$imp$cheby_rt_stack_slow_unwind
 ; userextname2 = cb$imp$cheby_rt_drop
-; userextname3 = cb$slot$std$io$debug
+; userextname3 = cb$slot$std$io$debug_error
 function u0:31(i64, i64, i64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname1

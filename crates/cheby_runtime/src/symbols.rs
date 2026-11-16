@@ -474,9 +474,12 @@ mod tests {
                     declared_context.insert(symbol.clone());
                 }
                 // `std::io` binds `bytes::length`'s kernel again for
-                // `copy` (D-1072): one symbol may be bound twice, with one
-                // C signature (E0054, D-455).
-                if module == "io" && symbol == "cheby_bytes_length" {
+                // `copy` (D-1072) and `string::add`'s for `debug_as`
+                // (D-1603): one symbol may be bound twice, with one C
+                // signature (E0054, D-455).
+                if module == "io"
+                    && matches!(symbol.as_str(), "cheby_bytes_length" | "cheby_string_add")
+                {
                     assert_eq!(declared.get(&symbol), Some(&signature), "{symbol}");
                     continue;
                 }

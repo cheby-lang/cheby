@@ -15,8 +15,8 @@ import std::bytes
 
 /// An input or output failure. Its kind, and the operating system's
 /// message for a kind without a predicate (D-345). Equality, hashing and
-/// debug printing go through `equal`, `hash` and `debug` (D-342, D-368).
-@std_hooks(equal, hash, debug)
+/// debug printing go through `equal`, `hash` and `debug_error` (D-342, D-368).
+@std_hooks(equal, hash, debug_error)
 pub type Error {
   kind: Kind,
   message: String,
@@ -103,7 +103,7 @@ fn equal(a: Error, b: Error) -> Bool {
 }
 
 /// The debug text of an error, the same as its `show` text (§3.13).
-fn debug(error: Error) -> String {
+fn debug_error(error: Error) -> String {
   show(error)
 }
 
@@ -516,3 +516,28 @@ fn sys_write_file_bytes(path: String, data: bytes::Bytes) -> Result<Nil, (Int, S
 @external(native, "cheby_bytes_length")
 @external(js, "./bytes.mjs", "length")
 priv fn bytes_length(data: bytes::Bytes) -> Int
+
+// Debugging
+
+/// Writes the debug text of `value` (§3.13) and a line ending to standard
+/// error, then returns `value`, so a call can wrap any expression or stand
+/// in a pipeline. It sits at the end of the file, so no std location that a
+/// golden pins moves (D-1603).
+pub fn debug<T>(value: T) -> T {
+  eprintln("{value:?}")
+  value
+}
+
+/// Writes `label`, `: `, the debug text of `value` and a line ending to
+/// standard error, then returns `value` (D-1603).
+pub fn debug_as<T>(value: T, label: String) -> T {
+  eprintln(string_add(label, ": {value:?}"))
+  value
+}
+
+/// `string::add`'s own kernel, for `debug_as`'s line. A call of `string::add`, or `{label}`, would
+/// make every program that uses `std::io` compile all of `std::string` and `std::bytes` with it
+/// (D-1297, D-1603).
+@external(native, "cheby_string_add")
+@external(js, "./string.mjs", "add")
+priv fn string_add(a: String, b: String) -> String
