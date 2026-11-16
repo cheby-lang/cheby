@@ -259,28 +259,13 @@ pub const PLANNED_STD_MODULES: &[&str] = &["log"];
 /// since (D-728). An entry's comment names what its test needs and the
 /// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // Captured contexts (`context::capture`, `with` and `empty`) need the
-    // runtime's `Context` objects, package R2a of workstream 4.6, and the
-    // seeded stream in a captured context needs R2b's seeded streams
-    // (D-1566, D-1567, D-1563).
-    ("context", "with runs a body under a captured context", "M4"),
-    ("context", "with hides the caller's own bindings", "M4"),
-    (
-        "context",
-        "provide binds on top of a captured context",
-        "M4",
-    ),
-    (
-        "context",
-        "a fiber spawned under with inherits the captured context",
-        "M4",
-    ),
+    // A seeded stream in a captured context needs `std::random`'s seeded
+    // streams, package R2b of workstream 4.6 (D-1566, D-1567, D-1563).
     (
         "context",
         "two bodies under one captured context draw the same numbers",
         "M4",
     ),
-    ("context", "the empty context has every default", "M4"),
     // Seeded random streams need `std::context`, M4's workstream 4.6
     // (D-1048, D-1049).
     (

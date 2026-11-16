@@ -3,13 +3,14 @@
 //! values are the runtime kinds 40 to 44 ([`abi::layout`]); `std::file`'s
 //! `File` is 45 and `std::net`'s `Listener` and `Connection` are 46 and 47
 //! (D-982), handles with a payload as 40 to 43 are, whose finalizers close
-//! their files (`file.rs`) and sockets (`net.rs`).
+//! their files (`file.rs`) and sockets (`net.rs`). `std::context`'s
+//! `Context` is 48 (D-1566, D-1583).
 //!
 //! They are handles: `==` and hashing stop on them with the catchable
 //! panic of a function value, and their debug text is `<Sender>`,
-//! `<Receiver>`, `<Fiber>`, `<Scope>` or `<Selector>`, exactly as for a
-//! value of an external type (D-233, D-590), through the kinds' `handle`
-//! flag ([`CustomKind::handle`]).
+//! `<Receiver>`, `<Fiber>`, `<Scope>`, `<Selector>` or `<Context>`, exactly
+//! as for a value of an external type (D-233, D-590), through the kinds'
+//! `handle` flag ([`CustomKind::handle`]).
 //!
 //! (D-750) The objects of kinds 40 to 43 and 45 to 47 are 24 bytes:
 //! the header, a pointer to the boxed Rust payload ([`HandlePayload`]), and
@@ -23,6 +24,17 @@
 //! selector node (44) is the header and five uniform words, all visited as
 //! children, so freeing, freezing and shared marking see them; it has no
 //! finalizer (architecture.md §7.3: one arm and the previous node).
+//!
+//! # Captured contexts
+//!
+//! A `Context` (48) is 32 bytes and immutable once [`new_context`] made it
+//! (D-1566, D-1574): the header, the bindings map word at 8 (0 for the
+//! empty context, or a map root the object owns), a raw word at 16 that is
+//! 1 when a seeded stream is held and 0 otherwise, and the stream's raw
+//! state at 24. Only the map word is visited as a child, so freeing and
+//! shared marking reach the map and its values, and a context sent on a
+//! channel shares them (D-072). It has no finalizer. [`context_parts`]
+//! reads it back.
 //!
 //! # Selector nodes
 //!
@@ -134,6 +146,19 @@ pub(crate) const SELECTOR_AFTER: i64 = 1;
 /// The tag of the empty selector, which ends every list.
 pub(crate) const SELECTOR_EMPTY: i64 = 2;
 
+/// The size of a captured context: the header, the map word, the stream
+/// flag and the stream state.
+const CONTEXT_SIZE: u64 = 32;
+
+/// The offset of a captured context's bindings map word.
+const CONTEXT_MAP_OFFSET: usize = 8;
+
+/// The offset of a captured context's stream flag, a raw 0 or 1.
+const CONTEXT_STREAM_OFFSET: usize = 16;
+
+/// The offset of a captured context's raw stream state.
+const CONTEXT_STATE_OFFSET: usize = 24;
+
 /// Allocates a selector node (kind 44) with count 1 that owns `words`
 /// (the layout of the module documentation), charged to the current
 /// domain: the running fiber's, or a host thread's. The one constructor of
@@ -183,6 +208,68 @@ pub(crate) unsafe fn selector_words(word: Word) -> [Word; SELECTOR_WORDS] {
         offset = offset.saturating_add(object::to_usize(abi::FIELD_SIZE));
     }
     words
+}
+
+/// Allocates a captured context (kind 48) with count 1, charged to the
+/// current domain, as [`new_selector_node`] is: it holds `map`, a
+/// bindings map word (0 for the empty context), and `stream`, the state of
+/// a seeded stream if it holds one (D-1566, D-1574). `map` is borrowed:
+/// the object takes its own reference only after the allocation, so a
+/// request that cannot be served raises `out of memory` (D-642) with
+/// nothing taken. The object never changes after this call.
+///
+/// # Safety
+///
+/// `map` is 0 or a live bindings map.
+#[must_use]
+pub(crate) unsafe fn new_context(map: Word, stream: Option<u64>) -> Word {
+    register();
+    let obj = alloc::alloc_object(CONTEXT_SIZE, abi::header(abi::RC_UNIQUE, 0, ids::CONTEXT));
+    #[cfg(debug_assertions)]
+    alloc::count_new_kind(None, ids::CONTEXT);
+    // SAFETY: forwarded from the caller; 0 is a no-op.
+    unsafe { crate::rc::dup(map) };
+    let (flag, state) = stream.map_or((0, 0), |state| (1, state));
+    // SAFETY: a fresh object of `CONTEXT_SIZE` bytes: its three words
+    // follow the header, each written here once.
+    unsafe {
+        object::write_field(obj, CONTEXT_MAP_OFFSET, map);
+        object::write_field(obj, CONTEXT_STREAM_OFFSET, flag);
+        object::write_field(obj, CONTEXT_STATE_OFFSET, state);
+    }
+    object::ptr_to_word(obj)
+}
+
+/// The bindings map word (0 for the empty context) and the stream state
+/// of a live captured context, borrowed.
+///
+/// # Safety
+///
+/// `word` is a live captured context made by [`new_context`].
+pub(crate) unsafe fn context_parts(word: Word) -> (Word, Option<u64>) {
+    let obj = word_to_ptr(word);
+    if cfg!(debug_assertions) {
+        // SAFETY: forwarded from the caller; poisoning catches a freed
+        // context here.
+        unsafe { alloc::check_live(word, "reading a captured context") };
+        // SAFETY: a live object.
+        let (_, id) = unsafe { scan_and_layout(obj) };
+        if id != ids::CONTEXT {
+            fatal(format_args!(
+                "reading a captured context reached an object of layout {id}"
+            ));
+        }
+    }
+    // SAFETY: forwarded from the caller: `new_context` wrote the three
+    // words after the header.
+    let (map, flag, state) = unsafe {
+        (
+            object::read_field(obj, CONTEXT_MAP_OFFSET),
+            object::read_field(obj, CONTEXT_STREAM_OFFSET),
+            object::read_field(obj, CONTEXT_STATE_OFFSET),
+        )
+    };
+    (map, (flag != 0).then_some(state))
 }
 
 /// How a handle object reaches its payload's type: written once by
@@ -357,6 +444,19 @@ unsafe fn selector_children(word: Word, visit: &mut dyn FnMut(Word)) {
     }
 }
 
+unsafe fn context_size(_: Word) -> u64 {
+    CONTEXT_SIZE
+}
+
+/// Visits a captured context's map word only: the stream flag and state
+/// are raw words.
+///
+/// # Safety `word` is a live (or dying) captured context.
+unsafe fn context_children(word: Word, visit: &mut dyn FnMut(Word)) {
+    // SAFETY: the map word follows the header.
+    visit(unsafe { object::read_field(word_to_ptr(word), CONTEXT_MAP_OFFSET) });
+}
+
 /// A handle kind with a payload.
 const fn handle_kind(name: &'static str) -> CustomKind {
     CustomKind {
@@ -393,7 +493,20 @@ static SELECTOR_KIND: CustomKind = CustomKind {
     shape: layout::KindShape::Opaque,
 };
 
-/// Registers the eight kinds once per process. The layout table's builtin
+/// The captured context kind (D-1566).
+static CONTEXT_KIND: CustomKind = CustomKind {
+    name: "Context",
+    size: context_size,
+    children: context_children,
+    equal: None,
+    hash: None,
+    debug: None,
+    handle: true,
+    finalize: None,
+    shape: layout::KindShape::Opaque,
+};
+
+/// Registers the nine kinds once per process. The layout table's builtin
 /// initialization calls it, so they are known before any object exists.
 pub(crate) fn register() {
     static ONCE: Once = Once::new();
@@ -407,6 +520,7 @@ pub(crate) fn register() {
             (ids::FILE, &FILE_KIND),
             (ids::LISTENER, &LISTENER_KIND),
             (ids::CONNECTION, &CONNECTION_KIND),
+            (ids::CONTEXT, &CONTEXT_KIND),
         ] {
             if let Err(error) = layout::register_builtin(id, LayoutInfo::custom(kind)) {
                 fatal(format_args!("cannot register handle layout {id}: {error}"));
@@ -461,6 +575,15 @@ pub(crate) mod tests {
         new_selector_node(words)
     }
 
+    /// A captured context holding `map` (owned: the context takes its own
+    /// reference, and this one is given up) and `stream`.
+    pub(crate) fn captured(map: Word, stream: Option<u64>) -> Word {
+        // SAFETY: tests pass 0 or a live map.
+        let word = unsafe { new_context(map, stream) };
+        release([map]);
+        word
+    }
+
     pub(crate) const KINDS: [HandleKind; 4] = [
         HandleKind::Sender,
         HandleKind::Receiver,
@@ -491,7 +614,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_kinds_are_registered_at_40_to_44() {
+    fn the_kinds_are_registered_at_40_to_48() {
         // Any builtin lookup registers them.
         assert!(layout::get(ids::STRING).is_some());
         for (id, name) in [
@@ -500,6 +623,10 @@ pub(crate) mod tests {
             (ids::FIBER, "Fiber"),
             (ids::SCOPE, "Scope"),
             (ids::SELECTOR, "Selector"),
+            (ids::FILE, "File"),
+            (ids::LISTENER, "Listener"),
+            (ids::CONNECTION, "Connection"),
+            (ids::CONTEXT, "Context"),
         ] {
             let info = layout::get(id).unwrap();
             assert_eq!(&*info.type_name, name);
@@ -527,6 +654,10 @@ pub(crate) mod tests {
                 .map(|(kind, name)| (counted(*kind, &finalized, Vec::new()), name))
                 .collect();
             handles.push((selector([int_word(0); SELECTOR_WORDS]), "<Selector>"));
+            // D-1566: a captured context, empty and holding a map and a
+            // stream.
+            handles.push((captured(0, None), "<Context>"));
+            handles.push((captured(map_of_one(), Some(7)), "<Context>"));
             for (word, name) in handles {
                 assert_eq!(text(word), name);
                 assert_eq!(eq(word, word), Err(Reached::Function), "{name}");
@@ -743,10 +874,13 @@ pub(crate) mod tests {
             ] {
                 words.push(counted(kind, &finalized, Vec::new()));
             }
+            // A captured context, the ninth kind (D-1583).
+            words.push(captured(0, None));
+            words.push(captured(0, Some(1)));
             let expected = if cfg!(debug_assertions) {
-                [1, 2, 1, 1, 1, 1, 1, 1]
+                [1, 2, 1, 1, 1, 1, 1, 1, 2]
             } else {
-                [0; 8]
+                [0; 9]
             };
             assert_eq!(domain.live_kinds(), expected);
             let line = alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects());
@@ -755,7 +889,7 @@ pub(crate) mod tests {
                     line.as_deref(),
                     Some(
                         "note: leaked 1 <Sender>, 2 <Receiver>, 1 <Fiber>, 1 <Scope>, \
-                         1 <Selector>, 1 <File>, 1 <Listener>, 1 <Connection>"
+                         1 <Selector>, 1 <File>, 1 <Listener>, 1 <Connection>, 2 <Context>"
                     )
                 );
             } else {
@@ -764,7 +898,7 @@ pub(crate) mod tests {
             release(words);
             let other = string("other");
             if cfg!(debug_assertions) {
-                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0, 0, 0, 0]);
+                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0, 0, 0, 0, 0]);
                 assert_eq!(
                     alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects()).as_deref(),
                     Some("note: leaked 1 <Receiver>, and 1 object of other kinds")
@@ -772,8 +906,101 @@ pub(crate) mod tests {
             }
             release([receiver, other]);
         });
-        assert_eq!(domain.live_kinds(), [0; 8]);
+        assert_eq!(domain.live_kinds(), [0; 9]);
         assert_eq!(domain.live_objects(), 0);
         assert_eq!(alloc::leaked_kinds_line(domain.live_kinds(), 0), None);
+    }
+
+    /// A one-entry bindings map, a key identity to `"value"`, owned.
+    fn map_of_one() -> Word {
+        let key = tuple(&[
+            crate::values::u64_word(1),
+            string("app::k"),
+            string("String"),
+        ]);
+        let value = string("value");
+        // SAFETY: the empty map and live words, borrowed; the result is
+        // owned.
+        let map = unsafe { crate::hamt::bindings::bind(0, key, value) };
+        release([key, value]);
+        map
+    }
+
+    /// D-1566, D-1574: a captured context gives back what it was made
+    /// with, holds its own reference to the map, visits only the map as a
+    /// child, and frees the map with its last reference.
+    #[test]
+    fn captured_contexts_hold_their_map_and_stream() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let empty = captured(0, None);
+            // SAFETY: a live captured context.
+            assert_eq!(unsafe { context_parts(empty) }, (0, None));
+            let map = map_of_one();
+            // SAFETY: a live captured context.
+            let word = unsafe { new_context(map, Some(u64::MAX)) };
+            // SAFETY: a live map.
+            let held = unsafe { rc::count_of(map) };
+            assert_eq!(held, Some(2), "the context's own reference");
+            // SAFETY: a live captured context.
+            assert_eq!(unsafe { context_parts(word) }, (map, Some(u64::MAX)));
+            let mut children = Vec::new();
+            // SAFETY: a live object.
+            unsafe { alloc::for_each_child(word, &mut |child| children.push(child)) };
+            assert_eq!(children, [map]);
+            // A stream state that looks like a pointer is never followed.
+            let raw = captured(0, Some(0x1000));
+            // SAFETY: a live captured context.
+            assert_eq!(unsafe { context_parts(raw) }, (0, Some(0x1000)));
+            release([map, raw, empty]);
+            // The context's reference keeps the map alive.
+            // SAFETY: a live map.
+            assert_eq!(unsafe { rc::count_of(map) }, Some(1));
+            release([word]);
+        });
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+
+    /// D-1566, D-072: a captured context sent through `mark_shared` (as a
+    /// channel's send does) marks its map and the map's values shared, and
+    /// its last reference, dropped on another thread, frees them all.
+    #[test]
+    fn a_shared_captured_context_shares_its_map() {
+        let domain = Domain::new();
+        let word = with_domain(Arc::clone(&domain), || {
+            let map = map_of_one();
+            let word = captured(map, Some(3));
+            // SAFETY: a live value only this thread uses.
+            unsafe { rc::mark_shared(word) };
+            // SAFETY: live objects.
+            unsafe {
+                assert_eq!(rc::count_of(word), Some(-1));
+                assert_eq!(rc::count_of(map), Some(-1));
+            }
+            word
+        });
+        let domain_of_thread = Arc::clone(&domain);
+        std::thread::spawn(move || {
+            with_domain(domain_of_thread, || release([word]));
+        })
+        .join()
+        .unwrap();
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
+    }
+
+    /// D-1566, D-1600: a captured context is a handle, so a constant whose
+    /// value held one would be E0081's ``a `Context` ``; no program reaches
+    /// that, since making one is E0077 in a constant (D-1045).
+    #[test]
+    fn a_captured_context_is_undescribed_in_a_constant() {
+        let domain = Domain::new();
+        with_domain(Arc::clone(&domain), || {
+            let word = tuple(&[int_word(1), captured(0, None)]);
+            // SAFETY: a live value.
+            let found = unsafe { crate::consteval::find_undescribed(word) };
+            assert_eq!(found.as_deref(), Some("a `Context`"));
+            release([word]);
+        });
+        assert_eq!((domain.live_objects(), domain.live_bytes()), (0, 0));
     }
 }

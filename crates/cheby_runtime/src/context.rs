@@ -33,6 +33,31 @@
 //! reserved ([`share_bindings`], I-E), and `sched::create_fiber` copies
 //! the pointer once the fiber exists ([`inherit`]).
 //!
+//! **Captured contexts.** `capture`, `with` and `empty` (D-1566, D-1568)
+//! are Cheby over four more kernels. [`cheby_context_sys_capture`] copies
+//! the fiber's map pointer into a `Context` object (`handles::new_context`),
+//! [`cheby_context_sys_enter`] puts a captured map in place of the fiber's
+//! and returns the outer one, as a bind does, and
+//! [`cheby_context_sys_leave`] puts it back; [`cheby_context_sys_empty`]
+//! makes the empty context.
+//!
+//! **The stream.** A fiber's seeded stream of `std::random` (D-1048,
+//! D-1574) is three fields beside the bindings: whether a stream is set,
+//! its `SplitMix64` state, and the spawns and captures since the last draw.
+//! `with` and `random::with_generator` keep the outer stream in the fiber,
+//! in a stack of frames ([`push_stream`], [`pop_stream`]), so that a
+//! scope's close puts back the stream that was current at its open in the
+//! state it has reached since (D-1573): the open records the stack's
+//! depth, and the close cuts the stack back to it. A capture under a
+//! stream counts as a spawn and holds the state a child would start from
+//! ([`derive`](fn@derive), D-1567). Nothing sets a stream outside the Rust tests yet:
+//! `std::random`'s kernels come with the seeded streams. On the paths
+//! every fiber takes, the stream halves cost little when no stream or
+//! frame is set: a scope's open copies the frame depth (a load and a
+//! store), its close compares it (two loads and a branch), and a release
+//! tests two fields (two loads and a branch); the work behind each branch
+//! is out of line.
+//!
 //! **Release.** The field cannot be released by dropping the control
 //! block, which happens with no fiber current (I-A). Every base frame
 //! marks itself ([`set_based`]) and releases the bindings while its fiber
@@ -43,12 +68,15 @@
 //! every host (D-1594). `fiber_start` checks that it was done
 //! ([`release_at_exit`]).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+use parking_lot::Mutex;
 
 use crate::abi::Word;
 use crate::ctx::ExecCtx;
 use crate::fiber_ops::running;
 use crate::hamt::bindings;
+use crate::handles;
 use crate::object::{load_rc, word_to_ptr};
 use crate::panic::fatal;
 use crate::rc;
@@ -73,7 +101,7 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 3] {
+fn all() -> [Entry; 7] {
     [
         (
             "cheby_context_sys_get",
@@ -92,6 +120,30 @@ fn all() -> [Entry; 3] {
             cheby_context_sys_restore as *const u8,
             &["Word"],
             "()",
+        ),
+        (
+            "cheby_context_sys_capture",
+            cheby_context_sys_capture as *const u8,
+            &[],
+            "Word",
+        ),
+        (
+            "cheby_context_sys_enter",
+            cheby_context_sys_enter as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_context_sys_leave",
+            cheby_context_sys_leave as *const u8,
+            &["Word"],
+            "()",
+        ),
+        (
+            "cheby_context_sys_empty",
+            cheby_context_sys_empty as *const u8,
+            &[],
+            "Word",
         ),
     ]
 }
@@ -115,10 +167,14 @@ pub(crate) fn signatures() -> Vec<(&'static str, &'static [&'static str], &'stat
 /// The kernels that take the running fiber's context (`@std_context`,
 /// D-692): all of them.
 #[cfg(test)]
-pub(crate) const CONTEXT_KERNELS: [&str; 3] = [
+pub(crate) const CONTEXT_KERNELS: [&str; 7] = [
     "cheby_context_sys_get",
     "cheby_context_sys_bind",
     "cheby_context_sys_restore",
+    "cheby_context_sys_capture",
+    "cheby_context_sys_enter",
+    "cheby_context_sys_leave",
+    "cheby_context_sys_empty",
 ];
 
 /// A fiber's context (D-1571, D-1574). Owner-written, `Relaxed`.
@@ -130,6 +186,119 @@ pub(crate) struct FiberContext {
     /// Whether a base frame runs this fiber, which releases the bindings
     /// itself ([`set_based`]).
     based: AtomicBool,
+    /// Whether a seeded stream is set (D-1574).
+    stream_on: AtomicBool,
+    /// The stream's `SplitMix64` state, while one is set.
+    stream_state: AtomicU64,
+    /// The spawns and captures since the stream's last draw (D-1048,
+    /// D-1567).
+    stream_spawns: AtomicU64,
+    /// The outer streams of `with` and `random::with_generator`, innermost
+    /// last (D-1573). Only the owning fiber locks it.
+    frames: Mutex<Vec<StreamFrame>>,
+    /// `frames.len()`, readable without the lock: 0 unless a `with` or a
+    /// `with_generator` runs on the fiber.
+    depth: AtomicUsize,
+}
+
+/// A stream that `with` or `random::with_generator` put aside: the
+/// fiber's three stream fields as they were when it started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StreamFrame {
+    /// Whether a stream was set.
+    on: bool,
+    /// Its state.
+    state: u64,
+    /// Its spawns and captures since the last draw.
+    spawns: u64,
+}
+
+impl FiberContext {
+    /// The fiber's current stream.
+    fn stream(&self) -> StreamFrame {
+        StreamFrame {
+            on: self.stream_on.load(Ordering::Relaxed),
+            state: self.stream_state.load(Ordering::Relaxed),
+            spawns: self.stream_spawns.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Makes `frame` the fiber's current stream.
+    fn set_stream_frame(&self, frame: StreamFrame) {
+        self.stream_on.store(frame.on, Ordering::Relaxed);
+        self.stream_state.store(frame.state, Ordering::Relaxed);
+        self.stream_spawns.store(frame.spawns, Ordering::Relaxed);
+    }
+
+    /// Makes the frame at `depth` the current stream and drops it and
+    /// every frame above it. Nothing when the stack is not deeper.
+    fn cut_streams(&self, depth: usize) {
+        let mut frames = self.frames.lock();
+        if let Some(&frame) = frames.get(depth) {
+            self.set_stream_frame(frame);
+            frames.truncate(depth);
+        }
+        self.depth.store(frames.len(), Ordering::Relaxed);
+    }
+}
+
+/// `SplitMix64`'s output function, the mixing of a step, as
+/// `std/random.cheby`'s `mix` (D-655).
+const fn mix(z: u64) -> u64 {
+    let mixed = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let remixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    remixed ^ (remixed >> 31)
+}
+
+/// The state that the `n`-th spawn or capture since the last draw of a
+/// stream in state `state` starts from (D-1048, D-1567):
+/// `state + n × 0xD1B54A32D192ED03` modulo 2⁶⁴, mixed. It equals
+/// `std::random`'s private `derived` bit for bit (I-J).
+pub(crate) const fn derive(state: u64, n: u64) -> u64 {
+    mix(state.wrapping_add(n.wrapping_mul(0xD1B5_4A32_D192_ED03)))
+}
+
+/// The fiber's stream, `(on, state, spawns)`, and the depth of its stream
+/// frames, for the tests.
+#[cfg(test)]
+pub(crate) fn stream_parts(me: &ExecCtx) -> ((bool, u64, u64), usize) {
+    let stream = me.context.stream();
+    (
+        (stream.on, stream.state, stream.spawns),
+        me.context.depth.load(Ordering::Relaxed),
+    )
+}
+
+/// Puts the fiber's current stream aside, on top of its frames, and sets
+/// the stream `(on, state)` with no spawns since a draw (D-1573): `with`
+/// and `random::with_generator` call it before their body. Never raises.
+pub(crate) fn push_stream(me: &ExecCtx, on: bool, state: u64) {
+    let fields = &me.context;
+    let mut frames = fields.frames.lock();
+    frames.push(fields.stream());
+    fields.depth.store(frames.len(), Ordering::Relaxed);
+    fields.set_stream_frame(StreamFrame {
+        on,
+        state,
+        spawns: 0,
+    });
+}
+
+/// Makes the frame that [`push_stream`] put aside the current stream again,
+/// as far as it had advanced when it was put aside, after the body
+/// returned. Debug builds end the process when no frame is left. Never
+/// raises.
+pub(crate) fn pop_stream(me: &ExecCtx) {
+    let fields = &me.context;
+    let mut frames = fields.frames.lock();
+    match frames.pop() {
+        Some(frame) => fields.set_stream_frame(frame),
+        None if cfg!(debug_assertions) => fatal(format_args!(
+            "a stream was put back with no stream frame left (D-1573)"
+        )),
+        None => {}
+    }
+    fields.depth.store(frames.len(), Ordering::Relaxed);
 }
 
 /// The fiber's bindings word, borrowed: 0 for the empty context.
@@ -230,23 +399,34 @@ pub(crate) unsafe fn restore(me: &ExecCtx, outer: Word) {
 pub(crate) struct ScopeSaved {
     /// An owned reference to the fiber's bindings at the open, or 0.
     bindings: AtomicU64,
+    /// The depth of the fiber's stream frames at the open.
+    depth: AtomicUsize,
 }
 
 impl ScopeSaved {
     /// Records the fiber's bindings, with one reference added: when the
     /// body unwinds, the frame that held the outer map may release it in
-    /// its cleanup, and this copy is then the only one. Never raises.
+    /// its cleanup, and this copy is then the only one. Also records the
+    /// depth of the stream frames, a load and a store. Never raises.
     pub(crate) fn save(&self, me: &ExecCtx) {
         let word = bindings_of(me);
         // SAFETY: the fiber's map, 0 or live.
         unsafe { rc::dup(word) };
         self.bindings.store(word, Ordering::Relaxed);
+        self.depth
+            .store(me.context.depth.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
     /// Puts the bindings recorded at the open back on the fiber and
     /// releases what it held, on every way out of the close (I-B). When
     /// the body `returned`, every swap inside it was undone, so the fiber
-    /// holds the recorded map already; debug builds check that. Never
+    /// holds the recorded map already; debug builds check that. When the
+    /// fiber has more stream frames than at the open, a `with` or a
+    /// `with_generator` inside the body unwound: the frame at the recorded
+    /// depth, which holds the stream current when the first of them
+    /// started, becomes the current stream again, in the state it had
+    /// reached, and the frames above it go (D-1573). With no frame above
+    /// the recorded depth, this half is a load, a load and a test. Never
     /// raises.
     pub(crate) fn restore(&self, me: &ExecCtx, returned: bool) {
         let saved = self.bindings.swap(0, Ordering::Relaxed);
@@ -258,7 +438,25 @@ impl ScopeSaved {
             ));
         }
         drop_bindings(old);
+        let depth = self.depth.load(Ordering::Relaxed);
+        if me.context.depth.load(Ordering::Relaxed) > depth {
+            cut_streams_at_close(me, depth, returned);
+        }
     }
+}
+
+/// The stream half of a scope's close when a `with` or a
+/// `with_generator` inside the body unwound ([`ScopeSaved::restore`]).
+#[cold]
+#[inline(never)]
+fn cut_streams_at_close(me: &ExecCtx, depth: usize, returned: bool) {
+    if cfg!(debug_assertions) && returned {
+        fatal(format_args!(
+            "a scope's body returned with more stream frames than it opened with \
+             (D-1573, I-B)"
+        ));
+    }
+    me.context.cut_streams(depth);
 }
 
 /// Marks the fiber's bindings shared, before a spawn makes another fiber
@@ -305,9 +503,78 @@ pub(crate) fn set_based(me: &ExecCtx) {
 /// fiber is current, before its last touch of shared state, so the
 /// objects are counted in the fiber's domain before its owner counts it,
 /// and a teardown's rule about drop functions is read from the fiber's
-/// own group (D-710). A second call does nothing. Never raises.
+/// own group (D-710). It also clears the stream and its frames, which a
+/// base frame that unwound out of `with` or `with_generator` leaves set:
+/// one test of two fields when there are none. A second call does
+/// nothing. Never raises.
 pub(crate) fn release(me: &ExecCtx) {
     drop_bindings(swap_bindings(me, 0));
+    let fields = &me.context;
+    if fields.stream_on.load(Ordering::Relaxed) || fields.depth.load(Ordering::Relaxed) != 0 {
+        clear_streams(me);
+    }
+}
+
+/// The stream half of [`release`] when a stream or a frame is set.
+#[cold]
+#[inline(never)]
+fn clear_streams(me: &ExecCtx) {
+    let fields = &me.context;
+    let mut frames = fields.frames.lock();
+    frames.clear();
+    fields.depth.store(0, Ordering::Relaxed);
+    fields.set_stream_frame(StreamFrame::default());
+}
+
+/// The fiber's whole context as a value (D-1566): a `Context` that holds
+/// the fiber's map, and, while a seeded stream is set, the state a fiber
+/// spawned here would start from (D-1567). The capture then takes the
+/// next spawn number and leaves the stream's state alone. The object is
+/// allocated first, which may raise `out of memory` (D-642), before the
+/// map gains a reference and before the count moves.
+pub(crate) fn capture(me: &ExecCtx) -> Word {
+    let fields = &me.context;
+    let stream = fields.stream();
+    let n = stream.spawns.wrapping_add(1);
+    let held = stream.on.then(|| derive(stream.state, n));
+    // SAFETY: the fiber's map, 0 or live while it holds it.
+    let word = unsafe { handles::new_context(bindings_of(me), held) };
+    if stream.on {
+        fields.stream_spawns.store(n, Ordering::Relaxed);
+    }
+    word
+}
+
+/// Runs the fiber under `captured` (D-1566, D-1567): its stream is put
+/// aside ([`push_stream`]) and the captured one set, or none, and the
+/// captured map replaces the fiber's bindings, with one reference added.
+/// The outer bindings are returned, owned, as [`bind`] returns them, for
+/// [`leave`]. Never raises.
+///
+/// # Safety
+///
+/// `captured` is a live captured context, borrowed.
+pub(crate) unsafe fn enter(me: &ExecCtx, captured: Word) -> Word {
+    // SAFETY: forwarded from the caller.
+    let (map, stream) = unsafe { handles::context_parts(captured) };
+    push_stream(me, stream.is_some(), stream.unwrap_or(0));
+    // SAFETY: the context's map, 0 or live while the caller holds it.
+    unsafe { rc::dup(map) };
+    let old = swap_bindings(me, map);
+    if old == 0 { bindings::empty() } else { old }
+}
+
+/// Undoes [`enter`] after the body returned: `outer`, which it returned,
+/// is the fiber's context again, as [`restore`] makes it, and the stream
+/// put aside is current again. Never raises.
+///
+/// # Safety
+///
+/// As for [`restore`].
+pub(crate) unsafe fn leave(me: &ExecCtx, outer: Word) {
+    // SAFETY: forwarded from the caller.
+    unsafe { restore(me, outer) };
+    pop_stream(me);
 }
 
 /// The check at the end of a fiber of a runtime, in `fiber_start` after
@@ -389,4 +656,71 @@ pub(crate) unsafe extern "C" fn cheby_context_sys_restore(ctx: *mut ExecCtx, out
         // SAFETY: as above.
         unsafe { restore(me, outer) };
     });
+}
+
+/// `context::sys_capture`, private, which `context::capture` calls: the
+/// calling fiber's context as a `Context`, owned.
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_context_sys_capture(ctx: *mut ExecCtx) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let me = unsafe { running(ctx) };
+        capture(me)
+    })
+}
+
+/// `context::sys_enter`, private, which `context::with` calls before
+/// `body`: puts `captured` in place of the fiber's context and returns the
+/// outer bindings, owned, which `with` gives back to
+/// [`cheby_context_sys_leave`].
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context and `captured` a live `Context`,
+/// borrowed.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_context_sys_enter(ctx: *mut ExecCtx, captured: Word) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let me = unsafe { running(ctx) };
+        // SAFETY: as above.
+        unsafe { enter(me, captured) }
+    })
+}
+
+/// `context::sys_leave`, private, which `context::with` calls after
+/// `body` returned: makes `outer`, which [`cheby_context_sys_enter`]
+/// returned, the fiber's bindings again, and its stream the one it had.
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context and `outer` a bindings word,
+/// borrowed.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_context_sys_leave(ctx: *mut ExecCtx, outer: Word) {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let me = unsafe { running(ctx) };
+        // SAFETY: as above.
+        unsafe { leave(me, outer) };
+    });
+}
+
+/// `context::sys_empty`, private, which `context::empty` calls: the
+/// context in which every key has its default and no stream is set
+/// (D-1568), owned.
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_context_sys_empty(ctx: *mut ExecCtx) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: 0 is the empty map.
+        unsafe { handles::new_context(0, None) }
+    })
 }

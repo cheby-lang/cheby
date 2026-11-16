@@ -346,7 +346,7 @@ mod mark_shared_tests {
     use super::*;
     use crate::abi::layout as ids;
     use crate::alloc::{Domain, alloc_object, for_each_child, poison_enabled, with_domain};
-    use crate::handles::tests::{KINDS, counted, selector};
+    use crate::handles::tests::{KINDS, captured, counted, selector};
     use crate::handles::{HandleKind, SELECTOR_WORDS};
     use crate::layout::{self, FieldKind, LayoutInfo};
     use crate::object::{self, scan_and_layout, write_field};
@@ -472,6 +472,14 @@ mod mark_shared_tests {
             int_word(0),
             object::nil(),
         ]));
+        // D-1566: a captured context whose map holds a string, marked
+        // through the context's one child.
+        let identity = tuple(&[u64_word(1), string("app::k"), string("Int")]);
+        let value = string("bound");
+        // SAFETY: the empty map and live words, borrowed.
+        let bindings = unsafe { crate::hamt::bindings::bind(0, identity, value) };
+        release([identity, value]);
+        handles.push(captured(bindings, Some(5)));
         let handles = list(handles);
         tuple(&[
             string("text"),
@@ -532,6 +540,7 @@ mod mark_shared_tests {
                 "Fiber",
                 "Scope",
                 "Selector",
+                "Context",
             ] {
                 assert!(names.contains(name), "{name} is not marked: {names:?}");
             }

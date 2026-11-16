@@ -776,8 +776,9 @@ mod tests {
     /// `std::context`'s kernels have the C signatures of their `@external`
     /// declarations in `std/context.cheby`, after the context pointer, and
     /// every one is `@std_context` (D-692, D-1573): `sys_get` and
-    /// `sys_bind`, whose tuple-typed identity is one word, and
-    /// `sys_restore`.
+    /// `sys_bind`, whose tuple-typed identity is one word, `sys_restore`,
+    /// and the four of captured contexts, `sys_capture`, `sys_enter`,
+    /// `sys_leave` and `sys_empty` (D-1566).
     #[test]
     fn context_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
@@ -806,7 +807,7 @@ mod tests {
             registered_context, declared_context,
             "the kernels that take the context pointer and the `@std_context` declarations differ"
         );
-        assert_eq!(registered.len(), 3);
+        assert_eq!(registered.len(), 7);
     }
 
     #[test]

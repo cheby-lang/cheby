@@ -24,10 +24,14 @@
 {
   "isIncomplete": false,
   "items": [
+    "Context | Struct | pub type Context | (context)",
     "Key | Struct | pub type Key<T> | (context)",
+    "capture() | Function | pub fn capture() -> context::Context | (context)",
+    "empty() | Function | pub fn empty() -> context::Context | (context)",
     "get(what) | Function | pub fn get<T>(what: context::Key<T>) -> T | (context)",
     "key(default) | Function | pub fn key<T>(default: T) -> context::Key<T> | (context)",
     "key_without_default() | Function | pub fn key_without_default<T>() -> context::Key<Option<T>> | (context)",
-    "provide(what, value, body) | Function | pub fn provide<T, R>(what: context::Key<T>, value: T, body: fn() -> R) -> R | (context)"
+    "provide(what, value, body) | Function | pub fn provide<T, R>(what: context::Key<T>, value: T, body: fn() -> R) -> R | (context)",
+    "with(captured, body) | Function | pub fn with<R>(captured: context::Context, body: fn() -> R) -> R | (context)"
   ]
 }

@@ -1,7 +1,8 @@
 //! Tests of a fiber's context (D-1571, D-1573, `crate::context`): the
 //! swap kernels on a root and on an isolated entry, a scope's save and
 //! restore, inheritance by scoped, detached and test fibers, the release
-//! at every base frame, and running out of memory in a bind or a spawn.
+//! at every base frame, running out of memory in a bind or a spawn, and
+//! captured contexts with the stream's frames (D-1566, D-1567, D-1574).
 //! Rust-level fibers on a `Runtime`, no JIT, with the return flag
 //! (D-733), as `fiber_ops::tests`; poisoning is on, and every test finds
 //! its domain's live count at its baseline at the end.
@@ -17,8 +18,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use crate::abi::{PanicKind, Word};
 use crate::alloc::Domain;
 use crate::context::{
-    self, ScopeSaved, bindings_of, cheby_context_sys_bind, cheby_context_sys_get,
-    cheby_context_sys_restore,
+    self, ScopeSaved, bindings_of, cheby_context_sys_bind, cheby_context_sys_capture,
+    cheby_context_sys_empty, cheby_context_sys_enter, cheby_context_sys_get,
+    cheby_context_sys_leave, cheby_context_sys_restore, derive, pop_stream, push_stream,
+    stream_parts,
 };
 use crate::ctx::ExecCtx;
 use crate::entry::{Callbacks, EntryConfig, EntryMode, EntryOutcome, run_entry};
@@ -883,5 +886,294 @@ fn a_bind_refused_at_any_allocation_changes_nothing() {
         for word in keys.into_iter().chain([value]) {
             drop_word(word);
         }
+    });
+}
+
+// ---------------------------------------------------------------------
+// Captured contexts and the stream's frames
+
+/// `context::sys_capture`, owned.
+fn capture(me: &ExecCtx) -> Word {
+    // SAFETY: the running fiber's context.
+    unsafe { cheby_context_sys_capture(ctx_of(me)) }
+}
+
+/// `context::sys_enter` of a borrowed captured context: the outer
+/// bindings, owned.
+fn enter(me: &ExecCtx, captured: Word) -> Word {
+    // SAFETY: the running fiber's context and a live captured context.
+    unsafe { cheby_context_sys_enter(ctx_of(me), captured) }
+}
+
+/// `context::sys_leave` of `outer`, then the release of `outer` that
+/// `with`'s frame does after it.
+fn leave(me: &ExecCtx, outer: Word) {
+    // SAFETY: the running fiber's context and the word `enter` gave.
+    unsafe { cheby_context_sys_leave(ctx_of(me), outer) };
+    drop_word(outer);
+}
+
+/// The debug text of a live value, borrowed.
+fn text_of(word: Word) -> String {
+    // SAFETY: a live value.
+    unsafe { crate::generic::debug_string(word) }
+}
+
+/// The map word and the stream of a captured context, borrowed.
+fn parts(captured: Word) -> (Word, Option<u64>) {
+    // SAFETY: a live captured context.
+    unsafe { handles::context_parts(captured) }
+}
+
+/// D-1048, I-J: the Rust derivation equals `std::random`'s `derived`,
+/// whose vector is `derive(42, 1)`.
+#[test]
+fn derive_follows_the_seeded_streams_vector() {
+    assert_eq!(derive(42, 1), 814_261_035_509_592_648);
+    assert_ne!(derive(42, 1), derive(42, 2));
+    assert_ne!(derive(42, 1), derive(43, 1));
+    // Wrapping: the largest state and spawn number do not overflow.
+    let _ = derive(u64::MAX, u64::MAX);
+}
+
+/// D-1566, D-1568: a capture of the empty context and `empty` hold no
+/// map and no stream; a capture holds the fiber's map, with a reference
+/// of its own, and later binds do not change it.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_capture_holds_the_fibers_map() {
+    on_a_root(1, |me| {
+        let empty_capture = capture(me);
+        assert_eq!(parts(empty_capture), (0, None));
+        // SAFETY: the running fiber's context.
+        let empty = unsafe { cheby_context_sys_empty(ctx_of(me)) };
+        assert_eq!(parts(empty), (0, None));
+        assert_eq!(text_of(empty), "<Context>");
+        let key = identity(1, "app::request");
+        let none = values::int_word(-1);
+        let outer = bind(me, key, values::int_word(1));
+        let map = bindings_of(me);
+        let captured = capture(me);
+        assert_eq!(parts(captured), (map, None));
+        assert_eq!(count(map), 2, "the fiber's and the context's");
+        let inner = bind(me, key, values::int_word(2));
+        assert_eq!(parts(captured), (map, None));
+        assert_eq!(int(get(me, key, none)), 2);
+        restore(me, inner);
+        restore(me, outer);
+        assert_eq!(count(map), 1, "the context's only");
+        for word in [captured, empty, empty_capture, key] {
+            drop_word(word);
+        }
+    });
+}
+
+/// D-1566, D-072: a captured context sent through `rc::mark_shared`, as
+/// a channel's send does, marks its map shared, and the last reference
+/// frees the map.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_shared_capture_marks_its_map_and_frees_it_last() {
+    on_a_root(1, |me| {
+        let key = identity(1, "app::request");
+        let outer = bind_taking(me, key, values::string("request 7"));
+        let map = bindings_of(me);
+        let captured = capture(me);
+        assert!(count(map) > 0, "a new map is local");
+        // SAFETY: a live value only this fiber holds.
+        unsafe { rc::mark_shared(captured) };
+        assert!(count(captured) < 0, "the context is shared");
+        assert!(count(map) < 0, "the map is shared");
+        let live = me.domain().live_objects();
+        restore(me, outer);
+        assert_eq!(
+            me.domain().live_objects(),
+            live,
+            "the context keeps the map"
+        );
+        drop_word(captured);
+        // The context, the root, its node and the value are freed.
+        assert_eq!(me.domain().live_objects(), live - 4);
+        drop_word(key);
+    });
+}
+
+/// D-1567, D-1048: under a stream, each capture takes the next spawn
+/// number and holds the state a child with that number starts from,
+/// while the stream's state stays where it was; a capture with no stream
+/// holds none and counts nothing.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_capture_under_a_stream_takes_the_next_spawn_number() {
+    on_a_root(1, |me| {
+        let without = capture(me);
+        assert_eq!(parts(without), (0, None));
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+        push_stream(me, true, 42);
+        assert_eq!(stream_parts(me), ((true, 42, 0), 1));
+        let first = capture(me);
+        assert_eq!(parts(first), (0, Some(814_261_035_509_592_648)));
+        assert_eq!(stream_parts(me), ((true, 42, 1), 1));
+        let second = capture(me);
+        assert_eq!(parts(second), (0, Some(derive(42, 2))));
+        assert_eq!(stream_parts(me), ((true, 42, 2), 1));
+        pop_stream(me);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+        for word in [first, second, without] {
+            drop_word(word);
+        }
+    });
+}
+
+/// D-1566, D-1567: `enter` puts the captured map and stream in place of
+/// the fiber's, hiding its own bindings, and `leave` puts both back, the
+/// outer stream as far as it had advanced; a context captured with no
+/// stream turns the fiber's stream off inside.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn enter_and_leave_swap_the_bindings_and_the_stream() {
+    on_a_root(1, |me| {
+        let key = identity(1, "app::request");
+        let none = values::int_word(-1);
+        let unbound = capture(me);
+        let outer = bind(me, key, values::int_word(1));
+        push_stream(me, true, 5);
+        let captured = capture(me);
+        let at_capture = bindings_of(me);
+        let inner = bind(me, key, values::int_word(2));
+        let outside = bindings_of(me);
+        // Under the captured context.
+        let entered = enter(me, captured);
+        assert_eq!(entered, outside, "the outer bindings, handed back");
+        assert_eq!(bindings_of(me), at_capture);
+        assert_eq!(int(get(me, key, none)), 1);
+        assert_eq!(stream_parts(me), ((true, derive(5, 1), 0), 2));
+        // `provide` binds on top, and a capture inside counts there.
+        let on_top = bind(me, key, values::int_word(3));
+        assert_eq!(int(get(me, key, none)), 3);
+        drop_word(capture(me));
+        assert_eq!(stream_parts(me), ((true, derive(5, 1), 1), 2));
+        restore(me, on_top);
+        leave(me, entered);
+        assert_eq!(bindings_of(me), outside);
+        assert_eq!(int(get(me, key, none)), 2);
+        assert_eq!(stream_parts(me), ((true, 5, 1), 1));
+        // A context with no stream and no bindings.
+        let entered = enter(me, unbound);
+        assert_eq!(entered, outside);
+        assert_eq!(bindings_of(me), 0);
+        assert_eq!(int(get(me, key, none)), -1);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 2));
+        leave(me, entered);
+        assert_eq!(stream_parts(me), ((true, 5, 1), 1));
+        pop_stream(me);
+        restore(me, inner);
+        restore(me, outer);
+        assert_eq!(bindings_of(me), 0);
+        for word in [captured, unbound, key] {
+            drop_word(word);
+        }
+    });
+}
+
+/// D-1573: a scope records the depth of the stream frames at its open;
+/// when frames pushed inside its body are left behind, its close makes
+/// the frame at the recorded depth current, in the state it had reached
+/// when the first of them was pushed (here: two captures later), and
+/// drops the frames above it. A close with no frame above does nothing to
+/// the stream.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_scopes_restore_cuts_the_stream_frames_back() {
+    on_a_root(1, |me| {
+        push_stream(me, true, 10);
+        let saved = ScopeSaved::default();
+        saved.save(me);
+        // The outer stream advances inside the body.
+        drop_word(capture(me));
+        drop_word(capture(me));
+        assert_eq!(stream_parts(me), ((true, 10, 2), 1));
+        push_stream(me, true, 20);
+        drop_word(capture(me));
+        push_stream(me, false, 0);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 3));
+        // The body unwinds: the close cuts back.
+        saved.restore(me, false);
+        assert_eq!(stream_parts(me), ((true, 10, 2), 1));
+        // A scope whose body pushed nothing.
+        saved.save(me);
+        drop_word(capture(me));
+        saved.restore(me, true);
+        assert_eq!(stream_parts(me), ((true, 10, 3), 1));
+        pop_stream(me);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+    });
+}
+
+/// D-1573, I-B, I-C: a body that panics inside `with`, under a scope,
+/// leaves the fiber on the captured context and stream; the scope's close
+/// puts the bindings and the stream of its open back.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn a_scopes_close_after_a_panic_inside_with_puts_both_back() {
+    on_a_root(2, |me| {
+        let key = identity(1, "app::request");
+        let none = values::int_word(-1);
+        let outer = bind(me, key, values::int_word(1));
+        push_stream(me, true, 7);
+        let captured = provide_and_capture(me, key);
+        let at_open = bindings_of(me);
+        let scope = open(me);
+        let entered = enter(me, captured);
+        assert_eq!(int(get(me, key, none)), 2);
+        push_stream(me, true, 99);
+        // SAFETY: the running fiber's context; no message or location.
+        unsafe { cheby_rt_panic(ctx_of(me), PanicKind::Explicit.code(), 0, 0) };
+        // `with`'s cleanup pad releases the outer word it held.
+        drop_word(entered);
+        assert!(!close_unwound(me, scope));
+        assert_eq!(failure_message(me), PanicKind::Explicit.default_message());
+        assert_eq!(bindings_of(me), at_open);
+        assert_eq!(int(get(me, key, none)), 1);
+        assert_eq!(stream_parts(me), ((true, 7, 1), 1));
+        pop_stream(me);
+        restore(me, outer);
+        drop_word(captured);
+        drop_word(key);
+    });
+}
+
+/// Binds `key` to 2, captures, and puts the fiber's bindings back: the
+/// captured context, owned.
+fn provide_and_capture(me: &ExecCtx, key: Word) -> Word {
+    let outer = bind(me, key, values::int_word(2));
+    let captured = capture(me);
+    restore(me, outer);
+    captured
+}
+
+/// I-A, D-1573: `release` clears the stream and its frames, which a base
+/// frame that unwound out of `with` leaves set; a second call does
+/// nothing. A root that ends inside `with` is released the same way.
+#[test]
+#[cfg_attr(windows, ignore = "fibers on Windows are M6 (D-545, D-714)")]
+fn release_clears_the_stream_and_its_frames() {
+    on_a_root(1, |me| {
+        push_stream(me, true, 1);
+        push_stream(me, true, 2);
+        assert_eq!(stream_parts(me), ((true, 2, 0), 2));
+        context::release(me);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+        context::release(me);
+        assert_eq!(stream_parts(me), ((false, 0, 0), 0));
+    });
+    on_a_root(1, |me| {
+        let key = identity(1, "app::request");
+        let captured = provide_and_capture(me, key);
+        push_stream(me, true, 3);
+        let entered = enter(me, captured);
+        drop_word(entered);
+        drop_word(captured);
+        drop_word(key);
     });
 }

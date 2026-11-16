@@ -233,9 +233,12 @@ pub mod layout {
     pub const LISTENER: LayoutId = 46;
     /// A TCP connection (`std::net`, D-982).
     pub const CONNECTION: LayoutId = 47;
+    /// A captured context (`std::context`, D-1566, D-1583): its bindings
+    /// map and its optional stream state (D-1574).
+    pub const CONTEXT: LayoutId = 48;
     /// The first id of the runtime-defined kinds registered with
     /// `layout::register_builtin` (list and map nodes, the handle kinds 40
-    /// to 47, the others to 63 reserved).
+    /// to 48, the others to 63 reserved).
     pub const CUSTOM_FIRST: LayoutId = LIST_FIRST;
     /// The last id reserved for builtin collection nodes (F3, F4).
     pub const BUILTIN_RESERVED_END: LayoutId = 63;
@@ -1007,6 +1010,8 @@ mod tests {
             (layout::FILE, layout::LISTENER, layout::CONNECTION),
             (45, 46, 47)
         );
+        // D-1583: a captured context.
+        assert_eq!(layout::CONTEXT, 48);
         // Intrinsics get generated bodies and are never registered (D-693).
         for intrinsic in sym::INTRINSICS {
             assert!(intrinsic.starts_with("cheby_rt_"));

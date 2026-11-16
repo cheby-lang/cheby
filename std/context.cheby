@@ -18,8 +18,14 @@
 //! map, put the outer map back, and read a binding. When the body of
 //! `provide` unwinds, the scope that catches the failure puts the context
 //! back instead, so no Cheby code ever sees a stale context (D-1573).
-//! Each kernel also declares its JS binding, written with the JS back end
-//! (D-986, D-1563).
+//!
+//! A `Context` is a fiber's whole context as a value, which `capture` takes
+//! and `with` runs a body under (D-1566). It is a runtime object that holds
+//! the fiber's map and, under a seeded random stream, the state a fiber
+//! spawned at the capture would start from (D-1567, D-1574). `with` is
+//! Cheby over two kernels that swap the map and the stream in and back,
+//! as `provide` is. Each kernel also declares its JS binding, written with
+//! the JS back end (D-986, D-1563).
 
 import std::bytes
 import std::fiber
@@ -41,6 +47,12 @@ pub type Key<T> {
   identity: (U64, String, String),
   default: T,
 }
+
+/// A fiber's whole context as a value: every binding it had at the
+/// `capture` that took it (D-1566). It prints as `<Context>`, and `==`
+/// and hashing panic when they reach one (D-233, D-647). No constant may
+/// hold one (D-139, D-1568).
+pub type Context
 
 /// The outer bindings of a fiber that `provide` puts back when its body
 /// returns: the runtime's map root, or its static empty map, never a
@@ -137,13 +149,17 @@ pub fn key_without_default<T>() -> Key<Option<T>> {
   panic as "the compiler did not replace this call of `context::key_without_default` (D-1598)"
 }
 
-/// A key of the tests below, with the identity the compiler would give
-/// `const greeting: Key<String> = key("hello")` (D-1572).
-const greeting: Key<String> = key_at("hello", "std::context::greeting", "String")
+/// A key of the tests below, built through the compiler's rewrite
+/// (D-1572, D-1599).
+const greeting: Key<String> = key("hello")
 
-/// A key without a default of the tests below, with the identity the
-/// compiler would give `key_without_default()` (D-1572).
-const port: Key<Option<Int>> = key_without_default_at("std::context::port", "Option<Int>")
+/// A key without a default of the tests below (D-1572, D-1599).
+const port: Key<Option<Int>> = key_without_default()
+
+test "a key's debug text is its constant's path" {
+  assert "{greeting:?}" == "Key(std::context::greeting)"
+  assert "{port:?}" == "Key(std::context::port)"
+}
 
 test "a key is a map key and a set element" {
   let twin = key_at("hello", "std::context::greeting", "String")
@@ -248,4 +264,107 @@ test "a caught panic restores the context" {
   let assert Err(failure) = outcome
   assert fiber::message(failure) == "boom"
   assert get(greeting) == "hello"
+}
+
+// Captured contexts
+
+/// Returns the calling fiber's whole context as a value (D-1566). Under a
+/// seeded random stream it counts as a spawn: it holds the state a fiber
+/// spawned here would start from, and the caller's stream is left alone
+/// (D-1567).
+@std_context
+@external(native, "cheby_context_sys_capture")
+@external(js, "./context.mjs", "sys_capture")
+fn sys_capture() -> Context
+
+/// Puts `captured` in place of the calling fiber's context, its stream
+/// included, and returns the outer bindings (D-1566, D-1567). The outer
+/// stream stays in the fiber, so a scope that catches a failure of the
+/// body puts it back (D-1573).
+@std_context
+@external(native, "cheby_context_sys_enter")
+@external(js, "./context.mjs", "sys_enter")
+fn sys_enter(captured: Context) -> Bindings
+
+/// Makes `outer`, which `sys_enter` returned, the calling fiber's context
+/// again, and its stream the one it had (D-1573).
+@std_context
+@external(native, "cheby_context_sys_leave")
+@external(js, "./context.mjs", "sys_leave")
+fn sys_leave(outer: Bindings)
+
+/// Returns the context in which every key has its default and no seeded
+/// stream is set (D-1568).
+@std_context
+@external(native, "cheby_context_sys_empty")
+@external(js, "./context.mjs", "sys_empty")
+fn sys_empty() -> Context
+
+/// Returns the calling fiber's whole context as a value: every binding the
+/// fiber has at the call. Later calls of `provide` do not change it. While
+/// a seeded random stream is in context, it counts as a spawn (D-1566,
+/// D-1567).
+pub fn capture() -> Context {
+  sys_capture()
+}
+
+/// Calls `body` on the calling fiber with `captured` in place of the
+/// fiber's context, and returns what `body` returns. The caller's own
+/// bindings are not visible inside `body`, `provide` binds on top of
+/// `captured`, and a fiber spawned meanwhile inherits what `body` has
+/// then. When `body` returns, the outer context is put back here; when it
+/// unwinds, the scope that catches the failure puts it back (D-1566,
+/// D-1567, D-1573).
+pub fn with<R>(captured: Context, body: fn() -> R) -> R {
+  let outer = sys_enter(captured)
+  let result = body()
+  sys_leave(outer)
+  result
+}
+
+test "with runs a body under a captured context" {
+  let captured = provide(greeting, "hi", fn() { capture() })
+  assert get(greeting) == "hello"
+  let inside = with(captured, fn() { get(greeting) })
+  assert inside == "hi"
+  assert get(greeting) == "hello"
+}
+
+test "with hides the caller's own bindings" {
+  let captured = capture()
+  use <- provide(greeting, "outer")
+  let inside = with(captured, fn() { get(greeting) })
+  assert inside == "hello"
+  assert get(greeting) == "outer"
+}
+
+test "provide binds on top of a captured context" {
+  let captured = provide(greeting, "hi", fn() { capture() })
+  use <- with(captured)
+  assert get(greeting) == "hi"
+  let inner = provide(greeting, "inner", fn() { get(greeting) })
+  assert inner == "inner"
+}
+
+test "a fiber spawned under with inherits the captured context" {
+  let captured = provide(greeting, "hi", fn() { capture() })
+  let outcome = {
+    use <- with(captured)
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { get(greeting) }))
+  }
+  assert outcome == Ok("hi")
+}
+
+/// Returns the context in which every key has its default and no seeded
+/// stream is set, the context of `main` when it starts. It is a function,
+/// not a constant, because a constant may not hold a handle (D-1568).
+pub fn empty() -> Context {
+  sys_empty()
+}
+
+test "the empty context has every default" {
+  use <- provide(greeting, "hi")
+  let inside = with(empty(), fn() { get(greeting) })
+  assert inside == "hello"
 }

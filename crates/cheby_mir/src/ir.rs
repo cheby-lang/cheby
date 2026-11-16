@@ -74,8 +74,8 @@ pub struct MirModule {
     /// unit's code is defined (D-454).
     pub layouts: Vec<LayoutDesc>,
     /// The external types this module declares (§12.5.3), in `DefIndex`
-    /// order, without std's handle types (runtime kinds 40 to 47, D-647,
-    /// D-982): what its module record lists (D-919). Filled for code units;
+    /// order, without std's handle types (runtime kinds 40 to 48, D-647,
+    /// D-982, D-1583): what its module record lists (D-919). Filled for code units;
     /// empty for tests and entries units. MIR dumps do not print it, so no
     /// golden moves.
     pub externals: Vec<crate::layout::ExternalDesc>,

@@ -332,13 +332,13 @@ pub struct ExternalDesc {
     pub drop: Option<Box<str>>,
 }
 
-/// Std's handle types (D-647, D-982): external types of their modules
-/// whose values are runtime kinds 40 to 47, which the runtime registers
-/// itself (D-703), so no module record lists them. `std::context`'s
+/// Std's handle types (D-647, D-982, D-1583): external types of their
+/// modules whose values are runtime kinds 40 to 48, which the runtime
+/// registers itself (D-703), so no module record lists them. `std::context`'s
 /// private `Bindings` is listed with them, although its values are no
 /// handle objects: they are the runtime's map roots (layout 32) or its
 /// static empty map, whose kinds the runtime registers too (D-1584).
-const STD_HANDLE_TYPES: [(&str, &str); 9] = [
+const STD_HANDLE_TYPES: [(&str, &str); 10] = [
     ("std::channel", "Sender"),
     ("std::channel", "Receiver"),
     ("std::fiber", "Fiber"),
@@ -347,12 +347,13 @@ const STD_HANDLE_TYPES: [(&str, &str); 9] = [
     ("std::file", "File"),
     ("std::net", "Listener"),
     ("std::net", "Connection"),
+    ("std::context", "Context"),
     ("std::context", "Bindings"),
 ];
 
 /// The external types `module`'s interface declares (§12.5.3), in
-/// `DefIndex` order, without std's handle types (runtime kinds 40 to 47,
-/// D-647, D-703, D-982, and `std::context`'s `Bindings`, D-1584), each
+/// `DefIndex` order, without std's handle types (runtime kinds 40 to 48,
+/// D-647, D-703, D-982, D-1583, and `std::context`'s `Bindings`, D-1584), each
 /// with its name and type key (D-559): the `externals` table of the
 /// module's record (D-919, D-920).
 ///

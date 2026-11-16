@@ -43,8 +43,9 @@ fn the_runtime_layouts_have_their_words() {
     for id in ids::LIST_FIRST..ids::LIST_FIRST + 3 {
         assert_ne!(layout::fast_word(id), 0, "list layout {id}");
     }
-    // Kinds with a finalizer, and handles, are never freed from a shape.
-    for id in ids::SENDER..=ids::SELECTOR {
+    // Kinds with a finalizer, and handles, are never freed from a shape:
+    // every handle kind, `Context` (D-1566) included.
+    for id in ids::SENDER..=ids::CONTEXT {
         assert!(layout::get(id).is_some(), "{id}");
         assert_eq!(layout::fast_word(id), 0, "handle layout {id}");
     }

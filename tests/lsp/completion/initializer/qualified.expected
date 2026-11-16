@@ -242,7 +242,7 @@
 
 == src/main.cheby:9:41 completion key key_without_default
 {
-  "count": 5,
+  "count": 8,
   "isIncomplete": false,
   "items": [
     {
@@ -305,7 +305,7 @@
 
 == src/main.cheby:12:42 completion key key_without_default
 {
-  "count": 5,
+  "count": 8,
   "isIncomplete": false,
   "items": [
     {
@@ -372,7 +372,7 @@
     "key",
     "key_without_default"
   ],
-  "count": 3,
+  "count": 6,
   "isIncomplete": false,
   "items": [
     {
@@ -412,7 +412,7 @@
     "key",
     "key_without_default"
   ],
-  "count": 3,
+  "count": 6,
   "isIncomplete": false,
   "items": []
 }
@@ -423,7 +423,7 @@
     "key",
     "key_without_default"
   ],
-  "count": 3,
+  "count": 6,
   "isIncomplete": false,
   "items": []
 }
@@ -434,7 +434,7 @@
     "key",
     "key_without_default"
   ],
-  "count": 3,
+  "count": 6,
   "isIncomplete": false,
   "items": []
 }
