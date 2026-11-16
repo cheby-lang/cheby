@@ -42,6 +42,8 @@
   "items": [
     "same | Variable | fn(List<Int>) -> List<Int>",
     "io | Module | (std::io) | `io::`",
+    "io::debug(value) | Function | pub fn debug<T>(value: T) -> T | (std::io)",
+    "io::debug_as(value, label) | Function | pub fn debug_as<T>(value: T, label: String) -> T | (std::io) | `io::debug_as(_, ${1:label})$0`",
     "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`"
   ]
 }
@@ -51,7 +53,7 @@
   "absent": [
     "list::unique"
   ],
-  "count": 3,
+  "count": 5,
   "isIncomplete": false,
   "items": []
 }
@@ -61,7 +63,7 @@
   "absent": [
     "list::unique"
   ],
-  "count": 3,
+  "count": 5,
   "isIncomplete": true,
   "items": []
 }

@@ -2656,3 +2656,13 @@ Open:
 - ~~E0080's and E0081's explanations and UI tests land with their checks (D-420, D-476), and E0081's summary is written then~~ → D-1595, then D-1600. Done: `docs/diagnostics/E0080.md`, `E0081.md` and the UI tests under `tests/ui/10-concurrency/context/` and `tests/ui/04-declarations/constants/`.
 - ~~`time.md`'s "so they can be built in constants" is read as D-1578 says. The page's wording follows with the documents of this work.~~ Done: `time.md`'s "Written in Cheby" bullet.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-11-16: `io::debug`
+
+Goal: add a function that prints a value's debug text and passes the value on.
+
+- **D-1603 `io::debug` and `io::debug_as`**: `std::io` gains `debug<T>(value: T) -> T`, which writes the debug text of `value` (§3.13) and the line ending `\n` to standard error, then returns `value`, and `debug_as<T>(value: T, label: String) -> T`, which writes `label`, `: `, the debug text and `\n`, then returns `value`. `T` has no bound, since debug printing works for every type (D-233, D-502). Both are Cheby over `{value:?}` and `eprintln`, with no kernel of their own, and like `eprintln` they end the program when the write fails (D-306). `debug_as` joins its text through a private binding of `string::add`'s kernel, `cheby_string_add`, as `copy` binds `bytes::length`'s (D-1297), since a mention of `std::string` would make every program that uses `std::io` load and compile `std::string` and `std::bytes` too (D-1177). Both sit at the end of `std/io.cheby`, so no std location that a golden pins moves. The value comes first, so `xs |> io::debug |> list::length` and `x |> io::debug_as(_, "parsed")` pipe. The private debug hook of `io::Error` is renamed `debug_error`, so the public name is free (D-342). Why: the user asked for it. Returning the value lets a call wrap any expression or pipeline stage and be removed later without touching the code around it, as Gleam's `io.debug` and Rust's `dbg!` do. Standard error keeps the text out of the program's output and its goldens, and is unbuffered (D-346). The label makes up for the missing source location, which would need a compiler intrinsic, since there are no macros (D-057). Rejected: a `debug` that returns `Nil`, which is only a shorter `io::eprintln("{x:?}")`, and writing to standard output.
+
+Open:
+
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.

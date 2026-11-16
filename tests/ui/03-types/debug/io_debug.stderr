@@ -1,0 +1,5 @@
+[3, 1, 2]
+sorted: [1, 2, 3]
+Point { x: 1.0, y: 2.0 }
+text: "a\nb"
+<fn>
