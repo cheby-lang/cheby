@@ -275,6 +275,87 @@ test "send writes the method, the headers, the body and its length" {
   assert string::starts_with(deleted.body, "DELETE /orders HTTP/1.1\r\n")
 }
 
+/// Sends a `HEAD` request for `url` and returns the final response, after
+/// following redirects: `send(Head, url, [], "")` (D-1604).
+pub fn head(url: String) -> Result<Response, Error> {
+  send(Head, url, [], "")
+}
+
+/// Sends a `POST` request with `headers` and `body` to `url` and returns the
+/// final response, after following redirects: `send(Post, url, headers,
+/// body)` (D-1604).
+pub fn post(url: String, headers: List<(String, String)>, body: String) -> Result<Response, Error> {
+  send(Post, url, headers, body)
+}
+
+/// Sends a `PUT` request with `headers` and `body` to `url` and returns the
+/// final response, after following redirects: `send(Put, url, headers,
+/// body)` (D-1604).
+pub fn put(url: String, headers: List<(String, String)>, body: String) -> Result<Response, Error> {
+  send(Put, url, headers, body)
+}
+
+/// Sends a `PATCH` request with `headers` and `body` to `url` and returns
+/// the final response, after following redirects: `send(Patch, url,
+/// headers, body)` (D-1604).
+pub fn patch(
+  url: String,
+  headers: List<(String, String)>,
+  body: String,
+) -> Result<Response, Error> {
+  send(Patch, url, headers, body)
+}
+
+/// Sends a `DELETE` request for `url` and returns the final response, after
+/// following redirects: `send(Delete, url, [], "")` (D-1604).
+pub fn delete(url: String) -> Result<Response, Error> {
+  send(Delete, url, [], "")
+}
+
+/// Sends an `OPTIONS` request for `url` and returns the final response,
+/// after following redirects: `send(Options, url, [], "")` (D-1604).
+pub fn options(url: String) -> Result<Response, Error> {
+  send(Options, url, [], "")
+}
+
+test "the method helpers send their method, headers and body" {
+  // D-1604: each helper is `send` with its method.
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    serve_on(listener, fn(request) {
+      let token = option::unwrap_or(request_header(request, "x-token"), "none")
+      text(200, method_name(request.method) + " " + token + " " + request.body)
+    })
+  })
+  let url = "http://127.0.0.1:{port}/orders"
+  let given = [("x-token", "abc")]
+  let answers = [
+    post(url, given, "one tea"),
+    put(url, given, "two teas"),
+    patch(url, given, "no sugar"),
+    delete(url),
+    options(url),
+  ]
+  let bodies = list::map(answers, fn(answer) {
+    case answer {
+      Ok(response) => response.body
+      Err(reason) => show(reason)
+    }
+  })
+  assert bodies == [
+    "POST abc one tea",
+    "PUT abc two teas",
+    "PATCH abc no sugar",
+    "DELETE none ",
+    "OPTIONS none ",
+  ]
+  let assert Ok(headed) = head(url)
+  assert headed.status == 200
+  assert headed.body == ""
+  assert header(headed, "content-length") == Some("10")
+}
+
 /// The request a call sends, and sends again on a redirect.
 priv type Outgoing {
   method: Method,
@@ -470,11 +551,15 @@ priv fn exchange(outgoing: Outgoing) -> Result<Response, Error> {
   use connection <- result::try(open(outgoing.target))
   use _ <-
     result::try(result::map_error(net::write_bytes(connection, request_bytes(outgoing)), from_io))
-  use head <- result::try(read_head(connection, bytes::new()))
-  use body <- result::try(read_body(connection, outgoing.method, head))
+  use response_head <- result::try(read_head(connection, bytes::new()))
+  use body <- result::try(read_body(connection, outgoing.method, response_head))
   let _ = net::close(connection)
   case string::from_bytes(body) {
-    Ok(decoded) => Ok(Response { status: head.status, headers: head.headers, body: decoded })
+    Ok(decoded) => Ok(Response {
+      status: response_head.status,
+      headers: response_head.headers,
+      body: decoded,
+    })
     Err(Nil) => Err(Error { kind: InvalidResponse })
   }
 }
@@ -556,8 +641,8 @@ priv fn request_bytes(outgoing: Outgoing) -> bytes::Bytes {
     target.path +
     target.query +
     " HTTP/1.1\r\n"
-  let head = request_line + string::join(lines, "") + "connection: close\r\n\r\n"
-  bytes::append(bytes::from_string(head), body)
+  let head_text = request_line + string::join(lines, "") + "connection: close\r\n\r\n"
+  bytes::append(bytes::from_string(head_text), body)
 }
 
 /// The methods that send no `content-length` for an empty body.
@@ -654,20 +739,20 @@ priv fn read_head(
   }
 }
 
-/// Reads the body that follows `head`: none for `HEAD`, 204 and 304; by
+/// Reads the body that follows `response_head`: none for `HEAD`, 204 and 304; by
 /// its chunks when its last transfer coding is `chunked`; by its
 /// `content-length`; else until the connection closes (RFC 9112 §6.3).
 priv fn read_body(
   connection: net::Connection,
   method: Method,
-  head: ResponseHead,
+  response_head: ResponseHead,
 ) -> Result<bytes::Bytes, Error> {
-  let codings = values_of(head.headers, "transfer-encoding")
-  case method == Head || head.status == 204 || head.status == 304, codings {
+  let codings = values_of(response_head.headers, "transfer-encoding")
+  case method == Head || response_head.status == 204 || response_head.status == 304, codings {
     True, _ => Ok(bytes::new())
-    False, [] => case content_length(head.headers) {
-      Ok(Some(length)) => read_exactly(connection, head.rest, length)
-      Ok(None) => read_to_end(connection, head.rest)
+    False, [] => case content_length(response_head.headers) {
+      Ok(Some(length)) => read_exactly(connection, response_head.rest, length)
+      Ok(None) => read_to_end(connection, response_head.rest)
       Err(Nil) => Err(Error { kind: InvalidResponse })
     }
     False, _ => {
@@ -678,11 +763,11 @@ priv fn read_body(
       case last {
         Some(coding) when ascii_lower(trim_blanks(coding)) == "chunked" => read_chunks(
           connection,
-          head.rest,
+          response_head.rest,
           0,
           bytes::new(),
         )
-        _ => read_to_end(connection, head.rest)
+        _ => read_to_end(connection, response_head.rest)
       }
     }
   }
@@ -920,8 +1005,8 @@ test "a head over 64 KiB, a body that is not UTF-8 and a cut body are invalid re
           bytes::from_string("HTTP/1.1 200 OK\r\n" + line + "\r\n")
         }
         Some(("GET /binary", _)) => {
-          let head = bytes::from_string("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n")
-          bytes::append(head, bytes::from_list([0xFF, 0xFE]))
+          let head_bytes = bytes::from_string("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n")
+          bytes::append(head_bytes, bytes::from_list([0xFF, 0xFE]))
         }
         Some(("GET /short", _)) => bytes::from_string(
           "HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc",
@@ -1644,7 +1729,7 @@ priv fn read_head_within(
   buffer: bytes::Bytes,
 ) -> Next {
   case fiber::timeout(limits.head_time, fn() { read_request_head(connection, buffer) }) {
-    Ok(Ok(head)) => request_from_head(connection, limits, head)
+    Ok(Ok(request_head)) => request_from_head(connection, limits, request_head)
     Ok(Err(Some(status))) => Refused(status)
     _ => Ended
   }
@@ -1680,14 +1765,18 @@ priv fn read_request_head(
   }
 }
 
-/// The request that `head` starts, with its body read: a path, query or
+/// The request that `request_head` starts, with its body read: a path, query or
 /// body that does not decode to valid UTF-8 is `400`, and a body too large
 /// or in a transfer coding other than `chunked` is refused (D-311, D-1004,
 /// D-1013, D-1069). An HTTP/1.0 request is served as an HTTP/1.1 one and
 /// its connection closed after the response; it gets no `100 Continue`,
 /// and a `transfer-encoding` in it is `400`. D-1242.
-priv fn request_from_head(connection: net::Connection, limits: Limits, head: RequestHead) -> Next {
-  case string::split(head.line, " ") {
+priv fn request_from_head(
+  connection: net::Connection,
+  limits: Limits,
+  request_head: RequestHead,
+) -> Next {
+  case string::split(request_head.line, " ") {
     [token, target, version] => {
       let old = version == "HTTP/1.0"
       let (raw_path, raw_query) = case string::split_once(target, "?") {
@@ -1698,14 +1787,15 @@ priv fn request_from_head(connection: net::Connection, limits: Limits, head: Req
         |> string::split(_, "/")
         |> list::filter(_, fn(part) { part != "" })
         |> list::try_map(_, fn(part) { urls::decode_segment(part) })
-      let both_lengths = values_of(head.headers, "transfer-encoding") != []
-        && values_of(head.headers, "content-length") != []
-      let expectation = ascii_lower(option::unwrap_or(first_header(head.headers, "expect"), ""))
+      let both_lengths = values_of(request_head.headers, "transfer-encoding") != []
+        && values_of(request_head.headers, "content-length") != []
+      let expectation =
+        ascii_lower(option::unwrap_or(first_header(request_head.headers, "expect"), ""))
       let expects = !old && expectation == "100-continue"
-      case decoded, urls::decode_query(raw_query), body_framing(old, head.headers, limits) {
+      case decoded, urls::decode_query(raw_query), body_framing(old, request_head.headers, limits) {
         Ok(names), Ok(pairs), Ok(framing) => case body_within(
           connection,
-          head.rest,
+          request_head.rest,
           framing,
           expects,
           limits,
@@ -1717,12 +1807,12 @@ priv fn request_from_head(connection: net::Connection, limits: Limits, head: Req
                 path: raw_path,
                 segments: names,
                 query: pairs,
-                headers: head.headers,
+                headers: request_head.headers,
                 body: content,
               }
               // A request with both a length and a transfer coding is read
               // by its coding, and its connection closed (RFC 9112 §6.1).
-              let closes = old || both_lengths || asks_to_close(head.headers)
+              let closes = old || both_lengths || asks_to_close(request_head.headers)
               Received(Incoming { request, closes, rest })
             }
             Err(Nil) => Refused(400)
@@ -2779,8 +2869,8 @@ priv fn fake_server(
 priv fn read_request(connection: net::Connection, buffer: bytes::Bytes) -> String {
   let received = string::from_bytes_lossy(buffer)
   let complete = case string::split_once(received, "\r\n\r\n") {
-    Some((head, body)) => {
-      let lines = string::split(ascii_lower(head), "\r\n")
+    Some((head_text, body)) => {
+      let lines = string::split(ascii_lower(head_text), "\r\n")
       let length = list::find_map(lines, fn(line) {
         case string::split_once(line, "content-length: ") {
           Some((_, value)) => result::to_option(int::parse(value))
@@ -2804,10 +2894,10 @@ priv fn read_request(connection: net::Connection, buffer: bytes::Bytes) -> Strin
 priv fn reply(status: Int, headers: List<(String, String)>, body: String) -> bytes::Bytes {
   let lines = list::map(headers, fn((name, value)) { name + ": " + value + "\r\n" })
   let length = bytes::length(bytes::from_string(body))
-  let head = "HTTP/1.1 {status} Status\r\n" +
+  let head_text = "HTTP/1.1 {status} Status\r\n" +
     string::join(lines, "") +
     "content-length: {length}\r\n\r\n"
-  bytes::from_string(head + body)
+  bytes::from_string(head_text + body)
 }
 
 // Kernels
@@ -2820,7 +2910,7 @@ priv fn reply(status: Int, headers: List<(String, String)>, body: String) -> byt
 @external(native, "cheby_http_sys_parse_response_head")
 @external(js, "./http.mjs", "sys_parse_response_head")
 priv fn sys_parse_response_head(
-  head: bytes::Bytes,
+  buffer: bytes::Bytes,
 ) -> Result<Option<(Int, List<(String, String)>, Int)>, (Int, String)>
 
 /// Parses a request head from the bytes read so far, as
@@ -2831,5 +2921,5 @@ priv fn sys_parse_response_head(
 @external(native, "cheby_http_sys_parse_request_head")
 @external(js, "./http.mjs", "sys_parse_request_head")
 fn sys_parse_request_head(
-  head: bytes::Bytes,
+  buffer: bytes::Bytes,
 ) -> Result<Option<(String, List<(String, String)>, Int)>, (Int, String)>

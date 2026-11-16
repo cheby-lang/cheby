@@ -39,7 +39,7 @@ pub type Error
   - `segments` is `path` split at `/`, with empty segments dropped and each segment decoded by [`url::decode_segment`](url.md#decode_segment), so `/orders//17/` gives `["orders", "17"]` and `/a%2Fb` gives `["a/b"]`. `.` and `..` are kept as they are (D-1069).
   - `query` is the query string as name and value pairs, in order, with repeated names kept, decoded by [`url::decode_query`](url.md#decode_query) as an HTML form decodes it: `+` is a space and `%XX` is a byte. A pair without `=` has the value `""` (D-1069).
   - `headers` and `body` follow the rules below. A form body, sent as `application/x-www-form-urlencoded`, is decoded with the same decoder, as `url::decode_query(request.body)` (D-1069).
-- **`Response`.** What a handler returns, and what [`get`](#get) and [`send`](#send) return. `status` is the status code. A response built with record syntax is as valid as one from [`json`](#json) or [`text`](#text).
+- **`Response`.** What a handler returns, and what the client calls, such as [`get`](#get) and [`send`](#send), return. `status` is the status code. A response built with record syntax is as valid as one from [`json`](#json) or [`text`](#text).
 - **Headers.** A header list holds name and value pairs in the order they were sent, with repeated names kept, as `set-cookie` needs. Names that `std::http` produces or receives are lower-case ASCII, as HTTP/2 and `fetch` write them. [`header`](#header) and [`request_header`](#request_header) match names without regard to ASCII case, so a list built by hand with `Content-Type` is still found (D-1006).
 - **Bodies are text.** `body` is a `String`. A response body that is not valid UTF-8 makes `get` return `Err`, and a request body, path or query that does not decode to valid UTF-8 makes `serve` answer `400` without calling the handler (D-311). Binary bodies come later through new functions, since the records cannot gain fields after 1.0 (D-1007).
 - **`Error`.** Opaque, because network failures follow the operating system and the host (D-304, ADR-0051). Callers ask the predicates under [Errors](#errors), and reach the IO failure underneath with [`io_error`](#io_error). Its `show` gives a fixed text for each kind, and debug printing gives the same text, so 031's `"{reason:?}"` and 030's `{reason:?}` print `connection refused`, not internal fields (D-134, D-345). Two errors are `==` when their kinds are the same and, for an IO failure, their `io::Error`s are `==`, through `@std_hooks` (D-342, D-368, D-1016).
@@ -47,8 +47,8 @@ pub type Error
 - **Written in Cheby.** On native targets every function is written in Cheby over `std::net`, `std::fiber` and private kernels that parse a request or response head and run the TLS state machine. A handler is therefore an ordinary Cheby call on a fiber, and every wait is a socket wait on the poller, which `fiber::timeout` can cancel (D-484, D-675, D-1003, ADR-0066). [How requests run on fibers](#how-requests-run-on-fibers) shows the structure.
 - **Constants.** [`json`](#json), [`text`](#text), [`with_header`](#with_header), [`add_header`](#add_header), [`header`](#header), [`request_header`](#request_header) and [`method_name`](#method_name) are Cheby over `std::json`, `std::list` and `std::string`, so they run in constants, and a constant may hold a `Response`. The client and the server do not: reaching them while computing a constant is E0077 (D-090, D-537, D-991).
 - **`std::json` inside this module.** `std/http.cheby` writes `import std::json as jsons`, because its function `json` and the module name `json` would share the value namespace (§7.3, §7.4, D-111). The plural follows std's own aliases, such as `import std::map as maps` in `std/set.cheby` and `import std::list as lists` in `std/json.cheby`. Signatures on this page name the type `json::Value`, as `cheby doc` prints it. The tests on this page are written as they sit in `std/http.cheby` apart from the `http::` prefixes (D-662), so they write `jsons::`. A reader who copies one into a package writes `import std::json as jsons` too.
-- **`std::url` inside this module.** `std/http.cheby` writes `import std::url as urls`, because [`get`](#get) and [`send`](#send) take a parameter `url`, and a binding must not have the name of an imported module (D-062, D-1053). The server's decoders and the encoders a caller uses to build a URL are the functions of [`std::url`](url.md), so the two cannot drift (D-1069). Code on this page writes `urls::`, as `std/http.cheby` does.
-- **On JS.** OQ-P14, with M4. The direction: `get` and `send` use the host's `fetch` through a private `@async` kernel, and `serve` takes requests from the host's server API through a queue that a Cheby loop reads, so handlers still run inside `serve`'s scope (D-207). The native client is shaped so that `fetch` can match it: it follows redirects, encodes URLs as the WHATWG parser does, lower-cases header names and decodes bodies strictly (D-1070).
+- **`std::url` inside this module.** `std/http.cheby` writes `import std::url as urls`, because the client calls, such as [`get`](#get) and [`send`](#send), take a parameter `url`, and a binding must not have the name of an imported module (D-062, D-1053). The server's decoders and the encoders a caller uses to build a URL are the functions of [`std::url`](url.md), so the two cannot drift (D-1069). Code on this page writes `urls::`, as `std/http.cheby` does.
+- **On JS.** OQ-P14, with M4. The direction: `send`, which every other client call is, uses the host's `fetch` through a private `@async` kernel, and `serve` takes requests from the host's server API through a queue that a Cheby loop reads, so handlers still run inside `serve`'s scope (D-207). The native client is shaped so that `fetch` can match it: it follows redirects, encodes URLs as the WHATWG parser does, lower-cases header names and decodes bodies strictly (D-1070).
 
 The tests that need a server start one on the loopback address, with a port the operating system chose, in a detached fiber that `cheby test` tears down when the test ends (D-723, D-990). Requests to other machines have an _Example_.
 
@@ -201,6 +201,122 @@ test "send carries a method, headers and a body" {
   assert response.body == "POST abc one tea"
 }
 ```
+
+### `head`
+
+```cheby
+pub fn head(url: String) -> Result<Response, Error>
+```
+
+Sends a `HEAD` request for `url` and returns the final response, after following redirects. It is `send(Head, url, [], "")` (D-1604). The response's body is empty.
+
+- **Fails:** the cases of [`get`](#get).
+- **Cost:** that of [`send`](#send). Informative.
+
+The test of [`patch`](#patch) uses it.
+
+### `post`
+
+```cheby
+pub fn post(url: String, headers: List<(String, String)>, body: String) -> Result<Response, Error>
+```
+
+Sends a `POST` request with `headers` and `body` to `url`, and returns the final response, after following redirects. It is `send(Post, url, headers, body)` (D-1604). A caller that posts JSON names its `content-type` in `headers`.
+
+- **Fails:** the cases of [`send`](#send).
+- **Cost:** that of [`send`](#send). Informative.
+
+The test of [`patch`](#patch) uses it.
+
+### `put`
+
+```cheby
+pub fn put(url: String, headers: List<(String, String)>, body: String) -> Result<Response, Error>
+```
+
+Sends a `PUT` request with `headers` and `body` to `url`, and returns the final response, after following redirects. It is `send(Put, url, headers, body)` (D-1604).
+
+- **Fails:** the cases of [`send`](#send).
+- **Cost:** that of [`send`](#send). Informative.
+
+The test of [`patch`](#patch) uses it.
+
+### `patch`
+
+```cheby
+pub fn patch(url: String, headers: List<(String, String)>, body: String) -> Result<Response, Error>
+```
+
+Sends a `PATCH` request with `headers` and `body` to `url`, and returns the final response, after following redirects. It is `send(Patch, url, headers, body)` (D-1604).
+
+- **Fails:** the cases of [`send`](#send).
+- **Cost:** that of [`send`](#send). Informative.
+
+```cheby
+test "the method helpers send their method, headers and body" {
+  // D-1604: each helper is `send` with its method.
+  let assert Ok(listener) = net::listen("127.0.0.1", 0)
+  let port = net::local_port(listener)
+  fiber::spawn_detached(fn() {
+    http::serve_on(listener, fn(request) {
+      let token = option::unwrap_or(http::request_header(request, "x-token"), "none")
+      http::text(200, http::method_name(request.method) + " " + token + " " + request.body)
+    })
+  })
+  let url = "http://127.0.0.1:{port}/orders"
+  let given = [("x-token", "abc")]
+  let answers = [
+    http::post(url, given, "one tea"),
+    http::put(url, given, "two teas"),
+    http::patch(url, given, "no sugar"),
+    http::delete(url),
+    http::options(url),
+  ]
+  let bodies = list::map(answers, fn(answer) {
+    case answer {
+      Ok(response) => response.body
+      Err(reason) => http::show(reason)
+    }
+  })
+  assert bodies == [
+    "POST abc one tea",
+    "PUT abc two teas",
+    "PATCH abc no sugar",
+    "DELETE none ",
+    "OPTIONS none ",
+  ]
+  let assert Ok(headed) = http::head(url)
+  assert headed.status == 200
+  assert headed.body == ""
+  assert http::header(headed, "content-length") == Some("10")
+}
+```
+
+### `delete`
+
+```cheby
+pub fn delete(url: String) -> Result<Response, Error>
+```
+
+Sends a `DELETE` request for `url` and returns the final response, after following redirects. It is `send(Delete, url, [], "")` (D-1604). A `DELETE` that needs headers, such as `authorization`, goes through [`send`](#send).
+
+- **Fails:** the cases of [`get`](#get).
+- **Cost:** that of [`send`](#send). Informative.
+
+The test of [`patch`](#patch) uses it.
+
+### `options`
+
+```cheby
+pub fn options(url: String) -> Result<Response, Error>
+```
+
+Sends an `OPTIONS` request for `url` and returns the final response, after following redirects. It is `send(Options, url, [], "")` (D-1604).
+
+- **Fails:** the cases of [`get`](#get).
+- **Cost:** that of [`send`](#send). Informative.
+
+The test of [`patch`](#patch) uses it.
 
 ## Server
 
@@ -474,7 +590,7 @@ The predicates below hold for the kinds this module defines. A failure underneat
 pub fn is_invalid_url(error: Error) -> Bool
 ```
 
-Tells whether `error` means that a URL given to `get` or `send`, or one that a redirect named, is not an absolute `http` or `https` URL. Its text is `invalid URL`.
+Tells whether `error` means that a URL given to a client call, or one that a redirect named, is not an absolute `http` or `https` URL. Its text is `invalid URL`.
 
 - **Cost:** O(1). Informative.
 
@@ -486,7 +602,7 @@ The first test of [`get`](#get) uses it.
 pub fn is_invalid_header(error: Error) -> Bool
 ```
 
-Tells whether `error` means that `send` was given a header name that is not an HTTP token, a value with a line break or U+0000, or an `Other` method that is not a token. Its text is `invalid header`.
+Tells whether `error` means that `send`, or a client call over it, was given a header name that is not an HTTP token, a value with a line break or U+0000, or an `Other` method that is not a token. Its text is `invalid header`.
 
 - **Cost:** O(1). Informative.
 

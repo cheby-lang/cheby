@@ -2666,3 +2666,13 @@ Goal: add a function that prints a value's debug text and passes the value on.
 Open:
 
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-11-17: HTTP method helpers
+
+Goal: give each named HTTP method a client call, as `get` has.
+
+- **D-1604 A client call for each named method**: `std::http` gains `head(url)`, `delete(url)` and `options(url)`, each `send(<method>, url, [], "")` as `get` is, and `post(url, headers, body)`, `put(url, headers, body)` and `patch(url, headers, body)`, each `send(<method>, url, headers, body)`. `Other` has no helper, and a call that needs what its helper lacks, such as a `DELETE` with `authorization`, uses `send`. `std/http.cheby` renames its own bindings named `head`, because a binding must not have the name of a top-level function (§5.2.3, D-062). Why: `http::post(url, headers, body)` reads better than `http::send(http::Post, url, headers, body)`, and every named `Method` variant then has a call. The methods that carry a body need headers for `content-type`, and the others take only `url`, as `get` does. Rejected: helpers for `POST`, `PUT`, `PATCH` and `DELETE` only (`HEAD` and `OPTIONS` would be the exceptions); headers on every helper (`delete(url, [])` does not match `get(url)`); no headers on `post`, `put` and `patch` (a JSON API needs `content-type`, so most calls would fall back to `send`). Extends D-1009.
+
+Open:
+
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
