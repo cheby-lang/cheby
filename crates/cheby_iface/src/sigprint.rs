@@ -446,6 +446,7 @@ mod tests {
             params: params.into(),
             ret,
             clamped: Box::new([]),
+            initializer: None,
         })
     }
 

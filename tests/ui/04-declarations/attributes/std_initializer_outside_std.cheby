@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-482, D-1599
+//! Only the standard library may mark a function that initializes only a
+//! constant and name the function called in its place. The attribute is
+//! unknown outside std (§4.8).
+
+pub type Tag {
+  Tag(String, Int),
+}
+
+@std_initializer(tag_at)
+pub fn tag(value: Int) -> Tag {
+  Tag("", value)
+}
+
+pub fn tag_at(value: Int, path: String, type_text: String) -> Tag {
+  Tag("{path}: {type_text}", value)
+}
+
+pub const t: Tag = tag(1)

@@ -20,8 +20,8 @@
 //!    started (D-666, `unwind::record::start_panic`), which reports it as
 //!    its `Err`, and a cancellation just ends the fiber;
 //! 4. drops its share of the join cell, its cancellation target and every
-//!    other reference its control block holds, so the fiber holds no Cheby
-//!    object;
+//!    other reference its control block holds, its context's bindings
+//!    included (D-1573), so the fiber holds no Cheby object;
 //! 5. only then leaves its scope's members, which may wake the scope's
 //!    owner: its last touch of shared state, so a leak check after the
 //!    owner wakes needs no global quiescence.
@@ -38,6 +38,7 @@ use super::cancel::{self, Cancelled};
 use super::scope::ScopeState;
 use super::{Owned, needs_scheduler};
 use crate::abi::Word;
+use crate::context;
 use crate::ctx::ExecCtx;
 use crate::handles::HandlePayload;
 use crate::panic::fatal;
@@ -273,6 +274,7 @@ pub(crate) struct Base {
 pub(crate) unsafe fn fiber_main(ctx: *mut ExecCtx, base: Base) {
     // SAFETY: forwarded from the caller.
     let me = unsafe { super::running(ctx) };
+    context::set_based(me);
     me.conc.set_spawn_scope(Some(Arc::clone(&base.scope)));
     let Base {
         function,
@@ -328,6 +330,8 @@ pub(crate) unsafe fn fiber_main(ctx: *mut ExecCtx, base: Base) {
     drop(cell);
     cancel::clear_at_end(me);
     me.conc.set_spawn_scope(None);
+    // The bindings it inherited, or what an unwinding left (I-A).
+    context::release(me);
     // 5. Leave the scope: the last touch of shared state.
     scope.leave(slot);
 }

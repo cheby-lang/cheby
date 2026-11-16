@@ -53,6 +53,7 @@ A type `T` **satisfies** an interface `I` when, for every function `fn f(P1, …
 - **`Never`** is declared in no module and satisfies no interface, apart from empty interfaces (D-492).
 - **Tuples** are not declared in any module. By a built-in rule, a tuple type satisfies `Show` when all of its element types satisfy `Show`, and `Compare` when all of its element types satisfy `Compare` (comparison is lexicographic, D-136) (D-167). Tuples satisfy no other interface, apart from empty interfaces (D-166).
 - **Function types** are not declared in any module and satisfy no interface, apart from empty interfaces (D-166).
+- **Key functions.** `std::context::key` and `std::context::key_without_default` never count toward an interface, whatever their signature. A key is made only by the call that is a constant's whole initializer ([§10.11](10-concurrency.md#1011-context-values)), so a type of `std::context` whose only fitting function is one of them does not satisfy the interface (D-1593).
 
 _Example:_ a `pub` type whose `show` is only package-visible does not satisfy `Show`, anywhere.
 

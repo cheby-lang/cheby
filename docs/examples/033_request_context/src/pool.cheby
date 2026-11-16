@@ -1,0 +1,130 @@
+//! A pool of worker fibers that runs each job under the context of the
+//! code that submitted it.
+//!
+//! `serve` opens a scope and spawns the workers before any job exists,
+//! so they start with the context that `serve` was called in and keep
+//! it. Context follows spawns, not messages: a worker never sees what
+//! its senders provided. So `submit` captures the sender's whole context
+//! with `context::capture` and sends it with the job, and the worker
+//! runs the job under it with `context::with`. The job then reads every
+//! key as the sender would, and under a seeded random stream it draws
+//! the numbers of its own capture, whichever worker takes it.
+//!
+//! As in a plain worker pool, the workers compete for the jobs on one
+//! channel, and results come back tagged and are put in the order of
+//! their tags. A collector fiber receives the results while the jobs are
+//! still being submitted, so no worker waits for the submitter.
+
+import std::channel
+import std::context
+import std::fiber
+import std::int
+import std::list
+
+/// A job as a worker receives it: its tag, the context it was submitted
+/// in, and the work.
+priv type Job<B> = (Int, context::Context, fn() -> B)
+
+/// A result tagged with the tag of its job.
+priv type Tagged<B> = (Int, B)
+
+/// Spawns `workers` worker fibers, then calls `submit_all` on the calling
+/// fiber with a function that submits one job: its tag and its work.
+/// Each job runs under the context that the calling fiber had when it
+/// submitted the job. Returns the results in the order of their tags, or
+/// `Err` with the first panic if a job panics. Panics itself unless
+/// `workers` is positive, because with no workers the jobs would never be
+/// taken.
+fn serve<B>(workers: Int, submit_all: fn(fn(Int, fn() -> B))) -> Result<List<B>, fiber::Panic> {
+  assert workers > 0 as "a pool needs at least one worker"
+  use scope <- fiber::scope()
+  // Capacity 0: a job is handed straight to a free worker.
+  let (jobs_tx, jobs_rx) = channel::new::<Job<B>>(0)
+  let (results_tx, results_rx) = channel::new::<Tagged<B>>(0)
+  fn hire(remaining) {
+    case remaining {
+      0 => Nil
+      _ => {
+        fiber::spawn(scope, fn() { work(jobs_rx, results_tx) })
+        hire(remaining - 1)
+      }
+    }
+  }
+  hire(workers)
+  // `hire` is not used again, so it is released here with the receiver
+  // and the sender it captured (D-205), and only the workers hold them.
+  // The collector holds the only result `Receiver`. It returns when the
+  // last worker has returned and the result channel has closed.
+  let collector = fiber::spawn(scope, fn() { channel::to_list(results_rx) })
+  // The capture runs on the calling fiber, at the call of `submit`, so
+  // the job carries the context of the code that submits it. Once
+  // `submit_all` returns, the function is released with the only job
+  // `Sender`, which closes the job channel.
+  submit_all(fn(tag, job) {
+    let assert Ok(Nil) = channel::send(jobs_tx, (tag, context::capture(), job))
+  })
+  in_order(fiber::join(collector))
+}
+
+/// Runs jobs from `jobs`, each under the context it was submitted in,
+/// until the job channel is empty and closed, and sends each result on
+/// `results` with the tag of its job.
+priv fn work<B>(jobs: channel::Receiver<Job<B>>, results: channel::Sender<Tagged<B>>) {
+  case channel::receive(jobs) {
+    Ok((tag, captured, job)) => {
+      let result = context::with(captured, job)
+      let assert Ok(Nil) = channel::send(results, (tag, result))
+      work(jobs, results)
+    }
+    // No job is left. Returning drops this worker's `results`, and the
+    // last worker to return closes the result channel.
+    Err(Nil) => Nil
+  }
+}
+
+/// Puts tagged values in the order of their tags and drops the tags.
+priv fn in_order<B>(tagged: List<Tagged<B>>) -> List<B> {
+  tagged
+  |> list::sort_with(_, fn((first, _), (second, _)) { int::compare(first, second) })
+  |> list::map(_, fn((_, value)) { value })
+}
+
+/// A key of the tests below.
+const colour: context::Key<String> = context::key("grey")
+
+test "tagged values are put in the order of their tags" {
+  assert in_order([(2, "c"), (0, "a"), (1, "b")]) == ["a", "b", "c"]
+}
+
+test "results come back in the order of the tags" {
+  let outcome = serve(3, fn(submit) {
+    list::each(list::range(0, 20), fn(n) { submit(n, fn() { n * n }) })
+  })
+  assert outcome == Ok(list::map(list::range(0, 20), fn(n) { n * n }))
+}
+
+test "a job reads the context it was submitted in" {
+  let outcome = serve(2, fn(submit) {
+    submit(0, fn() { context::get(colour) })
+    context::provide(colour, "red", fn() { submit(1, fn() { context::get(colour) }) })
+    context::provide(colour, "blue", fn() { submit(2, fn() { context::get(colour) }) })
+  })
+  assert outcome == Ok(["grey", "red", "blue"])
+}
+
+test "a job does not read the context the pool was started in" {
+  use <- context::provide(colour, "green")
+  let outcome = serve(1, fn(submit) {
+    context::with(context::empty(), fn() { submit(0, fn() { context::get(colour) }) })
+  })
+  assert outcome == Ok(["grey"])
+}
+
+test "a job that panics fails the whole pool" {
+  let outcome = serve(2, fn(submit) {
+    submit(0, fn() { 1 })
+    submit(1, fn() { panic as "boom" })
+  })
+  let assert Err(failure) = outcome
+  assert fiber::message(failure) == "boom"
+}

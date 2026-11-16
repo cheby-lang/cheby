@@ -15,6 +15,7 @@ is that each checksum matches the baseline's.
 | `<group>/<name>/`  | One benchmark: a Cheby package with `cheby.toml` and `src/`   |
 | `rc/`              | The RC group: reference counting and in-place updates (D-718) |
 | `fiber/`           | The fiber group: fibers, scopes and channels (M2)             |
+| `time/`            | The time group: reading the clocks (D-1577)                   |
 | `collections/`     | The collections group: the seven Cheby collections (D-664)    |
 | `json/`            | The JSON group: parsing, decoding and writing JSON (D-899)    |
 | `baseline-m1.json` | M1's results for the RC group, the committed reference        |
@@ -29,15 +30,26 @@ The RC group has five benchmarks:
 | `string_building` | interpolated lines appended to a string, then split and joined again |
 | `tree_inserts`    | pseudo-random keys inserted into a persistent binary search tree     |
 
-The fiber group has four benchmarks on M2's scheduler (D-718, D-722). Their default sizes are the
-ones D-702's plan names, so some run for less than half a second:
+The fiber group has five benchmarks on M2's scheduler (D-718, D-722). The default sizes of the
+first four are the ones D-702's plan names, so some run for less than half a second.
+`scope_open_close` was added for D-1577's gate, since no other program opens more than 100 scopes:
 
-| Benchmark      | What it does                                                                     |
-| -------------- | -------------------------------------------------------------------------------- |
-| `spawn_join`   | 100,000 fibers spawned into scopes of a thousand and joined                      |
-| `ping_pong`    | 1,000,000 messages between two fibers over two channels of capacity 0            |
-| `sieve`        | the concurrent prime sieve of `005_prime_sieve`, to 2,000 primes                 |
-| `buffered_4x4` | 4,000,000 messages from four producers to four consumers over a buffered channel |
+| Benchmark          | What it does                                                                     |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `spawn_join`       | 100,000 fibers spawned into scopes of a thousand and joined                      |
+| `ping_pong`        | 1,000,000 messages between two fibers over two channels of capacity 0            |
+| `sieve`            | the concurrent prime sieve of `005_prime_sieve`, to 2,000 primes                 |
+| `buffered_4x4`     | 4,000,000 messages from four producers to four consumers over a buffered channel |
+| `scope_open_close` | 10,000,000 scopes opened and closed one after another, each spawning nothing     |
+
+The time group times the clocks of `std::time` for D-1577's gate, which reads what a clock in
+context costs a program that provides none. It uses only what `std::time` shipped before
+`std::context`, so a binary without that module can run it as the base (D-897). A reading changes
+from run to run, so the checksum counts the readings instead:
+
+| Benchmark  | Default    | What it does                                                                    |
+| ---------- | ---------- | ------------------------------------------------------------------------------- |
+| `now_loop` | 20,000,000 | `time::now` called with nothing provided, counting the readings after the epoch |
 
 The collections group has one benchmark per collection that std writes in Cheby with no runtime
 kernel (D-336). Each one is named after its module, keeps the collection held by nothing but the

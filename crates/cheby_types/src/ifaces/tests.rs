@@ -380,6 +380,7 @@ fn probe_with(package: PackageId, deps: Option<&[&str]>, source: &str) -> Probe 
         resolved: &resolved,
         deps: DepView::new(&b.set, &deps),
         modules: &b.modules,
+        real_modules: &b.modules,
         globals: &b.globals,
     };
     let (own, d) = build_interface(&types_input).unwrap();
@@ -405,6 +406,7 @@ impl Probe {
             resolved: &self.resolved,
             deps: DepView::new(&self.b.set, &self.deps),
             modules: &self.b.modules,
+            real_modules: &self.b.modules,
             globals: &self.b.globals,
         }
     }
@@ -1931,6 +1933,27 @@ fn reason_text_is_one_line_per_kind_of_reason() {
     for (err, text) in reasons {
         assert_eq!(p.reason(&generics, &Verdict::No(err)), text);
     }
+}
+
+/// The one-line text of D-1593's reason. Only the text is under test, so the
+/// reason is built by hand over a function this probe has: the solver gives
+/// it for the key functions of `std::context` alone.
+#[test]
+fn the_key_function_reason_is_one_line() {
+    let p = probe(PROBE);
+    let generics = p.generics(&[&[]]);
+    let err = Unsatisfied {
+        ty: p.param(0),
+        want: Want::Iface(p.type_def("shapes", "Shape")),
+        reason: Reason::KeyFunction {
+            found: p.func("std::list", "show"),
+            func: None,
+        },
+    };
+    assert_eq!(
+        p.reason(&generics, &Verdict::No(err)),
+        "`list::show` does not count, because a key is made only by a constant's whole initializer"
+    );
 }
 
 #[test]

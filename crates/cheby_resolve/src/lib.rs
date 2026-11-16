@@ -183,6 +183,12 @@ pub struct ItemAttrs {
     /// `@external`: its native kernel receives the running fiber's context
     /// as its first C argument (D-692, D-482).
     pub std_context: bool,
+    /// The function named by the standard library's
+    /// `@std_initializer(constructor)` on a function: the function may be
+    /// mentioned only as the function called in the call that is a
+    /// constant's whole initializer, and the compiler calls `constructor`,
+    /// a function of the same module, in its place (D-1599, D-482).
+    pub initializer: Option<(Name, Span)>,
 }
 
 impl Default for ItemAttrs {
@@ -196,6 +202,7 @@ impl Default for ItemAttrs {
             clamped: Vec::new(),
             hooks: None,
             std_context: false,
+            initializer: None,
         }
     }
 }

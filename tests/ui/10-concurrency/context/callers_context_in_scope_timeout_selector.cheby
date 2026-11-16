@@ -1,0 +1,37 @@
+// @mode: run-pass
+// @decisions: D-1044, D-665, D-675
+//! The body of a scope, the function of a timeout and a selector's mapping
+//! function run on the calling fiber, so under `provide` they read the
+//! provided value (§10.3, §10.6, §10.8, §10.11).
+
+import std::channel
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+
+const greeting: context::Key<String> = context::key("hello")
+
+fn read_all() -> String {
+  let in_scope = {
+    use _ <- fiber::scope()
+    context::get(greeting)
+  }
+  let in_timeout = fiber::timeout(duration::seconds(10), fn() { context::get(greeting) })
+  let (tx, rx) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(tx, 1)
+  let in_receive_arm = selector::new()
+    |> selector::receive(_, rx, fn(_) { context::get(greeting) })
+    |> selector::select
+  let in_timer_arm = selector::new()
+    |> selector::after(_, duration::zero, fn() { context::get(greeting) })
+    |> selector::select
+  "scope {in_scope:?}, timeout {in_timeout:?}, receive {in_receive_arm}, timer {in_timer_arm}"
+}
+
+fn main() {
+  io::println(read_all())
+  let provided = context::provide(greeting, "provided", read_all)
+  io::println(provided)
+}

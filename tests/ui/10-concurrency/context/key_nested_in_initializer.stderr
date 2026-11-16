@@ -1,0 +1,36 @@
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_nested_in_initializer.cheby:10:41
+   |
+10 | const pair: (context::Key<Int>, Int) = (context::key(1), 2)
+   |                                         ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_nested_in_initializer.cheby:12:46
+   |
+12 | const some: Option<context::Key<Int>> = Some(context::key(1))
+   |                                              ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_nested_in_initializer.cheby:18:38
+   |
+18 | const kept: context::Key<Int> = keep(context::key(1))
+   |                                      ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_nested_in_initializer.cheby:20:39
+   |
+20 | const in_block: context::Key<Int> = { context::key(1) }
+   |                                       ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+

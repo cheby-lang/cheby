@@ -15,16 +15,20 @@
 //! an interface function are the parser's E0045, so they never reach this
 //! pass (D-514).
 //!
-//! The standard library may also write three attributes of its own
-//! (§4.8, D-298, D-303, D-342, D-482, D-692): `@std_clamped(param, …)` on a
-//! function names the count parameters it clamps,
+//! The standard library may also write four attributes of its own
+//! (§4.8, D-298, D-303, D-342, D-482, D-692, D-1599): `@std_clamped(param,
+//! …)` on a function names the count parameters it clamps,
 //! `@std_hooks(equal_fn, hash_fn, debug_fn)` on a type names the functions
 //! of its module that implement its equality, hashing and debug printing,
-//! and `@std_context`, without arguments on a function with an `@external`,
-//! makes its native kernel receive the running fiber's context first.
-//! In any other package they are unknown attributes. `@std_context` on a
-//! `@blocking` function is E0045, since a blocking kernel runs on a pool
-//! thread, which never receives the context (D-191, D-819).
+//! `@std_context`, without arguments on a function with an `@external`,
+//! makes its native kernel receive the running fiber's context first, and
+//! `@std_initializer(constructor)` on a function names the function of its
+//! module that the compiler calls in its place where it is a constant's
+//! whole initializer. In any other package they are unknown attributes.
+//! `@std_context` on a `@blocking` function is E0045, since a blocking
+//! kernel runs on a pool thread, which never receives the context (D-191,
+//! D-819). The constructor's shape is checked with the signatures
+//! (`cheby_types`).
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{DefIndex, DefKind, Ice, IndexVec, Name, Namespace, PackageId, Vis};
@@ -117,8 +121,9 @@ const ATTRIBUTE_LIST: &str =
 /// The attributes every package may write (§4.8).
 const ATTRIBUTES: [&str; 5] = ["external", "target", "blocking", "async", "deprecated"];
 
-/// The attributes only the standard library may write (D-482, D-692).
-const STD_ATTRIBUTES: [&str; 3] = ["std_clamped", "std_hooks", "std_context"];
+/// The attributes only the standard library may write (D-482, D-692,
+/// D-1599).
+const STD_ATTRIBUTES: [&str; 4] = ["std_clamped", "std_hooks", "std_context", "std_initializer"];
 
 /// Why a function without a body can end up on no target.
 const BODILESS: &str = "a function without a body exists only on the targets of its \
@@ -147,6 +152,7 @@ pub(crate) fn collect(
         cx.item(item, module_targets)?;
     }
     cx.check_hooks();
+    cx.check_initializers();
     Ok(Collected {
         items: cx.items,
         module_targets: input.package_targets.intersection(module_targets),
@@ -554,6 +560,13 @@ impl Cx<'_, '_> {
                     }
                     out.hooks = self.hooks(&args, span);
                 }
+                "std_initializer" => {
+                    if !matches!(placement, Placement::Fn { .. }) {
+                        self.misplaced(span, known, placement, None);
+                        continue;
+                    }
+                    out.initializer = self.initializer(&args, span);
+                }
                 _ => {}
             }
         }
@@ -947,6 +960,58 @@ impl Cx<'_, '_> {
         hooks
     }
 
+    /// `@std_initializer(constructor)`: exactly one function name. Whether
+    /// it names a function of the module is checked once every item is
+    /// collected ([`Self::check_initializers`]).
+    fn initializer(&mut self, args: &[AttrArg<'_>], span: Span) -> Option<(Name, Span)> {
+        let constructor = match args {
+            [AttrArg::Name(ident)] => Some((self.intern(ident.text()), ident.span())),
+            _ => None,
+        };
+        if constructor.is_none() {
+            self.diags.push(
+                Diagnostic::new(
+                    codes::INVALID_ATTRIBUTE,
+                    "malformed `@std_initializer` attribute",
+                )
+                .with_primary(span, "")
+                .with_help(
+                    "write `@std_initializer(constructor)` with the name of one function of \
+                     this module",
+                ),
+            );
+        }
+        constructor
+    }
+
+    /// E0042 for an `@std_initializer` name that is not a function of the
+    /// module.
+    fn check_initializers(&mut self) {
+        let missing: Vec<(Name, Span)> = self
+            .items
+            .iter()
+            .filter(|item| item.kind == DefKind::Fn)
+            .filter_map(|item| item.attrs.initializer)
+            .filter(|&(name, _)| {
+                !self
+                    .items
+                    .iter()
+                    .any(|f| f.kind == DefKind::Fn && f.name == name)
+            })
+            .collect();
+        for (name, span) in missing {
+            let text = self.input.globals.names.get(name);
+            self.diags.push(
+                Diagnostic::new(
+                    codes::UNRESOLVED_NAME,
+                    format!("cannot find function `{text}` in this module"),
+                )
+                .with_primary(span, "not found")
+                .with_note("`@std_initializer` names a function declared in the same module"),
+            );
+        }
+    }
+
     /// E0042 for an `@std_hooks` name that is not a function of the
     /// module.
     fn check_hooks(&mut self) {
@@ -1329,6 +1394,50 @@ mod tests {
         );
         let r = resolve_in(PackageId::STD, Targets::ALL, source);
         assert_eq!(r.messages(), ["E0045: unknown attribute `@inline`"]);
+    }
+
+    /// `@std_initializer(constructor)` names one function of the module,
+    /// on a function, once, and only in the standard library; elsewhere it
+    /// is an unknown attribute (D-482, D-1599).
+    #[test]
+    fn std_initializer_names_one_function_of_the_module() {
+        let source = "@std_initializer(make_at)\npub fn make(n: Int) -> Int {\n  n\n}\n\nfn make_at(n: Int, path: String, type_text: String) -> Int {\n  n\n}\n\n@std_initializer\npub fn bare() {\n  Nil\n}\n\n@std_initializer(a, b)\npub fn two() {\n  Nil\n}\n\n@std_initializer(\"make_at\")\npub fn text() {\n  Nil\n}\n\n@std_initializer(missing)\npub fn lost() {\n  Nil\n}\n\n@std_initializer(make_at)\n@std_initializer(make_at)\npub fn twice() {\n  Nil\n}\n\n@std_initializer(make_at)\npub type T {\n  T,\n}\n\n@std_initializer(make_at)\nconst c: Int = 1\n\n@std_initializer(c)\npub fn not_a_function() {\n  Nil\n}\n";
+        let r = resolve_in(PackageId::STD, Targets::ALL, source);
+        assert_eq!(
+            r.messages(),
+            [
+                "E0042: cannot find function `c` in this module",
+                "E0042: cannot find function `missing` in this module",
+                "E0045: `@std_initializer` is not allowed on a constant",
+                "E0045: `@std_initializer` is not allowed on a type",
+                "E0045: duplicate `@std_initializer` attribute",
+                "E0045: malformed `@std_initializer` attribute",
+                "E0045: malformed `@std_initializer` attribute",
+                "E0045: malformed `@std_initializer` attribute",
+            ]
+        );
+        let constructor = |name: &str| {
+            r.module
+                .items
+                .iter()
+                .find(|i| r.globals.names.get(i.name) == name)
+                .unwrap()
+                .attrs
+                .initializer
+                .map(|(n, _)| r.globals.names.get(n))
+        };
+        assert_eq!(constructor("make"), Some("make_at"));
+        assert_eq!(constructor("twice"), Some("make_at"));
+        assert_eq!(constructor("lost"), Some("missing"));
+        for name in ["make_at", "bare", "two", "text", "T", "c"] {
+            assert_eq!(constructor(name), None, "{name}");
+        }
+        let r = resolve(source);
+        assert_eq!(
+            r.messages(),
+            ["E0045: unknown attribute `@std_initializer`"; 10]
+        );
+        assert!(r.module.items.iter().all(|i| i.attrs.initializer.is_none()));
     }
 
     #[test]

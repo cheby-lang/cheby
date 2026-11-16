@@ -168,6 +168,19 @@ pub(super) struct Path {
 impl Path {
     /// Walks down from `top` (read-only) towards `key`.
     fn walk(top: Bitmap, coll: Collection, key: Word, hash: u64) -> Self {
+        Self::walk_by(top, coll, key, hash, &keys_equal)
+    }
+
+    /// [`Path::walk`] with `same` comparing a stored key (first) with
+    /// `key`: a context's bindings compare identities by address first
+    /// ([`insert_hashed`]).
+    fn walk_by(
+        top: Bitmap,
+        coll: Collection,
+        key: Word,
+        hash: u64,
+        same: &impl Fn(Word, Word) -> bool,
+    ) -> Self {
         let stride = coll.stride();
         let mut path = Self {
             hash,
@@ -182,7 +195,7 @@ impl Path {
                 let leaf = Collision(node);
                 path.spot = (0..leaf.len())
                     .map(|e| e.wrapping_mul(stride))
-                    .find(|&s| keys_equal(leaf.get(s), key))
+                    .find(|&s| same(leaf.get(s), key))
                     .map_or(Spot::Appended, Spot::Found);
                 break;
             }
@@ -191,7 +204,7 @@ impl Path {
             let (data, nodes) = here.maps();
             if data & bit != 0 {
                 let s = index(data, bit).wrapping_mul(stride);
-                path.spot = if keys_equal(here.get(s), key) {
+                path.spot = if same(here.get(s), key) {
                     Spot::Found(s)
                 } else {
                     Spot::Clash(bit, s)
@@ -307,8 +320,18 @@ fn single(coll: Collection, seed: u64, hash: u64, key: Word, value: Option<Word>
 
 /// The entry `key` (and `value` for a map), taken, written at the end of
 /// `path` in `root`, which this code owns and may change. The path was
-/// walked in `root` and the key is absent.
-fn put_new(root: Root, coll: Collection, path: &mut Path, key: Word, value: Option<Word>) {
+/// walked in `root` and the key is absent. `rehash` gives the hash of a
+/// key already stored, which a clash splits from the new one: `SipHash`
+/// under the root's seed for `std::map` and `std::set`, the hash a key
+/// carries for a context's bindings ([`insert_hashed`]).
+fn put_new(
+    root: Root,
+    coll: Collection,
+    path: &mut Path,
+    key: Word,
+    value: Option<Word>,
+    rehash: &impl Fn(Word) -> u64,
+) {
     let stride = coll.stride();
     let extra = match path.spot {
         Spot::Free(_) | Spot::Appended => stride,
@@ -355,7 +378,7 @@ fn put_new(root: Root, coll: Collection, path: &mut Path, key: Word, value: Opti
             let old_key = node.get(at);
             let old_value = (stride == 2).then(|| node.get(at.wrapping_add(1)));
             let shift = path.last_shift().wrapping_add(BITS);
-            let old_hash = key_hash(old_key, root.seed());
+            let old_hash = rehash(old_key);
             let child = merge(
                 coll,
                 shift,
@@ -385,6 +408,11 @@ fn put_new(root: Root, coll: Collection, path: &mut Path, key: Word, value: Opti
 /// A new node (a chain of bitmap nodes ending in two entries, or in a
 /// collision node) holding two entries whose hashes agree below `shift`,
 /// taking their words.
+///
+/// Every node is allocated before a word moves into one, so running out
+/// of memory part of the way (D-642) leaves both entries where they were
+/// and releases the empty nodes made so far: the caller still holds every
+/// word it would have given.
 fn merge(
     coll: Collection,
     shift: u32,
@@ -398,6 +426,26 @@ fn merge(
     while split < MAX_SHIFT && bit_at(h0, split) == bit_at(h1, split) {
         split = split.wrapping_add(BITS);
     }
+    // The node that will hold the two entries, still empty.
+    let bottom = if split >= MAX_SHIFT {
+        Collision::alloc(coll, h0, stride.wrapping_mul(2)).0
+    } else {
+        Bitmap::alloc(coll, stride.wrapping_mul(2)).0
+    };
+    // Wrap it in one-child nodes up to `shift`. The chain made so far is
+    // released if an allocation raises: each node holds only the one below.
+    let mut node = bottom;
+    let mut level = split;
+    while level > shift {
+        level = level.wrapping_sub(BITS);
+        let held = DropOnUnwind::new([node]);
+        let parent = Bitmap::alloc(coll, 1);
+        held.disarm();
+        parent.put(0, node);
+        parent.set_maps(0, bit_at(h0, level));
+        node = parent.0;
+    }
+    // Nothing allocates from here on: the entries move in.
     let put =
         |write: &dyn Fn(usize, Word), at: usize, (_, key, value): (u64, Word, Option<Word>)| {
             write(at, key);
@@ -405,14 +453,13 @@ fn merge(
                 write(at.wrapping_add(1), value);
             }
         };
-    let mut node = if split >= MAX_SHIFT {
-        let leaf = Collision::alloc(coll, h0, stride.wrapping_mul(2));
+    if split >= MAX_SHIFT {
+        let leaf = Collision(bottom);
         put(&|i, w| leaf.put(i, w), 0, first);
         put(&|i, w| leaf.put(i, w), stride, second);
         leaf.set_len(2);
-        leaf.0
     } else {
-        let pair = Bitmap::alloc(coll, stride.wrapping_mul(2));
+        let pair = Bitmap(bottom);
         let (b0, b1) = (bit_at(h0, split), bit_at(h1, split));
         let (low, high) = if b0 < b1 {
             (first, second)
@@ -422,15 +469,6 @@ fn merge(
         put(&|i, w| pair.put(i, w), 0, low);
         put(&|i, w| pair.put(i, w), stride, high);
         pair.set_maps(b0 | b1, 0);
-        pair.0
-    };
-    // Wrap in one-child nodes up to `shift`.
-    while split > shift {
-        split = split.wrapping_sub(BITS);
-        let parent = Bitmap::alloc(coll, 1);
-        parent.put(0, node);
-        parent.set_maps(0, bit_at(h0, split));
-        node = parent.0;
     }
     node
 }
@@ -463,16 +501,96 @@ pub(super) fn insert(root: Root, coll: Collection, key: Word, value: Option<Word
         dup_word(value);
     }
     let target = writable_root(root, coll);
-    put_owned(target, coll, &mut path, key, value);
+    put_owned(target, coll, &mut path, key, value, &|stored| {
+        key_hash(stored, root.seed())
+    });
+    target
+}
+
+/// A new root over `root`'s top node `top`, with a reference added to it
+/// and the same count and seed: the copying branch of `writable_root`
+/// without its uniqueness test and without a statistics event. The root
+/// is allocated before the reference is taken, so running out of memory
+/// leaves nothing to release.
+fn fresh_root(root: Root, coll: Collection, top: Bitmap) -> Root {
+    let fresh = Root::alloc(coll, root.count(), root.seed(), top);
+    dup_word(top.0);
+    fresh
+}
+
+/// `insert` for a collection whose keys carry their own hashes, a fiber's
+/// context bindings (`super::bindings`, D-1572): `key`, whose hash is
+/// `hash`, and `value` borrowed, the result owned, and `rehash` gives the
+/// hash of a stored key. Never in place, whatever `root`'s count: the
+/// result is a new root and `root` keeps exactly what it held, so the
+/// outer map of a `provide` never changes (D-1571). A new root has seed 0,
+/// which nothing reads. `same` compares a stored key (first) with `key`
+/// in place of [`keys_equal`].
+///
+/// Running out of memory (D-642) leaves no reference behind: the nodes
+/// are allocated before the key and the value gain theirs, and the new
+/// root, whose tree is whole after every step, is released by a guard
+/// until the entry is in.
+pub(super) fn insert_hashed(
+    root: Root,
+    coll: Collection,
+    key: Word,
+    hash: u64,
+    value: Option<Word>,
+    rehash: &impl Fn(Word) -> u64,
+    same: &impl Fn(Word, Word) -> bool,
+) -> Root {
+    let Some(top) = root.node() else {
+        let node = Bitmap::alloc(coll, coll.stride());
+        // An empty node, released if the root's allocation raises.
+        let held = DropOnUnwind::new([node.0]);
+        let fresh = Root::alloc(coll, 1, 0, node);
+        held.disarm();
+        dup_word(key);
+        node.put(0, key);
+        if let Some(value) = value {
+            dup_word(value);
+            node.put(1, value);
+        }
+        node.set_maps(bit_at(hash, 0), 0);
+        return fresh;
+    };
+    let mut path = Path::walk_by(top, coll, key, hash, same);
+    let target = fresh_root(root, coll, top);
+    // Every node on the path is shared with `root` here, so each is copied
+    // and none is written in place.
+    let held = DropOnUnwind::new([target.word()]);
+    let extra = match path.spot {
+        Spot::Free(_) | Spot::Appended => coll.stride(),
+        Spot::Clash(..) | Spot::Found(_) => 0,
+    };
+    path.make_writable(target, coll, extra);
+    held.disarm();
+    dup_word(key);
+    if let Some(value) = value {
+        dup_word(value);
+    }
+    // Only a clash allocates still, in `merge`, before it moves a word.
+    let held = DropOnUnwind::new([target.word(), key, value.unwrap_or(0)]);
+    put_owned(target, coll, &mut path, key, value, rehash);
+    held.disarm();
     target
 }
 
 /// Writes the entry `key` (and `value`), taken, at the end of `path` in
 /// `root`, which this code owns and may change: replaces the value of a
-/// present key (keeping the stored key) or adds the entry.
-fn put_owned(root: Root, coll: Collection, path: &mut Path, key: Word, value: Option<Word>) {
+/// present key (keeping the stored key) or adds the entry. `rehash` is
+/// [`put_new`]'s.
+fn put_owned(
+    root: Root,
+    coll: Collection,
+    path: &mut Path,
+    key: Word,
+    value: Option<Word>,
+    rehash: &impl Fn(Word) -> u64,
+) {
     let Spot::Found(at) = path.spot else {
-        put_new(root, coll, path, key, value);
+        put_new(root, coll, path, key, value, rehash);
         return;
     };
     drop_word(key);
@@ -495,7 +613,9 @@ fn insert_owned(root: Root, coll: Collection, hash: u64, key: Word, value: Optio
         return;
     };
     let mut path = Path::walk(top, coll, key, hash);
-    put_owned(root, coll, &mut path, key, value);
+    put_owned(root, coll, &mut path, key, value, &|stored| {
+        key_hash(stored, root.seed())
+    });
 }
 
 /// Builds a map or set under `seed` from owned entries, in place.
@@ -552,7 +672,9 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
         let value = update(None);
         guard.disarm();
         dup_word(key);
-        put_new(target, coll, &mut path, key, Some(value));
+        put_new(target, coll, &mut path, key, Some(value), &|stored| {
+            key_hash(stored, root.seed())
+        });
         return target;
     };
     path.make_writable(target, coll, 0);

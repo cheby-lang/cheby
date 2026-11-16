@@ -1,0 +1,5 @@
+Draws { fractions: [0.47599493018970085, 0.4665031420095924], die: 854, child: 0.27299049413827137 }
+two bodies under one capture draw the same numbers: True
+also under another stream: True
+a capture with no stream draws from the host: True
+the fiber's own stream did not move: True

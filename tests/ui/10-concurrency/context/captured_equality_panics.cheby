@@ -1,0 +1,15 @@
+// @mode: run-fail
+// @decisions: D-1566, D-233
+//! `==` on a captured context warns at compile time and panics at run
+//! time when it reaches the handle: a `Context` has no structural
+//! equality, and its identity is never observable (§3.13, §9.5, §10.11).
+
+import std::context
+import std::io
+
+fn main() {
+  let captured = context::capture()
+  io::println("comparing")
+  let same = captured == captured
+  io::println("never printed: {same}")
+}

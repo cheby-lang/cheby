@@ -47,6 +47,12 @@ pub struct FnSig {
     /// `@std_clamped(name, …)`, sorted (D-298, D-303, D-482). Always
     /// empty outside `std`.
     pub clamped: Box<[u32]>,
+    /// The constructor named by the std-only attribute
+    /// `@std_initializer(constructor)`, a function of the same module. The
+    /// function may be mentioned only as the function called in the call
+    /// that is a constant's whole initializer, and that call calls the
+    /// constructor instead (D-1599, D-482). Always `None` outside `std`.
+    pub initializer: Option<Name>,
 }
 
 /// A type definition.

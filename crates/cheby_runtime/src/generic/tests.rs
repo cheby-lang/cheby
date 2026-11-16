@@ -410,8 +410,8 @@ static BAG: CustomKind = CustomKind {
     shape: layout::KindShape::Opaque,
 };
 
-/// An id unused by every runtime module (40 to 44, 46 and 47 are the
-/// handle kinds, 45 is reserved for `File`, D-982; 60 to 63 stay free of
+/// An id unused by every runtime module (40 to 48 are the
+/// handle kinds, D-982, D-1583; 60 to 63 stay free of
 /// them).
 const BAG_ID: abi::LayoutId = 60;
 

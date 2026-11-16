@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @decisions: D-1045, D-1049, D-1563, D-1587
+//! A `pub` key of a sibling module is read and provided from `main`, and
+//! the module's own reader sees the value. Its debug text names the
+//! constant's full path, `Key(app::db::pool)` (§10.11).
+
+import app::db
+import std::context
+import std::io
+
+fn main() {
+  let pool = db::pool
+  io::println("{pool:?}")
+  let default = context::get(db::pool)
+  let read_here = context::provide(db::pool, "primary", fn() { context::get(db::pool) })
+  let read_there = context::provide(db::pool, "replica", fn() { db::current() })
+  io::println("{default} {read_here} {read_there}")
+}

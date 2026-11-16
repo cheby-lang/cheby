@@ -56,7 +56,8 @@
 //! an earlier constant of the same [`serialize`] call holds is stored only
 //! in that constant's image and referenced from the later ones by (path,
 //! index), so sharing survives across constants (D-539). Results hold no
-//! closures or handles (E0068); a value that holds one is refused.
+//! functions, `dyn` values or handles (E0068, and E0081 for a key's
+//! default, D-1578); a value that holds one is refused.
 //!
 //! # Installing
 //!
@@ -122,8 +123,10 @@ pub enum ConstImageError {
         /// What is wrong.
         what: &'static str,
     },
-    /// The value of `path` holds something no image describes (a closure
-    /// or a handle, which E0068 keeps out of constants).
+    /// The value of `path` holds something no image describes: a function,
+    /// a `dyn` value, a handle or a value of an external type. E0068 keeps
+    /// them out of a constant's type, and E0081 out of a key's default,
+    /// which that check does not look into (D-1578, D-1600).
     Unsupported {
         /// The constant's path.
         path: Box<str>,
@@ -499,7 +502,47 @@ unsafe fn leaf_ref(word: Word, in_process: bool) -> Option<Ref> {
     (in_process && unsafe { is_static(word) }).then_some(Ref::Address(word))
 }
 
-/// The shape and the children of the object `word`.
+/// What E0081's walk learns of one word of a constant's value
+/// ([`super::find_undescribed`], D-1578): the image writer's own answer.
+#[derive(Debug)]
+pub(super) enum Look {
+    /// No object of an image: a tagged integer, 0 or a runtime static, or
+    /// a malformed word, which the writer reports.
+    Leaf,
+    /// An object an image describes, with its children.
+    Children(Vec<Word>),
+    /// An object no image describes, as [`ConstImageError::Unsupported`]
+    /// names it: `a function`, or a handle's or external type's name.
+    Undescribed(String),
+}
+
+/// What [`serialize`] would make of `word`: [`leaf_ref`] and [`shape_of`],
+/// the one predicate of what a constant may hold, so E0081's check and
+/// the writer cannot disagree (D-1578).
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0 or a live object.
+pub(super) unsafe fn look(word: Word) -> Look {
+    // SAFETY: forwarded from the caller.
+    if word == 0 || unsafe { leaf_ref(word, false) }.is_some() {
+        return Look::Leaf;
+    }
+    // SAFETY: as above, an object that is no runtime static.
+    match unsafe { shape_of("", word) } {
+        Ok((_, children)) => Look::Children(children),
+        Err(ConstImageError::Unsupported { what, .. }) => Look::Undescribed(what),
+        Err(
+            ConstImageError::Malformed { .. }
+            | ConstImageError::UnknownTypeKey { .. }
+            | ConstImageError::NoSlot { .. },
+        ) => Look::Leaf,
+    }
+}
+
+/// The shape and the children of the object `word`, or
+/// [`ConstImageError::Unsupported`] for an object that no image describes:
+/// a function, a handle, a value of an external type.
 ///
 /// # Safety
 ///
@@ -560,6 +603,9 @@ unsafe fn shape_of(path: &str, word: Word) -> Result<(Shape, Vec<Word>), ConstIm
             let Some(info) = layout::get(id) else {
                 return Err(unsupported(format!("an object of the unknown layout {id}")));
             };
+            if info.kind == LayoutKind::Closure {
+                return Err(unsupported("a function".to_owned()));
+            }
             let LayoutKind::Ctor { tag, .. } = info.kind else {
                 return Err(unsupported(format!("a `{}`", info.name)));
             };

@@ -18,7 +18,8 @@
 //! the end of a body; `expr`, `call`, `stmt`, `closure`,
 //! `desugar`, `coerce`, `constraints` and `interp` the expression core;
 //! `pat`, `case` and `record` patterns, `case` and records; `facts` the
-//! hooks of a recording run (D-1380).
+//! hooks of a recording run (D-1380); `key` the rules of context keys
+//! (§10.11).
 
 mod call;
 mod case;
@@ -29,11 +30,13 @@ mod desugar;
 mod expr;
 mod facts;
 mod interp;
+mod key;
 mod pat;
 mod record;
 mod stmt;
 
 pub(crate) use constraints::Deferred;
+pub(crate) use key::{is_key_type, key_fn};
 pub(crate) use pat::PatSite;
 
 use cheby_diag::{Diagnostic, Span, codes};
@@ -534,6 +537,7 @@ fn check_const(
     };
     let res = body_res(input, index)?;
     let mut cx = BodyCx::new(input, own, res, index, Generics::empty(), record)?;
+    cx.key_site = key::key_site(input, own, res, value)?;
     let origin = decl.ty().map(|t| {
         (
             t.significant_span(),
@@ -546,9 +550,19 @@ fn check_const(
     let mut deps = std::mem::take(&mut cx.const_deps);
     let diags = std::mem::take(&mut cx.diags);
     let facts = cx.facts_out.take();
-    let Some(body) = body.filter(|_| sig_ok) else {
+    let Some(mut body) = body.filter(|_| sig_ok) else {
         return Ok((None, diags, facts));
     };
+    if cx.key_site.is_some()
+        && !key::rewrite(
+            input,
+            own,
+            input.name_of(own, input.def_id(index)),
+            &mut body,
+        )?
+    {
+        return Ok((None, diags, facts));
+    }
     deps.sort_by_cached_key(|&dep| {
         let path = input.modules.get(dep.module).map(|m| m.path.clone());
         (path, input.name_of(own, dep))
@@ -730,6 +744,10 @@ pub(crate) struct BodyCx<'a> {
     pub facts: Option<Box<FactLog>>,
     /// The log's result, filled at the end of [`Self::finish`].
     pub facts_out: Option<BodyFacts>,
+    /// The callee's path node of a constant's initializer that is a call
+    /// of `context::key` or `context::key_without_default`: the one
+    /// mention of them that is not E0080 (D-1565, D-1581).
+    pub key_site: Option<cheby_syntax::NodeId>,
 }
 
 impl<'a> BodyCx<'a> {
@@ -766,6 +784,7 @@ impl<'a> BodyCx<'a> {
             item,
             facts: record.then(Box::default),
             facts_out: None,
+            key_site: None,
         })
     }
 

@@ -1,0 +1,15 @@
+//! Keys of a database, for the `context_key_reload` transcript, which
+//! changes this module in a copy of the package and reloads it.
+
+import std::context
+
+/// An item of the database.
+pub type Item {
+  Item(Int),
+}
+
+/// The size of the pool.
+pub const pool: context::Key<Int> = context::key(1)
+
+/// The item in use, whose value type is declared in this module.
+pub const item: context::Key<Item> = context::key(Item(0))

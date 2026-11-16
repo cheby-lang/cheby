@@ -693,7 +693,7 @@ fn builtins() -> &'static [Option<LayoutInfo>] {
         set(layout::NONE, builtin_ctor("Option", "None", 1, 0));
         set(layout::OK, builtin_ctor("Result", "Ok", 0, 1));
         set(layout::ERR, builtin_ctor("Result", "Err", 1, 1));
-        // The handle kinds 40 to 44 (D-703) are registered with the
+        // The handle kinds 40 to 48 (D-703, D-1583) are registered with the
         // builtins, so the first lookup of any builtin layout makes them
         // known too; the code that builds them registers them as well
         // before it allocates one. Registering takes the registration

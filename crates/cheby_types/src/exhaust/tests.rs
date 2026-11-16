@@ -1558,6 +1558,7 @@ fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
             resolved: &resolved,
             deps: DepView::new(&set, &deps),
             modules: &table,
+            real_modules: &table,
             globals: &globals,
         };
         let (own, _) = build_interface(&input).unwrap();

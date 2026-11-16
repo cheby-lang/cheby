@@ -1,0 +1,16 @@
+error[E0063]: `context::Key<Int>` does not satisfy `Wrap`
+  --> tests/ui/08-interfaces/satisfaction/context_key_never_satisfies.cheby:19:3
+   |
+19 |   Wrap::key(port)
+   |   ^^^^^^^^^^^^^^^ `Wrap::key` is called with `Self` = `context::Key<Int>`
+   |
+   = note: `context::key` exists but does not count, because a key is made only by the call that is a constant's whole initializer (§10.11, D-1593)
+
+error[E0063]: `context::Key<Int>` does not satisfy `Wrap`
+  --> tests/ui/08-interfaces/satisfaction/context_key_never_satisfies.cheby:23:3
+   |
+23 |   generic(port)
+   |   ^^^^^^^^^^^^^ required by a bound of `generic`
+   |
+   = note: `context::key` exists but does not count, because a key is made only by the call that is a constant's whole initializer (§10.11, D-1593)
+

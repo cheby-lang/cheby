@@ -11,6 +11,8 @@
 //! - [`compare`]: key hashing and equality, and the order-independent
 //!   equality and hashing of whole maps and sets.
 //! - `kernels`: the `std::map` and `std::set` kernels (D-484).
+//! - [`bindings`]: a fiber's context bindings (D-1571), a map whose keys
+//!   carry their own hashes (D-1572), never updated in place.
 //!
 //! **Seeds** (plan §4.3.5, D-538). Every non-empty root records the seed
 //! it was built with. `from_list` and an insertion into an empty
@@ -26,6 +28,7 @@
 //!
 //! [`entry::current_seed`]: crate::entry::current_seed
 
+pub(crate) mod bindings;
 mod compare;
 pub(crate) mod kernels;
 mod node;

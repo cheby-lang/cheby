@@ -108,8 +108,8 @@ pub struct Domain {
     /// in flight may then have leaked what it held, so `run_main` skips
     /// the debug leak check.
     system_refused: AtomicBool,
-    /// The live objects of each runtime kind, Sender to Connection
-    /// (layouts 40 to 47), for D-711's line; debug builds only, so release builds
+    /// The live objects of each runtime kind, Sender to Context
+    /// (layouts 40 to 48), for D-711's line; debug builds only, so release builds
     /// pay nothing (D-784). Not sharded: only handle constructors and the
     /// free worklist's custom-kind branch touch it.
     #[cfg(debug_assertions)]
@@ -121,11 +121,12 @@ pub struct Domain {
 
 /// The number of runtime kinds whose live objects debug builds count per
 /// domain (D-711): `Sender`, `Receiver`, `Fiber`, `Scope`, `Selector`,
-/// `File`, `Listener` and `Connection`, the layouts 40 to 47, in that
-/// order. D-1208: tier 3's handles (D-982) are counted
+/// `File`, `Listener`, `Connection` and `Context`, the layouts 40 to 48,
+/// in that order. D-1208: tier 3's handles (D-982) are counted
 /// after `Selector`, in kind order, as D-711 asks for every runtime kind
-/// (the user's answer to wave 6's question Q6 (3)).
-pub const RUNTIME_KINDS: usize = 8;
+/// (the user's answer to wave 6's question Q6 (3)), and D-1583 counts
+/// `std::context`'s `Context` after `Connection`.
+pub const RUNTIME_KINDS: usize = 9;
 
 /// The debug text of each runtime kind, in kind order (D-233, D-784).
 const RUNTIME_KIND_NAMES: [&str; RUNTIME_KINDS] = [
@@ -137,6 +138,7 @@ const RUNTIME_KIND_NAMES: [&str; RUNTIME_KINDS] = [
     "<File>",
     "<Listener>",
     "<Connection>",
+    "<Context>",
 ];
 
 /// The index of the runtime kind of layout `id` among the counted kinds,
@@ -261,9 +263,10 @@ impl Domain {
             .fold(0, i64::wrapping_add)
     }
 
-    /// Live objects of the runtime kinds 40 to 47 (Sender, Receiver,
-    /// Fiber, Scope, Selector, File, Listener, Connection), counted in
-    /// debug builds only; zeros in release builds (D-711). They are among
+    /// Live objects of the runtime kinds 40 to 48 (Sender, Receiver,
+    /// Fiber, Scope, Selector, File, Listener, Connection, Context),
+    /// counted in debug builds only; zeros in release builds (D-711,
+    /// D-1583). They are among
     /// [`Domain::live_objects`].
     #[cfg(debug_assertions)]
     #[must_use]
@@ -273,9 +276,10 @@ impl Domain {
             .map(|count| count.load(Ordering::Relaxed))
     }
 
-    /// Live objects of the runtime kinds 40 to 47 (Sender, Receiver,
-    /// Fiber, Scope, Selector, File, Listener, Connection), counted in
-    /// debug builds only; zeros in release builds (D-711).
+    /// Live objects of the runtime kinds 40 to 48 (Sender, Receiver,
+    /// Fiber, Scope, Selector, File, Listener, Connection, Context),
+    /// counted in debug builds only; zeros in release builds (D-711,
+    /// D-1583).
     #[cfg(not(debug_assertions))]
     #[must_use]
     pub fn live_kinds(&self) -> [i64; RUNTIME_KINDS] {
@@ -1628,7 +1632,7 @@ fn tally_kind(delta: &mut [i64; RUNTIME_KINDS], id: abi::LayoutId, by: i64) {
     }
 }
 
-/// Counts a new object of the runtime kind of layout `id` (40 to 47) in
+/// Counts a new object of the runtime kind of layout `id` (40 to 48) in
 /// the domain it was charged to: `ctx`'s, or the running fiber's, or
 /// without a fiber the host's, as [`alloc_for`] chooses (debug builds
 /// only, D-711). The handle constructors call it right after allocating.
@@ -2400,35 +2404,40 @@ pub(crate) mod tests {
     fn the_leaked_kinds_line_follows_d784() {
         let line = |kinds, live| leaked_kinds_line(kinds, live);
         if !cfg!(debug_assertions) {
-            assert_eq!(line([1, 0, 0, 0, 0, 0, 0, 0], 3), None);
+            assert_eq!(line([1, 0, 0, 0, 0, 0, 0, 0, 0], 3), None);
             return;
         }
         assert_eq!(
-            line([0, 1, 0, 0, 0, 0, 0, 0], 2).as_deref(),
+            line([0, 1, 0, 0, 0, 0, 0, 0, 0], 2).as_deref(),
             Some("note: leaked 1 <Receiver>, and 1 object of other kinds")
         );
         assert_eq!(
-            line([1, 0, 2, 0, 0, 0, 0, 0], 17).as_deref(),
+            line([1, 0, 2, 0, 0, 0, 0, 0, 0], 17).as_deref(),
             Some("note: leaked 1 <Sender>, 2 <Fiber>, and 14 objects of other kinds")
         );
         assert_eq!(
-            line([0, 0, 0, 3, 1, 0, 0, 0], 4).as_deref(),
+            line([0, 0, 0, 3, 1, 0, 0, 0, 0], 4).as_deref(),
             Some("note: leaked 3 <Scope>, 1 <Selector>")
         );
         // D-1208: tier 3's handles after `Selector`, in
         // kind order (D-982).
         assert_eq!(
-            line([0, 1, 0, 0, 0, 2, 1, 3], 9).as_deref(),
+            line([0, 1, 0, 0, 0, 2, 1, 3, 0], 9).as_deref(),
             Some(
                 "note: leaked 1 <Receiver>, 2 <File>, 1 <Listener>, 3 <Connection>, \
                  and 2 objects of other kinds"
             )
         );
+        // D-1583: `Context` after `Connection`, the ninth kind.
+        assert_eq!(
+            line([0, 0, 0, 0, 0, 0, 0, 1, 2], 4).as_deref(),
+            Some("note: leaked 1 <Connection>, 2 <Context>, and 1 object of other kinds")
+        );
         assert_eq!(line([0; RUNTIME_KINDS], 5), None);
         // A test's delta may be negative for a kind it freed.
-        assert_eq!(line([-1, 0, 0, 0, 0, 0, 0, 0], 2), None);
+        assert_eq!(line([-1, 0, 0, 0, 0, 0, 0, 0, 0], 2), None);
         assert_eq!(
-            line([-1, 1, 0, 0, 0, 0, 0, 0], 1).as_deref(),
+            line([-1, 1, 0, 0, 0, 0, 0, 0, 0], 1).as_deref(),
             Some("note: leaked 1 <Receiver>")
         );
     }
@@ -2660,7 +2669,7 @@ pub(crate) mod tests {
     };
 
     /// The id the test node registers at (unused by every runtime module:
-    /// 40 to 47 are the handle kinds, 45 `File`'s (D-982); `generic`'s
+    /// 40 to 48 are the handle kinds, 45 `File`'s (D-982); `generic`'s
     /// tests use 60 and 61, `layout`'s 62).
     pub(crate) const TEST_NODE_ID: abi::LayoutId = 59;
 

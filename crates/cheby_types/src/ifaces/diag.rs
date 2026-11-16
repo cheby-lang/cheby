@@ -54,6 +54,7 @@ fn descriptor_leaf(err: &Unsatisfied) -> Option<(&Unsatisfied, ParamIdx)> {
         Reason::Element { inner, .. } | Reason::Bound { inner, .. } => descriptor_leaf(inner),
         Reason::Missing { .. }
         | Reason::LessVisible { .. }
+        | Reason::KeyFunction { .. }
         | Reason::Signature { .. }
         | Reason::HomeNotInDeps { .. }
         | Reason::NoModule
@@ -225,6 +226,13 @@ impl Writer<'_, '_> {
                 func,
                 type_vis,
             } => self.less_visible(diag, err, *found, *func, *type_vis),
+            Reason::KeyFunction { found, func } => {
+                let note = format!(
+                    "`{}` exists but does not count, because a key is made only by the call that is a constant's whole initializer (§10.11, D-1593)",
+                    self.func(*found)
+                );
+                self.embedded_note(diag.with_note(note), err.want, *func)
+            }
             Reason::Signature {
                 found,
                 func,
@@ -323,6 +331,10 @@ impl Writer<'_, '_> {
             Reason::LessVisible { found, .. } => {
                 format!("`{}` is less visible than `{ty}`", self.func(*found))
             }
+            Reason::KeyFunction { found, .. } => format!(
+                "`{}` does not count, because a key is made only by a constant's whole initializer",
+                self.func(*found)
+            ),
             Reason::Signature {
                 found,
                 required,
@@ -664,6 +676,7 @@ impl Writer<'_, '_> {
             }
             Reason::Missing { .. }
             | Reason::LessVisible { .. }
+            | Reason::KeyFunction { .. }
             | Reason::Signature { .. }
             | Reason::HomeNotInDeps { .. }
             | Reason::NoModule

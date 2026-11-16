@@ -369,6 +369,206 @@ fn target_narrows_the_js_range_check() {
     assert_eq!(codes(Some(Target::Native)), Vec::<String>::new());
 }
 
+const KEYS: &str = "//! Keys whose defaults hold functions, beside a good one.\n\n\
+                    import std::context\n\n\
+                    type Greeter {\n  greet: fn(String) -> String,\n}\n\n\
+                    fn shout(name: String) -> String {\n  \"HELLO {name}\"\n}\n\n\
+                    fn exclaim(suffix: String) -> fn(String) -> String {\n  \
+                    fn(name) { \"{name}{suffix}\" }\n}\n\n\
+                    const greeter: context::Key<Greeter> = context::key(Greeter { greet: shout })\n\n\
+                    const port: context::Key<Int> = context::key(8080)\n\n\
+                    const alias: context::Key<Greeter> = greeter\n\n\
+                    const loud: context::Key<fn(String) -> String> = context::key(exclaim(\"!\"))\n\n\
+                    const keys: List<context::Key<Int>> = [port]\n\n\
+                    fn main() {\n  let _ = context::get(port)\n  let _ = context::get(alias)\n  \
+                    let _ = context::get(loud)\n  let _ = keys\n}\n";
+
+/// A key constant whose default holds a function is E0081 at its name,
+/// each one: a static closure inside a record, an alias of that key, and a
+/// closure with a capture. The key with an `Int` default and a list of
+/// keys beside them are not, and every diagnostic is marked with its
+/// constant's symbol (D-1578, D-1589, D-1591, D-1600). `cheby check`
+/// reports the same.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs generated code, which Windows does not until M6 (D-545)"
+)]
+fn a_key_default_with_a_function_is_e0081_at_each_constant() {
+    let dir = Temp::package("keys", KEYS);
+    let result = backend_query(&request(&dir.0)).unwrap();
+    assert_eq!(result.front, FrontOutcome::Clean);
+    let out = section(&result);
+    assert_eq!(out.values, []);
+    let found: Vec<(String, Option<Symbol>, Option<TextRange>)> = out
+        .diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d.diagnostic.code.to_string(),
+                d.symbol.clone(),
+                d.diagnostic.range,
+            )
+        })
+        .collect();
+    // The name in `const <name>: context::…`, the constant's name span.
+    let at = |name: &str| {
+        let declared = range_of(KEYS, &format!("const {name}: context"));
+        let start = declared.start().saturating_add(6);
+        let range = TextRange::at(start, u32::try_from(name.len()).unwrap());
+        ("E0081".to_owned(), Some(app(name)), Some(range))
+    };
+    assert_eq!(found, [at("greeter"), at("alias"), at("loud")]);
+    let first = &out.diagnostics[0].diagnostic;
+    assert_eq!(
+        first.message,
+        "the constant `greeter` holds a key whose default value holds a function"
+    );
+    let checked = crate::check(&dir.0).unwrap();
+    let rendered: Vec<(String, String)> = checked
+        .diagnostics
+        .iter()
+        .map(|d| (d.code.to_string(), d.message.clone()))
+        .collect();
+    assert_eq!(rendered.len(), 3, "{rendered:?}");
+    assert!(
+        rendered.iter().all(|(code, _)| code == "E0081"),
+        "{rendered:?}"
+    );
+    let notes: Vec<&str> = checked.diagnostics[0]
+        .notes
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "its value holds a function, which a program cannot embed; a key's value type may \
+             hold functions, `dyn` values and handles, but its default may not"
+        ]
+    );
+}
+
+const GOOD_KEYS: &str = "//! Keys whose defaults are plain data.\n\n\
+                         import std::context\n\n\
+                         type Greeter {\n  greet: fn(String) -> String,\n}\n\n\
+                         const port: context::Key<Int> = context::key(8080)\n\n\
+                         const greeter: context::Key<Option<Greeter>> = \
+                         context::key_without_default()\n\n\
+                         const alias: context::Key<Int> = port\n\n\
+                         fn main() {\n  let _ = context::get(alias)\n  \
+                         let _ = context::get(greeter)\n}\n";
+
+/// Keys whose value types hold functions but whose defaults do not are
+/// clean, and an alias of a good key is too (D-1578).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs generated code, which Windows does not until M6 (D-545)"
+)]
+fn a_key_default_without_a_function_is_clean() {
+    let dir = Temp::package("good_keys", GOOD_KEYS);
+    let result = backend_query(&request(&dir.0)).unwrap();
+    let out = section(&result);
+    assert_eq!(out.diagnostics, []);
+    let values: Vec<(Symbol, &str)> = out
+        .values
+        .iter()
+        .map(|v| (v.symbol.clone(), v.text.as_str()))
+        .collect();
+    assert_eq!(
+        values,
+        [
+            (app("alias"), "Key(app::port)"),
+            (app("greeter"), "Key(app::greeter)"),
+            (app("port"), "Key(app::port)"),
+        ]
+    );
+    assert_eq!(crate::check(&dir.0).unwrap().diagnostics.len(), 0);
+}
+
+const DYN_KEYS: &str = "//! Keys whose defaults hold `dyn` values, beside a clean one.\n\n\
+                        import std::context\n\n\
+                        pub interface Named {\n  fn name(Self) -> String\n}\n\n\
+                        pub type Cat {\n  Cat,\n}\n\n\
+                        pub fn name(_cat: Cat) -> String {\n  \"cat\"\n}\n\n\
+                        const pet: context::Key<dyn Named> = context::key(Cat)\n\n\
+                        const pets: context::Key<List<dyn Named>> = context::key([Cat])\n\n\
+                        const none: context::Key<List<dyn Named>> = context::key([])\n\n\
+                        fn main() {\n  let _ = context::get(pet)\n  \
+                        let _ = context::get(pets)\n  let _ = context::get(none)\n}\n";
+
+/// A key whose default is a `dyn` value, or a list that holds one, is
+/// E0081, and the message and the note name the `dyn` value; the same
+/// key type with an empty list as its default is clean (D-1600).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs generated code, which Windows does not until M6 (D-545)"
+)]
+fn a_key_default_with_a_dyn_value_is_e0081() {
+    let dir = Temp::package("dyn_keys", DYN_KEYS);
+    let result = backend_query(&request(&dir.0)).unwrap();
+    assert_eq!(result.front, FrontOutcome::Clean);
+    let out = section(&result);
+    assert_eq!(out.values, []);
+    let found: Vec<(String, Option<Symbol>, String, Vec<String>)> = out
+        .diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d.diagnostic.code.to_string(),
+                d.symbol.clone(),
+                d.diagnostic.message.clone(),
+                d.diagnostic.notes.clone(),
+            )
+        })
+        .collect();
+    let at = |name: &str| {
+        (
+            "E0081".to_owned(),
+            Some(app(name)),
+            format!("the constant `{name}` holds a key whose default value holds a `dyn` value"),
+            vec![
+                "its value holds a `dyn` value, which a program cannot embed; a key's value \
+                 type may hold functions, `dyn` values and handles, but its default may not"
+                    .to_owned(),
+            ],
+        )
+    };
+    assert_eq!(found, [at("pet"), at("pets")]);
+}
+
+const SENDER_KEY: &str = "//! A key whose default would hold a channel's end.\n\n\
+                          import std::channel\n\
+                          import std::context\n\n\
+                          const outbox: context::Key<Option<channel::Sender<Int>>> = \
+                          context::key(Some(open()))\n\n\
+                          fn open() -> channel::Sender<Int> {\n  \
+                          let (sender, _) = channel::new(1)\n  sender\n}\n\n\
+                          fn main() {\n  let _ = context::get(outbox)\n}\n";
+
+/// A handle is made only by a kernel that constant evaluation does not
+/// run, so a key whose default would hold a channel's end is E0077 before
+/// E0081 could look at it (D-537, D-1578): E0081's walk finds handles too
+/// (`cheby_runtime`'s `undescribed_finds_a_handle_inside_plain_data`), but
+/// no constant's evaluation gets one.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs generated code, which Windows does not until M6 (D-545)"
+)]
+fn a_key_default_with_a_handle_is_an_effect_first() {
+    let dir = Temp::package("sender_key", SENDER_KEY);
+    let result = backend_query(&request(&dir.0)).unwrap();
+    let codes: Vec<String> = section(&result)
+        .diagnostics
+        .iter()
+        .map(|d| d.diagnostic.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E0077"]);
+}
+
 /// A root without `cheby.toml` is `no-package`.
 #[test]
 fn no_manifest_is_no_package() {

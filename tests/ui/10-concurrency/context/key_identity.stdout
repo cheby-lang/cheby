@@ -1,0 +1,7 @@
+equal: False, not equal: True
+debug: Key(ui_test::first) Key(ui_test::second) Key(ui_test::pool) Key(ui_test::port)
+elements of a set: 2
+entries of a map: 2, by key: Some("second")
+under first = 5: first 5, second 1
+without a default: None, provided: Some("db")
+through an alias type: 8080 9090

@@ -1,0 +1,59 @@
+// @mode: run-pass
+// @decisions: D-1047
+//! Timers never read the clock in context. Under a fixed clock,
+//! `time::sleep` waits its span on the runtime's clock, `fiber::timeout`
+//! still expires, a selector's timer arm still fires, and
+//! `time::sleep_until` of a deadline built from `time::monotonic()`, the
+//! fixed clock's origin, which is long past for the runtime's clock,
+//! returns at once. Under a custom clock an hour ahead of the system's,
+//! `time::sleep_until` of a deadline 10 ms ahead on the system clock
+//! still waits those 10 ms, where reading the clock in context would
+//! return at once (§10.8, §10.11).
+
+import std::channel
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::selector
+import std::time
+import std::time::instant
+
+/// A clock an hour ahead of the system's.
+fn an_hour_ahead() -> time::Clock {
+  time::custom_clock(
+    fn() { time::add(time::now_on(time::system_clock()), duration::hours(1)) },
+    fn() { instant::add(time::monotonic_on(time::system_clock()), duration::hours(1)) },
+  )
+}
+
+fn main() {
+  let waited = context::provide(time::clock, an_hour_ahead(), fn() {
+    let start = time::monotonic_on(time::system_clock())
+    time::sleep_until(instant::add(start, duration::milliseconds(10)))
+    let after = time::monotonic_on(time::system_clock())
+    instant::between(start, after) >= duration::milliseconds(10)
+  })
+  io::println("sleep_until under a clock an hour ahead waited on the runtime's clock: {waited}")
+  let launch = time::from_unix(duration::zero)
+  use <- context::provide(time::clock, time::fixed_clock(launch))
+  let start = time::monotonic_on(time::system_clock())
+  time::sleep(duration::milliseconds(10))
+  let after = time::monotonic_on(time::system_clock())
+  let long_enough = instant::between(start, after) >= duration::milliseconds(10)
+  io::println("sleep waited its span on the runtime's clock: {long_enough}")
+  let measured = time::elapsed(time::monotonic())
+  io::println("elapsed under the fixed clock: {measured}")
+  let timed = fiber::timeout(duration::milliseconds(10), fn() { time::sleep(duration::hours(1)) })
+  io::println("a timeout over a long sleep: {timed:?}")
+  let deadline = time::monotonic()
+  let until_past = fiber::timeout(duration::seconds(10), fn() { time::sleep_until(deadline) })
+  io::println("sleep_until the fixed clock's origin: {until_past:?}")
+  let (keep, never) = channel::new::<Int>(0)
+  let fired = selector::new()
+    |> selector::receive(_, never, fn(_) { "message" })
+    |> selector::after(_, duration::milliseconds(10), fn() { "timer" })
+    |> selector::select
+  let _ = channel::send(keep, 1)
+  io::println("a selector's timer arm: {fired}")
+}

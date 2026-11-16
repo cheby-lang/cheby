@@ -1,0 +1,17 @@
+under the custom clock:
+  read_now called
+now: 1970-01-02T00:00:00Z
+  read_monotonic called
+monotonic: Instant { since_origin: Duration { seconds: 8, nanoseconds: 0 } }
+  read_monotonic called
+elapsed since 5 s: 3s
+  read_monotonic called
+until 10 s: 2s
+now_on a fixed clock: 2023-11-14T22:13:20Z, monotonic_on it: Instant { since_origin: Duration { seconds: 0, nanoseconds: 0 } }
+now_on the system clock is after the launch: True
+with no clock provided:
+  read_now called
+now_on the custom clock: 1970-01-02T00:00:00Z
+  read_monotonic called
+monotonic_on it: Instant { since_origin: Duration { seconds: 8, nanoseconds: 0 } }
+a clock built on the system clock is ahead of it: True

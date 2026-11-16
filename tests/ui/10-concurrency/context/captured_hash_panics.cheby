@@ -1,0 +1,14 @@
+// @mode: run-fail
+// @decisions: D-1566, D-233
+//! Putting a captured context in a `Set` panics when hashing reaches the
+//! handle: a `Context` has no structural hash (§3.13, §9.5, §10.11).
+
+import std::context
+import std::io
+import std::set
+
+fn main() {
+  io::println("hashing")
+  let contexts = set::from_list([context::capture()])
+  io::println("never printed: {contexts:?}")
+}

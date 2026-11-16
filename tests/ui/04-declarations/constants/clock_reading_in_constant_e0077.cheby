@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-1570, D-537
+//! `now_on` and `monotonic_on` of the system clock read the system's
+//! clocks through a kernel, so a constant that calls one is E0077, while
+//! the same functions of a fixed clock run at compile time (§4.5).
+
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+const fixed: time::Timestamp = time::now_on(time::fixed_clock(time::from_unix(duration::zero)))
+
+const wall: time::Timestamp = time::now_on(time::system_clock())
+
+const steady: instant::Instant = time::monotonic_on(time::system_clock())
+
+fn main() {
+  io::println("{fixed} {wall} {steady:?}")
+}

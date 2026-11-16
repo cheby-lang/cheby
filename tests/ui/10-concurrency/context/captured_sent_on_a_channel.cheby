@@ -1,0 +1,66 @@
+// @mode: run-pass
+// @decisions: D-1566
+//! A captured context may be sent on a channel. In the pattern of
+//! `context.md`'s example under `with`, the sender captures its context
+//! with each job, and a worker spawned earlier runs the job under it, so
+//! the job reads every key as the sender would. Between jobs the worker
+//! has its own context again (§10.11).
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+import std::list
+
+const request_id: context::Key<Option<String>> = context::key_without_default()
+
+const user: context::Key<String> = context::key("guest")
+
+/// Reads both keys, as code deep inside a job would.
+fn run(job: String) -> String {
+  let id = context::get(request_id)
+  let who = context::get(user)
+  "{job}: request {id:?}, user {who}"
+}
+
+fn submit(
+  jobs: channel::Sender<(String, context::Context)>,
+  job: String,
+) -> Result<Nil, (String, context::Context)> {
+  channel::send(jobs, (job, context::capture()))
+}
+
+/// Runs jobs until the channel closes, each under the context that came
+/// with it, and returns what they gave, each followed by what the worker
+/// reads itself after the job.
+fn work(jobs: channel::Receiver<(String, context::Context)>, done: List<String>) -> List<String> {
+  case channel::receive(jobs) {
+    Ok((job, captured)) => {
+      let result = context::with(captured, fn() { run(job) })
+      let own = run("  worker")
+      work(jobs, [own, result, ..done])
+    }
+    Err(Nil) => list::reverse(done)
+  }
+}
+
+fn main() {
+  let (jobs_tx, jobs_rx) = channel::new::<(String, context::Context)>(4)
+  let results = {
+    use owner <- fiber::scope()
+    let worker = fiber::spawn(owner, fn() {
+      context::provide(user, "worker", fn() { work(jobs_rx, []) })
+    })
+    let _ = submit(jobs_tx, "tick")
+    let _ = context::provide(request_id, Some("r-7"), fn() { submit(jobs_tx, "load") })
+    let _ = context::provide(user, "ann", fn() {
+      context::provide(request_id, Some("r-8"), fn() { submit(jobs_tx, "save") })
+    })
+    let _ = context::with(context::empty(), fn() { submit(jobs_tx, "clean") })
+    fiber::join(worker)
+  }
+  case results {
+    Ok(lines) => list::each(lines, io::println)
+    Err(failure) => io::println(fiber::show(failure))
+  }
+}

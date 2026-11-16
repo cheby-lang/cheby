@@ -1,0 +1,8 @@
+test ui_test "leaks a captured context" ... FAILED
+test ui_test "leaks nothing" ... ok
+
+---- ui_test "leaks a captured context" ----
+error: leak check failed: 5 objects are still live at exit
+note: leaked 1 <Receiver>, 1 <Context>, and 3 objects of other kinds
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out

@@ -1,0 +1,31 @@
+// @decisions: D-1581, D-1599
+//! `context::key` and `context::key_without_default` carry
+//! `@std_initializer`, so after `context::` they are offered only where the
+//! completed call is a constant's whole initializer, also through
+//! parentheses, and not in a list, a block, a function body or a test.
+
+import std::context
+
+const a: context::Key<Int> = context::ke
+//                                      ^ completion key key_without_default
+
+const b: context::Key<Int> = (context::ke)
+//                                       ^ completion key key_without_default
+
+const c: List<context::Key<Int>> = [context::ke]
+//                                             ^ completion key key_without_default get
+
+const d: context::Key<Int> = {
+  context::ke
+  //         ^ completion key key_without_default
+}
+
+fn main() {
+  let e = context::ke
+  //                 ^ completion key key_without_default
+}
+
+test "keys" {
+  let f = context::ke
+  //                 ^ completion key key_without_default
+}

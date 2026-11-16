@@ -13,7 +13,7 @@ pub type Generator
 - **Bounds include both ends.** `int_between(low, high)` and `next_int_between` draw from `low` to `high` with both ends included, so `int_between(0, 0)` is `0` and `int_between(1, 6)` is a die roll. When `high` is less than `low`, the two bounds swap roles, so every pair of bounds is valid and no call fails or panics (D-297, D-654). This is the exception to "ranges exclude their end" (D-319): a pair of bounds is not a range of positions.
 - **The seeded algorithm is fixed.** A generator is SplitMix64, and the way a draw maps its output to a number is given below, bit for bit. So are [`split`](#split), [`next_bool`](#next_bool), [`choose`](#choose) and [`shuffle`](#shuffle). A program's seeded draws are therefore the same on every target and with every toolchain from 1.0 on (D-232, D-655, D-1096).
 - **The generator comes first.** Every seeded function takes the generator as its first argument and returns the value and the next generator, in that order, `(value, generator)`. The generator is the module's subject, the value that every call threads through, so `shuffle` and `choose` take it before their list (D-296, D-653, D-1096).
-- **Kernels.** The module has one private kernel, which returns 64 bits from the host's random source. Everything else is written in Cheby over it, so the seeded functions run in constants and the host functions do not: reaching the kernel while computing a constant is E0077 (D-090, D-537, D-656). If the host's random source fails, the kernel ends the program with a fatal runtime error that names the operating system's error. This reaches `int_between`, `fraction` and `from_host`. It is neither an `Err` nor a panic, because no call fails or panics, and a random source that fails is a broken host, not a condition a program can handle (D-794).
+- **Kernels.** The module has one private kernel, which returns 64 bits from the host's random source, and five private `@std_context` kernels for the stream the fiber holds (D-1573, D-1574). `sys_stream_on` and `sys_stream_state` read whether a stream is set and its state, `sys_stream_set` writes a draw's advanced state back and starts the spawn count again, and `sys_stream_push` and `sys_stream_pop` set and put back the stream of `with_generator`. Each is bound as `@external(native, "cheby_random_sys_<name>")` and `@external(js, "./random.mjs", "sys_<name>")` (D-986). Everything else is written in Cheby over them, so the seeded functions run in constants and the host functions do not: reaching a kernel while computing a constant is E0077 (D-090, D-537, D-656). If the host's random source fails, the host kernel ends the program with a fatal runtime error that names the operating system's error. This reaches `int_between`, `fraction` and `from_host`. It is neither an `Err` nor a panic, because no call fails or panics, and a random source that fails is a broken host, not a condition a program can handle (D-794).
 - **Not for secrets.** The host source is unpredictable, but this module makes no promise about cryptographic strength. Keys and tokens wait for a cryptography module (D-656).
 - **Equality and printing.** `Generator` compares, hashes and debug-prints as the record it is, a single `U64` of state, so two generators are `==` exactly when they will draw the same numbers.
 
@@ -89,14 +89,19 @@ pub fn with_generator<R>(generator: Generator, body: fn() -> R) -> R
 Calls `body` on the calling fiber with a seeded stream in context that starts at `generator`, and returns what `body` returns. It is written with `use` (§5.10). While the stream is in context:
 
 1. `int_between(low, high)` is `next_int_between` on the stream, `fraction` is `next_fraction`, and `from_host` takes one step, as described under [`next_int_between`](#next_int_between), and returns the generator whose state is that step's output. Each draw advances the calling fiber's copy of the stream, and no other fiber sees it.
-2. A spawn of any kind leaves the spawning fiber's stream alone. Let `s` be the spawning fiber's state and `n` the spawn's number, counted from 1 among the fiber's spawns since its last draw. The new fiber's stream starts from the generator whose state is `s + n × 0xD1B54A32D192ED03` modulo 2⁶⁴, put through the output function of a step: `z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9`, then `z = (z ^ (z >> 27)) * 0x94D049BB133111EB`, then `z ^ (z >> 31)`, all modulo 2⁶⁴. A scope's body, a timeout's function and a selector's mapping function run on the calling fiber, so they draw from its stream ([§10.11](../spec/10-concurrency.md#1011-context-values)).
-3. So a fiber's own draws never depend on its spawns. A child's draws depend on its parent's draws before the spawn and on its place among the spawns since then, and nothing depends on how the scheduler interleaves fibers.
+2. A spawn of any kind leaves the spawning fiber's stream alone. Let `s` be the spawning fiber's state and `n` the spawn's number, counted from 1 among the fiber's spawns and captures since its last draw. The new fiber's stream starts from the generator whose state is `s + n × 0xD1B54A32D192ED03` modulo 2⁶⁴, put through the output function of a step: `z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9`, then `z = (z ^ (z >> 27)) * 0x94D049BB133111EB`, then `z ^ (z >> 31)`, all modulo 2⁶⁴. A scope's body, a timeout's function and a selector's mapping function run on the calling fiber, so they draw from its stream ([§10.11](../spec/10-concurrency.md#1011-context-values)).
+3. [`context::capture`](context.md#capture) counts as a spawn. It takes the next spawn number, the captured context holds the generator that a fiber spawned at that point would start from, and the fiber's own stream is left alone. Each [`context::with`](context.md#with) of that context starts its body's stream from that generator, so two of them draw the same numbers, and draws in the body advance the stream for the body alone. Under a context captured with no stream, such as [`context::empty()`](context.md#empty), the host functions draw from the host (D-1567).
+4. So a fiber's own draws never depend on its spawns or its captures. A child's draws depend on its parent's draws before the spawn and on its place among the spawns and captures since then, and nothing depends on how the scheduler interleaves fibers. A job that a worker runs under its sender's captured context draws the same numbers whichever worker takes it.
 
 A test that checks exact values under a stream stays valid only while the fibers that the code starts stay the same. For code that spawns, checking properties of the results is more robust.
 
-When `body` returns or unwinds, the fiber's stream is again what it was before the call, so an outer stream continues from where it stood. The stream's key is private to this module. Seeded streams belong to tier 4 and are implemented in M4, with `std::context` (D-1049).
+_Note:_ spawning a worker pool under a stream takes spawn numbers like any other spawn. So when a pool is spawned inside `with_generator` and jobs are captured after it, the jobs' draws depend on the number of workers. Spawn the pool before setting the stream, as example [`033_request_context`](../examples/033_request_context/src/main.cheby) does (D-1048, D-1567).
 
-- **Cost:** O(log k) in the number of keys the fiber has values for, plus the call of `body`. Each host draw under a stream costs the same lookup. Informative.
+When `body` returns or unwinds, the fiber's stream is again what it was before the call, so an outer stream continues from where it stood. The stream is part of the fiber's context, but no key names it: the fiber holds it beside its bindings, and only this module reaches it (D-1574). Seeded streams belong to tier 4. They are implemented on native with `std::context`, and their JS side follows with M4's JS runtime (D-1049, D-1563).
+
+_Note:_ the outer stream comes back with its spawn count as well as its state. Spawns and captures made under it before the call still count toward its next spawn number, and those made under `body`'s stream do not. A scope's close that catches a panic from inside `body` puts back both in the same way (D-1573, D-1574).
+
+- **Cost:** O(1), plus the call of `body`. Each host draw under a stream is O(1) (D-1574). Informative.
 
 ```cheby
 test "with_generator makes host draws follow the seeded draws" {
@@ -137,6 +142,26 @@ test "spawned fibers draw reproducibly and apart" {
   let assert Ok((a, b)) = draws()
   assert draws() == Ok((a, b))
   assert a != b
+}
+
+test "a capture derives its stream as a spawn does" {
+  let spawned = random::with_generator(random::from_seed(42), fn() {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { random::fraction() }))
+  })
+  let captured = random::with_generator(random::from_seed(42), fn() {
+    context::with(context::capture(), fn() { random::fraction() })
+  })
+  assert spawned == Ok(captured)
+}
+
+test "a capture leaves the stream alone" {
+  let alone = random::with_generator(random::from_seed(42), fn() { random::fraction() })
+  let after_capture = random::with_generator(random::from_seed(42), fn() {
+    let _ = context::capture()
+    random::fraction()
+  })
+  assert alone == after_capture
 }
 ```
 

@@ -15,8 +15,8 @@ use rustc_hash::FxHashMap;
 
 use crate::builtin;
 use crate::{
-    DefId, DepView, Globals, IfaceItem, IndexVec, ModuleId, ModuleInterface, ModuleTable, Name,
-    ParamIdx,
+    DefId, DepView, Globals, Ice, IfaceItem, IndexVec, ModuleId, ModuleInterface, ModuleTable,
+    Name, ParamIdx,
 };
 
 /// An interned closed type.
@@ -360,6 +360,116 @@ pub fn display(ty: Ty, cx: &DisplayCx<'_>) -> String {
     out
 }
 
+/// `ty` with every named type by its full internal module path, the same
+/// text whichever module reads it: `app::shapes::Circle`,
+/// `List<<repl:4>::U>`, `(Int, String)`, `fn(Int) -> Bool`,
+/// `dyn app::Named<Int>`, `Never`. Builtin types are bare (`Int`, `Map`).
+///
+/// The module path is the internal one, unmapped: a REPL entry's module
+/// `<repl:N>` or `<repl:N:G>` and the `<rN>` mark of a reloaded module
+/// stay, so a redefined or reloaded type reads as another type (D-547,
+/// D-625). A context key's type text is this (D-1572). Items are read from
+/// `own` when they are its own, else through `deps`, which records the read
+/// when it is a recording view.
+///
+/// MIR names statics with a renderer of its own, which writes `dyn` types
+/// without their arguments.
+///
+/// # Errors
+///
+/// An [`Ice`] for a type parameter, the error type, or an item that `deps`
+/// cannot read.
+pub fn path_text(
+    ty: Ty,
+    own: Option<&ModuleInterface>,
+    deps: &DepView<'_>,
+    modules: &ModuleTable,
+    globals: &Globals,
+) -> Result<String, Ice> {
+    let cx = PathCx {
+        own,
+        deps,
+        modules,
+        globals,
+    };
+    let mut out = String::new();
+    cx.write(&mut out, ty)?;
+    Ok(out)
+}
+
+/// What [`path_text`] reads.
+struct PathCx<'a> {
+    own: Option<&'a ModuleInterface>,
+    deps: &'a DepView<'a>,
+    modules: &'a ModuleTable,
+    globals: &'a Globals,
+}
+
+impl PathCx<'_> {
+    fn write(&self, out: &mut String, ty: Ty) -> Result<(), Ice> {
+        match self.globals.types.kind(ty) {
+            TyKind::Never => out.push_str("Never"),
+            TyKind::Named { def, args } => {
+                self.write_def(out, *def)?;
+                self.write_args(out, args)?;
+            }
+            TyKind::Tuple(elems) => {
+                out.push('(');
+                self.write_list(out, elems)?;
+                out.push(')');
+            }
+            TyKind::Fn { params, ret } => {
+                out.push_str("fn(");
+                self.write_list(out, params)?;
+                out.push_str(") -> ");
+                self.write(out, *ret)?;
+            }
+            TyKind::Dyn { iface, args } => {
+                out.push_str("dyn ");
+                self.write_def(out, *iface)?;
+                self.write_args(out, args)?;
+            }
+            kind @ (TyKind::Param(_) | TyKind::Error) => {
+                return Err(Ice::new(format!("the path text of the open type {kind:?}")));
+            }
+        }
+        Ok(())
+    }
+
+    fn write_args(&self, out: &mut String, args: &[Ty]) -> Result<(), Ice> {
+        if !args.is_empty() {
+            out.push('<');
+            self.write_list(out, args)?;
+            out.push('>');
+        }
+        Ok(())
+    }
+
+    fn write_list(&self, out: &mut String, tys: &[Ty]) -> Result<(), Ice> {
+        for (n, ty) in tys.iter().enumerate() {
+            if n > 0 {
+                out.push_str(", ");
+            }
+            self.write(out, *ty)?;
+        }
+        Ok(())
+    }
+
+    fn write_def(&self, out: &mut String, def: DefId) -> Result<(), Ice> {
+        let item = match self.own.filter(|own| own.module == def.module) {
+            Some(own) => own.item(def.index),
+            None => self.deps.item(def),
+        }
+        .ok_or_else(|| Ice::new(format!("no interface item for {def:?}")))?;
+        if def.module != ModuleId::BUILTIN {
+            out.push_str(&self.modules.try_get(def.module)?.path.to_string());
+            out.push_str("::");
+        }
+        out.push_str(self.globals.names.get(item.name));
+        Ok(())
+    }
+}
+
 /// The modules `ty` names that the viewer has not imported, in the order
 /// `ty` first names them, for text that will be inserted. The viewer is
 /// [`DisplayCx::own`], and its imports are [`DisplayCx::imports`]. A
@@ -624,5 +734,32 @@ mod tests {
         assert_eq!(display(map, &cx), "map::Map<String, Int>");
         let set = t.named(builtin::SET, [t.named(builtin::BYTES, [])]);
         assert_eq!(display(set, &cx), "set::Set<bytes::Bytes>");
+    }
+
+    /// Builtin types are bare in a path text, also those written through a
+    /// home module in diagnostics, and an open type is an internal error.
+    /// Named types of modules are covered by `cheby_types`'s key tests.
+    #[test]
+    fn path_text_of_builtin_types() {
+        let globals = Globals::new();
+        let set = InterfaceSet::new(builtin::interface(&globals));
+        let modules = ModuleTable::new();
+        let allowed = [ModuleId::BUILTIN];
+        let deps = DepView::new(&set, &allowed);
+        let text = |ty| path_text(ty, None, &deps, &modules, &globals);
+        let t = &globals.types;
+        let opt = t.named(builtin::OPTION, [Ty::INT]);
+        let tuple = t.intern(TyKind::Tuple(Box::new([Ty::STRING, Ty::BOOL])));
+        let f = t.func([opt, tuple], Ty::NIL);
+        assert_eq!(text(f).unwrap(), "fn(Option<Int>, (String, Bool)) -> Nil");
+        assert_eq!(text(t.func([], Ty::U64)).unwrap(), "fn() -> U64");
+        assert_eq!(text(Ty::NEVER).unwrap(), "Never");
+        let map = t.named(
+            builtin::MAP,
+            [Ty::STRING, t.named(builtin::LIST, [Ty::INT])],
+        );
+        assert_eq!(text(map).unwrap(), "Map<String, List<Int>>");
+        assert!(text(t.param(ParamIdx::from_u32(0))).is_err());
+        assert!(text(Ty::ERROR).is_err());
     }
 }

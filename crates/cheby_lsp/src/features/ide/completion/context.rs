@@ -194,6 +194,135 @@ impl<'t> Found<'t> {
     }
 }
 
+/// Whether the call that completing `found` writes would be a constant's
+/// whole initializer: its callee is the first thing after the `=` of a
+/// `const`, with nothing around the call but parentheses (D-1581). This
+/// is the only place a function with `@std_initializer` is offered
+/// (D-1599). The callee is the partial word, bare or after a qualifier
+/// such as `context::`, or nothing yet: `const k: T = ‸`, `= (‸`,
+/// `= context::‸`, `= ke‸(1)` and `= ‸(1)` are such places, `= [ke‸]`,
+/// `= { ke‸ }`, `= 1 + ke‸` and `= ‸ + 1` are not. With nothing typed,
+/// what follows the cursor counts only up to the end of its line: the
+/// parser reads the items after an open `(` into it, and a line break
+/// after the `=` ends the initializer that the user is writing.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a match on syntax kinds names only the kinds it handles"
+)]
+pub(crate) fn whole_initializer(root: SyntaxNode<'_>, found: &Found<'_>) -> bool {
+    let start = if found.partial.is_empty() {
+        let Some(anchor) = found.anchor else {
+            return false;
+        };
+        let next = next_on_line(anchor);
+        match anchor.kind() {
+            // `= ‸`, also with a line break after the `=`, and `= ‸(1)`.
+            K::EQ => {
+                if anchor.parent().is_none_or(|p| p.kind() != K::CONST_DECL) {
+                    return false;
+                }
+                match next {
+                    None => return true,
+                    Some(next) => match paren_of(next) {
+                        Some(paren) => paren,
+                        None => return false,
+                    },
+                }
+            }
+            // `= (‸`, `= (‸)` and `= (‸(1))`: the parser reads an empty
+            // parenthesis as a tuple until something is in it.
+            K::L_PAREN => match anchor.parent() {
+                Some(open) if matches!(open.kind(), K::PAREN_EXPR | K::TUPLE_EXPR) => match next {
+                    None => open,
+                    Some(next) if next.kind() == K::R_PAREN => open,
+                    Some(next) => match paren_of(next) {
+                        Some(paren) => paren,
+                        None => return false,
+                    },
+                },
+                _ => return false,
+            },
+            // `= context::‸`: the qualifier is a path before the `::`,
+            // whose `::` can sit in an `ERROR` after the item.
+            K::COLON2 => match prev_significant(anchor).and_then(path_expr_of) {
+                Some(path) => callee_of(path),
+                None => return false,
+            },
+            _ => return false,
+        }
+    } else {
+        match token_at(root, found.partial.start())
+            .right()
+            .and_then(path_expr_of)
+        {
+            Some(path) => callee_of(path),
+            None => return false,
+        }
+    };
+    let mut node = start;
+    loop {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            K::PAREN_EXPR => node = parent,
+            // `= (ke‸` before its `)`: one element and no comma. The `::`
+            // of `= (context::‸` sits in an `ERROR` beside the element.
+            K::TUPLE_EXPR
+                if parent.first_token_of_kind(K::COMMA).is_none()
+                    && parent.children().filter(|c| c.kind() != K::ERROR).count() == 1 =>
+            {
+                node = parent;
+            }
+            K::CONST_DECL => {
+                return parent
+                    .first_token_of_kind(K::EQ)
+                    .is_some_and(|eq| eq.text_range().end() <= node.text_range().start());
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// The next significant token after `token` on its line, `None` when a
+/// line break or the end of the tree comes first.
+fn next_on_line(token: SyntaxToken<'_>) -> Option<SyntaxToken<'_>> {
+    std::iter::successors(token.next_token(), |t| t.next_token())
+        .find(|t| t.kind() == K::NEWLINE || t.text().contains('\n') || is_significant(t.kind()))
+        .filter(|t| is_significant(t.kind()))
+}
+
+/// The parenthesized expression that `token` opens, which a callee
+/// written before it would take as its arguments: `(1)` in `= ‸(1)`.
+fn paren_of(token: SyntaxToken<'_>) -> Option<SyntaxNode<'_>> {
+    if token.kind() != K::L_PAREN {
+        return None;
+    }
+    token
+        .parent()
+        .filter(|p| matches!(p.kind(), K::PAREN_EXPR | K::TUPLE_EXPR))
+}
+
+/// The `PATH_EXPR` that `token` is a segment or `::` of.
+fn path_expr_of(token: SyntaxToken<'_>) -> Option<SyntaxNode<'_>> {
+    let path = token.parent().filter(|p| p.kind() == K::PATH)?;
+    path.parent().filter(|p| p.kind() == K::PATH_EXPR)
+}
+
+/// The call whose callee is `path`, or `path` itself when it is not a
+/// callee.
+fn callee_of(path: SyntaxNode<'_>) -> SyntaxNode<'_> {
+    match path.parent() {
+        Some(call)
+            if call.kind() == K::CALL_EXPR
+                && call.first_child().map(SyntaxNode::id) == Some(path.id()) =>
+        {
+            call
+        }
+        _ => path,
+    }
+}
+
 /// The context of a cursor at `offset` of the tree under `root`.
 pub(crate) fn detect(root: SyntaxNode<'_>, offset: TextSize) -> Found<'_> {
     let Some(left) = token_at(root, offset).left() else {

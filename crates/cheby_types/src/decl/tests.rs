@@ -521,6 +521,103 @@ fn std_hooks_need_their_shapes() {
     );
 }
 
+/// The constructor of `@std_initializer` has its function's type
+/// parameters, parameters and result, two `String` parameters more, and is
+/// not `priv` (D-1587, D-1599): E0045 for each one that does not. A
+/// function whose constructor fits records it in its signature.
+#[test]
+fn std_initializer_constructors_need_their_shapes() {
+    let lib = "//! A fake std module.\n\n\
+               @std_initializer(good_at)\npub fn good<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn good_at<T>(value: T, path: String, type_text: String) -> List<T> {\n  todo\n}\n\n\
+               @std_initializer(short_at)\npub fn short<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn short_at<T>(value: T, path: String) -> List<T> {\n  todo\n}\n\n\
+               @std_initializer(generic_at)\npub fn generic<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn generic_at<T, U>(value: T, path: String, type_text: String) -> List<T> {\n  todo\n}\n\n\
+               @std_initializer(result_at)\npub fn result<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn result_at<T>(value: T, path: String, type_text: String) -> Option<T> {\n  todo\n}\n\n\
+               @std_initializer(texts_at)\npub fn texts<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn texts_at<T>(value: T, path: String, type_text: Int) -> List<T> {\n  todo\n}\n\n\
+               @std_initializer(params_at)\npub fn params<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn params_at<T>(value: Int, path: String, type_text: String) -> List<T> {\n  todo\n}\n\n\
+               @std_initializer(bound_at)\npub fn bound<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn bound_at<T: Show>(value: T, path: String, type_text: String) -> List<T> {\n  todo\n}\n\n\
+               @std_initializer(hidden_at)\npub fn hidden<T>(value: T) -> List<T> {\n  todo\n}\n\n\
+               priv fn hidden_at<T>(value: T, path: String, type_text: String) -> List<T> {\n  todo\n}\n";
+    let b = build_with_std(
+        &[("init", lib)],
+        &[(
+            "",
+            &module("import std::init\n\npub fn f(xs: List<Int>) -> List<Int> {\n  xs\n}\n"),
+        )],
+    );
+    assert_eq!(
+        messages(&b, "E0045"),
+        [
+            "E0045: `bound_at` cannot be the initializer constructor of `bound` [\"named here\"]",
+            "E0045: `generic_at` cannot be the initializer constructor of `generic` [\"named here\"]",
+            "E0045: `params_at` cannot be the initializer constructor of `params` [\"named here\"]",
+            "E0045: `result_at` cannot be the initializer constructor of `result` [\"named here\"]",
+            "E0045: `short_at` cannot be the initializer constructor of `short` [\"named here\"]",
+            "E0045: `texts_at` cannot be the initializer constructor of `texts` [\"named here\"]",
+            "E0045: the initializer constructor `hidden_at` of `hidden` is `priv` [\"named here\"]",
+        ],
+        "{}",
+        b.rendered()
+    );
+    let ItemSig::Fn(good) = b.fn_sig("std::init", "good") else {
+        panic!("good has no signature");
+    };
+    assert_eq!(
+        good.initializer.map(|n| b.globals.names.get(n)),
+        Some("good_at")
+    );
+    let ItemSig::Fn(plain) = b.fn_sig("std::init", "good_at") else {
+        panic!("good_at has no signature");
+    };
+    assert_eq!(plain.initializer, None);
+}
+
+/// A function with `@std_initializer` returns a named type with exactly one
+/// type argument, whose text its constructor receives (D-1601): E0045 at
+/// the attribute for `-> Int`, `-> Tag` and `-> Pair<A, B>`, even when the
+/// constructor fits, and the function records no constructor.
+#[test]
+fn std_initializer_results_need_one_type_argument() {
+    let lib = "//! A fake std module.\n\n\
+               pub type Tag {\n  Tag,\n}\n\n\
+               pub type Pair<A, B> {\n  Pair(A, B),\n}\n\n\
+               @std_initializer(int_at)\npub fn int(value: Int) -> Int {\n  value\n}\n\n\
+               fn int_at(value: Int, path: String, type_text: String) -> Int {\n  value\n}\n\n\
+               @std_initializer(tag_at)\npub fn tag() -> Tag {\n  Tag\n}\n\n\
+               fn tag_at(path: String, type_text: String) -> Tag {\n  Tag\n}\n\n\
+               @std_initializer(pair_at)\npub fn pair<A, B>(a: A, b: B) -> Pair<A, B> {\n  Pair(a, b)\n}\n\n\
+               fn pair_at<A, B>(a: A, b: B, path: String, type_text: String) -> Pair<A, B> {\n  Pair(a, b)\n}\n";
+    let b = build_with_std(
+        &[("init", lib)],
+        &[(
+            "",
+            &module("import std::init\n\npub fn f(n: Int) -> Int {\n  n\n}\n"),
+        )],
+    );
+    assert_eq!(
+        messages(&b, "E0045"),
+        [
+            "E0045: `int` cannot carry `@std_initializer`: its result type has not exactly one type argument [\"named here\"]",
+            "E0045: `pair` cannot carry `@std_initializer`: its result type has not exactly one type argument [\"named here\"]",
+            "E0045: `tag` cannot carry `@std_initializer`: its result type has not exactly one type argument [\"named here\"]",
+        ],
+        "{}",
+        b.rendered()
+    );
+    let errors = b
+        .messages()
+        .into_iter()
+        .filter(|m| m.starts_with('E'))
+        .count();
+    assert_eq!(errors, 3, "{}", b.rendered());
+}
+
 /// Editing bodies, initializers and tests never changes the interface or
 /// its hash (B8, D-460); editing a signature does.
 #[test]

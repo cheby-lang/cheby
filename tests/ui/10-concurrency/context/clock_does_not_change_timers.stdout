@@ -1,0 +1,6 @@
+sleep_until under a clock an hour ahead waited on the runtime's clock: True
+sleep waited its span on the runtime's clock: True
+elapsed under the fixed clock: 0s
+a timeout over a long sleep: Err(TimedOut)
+sleep_until the fixed clock's origin: Ok(Nil)
+a selector's timer arm: timer

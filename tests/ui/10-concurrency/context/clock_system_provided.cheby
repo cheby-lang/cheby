@@ -1,0 +1,51 @@
+// @mode: run-pass
+// @decisions: D-1597, D-1570
+//! `time::now` and `time::monotonic` read the clock in context however
+//! the context is made: the system clock provided as a value gives real
+//! readings, a context that holds only an unrelated key gives real
+//! readings, and a fixed clock provided inside an unrelated `provide` is
+//! read (§10.11).
+
+import std::context
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+const request_id: context::Key<Option<String>> = context::key_without_default()
+
+/// Whether `now` and `monotonic` read the system's clocks: each reading
+/// lies between two readings of the system clock taken around it, and a
+/// second reading is not before the first.
+fn reads_the_system() -> Bool {
+  let wall_before = time::now_on(time::system_clock())
+  let first = time::now()
+  let second = time::now()
+  let wall_after = time::now_on(time::system_clock())
+  let steady_before = time::monotonic_on(time::system_clock())
+  let start = time::monotonic()
+  let later = time::monotonic()
+  let steady_after = time::monotonic_on(time::system_clock())
+  let wall = wall_before <= first && first <= second && second <= wall_after
+  let steady = steady_before <= start && start <= later && later <= steady_after
+  wall && steady
+}
+
+fn main() {
+  let launch = time::from_unix(duration::seconds(1_700_000_000))
+  let plain = reads_the_system()
+  io::println("nothing provided: {plain}")
+  let provided = context::provide(time::clock, time::system_clock(), reads_the_system)
+  io::println("the system clock provided: {provided}")
+  let unrelated = context::provide(request_id, Some("r-1"), reads_the_system)
+  io::println("an unrelated key provided: {unrelated}")
+  let (stamp, start) = context::provide(request_id, Some("r-2"), fn() {
+    use <- context::provide(time::clock, time::fixed_clock(launch))
+    use <- context::provide(request_id, Some("r-3"))
+    (time::now(), time::monotonic())
+  })
+  let at_origin = start == instant::from_origin(duration::zero)
+  io::println("a fixed clock inside an unrelated key: {stamp}, at the origin: {at_origin}")
+  let again = context::provide(request_id, Some("r-4"), reads_the_system)
+  io::println("the unrelated key again: {again}")
+}

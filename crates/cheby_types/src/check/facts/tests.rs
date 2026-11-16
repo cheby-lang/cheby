@@ -72,6 +72,7 @@ fn with_module<R>(text: &str, check: impl FnOnce(&TypesInput<'_>, &ModuleInterfa
         resolved: &resolved,
         deps: DepView::new(&set, &deps),
         modules: &modules,
+        real_modules: &modules,
         globals: &globals,
     };
     let (own, _) = build_interface(&input).unwrap();

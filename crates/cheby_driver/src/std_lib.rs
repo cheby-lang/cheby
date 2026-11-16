@@ -35,6 +35,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/channel.cheby"),
     },
     StdModule {
+        path: "context",
+        source: include_str!("../../../std/context.cheby"),
+    },
+    StdModule {
         path: "duration",
         source: include_str!("../../../std/duration.cheby"),
     },
@@ -232,11 +236,12 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Modules the standard-library spec plans that `std/` does not ship yet.
 /// Importing one is E0038, not E0039 (D-451). Sorted.
 ///
-/// Tier 3 ships whole in M3 (D-989), so no tier-3 module is planned; only
-/// `std::context`, which starts tier 4 and lands in M4 (D-1049), stays,
-/// so that `import std::context` keeps D-480's "not supported yet" for a
-/// module its page describes. D-1295.
-pub const PLANNED_STD_MODULES: &[&str] = &["context"];
+/// Tier 3 ships whole in M3 (D-989), and tier 4's `std::context` ships
+/// with M4's native work (D-1049, D-1563), so only `std::log`, which
+/// reads its logger from context (D-1046) and is not specified yet,
+/// stays, so that `import std::log` keeps D-480's "not supported yet".
+/// D-1295, D-1575.
+pub const PLANNED_STD_MODULES: &[&str] = &["log"];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -254,20 +259,6 @@ pub const PLANNED_STD_MODULES: &[&str] = &["context"];
 /// since (D-728). An entry's comment names what its test needs and the
 /// package that brings it.
 pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // Seeded random streams need `std::context`, M4's workstream 4.6
-    // (D-1048, D-1049).
-    (
-        "random",
-        "with_generator makes host draws follow the seeded draws",
-        "M4",
-    ),
-    (
-        "random",
-        "with_generator gives the same draws for the same generator",
-        "M4",
-    ),
-    ("random", "a spawn leaves the parent's stream alone", "M4"),
-    ("random", "spawned fibers draw reproducibly and apart", "M4"),
     // `fiber::raise` needs the private kernel `sys_raise` (D-1097), and
     // `fiber::map` and `try_map` need it and S5's `fiber::cancel` (D-1098).
     // Both are built after M3.
@@ -317,12 +308,6 @@ pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
     // `channel::receive_now` (D-1099).
     ("fiber", "a loop that yields lets other fibers run", "M4"),
     ("fiber", "a cancellation is delivered at yield_now", "M4"),
-    // The clocks in context of `std::time` (`Clock`, the key `time::clock`,
-    // `fixed_clock` and `custom_clock`) need `std::context`, M4's
-    // workstream 4.6 (D-1047, D-1049).
-    ("time", "a fixed clock fixes now", "M4"),
-    ("time", "a clock in context does not change sleep", "M4"),
-    ("time", "a custom clock calls its functions", "M4"),
 ];
 
 include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
@@ -629,8 +614,9 @@ mod tests {
     /// `std::time::instant`, `std::net`, `std::file`, `std::http`,
     /// `std::url`, `std::base64` and `std::hex` (D-1054), and
     /// `std::process` (D-1022), each with its file in `std/`. No tier-3
-    /// module stays planned; the planned list holds only tier 4's
-    /// `std::context` (D-1049), D-1295.
+    /// module stays planned. Tier 4's `std::context` ships with M4's native
+    /// work (D-1049, D-1563), and the planned list holds only `std::log`
+    /// (D-1295, D-1575).
     #[test]
     fn m3_tier3_modules_ship() {
         for path in [
@@ -652,8 +638,15 @@ mod tests {
             assert!(find(path).is_some(), "std::{path} is not shipped");
             assert!(!is_planned(path), "std::{path} is still planned");
         }
-        assert_eq!(PLANNED_STD_MODULES, &["context"]);
-        assert!(find("context").is_none(), "std::context is shipped");
+        assert!(
+            repo().join(display_path("context")).exists(),
+            "{} is missing",
+            display_path("context")
+        );
+        assert!(find("context").is_some(), "std::context is not shipped");
+        assert!(!is_planned("context"), "std::context is still planned");
+        assert_eq!(PLANNED_STD_MODULES, &["log"]);
+        assert!(find("log").is_none(), "std::log is shipped");
     }
 
     /// M2 ships tier 1's seven collections, written in Cheby (D-664,

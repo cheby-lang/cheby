@@ -87,8 +87,8 @@ fn examples_check_cleanly() {
         }
         checked += 1;
     }
-    // 31 since 031 checks with `std::http` shipped (D-1003, D-729).
-    assert_eq!(checked, 31);
+    // 32 since 033 checks with `std::context` shipped (D-1563, D-1582).
+    assert_eq!(checked, 32);
 }
 
 /// No example needs a std module of a later tier since `std::http` ships
@@ -309,8 +309,8 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    // 31 since 031 checks with `std::http` shipped (D-1003, D-729).
-    assert_eq!(lowered + not_yet, 31, "{}", failures.join("\n"));
+    // 32 since 033 lowers with `std::context` shipped (D-1563, D-1582).
+    assert_eq!(lowered + not_yet, 32, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);
@@ -554,15 +554,16 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::context\nimport std::ioo\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::ioo\nimport std::log\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
-    // D-989, D-1213: tier 3 ships whole, so tier 4's `std::context`
-    // (D-1049) is the real planned module of the probe.
+    // D-989, D-1213: tier 3 ships whole, and `std::context` ships with
+    // M4's native work, so `std::log` (D-1575) is the real planned module
+    // of the probe.
     assert!(
-        rendered.contains("error[E0038]: the module `std::context` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::log` is not supported yet"),
         "{rendered}"
     );
     assert!(
@@ -571,6 +572,35 @@ fn missing_and_planned_std_modules() {
     );
     assert!(rendered.contains("`std::io`"), "{rendered}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-1587: a package's key constant calls the package-visible
+/// constructors `context::key_at` and `key_without_default_at` through the
+/// compiler's rewrite, with the convention of a call of std's `pub`
+/// functions, which own their arguments (D-787). So std's masks, which
+/// only std's units take, must hold no entry for them: neither borrows.
+#[test]
+fn the_key_constructors_borrow_nothing() {
+    let whole = std_cache::whole_std().unwrap();
+    let modules = whole.modules();
+    assert!(modules.iter().any(|path| path == "std::context"));
+    // The masks name modules as the build does, so a missing entry is not
+    // a misspelt path.
+    for (module, item, _) in whole.named() {
+        assert!(modules.contains(module), "{module}::{item}");
+    }
+    let borrowing: Vec<&str> = whole
+        .named()
+        .iter()
+        .filter(|(module, _, _)| module == "std::context")
+        .map(|(_, item, _)| item.as_str())
+        .collect();
+    for constructor in ["key_at", "key_without_default_at"] {
+        assert!(
+            !borrowing.contains(&constructor),
+            "std::context::{constructor} borrows: {borrowing:?}"
+        );
+    }
 }
 
 /// D-989: the made-up planned module of this crate's tests is planned and

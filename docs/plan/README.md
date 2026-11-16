@@ -24,7 +24,7 @@ The plan is a living document. When a milestone starts, its file is refined into
 1. A reference implementation of the whole spec, shipping as one `cheby` binary with every tool of [§13.1](../spec/13-tooling.md#131-the-cheby-command) (D-031).
 2. The build order of D-099: the single-fiber core first, because the REPL gives the fastest feedback on the language design itself.
 3. Compile speed from the first milestone: the locality rule (D-246) shapes the compiler's structure, and the budgets of D-247 and D-267 are measured in CI from M1.
-4. The 32 examples in [`../examples/`](../examples/) become the end-to-end conformance suite, and every milestone is defined by which of them run.
+4. The 33 examples in [`../examples/`](../examples/) become the end-to-end conformance suite, and every milestone is defined by which of them run.
 5. Spec gaps found while implementing go back into the decision log, never into ad-hoc compiler behavior.
 
 ## Milestones
@@ -423,6 +423,17 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1560    | More lints (unsafe docs, hash order, enum wildcards, some `nursery`); CI runs typos, taplo, etc.    |
 | D-1561    | `sanitize-cfg` clippies the workspace and checks fuzz/; a cfg-only build names no runtime            |
 | D-1562    | Under ASan, `jits_commit_only_what_they_use` skips its process-memory bound; per-JIT checks stay     |
+| D-1563    | Workstream 4.6 (`std::context`, clocks, seeded streams) is built on native first, JS with 4.3       |
+| D-1571    | A fiber's context is a persistent map in the runtime's HAMT, one pointer per fiber                  |
+| D-1573    | `provide` and `with` are Cheby over swap kernels; scopes and entries restore the context            |
+| D-1574    | The seeded stream is fiber state beside the bindings, not a context entry                           |
+| D-1575    | `std::log` is the planned std module once `std::context` ships; E0038's probes import it            |
+| D-1576    | The context work adds the example `request_context`, 033, which binds as an M3 example (D-1582)     |
+| D-1577    | Context's cost gate: fiber benchmarks and `time::now` before and after, stop at 1.05                |
+| D-1582    | Context's new UI tests and REPL transcripts bind at once; `request_context`'s `test.toml` names M3  |
+| D-1586    | Context's cost gate: one benchmark's median `main` time at 1.05 stops, after a rerun; no x86-64     |
+| D-1592    | Context's final reading also times three provided values against an empty context, with no stop     |
+| D-1596    | Context's cost gate also reads `rc/map_updates` and the `collections` group, stop at 1.05           |
 
 ## Open questions
 

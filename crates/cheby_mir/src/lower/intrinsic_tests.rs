@@ -103,18 +103,21 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         },
         ret: result,
         clamped: Box::new([]),
+        initializer: None,
     };
     let kernel_sig = FnSig {
         generics: Generics::empty(),
         params: Box::new([param("count", Ty::INT), param("text", Ty::STRING)]),
         ret: Ty::INT,
         clamped: Box::new([]),
+        initializer: None,
     };
     let nullary_sig = FnSig {
         generics: Generics::empty(),
         params: Box::new([]),
         ret: Ty::NIL,
         clamped: Box::new([]),
+        initializer: None,
     };
     let mut items = IndexVec::new();
     for (n, name, sig) in [

@@ -210,6 +210,10 @@ pub struct StdItem {
     pub fields: Vec<StdField>,
     /// A constant's initializer as written, for hover (S-20).
     pub initializer: Option<String>,
+    /// A function that carries `@std_initializer`, which completion offers
+    /// only where the completed call would be a constant's whole
+    /// initializer (D-1599).
+    pub std_initializer: bool,
 }
 
 /// One named field of a std type.
@@ -529,6 +533,7 @@ impl Reader<'_> {
             ret,
             fields,
             initializer,
+            std_initializer: matches!(&item.sig, ItemSig::Fn(sig) if sig.initializer.is_some()),
         })
     }
 

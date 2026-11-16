@@ -1,18 +1,33 @@
 //! Random numbers from the host's random source and from seeded
 //! generators (D-226, D-653 to D-656).
 //!
-//! The module keeps no state of its own (D-653). A `Generator` is
-//! SplitMix64 over a `U64` of state that the value itself holds, and every
-//! draw from one is defined bit for bit, so a seed gives the same numbers
-//! on every run and every target (D-232, D-655). The one kernel is the
-//! private `host_bits`, which returns 64 bits from the host's random
-//! source; everything else is written in Cheby over it and over `U64`
+//! A `Generator` is SplitMix64 over a `U64` of state that the value
+//! itself holds, and every draw from one is defined bit for bit, so a seed
+//! gives the same numbers on every run and every target (D-232, D-655).
+//! `split`, `next_bool`, `choose` and `shuffle` are fixed bit for bit as
+//! well (D-1096).
+//!
+//! The module keeps no global state (D-653). Its one other state is the
+//! seeded stream that `with_generator` gives the calling fiber (D-1048):
+//! while one is set, `int_between`, `fraction` and `from_host` draw from it
+//! instead of the host, and write the advanced state back. The stream is
+//! held by the fiber beside its context's bindings, so no key names it and
+//! only this module reaches it (D-1574). A spawn or a capture derives the
+//! child's stream in the runtime, which computes `derived` bit for bit
+//! (D-1567). When the body of `with_generator` unwinds, the scope that
+//! catches the failure puts the outer stream back (D-1573).
+//!
+//! The kernels are the private `host_bits`, which returns 64 bits from the
+//! host's random source, and the private `@std_context` kernels of the
+//! stream, which read and set its state and put the outer stream aside and
+//! back. Everything else is written in Cheby over them and over `U64`
 //! arithmetic (D-656). The seeded functions therefore run in constants,
 //! and a constant that reaches a host function is E0077 (D-090, D-537).
-//! The kernel also declares its JS binding, written with the JS back end
-//! (D-661). `split`, `next_bool`, `choose` and `shuffle` are fixed bit for
-//! bit as well (D-1096).
+//! Each kernel also declares its JS binding, written with the JS back end
+//! (D-661, D-986).
 
+import std::channel
+import std::fiber
 import std::float
 import std::int
 import std::list
@@ -56,15 +71,67 @@ const highest_bit: U64 = 0x8000_0000_0000_0000
 @external(js, "./random.mjs", "host_bits")
 fn host_bits() -> U64
 
+/// Whether the calling fiber has a seeded stream (D-1048, D-1574).
+@std_context
+@external(native, "cheby_random_sys_stream_on")
+@external(js, "./random.mjs", "sys_stream_on")
+fn sys_stream_on() -> Bool
+
+/// The state of the calling fiber's seeded stream, which its next draw
+/// starts from. Called only under a stream (D-1048).
+@std_context
+@external(native, "cheby_random_sys_stream_state")
+@external(js, "./random.mjs", "sys_stream_state")
+fn sys_stream_state() -> U64
+
+/// Stores `state`, the state a draw advanced the calling fiber's stream
+/// to, and starts the count of spawns and captures since the last draw
+/// again. Called only under a stream (D-1048, D-1567).
+@std_context
+@external(native, "cheby_random_sys_stream_set")
+@external(js, "./random.mjs", "sys_stream_set")
+fn sys_stream_set(state: U64)
+
+/// Puts the calling fiber's stream aside and sets a stream that starts at
+/// `state` (D-1048, D-1573).
+@std_context
+@external(native, "cheby_random_sys_stream_push")
+@external(js, "./random.mjs", "sys_stream_push")
+fn sys_stream_push(state: U64)
+
+/// Makes the stream that `sys_stream_push` put aside the calling fiber's
+/// again, as far as it had advanced (D-1048, D-1573).
+@std_context
+@external(native, "cheby_random_sys_stream_pop")
+@external(js, "./random.mjs", "sys_stream_pop")
+fn sys_stream_pop()
+
+/// The generator at the calling fiber's seeded stream. Called only under
+/// a stream (D-1048).
+fn stream() -> Generator {
+  Generator { state: sys_stream_state() }
+}
+
 /// Returns an integer from `low` to `high`, both included, drawn from the
 /// host's random source with every integer in that range equally likely.
 /// When `high` is less than `low`, it draws from `high` to `low` (D-297,
 /// D-654). It is `next_int_between(from_host(), low, high)` without the
-/// generator. On JS it panics when the drawn integer is outside
-/// ±(2⁵³−1), which needs a bound outside that range (D-037).
+/// generator. Under a seeded stream it is `next_int_between` on the stream
+/// itself, which it advances (D-1048). On JS it panics when the drawn
+/// integer is outside ±(2⁵³−1), which needs a bound outside that range
+/// (D-037).
 pub fn int_between(low: Int, high: Int) -> Int {
-  let (drawn, _) = next_int_between(from_host(), low, high)
-  drawn
+  case sys_stream_on() {
+    True => {
+      let (drawn, next) = next_int_between(stream(), low, high)
+      sys_stream_set(next.state)
+      drawn
+    }
+    False => {
+      let (drawn, _) = next_int_between(Generator { state: host_bits() }, low, high)
+      drawn
+    }
+  }
 }
 
 test "int_between stays within its bounds" {
@@ -78,10 +145,20 @@ test "int_between stays within its bounds" {
 /// Returns a `Float` from `0.0` up to but not including `1.0`, drawn from
 /// the host's random source: one of the 2⁵³ values `k / 2⁵³`, each equally
 /// likely. It is `next_fraction(from_host())` without the generator
-/// (D-655).
+/// (D-655). Under a seeded stream it is `next_fraction` on the stream
+/// itself, which it advances (D-1048).
 pub fn fraction() -> Float {
-  let (drawn, _) = next_fraction(from_host())
-  drawn
+  case sys_stream_on() {
+    True => {
+      let (drawn, next) = next_fraction(stream())
+      sys_stream_set(next.state)
+      drawn
+    }
+    False => {
+      let (drawn, _) = next_fraction(Generator { state: host_bits() })
+      drawn
+    }
+  }
 }
 
 test "fraction is at least zero and below one" {
@@ -90,9 +167,108 @@ test "fraction is at least zero and below one" {
 }
 
 /// Returns a generator whose state is 64 bits from the host's random
-/// source (D-656).
+/// source (D-656). Under a seeded stream it takes one step of the stream,
+/// which it advances, and returns the generator whose state is that
+/// step's output (D-1048).
 pub fn from_host() -> Generator {
-  Generator { state: host_bits() }
+  case sys_stream_on() {
+    True => {
+      let (output, next) = step(stream())
+      sys_stream_set(next.state)
+      Generator { state: output }
+    }
+    False => Generator { state: host_bits() }
+  }
+}
+
+// Seeded streams
+
+/// Calls `body` on the calling fiber with a seeded stream that starts at
+/// `generator`, and returns what `body` returns (D-1048). While it runs,
+/// the host functions draw from the stream, each draw advances the
+/// calling fiber's copy alone, and a fiber spawned meanwhile starts from a
+/// stream derived from the spawner's state and the spawn's number. When
+/// `body` returns, the outer stream is put back here, as far as it had
+/// advanced; when it unwinds, the scope that catches the failure puts it
+/// back (D-1573).
+pub fn with_generator<R>(generator: Generator, body: fn() -> R) -> R {
+  sys_stream_push(generator.state)
+  let result = body()
+  sys_stream_pop()
+  result
+}
+
+test "with_generator makes host draws follow the seeded draws" {
+  use <- with_generator(from_seed(7))
+  let a = fraction()
+  let b = int_between(1, 6)
+  let (x, after) = next_fraction(from_seed(7))
+  let (y, _) = next_int_between(after, 1, 6)
+  assert (a, b) == (x, y)
+}
+
+test "with_generator gives the same draws for the same generator" {
+  let inside = with_generator(from_seed(42), fn() { from_host() })
+  let again = with_generator(from_seed(42), fn() { from_host() })
+  assert inside == again
+}
+
+test "a spawn leaves the parent's stream alone" {
+  let alone = with_generator(from_seed(42), fn() { fraction() })
+  let after_spawn = with_generator(from_seed(42), fn() {
+    let _ = {
+      use owner <- fiber::scope()
+      fiber::spawn(owner, fn() { fraction() })
+    }
+    fraction()
+  })
+  assert alone == after_spawn
+}
+
+test "spawned fibers draw reproducibly and apart" {
+  fn draws() {
+    use <- with_generator(from_seed(42))
+    use owner <- fiber::scope()
+    let first = fiber::spawn(owner, fn() { fraction() })
+    let second = fiber::spawn(owner, fn() { fraction() })
+    (fiber::join(first), fiber::join(second))
+  }
+  let assert Ok((a, b)) = draws()
+  assert draws() == Ok((a, b))
+  assert a != b
+}
+
+test "from_host under a stream is the output of one step" {
+  let seed = from_seed(2026)
+  let (drawn, after) = with_generator(seed, fn() { (from_host(), fraction()) })
+  let (output, advanced) = step(seed)
+  assert drawn == Generator { state: output }
+  let (next, _) = next_fraction(advanced)
+  assert after == next
+}
+
+test "spawned fibers start from the derived streams" {
+  let seed = from_seed(42)
+  let children = with_generator(seed, fn() {
+    use owner <- fiber::scope()
+    let first = fiber::spawn(owner, fn() { from_host() })
+    let second = fiber::spawn(owner, fn() { from_host() })
+    (fiber::join(first), fiber::join(second))
+  })
+  let (first, _) = step(derived(seed, 1))
+  let (second, _) = step(derived(seed, 2))
+  assert children == Ok((Generator { state: first }, Generator { state: second }))
+}
+
+test "a detached fiber starts from the derived stream" {
+  let seed = from_seed(7)
+  let (tx, rx) = channel::new::<Generator>(1)
+  let received = with_generator(seed, fn() {
+    fiber::spawn_detached(fn() { channel::send(tx, from_host()) })
+    channel::receive(rx)
+  })
+  let (output, _) = step(derived(seed, 1))
+  assert received == Ok(Generator { state: output })
 }
 
 // Seeded generators
@@ -186,8 +362,9 @@ fn step(generator: Generator) -> (U64, Generator) {
 
 /// The generator that D-1048 derives from `generator` for the `n`th spawn
 /// since its last draw: the state `s + n × 0xD1B54A32D192ED03` modulo
-/// 2⁶⁴, put through `mix`. `split` takes the first (D-1096), and M4's
-/// seeded streams take each spawn's.
+/// 2⁶⁴, put through `mix`. `split` takes the first (D-1096). A seeded
+/// stream's spawns and captures take theirs in the runtime, which computes
+/// the same state bit for bit, as the tests of the streams check (D-1048).
 fn derived(generator: Generator, n: U64) -> Generator {
   let offset = u64::wrapping_mul(n, stream_increment)
   Generator { state: mix(u64::wrapping_add(generator.state, offset)) }

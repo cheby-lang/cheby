@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
+use super::bindings;
 use super::kernels::*;
 use super::node::{BITS, Bitmap, Collection, Collision, MAX_SHIFT, Root, drop_word, dup_word};
 use super::ops;
@@ -200,6 +201,13 @@ fn set_of(seed: u64, model: &BTreeSet<Key>) -> Word {
 /// top holding more than one entry), collision nodes only at the bottom
 /// with two or more entries of one hash, and the stored seed's hashes.
 fn check_trie(word: Word, coll: Collection) {
+    let seed = root(word, coll).seed();
+    check_trie_hashed(word, coll, &|key| super::compare::key_hash(key, seed));
+}
+
+/// [`check_trie`] for a trie whose keys hash with `hash_of`: a context's
+/// bindings, whose keys carry their own hashes, with no seed.
+fn check_trie_hashed(word: Word, coll: Collection, hash_of: &dyn Fn(Word) -> u64) {
     let root = root(word, coll);
     let Some(top) = root.node() else {
         assert_eq!(root.count(), 0);
@@ -211,7 +219,6 @@ fn check_trie(word: Word, coll: Collection) {
         return;
     };
     assert!(root.count() > 0, "a heap root is never empty");
-    let seed = root.seed();
     let stride = coll.stride();
     let mut total = 0;
     // (node, shift, the hash bits above this node, whether it is the top)
@@ -227,7 +234,7 @@ fn check_trie(word: Word, coll: Collection) {
             assert_eq!(leaf.hash(), prefix, "collision hash");
             for e in 0..leaf.len() {
                 let key = leaf.get(e * stride);
-                assert_eq!(super::compare::key_hash(key, seed), leaf.hash());
+                assert_eq!(hash_of(key), leaf.hash());
             }
             total += leaf.len();
             continue;
@@ -250,7 +257,7 @@ fn check_trie(word: Word, coll: Collection) {
             let bits = prefix | (u64::from(bit_index).checked_shl(shift).unwrap_or(0));
             if data & bit != 0 {
                 let key = here.get(di * stride);
-                let hash = super::compare::key_hash(key, seed);
+                let hash = hash_of(key);
                 assert_eq!(hash & mask, prefix & mask, "entry under the wrong prefix");
                 assert_eq!(
                     (hash >> shift) & 31,
@@ -1534,6 +1541,309 @@ fn cost_lookups_allocate_nothing_and_updates_copy_one_path() {
             assert!(depth <= 10, "depth {depth}");
         }
         drop_word(m);
+    });
+}
+
+// ---------------------------------------------------------------------
+// A context's bindings (D-1571, D-1572)
+
+/// A key identity `(hash, path, type)`, owned: the hash as a `U64`, boxed
+/// above 2^62 - 1, and the two texts as new strings.
+fn identity(hash: u64, path: &str, ty: &str) -> Word {
+    values::tuple(&[values::u64_word(hash), new_string(path), new_string(ty)])
+}
+
+/// `map` with `identity` bound to `v`, owned, the value `elem(v)`: what
+/// the bind kernel's wrapper does, which drops its argument afterwards.
+fn bind(map: Word, identity: Word, v: i64) -> Word {
+    let value = elem(v);
+    // SAFETY: live words, borrowed.
+    let bound = unsafe { bindings::bind(map, identity, value) };
+    drop_word(value);
+    bound
+}
+
+/// The model value bound to `identity` in `map`, if any.
+fn bound(map: Word, identity: Word) -> Option<i64> {
+    // SAFETY: live words, borrowed.
+    unsafe { bindings::lookup(map, identity) }.map(value)
+}
+
+/// [`check_trie`] for a bindings map, whose keys carry their hashes.
+fn check_bindings(map: Word) {
+    check_trie_hashed(map, Collection::Map, &|key| {
+        // SAFETY: a stored key of a bindings map is a live identity.
+        unsafe { bindings::identity_hash(key) }
+    });
+}
+
+/// Follows `hash` down from `map`'s top through nodes that hold one child
+/// and no entry, and returns how many it passed and the node it stopped
+/// at, with its shift.
+fn single_child_chain(map: Word, hash: u64) -> (u32, Word, u32) {
+    let mut node = root(map, Collection::Map).node().unwrap().0;
+    let (mut passed, mut shift) = (0, 0);
+    while shift < MAX_SHIFT {
+        let here = Bitmap(node);
+        let (data, nodes) = here.maps();
+        let bit = 1_u32 << ((hash >> shift) & 31);
+        if data != 0 || nodes != bit {
+            break;
+        }
+        node = here.child(Collection::Map, 0);
+        passed += 1;
+        shift += BITS;
+    }
+    (passed, node, shift)
+}
+
+/// D-1571, D-1572: a bind into the empty context (0 or the static empty
+/// map) makes a one-entry map that a lookup finds by the identity, and
+/// only by an equal one; a second bind adds an entry.
+#[test]
+fn bindings_bind_into_the_empty_map_and_look_up() {
+    balanced(|| {
+        let port = identity(7, "app::port", "Int");
+        let host = identity(1 << 63, "app::host", "String");
+        let other_type = identity(7, "app::port", "String");
+        assert_eq!(bound(0, port), None);
+        for empty in [0, bindings::empty()] {
+            let m = bind(empty, port, 8080);
+            check_bindings(m);
+            // SAFETY: a live map.
+            assert_eq!(unsafe { size(m) }, 1);
+            assert_eq!(bound(m, port), Some(8080));
+            assert_eq!(bound(m, host), None);
+            assert_eq!(bound(m, other_type), None);
+            let both = bind(m, host, 6);
+            check_bindings(both);
+            assert_eq!(bound(both, port), Some(8080));
+            assert_eq!(bound(both, host), Some(6));
+            assert_eq!(bound(m, host), None, "the outer map is unchanged");
+            drop_word(both);
+            drop_word(m);
+        }
+        assert_eq!(bindings::empty(), Root::empty(Collection::Map).word());
+        for word in [port, host, other_type] {
+            drop_word(word);
+        }
+    });
+}
+
+/// I-D: two binds on top of one outer map give two maps, each with the
+/// outer bindings and its own, and leave the outer map as it was, also
+/// when its root and nodes have a count of one (where `std::map` would
+/// update in place).
+#[test]
+fn bindings_never_change_the_outer_map() {
+    balanced(|| {
+        let n = sized(200, 40);
+        let keys: Vec<Word> = (0..n)
+            .map(|i| {
+                identity(
+                    (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                    &format!("k{i}"),
+                    "Int",
+                )
+            })
+            .collect();
+        for size_of_outer in [1, n] {
+            let mut outer = 0;
+            for (i, &key) in keys.iter().take(size_of_outer as usize).enumerate() {
+                let next = bind(outer, key, i as i64);
+                drop_word(outer);
+                outer = next;
+            }
+            // SAFETY: a live map.
+            let unique = unsafe { crate::rc::is_unique(outer) };
+            assert!(unique, "the outer root is unique");
+            let first = identity(3, "app::first", "Int");
+            let second = identity(3, "app::second", "Int");
+            let a = bind(outer, first, 30);
+            let b = bind(outer, second, 60);
+            for (map, own, v, absent) in [(a, first, 30, second), (b, second, 60, first)] {
+                check_bindings(map);
+                assert_ne!(map, outer);
+                assert_eq!(bound(map, own), Some(v));
+                assert_eq!(bound(map, absent), None);
+                // SAFETY: live maps.
+                assert_eq!(unsafe { size(map) }, unsafe { size(outer) } + 1);
+            }
+            check_bindings(outer);
+            // SAFETY: a live map.
+            assert_eq!(unsafe { size(outer) }, size_of_outer as usize);
+            assert_eq!(bound(outer, first), None);
+            assert_eq!(bound(outer, second), None);
+            for (i, &key) in keys.iter().take(size_of_outer as usize).enumerate() {
+                assert_eq!(bound(outer, key), Some(i as i64));
+                assert_eq!(bound(a, key), Some(i as i64));
+                assert_eq!(bound(b, key), Some(i as i64));
+            }
+            for word in [a, b, outer, first, second] {
+                drop_word(word);
+            }
+        }
+        for key in keys {
+            drop_word(key);
+        }
+    });
+}
+
+/// D-1571: rebinding a key replaces its value in the new map, which keeps
+/// one entry and the stored key; the old value lives as long as the old
+/// map, and goes with it.
+#[test]
+fn bindings_rebinding_keeps_one_entry_and_the_old_value_goes_with_the_old_map() {
+    balanced(|| {
+        let key = identity(5, "app::name", "String");
+        let equal = identity(5, "app::name", "String");
+        let old = new_string("old");
+        // SAFETY: live words, borrowed.
+        let outer = unsafe { bindings::bind(0, key, old) };
+        drop_word(old);
+        let new = new_string("new");
+        // SAFETY: as above.
+        let inner = unsafe { bindings::bind(outer, equal, new) };
+        drop_word(new);
+        check_bindings(inner);
+        // SAFETY: a live map.
+        assert_eq!(unsafe { size(inner) }, 1);
+        let text = |map: Word| {
+            // SAFETY: live words; the value is a live string.
+            unsafe { to_rust_string(bindings::lookup(map, key).unwrap()) }.unwrap()
+        };
+        assert_eq!(text(inner), "new");
+        assert_eq!(text(outer), "old");
+        let mut stored = Vec::new();
+        // SAFETY: a live map.
+        unsafe { for_each_entry(inner, &mut |k, _| stored.push(k)) };
+        assert_eq!(stored, [key], "the stored key stays");
+        // The outer root, its node and the old value.
+        let before = live();
+        drop_word(outer);
+        assert_eq!(live(), before - 3);
+        assert_eq!(text(inner), "new");
+        for word in [inner, key, equal] {
+            drop_word(word);
+        }
+    });
+}
+
+/// D-1572: identities with one hash and other texts all go into one
+/// collision node at the bottom, and each is found by its texts; a
+/// rebinding there replaces one value only.
+#[test]
+fn bindings_with_one_hash_share_a_collision_node() {
+    balanced(|| {
+        let hash = 0x0123_4567_89AB_CDEF;
+        let a = identity(hash, "app::a", "Int");
+        let b = identity(hash, "app::b", "Int");
+        let c = identity(hash, "app::a", "String");
+        let one = bind(0, a, 1);
+        let two = bind(one, b, 2);
+        let three = bind(two, c, 3);
+        check_bindings(three);
+        let (passed, bottom, shift) = single_child_chain(three, hash);
+        assert!(
+            shift >= MAX_SHIFT,
+            "the entries are not at the collision level"
+        );
+        assert_eq!(passed, 13);
+        assert_eq!(Collision(bottom).len(), 3);
+        assert_eq!(Collision(bottom).hash(), hash);
+        assert_eq!(
+            [bound(three, a), bound(three, b), bound(three, c)],
+            [Some(1), Some(2), Some(3)]
+        );
+        let b_again = identity(hash, "app::b", "Int");
+        let rebound = bind(three, b_again, 20);
+        check_bindings(rebound);
+        // SAFETY: live maps.
+        assert_eq!(unsafe { size(rebound) }, 3);
+        assert_eq!(
+            [bound(rebound, a), bound(rebound, b), bound(rebound, c)],
+            [Some(1), Some(20), Some(3)]
+        );
+        assert_eq!(bound(three, b), Some(2));
+        assert_eq!(bound(two, c), None);
+        for word in [one, two, three, rebound, a, b, c, b_again] {
+            drop_word(word);
+        }
+    });
+}
+
+/// A lookup and a rebind compare identities by address first: the stored
+/// word itself is a hit with no comparison, an equal identity at another
+/// address is a hit by `generic::equal`, and one with the same hash and
+/// another path is a miss.
+#[test]
+fn bindings_compare_identities_by_address_first() {
+    balanced(|| {
+        let key = identity(9, "app::port", "Int");
+        let equal = identity(9, "app::port", "Int");
+        let other_path = identity(9, "app::host", "Int");
+        let map = bind(0, key, 1);
+        assert_ne!(key, equal);
+        assert_eq!(bound(map, key), Some(1), "the same word");
+        assert_eq!(bound(map, equal), Some(1), "an equal identity");
+        assert_eq!(bound(map, other_path), None, "the same hash, another path");
+        let rebound = bind(map, equal, 2);
+        // SAFETY: live maps.
+        assert_eq!(unsafe { size(rebound) }, 1);
+        assert_eq!(bound(rebound, key), Some(2));
+        assert_eq!(bound(map, key), Some(1), "the outer map is unchanged");
+        for word in [map, rebound, key, equal, other_path] {
+            drop_word(word);
+        }
+    });
+}
+
+/// The address test is observable: an identity whose third element is a
+/// function would panic in `generic::equal` (D-233), yet looking it up and
+/// rebinding it by its own word compare nothing, as a key constant's one
+/// static identity is looked up.
+#[test]
+fn bindings_find_the_same_word_without_comparing() {
+    balanced(|| {
+        let function = generic::tests::closure(&[]);
+        let key = values::tuple(&[values::u64_word(11), new_string("app::f"), function]);
+        let map = bind(0, key, 1);
+        assert_eq!(bound(map, key), Some(1));
+        let rebound = bind(map, key, 2);
+        // SAFETY: a live map.
+        assert_eq!(unsafe { size(rebound) }, 1);
+        assert_eq!(bound(rebound, key), Some(2));
+        for word in [map, rebound, key] {
+            drop_word(word);
+        }
+    });
+}
+
+/// The hash a stored identity carries places it again when a new one
+/// clashes with it (`rehash`): hashes that share their first 5 or 10 bits
+/// split into a child node one or two levels down.
+#[test]
+fn bindings_whose_hashes_share_a_prefix_split_into_a_child() {
+    balanced(|| {
+        for (shared_levels, first, second) in [
+            (1, 0b00011, 0b00011 | (1 << 5)),
+            (2, 0b00011 | (4 << 5), 0b00011 | (4 << 5) | (1 << 10)),
+        ] {
+            let a = identity(first, "app::a", "Int");
+            let b = identity(second, "app::b", "Int");
+            let one = bind(0, a, 1);
+            let two = bind(one, b, 2);
+            check_bindings(two);
+            let (passed, node, _) = single_child_chain(two, first);
+            assert_eq!(passed, shared_levels);
+            assert_eq!(Bitmap(node).data_len(), 2);
+            assert_eq!(Bitmap(node).node_len(), 0);
+            assert_eq!((bound(two, a), bound(two, b)), (Some(1), Some(2)));
+            assert_eq!((bound(one, a), bound(one, b)), (Some(1), None));
+            for word in [one, two, a, b] {
+                drop_word(word);
+            }
+        }
     });
 }
 

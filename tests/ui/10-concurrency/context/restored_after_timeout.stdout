@@ -1,0 +1,6 @@
+Err(TimedOut), then hello
+Err(Panicked): crash, then hello
+Ok: returning, then hello
+Err(TimedOut), then outer
+Err(Panicked): crash, then outer
+Ok: returning, then outer

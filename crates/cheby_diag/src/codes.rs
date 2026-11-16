@@ -221,6 +221,9 @@ codes! {
     E0078 Error 78 CONSTANT_OUT_OF_JS_RANGE "constant that exists on `js` and holds an `Int` outside the JS safe range";
     // Targets and foreign code (chapter 12, D-948).
     E0079 Error 79 EXTERNAL_INSIDE_FOREIGN_RESULT "native foreign result type that holds an external type below its top level";
+    // Context keys (§10.11, D-1565, D-1578, D-1589).
+    E0080 Error 80 KEY_OUTSIDE_CONSTANT "mention of `context::key` or `context::key_without_default` that is not the call that is a constant's whole initializer";
+    E0081 Error 81 KEY_DEFAULT_NOT_STATIC "constant that holds a key whose default value holds a function, a `dyn` value or a handle";
     // Warnings.
     W0001 Warning 1 TUPLE_SHAPE "tuple type that hides meaning";
     W0002 Warning 2 UNUSED_BINDING "unused local binding or parameter";
@@ -281,6 +284,8 @@ mod tests {
         );
     }
 
+    /// Each explanation starts with its code, and its heading is the
+    /// code's summary (D-420; E0081's, D-1600).
     #[test]
     fn explanations_name_their_code() {
         for info in ALL {
@@ -288,6 +293,12 @@ mod tests {
             assert!(
                 info.explanation.starts_with(&heading),
                 "docs/diagnostics/{}.md must start with `{heading}`",
+                info.code
+            );
+            assert_eq!(
+                info.explanation.lines().next(),
+                Some(format!("{heading}{}", info.summary).as_str()),
+                "docs/diagnostics/{}.md's heading is its summary",
                 info.code
             );
             assert_eq!(explanation(info.code), Some(info.explanation));

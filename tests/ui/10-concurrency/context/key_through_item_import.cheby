@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-1565, D-1581
+//! The key rule follows the function, not its spelling: after
+//! `import std::context::{key}`, a bare `key(1)` in a function body is
+//! E0080, as `context::key(1)` is (§10.11).
+
+import std::context
+import std::context::{key, key_without_default}
+
+fn main() {
+  let k = key(1)
+  let empty = key_without_default::<Int>()
+  assert context::get(k) == 1
+  assert context::get(empty) == None
+}

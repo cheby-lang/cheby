@@ -7,7 +7,10 @@
 //! collections and the fields of every constructor of the types it meets,
 //! transitively, so `Option<Db>` and a record with a function field are
 //! rejected like `Db` and `fn() -> Int`. A type argument that no field
-//! uses holds no value, so it is not looked at (D-511).
+//! uses holds no value, so it is not looked at (D-511). Nor is the type
+//! argument of a `context::Key<T>`, wherever the key appears: a default
+//! that holds a function, a `dyn` value or a handle is found when the
+//! constant is evaluated, as E0081 (D-1578, D-1591, D-1600).
 //! Handle types other than external types (channels, fibers) arrive with
 //! the tier-2 standard library and join the check then.
 //!
@@ -28,6 +31,7 @@ use cheby_syntax::ast::{AstNode, ConstDecl};
 use rustc_hash::FxHashSet;
 
 use crate::TypesInput;
+use crate::check::is_key_type;
 use crate::ifaces::tyutil::subst;
 use crate::thir::{self, ExprKind};
 
@@ -110,6 +114,10 @@ impl<'a, 'i> Search<'a, 'i> {
             TyKind::Fn { .. } => direct(Forbidden::Function(ty)),
             TyKind::Dyn { .. } => direct(Forbidden::Dyn(ty)),
             TyKind::Tuple(parts) => self.find_all(parts),
+            // A key's type argument is not looked at: its default is
+            // checked when the constant is evaluated (E0081, D-1578,
+            // D-1591).
+            TyKind::Named { def, .. } if is_key_type(self.input, self.own, *def)? => Ok(None),
             TyKind::Named { def, args } => {
                 let item = self.input.item(self.own, *def)?;
                 let ItemSig::Type(def_sig) = &item.sig else {

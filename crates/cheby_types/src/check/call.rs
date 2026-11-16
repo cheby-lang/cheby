@@ -18,6 +18,7 @@ use cheby_syntax::ast::{Arg, AstNode, CallExpr, Expr, PathExpr};
 use super::constraints::placeholder_dict;
 use super::desugar::Callback;
 use super::expr::{bounds_of, item_params, named_ctor_as_value};
+use super::key;
 use super::{BodyCx, Deferred, Expected};
 use crate::infer::{InferTy, instantiate};
 use crate::thir::{self, Callee, Dict, ExprId, ExprKind, ParamOrigin, PatKind};
@@ -213,6 +214,12 @@ impl BodyCx<'_> {
                 Signature::error()
             }
             ItemSig::Fn(sig) => {
+                if let Some(which) = key::key_fn(self.input, self.own, def)?
+                    && p.path().map(|path| path.syntax().id()) != self.key_site
+                {
+                    let diag = key::mention_error(self.input, self.own, which, spans.callee, true)?;
+                    self.report(diag);
+                }
                 let params = item_params(&sig.generics);
                 let Some(inst) = self.instance(def, &params, p.type_args(), spans.callee)? else {
                     self.errored = true;

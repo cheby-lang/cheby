@@ -1,0 +1,7 @@
+outer [0.5665615751722809, 0.7457817572627011]
+inner [0.5911897341980794, 0.7491496838738246]
+innermost [0.11345034205715454]
+the outer stream continued where it stood: True
+each inner stream drew its own numbers: True
+the outer spawn count continued too: True
+no stream after the outer one: True

@@ -1,0 +1,45 @@
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/10-concurrency/context/clock_equality.cheby:14:17
+   |
+14 |   let systems = time::system_clock() == time::system_clock()
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/10-concurrency/context/clock_equality.cheby:16:20
+   |
+16 |   let same_point = time::fixed_clock(launch) == time::fixed_clock(launch)
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/10-concurrency/context/clock_equality.cheby:18:21
+   |
+18 |   let other_point = time::fixed_clock(launch) == time::fixed_clock(later)
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/10-concurrency/context/clock_equality.cheby:20:15
+   |
+20 |   let mixed = time::fixed_clock(launch) == time::system_clock()
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `!=` on a type that contains a function
+  --> tests/ui/10-concurrency/context/clock_equality.cheby:22:16
+   |
+22 |   let differ = time::fixed_clock(launch) != time::fixed_clock(later)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+

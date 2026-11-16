@@ -1,0 +1,98 @@
+// @decisions: D-1045, D-1564, D-1572, D-1580, D-547
+> import std::channel
+> import std::context
+> import std::fiber
+> const k: context::Key<Int> = context::key(1)
+> fn shown() -> String {
+.   let value = context::get(k)
+.   "{value:?}"
+. }
+> fn read() -> Int {
+.   context::get(k)
+. }
+> context::provide(k, 5, fn() { shown() })
+"5" : String
+> let (go_first, wait_first) = channel::new::<Nil>(0)
+> let (tell_first, heard_first) = channel::new::<String>(1)
+> context::provide(k, 5, fn() {
+.   fiber::spawn_detached(fn() {
+.     let _ = channel::receive(wait_first)
+.     channel::send(tell_first, shown())
+.   })
+. })
+> let (go_second, wait_second) = channel::new::<Nil>(0)
+> let (tell_second, heard_second) = channel::new::<String>(1)
+> context::provide(k, 5, fn() {
+.   fiber::spawn_detached(fn() {
+.     let _ = channel::receive(wait_second)
+.     channel::send(tell_second, shown())
+.   })
+. })
+> const k: context::Key<Int> = context::key(2)
+> shown()
+"2" : String
+> channel::send(go_first, Nil)
+Ok(Nil) : Result<Nil, Nil>
+> channel::receive(heard_first)
+Ok("5") : Result<String, Nil>
+> "{k:?}"
+"Key(k)" : String
+> const k: context::Key<String> = context::key("text")
+error[E0047]: mismatched types
+ --> <repl:6>:2:16
+  |
+2 |   context::get(k)
+  |   ------------ ^ expected `context::Key<Int>`, found `context::Key<String>`
+  |   |
+  |   arguments to this function are incorrect
+  |
+  = note: `read` was checked again because a definition it uses changed its signature; it keeps its old definition
+
+> shown()
+"\"text\"" : String
+> read()
+2 : Int
+> channel::send(go_second, Nil)
+Ok(Nil) : Result<Nil, Nil>
+> channel::receive(heard_second)
+Ok("\"text\"") : Result<String, Nil>
+> context::provide(k, "mine", fn() { shown() })
+"\"mine\"" : String
+> let k = context::key(1)
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+ --> <repl:25>:1:9
+  |
+1 | let k = context::key(1)
+  |         ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+  |
+  = note: a key is identified by the path of the constant it initializes
+  = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+> type T {
+.   T(Int),
+. }
+> const t: context::Key<T> = context::key(T(0))
+> fn shown_t() -> String {
+.   let value = context::get(t)
+.   "{value:?}"
+. }
+> let (go_third, wait_third) = channel::new::<Nil>(0)
+> let (tell_third, heard_third) = channel::new::<String>(1)
+> context::provide(t, T(7), fn() {
+.   fiber::spawn_detached(fn() {
+.     let _ = channel::receive(wait_third)
+.     channel::send(tell_third, shown_t())
+.   })
+. })
+> type T {
+.   T(Int),
+. }
+> const t: context::Key<T> = context::key(T(0))
+> shown_t()
+"T(0)" : String
+> channel::send(go_third, Nil)
+Ok(Nil) : Result<Nil, Nil>
+> channel::receive(heard_third)
+Ok("T(0)") : Result<String, Nil>
+> "{t:?}"
+"Key(t)" : String

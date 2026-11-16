@@ -1,0 +1,9 @@
+a capture is not changed by a later provide: hi None
+caller before: outer Some("ann")
+with hides the caller's bindings: hi None
+provide binds on top: hi Some("bob"), then hi None
+a scoped spawn under with: hi None
+a scoped spawn under with and provide: hi Some("cy")
+a detached spawn under with, read after with returned: Ok("hi None")
+nested with: hi None, then hello None
+caller after: outer Some("ann")

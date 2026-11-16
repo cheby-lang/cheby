@@ -21,14 +21,16 @@
 //!
 //! `sys_spawn_detached(f)`, in order:
 //!
-//! 1. marks `f` shared (D-705), outside every lock;
+//! 1. marks the spawner's context bindings and `f` shared (D-705, D-1571),
+//!    outside every lock;
 //! 2. without a runtime, ends the program (D-692);
 //! 3. reserves a slot in the spawner's group, so a teardown waits for the
 //!    fiber from now on, and takes the fiber's reference to `f`;
 //! 4. creates the fiber on the runtime's default fiber stack (D-659: a
-//!    detached fiber always gets the default; D-660's `fiber-stack`); a
-//!    stack region that cannot be mapped gives the slot back and panics
-//!    with `out of memory` (D-677);
+//!    detached fiber always gets the default; D-660's `fiber-stack`),
+//!    with the spawner's context bindings (D-1044); a stack region that
+//!    cannot be mapped gives the slot back and panics with `out of memory`
+//!    (D-677);
 //! 5. makes its base scope, sets it as the fiber's spawn scope and records
 //!    the fiber in its slot, which tells whether the group is closing: then
 //!    the fiber gets its base as its target before it is first queued, so
@@ -47,8 +49,9 @@
 //!    report after standard output is flushed, the two lines in one write
 //!    (D-669, D-701), as an entry's catch point does; a cancellation (a
 //!    teardown) prints nothing;
-//! 4. drops its target and its spawn scope, and ends the base scope under
-//!    its lock, so a later teardown's walk skips it;
+//! 4. drops its target, its spawn scope and its context's bindings
+//!    (D-1573), and ends the base scope under its lock, so a later
+//!    teardown's walk skips it;
 //! 5. last, leaves its group, which may wake a teardown: its last touch of
 //!    shared state, so a leak check after the teardown needs no global
 //!    quiescence.
@@ -61,6 +64,7 @@ use super::scope::ScopeState;
 use super::{Owned, cancel, needs_scheduler, running};
 use crate::abi::{PanicKind, Word};
 use crate::alloc::OUT_OF_MEMORY;
+use crate::context;
 use crate::ctx::ExecCtx;
 use crate::io;
 use crate::panic::fatal;
@@ -104,9 +108,11 @@ struct Start {
 unsafe fn spawn_detached(ctx: *mut ExecCtx, function: Word) {
     // SAFETY: forwarded from the caller.
     let me = unsafe { running(ctx) };
-    // 1. Mark it shared: every object it reaches with a positive count is
-    // confined to this fiber (I-1); if the walk raises, what it marked
-    // stays shared together with all it reaches.
+    // 1. Mark the context the fiber inherits (I-E) and the function
+    // shared: every object they reach with a positive count is confined to
+    // this fiber (I-1); if a walk raises, what it marked stays shared
+    // together with all it reaches.
+    context::share_bindings(me);
     // SAFETY: a live closure, borrowed.
     unsafe { rc::mark_shared(function) };
     // 2. The no-runtime rule.
@@ -176,6 +182,7 @@ unsafe fn spawn_detached(ctx: *mut ExecCtx, function: Word) {
 unsafe fn detached_main(ctx: *mut ExecCtx, start: Start) {
     // SAFETY: forwarded from the caller.
     let me = unsafe { running(ctx) };
+    context::set_based(me);
     let Start {
         function,
         group,
@@ -227,6 +234,9 @@ unsafe fn detached_main(ctx: *mut ExecCtx, start: Start) {
     // comes later skips it and never reaches this fiber once it retires.
     cancel::clear_at_end(me);
     me.conc.set_spawn_scope(None);
+    // The bindings are released while the fiber is current and still in
+    // its group (I-A, D-710).
+    context::release(me);
     base.end_base();
     drop(base);
     // 5. Leave the group: the last touch of shared state.

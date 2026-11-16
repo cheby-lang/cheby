@@ -10,6 +10,7 @@ use cheby_syntax::ast::{
 };
 
 use super::constraints::placeholder_dict;
+use super::key;
 use super::{BodyCx, Deferred, Expected, VarNote};
 use crate::infer::{InferTy, VarKind, instantiate};
 use crate::thir::{BinOpKind, Dict, ExprId, ExprKind, FloatLit, ListItem, Lit, OpImpl, PanicKind};
@@ -243,6 +244,10 @@ impl BodyCx<'_> {
             // (D-494).
             (ItemSig::Error, _) => self.propagated_error_expr(span),
             (ItemSig::Fn(sig), _) => {
+                if let Some(which) = key::key_fn(self.input, self.own, def)? {
+                    let diag = key::mention_error(self.input, self.own, which, span, false)?;
+                    self.report(diag);
+                }
                 let params = item_params(&sig.generics);
                 let Some(inst) = self.instance(def, &params, type_args, span)? else {
                     return self.error_expr(span);

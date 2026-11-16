@@ -44,6 +44,7 @@ use parking_lot::Mutex;
 use super::cancel::{self, AtClose};
 use super::{Failure, Owned, needs_scheduler, running};
 use crate::abi::Word;
+use crate::context::ScopeSaved;
 use crate::ctx::ExecCtx;
 use crate::handles::{self, HandleKind, HandlePayload};
 use crate::panic::{PanicReport, fatal};
@@ -102,6 +103,11 @@ pub(crate) struct ScopeState {
     /// targets (`cancel::cancel_deadlocked_root`), ended by the root's
     /// base frame ([`close_root_base`]).
     root: bool,
+    /// The fiber's context when the scope opened (D-1573), recorded by
+    /// [`cheby_rt_scope_open`] and put back by [`cheby_rt_scope_close`] on
+    /// every way out; only the fiber that opened the scope touches it. A
+    /// base scope records nothing.
+    saved: ScopeSaved,
 }
 
 /// The target of a timed scope's timer (D-671): it holds the scope weakly,
@@ -283,6 +289,7 @@ impl ScopeState {
             of_timeout: false,
             base: false,
             root: false,
+            saved: ScopeSaved::default(),
         }
     }
 
@@ -773,7 +780,8 @@ pub(crate) fn close_root_base(ctx: &ExecCtx) {
 /// Opens a scope for the running fiber and returns its handle, owned
 /// (D-693, architecture §7.5): its parent is the fiber's innermost open
 /// scope, else the scope the fiber was spawned into; it is linked into the
-/// parent's nested scopes and pushed on the fiber's open scopes. It may
+/// parent's nested scopes, records the fiber's context for the close to
+/// put back (D-1573) and is pushed on the fiber's open scopes. It may
 /// raise only out of memory, when the handle cannot be allocated, which
 /// happens before anything is open.
 ///
@@ -835,6 +843,9 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_open(
             let target = Arc::new(ScopeTimer(Arc::downgrade(&state)));
             *state.timer.lock() = Some(runtime.arm_timer(at, target));
         }
+        // The fiber's context, recorded once nothing can raise any more
+        // (D-1573): the close puts it back.
+        state.saved.save(me);
         me.conc.push_scope(state);
         handle
     })
@@ -845,7 +856,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_open(
 /// §7.5):
 ///
 /// 1. waits, without interruption, until every member has left;
-/// 2. pops the scope from the fiber's open scopes, unlinks it from its
+/// 2. pops the scope from the fiber's open scopes, puts back the fiber's
+///    context as the open recorded it (D-1573), unlinks the scope from its
 ///    parent (step 1 marked it ended) and cancels its timer, if it is
 ///    timed: on every path out, a return, a panic or the pass-through of an
 ///    outer cancellation (D-671);
@@ -932,6 +944,10 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_close(
         // 2. Pop, unlink, and cancel the timer. A firing that already took
         // the timer finds the scope ended, and its walk skips it.
         me.conc.pop_scope(&state);
+        // D-1573: the context of the open, back on every path, before the
+        // pass-through below re-raises and before Cheby code runs again
+        // (I-B, I-C). No lock is held.
+        state.saved.restore(me, !unwound);
         state.unlink();
         let timer = state.timer.lock().take();
         if let Some(timer) = timer {

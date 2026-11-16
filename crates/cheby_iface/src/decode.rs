@@ -299,6 +299,7 @@ enum RawSig<'a> {
         params: Vec<(&'a str, RawTy)>,
         ret: RawTy,
         clamped: Vec<u32>,
+        initializer: Option<&'a str>,
     },
     Type {
         generics: RawGenerics<'a>,
@@ -603,30 +604,39 @@ impl<'a> Reader<'a> {
         self.sig_of(tag)
     }
 
+    /// A function's signature, whose tag 0 was just read.
+    fn fn_sig(&mut self) -> Result<RawSig<'a>, DecodeError> {
+        let generics = self.generics()?;
+        let count = self.u32()?;
+        let mut params = Vec::new();
+        for _ in 0..count {
+            let name = self.str()?;
+            params.push((name, self.ty()?));
+        }
+        let ret = self.ty()?;
+        let count = self.u32()?;
+        let mut clamped = Vec::new();
+        for _ in 0..count {
+            clamped.push(self.u32()?);
+        }
+        let initializer = if self.bool()? {
+            Some(self.str()?)
+        } else {
+            None
+        };
+        Ok(RawSig::Fn {
+            generics,
+            params,
+            ret,
+            clamped,
+            initializer,
+        })
+    }
+
     /// The signature whose tag `tag` was just read.
     fn sig_of(&mut self, tag: u8) -> Result<RawSig<'a>, DecodeError> {
         Ok(match tag {
-            0 => {
-                let generics = self.generics()?;
-                let count = self.u32()?;
-                let mut params = Vec::new();
-                for _ in 0..count {
-                    let name = self.str()?;
-                    params.push((name, self.ty()?));
-                }
-                let ret = self.ty()?;
-                let count = self.u32()?;
-                let mut clamped = Vec::new();
-                for _ in 0..count {
-                    clamped.push(self.u32()?);
-                }
-                RawSig::Fn {
-                    generics,
-                    params,
-                    ret,
-                    clamped,
-                }
-            }
+            0 => self.fn_sig()?,
             1 => {
                 let generics = self.generics()?;
                 let exposed = self.bool()?;
@@ -966,6 +976,7 @@ impl Resolver<'_, '_> {
                 params,
                 ret,
                 clamped,
+                initializer,
             } => ItemSig::Fn(FnSig {
                 generics: self.generics(generics)?,
                 params: params
@@ -979,6 +990,7 @@ impl Resolver<'_, '_> {
                     .collect::<Result<_, DecodeError>>()?,
                 ret: self.ty(*ret)?,
                 clamped: clamped.as_slice().into(),
+                initializer: initializer.map(|constructor| self.name(constructor)),
             }),
             RawSig::Type {
                 generics,

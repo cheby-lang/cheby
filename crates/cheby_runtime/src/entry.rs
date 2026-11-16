@@ -569,14 +569,22 @@ unsafe fn spawn_entry(
             // it stops being current, whether the entry returned or
             // unwound.
             unsafe { tls::set_current_fiber(ctx) };
+            // SAFETY: the live block made above.
+            crate::context::set_based(unsafe { &*ctx });
             // The caller of `spawn_entry` keeps the code `body` runs valid
             // until the host stops waiting, which is after this call
             // returns.
             let word = catch_unwinding(|| body(ctx));
+            // What a `provide` that unwound to here left (I-A, D-1573),
+            // released while the block is current, before the host counts
+            // the domain's objects, and before a panic's report, as a root
+            // releases it (D-1594).
+            // SAFETY: `ctx` is the live block made above.
+            crate::context::release(unsafe { &*ctx });
             // The entry's catch point (D-699, D-701): a panic unwound to
             // here, and the record says so, not the word (a `main` thunk's
             // 0 is success).
-            // SAFETY: `ctx` is the live block made above.
+            // SAFETY: as above.
             let outcome = unwind::record::finish_entry(unsafe { &*ctx }, word);
             entry_interrupter.clear();
             // SAFETY: null is always allowed.

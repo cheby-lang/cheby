@@ -1,0 +1,48 @@
+error[E0077]: evaluating the constant `read` reached an effect
+  --> tests/ui/04-declarations/constants/context_in_constants_e0077.cheby:18:7
+   |
+18 | const read: String = context::get(greeting)
+   |       ^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_get`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `provided` reached an effect
+  --> tests/ui/04-declarations/constants/context_in_constants_e0077.cheby:20:7
+   |
+20 | const provided: Int = context::provide(greeting, "hi", fn() { 1 })
+   |       ^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_bind`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `captured` reached an effect
+  --> tests/ui/04-declarations/constants/context_in_constants_e0077.cheby:27:7
+   |
+27 | const captured: Int = after_capture()
+   |       ^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_capture`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `with_empty` reached an effect
+  --> tests/ui/04-declarations/constants/context_in_constants_e0077.cheby:33:7
+   |
+33 | const with_empty: Int = under_with()
+   |       ^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_empty`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `emptied` reached an effect
+  --> tests/ui/04-declarations/constants/context_in_constants_e0077.cheby:40:7
+   |
+40 | const emptied: Int = after_empty()
+   |       ^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_empty`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `seeded` reached an effect
+  --> tests/ui/04-declarations/constants/context_in_constants_e0077.cheby:42:7
+   |
+42 | const seeded: Float = random::with_generator(random::from_seed(1), fn() { 0.5 })
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_random_sys_stream_push`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

@@ -22,8 +22,9 @@ use cheby_test_support::example;
 /// 018, 022 and 028 left the list (D-729), and with `std::selector`,
 /// `std::random` and `std::runtime` 009, 013 and 019 left it too. M3 ships
 /// `std::http`'s client, so 031 left it last (D-1003): no example needs an
-/// unshipped module. Tier 3 ships whole with `std::process`, so the E0038
-/// probes use tier 4's `std::context` (D-1049, D-989, D-1213).
+/// unshipped module. Tier 3 ships whole with `std::process`, and tier 4's
+/// `std::context` ships with M4's native work, so the E0038 probes use
+/// `std::log` (D-989, D-1213, D-1563, D-1575).
 const LATER_TIER: [&str; 0] = [];
 
 /// The example whose dependency cannot resolve yet.

@@ -460,6 +460,7 @@ impl Snapshot {
                 resolved: from.resolved()?,
                 deps: DepView::new(&self.front.set, &self.all_ids),
                 modules: &self.front.modules,
+                real_modules: &self.front.modules,
                 globals: &self.front.globals,
             },
             own,

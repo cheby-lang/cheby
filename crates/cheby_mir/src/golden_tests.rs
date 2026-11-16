@@ -198,6 +198,7 @@ fn build(package: &str, main: &str) -> String {
             resolved: &resolved,
             deps: DepView::new(&set, &deps),
             modules: &modules.table,
+            real_modules: &modules.table,
             globals: &globals,
         };
         let (iface, d) = build_interface(&types).unwrap();

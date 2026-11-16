@@ -206,7 +206,7 @@ pub enum Section<T> {
 /// The constants section (D-1413).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConstantsSection {
-    /// E0069 and E0075 to E0078, in `cheby check`'s order.
+    /// E0069, E0075 to E0078 and E0081, in `cheby check`'s order.
     #[serde(default)]
     pub diagnostics: Vec<WireDiagnostic>,
     /// Every evaluated constant's value; empty when evaluation failed.

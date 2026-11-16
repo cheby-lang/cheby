@@ -1,0 +1,83 @@
+// @mode: run-pass
+// @decisions: D-1048, D-1567, D-1574
+//! A seeded stream's spawn number counts the spawns and the captures
+//! since the stream's last draw, and every draw starts it again at one. A
+//! capture takes a number as a spawn does: running a body under it draws
+//! from the stream a fiber spawned there would start from (§10.11).
+
+import std::context
+import std::fiber
+import std::int
+import std::io
+import std::random
+import std::u64
+
+/// What D-1048 adds to a state once per spawn.
+const stream_increment: U64 = 0xD1B5_4A32_D192_ED03
+
+/// What SplitMix64 adds to its state at each step.
+const increment: U64 = 0x9E37_79B9_7F4A_7C15
+
+/// SplitMix64's output function.
+fn mix(z: U64) -> U64 {
+  let mixed = u64::wrapping_mul(z ^ (z >> 30), 0xBF58_476D_1CE4_E5B9)
+  let remixed = u64::wrapping_mul(mixed ^ (mixed >> 27), 0x94D0_49BB_1331_11EB)
+  remixed ^ (remixed >> 31)
+}
+
+/// The first fraction drawn by the n-th child of a stream at `state`.
+fn child_draw(state: U64, n: U64) -> Float {
+  let child = mix(u64::wrapping_add(state, u64::wrapping_mul(n, stream_increment)))
+  let (x, _) = random::next_fraction(random::from_seed(int::wrapping_from_u64(child)))
+  x
+}
+
+/// Spawns a scoped fiber that draws once, and returns its draw.
+fn spawn_draw() -> Float {
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, random::fraction))
+  }
+  let assert Ok(x) = outcome
+  x
+}
+
+fn main() {
+  let state = u64::wrapping_from_int(5)
+  let drawn = random::with_generator(random::from_seed(5), fn() {
+    let a = spawn_draw()
+    let b = context::with(context::capture(), random::fraction)
+    let c = spawn_draw()
+    let own = random::fraction()
+    let d = spawn_draw()
+    let captured = context::capture()
+    let e = spawn_draw()
+    let f = context::with(captured, random::fraction)
+    let g = context::with(captured, random::fraction)
+    // A draw of a die takes one step at this state.
+    let _ = random::int_between(1, 6)
+    let h = context::with(context::capture(), random::fraction)
+    let _ = random::from_host()
+    let i = spawn_draw()
+    [a, b, c, own, d, e, f, g, h, i]
+  })
+  let after_one = u64::wrapping_add(state, increment)
+  let after_two = u64::wrapping_add(after_one, increment)
+  let after_three = u64::wrapping_add(after_two, increment)
+  let (own, _) = random::next_fraction(random::from_seed(5))
+  let expected = [
+    child_draw(state, 1),
+    child_draw(state, 2),
+    child_draw(state, 3),
+    own,
+    child_draw(after_one, 1),
+    child_draw(after_one, 3),
+    child_draw(after_one, 2),
+    child_draw(after_one, 2),
+    child_draw(after_two, 1),
+    child_draw(after_three, 1),
+  ]
+  io::println("{drawn:?}")
+  let numbered = drawn == expected
+  io::println("spawns and captures take the numbers derived by hand: {numbered}")
+}

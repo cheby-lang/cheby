@@ -5,7 +5,7 @@
 use cheby_driver::analysis::TextRange;
 use cheby_syntax::{SyntaxKind as K, SyntaxTree};
 
-use super::{Context, ExprSite, Found, PathNs, Receiver, Subject, detect};
+use super::{Context, ExprSite, Found, PathNs, Receiver, Subject, detect, whole_initializer};
 use crate::features::handlers::symbols::tests::doc;
 
 /// The tree of `text` with its `‸` removed, and the offset of the `‸`.
@@ -531,4 +531,60 @@ fn before_a_paths_colons_the_context_is_the_words() {
             "le",
         ),
     ]);
+}
+
+/// Where the completed call would be a constant's whole initializer, the
+/// only place a function with `@std_initializer` is offered (D-1581,
+/// D-1599): the callee right after a `const`'s `=`, bare or qualified,
+/// through parentheses, also before the call's arguments. Not nested, not
+/// in a block, not in a body.
+#[test]
+fn whole_initializers() {
+    let at = |text: &str| {
+        let (tree, at) = parse(text);
+        whole_initializer(tree.root(), &detect(tree.root(), at))
+    };
+    for text in [
+        "const k: context::Key<Int> = ‸\n",
+        "const k: context::Key<Int> =\n  ‸\n",
+        "const k: context::Key<Int> = ke‸\n",
+        "const k: context::Key<Int> = context::‸\n",
+        "const k: context::Key<Int> = context::ke‸\n",
+        "const k: context::Key<Int> = (‸\n",
+        "const k: context::Key<Int> = (‸)\n",
+        "const k: context::Key<Int> = (ke‸\n",
+        "const k: context::Key<Int> = ((context::ke‸))\n",
+        "const k: context::Key<Int> = ke‸(1)\n",
+        "const k: context::Key<Int> = context::ke‸(1)\n",
+        "const k: context::Key<Int> = context::‸(1)\n",
+        "const k: context::Key<Int> = ‸(1)\n",
+        "const k: context::Key<Int> = (‸(1))\n",
+        "const k: context::Key<Int> = ‸\n\nfn main() {\n  Nil\n}\n",
+        "const k: context::Key<Int> = (‸\n\nfn main() {\n  Nil\n}\n",
+        "const k: context::Key<Int> = (ke‸\n\nfn main() {\n  Nil\n}\n",
+        "const k: context::Key<Int> = (context::‸\n\nfn main() {\n  Nil\n}\n",
+        "const k: context::Key<Int> = (context::‸\n",
+    ] {
+        assert!(at(text), "{text:?}");
+    }
+    for text in [
+        "const k: context::Key<Int> = [ke‸]\n",
+        "const k: context::Key<Int> = {\n  ke‸\n}\n",
+        "const k: context::Key<Int> = 1 + ke‸\n",
+        "const k: context::Key<Int> = f(ke‸)\n",
+        "const k: context::Key<Int> = (1, ke‸)\n",
+        "const k: context::Key<Int> = 1 |> ke‸\n",
+        "const k: context::Key<Int> = context::key(context::ke‸)\n",
+        "fn f() {\n  let k = ke‸\n}\n",
+        "fn f() {\n  ke‸\n}\n",
+        "test \"t\" {\n  let k = context::ke‸\n}\n",
+        "const k: context::Ke‸\n",
+        "const k: context::Key<Int> = ‸ + 1\n",
+        "const k: context::Key<Int> = ‸context::key(1)\n",
+        "const k: context::Key<Int> = ‸(1) + 2\n",
+        "const k: context::Key<Int> = (‸ + 1)\n",
+        "const k: context::Key<Int> = (‸, 1)\n",
+    ] {
+        assert!(!at(text), "{text:?}");
+    }
 }

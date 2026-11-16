@@ -1,0 +1,49 @@
+// @mode: run-pass
+// @decisions: D-1046, D-1047
+//! Under a fixed clock, `time::now()` is the clock's point, `monotonic`
+//! is the origin, so `elapsed` and `until` measure nothing, and a fiber
+//! spawned meanwhile inherits the clock. When `provide` returns, the
+//! system clock is read again (§10.11).
+
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::list
+import std::time
+import std::time::instant
+
+fn main() {
+  let launch = time::from_unix(duration::seconds(1_700_000_000))
+  let before = time::now()
+  let lines = context::provide(time::clock, time::fixed_clock(launch), fn() {
+    let stamp = time::now()
+    let start = time::monotonic()
+    let at_origin = start == instant::from_origin(duration::zero)
+    let measured = time::elapsed(start)
+    let left = time::until(instant::add(start, duration::seconds(3)))
+    let inherited = {
+      use owner <- fiber::scope()
+      let child = fiber::spawn(owner, fn() {
+        let grandchild = fiber::spawn(owner, fn() { time::now() })
+        (time::now(), time::elapsed(time::monotonic()), fiber::join(grandchild))
+      })
+      fiber::join(child)
+    }
+    let (child_stamp, child_elapsed, grandchild_stamp) = case inherited {
+      Ok(readings) => readings
+      Err(_) => (before, duration::seconds(-1), before)
+    }
+    [
+      "now: {stamp}",
+      "monotonic is the origin: {at_origin}",
+      "elapsed: {measured}, until three seconds later: {left}",
+      "a spawned fiber: {child_stamp}, elapsed {child_elapsed}; its child: {grandchild_stamp}",
+    ]
+  })
+  let after = time::now()
+  let real_again = time::compare(after, launch) == Greater
+    && time::compare(before, after) != Greater
+  list::each(lines, io::println)
+  io::println("the system clock after provide: {real_again}")
+}

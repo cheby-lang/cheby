@@ -5,21 +5,29 @@
 //! `instant::Instant` of the submodule `std::time::instant`. Spans of time
 //! are `duration::Duration` values.
 //!
-//! Every public function is written in Cheby (D-985). Only `now`,
-//! `monotonic`, `sleep` and `sleep_until` reach kernels: `sys_now` and
-//! `sys_monotonic` return a reading as whole seconds and the nanoseconds
-//! after them, and the `@std_context` kernel `sys_sleep` waits on the
-//! runtime's timer heap (D-682, D-983). Everything else runs in constants
-//! and gives the same result on every target (D-090, D-232, D-991), and a
-//! constant that reaches a clock or a sleep is E0077 (D-537). Dates before
-//! 1970 are computed with `int::floor_div` and `int::modulo` (D-1056).
+//! `now`, `monotonic`, `elapsed` and `until` read the clock that the key
+//! `clock` holds in the calling fiber's context, the system clock unless
+//! a program provides a fixed or a custom one with `context::provide`
+//! (D-1046, D-1047). `now_on` and `monotonic_on` read the clock they are
+//! given (D-1570). Timers never read a clock in context (D-1047), so
+//! `sleep` and `sleep_until` wait on the runtime's monotonic clock.
 //!
-//! The clocks in context of `docs/stdlib/time.md` (`Clock`, the key
-//! `clock`, `system_clock`, `fixed_clock` and `custom_clock`) come in M4
-//! with `std::context` (D-1049). Until then `now` and `monotonic` read the
-//! system's clocks directly. Timers never read a clock in context
-//! (D-1047), so `sleep_until` waits on the runtime's monotonic clock.
+//! Every public function is written in Cheby (D-985). The system clock is
+//! read by the kernels `sys_now` and `sys_monotonic`, which return a
+//! reading as whole seconds and the nanoseconds after them. `now` and
+//! `monotonic` call the `@std_context` kernels `sys_now_unless_provided`
+//! and `sys_monotonic_unless_provided` instead, which give the same
+//! reading unless the fiber's context binds `clock`, and then a reading
+//! with negative nanoseconds that says so, after which Cheby reads the
+//! provided clock. So with no clock provided a reading costs no lookup of
+//! the key (D-1597). The `@std_context` kernel `sys_sleep` waits on the
+//! runtime's timer heap (D-682, D-983). The clocks themselves and
+//! everything else run in constants and give the same result on every
+//! target (D-090, D-232, D-991), and a constant that reaches a reading of
+//! a clock or a sleep is E0077 (D-537). Dates before 1970 are computed
+//! with `int::floor_div` and `int::modulo` (D-1056).
 
+import std::context
 import std::duration
 import std::fiber
 import std::int
@@ -34,6 +42,18 @@ import std::time::instant
 /// satisfies `Compare` and `Show` through `compare` and `show`.
 pub type Timestamp {
   since_epoch: duration::Duration,
+}
+
+/// Where `now`, `monotonic`, `elapsed` and `until` read the time, through
+/// the key `clock`, and `now_on` and `monotonic_on` read it directly: the
+/// system's clocks, a fixed point, or two functions (D-1047, D-1570). It is
+/// opaque plain data. The system clock and fixed clocks compare
+/// structurally, and `==` panics on a custom clock, as on any function
+/// value (§3.13, D-233).
+pub type Clock {
+  System,
+  Fixed(Timestamp),
+  Custom(fn() -> Timestamp, fn() -> instant::Instant),
 }
 
 // Kernels
@@ -52,6 +72,24 @@ fn sys_now() -> (Int, Int)
 @external(native, "cheby_time_sys_monotonic")
 @external(js, "./time.mjs", "sys_monotonic")
 fn sys_monotonic() -> (Int, Int)
+
+/// The wall clock now, as `sys_now` reads it, unless the calling fiber's
+/// context binds the key whose identity is `identity`. Then it reads no
+/// clock and returns a pair whose nanoseconds are negative, which no
+/// reading's are, so that `now` reads the provided clock in Cheby: a
+/// kernel never calls a clock's functions (D-1597).
+@std_context
+@external(native, "cheby_time_sys_now_unless_provided")
+@external(js, "./time.mjs", "sys_now_unless_provided")
+fn sys_now_unless_provided(identity: (U64, String, String)) -> (Int, Int)
+
+/// The monotonic clock now, as `sys_monotonic` reads it, unless the
+/// calling fiber's context binds the key whose identity is `identity`, as
+/// for `sys_now_unless_provided` (D-1597).
+@std_context
+@external(native, "cheby_time_sys_monotonic_unless_provided")
+@external(js, "./time.mjs", "sys_monotonic_unless_provided")
+fn sys_monotonic_unless_provided(identity: (U64, String, String)) -> (Int, Int)
 
 /// Suspends the calling fiber for the span of `seconds` and `nanoseconds`
 /// on the runtime's timer heap, and can be cancelled (D-652, D-682,
@@ -73,11 +111,18 @@ fn reading(parts: (Int, Int)) -> duration::Duration {
 
 // The wall clock
 
-/// Returns the current time on the system's real-time clock (D-1021). The
+/// Returns the current time on the wall clock of the clock in context,
+/// the system's real-time clock by default (D-1021, D-1047). It is
+/// `now_on(context::get(clock))`, and when no clock is provided it reads
+/// the system's clock without looking the key up (D-1570, D-1597). The
 /// clock can jump when someone sets it, so the difference of two readings
 /// is not a duration: measure that with `monotonic`.
 pub fn now() -> Timestamp {
-  Timestamp { since_epoch: reading(sys_now()) }
+  let (seconds, nanoseconds) = sys_now_unless_provided(clock_identity)
+  guard nanoseconds >= 0 else {
+    now_on(context::get(clock))
+  }
+  Timestamp { since_epoch: duration::Duration { seconds: seconds, nanoseconds: nanoseconds } }
 }
 
 test "now is after 2020" {
@@ -557,12 +602,19 @@ test "show and parse agree for years from 0 to 9999" {
 
 // The monotonic clock
 
-/// Returns the current reading of the monotonic clock, the clock the
-/// runtime's timers use, so a timer of one second and the time `elapsed`
-/// measures across it agree (D-682, D-1021). It builds its reading with
+/// Returns the current reading of the monotonic clock of the clock in
+/// context (D-1047, D-1057). By default it is the clock the runtime's
+/// timers use, so a timer of one second and the time `elapsed` measures
+/// across it agree (D-682, D-1021). It is `monotonic_on(context::get(clock))`,
+/// and when no clock is provided it reads the runtime's clock without
+/// looking the key up (D-1570, D-1597). It builds its reading with
 /// `instant::from_origin` (D-1057).
 pub fn monotonic() -> instant::Instant {
-  instant::from_origin(reading(sys_monotonic()))
+  let (seconds, nanoseconds) = sys_monotonic_unless_provided(clock_identity)
+  guard nanoseconds >= 0 else {
+    monotonic_on(context::get(clock))
+  }
+  instant::from_origin(duration::Duration { seconds: seconds, nanoseconds: nanoseconds })
 }
 
 test "instants compare with the operators" {
@@ -681,4 +733,122 @@ test "sleep_until of the earliest reading returns at once" {
   let earliest = instant::from_origin(duration::seconds(int::min_value))
   sleep_until(earliest)
   assert earliest < monotonic()
+}
+
+// Clocks in context
+
+/// The key of the clock that `now`, `monotonic`, `elapsed` and `until`
+/// read (D-1047). Its default is the system clock, and a program provides
+/// another with `context::provide`, for the code it calls and everything
+/// spawned meanwhile (D-1044). Its value type holds functions, which a
+/// key's type may (D-1578), and its default holds none, so it is static
+/// data.
+pub const clock: context::Key<Clock> = context::key(system_clock())
+
+/// The identity of the key `clock`, which `now` and `monotonic` give their
+/// kernels to look it up in the fiber's context (D-1572, D-1597).
+const clock_identity: (U64, String, String) = clock.identity
+
+test "a fixed clock fixes now" {
+  let launch = from_unix(duration::seconds(1_700_000_000))
+  use <- context::provide(clock, fixed_clock(launch))
+  assert now() == launch
+  assert elapsed(monotonic()) == duration::zero
+}
+
+test "a clock in context does not change sleep" {
+  use <- context::provide(clock, fixed_clock(from_unix(duration::zero)))
+  let outcome = fiber::timeout(duration::milliseconds(10), fn() { sleep(duration::hours(1)) })
+  assert outcome == Err(fiber::TimedOut)
+}
+
+/// Returns the clock that reads the system's real-time clock for `now`
+/// and the runtime's monotonic clock for `monotonic` (D-1021). It is plain
+/// data, so it runs in constants (D-1047).
+pub fn system_clock() -> Clock {
+  System
+}
+
+/// Returns a clock whose `now` is always `at`, and whose `monotonic` is
+/// always `instant::from_origin(duration::zero)`. So `elapsed` of any
+/// reading taken under it is zero (D-1047, D-1057).
+pub fn fixed_clock(at: Timestamp) -> Clock {
+  Fixed(at)
+}
+
+/// Returns a clock that calls `read_now` for the wall clock and
+/// `read_monotonic` for the monotonic clock (D-1047, D-1057). The two
+/// functions must not call `now`, `monotonic`, `elapsed` or `until` while
+/// their own clock is the one in context, since the calls would nest until
+/// the stack overflows: they read another clock with `now_on` or
+/// `monotonic_on` (D-1570).
+pub fn custom_clock(
+  read_now: fn() -> Timestamp,
+  read_monotonic: fn() -> instant::Instant,
+) -> Clock {
+  Custom(read_now, read_monotonic)
+}
+
+test "a custom clock calls its functions" {
+  let start = instant::from_origin(duration::seconds(5))
+  let fake = custom_clock(fn() { from_unix(duration::zero) }, fn() {
+    instant::from_origin(duration::seconds(8))
+  })
+  use <- context::provide(clock, fake)
+  assert now() == from_unix(duration::zero)
+  assert elapsed(start) == duration::seconds(3)
+  assert until(instant::from_origin(duration::seconds(10))) == duration::seconds(2)
+}
+
+/// Returns the current time on the wall clock of `source`, whatever clock
+/// is in context: the system's real-time clock for the system clock, the
+/// clock's point for a fixed clock, and what the clock's first function
+/// returns for a custom clock (D-1570). Only the system clock reaches a
+/// kernel. The parameter is not named `clock`, which is the key (D-062).
+pub fn now_on(source: Clock) -> Timestamp {
+  case source {
+    System => Timestamp { since_epoch: reading(sys_now()) }
+    Fixed(at) => at
+    Custom(read_now, _) => read_now()
+  }
+}
+
+test "now_on reads the clock it is given" {
+  let launch = from_unix(duration::seconds(1_700_000_000))
+  use <- context::provide(clock, fixed_clock(from_unix(duration::zero)))
+  assert now_on(fixed_clock(launch)) == launch
+  assert now() == from_unix(duration::zero)
+}
+
+test "a custom clock builds on the system clock with now_on" {
+  fn read_tomorrow() {
+    add(now_on(system_clock()), duration::hours(24))
+  }
+  fn read_monotonic() {
+    monotonic_on(system_clock())
+  }
+  use <- context::provide(clock, custom_clock(read_tomorrow, read_monotonic))
+  assert now_on(system_clock()) < now()
+}
+
+/// Returns the current reading of the monotonic clock of `source`,
+/// whatever clock is in context: the runtime's monotonic clock for the
+/// system clock, `instant::from_origin(duration::zero)` for a fixed clock,
+/// and what the clock's second function returns for a custom clock
+/// (D-1570). Only the system clock reaches a kernel.
+pub fn monotonic_on(source: Clock) -> instant::Instant {
+  case source {
+    System => instant::from_origin(reading(sys_monotonic()))
+    Fixed(_) => instant::from_origin(duration::zero)
+    Custom(_, read_monotonic) => read_monotonic()
+  }
+}
+
+test "monotonic_on reads the clock it is given" {
+  let fake = custom_clock(fn() { from_unix(duration::zero) }, fn() {
+    instant::from_origin(duration::seconds(8))
+  })
+  assert monotonic_on(fake) == instant::from_origin(duration::seconds(8))
+  let fixed = fixed_clock(from_unix(duration::zero))
+  assert monotonic_on(fixed) == instant::from_origin(duration::zero)
 }

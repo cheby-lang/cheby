@@ -1,0 +1,5 @@
+derived states: 814261035509592648, 735673624672101622
+children: Ok(((0.5983632421673309, Ok(0.008126809613826835)), 0.5307489167300402, 0.7624976190333335))
+detached: Ok(0.534574152394423)
+each child's first draw is the one derived by hand: True
+the spawner draws the seed's first number: True

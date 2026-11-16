@@ -1,0 +1,27 @@
+// @mode: check-fail
+// @decisions: D-1045, D-1565
+//! A call of `context::key` or `context::key_without_default` anywhere but
+//! as a constant's whole initializer is E0080: in a function body, in a
+//! `test` block, and with explicit type arguments (§10.11).
+
+import std::context
+
+fn make() -> context::Key<Int> {
+  context::key(1)
+}
+
+fn make_without_default() -> context::Key<Option<Int>> {
+  context::key_without_default::<Int>()
+}
+
+test "a key made in a test" {
+  let k = context::key("text")
+  assert context::get(k) == "text"
+}
+
+fn main() {
+  let a = make()
+  let b = make_without_default()
+  assert context::get(a) == 1
+  assert context::get(b) == None
+}

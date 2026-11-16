@@ -1,0 +1,5 @@
+now: 2023-11-14T22:13:20Z
+monotonic is the origin: True
+elapsed: 0s, until three seconds later: 3s
+a spawned fiber: 2023-11-14T22:13:20Z, elapsed 0s; its child: 2023-11-14T22:13:20Z
+the system clock after provide: True

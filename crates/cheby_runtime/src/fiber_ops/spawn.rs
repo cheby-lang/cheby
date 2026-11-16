@@ -10,11 +10,11 @@
 //!
 //! `sys_spawn(owner, f)`, in order:
 //!
-//! 1. allocates the `Fiber` handle and its join cell, and marks `f` shared,
-//!    outside every lock (D-705), so that running out of memory raises
-//!    before a member slot is reserved (D-642; review finding MEM-1: a
-//!    raise after the reservation left the scope waiting for a fiber that
-//!    never existed);
+//! 1. allocates the `Fiber` handle and its join cell, and marks the
+//!    spawner's context bindings and `f` shared, outside every lock
+//!    (D-705, D-1571), so that running out of memory raises before a member
+//!    slot is reserved (D-642; review finding MEM-1: a raise after the
+//!    reservation left the scope waiting for a fiber that never existed);
 //! 2. joins the scope `owner` under its lock: a scope that has ended makes
 //!    the spawn panic with `spawn into a scope that has ended` (D-666,
 //!    D-732); otherwise a member slot is reserved, so the scope waits for
@@ -24,9 +24,10 @@
 //! 5. creates the fiber on a slot of the requested size (D-125, D-659,
 //!    D-677), by default the runtime's fiber stack (8 MiB unless
 //!    `[runtime] fiber-stack` sets it, D-660),
-//!    inheriting the spawner's domain, trampolines, hash seed, entry mode
-//!    and unwind-edge setting (D-742); a stack region that cannot be
-//!    mapped gives the slot back and panics with `out of memory` (D-677);
+//!    inheriting the spawner's domain, trampolines, hash seed, entry mode,
+//!    unwind-edge setting (D-742) and context bindings (D-1044); a stack
+//!    region that cannot be mapped gives the slot back and panics with
+//!    `out of memory` (D-677);
 //!
 //! Every raise here happens with no lock held (plan §0 'Locks'): `join`
 //! and `leave` release the scope's lock before they return, and a raise
@@ -53,6 +54,7 @@ use super::scope::{Membership, state_of};
 use super::{Owned, cancel, needs_scheduler, running};
 use crate::abi::{PanicKind, Word};
 use crate::alloc::OUT_OF_MEMORY;
+use crate::context;
 use crate::ctx::ExecCtx;
 use crate::fiber::stack::{MAX_STACK, clamp_user_size};
 use crate::handles::{self, HandleKind};
@@ -138,9 +140,11 @@ unsafe fn spawn(
             Box::new(FiberHandle(Arc::clone(&cell))),
         ))
     };
+    // The context the fiber inherits (I-E), then the function. If a walk
+    // raises, what it marked stays shared together with all it reaches.
+    context::share_bindings(me);
     // SAFETY: a live closure, borrowed; every object it reaches with a
-    // positive count is confined to this fiber (I-1). If the walk raises,
-    // what it marked stays shared together with all it reaches.
+    // positive count is confined to this fiber (I-1).
     unsafe { rc::mark_shared(function) };
     // 2. Join the scope.
     let slot = match scope.join() {

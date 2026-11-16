@@ -1,0 +1,58 @@
+//! Runtime benchmark of the fiber group: opening and closing scopes.
+//!
+//! Each step opens a scope that spawns nothing, and its body returns the
+//! step's index, so the step measures a scope's open and close alone.
+//! The number of scopes is the first program argument, and `main` prints
+//! the sum of the bodies' values, which depends on that number only.
+
+import std::env
+import std::fiber
+import std::int
+import std::io
+
+/// The number of scopes when no argument is given.
+const default_size: Int = 10_000_000
+
+/// Keeps the checksum small.
+const modulus: Int = 1_000_000_007
+
+fn main() {
+  let n = size(env::args())
+  let checksum = open_close(n)
+  io::println("size: {n}")
+  io::println("checksum: {checksum}")
+}
+
+/// The size from the first program argument, or `default_size`.
+fn size(args: List<String>) -> Int {
+  case args {
+    [] => default_size
+    [first, ..] => {
+      let assert Ok(n) = int::parse(first)
+      n
+    }
+  }
+}
+
+/// Opens `count` scopes one after another, the scope of step `i`
+/// returning `i`, and returns the sum of their values modulo `modulus`.
+fn open_close(count: Int) -> Int {
+  fn step(i, total) {
+    case {
+      i == count => total
+      _ => {
+        let assert Ok(value) = fiber::scope(fn(_) { i })
+        step(i + 1, (total + value) % modulus)
+      }
+    }
+  }
+  step(0, 0)
+}
+
+test "the scopes' values add up" {
+  assert open_close(5) == 0 + 1 + 2 + 3 + 4
+}
+
+test "no scope sums to zero" {
+  assert open_close(0) == 0
+}

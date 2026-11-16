@@ -1,0 +1,176 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find value `ke` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 7
+        },
+        "start": {
+          "character": 20,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `ke` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 10
+        },
+        "start": {
+          "character": 20,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `ke` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 35,
+          "line": 13
+        },
+        "start": {
+          "character": 33,
+          "line": 13
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "message": "unused binding `d`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_d`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 17
+        },
+        "start": {
+          "character": 6,
+          "line": 17
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "cannot find value `ke` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 17
+        },
+        "start": {
+          "character": 10,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:23 completion key
+{
+  "count": 98,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn key<T>(default: T) -> Key<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose `get` gives `default` when no value is provided.\nIt must be the whole initializer of a `const`, and every other mention\nof it in an expression is E0080 (D-1045, D-1565, D-1581). The attribute\n`@std_initializer(key_at)` says so to the compiler, which replaces that\none call with a call of `key_at` that also passes the constant's path\nand the text of its value type (D-1572, D-1599). `key` never counts\ntoward satisfying an interface (D-1593). So no program reaches this\nbody, and it panics if a fault of the compiler ever lets one reach it\n(D-1598)."
+      },
+      "insertTextFormat": 2,
+      "kind": 3,
+      "label": "key",
+      "labelDetails": {
+        "description": "context",
+        "detail": "(default)"
+      },
+      "sortText": "00key",
+      "textEdit": {
+        "newText": "key(${1:default})$0",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 7
+          },
+          "start": {
+            "character": 20,
+            "line": 7
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:11:23 completion key
+{
+  "count": 98,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "pub fn key<T>(default: T) -> Key<T>",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns a key whose `get` gives `default` when no value is provided.\nIt must be the whole initializer of a `const`, and every other mention\nof it in an expression is E0080 (D-1045, D-1565, D-1581). The attribute\n`@std_initializer(key_at)` says so to the compiler, which replaces that\none call with a call of `key_at` that also passes the constant's path\nand the text of its value type (D-1572, D-1599). `key` never counts\ntoward satisfying an interface (D-1593). So no program reaches this\nbody, and it panics if a fault of the compiler ever lets one reach it\n(D-1598)."
+      },
+      "kind": 3,
+      "label": "key",
+      "labelDetails": {
+        "description": "context",
+        "detail": "(default)"
+      },
+      "sortText": "30key",
+      "textEdit": {
+        "newText": "key",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 10
+          },
+          "start": {
+            "character": 20,
+            "line": 10
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:14:36 completion key
+{
+  "absent": [
+    "key"
+  ],
+  "count": 95,
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:18:13 completion key
+{
+  "absent": [
+    "key"
+  ],
+  "count": 95,
+  "isIncomplete": false,
+  "items": []
+}

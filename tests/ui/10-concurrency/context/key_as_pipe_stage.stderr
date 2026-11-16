@@ -1,0 +1,18 @@
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_as_pipe_stage.cheby:10:6
+   |
+10 |   |> context::key
+   |      ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_as_pipe_stage.cheby:14:8
+   |
+14 |     |> context::key
+   |        ^^^^^^^^^^^^ this call is not the whole initializer of a constant
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+

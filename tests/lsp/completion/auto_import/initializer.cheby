@@ -1,0 +1,13 @@
+// @decisions: D-1599
+//! A function with `@std_initializer` of a module the file does not import
+//! is offered with its import only where the completed call is a
+//! constant's whole initializer: `context::key_without_default` here, and
+//! not in a function body.
+
+const a: Int = key_with
+//                     ^ completion context::key_without_default
+
+fn main() {
+  let b = key_with
+  //              ^ completion context::key_without_default
+}

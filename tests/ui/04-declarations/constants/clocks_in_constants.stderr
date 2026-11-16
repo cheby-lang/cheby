@@ -1,0 +1,18 @@
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/04-declarations/constants/clocks_in_constants.cheby:26:29
+   |
+26 | const systems_equal: Bool = time::system_clock() == time::system_clock()
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/04-declarations/constants/clocks_in_constants.cheby:28:27
+   |
+28 | const fixed_equal: Bool = time::fixed_clock(launch) == time::fixed_clock(launch)
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+

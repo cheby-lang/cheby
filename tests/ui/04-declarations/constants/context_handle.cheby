@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-1566, D-1568, D-139
+//! A captured context is a handle, so no constant may hold one, not even
+//! the empty context, and not even inside another type: `context::empty`
+//! is a function for this reason (§4.5).
+
+import std::context
+
+pub const nothing: context::Context = context::empty()
+
+pub const maybe: Option<context::Context> = None

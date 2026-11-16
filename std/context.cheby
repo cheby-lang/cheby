@@ -1,0 +1,401 @@
+//! Values that a program provides for the duration of a callback, and that
+//! the code running meanwhile reads without being passed them (D-1044,
+//! ADR-0068).
+//!
+//! A `Key<T>` names one value and holds its default. It is made only by
+//! the call of `key` or `key_without_default` that is a constant's whole
+//! initializer, which the compiler replaces with a call of `key_at` or
+//! `key_without_default_at` that also passes the constant's path and the
+//! text of its value type (D-1045, D-1565, D-1572, D-1587). The two
+//! functions name their constructors with `@std_initializer`, which is
+//! where the compiler learns all of this (D-1599). A key's
+//! identity is the pair of texts with their FNV-1a hash, computed here in
+//! Cheby, so a key is built in a constant on every target (D-1590).
+//!
+//! A fiber's context is a persistent map in the runtime, from a key's
+//! identity to its value (D-1571). `provide` and `get` are Cheby over
+//! private `@std_context` kernels that bind a value on top of the fiber's
+//! map, put the outer map back, and read a binding. When the body of
+//! `provide` unwinds, the scope that catches the failure puts the context
+//! back instead, so no Cheby code ever sees a stale context (D-1573).
+//!
+//! A `Context` is a fiber's whole context as a value, which `capture` takes
+//! and `with` runs a body under (D-1566). It is a runtime object that holds
+//! the fiber's map and, under a seeded random stream, the state a fiber
+//! spawned at the capture would start from (D-1567, D-1574). `with` is
+//! Cheby over two kernels that swap the map and the stream in and back,
+//! as `provide` is. Each kernel also declares its JS binding, written with
+//! the JS back end (D-986, D-1563).
+
+import std::bytes
+import std::fiber
+import std::map
+import std::random
+import std::set
+import std::u64
+
+// Types
+
+/// A key that names one value of type `T` in a fiber's context, and the
+/// value `get` gives when none is provided (D-1044, D-1572). It is opaque
+/// and plain data. Its identity is the hash, the constant's path and the
+/// text of its value type, so two constants are two keys even when their
+/// defaults are equal. Equality, hashing and debug printing go through
+/// `equal`, `hash` and `debug`, which read the identity only: the debug
+/// text is `Key(<path>)` (D-342, D-1564).
+@std_hooks(equal, hash, debug)
+pub type Key<T> {
+  identity: (U64, String, String),
+  default: T,
+}
+
+/// A fiber's whole context as a value: every binding it had at the
+/// `capture` that took it (D-1566). It prints as `<Context>`, and `==`
+/// and hashing panic when they reach one (D-233, D-647). No constant may
+/// hold one (D-139, D-1568).
+pub type Context
+
+/// The outer bindings of a fiber that `provide` puts back when its body
+/// returns: the runtime's map root, or its static empty map, never a
+/// handle object (D-1584). It is listed with std's handle types, so no
+/// module record lists it (D-1168).
+type Bindings
+
+/// Whether two keys are the same key: their identities are equal, which
+/// compares the hash, then the path, then the type text (D-1572).
+fn equal<T>(a: Key<T>, b: Key<T>) -> Bool {
+  a.identity == b.identity
+}
+
+/// What two equal keys share, which the runtime hashes: the identity
+/// (D-1572).
+fn hash<T>(what: Key<T>) -> (U64, String, String) {
+  what.identity
+}
+
+/// The debug text of a key, `Key(<path>)`, as in
+/// `Key(my_app::db::pool)` (D-1564, D-1580).
+fn debug<T>(what: Key<T>) -> String {
+  let (_, path, _) = what.identity
+  "Key({path})"
+}
+
+// Keys
+
+/// FNV-1a's 64-bit offset basis, the hash of no bytes (D-1590).
+const fnv_offset: U64 = 0xCBF2_9CE4_8422_2325
+
+/// FNV-1a's 64-bit prime (D-1590).
+const fnv_prime: U64 = 0x0000_0100_0000_01B3
+
+/// One step of FNV-1a: `byte` is mixed into `state` (D-1590).
+fn fnv_step(state: U64, byte: U8) -> U64 {
+  u64::wrapping_mul(state ^ u64::from_u8(byte), fnv_prime)
+}
+
+/// The 64-bit hash of a key's identity: FNV-1a over the bytes of `path`,
+/// one byte `0xFF`, and the bytes of `type_text`. It reaches only
+/// kernels that constant evaluation runs, so a key is built in a
+/// constant (D-537, D-1590).
+fn identity_hash(path: String, type_text: String) -> U64 {
+  let over_path = bytes::fold(bytes::from_string(path), fnv_offset, fnv_step)
+  bytes::fold(bytes::from_string(type_text), fnv_step(over_path, 0xFF), fnv_step)
+}
+
+test "the identity hash is FNV-1a over both texts" {
+  assert identity_hash("", "") == 0xAF64_724C_8602_EB6E
+  assert identity_hash("a", "b") == 0xE57D_A319_03DE_37B1
+  assert identity_hash("std::context::greeting", "String") == 0xA2ED_F6ED_8410_9802
+  assert identity_hash("std::context::port", "Option<Int>") == 0x0A3D_08D3_66EC_11C7
+}
+
+/// The key that the compiler builds for a constant `const k: Key<T> =
+/// key(default)`: `path` is the constant's path and `type_text` the text
+/// of `T`, which the compiler passes (D-1572, D-1580). It is
+/// package-visible, not `priv`, so that a package's constant can call it
+/// through the compiler's rewrite on a warm build (D-1587).
+fn key_at<T>(default: T, path: String, type_text: String) -> Key<T> {
+  Key { identity: (identity_hash(path, type_text), path, type_text), default: default }
+}
+
+/// The key that the compiler builds for a constant `const k:
+/// Key<Option<T>> = key_without_default()`, whose default is `None`
+/// (D-1572, D-1587).
+fn key_without_default_at<T>(path: String, type_text: String) -> Key<Option<T>> {
+  key_at(None, path, type_text)
+}
+
+/// Returns a key whose `get` gives `default` when no value is provided.
+/// It must be the whole initializer of a `const`, and every other mention
+/// of it in an expression is E0080 (D-1045, D-1565, D-1581). The attribute
+/// `@std_initializer(key_at)` says so to the compiler, which replaces that
+/// one call with a call of `key_at` that also passes the constant's path
+/// and the text of its value type (D-1572, D-1599). `key` never counts
+/// toward satisfying an interface (D-1593). So no program reaches this
+/// body, and it panics if a fault of the compiler ever lets one reach it
+/// (D-1598).
+@std_initializer(key_at)
+pub fn key<T>(default: T) -> Key<T> {
+  let _ = default
+  panic as "the compiler did not replace this call of `context::key` (D-1598)"
+}
+
+/// Returns a key whose default is `None`, for a dependency that has no
+/// sensible default. It must be the whole initializer of a `const`, as
+/// `key` must (D-1045, D-1565). Through `@std_initializer`, the compiler
+/// replaces that one call with a call of `key_without_default_at` (D-1599).
+/// So no program reaches this body, which panics as `key`'s does (D-1598).
+@std_initializer(key_without_default_at)
+pub fn key_without_default<T>() -> Key<Option<T>> {
+  panic as "the compiler did not replace this call of `context::key_without_default` (D-1598)"
+}
+
+/// A key of the tests below, built through the compiler's rewrite
+/// (D-1572, D-1599).
+const greeting: Key<String> = key("hello")
+
+/// A key without a default of the tests below (D-1572, D-1599).
+const port: Key<Option<Int>> = key_without_default()
+
+test "a key's debug text is its constant's path" {
+  assert "{greeting:?}" == "Key(std::context::greeting)"
+  assert "{port:?}" == "Key(std::context::port)"
+}
+
+test "a key is a map key and a set element" {
+  let twin = key_at("hello", "std::context::greeting", "String")
+  let other = key_at("hello", "std::context::other", "String")
+  let redefined = key_at("bye", "std::context::greeting", "String")
+  assert twin == greeting
+  assert other != greeting
+  assert redefined == greeting
+  assert set::size(set::from_list([greeting, twin])) == 1
+  assert set::size(set::from_list([greeting, other])) == 2
+  assert set::size(set::from_list([greeting, redefined])) == 1
+  let found = map::from_list([(greeting, 1), (other, 2)])
+  assert map::get(found, twin) == Some(1)
+  assert map::get(found, other) == Some(2)
+  assert map::get(found, redefined) == Some(1)
+  assert "{greeting:?}" == "Key(std::context::greeting)"
+}
+
+// Reading and providing
+
+/// The value bound to the key whose identity is `identity` in the calling
+/// fiber's context, or `default` (D-1571).
+@std_context
+@external(native, "cheby_context_sys_get")
+@external(js, "./context.mjs", "sys_get")
+fn sys_get<T>(identity: (U64, String, String), default: T) -> T
+
+/// Binds the key whose identity is `identity` to `value` on top of the
+/// calling fiber's context, never changing the outer map, and returns the
+/// outer bindings (D-1571, D-1584).
+@std_context
+@external(native, "cheby_context_sys_bind")
+@external(js, "./context.mjs", "sys_bind")
+fn sys_bind<T>(identity: (U64, String, String), value: T) -> Bindings
+
+/// Makes `outer`, which `sys_bind` returned, the calling fiber's context
+/// again (D-1573).
+@std_context
+@external(native, "cheby_context_sys_restore")
+@external(js, "./context.mjs", "sys_restore")
+fn sys_restore(outer: Bindings)
+
+/// Returns the innermost value that the calling fiber has for the key
+/// `what`, or its default when it has none (D-1044). The parameter is
+/// `what` because `key` names the function that makes keys (D-062,
+/// D-1579).
+pub fn get<T>(what: Key<T>) -> T {
+  sys_get(what.identity, what.default)
+}
+
+test "get gives the default when nothing is provided" {
+  assert get(greeting) == "hello"
+}
+
+test "a key without a default gives None until a value is provided" {
+  assert get(port) == None
+  use <- provide(port, Some(8080))
+  assert get(port) == Some(8080)
+}
+
+/// Calls `body` on the calling fiber with the key `what` bound to
+/// `value`, and returns what `body` returns. Every fiber spawned while
+/// `body` runs inherits the binding (D-1044). When `body` returns, the
+/// outer bindings are put back here; when it unwinds, the scope that
+/// catches the failure puts back the context it was opened with, so
+/// `provide` needs no scope and no intrinsic of its own, and allocates
+/// nothing but the new map (D-1573, D-1584).
+pub fn provide<T, R>(what: Key<T>, value: T, body: fn() -> R) -> R {
+  let outer = sys_bind(what.identity, value)
+  let result = body()
+  sys_restore(outer)
+  result
+}
+
+test "provide binds a value while its body runs" {
+  let inside = provide(greeting, "hi", fn() { get(greeting) })
+  assert inside == "hi"
+  assert get(greeting) == "hello"
+}
+
+test "the innermost value wins" {
+  use <- provide(greeting, "outer")
+  let inner = provide(greeting, "inner", fn() { get(greeting) })
+  assert inner == "inner"
+  assert get(greeting) == "outer"
+}
+
+test "a spawned fiber inherits the context" {
+  use <- provide(greeting, "hi")
+  let outcome = {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { get(greeting) }))
+  }
+  assert outcome == Ok("hi")
+}
+
+test "a caught panic restores the context" {
+  let outcome = {
+    use _ <- fiber::scope()
+    provide(greeting, "inside", fn() { panic as "boom" })
+  }
+  let assert Err(failure) = outcome
+  assert fiber::message(failure) == "boom"
+  assert get(greeting) == "hello"
+}
+
+// Captured contexts
+
+/// Returns the calling fiber's whole context as a value (D-1566). Under a
+/// seeded random stream it counts as a spawn: it holds the state a fiber
+/// spawned here would start from, and the caller's stream is left alone
+/// (D-1567).
+@std_context
+@external(native, "cheby_context_sys_capture")
+@external(js, "./context.mjs", "sys_capture")
+fn sys_capture() -> Context
+
+/// Puts `captured` in place of the calling fiber's context, its stream
+/// included, and returns the outer bindings (D-1566, D-1567). The outer
+/// stream stays in the fiber, so a scope that catches a failure of the
+/// body puts it back (D-1573).
+@std_context
+@external(native, "cheby_context_sys_enter")
+@external(js, "./context.mjs", "sys_enter")
+fn sys_enter(captured: Context) -> Bindings
+
+/// Makes `outer`, which `sys_enter` returned, the calling fiber's context
+/// again, and its stream the one it had (D-1573).
+@std_context
+@external(native, "cheby_context_sys_leave")
+@external(js, "./context.mjs", "sys_leave")
+fn sys_leave(outer: Bindings)
+
+/// Returns the context in which every key has its default and no seeded
+/// stream is set (D-1568).
+@std_context
+@external(native, "cheby_context_sys_empty")
+@external(js, "./context.mjs", "sys_empty")
+fn sys_empty() -> Context
+
+/// Returns the calling fiber's whole context as a value: every binding the
+/// fiber has at the call. Later calls of `provide` do not change it. While
+/// a seeded random stream is in context, it counts as a spawn (D-1566,
+/// D-1567).
+pub fn capture() -> Context {
+  sys_capture()
+}
+
+/// Calls `body` on the calling fiber with `captured` in place of the
+/// fiber's context, and returns what `body` returns. The caller's own
+/// bindings are not visible inside `body`, `provide` binds on top of
+/// `captured`, and a fiber spawned meanwhile inherits what `body` has
+/// then. When `body` returns, the outer context is put back here; when it
+/// unwinds, the scope that catches the failure puts it back (D-1566,
+/// D-1567, D-1573).
+pub fn with<R>(captured: Context, body: fn() -> R) -> R {
+  let outer = sys_enter(captured)
+  let result = body()
+  sys_leave(outer)
+  result
+}
+
+test "with runs a body under a captured context" {
+  let captured = provide(greeting, "hi", fn() { capture() })
+  assert get(greeting) == "hello"
+  let inside = with(captured, fn() { get(greeting) })
+  assert inside == "hi"
+  assert get(greeting) == "hello"
+}
+
+test "with hides the caller's own bindings" {
+  let captured = capture()
+  use <- provide(greeting, "outer")
+  let inside = with(captured, fn() { get(greeting) })
+  assert inside == "hello"
+  assert get(greeting) == "outer"
+}
+
+test "provide binds on top of a captured context" {
+  let captured = provide(greeting, "hi", fn() { capture() })
+  use <- with(captured)
+  assert get(greeting) == "hi"
+  let inner = provide(greeting, "inner", fn() { get(greeting) })
+  assert inner == "inner"
+}
+
+test "a fiber spawned under with inherits the captured context" {
+  let captured = provide(greeting, "hi", fn() { capture() })
+  let outcome = {
+    use <- with(captured)
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { get(greeting) }))
+  }
+  assert outcome == Ok("hi")
+}
+
+test "two bodies under one captured context draw the same numbers" {
+  use <- random::with_generator(random::from_seed(7))
+  let captured = capture()
+  let first = with(captured, fn() { random::fraction() })
+  let again = with(captured, fn() { random::fraction() })
+  assert first == again
+}
+
+/// Returns the context in which every key has its default and no seeded
+/// stream is set, the context of `main` when it starts. It is a function,
+/// not a constant, because a constant may not hold a handle (D-1568).
+pub fn empty() -> Context {
+  sys_empty()
+}
+
+test "the empty context has every default" {
+  use <- provide(greeting, "hi")
+  let inside = with(empty(), fn() { get(greeting) })
+  assert inside == "hello"
+}
+
+// Tests of `std::random` that need this module.
+
+test "a capture derives its stream as a spawn does" {
+  let spawned = random::with_generator(random::from_seed(42), fn() {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { random::fraction() }))
+  })
+  let captured = random::with_generator(random::from_seed(42), fn() {
+    with(capture(), fn() { random::fraction() })
+  })
+  assert spawned == Ok(captured)
+}
+
+test "a capture leaves the stream alone" {
+  let alone = random::with_generator(random::from_seed(42), fn() { random::fraction() })
+  let after_capture = random::with_generator(random::from_seed(42), fn() {
+    let _ = capture()
+    random::fraction()
+  })
+  assert alone == after_capture
+}
