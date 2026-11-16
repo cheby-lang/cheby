@@ -1,0 +1,53 @@
+// @mode: run-pass
+// @decisions: D-1047, D-1570
+//! The clocks of `std::time` are plain Cheby, so a constant is computed
+//! with them at compile time: `now_on` and `monotonic_on` of a fixed or a
+//! custom clock, and a comparison of clocks. A clock itself cannot be a
+//! constant's value, since its type holds functions, but it can be built
+//! while a constant is computed, and each constant prints as the same
+//! call does when the program runs (§4.5).
+
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+const launch: time::Timestamp = time::from_unix(duration::seconds(1_700_000_000))
+
+const fixed_now: time::Timestamp = time::now_on(time::fixed_clock(launch))
+
+const fixed_monotonic: instant::Instant = time::monotonic_on(time::fixed_clock(launch))
+
+const custom_now: time::Timestamp = time::now_on(time::custom_clock(at_launch, eight_seconds))
+
+const custom_monotonic: instant::Instant =
+  time::monotonic_on(time::custom_clock(at_launch, eight_seconds))
+
+const systems_equal: Bool = time::system_clock() == time::system_clock()
+
+const fixed_equal: Bool = time::fixed_clock(launch) == time::fixed_clock(launch)
+
+/// The wall clock of the custom clock.
+fn at_launch() -> time::Timestamp {
+  launch
+}
+
+/// The monotonic clock of the custom clock.
+fn eight_seconds() -> instant::Instant {
+  instant::from_origin(duration::seconds(8))
+}
+
+fn main() {
+  io::println("{fixed_now}")
+  io::println("{fixed_monotonic:?}")
+  io::println("{custom_now}")
+  io::println("{custom_monotonic:?}")
+  io::println("{systems_equal} {fixed_equal}")
+  let stamp = time::from_unix(duration::seconds(1_700_000_000))
+  let eight = eight_seconds()
+  let same = fixed_now == time::now_on(time::fixed_clock(stamp))
+    && fixed_monotonic == time::monotonic_on(time::fixed_clock(stamp))
+    && custom_now == time::now_on(time::custom_clock(fn() { stamp }, fn() { eight }))
+    && custom_monotonic == time::monotonic_on(time::custom_clock(fn() { stamp }, fn() { eight }))
+  io::println("the same at run time: {same}")
+}

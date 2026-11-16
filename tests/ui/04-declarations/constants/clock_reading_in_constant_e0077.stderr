@@ -1,0 +1,16 @@
+error[E0077]: evaluating the constant `wall` reached an effect
+  --> tests/ui/04-declarations/constants/clock_reading_in_constant_e0077.cheby:14:7
+   |
+14 | const wall: time::Timestamp = time::now_on(time::system_clock())
+   |       ^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_now`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `steady` reached an effect
+  --> tests/ui/04-declarations/constants/clock_reading_in_constant_e0077.cheby:16:7
+   |
+16 | const steady: instant::Instant = time::monotonic_on(time::system_clock())
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_time_sys_monotonic`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

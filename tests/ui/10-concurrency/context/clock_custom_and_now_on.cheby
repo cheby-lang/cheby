@@ -1,0 +1,64 @@
+// @mode: run-pass
+// @decisions: D-1047, D-1570
+//! A custom clock in context has its functions called by `now`,
+//! `monotonic`, `elapsed` and `until`, and they may read another clock
+//! with `now_on` and `monotonic_on`. `now_on` and `monotonic_on` read the
+//! clock they are given, whatever clock is in context, and call no
+//! function of a clock that is only in context (§10.11).
+
+import std::context
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+fn read_now() -> time::Timestamp {
+  io::println("  read_now called")
+  time::from_unix(duration::seconds(86_400))
+}
+
+fn read_monotonic() -> instant::Instant {
+  io::println("  read_monotonic called")
+  instant::from_origin(duration::seconds(8))
+}
+
+/// A clock a day ahead of the system's, built on the system clock with
+/// `now_on` and `monotonic_on`.
+fn tomorrow() -> time::Clock {
+  time::custom_clock(
+    fn() { time::add(time::now_on(time::system_clock()), duration::hours(24)) },
+    fn() { instant::add(time::monotonic_on(time::system_clock()), duration::hours(24)) },
+  )
+}
+
+fn main() {
+  let fake = time::custom_clock(read_now, read_monotonic)
+  let launch = time::from_unix(duration::seconds(1_700_000_000))
+  io::println("under the custom clock:")
+  context::provide(time::clock, fake, fn() {
+    let stamp = time::now()
+    io::println("now: {stamp}")
+    let reading = time::monotonic()
+    io::println("monotonic: {reading:?}")
+    let measured = time::elapsed(instant::from_origin(duration::seconds(5)))
+    io::println("elapsed since 5 s: {measured}")
+    let left = time::until(instant::from_origin(duration::seconds(10)))
+    io::println("until 10 s: {left}")
+    let fixed_stamp = time::now_on(time::fixed_clock(launch))
+    let fixed_reading = time::monotonic_on(time::fixed_clock(launch))
+    io::println("now_on a fixed clock: {fixed_stamp}, monotonic_on it: {fixed_reading:?}")
+    let system_close = time::now_on(time::system_clock()) > launch
+    io::println("now_on the system clock is after the launch: {system_close}")
+  })
+  io::println("with no clock provided:")
+  let given = time::now_on(fake)
+  io::println("now_on the custom clock: {given}")
+  let given_reading = time::monotonic_on(fake)
+  io::println("monotonic_on it: {given_reading:?}")
+  let ahead = context::provide(time::clock, tomorrow(), fn() {
+    let wall = time::now_on(time::system_clock()) < time::now()
+    let steady = time::monotonic_on(time::system_clock()) < time::monotonic()
+    wall && steady
+  })
+  io::println("a clock built on the system clock is ahead of it: {ahead}")
+}

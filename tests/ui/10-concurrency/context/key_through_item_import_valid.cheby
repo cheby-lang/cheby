@@ -1,0 +1,27 @@
+// @mode: check-pass
+// @decisions: D-1565, D-1581
+//! An import is not a mention, so `import std::context::{key}` is valid,
+//! and so is a bare `key(1)` as a constant's whole initializer. Parentheses
+//! around the call and explicit type arguments keep it the whole
+//! initializer (§10.11).
+
+import std::context
+import std::context::{key, key_without_default}
+
+const port: context::Key<Int> = key(8080)
+
+const name: context::Key<Option<String>> = key_without_default()
+
+const wrapped: context::Key<Int> = (context::key(1))
+
+const typed: context::Key<Int> = context::key::<Int>(2)
+
+const typed_without_default: context::Key<Option<Int>> = key_without_default::<Int>()
+
+fn main() {
+  assert context::get(port) == 8080
+  assert context::get(name) == None
+  assert context::get(wrapped) == 1
+  assert context::get(typed) == 2
+  assert context::get(typed_without_default) == None
+}

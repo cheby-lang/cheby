@@ -1,0 +1,45 @@
+// @mode: run-pass
+// @decisions: D-1045, D-1564, D-1572
+//! A key is its constant, not its default: two constants with equal
+//! defaults are two keys, which are not `==`, are two elements of a set
+//! and two entries of a map, and do not share a provided value. A key's
+//! debug text is `Key(<path>)`. A key without a default reads `None` until
+//! a value is provided as `Some(v)`. A key declared through a type alias
+//! is an ordinary key (§10.11).
+
+import std::context
+import std::io
+import std::map
+import std::set
+
+const first: context::Key<Int> = context::key(1)
+
+const second: context::Key<Int> = context::key(1)
+
+const pool: context::Key<Option<String>> = context::key_without_default()
+
+type PortKey = context::Key<Int>
+
+const port: PortKey = context::key(8080)
+
+fn main() {
+  let equal = first == second
+  let not_equal = first != second
+  io::println("equal: {equal}, not equal: {not_equal}")
+  io::println("debug: {first:?} {second:?} {pool:?} {port:?}")
+  let elements = set::size(set::from_list([first, second, first]))
+  io::println("elements of a set: {elements}")
+  let names = map::from_list([(first, "first"), (second, "second")])
+  let entries = map::size(names)
+  let by_key = map::get(names, second)
+  io::println("entries of a map: {entries}, by key: {by_key:?}")
+  let other = context::provide(first, 5, fn() { context::get(second) })
+  let own = context::provide(first, 5, fn() { context::get(first) })
+  io::println("under first = 5: first {own}, second {other}")
+  let missing = context::get(pool)
+  let provided = context::provide(pool, Some("db"), fn() { context::get(pool) })
+  io::println("without a default: {missing:?}, provided: {provided:?}")
+  let default_port = context::get(port)
+  let provided_port = context::provide(port, 9090, fn() { context::get(port) })
+  io::println("through an alias type: {default_port} {provided_port}")
+}

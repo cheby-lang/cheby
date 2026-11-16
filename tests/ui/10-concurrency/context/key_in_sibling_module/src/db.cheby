@@ -1,0 +1,11 @@
+//! Holds the key of a database pool, which other modules read and provide.
+
+import std::context
+
+/// The name of the pool in use, `"none"` until one is provided.
+pub const pool: context::Key<String> = context::key("none")
+
+/// The pool that the calling fiber's context holds.
+pub fn current() -> String {
+  context::get(pool)
+}

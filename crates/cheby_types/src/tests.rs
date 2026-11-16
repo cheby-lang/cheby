@@ -1929,6 +1929,7 @@ fn tolerant(text: &str) -> (Vec<String>, Vec<String>) {
         resolved: &resolved,
         deps: DepView::new(&set, &[]),
         modules: &modules,
+        real_modules: &modules,
         globals: &globals,
     };
     let (iface, more) =

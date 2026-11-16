@@ -1,0 +1,51 @@
+// @mode: run-fail
+// @command: test
+// @exit: 1
+// @decisions: D-1044, D-1573, D-723
+//! Each test starts with an empty context, whatever the tests before it
+//! did on the same thread: one panics inside `provide`, so the run fails,
+//! another leaves a detached fiber waiting under `provide`, and the tests
+//! after them read the defaults (§10.11, §13.6).
+
+import std::channel
+import std::context
+import std::fiber
+import std::list
+
+const greeting: context::Key<String> = context::key("hello")
+
+const numbers: context::Key<List<Int>> = context::key([])
+
+/// Reports that it is running, then waits on a channel that never gets a
+/// value, until its test ends.
+fn hold(ready: channel::Sender<String>) -> Result<Int, Nil> {
+  let (keep, never) = channel::new::<Int>(1)
+  let assert Ok(Nil) = channel::send(ready, context::get(greeting))
+  let got = channel::receive(never)
+  let _ = channel::send(keep, 0)
+  got
+}
+
+test "panics inside provide" {
+  use <- context::provide(greeting, "first")
+  use <- context::provide(numbers, list::range(0, 10))
+  assert context::get(greeting) == "first"
+  panic as "the first test gives up"
+}
+
+test "leaves a detached fiber under provide" {
+  use <- context::provide(greeting, "second")
+  let (ready_tx, ready_rx) = channel::new::<String>(1)
+  fiber::spawn_detached(fn() { hold(ready_tx) })
+  assert channel::receive(ready_rx) == Ok("second")
+}
+
+test "reads the defaults" {
+  assert context::get(greeting) == "hello"
+  assert context::get(numbers) == []
+}
+
+test "reads the defaults again" {
+  assert context::get(greeting) == "hello"
+  assert context::get(numbers) == []
+}

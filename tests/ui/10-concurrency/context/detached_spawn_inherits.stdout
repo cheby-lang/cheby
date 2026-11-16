@@ -1,0 +1,3 @@
+the spawner after provide: hello
+the detached fiber: Ok("first")
+the spawner: second

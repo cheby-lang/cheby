@@ -1,0 +1,43 @@
+// @decisions: D-1564, D-1572, D-1580, D-625
+> import app::db
+> import std::context
+> import std::io
+> let old_pool = db::pool
+> let old_item = db::item
+> let old_value = db::Item(7)
+> context::provide(old_pool, 5, fn() { context::get(db::pool) })
+5 : Int
+> io::write_file("src/db.cheby", r#"//! Keys of a database, with a larger pool.
+. import std::context
+. /// An item of the database.
+. pub type Item {
+.   Item(Int),
+. }
+. /// The size of the pool.
+. pub const pool: context::Key<Int> = context::key(2)
+. /// The item in use, whose value type is declared in this module.
+. pub const item: context::Key<Item> = context::key(Item(1))
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `app::db`
+> db::pool
+Key(app::db::pool) : context::Key<Int>
+> old_pool == db::pool
+True : Bool
+> context::get(db::pool)
+2 : Int
+> context::provide(old_pool, 5, fn() { context::get(db::pool) })
+5 : Int
+> db::item
+Key(app::db::item) : context::Key<db::Item>
+> old_item
+Key(app::db::item) : context::Key<db::Item (stale)>
+> context::get(db::item)
+Item(1) : db::Item
+> context::provide(old_item, old_value, fn() { context::get(db::item) })
+Item(1) : db::Item
+> context::provide(db::item, db::Item(8), fn() { context::get(old_item) })
+Item(0) : db::Item (stale)
+> context::provide(db::item, db::Item(8), fn() { context::get(db::item) })
+Item(8) : db::Item

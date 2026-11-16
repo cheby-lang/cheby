@@ -1,0 +1,175 @@
+// @mode: run-pass
+// @decisions: D-1571
+//! Thirty-four keys provided in nested calls, more than one node of the
+//! map holds, are each read back with the value provided for it. A key
+//! bound again reads the inner value and then the outer one, and the
+//! others keep theirs. Keys that are not provided keep their defaults
+//! (§10.11).
+
+import std::context
+import std::int
+import std::io
+import std::list
+import std::string
+
+const k01: context::Key<Int> = context::key(0)
+
+const k02: context::Key<Int> = context::key(0)
+
+const k03: context::Key<Int> = context::key(0)
+
+const k04: context::Key<Int> = context::key(0)
+
+const k05: context::Key<Int> = context::key(0)
+
+const k06: context::Key<Int> = context::key(0)
+
+const k07: context::Key<Int> = context::key(0)
+
+const k08: context::Key<Int> = context::key(0)
+
+const k09: context::Key<Int> = context::key(0)
+
+const k10: context::Key<Int> = context::key(0)
+
+const k11: context::Key<Int> = context::key(0)
+
+const k12: context::Key<Int> = context::key(0)
+
+const k13: context::Key<Int> = context::key(0)
+
+const k14: context::Key<Int> = context::key(0)
+
+const k15: context::Key<Int> = context::key(0)
+
+const k16: context::Key<Int> = context::key(0)
+
+const k17: context::Key<Int> = context::key(0)
+
+const k18: context::Key<Int> = context::key(0)
+
+const k19: context::Key<Int> = context::key(0)
+
+const k20: context::Key<Int> = context::key(0)
+
+const k21: context::Key<Int> = context::key(0)
+
+const k22: context::Key<Int> = context::key(0)
+
+const k23: context::Key<Int> = context::key(0)
+
+const k24: context::Key<Int> = context::key(0)
+
+const k25: context::Key<Int> = context::key(0)
+
+const k26: context::Key<Int> = context::key(0)
+
+const k27: context::Key<Int> = context::key(0)
+
+const k28: context::Key<Int> = context::key(0)
+
+const k29: context::Key<Int> = context::key(0)
+
+const k30: context::Key<Int> = context::key(0)
+
+const k31: context::Key<Int> = context::key(0)
+
+const k32: context::Key<Int> = context::key(0)
+
+const k33: context::Key<Int> = context::key(0)
+
+const k34: context::Key<Int> = context::key(0)
+
+const label: context::Key<String> = context::key("none")
+
+const unused: context::Key<Int> = context::key(-1)
+
+const keys: List<context::Key<Int>> = [
+  k01,
+  k02,
+  k03,
+  k04,
+  k05,
+  k06,
+  k07,
+  k08,
+  k09,
+  k10,
+  k11,
+  k12,
+  k13,
+  k14,
+  k15,
+  k16,
+  k17,
+  k18,
+  k19,
+  k20,
+  k21,
+  k22,
+  k23,
+  k24,
+  k25,
+  k26,
+  k27,
+  k28,
+  k29,
+  k30,
+  k31,
+  k32,
+  k33,
+  k34,
+]
+
+/// Provides each key of `rest` in turn, the first with `value` and each
+/// next one with one more, each call inside the one before, and calls
+/// `body` inside the last.
+fn provide_all<R>(rest: List<context::Key<Int>>, value: Int, body: fn() -> R) -> R {
+  case rest {
+    [] => body()
+    [what, ..others] => context::provide(what, value, fn() { provide_all(others, value + 1, body) })
+  }
+}
+
+/// The values of every key, as one text.
+fn read_all() -> String {
+  keys
+  |> list::map(_, context::get)
+  |> list::map(_, int::show)
+  |> string::join(_, " ")
+}
+
+/// Whether the keys read `first`, `first + 1` and so on, in order.
+fn reads_from(first: Int) -> Bool {
+  let expected = list::range(first, first + 34)
+  list::map(keys, context::get) == expected
+}
+
+fn main() {
+  let before = read_all()
+  io::println("before: {before}")
+  let inside = provide_all(keys, 100, fn() {
+    let all_read = reads_from(100)
+    let text = read_all()
+    let rebound = context::provide(k05, 5000, fn() {
+      let fifth = context::get(k05)
+      let in_range = list::filter(list::map(keys, context::get), fn(v) { v >= 100 && v < 134 })
+      let kept = list::length(in_range)
+      "{fifth}, {kept} others kept"
+    })
+    let fifth_after = context::get(k05)
+    let still_read = reads_from(100)
+    let labelled = context::provide(label, "many", fn() { context::get(label) })
+    let default_kept = context::get(unused)
+    let lines = [
+      "all read: {all_read}",
+      text,
+      "rebound: {rebound}, then {fifth_after}, all read again: {still_read}",
+      "another key: {labelled}, a key never provided: {default_kept}",
+    ]
+    string::join(lines, "\n")
+  })
+  io::println(inside)
+  let after = read_all()
+  io::println("after: {after}")
+}

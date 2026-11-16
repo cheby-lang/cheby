@@ -500,6 +500,7 @@ fn build_package_with(
             resolved: &resolved,
             deps: DepView::new(&set, &deps),
             modules: &modules,
+            real_modules: &modules,
             globals: &globals,
         };
         let (iface, d) = build_interface(&types).unwrap();

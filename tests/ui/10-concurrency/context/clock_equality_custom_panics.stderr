@@ -1,0 +1,11 @@
+warning[W0011]: `==` on a type that contains a function
+  --> tests/ui/10-concurrency/context/clock_equality_custom_panics.cheby:22:14
+   |
+22 |   let same = fake == fake
+   |              ^^^^^^^^^^^^ `time::Clock` contains a function type
+   |
+   = note: `==` and `!=` panic when they reach a function value at run time
+   = help: compare the parts that can be compared
+
+panicked at tests/ui/10-concurrency/context/clock_equality_custom_panics.cheby:22:14:
+equality or hashing reached a function value or a handle

@@ -1,0 +1,16 @@
+// @mode: check-fail
+// @decisions: D-1565
+//! A pipe into `context::key` is E0080, in a function body and also as a
+//! constant's whole initializer: the stage is not the call that is the
+//! whole initializer (§10.11).
+
+import std::context
+
+const piped: context::Key<Int> = 1
+  |> context::key
+
+fn main() {
+  let k = 1
+    |> context::key
+  assert context::get(k) == context::get(piped)
+}

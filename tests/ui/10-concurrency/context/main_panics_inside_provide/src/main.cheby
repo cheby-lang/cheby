@@ -1,0 +1,34 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1573, D-1594
+//! `main` panics while values it provided are still bound: a list, a
+//! string and a foreign handle. The handle's drop function writes a line
+//! to standard error, and that line comes before the panic report: the
+//! entry released the fiber's bindings first. The program exits with the
+//! panic's status, 101, and not with the leak check's 102 (§10.11, §11.6).
+
+import std::context
+import std::io
+import std::list
+
+@external(native, "app_handle_close")
+type Handle
+
+@external(native, "app_handle_open")
+fn open() -> Handle
+
+const numbers: context::Key<List<Int>> = context::key([])
+
+const greeting: context::Key<String> = context::key("hello")
+
+const handle: context::Key<Option<Handle>> = context::key(None)
+
+fn main() {
+  use <- context::provide(numbers, list::range(0, 100))
+  use <- context::provide(greeting, "inside")
+  use <- context::provide(handle, Some(open()))
+  let total = list::length(context::get(numbers))
+  let text = context::get(greeting)
+  io::println("{text}: {total}")
+  panic as "main gives up"
+}

@@ -907,7 +907,7 @@ impl Session {
             // and the session's definitions are usable (D-628).
             package_targets: Targets::only(Target::Native),
         };
-        let checked = self.repl.check_entry(&input, shape)?;
+        let checked = self.repl.check_entry(&input, &self.front.modules, shape)?;
         shape.move_diagnostics(tree.file(), &mut import_diags);
         Ok(match checked {
             Ok(entry) if !import_diags.iter().any(Diagnostic::is_error) => {
@@ -3942,6 +3942,97 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("this session has no package"), "{printed}");
+    }
+
+    /// D-1564, D-1572, D-1580: a key's type text names the real module of
+    /// its value type, with the reload's generation, although diagnostics
+    /// show the reloaded module by its own path. A prompt key redefined
+    /// with the same type keeps its identity, so a value provided for the
+    /// old one is read through the new one. After `:reload` of the module
+    /// that declares the type, a key of the type is another key, whether
+    /// the module declares it or the prompt does, so a value provided for
+    /// the old key is not seen and the new key's default is read.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+    )]
+    fn a_reload_makes_new_keys_of_the_reloaded_types() {
+        const DB: &str = "//! Keys.\n\nimport std::context\n\n/// An item.\npub type Item {\n  \
+                          Item(Int),\n}\n\n/// The item in use.\npub const item: \
+                          context::Key<Item> = context::key(Item(0))\n";
+        let dir =
+            std::env::temp_dir().join(format!("cheby_session_key_reload_{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        let root = dir.join("app");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            root.join("cheby.toml"),
+            "name = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("db.cheby"), DB).unwrap();
+        std::fs::write(src.join("main.cheby"), "//! Root.\n\nfn main() {\n}\n").unwrap();
+        let printed = std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || {
+                let Start::Ready(mut session, _) = Session::start(&root, options()).unwrap() else {
+                    panic!("the session did not start");
+                };
+                let mut printed = Vec::new();
+                for entry in [
+                    "import app::db",
+                    "import std::context",
+                    "const k: context::Key<db::Item> = context::key(db::Item(1))",
+                    "let old_k = k",
+                    "let old_item = db::item",
+                    "let old_value = db::Item(7)",
+                    "const k: context::Key<db::Item> = context::key(db::Item(2))",
+                    "context::provide(old_k, old_value, fn() { context::get(k) })",
+                ] {
+                    printed.push(eval(&mut session, entry));
+                }
+                let edited = format!("{DB}\n/// Added.\npub fn added() -> Int {{\n  1\n}}\n");
+                std::fs::write(src.join("db.cheby"), edited).unwrap();
+                let mut out = Buffer::default();
+                session.reload(&mut out).unwrap();
+                printed.push(out.text);
+                for entry in [
+                    "context::provide(old_item, old_value, fn() { context::get(db::item) })",
+                    "const k: context::Key<db::Item> = context::key(db::Item(3))",
+                    "context::provide(old_k, old_value, fn() { context::get(k) })",
+                ] {
+                    printed.push(eval(&mut session, entry));
+                }
+                printed
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let printed: Vec<&str> = printed.iter().map(String::as_str).collect();
+        assert_eq!(
+            printed,
+            [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                // The same type: the redefined key is the old one.
+                "Item(7) : db::Item\n",
+                "reloaded `app::db`\n",
+                // `app::db<r1>::Item` against `app::db::Item`: new keys.
+                "Item(0) : db::Item\n",
+                "",
+                "Item(3) : db::Item\n",
+            ]
+        );
     }
 
     #[test]

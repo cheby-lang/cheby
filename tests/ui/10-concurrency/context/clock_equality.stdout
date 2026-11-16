@@ -1,0 +1,5 @@
+system_clock() == system_clock(): True
+two fixed clocks at one point: True
+two fixed clocks at two points: False
+a fixed clock and the system clock: False
+!= on two points: True

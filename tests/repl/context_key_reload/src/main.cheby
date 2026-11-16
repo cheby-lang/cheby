@@ -1,0 +1,7 @@
+//! A package for the `context_key_reload` transcript, whose `:reload`
+//! keeps a key of type `Int` and makes a new key of a type the reloaded
+//! module declares.
+
+fn main() {
+  Nil
+}

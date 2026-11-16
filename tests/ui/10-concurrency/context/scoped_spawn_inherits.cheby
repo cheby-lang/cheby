@@ -1,0 +1,49 @@
+// @mode: run-pass
+// @decisions: D-1044, D-1571
+//! A fiber spawned into a scope under `provide` reads the provided value:
+//! at once, after `provide` has returned in the parent, and after the
+//! parent has provided another value for the key. A fiber it spawns
+//! inherits the value too (§10.11).
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+
+const greeting: context::Key<String> = context::key("hello")
+
+const count: context::Key<Int> = context::key(0)
+
+fn main() {
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let (at_once, waiter) = {
+      use <- context::provide(greeting, "first")
+      use <- context::provide(count, 1)
+      let at_once = fiber::join(fiber::spawn(owner, fn() { context::get(greeting) }))
+      let waiter = fiber::spawn(owner, fn() {
+        let _ = channel::receive(go_rx)
+        let grandchild = fiber::spawn(owner, fn() { context::get(count) })
+        let text = context::get(greeting)
+        let number = fiber::join(grandchild)
+        "{text} and {number}"
+      })
+      (at_once, waiter)
+    }
+    let after = context::get(greeting)
+    let later = context::provide(greeting, "second", fn() {
+      let assert Ok(Nil) = channel::send(go_tx, Nil)
+      let waited = fiber::join(waiter)
+      let mine = context::get(greeting)
+      "{waited}, while the parent has {mine}"
+    })
+    "at once: {at_once}; the parent after provide: {after}; later: {later}"
+  }
+  case outcome {
+    Ok(text) => io::println(text)
+    Err(failure) => io::println(fiber::show(failure))
+  }
+  let last = context::get(greeting)
+  io::println("at the end: {last}")
+}

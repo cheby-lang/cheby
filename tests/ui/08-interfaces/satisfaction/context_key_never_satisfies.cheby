@@ -1,0 +1,28 @@
+// @mode: check-fail
+// @decisions: D-1593
+//! `context::key` never counts toward an interface, so `context::Key<Int>`
+//! does not satisfy one through it, by an interface call or a bound (§8.2).
+
+import std::context
+
+interface Wrap {
+  fn key(Self) -> context::Key<Self>
+}
+
+fn generic<T: Wrap>(x: T) -> context::Key<T> {
+  Wrap::key(x)
+}
+
+const port: context::Key<Int> = context::key(8080)
+
+fn direct() -> context::Key<context::Key<Int>> {
+  Wrap::key(port)
+}
+
+fn bounded() -> context::Key<context::Key<Int>> {
+  generic(port)
+}
+
+fn main() {
+  assert direct() == bounded()
+}

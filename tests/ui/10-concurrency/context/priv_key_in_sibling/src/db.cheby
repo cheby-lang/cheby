@@ -1,0 +1,11 @@
+//! Holds a key that only this module may read or provide.
+
+import std::context
+
+/// The name of the pool in use, private to this module.
+priv const pool: context::Key<String> = context::key("none")
+
+/// The pool that the calling fiber's context holds.
+pub fn current() -> String {
+  context::get(pool)
+}

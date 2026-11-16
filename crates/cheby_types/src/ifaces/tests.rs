@@ -380,6 +380,7 @@ fn probe_with(package: PackageId, deps: Option<&[&str]>, source: &str) -> Probe 
         resolved: &resolved,
         deps: DepView::new(&b.set, &deps),
         modules: &b.modules,
+        real_modules: &b.modules,
         globals: &b.globals,
     };
     let (own, d) = build_interface(&types_input).unwrap();
@@ -405,6 +406,7 @@ impl Probe {
             resolved: &self.resolved,
             deps: DepView::new(&self.b.set, &self.deps),
             modules: &self.b.modules,
+            real_modules: &self.b.modules,
             globals: &self.b.globals,
         }
     }

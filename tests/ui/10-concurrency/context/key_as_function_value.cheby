@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-1565
+//! `context::key` and `context::key_without_default` used as function
+//! values are E0080, since such a value could make a key with no constant
+//! and so no path (§10.11).
+
+import std::context
+import std::list
+
+fn main() {
+  let make = context::key
+  let keys = list::map([1], context::key)
+  let make_empty = context::key_without_default
+  assert context::get(make(1)) == 1
+  assert list::length(keys) == 1
+  assert context::get(make_empty()) == None
+}

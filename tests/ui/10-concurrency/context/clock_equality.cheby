@@ -1,0 +1,24 @@
+// @mode: run-pass
+// @decisions: D-1047, D-233
+//! The system clock and fixed clocks compare structurally: the system
+//! clock equals itself, two fixed clocks are equal when their points are,
+//! and a fixed clock never equals the system clock (§3.13).
+
+import std::duration
+import std::io
+import std::time
+
+fn main() {
+  let launch = time::from_unix(duration::seconds(1_700_000_000))
+  let later = time::add(launch, duration::seconds(1))
+  let systems = time::system_clock() == time::system_clock()
+  io::println("system_clock() == system_clock(): {systems}")
+  let same_point = time::fixed_clock(launch) == time::fixed_clock(launch)
+  io::println("two fixed clocks at one point: {same_point}")
+  let other_point = time::fixed_clock(launch) == time::fixed_clock(later)
+  io::println("two fixed clocks at two points: {other_point}")
+  let mixed = time::fixed_clock(launch) == time::system_clock()
+  io::println("a fixed clock and the system clock: {mixed}")
+  let differ = time::fixed_clock(launch) != time::fixed_clock(later)
+  io::println("!= on two points: {differ}")
+}

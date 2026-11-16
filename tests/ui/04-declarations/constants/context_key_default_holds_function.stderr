@@ -1,0 +1,36 @@
+error[E0081]: the constant `writer` holds a key whose default value holds a function
+  --> tests/ui/04-declarations/constants/context_key_default_holds_function.cheby:30:7
+   |
+30 | const writer: context::Key<fn(String) -> String> = context::key(shout)
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: its value holds a function, which a program cannot embed; a key's value type may hold functions, `dyn` values and handles, but its default may not
+   = help: make the key with `context::key_without_default()` and provide the value at run time, or give it a default that holds no function, `dyn` value or handle
+
+error[E0081]: the constant `alias` holds a key whose default value holds a function
+  --> tests/ui/04-declarations/constants/context_key_default_holds_function.cheby:32:7
+   |
+32 | const alias: context::Key<fn(String) -> String> = writer
+   |       ^^^^^ this constant is computed at compile time
+   |
+   = note: its value holds a function, which a program cannot embed; a key's value type may hold functions, `dyn` values and handles, but its default may not
+   = help: make the key with `context::key_without_default()` and provide the value at run time, or give it a default that holds no function, `dyn` value or handle
+
+error[E0081]: the constant `pet` holds a key whose default value holds a `dyn` value
+  --> tests/ui/04-declarations/constants/context_key_default_holds_function.cheby:34:7
+   |
+34 | const pet: context::Key<dyn Named> = context::key(Cat)
+   |       ^^^ this constant is computed at compile time
+   |
+   = note: its value holds a `dyn` value, which a program cannot embed; a key's value type may hold functions, `dyn` values and handles, but its default may not
+   = help: make the key with `context::key_without_default()` and provide the value at run time, or give it a default that holds no function, `dyn` value or handle
+
+error[E0081]: the constant `pets` holds a key whose default value holds a `dyn` value
+  --> tests/ui/04-declarations/constants/context_key_default_holds_function.cheby:36:7
+   |
+36 | const pets: context::Key<List<dyn Named>> = context::key([Cat])
+   |       ^^^^ this constant is computed at compile time
+   |
+   = note: its value holds a `dyn` value, which a program cannot embed; a key's value type may hold functions, `dyn` values and handles, but its default may not
+   = help: make the key with `context::key_without_default()` and provide the value at run time, or give it a default that holds no function, `dyn` value or handle
+

@@ -74,7 +74,16 @@ pub struct TypesInput<'a> {
     pub resolved: &'a ResolvedModule,
     /// The interfaces of M's dependencies and the builtin module.
     pub deps: DepView<'a>,
+    /// The table that names modules in diagnostics and printed types: in
+    /// the REPL, its display table, which shows a reloaded module by its
+    /// own path and a stale one with a mark (D-463, D-625).
     pub modules: &'a ModuleTable,
+    /// The table of the compiler's own module paths, in which a REPL
+    /// entry's module is `<repl:N>` and a reloaded one carries its `<rN>`
+    /// mark. It is `modules` outside the REPL. Only a context key's type
+    /// text reads it, so that the text names the real module of each type
+    /// (D-1572, D-1580).
+    pub real_modules: &'a ModuleTable,
     pub globals: &'a Globals,
 }
 

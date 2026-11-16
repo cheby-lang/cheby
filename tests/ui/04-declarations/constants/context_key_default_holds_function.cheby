@@ -1,0 +1,47 @@
+// @mode: check-fail
+// @decisions: D-1578, D-1600, D-139
+//! A key's value type may hold functions and `dyn` values, but its default
+//! is computed at compile time and embedded in the program, so a default
+//! that holds a function or a `dyn` value is E0081 when the constant is
+//! evaluated. It is reported at each constant that holds such a key, an
+//! alias constant too (§4.5, §10.11).
+
+import std::context
+import std::list
+
+/// Something with a name.
+interface Named {
+  fn name(Self) -> String
+}
+
+/// A cat, which has a name.
+type Cat {
+  Cat,
+}
+
+fn name(_cat: Cat) -> String {
+  "cat"
+}
+
+fn shout(text: String) -> String {
+  "{text}!"
+}
+
+const writer: context::Key<fn(String) -> String> = context::key(shout)
+
+const alias: context::Key<fn(String) -> String> = writer
+
+const pet: context::Key<dyn Named> = context::key(Cat)
+
+const pets: context::Key<List<dyn Named>> = context::key([Cat])
+
+const no_pets: context::Key<List<dyn Named>> = context::key([])
+
+fn main() {
+  let write = context::get(alias)
+  let first = context::get(pet)
+  let all = context::get(pets)
+  let none = context::get(no_pets)
+  assert write(Named::name(first)) == "cat!"
+  assert list::length(all) > list::length(none)
+}

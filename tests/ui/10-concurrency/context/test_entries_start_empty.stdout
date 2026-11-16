@@ -1,0 +1,10 @@
+test ui_test "panics inside provide" ... FAILED
+test ui_test "leaves a detached fiber under provide" ... ok
+test ui_test "reads the defaults" ... ok
+test ui_test "reads the defaults again" ... ok
+
+---- ui_test "panics inside provide" ----
+panicked at tests/ui/10-concurrency/context/test_entries_start_empty.cheby:33:3:
+the first test gives up
+
+test result: FAILED. 3 passed; 1 failed; 0 filtered out

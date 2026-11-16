@@ -1,0 +1,96 @@
+// @mode: run-pass
+// @decisions: D-1044, D-1573, D-693
+//! A scope that catches a panic continues with the context it was opened
+//! with: when a body panics inside `provide`, when a member's panic
+//! cancels a body that is inside `provide`, and when the panic comes from
+//! inside nested calls of `provide` (§10.3, §10.11).
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+
+const greeting: context::Key<String> = context::key("hello")
+
+const count: context::Key<Int> = context::key(0)
+
+fn describe(outcome: Result<String, fiber::Panic>) -> String {
+  case outcome {
+    Ok(text) => "Ok: {text}"
+    Err(failure) => {
+      let text = fiber::message(failure)
+      "Err: {text}"
+    }
+  }
+}
+
+/// Panics with `text`. Its return type is the body's.
+fn fail(text: String) -> String {
+  panic as text
+}
+
+/// A body inside `provide` panics, and the scope around it catches it.
+fn body_panics() -> String {
+  let outcome = {
+    use _ <- fiber::scope()
+    context::provide(greeting, "inside", fn() { fail("boom") })
+  }
+  let text = describe(outcome)
+  let now = context::get(greeting)
+  "{text}, then {now}"
+}
+
+/// The body waits inside `provide` on a channel that never gets a value,
+/// so only the member's panic, which cancels it, ends it.
+fn member_panics() -> String {
+  let (keep, never) = channel::new::<String>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    context::provide(greeting, "waiting", fn() {
+      let _ = fiber::spawn(owner, fn() { panic as "member" })
+      case channel::receive(never) {
+        Ok(text) => text
+        Err(Nil) => "closed"
+      }
+    })
+  }
+  let _ = channel::send(keep, "unused")
+  let text = describe(outcome)
+  let now = context::get(greeting)
+  "{text}, then {now}"
+}
+
+/// Three calls of `provide`, two of them for the same key, are open when
+/// the body panics.
+fn nested_panics() -> String {
+  let outcome = {
+    use _ <- fiber::scope()
+    use <- context::provide(greeting, "first")
+    use <- context::provide(count, 1)
+    use <- context::provide(greeting, "second")
+    fail("deep")
+  }
+  let text = describe(outcome)
+  let now = context::get(greeting)
+  let number = context::get(count)
+  "{text}, then {now} and {number}"
+}
+
+/// The same catches under an outer `provide`, which each of them puts
+/// back.
+fn under_outer() -> String {
+  use <- context::provide(greeting, "outer")
+  let first = body_panics()
+  let second = member_panics()
+  let third = nested_panics()
+  "{first} | {second} | {third}"
+}
+
+fn main() {
+  io::println(body_panics())
+  io::println(member_panics())
+  io::println(nested_panics())
+  io::println(under_outer())
+  let last = context::get(greeting)
+  io::println("at the end: {last}")
+}

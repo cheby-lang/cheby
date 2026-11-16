@@ -1,0 +1,103 @@
+// @mode: run-pass
+// @decisions: D-1044, D-1573, D-667
+//! Fibers that are cancelled while they run inside `provide` unwind, and
+//! the caller's context does not change: the losers of `fiber::race`,
+//! which are inside `provide` before the winner returns, a member that
+//! `fiber::cancel` reaches, and a member cancelled while a scope of its
+//! own is open inside `provide` (§10.7, §10.11). The leak check at exit
+//! shows that each unwound fiber released its bindings.
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+
+const greeting: context::Key<String> = context::key("hello")
+
+const count: context::Key<Int> = context::key(0)
+
+/// A contender that says it is ready inside `provide`, then waits there
+/// until the race cancels it.
+fn slow(never: channel::Receiver<String>, ready: channel::Sender<Nil>) -> String {
+  use <- context::provide(greeting, "slow")
+  use <- context::provide(count, 2)
+  let assert Ok(Nil) = channel::send(ready, Nil)
+  case channel::receive(never) {
+    Ok(text) => text
+    Err(Nil) => "closed"
+  }
+}
+
+fn race_losers() -> String {
+  let (keep, never) = channel::new::<String>(1)
+  let (ready_tx, ready_rx) = channel::new::<Nil>(2)
+  let outcome = fiber::race([
+    fn() { slow(never, ready_tx) },
+    fn() {
+      let assert Ok(Nil) = channel::receive(ready_rx)
+      let assert Ok(Nil) = channel::receive(ready_rx)
+      context::provide(greeting, "fast", fn() { context::get(greeting) })
+    },
+    fn() { slow(never, ready_tx) },
+  ])
+  let _ = channel::send(keep, "unused")
+  let text = case outcome {
+    Ok(Some(winner)) => "won by {winner}"
+    Ok(None) => "no contender"
+    Err(failure) => fiber::message(failure)
+  }
+  let now = context::get(greeting)
+  let number = context::get(count)
+  "race {text}, then {now} and {number}"
+}
+
+fn cancelled_members() -> String {
+  let (keep, never) = channel::new::<String>(1)
+  let (ready_tx, ready_rx) = channel::new::<Nil>(2)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() {
+      use <- context::provide(greeting, "member")
+      let assert Ok(Nil) = channel::send(ready_tx, Nil)
+      channel::receive(never)
+    })
+    let _ = fiber::spawn(owner, fn() {
+      use <- context::provide(greeting, "member with a scope")
+      let inner = {
+        use _ <- fiber::scope()
+        use <- context::provide(count, 7)
+        let assert Ok(Nil) = channel::send(ready_tx, Nil)
+        channel::receive(never)
+      }
+      case inner {
+        Ok(_) => "inner returned"
+        Err(failure) => fiber::message(failure)
+      }
+    })
+    use <- context::provide(greeting, "body")
+    let assert Ok(Nil) = channel::receive(ready_rx)
+    let assert Ok(Nil) = channel::receive(ready_rx)
+    fiber::cancel(owner)
+    context::get(greeting)
+  }
+  let _ = channel::send(keep, "unused")
+  let text = case outcome {
+    Ok(value) => "Ok: {value}"
+    Err(failure) => {
+      let why = fiber::message(failure)
+      "Err: {why}"
+    }
+  }
+  let now = context::get(greeting)
+  let number = context::get(count)
+  "cancel {text}, then {now} and {number}"
+}
+
+fn main() {
+  io::println(race_losers())
+  io::println(cancelled_members())
+  use <- context::provide(greeting, "outer")
+  use <- context::provide(count, 1)
+  io::println(race_losers())
+  io::println(cancelled_members())
+}

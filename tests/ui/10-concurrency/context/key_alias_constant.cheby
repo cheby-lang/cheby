@@ -1,0 +1,28 @@
+// @mode: run-pass
+// @decisions: D-1565, D-1572
+//! A constant initialized from another key constant is the same key,
+//! because a key carries its identity in its value: the two are `==`,
+//! share the debug text, a value provided through one is read through the
+//! other, and a set of both has one element (§10.11).
+
+import std::context
+import std::io
+import std::set
+
+const port: context::Key<Int> = context::key(8080)
+
+const alias: context::Key<Int> = port
+
+fn main() {
+  let equal = alias == port
+  io::println("equal: {equal}")
+  io::println("debug: {port:?} {alias:?}")
+  let through_alias = context::provide(port, 1, fn() { context::get(alias) })
+  let through_port = context::provide(alias, 2, fn() { context::get(port) })
+  io::println("provided through one, read through the other: {through_alias} {through_port}")
+  let default_port = context::get(port)
+  let default_alias = context::get(alias)
+  io::println("defaults: {default_port} {default_alias}")
+  let elements = set::size(set::from_list([port, alias]))
+  io::println("elements of a set of both: {elements}")
+}

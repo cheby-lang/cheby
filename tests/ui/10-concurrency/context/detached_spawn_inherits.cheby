@@ -1,0 +1,32 @@
+// @mode: run-pass
+// @decisions: D-1044
+//! A detached fiber spawned under `provide` reads the provided value, also
+//! after `provide` has returned in the spawning fiber and after it has
+//! provided another value for the key. The answer comes back on a channel
+//! (§10.4, §10.11).
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+
+const greeting: context::Key<String> = context::key("hello")
+
+fn main() {
+  let (go_tx, go_rx) = channel::new::<Nil>(1)
+  let (answer_tx, answer_rx) = channel::new::<String>(1)
+  context::provide(greeting, "first", fn() {
+    fiber::spawn_detached(fn() {
+      let _ = channel::receive(go_rx)
+      channel::send(answer_tx, context::get(greeting))
+    })
+  })
+  let after = context::get(greeting)
+  io::println("the spawner after provide: {after}")
+  use <- context::provide(greeting, "second")
+  let assert Ok(Nil) = channel::send(go_tx, Nil)
+  let answer = channel::receive(answer_rx)
+  io::println("the detached fiber: {answer:?}")
+  let mine = context::get(greeting)
+  io::println("the spawner: {mine}")
+}

@@ -599,8 +599,11 @@ impl ReplSession {
 
     /// Checks one entry: `input` holds its tree, its own imports and their
     /// targets, and its dependencies (the package, std, and
-    /// [`ReplSession::modules`]). `Ok(Err(..))` holds its diagnostics when
-    /// one is an error, with spans moved to the entry's own text.
+    /// [`ReplSession::modules`]). `input.modules` is the
+    /// [`ReplSession::display_table`] of `real`, the table of the session's
+    /// own module paths, which a context key's type text reads (D-1580).
+    /// `Ok(Err(..))` holds its diagnostics when one is an error, with spans
+    /// moved to the entry's own text.
     ///
     /// # Errors
     ///
@@ -608,6 +611,7 @@ impl ReplSession {
     pub fn check_entry(
         &self,
         input: &ResolveInput<'_>,
+        real: &ModuleTable,
         shape: EntryShape,
     ) -> Result<Result<CheckedEntry, Vec<Diagnostic>>, Ice> {
         let (resolved, mut diags) = self.scope.resolve_entry(input)?;
@@ -618,6 +622,7 @@ impl ReplSession {
             resolved: &resolved,
             deps: input.deps,
             modules: input.modules,
+            real_modules: real,
             globals: input.globals,
         };
         let (mut iface, found) = build_interface(&types)?;
@@ -1912,7 +1917,8 @@ mod tests {
                 std: StdCatalog { known: &[] },
                 package_targets: Targets::ALL,
             };
-            Ok(match self.repl.check_entry(&input, shape)? {
+            let checked = self.repl.check_entry(&input, &self.b.modules, shape)?;
+            Ok(match checked {
                 Ok(entry) => {
                     self.repl.note_compiled(&entry);
                     self.repl.commit(&entry, &self.b.globals.names);

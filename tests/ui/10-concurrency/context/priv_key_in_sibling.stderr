@@ -1,0 +1,11 @@
+error[E0043]: `pool` is private to module `app::db`
+  --> tests/ui/10-concurrency/context/priv_key_in_sibling/src/main.cheby:11:35
+   |
+11 |   let name = context::provide(db::pool, "primary", fn() { db::current() })
+   |                                   ^^^^
+   |
+  ::: tests/ui/10-concurrency/context/priv_key_in_sibling/src/db.cheby:6:12
+   |
+6  | priv const pool: context::Key<String> = context::key("none")
+   |            ---- declared here
+

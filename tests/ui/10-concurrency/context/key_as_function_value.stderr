@@ -1,0 +1,27 @@
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_as_function_value.cheby:11:14
+   |
+11 |   let make = context::key
+   |              ^^^^^^^^^^^^ this uses it as a value
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+error[E0080]: `context::key` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_as_function_value.cheby:12:29
+   |
+12 |   let keys = list::map([1], context::key)
+   |                             ^^^^^^^^^^^^ this uses it as a value
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Int> = context::key(0)`
+
+error[E0080]: `context::key_without_default` may only be called as the whole initializer of a constant
+  --> tests/ui/10-concurrency/context/key_as_function_value.cheby:13:20
+   |
+13 |   let make_empty = context::key_without_default
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this uses it as a value
+   |
+   = note: a key is identified by the path of the constant it initializes
+   = help: make the call the whole initializer of a `const`, as in `const name: context::Key<Option<Int>> = context::key_without_default()`
+

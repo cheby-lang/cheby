@@ -1,0 +1,24 @@
+// @mode: run-fail
+// @decisions: D-1047, D-233
+//! `==` on a custom clock panics when it reaches the clock's functions, as
+//! on any function value: functions have no equality (§3.13).
+
+import std::duration
+import std::io
+import std::time
+import std::time::instant
+
+fn read_now() -> time::Timestamp {
+  time::from_unix(duration::zero)
+}
+
+fn read_monotonic() -> instant::Instant {
+  instant::from_origin(duration::zero)
+}
+
+fn main() {
+  let fake = time::custom_clock(read_now, read_monotonic)
+  io::println("comparing")
+  let same = fake == fake
+  io::println("never printed: {same}")
+}

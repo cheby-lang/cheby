@@ -1,0 +1,82 @@
+// @mode: run-pass
+// @decisions: D-1044
+//! Context follows spawns, not messages. A worker spawned before
+//! `provide` keeps its own context when a job arrives from inside
+//! `provide`, so it reads the default. In the pattern of `context.md`, the
+//! sender passes the value with each job and the worker provides it around
+//! the work (§10.11).
+
+import std::channel
+import std::context
+import std::fiber
+import std::io
+import std::list
+
+const request_id: context::Key<Option<String>> = context::key_without_default()
+
+/// Reads the request id, as code deep inside a job would.
+fn run(job: String) -> String {
+  case context::get(request_id) {
+    Some(id) => "{job} for {id}"
+    None => "{job} for nobody"
+  }
+}
+
+fn submit(
+  jobs: channel::Sender<(String, Option<String>)>,
+  job: String,
+) -> Result<Nil, (String, Option<String>)> {
+  channel::send(jobs, (job, context::get(request_id)))
+}
+
+/// Runs jobs until the channel closes, each with the request id that came
+/// with it, and returns what they gave in order.
+fn work(jobs: channel::Receiver<(String, Option<String>)>, done: List<String>) -> List<String> {
+  case channel::receive(jobs) {
+    Ok((job, id)) => {
+      let result = context::provide(request_id, id, fn() { run(job) })
+      work(jobs, [result, ..done])
+    }
+    Err(Nil) => list::reverse(done)
+  }
+}
+
+/// Answers each message with what it reads itself, until the channel
+/// closes.
+fn plain_worker(asks: channel::Receiver<channel::Sender<String>>) -> Nil {
+  case channel::receive(asks) {
+    Ok(reply) => {
+      let _ = channel::send(reply, run("plain"))
+      plain_worker(asks)
+    }
+    Err(Nil) => Nil
+  }
+}
+
+fn main() {
+  let (asks_tx, asks_rx) = channel::new::<channel::Sender<String>>(0)
+  let (reply_tx, reply_rx) = channel::new::<String>(1)
+  let outcome = {
+    use owner <- fiber::scope()
+    let _ = fiber::spawn(owner, fn() { plain_worker(asks_rx) })
+    let answer = context::provide(request_id, Some("r-1"), fn() {
+      let assert Ok(Nil) = channel::send(asks_tx, reply_tx)
+      channel::receive(reply_rx)
+    })
+    answer
+  }
+  io::println("a worker spawned before provide: {outcome:?}")
+  let (jobs_tx, jobs_rx) = channel::new::<(String, Option<String>)>(4)
+  let results = {
+    use owner <- fiber::scope()
+    let worker = fiber::spawn(owner, fn() { work(jobs_rx, []) })
+    let _ = context::provide(request_id, Some("r-7"), fn() { submit(jobs_tx, "load") })
+    let _ = submit(jobs_tx, "tick")
+    let _ = context::provide(request_id, Some("r-8"), fn() { submit(jobs_tx, "save") })
+    fiber::join(worker)
+  }
+  case results {
+    Ok(lines) => list::each(lines, io::println)
+    Err(failure) => io::println(fiber::show(failure))
+  }
+}

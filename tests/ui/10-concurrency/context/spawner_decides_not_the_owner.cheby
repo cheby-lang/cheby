@@ -1,0 +1,36 @@
+// @mode: run-pass
+// @decisions: D-1044, D-666
+//! A fiber that spawns into a scope opened by another fiber gives the new
+//! fiber its own context, not the context of the fiber that owns the
+//! scope: the spawning fiber decides (§10.3, §10.11).
+
+import std::context
+import std::fiber
+import std::io
+
+const greeting: context::Key<String> = context::key("hello")
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let helper = context::provide(greeting, "the helper's", fn() {
+      fiber::spawn(owner, fn() {
+        let as_spawned = fiber::join(fiber::spawn(owner, fn() { context::get(greeting) }))
+        let provided = context::provide(greeting, "the helper's own", fn() {
+          fiber::join(fiber::spawn(owner, fn() { context::get(greeting) }))
+        })
+        "{as_spawned}, then {provided}"
+      })
+    })
+    let by_helper = fiber::join(helper)
+    let by_owner = fiber::join(fiber::spawn(owner, fn() { context::get(greeting) }))
+    let by_owner_provided = context::provide(greeting, "the owner's", fn() {
+      fiber::join(fiber::spawn(owner, fn() { context::get(greeting) }))
+    })
+    "spawned by the helper: {by_helper}; by the owner: {by_owner}, then {by_owner_provided}"
+  }
+  case outcome {
+    Ok(text) => io::println(text)
+    Err(failure) => io::println(fiber::show(failure))
+  }
+}

@@ -380,11 +380,13 @@ pub(crate) fn rewrite(
     let [value_ty] = **args else {
         return Err(Ice::new("a key call whose type has not one argument"));
     };
+    // The type text names each module by its real path, with a reload's
+    // generation, and the path text by the one diagnostics show (D-1580).
     let type_text = path_text(
         value_ty,
         Some(own),
         &input.deps,
-        input.modules,
+        input.real_modules,
         input.globals,
     )?;
     let module = input.modules.try_get(input.module)?;

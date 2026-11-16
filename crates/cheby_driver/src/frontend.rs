@@ -802,6 +802,7 @@ pub(crate) fn check_extra_module(
         resolved: &resolved,
         deps: DepView::new(&set, &deps),
         modules: &table,
+        real_modules: &table,
         globals: &front.globals,
     };
     let (iface, iface_diags) = build_interface(&types)?;
@@ -904,6 +905,7 @@ pub(crate) fn check_reloaded(
         resolved: &resolved,
         deps: DepView::new(&front.set, &deps),
         modules: display,
+        real_modules: &front.modules,
         globals: &front.globals,
     };
     let (iface, found) = build_interface(&types)?;
@@ -1752,6 +1754,7 @@ impl BuildInputs<'_> {
             resolved: &resolved,
             deps: view,
             modules: self.modules,
+            real_modules: self.modules,
             globals: self.globals,
         };
         let (iface, diags) = build_interface(&types)?;

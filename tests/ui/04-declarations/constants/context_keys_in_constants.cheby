@@ -1,0 +1,49 @@
+// @mode: run-pass
+// @decisions: D-1045, D-533, D-1578, D-1591
+//! `context::key` and `context::key_without_default` run in constants, so
+//! a key is computed at compile time. A key's value type may hold
+//! functions when its default holds none, as `time::clock`'s does, and
+//! keys may sit inside other constants, as in a list of keys (§4.5,
+//! §10.11).
+
+import std::context
+import std::io
+import std::list
+import std::string
+import std::time
+
+/// How a greeting is written: as it is, or by a function.
+type Style {
+  Plain,
+  Custom(fn(String) -> String),
+}
+
+const style: context::Key<Style> = context::key(Plain)
+
+const name: context::Key<Option<String>> = context::key_without_default()
+
+const port: context::Key<Int> = context::key(8080)
+
+const ports: List<context::Key<Int>> = [port, port]
+
+const clocks: List<context::Key<time::Clock>> = [time::clock]
+
+const named: (context::Key<Option<String>>, Int) = (name, 1)
+
+fn greet(text: String) -> String {
+  case context::get(style) {
+    Plain => text
+    Custom(write) => write(text)
+  }
+}
+
+fn main() {
+  io::println(greet("hello"))
+  io::println(context::provide(style, Custom(string::uppercase), fn() { greet("hello") }))
+  let (key, _) = named
+  let missing = context::get(key)
+  let provided = context::provide(name, Some("ada"), fn() { context::get(key) })
+  io::println("{missing:?} {provided:?}")
+  let defaults = list::map(ports, context::get)
+  io::println("{defaults:?} {clocks:?}")
+}
