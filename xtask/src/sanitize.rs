@@ -47,19 +47,18 @@
 //! `allocator_may_return_null=1` and
 //! `suppressions=.github/tsan-suppressions.txt`, which lists reports from
 //! dependencies only, each with its reason (D-863). On Linux, the leak
-//! checker is on for the `jit`, `ui-deadlock` and `aot` steps, since an
-//! executable's constant slots are in its own data, which the checker scans
-//! (D-1337), and off for
-//! `runtime` and `runtime-stress`, whose unit tests leak on purpose (frozen
-//! constants are immortal, leaked fixtures, child processes that end at a
-//! halt or a refusal without cleanup), and for `conformance`,
-//! `examples-poison-off` and `repl`, whose programs keep objects for good
-//! on purpose: D-539 makes a constant's objects static, outside the
-//! runtime's leak check, and only the constant's slot `cb$const$…` in the
-//! JIT's data memory holds them, which the leak checker does not scan; and
-//! the REPL never frees what its entries return, its session values
-//! (D-547, no leak check in the REPL: D-458); the runtime's own leak check
-//! (status 102, D-458) stays on everywhere (D-881). Fiber stack
+//! checker is on for the `jit`, `ui-deadlock`, `conformance`, `aot` and
+//! `examples-poison-off` steps. A constant's objects are static (D-539),
+//! held only by the constant's slot `cb$const$…`, which an executable keeps
+//! in its own data, which the checker scans (D-1337), and the JIT in its
+//! data memory, which it does not; so the runtime tells the checker about
+//! every object that becomes static (D-1637). It is off for
+//! `runtime` and `runtime-stress`, whose unit tests leak on purpose (leaked
+//! fixtures, child processes that end at a halt or a refusal without
+//! cleanup), and for `repl`, since the REPL never frees what its entries
+//! return, its session values (D-547, no leak check in the REPL: D-458);
+//! the runtime's own leak check (status 102, D-458) stays on everywhere
+//! (D-881). Fiber stack
 //! slots are registered as root regions under the address cfg, so objects
 //! held by fibers a halt freezes are not reported (D-708, D-859). The leak
 //! checker does not run on macOS, so
@@ -341,11 +340,8 @@ pub(crate) const MIRI_GROUPS: &[MiriGroup] = &[
 pub(crate) enum Leaks {
     /// `detect_leaks=1` on Linux.
     On,
-    /// `detect_leaks=0`: the runtime's unit tests leak on purpose, a
-    /// program under `cheby run` that reads a constant holds its static
-    /// objects (D-539) only in the JIT's data memory, which the leak checker
-    /// does not scan, and the REPL never frees its session values (D-547,
-    /// D-458).
+    /// `detect_leaks=0`: the runtime's unit tests leak on purpose, and the
+    /// REPL never frees its session values (D-547, D-458).
     Off,
 }
 
@@ -464,7 +460,7 @@ pub(crate) fn steps() -> Vec<Step> {
             name: "conformance",
             address: true,
             thread: true,
-            leaks: Leaks::Off,
+            leaks: Leaks::On,
             actions: vec![Action::Test {
                 env: vec![("CHEBY_THREADS", "4"), ("CHEBY_RT_STRESS_MIGRATE", "1")],
                 // The 2- and 4-thread variants of every run and `::test`
@@ -509,7 +505,7 @@ pub(crate) fn steps() -> Vec<Step> {
             name: "examples-poison-off",
             address: true,
             thread: false,
-            leaks: Leaks::Off,
+            leaks: Leaks::On,
             actions: vec![Action::ExamplesPoisonOff],
         },
         Step {
@@ -1577,7 +1573,16 @@ mod tests {
             .filter(|s| s.leaks == Leaks::On)
             .map(|s| s.name)
             .collect();
-        assert_eq!(on, ["jit", "ui-deadlock", "aot"]);
+        assert_eq!(
+            on,
+            [
+                "jit",
+                "ui-deadlock",
+                "conformance",
+                "aot",
+                "examples-poison-off"
+            ]
+        );
         let supp = Path::new("/r/.github/tsan-suppressions.txt");
         let (var, linux_on) = sanitizer_options(Sanitizer::Address, Leaks::On, true, supp).unwrap();
         assert_eq!(var, "ASAN_OPTIONS");

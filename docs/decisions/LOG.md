@@ -1331,7 +1331,7 @@ Goal: record the user's answers to H1's checkpoint report: the decisions H1's pa
 
 Open:
 
-- LeakSanitizer stays off for the `conformance`, `examples-poison-off` and `repl` steps until the runtime tells it about D-539's frozen constants (or the JIT data region that holds them) and the REPL's kept values; then those steps turn it on, and D-831's REPL run gains a leak check (D-881). No owner; before M3's sanitizer work.
+- LeakSanitizer stays off for the `conformance`, `examples-poison-off` and `repl` steps until the runtime tells it about D-539's frozen constants (or the JIT data region that holds them) and the REPL's kept values; then those steps turn it on, and D-831's REPL run gains a leak check (D-881). No owner; before M3's sanitizer work. Constants and the `conformance` and `examples-poison-off` steps: → D-1637; the REPL stays open.
 - x86-64 ThreadSanitizer and AddressSanitizer are first checked by the scheduled workflow after the push (D-862); `container.sh` cannot run an amd64 sanitizer step until it has a per-platform rustup volume.
 - The detector's collect step relies on the hardware's ordering of a resumed fiber's stores after `run_fiber`'s SeqCst load, not on a C11 fence pair (DLm's model 6); a C11 proof needs a Release fence per resume, which D-860's one relaxed store per resume leaves out. The user accepted it as a known risk; D-860 is unchanged.
 - string_building reads +2.99% against M1 in H1's quiet window, met by 0.01 points: every configuration's rounds fall in two groups about 5% apart, so D-760's median of 5 round medians follows the group that holds three. The next quiet RC reading takes more rounds for it or separates the two groups. No owner.
@@ -1413,7 +1413,7 @@ Goal: make the nightly `fuzz (check)` job pass, after its first scheduled run fa
 
 Open:
 
-- Telling LeakSanitizer about frozen constants (D-539), for example with `__lsan_ignore_object` in `alloc::freeze` under the address cfg, would let `check` and the sanitizer jobs' `conformance` step run with it on (D-881).
+- Telling LeakSanitizer about frozen constants (D-539), for example with `__lsan_ignore_object` in `alloc::freeze` under the address cfg, would let `check` and the sanitizer jobs' `conformance` step run with it on (D-881). The constants and the `conformance` step: → D-1637; the fuzz targets keep it off.
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
 
 ## 2026-10-19: Faster std::json
@@ -2695,4 +2695,16 @@ Open:
 
 - ~~If the `Compare` dictionary's descriptor cannot reach the heap's kernels without a compiler change, the fast path waits for a decision, and the kernels call `compare` back for every type until then.~~ → D-1613
 - `std::heap` is not among the modules whose functions run in constants (D-537), so building a heap in a constant is E0077.
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+## 2026-11-17: LeakSanitizer and constants
+
+Goal: make the nightly `sanitizer (address)` job pass again, after `ui-deadlock`'s `tail_called_sleep` reported the objects of `time::clock` as leaks.
+
+- **D-1637 Static objects are told to LeakSanitizer**: Under `--cfg cheby_sanitize="address"`, the runtime calls `__lsan_ignore_object` on each heap object as it becomes static: when constant evaluation freezes its results, when an image is installed and when a count overflows (D-454, D-539, D-979). LeakSanitizer then treats the object and everything it reaches as reachable. The `conformance` and `examples-poison-off` steps of `cargo xtask sanitize address` run with LeakSanitizer on, as `jit`, `ui-deadlock` and `aot` do. `runtime`, `runtime-stress` and `repl` keep it off. Why: only a constant's slot in the JIT's data memory holds its objects, and LeakSanitizer does not scan that memory, so every JIT program that reads a constant reported them at exit. Since `std::time` keeps the key of its clock in the constant `time::clock` (D-1563, D-1597), the deadlock test `tail_called_sleep` became such a program. A static object is never freed by design, so the sanitizer is told, as D-863 asks and as the interners' entries are (D-881). Rejected: registering the JIT's data memory as a root region, which is more precise but needs a hook into the JIT's data allocation and leaves overflowed counts out; and turning the leak checker off for `ui-deadlock`, which drops the check of a deadlock's teardown. The user chose this. Refines D-881, D-898.
+
+Open:
+
+- The fuzz targets `check` and `analysis` and `rc_differential`'s `address` leg still pass `detect_leaks=0` (D-898, D-1338). Turning it on for them waits for a run that shows no other report.
+- The REPL's session values are still not told to LeakSanitizer, so the `repl` step keeps it off (D-881).
 - Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
