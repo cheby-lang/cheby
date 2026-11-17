@@ -116,6 +116,20 @@ pub(super) fn set(tree: Node, i: usize, elem: Word) -> Node {
     node
 }
 
+/// `tree` with every node on the path to element `i` (below the length)
+/// unique: a shared node is copied ([`make_unique`]), so only that path
+/// changes and the rest stays shared. Nothing changes where the path is
+/// already unique. For writing slots in place (`std::heap`, D-1613).
+pub(super) fn unique_path(tree: Node, i: usize) -> Node {
+    let node = make_unique(tree, 0);
+    if !node.is_leaf() {
+        let (j, before) = node.locate(i);
+        let child = unique_path(node.child(j), i.saturating_sub(before));
+        node.put_child(j, child);
+    }
+    node
+}
+
 /// Element `i` (below the length), owned, in one descent: moved out and
 /// replaced with the immediate `word` when every node on its path is
 /// unique, so the tree no longer holds it; dup'd and left in place when a

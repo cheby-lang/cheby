@@ -384,3 +384,51 @@ test "i64 wrapping arithmetic wraps around" {
 test "from_i64 keeps every I64 on native" {
   assert int::from_i64(max_value) == Ok(int::max_value)
 }
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the greatest common divisor of `a` and `b`, which is never
+/// negative, and `0` for `gcd(0, 0)` (D-1606). It panics only when the
+/// result does not fit, as for `gcd(min_value, 0)`.
+pub fn gcd(a: I64, b: I64) -> I64 {
+  // Euclid's steps on values made non-positive, whose range holds the
+  // negation of every `I64`, so only the last `-` can overflow.
+  fn step(x: I64, y: I64) -> I64 {
+    case y {
+      0 => -x
+      _ => step(y, x % y)
+    }
+  }
+  step(non_positive(a), non_positive(b))
+}
+
+/// `n` with its sign made negative, which always fits.
+priv fn non_positive(n: I64) -> I64 {
+  case {
+    n > 0 => -n
+    _ => n
+  }
+}
+
+/// Returns the least common multiple of `a` and `b`, which is never
+/// negative, and `0` when either is `0` (D-1606). It panics when the result
+/// does not fit.
+pub fn lcm(a: I64, b: I64) -> I64 {
+  case a, b {
+    0, _ => 0
+    _, 0 => 0
+    _, _ => abs(a / gcd(a, b) * b)
+  }
+}
+
+test "i64 gcd and lcm" {
+  assert gcd(12, -18) == 6
+  assert gcd(0, -5) == 5
+  assert gcd(0, 0) == 0
+  assert gcd(min_value, 6) == 2
+  assert gcd(min_value, -1) == 1
+  assert lcm(-4, 6) == 12
+  assert lcm(0, 6) == 0
+  assert lcm(max_value, 1) == max_value
+}

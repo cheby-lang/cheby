@@ -64,6 +64,25 @@ test "from_list keeps the last duplicate" {
 }
 ```
 
+### `frequencies`
+
+```cheby
+pub fn frequencies<K>(xs: List<K>) -> Map<K, Int>
+```
+
+Returns a map from each element of `xs` to how many times it occurs there. `frequencies([])` is the empty map. It lives here rather than in `std::list` because `std::map` imports `std::list` (D-1610).
+
+- **Cost:** O(n log n), effectively O(n), where n is the length of `xs`. Informative.
+
+```cheby
+test "frequencies counts each element" {
+  let counts = map::frequencies(["a", "b", "a", "c", "a"])
+  assert counts == map::from_list([("a", 3), ("b", 1), ("c", 1)])
+  assert map::frequencies(list::new::<Int>()) == map::new()
+  assert map::frequencies([(1, 2), (1, 2)]) == map::from_list([((1, 2), 2)])
+}
+```
+
 ## Size
 
 ### `size`

@@ -11,6 +11,8 @@
 //! - [`ops`]: the operations on list values (views over a tree).
 //! - `kernels`: the runtime helpers for generated code (plan §4.1) and
 //!   the `std::list` kernels (D-484).
+//! - `heap`: the `std::heap` kernels, a binary heap kept in a list's tree
+//!   and updated in place (D-1612, D-1613).
 //!
 //! Costs, as `docs/stdlib/list.md` requires (D-300) and the tests in
 //! `tests.rs` pin: `length` O(1); `get` and `set` O(log n); `push` O(log n)
@@ -22,6 +24,7 @@
 //!
 //! [`CustomKind`]: crate::layout::CustomKind
 
+mod heap;
 pub(crate) mod kernels;
 mod node;
 mod ops;
@@ -30,6 +33,9 @@ mod tree;
 #[cfg(test)]
 mod tests;
 
+pub use heap::{
+    cheby_heap_sys_from_list, cheby_heap_sys_pop, cheby_heap_sys_push, cheby_heap_sys_to_list,
+};
 pub use kernels::{
     cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_prepend,
     cheby_list_push, cheby_list_set, cheby_list_slice, cheby_list_sort_with, cheby_list_split_at,
@@ -42,8 +48,8 @@ pub(crate) use ops::Iter;
 
 use crate::abi::Word;
 
-/// The `std::list` kernels this module registers, as `(symbol, address)`
-/// pairs. The `cheby_rt_list_*` helpers and the static empty list are
+/// The `std::list` and `std::heap` kernels this module registers, as
+/// `(symbol, address)` pairs. The `cheby_rt_list_*` helpers and the static empty list are
 /// runtime helpers, registered by `symbols.rs` itself.
 ///
 /// Also registers the list layouts (26-28), so generated code that only
@@ -52,6 +58,7 @@ use crate::abi::Word;
 pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     node::register();
     out.extend(kernels::all());
+    out.extend(heap::all());
 }
 
 /// Registers the list layouts (26-28) once per process, as `kernels`
@@ -62,7 +69,12 @@ pub(crate) fn register_kinds() {
 }
 
 /// The std module paths whose kernels this module registers completely.
-pub(crate) const COMPLETE: &[&str] = &["list"];
+pub(crate) const COMPLETE: &[&str] = &["list", "heap"];
+
+/// The C signatures of the `std::heap` kernels, for the test that compares
+/// them with their declarations.
+#[cfg(test)]
+pub(crate) use heap::signatures as heap_signatures;
 
 /// The elements of a borrowed list, in order, each borrowed: valid while
 /// the iterator lives (it holds a reference to the list). O(1) amortized

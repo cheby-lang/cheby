@@ -22,7 +22,7 @@
 
 == src/main.cheby:9:18 completion list::map list::length list::fold
 {
-  "count": 51,
+  "count": 56,
   "isIncomplete": true,
   "items": [
     {

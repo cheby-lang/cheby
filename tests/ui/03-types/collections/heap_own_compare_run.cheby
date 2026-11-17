@@ -1,0 +1,41 @@
+// @mode: run-pass
+// @decisions: D-1612, D-1613
+//! The heap's kernels compare natively only the types whose `compare` is
+//! built in, and they read that from the element type, never from the
+//! values: `Level`'s nullary constructors may be stored like `Int`s, but
+//! its own `compare`, which reverses their order, decides, in both
+//! directions and inside a tuple.
+
+import std::heap
+import std::int
+import std::io
+
+type Level {
+  Low,
+  Mid,
+  High,
+}
+
+fn rank(level: Level) -> Int {
+  case level {
+    Low => 0
+    Mid => 1
+    High => 2
+  }
+}
+
+fn compare(a: Level, b: Level) -> Order {
+  int::compare(rank(b), rank(a))
+}
+
+fn main() {
+  let levels = [Low, High, Mid, Low]
+  let smallest = heap::to_list(heap::from_list(levels))
+  let largest = heap::to_list(heap::from_list_max(levels))
+  let ranks = heap::to_list(heap::from_list([0, 2, 1, 0]))
+  let pairs = heap::to_list(heap::from_list([(1, Low), (0, Low), (1, High)]))
+  io::println("{smallest:?}")
+  io::println("{largest:?}")
+  io::println("{ranks:?}")
+  io::println("{pairs:?}")
+}

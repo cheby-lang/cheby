@@ -1,0 +1,2 @@
+panicked at tests/ui/03-types/collections/heap_panic_run.cheby:19:13:
+division by zero

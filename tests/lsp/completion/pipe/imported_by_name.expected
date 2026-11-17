@@ -108,7 +108,7 @@
 
 == src/main.cheby:13:20 completion map
 {
-  "count": 12,
+  "count": 15,
   "isIncomplete": false,
   "items": [
     {
@@ -144,7 +144,7 @@
 
 == src/main.cheby:15:17 completion map
 {
-  "count": 49,
+  "count": 54,
   "isIncomplete": false,
   "items": [
     {

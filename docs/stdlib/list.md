@@ -723,7 +723,7 @@ test "zip pairs by position" {
 ### `unzip`
 
 ```cheby
-pub fn unzip<T, U>(pairs: List<(T, U)>) -> (List<T>, List<U>)
+pub fn unzip<T, U>(items: List<(T, U)>) -> (List<T>, List<U>)
 ```
 
 Splits a list of pairs into the list of first elements and the list of second elements, each in order.
@@ -996,6 +996,134 @@ Calls `f` on each element, front to back, for its effects.
 ```cheby
 test "each visits every element" {
   list::each([1, 2, 3], fn(n) { assert n > 0 })
+}
+```
+
+## Windows, columns and combinations
+
+### `windows`
+
+```cheby
+pub fn windows<T>(xs: List<T>, n: Int) -> List<List<T>>
+```
+
+Returns every run of `n` adjacent elements of `xs`, in order, and `[]` when `n` exceeds the length of `xs` (D-1607).
+
+- **Panics:** when `n` is below 1.
+- **Cost:** O(m log n) for m windows, which share `xs`'s tree as slices do. Informative.
+
+```cheby
+test "windows slides over adjacent elements" {
+  assert list::windows([1, 2, 3, 4], 2) == [[1, 2], [2, 3], [3, 4]]
+  assert list::windows([1, 2, 3], 3) == [[1, 2, 3]]
+  assert list::windows([1, 2, 3], 4) == []
+  assert list::windows(list::new::<Int>(), 1) == []
+}
+```
+
+### `chunks`
+
+```cheby
+pub fn chunks<T>(xs: List<T>, n: Int) -> List<List<T>>
+```
+
+Returns `xs` cut into runs of `n` elements from the front. The last run holds what is left, so it may be shorter, and `chunks([], n)` is `[]` (D-1607).
+
+- **Panics:** when `n` is below 1.
+- **Cost:** O(m log n) for m chunks. Informative.
+
+```cheby
+test "chunks cuts from the front" {
+  assert list::chunks([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+  assert list::chunks([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]
+  assert list::chunks([1, 2], 5) == [[1, 2]]
+  assert list::chunks(list::new::<Int>(), 3) == []
+}
+```
+
+### `transpose`
+
+```cheby
+pub fn transpose<T>(rows: List<List<T>>) -> List<List<T>>
+```
+
+Returns the columns of `rows`. Row `i` of the result holds element `i` of each row that has one, in row order, so a missing cell is skipped, and the result has as many rows as the longest row has elements (D-1608).
+
+- **Cost:** O(w · r log n) for r rows of at most w elements. Informative.
+
+```cheby
+test "transpose turns rows into columns" {
+  assert list::transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]
+  assert list::transpose([[1, 2, 3], [4]]) == [[1, 4], [2], [3]]
+  assert list::transpose([[1], [], [2, 3]]) == [[1, 2], [3]]
+  assert list::transpose(list::new::<List<Int>>()) == []
+  assert list::transpose([list::new::<Int>()]) == []
+}
+```
+
+### `pairs`
+
+```cheby
+pub fn pairs<T>(xs: List<T>) -> List<(T, T)>
+```
+
+Returns every pair `(xs[i], xs[j])` with `i < j`, ordered by `i` and then by `j`. Equal elements are not merged (D-1609).
+
+- **Cost:** O(n²). Informative.
+
+```cheby
+test "pairs lists every pair once" {
+  assert list::pairs([1, 2, 3]) == [(1, 2), (1, 3), (2, 3)]
+  assert list::pairs([7, 7]) == [(7, 7)]
+  assert list::pairs([1]) == []
+  assert list::pairs(list::new::<Int>()) == []
+}
+```
+
+### `combinations`
+
+```cheby
+pub fn combinations<T>(xs: List<T>, k: Int) -> List<List<T>>
+```
+
+Returns every choice of `k` elements of `xs`, each keeping the order of `xs`, in lexicographic order of the chosen positions, as Python's `itertools.combinations` does. Equal elements are not merged. `combinations(xs, 0)` is `[[]]`, and a `k` beyond the length of `xs` gives `[]` (D-1609).
+
+- **Panics:** when `k` is negative.
+- **Cost:** O(k) for each of the C(n, k) results. Informative.
+
+```cheby
+test "combinations chooses k elements in order" {
+  assert list::combinations([1, 2, 3], 2) == [[1, 2], [1, 3], [2, 3]]
+  assert list::combinations([1, 2, 3, 4], 3) == [[1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4]]
+  assert list::combinations([1, 2], 0) == [[]]
+  assert list::combinations([1, 2], 3) == []
+  assert list::combinations([5, 5], 1) == [[5], [5]]
+}
+```
+
+### `permutations`
+
+```cheby
+pub fn permutations<T>(xs: List<T>) -> List<List<T>>
+```
+
+Returns every ordering of `xs`, in lexicographic order of the positions, as Python's `itertools.permutations` does. Equal elements are not merged, so a list of n elements gives n! results, and `permutations([])` is `[[]]` (D-1609).
+
+- **Cost:** O(n log n) for each of the n! results. Informative.
+
+```cheby
+test "permutations lists every ordering" {
+  assert list::permutations([1, 2, 3]) == [
+    [1, 2, 3],
+    [1, 3, 2],
+    [2, 1, 3],
+    [2, 3, 1],
+    [3, 1, 2],
+    [3, 2, 1],
+  ]
+  assert list::permutations([1]) == [[1]]
+  assert list::permutations(list::new::<Int>()) == [[]]
+  assert list::length(list::permutations([4, 4])) == 2
 }
 ```
 

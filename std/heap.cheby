@@ -1,0 +1,353 @@
+//! The heap `Heap<T>`, a persistent priority queue that pops its smallest
+//! or its largest element first and keeps duplicates (D-1612).
+//!
+//! A heap is a binary heap in a `List<T>`, and each update is a runtime
+//! kernel that changes a unique heap in place (D-1613, D-525). The
+//! functions that compare elements carry `T: Compare` and give the kernels
+//! the element type's `compare`, which they call back, or compare natively
+//! when the element type's descriptor shows a built-in one. The hooks and
+//! the functions that do not compare carry no bound (D-482).
+
+import std::int
+import std::list
+import std::map
+import std::ops::{Compare}
+import std::string
+
+/// A persistent heap that pops its smallest element first, when made by
+/// `new_min` or `from_list`, or its largest, when made by `new_max` or
+/// `from_list_max` (D-1612). Equality, hashing and debug printing go
+/// through `equal`, `hash` and `debug` (D-342).
+@std_hooks(equal, hash, debug)
+pub type Heap<T> {
+  Min(List<T>),
+  Max(List<T>),
+}
+
+/// The elements in the order the heap's array holds them.
+priv fn stored<T>(h: Heap<T>) -> List<T> {
+  case h {
+    Min(items) => items
+    Max(items) => items
+  }
+}
+
+/// Whether `h` pops its largest element first.
+priv fn is_max<T>(h: Heap<T>) -> Bool {
+  case h {
+    Min(_) => False
+    Max(_) => True
+  }
+}
+
+/// How many times each element occurs, compared with `==`.
+priv fn counts<T>(h: Heap<T>) -> map::Map<T, Int> {
+  list::fold(stored(h), map::new(), fn(found, item) { map::upsert(found, item, count_one) })
+}
+
+/// One more occurrence, for `counts`.
+priv fn count_one(previous: Option<Int>) -> Int {
+  case previous {
+    Some(n) => n + 1
+    None => 1
+  }
+}
+
+/// Whether two heaps pop in the same direction and hold the same elements,
+/// compared with `==`, as a multiset (D-1612).
+fn equal<T>(a: Heap<T>, b: Heap<T>) -> Bool {
+  let same_size = list::length(stored(a)) == list::length(stored(b))
+  let same_kind = is_max(a) == is_max(b) && same_size
+  same_kind && (stored(a) == stored(b) || counts(a) == counts(b))
+}
+
+/// The direction and the number of times each element occurs, which do not
+/// depend on the order the elements are stored in (D-1612, D-584).
+fn hash<T>(h: Heap<T>) -> (Bool, map::Map<T, Int>) {
+  (is_max(h), counts(h))
+}
+
+/// `heap::from_list([…])` or `heap::from_list_max([…])`, with each element
+/// debug-printed and the elements sorted by that text, as a map's entries
+/// are (D-1612, D-344).
+fn debug<T>(h: Heap<T>) -> String {
+  let texts = list::sort(list::map(stored(h), fn(item) { "{item:?}" }))
+  let joined = string::join(texts, ", ")
+  case h {
+    Min(_) => "heap::from_list([{joined}])"
+    Max(_) => "heap::from_list_max([{joined}])"
+  }
+}
+
+test "heaps compare by direction and contents" {
+  let built = from_list([3, 1, 2])
+  let pushed = push(push(push(new_min(), 3), 2), 1)
+  assert built == pushed
+  assert built != from_list_max([3, 1, 2])
+  assert built != from_list([1, 2])
+  assert from_list([1, 1, 2]) != from_list([1, 2, 2])
+  assert new_min::<Int>() == from_list([])
+  assert new_min::<Int>() != new_max::<Int>()
+}
+
+test "equal heaps hash alike" {
+  let built = from_list([1, 2, 3, 2])
+  let pushed = push(push(push(push(new_min(), 3), 2), 2), 1)
+  assert built == pushed
+  assert map::size(map::from_list([(built, 1), (pushed, 2)])) == 1
+  assert map::size(map::from_list([(built, 1), (from_list_max([1, 2, 3, 2]), 2)])) == 2
+}
+
+test "debug text sorts the elements by their text" {
+  let numbers = from_list([10, 9, 1])
+  let words = from_list_max(["b", "a", "b"])
+  let empty = new_min::<Int>()
+  assert "{numbers:?}" == "heap::from_list([1, 10, 9])"
+  assert "{words:?}" == "heap::from_list_max([\"a\", \"b\", \"b\"])"
+  assert "{empty:?}" == "heap::from_list([])"
+}
+
+/// `T`'s `compare` as a function value for the kernels. Its one capture is
+/// the dictionary of the bound, whose descriptor tells the kernels when the
+/// comparison is built in (D-1613).
+priv fn comparison<T: Compare>() -> fn(T, T) -> Order {
+  fn(a, b) { Compare::compare(a, b) }
+}
+
+// Kernels
+
+/// `items` with `item` added at the end and sifted up (D-1613).
+@external(native, "cheby_heap_sys_push")
+@external(js, "./heap.mjs", "sys_push")
+priv fn sys_push<T>(items: List<T>, item: T, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+/// `items` without its first element, the last moved there and sifted down
+/// (D-1613).
+@external(native, "cheby_heap_sys_pop")
+@external(js, "./heap.mjs", "sys_pop")
+priv fn sys_pop<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+/// `items` made a heap: each position from `n / 2 - 1` to `0` sifted down
+/// (D-1613).
+@external(native, "cheby_heap_sys_from_list")
+@external(js, "./heap.mjs", "sys_from_list")
+priv fn sys_from_list<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+/// The elements of the heap `items` in the order repeated pops give them
+/// (D-1613).
+@external(native, "cheby_heap_sys_to_list")
+@external(js, "./heap.mjs", "sys_to_list")
+priv fn sys_to_list<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+// Building
+
+/// Returns an empty heap that pops its smallest element first.
+pub fn new_min<T>() -> Heap<T> {
+  Min([])
+}
+
+test "new_min is empty" {
+  let empty = new_min::<Int>()
+  assert is_empty(empty)
+  assert pop(empty) == None
+  assert to_list(empty) == []
+}
+
+/// Returns an empty heap that pops its largest element first.
+pub fn new_max<T>() -> Heap<T> {
+  Max([])
+}
+
+test "new_max pops the largest element first" {
+  let h = push(push(push(new_max(), 2), 7), 4)
+  assert to_list(h) == [7, 4, 2]
+}
+
+/// Returns a heap of `items` that pops its smallest element first. It
+/// keeps the order of `items` and sifts down each position from `n / 2 - 1`
+/// to `0`, which takes O(n) (D-1613).
+pub fn from_list<T: Compare>(items: List<T>) -> Heap<T> {
+  Min(sys_from_list(items, False, comparison()))
+}
+
+test "from_list pops the smallest element first and keeps duplicates" {
+  let h = from_list([5, 3, 8, 3, 1])
+  assert size(h) == 5
+  assert to_list(h) == [1, 3, 3, 5, 8]
+}
+
+/// Returns a heap of `items` that pops its largest element first, built as
+/// `from_list` builds one.
+pub fn from_list_max<T: Compare>(items: List<T>) -> Heap<T> {
+  Max(sys_from_list(items, True, comparison()))
+}
+
+test "from_list_max pops the largest element first" {
+  assert to_list(from_list_max([5, 3, 8, 3, 1])) == [8, 5, 3, 3, 1]
+}
+
+// Updating
+
+/// Returns `h` with `item` added, kept beside any element equal to it. It
+/// goes at the end and moves up past each parent that it goes before, in
+/// O(log n) (D-1613).
+pub fn push<T: Compare>(h: Heap<T>, item: T) -> Heap<T> {
+  case h {
+    Min(items) => Min(sys_push(items, item, False, comparison()))
+    Max(items) => Max(sys_push(items, item, True, comparison()))
+  }
+}
+
+test "push keeps duplicates" {
+  let h = push(push(push(new_min(), "b"), "a"), "b")
+  assert to_list(h) == ["a", "b", "b"]
+  assert size(h) == 3
+}
+
+/// Returns the first element, the smallest or the largest, and the heap
+/// without it, or `None` when `h` is empty. The last element moves to the
+/// top and down past each child that goes before it, in O(log n)
+/// (D-1613).
+pub fn pop<T: Compare>(h: Heap<T>) -> Option<(T, Heap<T>)> {
+  case h {
+    Min(items) => pop_items(items, False)
+    Max(items) => pop_items(items, True)
+  }
+}
+
+/// `pop` of the elements of a heap in the given direction.
+priv fn pop_items<T: Compare>(items: List<T>, max: Bool) -> Option<(T, Heap<T>)> {
+  case list::get(items, 0) {
+    Some(top) => {
+      let rest = sys_pop(items, max, comparison())
+      let remaining = case max {
+        True => Max(rest)
+        False => Min(rest)
+      }
+      Some((top, remaining))
+    }
+    None => None
+  }
+}
+
+test "pop returns the first element and the rest" {
+  let assert Some((first, rest)) = pop(from_list([4, 1, 3]))
+  assert first == 1
+  assert to_list(rest) == [3, 4]
+  let assert Some((largest, _)) = pop(from_list_max([4, 1, 3]))
+  assert largest == 4
+  assert pop(new_max::<Int>()) == None
+}
+
+// Reading
+
+/// Returns the element `pop` would return, without removing it, or `None`
+/// when `h` is empty. O(1).
+pub fn peek<T>(h: Heap<T>) -> Option<T> {
+  list::get(stored(h), 0)
+}
+
+test "peek reads the first element" {
+  assert peek(from_list([4, 1, 3])) == Some(1)
+  assert peek(from_list_max([4, 1, 3])) == Some(4)
+  assert peek(new_min::<Int>()) == None
+}
+
+/// Returns the number of elements, duplicates included. O(1).
+pub fn size<T>(h: Heap<T>) -> Int {
+  list::length(stored(h))
+}
+
+test "size counts duplicates" {
+  assert size(from_list([2, 2, 2])) == 3
+  assert size(new_max::<Int>()) == 0
+}
+
+/// Tells whether the heap has no elements. O(1).
+pub fn is_empty<T>(h: Heap<T>) -> Bool {
+  list::is_empty(stored(h))
+}
+
+test "is_empty tells an empty heap" {
+  assert is_empty(new_min::<Int>())
+  assert !is_empty(from_list([1]))
+}
+
+/// Returns the elements in the order repeated pops would return them, in
+/// O(n log n). The heap does not change (D-1612).
+pub fn to_list<T: Compare>(h: Heap<T>) -> List<T> {
+  sys_to_list(stored(h), is_max(h), comparison())
+}
+
+test "to_list lists the elements in pop order" {
+  let h = from_list([(2, "b"), (1, "z"), (2, "a")])
+  assert to_list(h) == [(1, "z"), (2, "a"), (2, "b")]
+  assert to_list(h) == to_list(h)
+  assert size(h) == 3
+}
+
+test "built-in comparisons cover Int, strings and tuples" {
+  assert to_list(from_list(["pear", "apple", "fig", "Pear"])) == ["Pear", "apple", "fig", "pear"]
+  assert to_list(from_list([3, -1, 2, 0])) == [-1, 0, 2, 3]
+  let nested = [((2, "a"), 1), ((1, "b"), 2), ((2, "a"), 0)]
+  assert to_list(from_list(nested)) == [((1, "b"), 2), ((2, "a"), 0), ((2, "a"), 1)]
+}
+
+// An element type for the next tests, ordered by `rank` alone and from the
+// highest rank down, so two jobs of one rank compare `Equal` and show
+// which one the algorithm pops first. Satisfaction is not a written use, so
+// the test also names `compare` (D-631).
+priv type Job {
+  rank: Int,
+  name: String,
+}
+
+priv fn compare(a: Job, b: Job) -> Order {
+  int::compare(b.rank, a.rank)
+}
+
+/// The names of the jobs of `h` in pop order.
+priv fn names(h: Heap<Job>) -> String {
+  string::join(list::map(to_list(h), fn(job) { job.name }), "")
+}
+
+test "a type's own compare is called, and ties pop in a fixed order" {
+  let jobs = [
+    Job { rank: 1, name: "a" },
+    Job { rank: 1, name: "b" },
+    Job { rank: 2, name: "c" },
+    Job { rank: 2, name: "d" },
+    Job { rank: 2, name: "e" },
+    Job { rank: 2, name: "f" },
+  ]
+  assert names(from_list(jobs)) == "dfecba"
+  assert names(list::fold(jobs, new_min(), push)) == "cdefba"
+  assert names(from_list_max(jobs)) == "abedcf"
+  assert compare(Job { rank: 1, name: "x" }, Job { rank: 2, name: "y" }) == Greater
+}
+
+test "updates leave the heap they started from unchanged" {
+  let h = from_list(list::map(list::range(0, 100), fn(n) { n * 37 % 100 }))
+  let more = push(h, -1)
+  let assert Some((first, rest)) = pop(h)
+  let assert Some((again, _)) = pop(h)
+  assert first == 0
+  assert again == 0
+  assert to_list(h) == list::range(0, 100)
+  assert peek(more) == Some(-1)
+  assert size(rest) == 99
+  assert size(h) == 100
+}
+
+test "pushes and pops of many elements keep the heap order" {
+  let numbers = list::map(list::range(0, 3000), fn(n) { n * 7919 % 3001 })
+  let h = list::fold(numbers, new_min(), push)
+  let popped = list::fold(list::range(0, 1500), (h, []), fn((current, out), _) {
+    let assert Some((top, rest)) = pop(current)
+    (rest, list::push(out, top))
+  })
+  let (left, firsts) = popped
+  assert firsts == list::take(list::sort(numbers), 1500)
+  assert to_list(left) == list::drop(list::sort(numbers), 1500)
+  assert to_list(from_list(numbers)) == list::sort(numbers)
+}

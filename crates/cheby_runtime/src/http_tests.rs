@@ -384,8 +384,8 @@ fn http_head_kernels_match_their_declarations() {
             _ => "Result<Option<(String, List<(String, String)>, Int)>, (Int, String)>",
         };
         assert!(
-            header.starts_with(&format!("fn {name}(head: bytes::Bytes) -> {result}"))
-                || header.starts_with(&format!("priv fn {name}(head: bytes::Bytes) -> {result}")),
+            header.starts_with(&format!("fn {name}(buffer: bytes::Bytes) -> {result}"))
+                || header.starts_with(&format!("priv fn {name}(buffer: bytes::Bytes) -> {result}")),
             "{header}"
         );
         assert!(

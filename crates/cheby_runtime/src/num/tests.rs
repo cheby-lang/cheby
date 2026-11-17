@@ -159,6 +159,13 @@ fn declared() -> BTreeMap<String, Declared> {
                 pending = Some(rest.split('"').next().unwrap().to_owned());
                 continue;
             }
+            // A private binding, such as `int`'s binding of a `std::string`
+            // kernel for `find_all` (D-1605), is not one of this module's
+            // kernels.
+            if line.starts_with("priv fn ") {
+                pending = None;
+                continue;
+            }
             let Some(signature) = line.strip_prefix("pub fn ") else {
                 continue;
             };
