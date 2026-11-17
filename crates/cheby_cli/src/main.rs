@@ -66,6 +66,10 @@ use crate::color::ColorWhen;
 #[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// Sanitizer builds still depend on mimalloc; this keeps cargo's
+// `unused_dependencies` lint quiet in them.
+#[cfg(any(cheby_sanitize = "address", cheby_sanitize = "thread"))]
+use mimalloc as _;
 
 #[derive(Debug, Parser)]
 #[command(name = "cheby", version, about = "The Cheby toolchain")]

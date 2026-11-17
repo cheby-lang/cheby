@@ -18,7 +18,7 @@
 //! mkdir -p corpus/analysis
 //! cp corpus/check/* corpus/analysis/
 //! RUSTFLAGS='--cfg cheby_sanitize="address"' ASAN_OPTIONS=detect_leaks=0 \
-//!   cargo +nightly-2026-10-01 fuzz run analysis -- -rss_limit_mb=6144
+//!   cargo +nightly-2026-11-17 fuzz run analysis -- -rss_limit_mb=6144
 //! ```
 //!
 //! LeakSanitizer stays off for the reason `check` gives (D-898): the

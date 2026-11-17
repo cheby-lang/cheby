@@ -14,7 +14,7 @@
 //! cp ../docs/examples/*/src/main.cheby corpus/check/ 2>/dev/null
 //! find ../tests/ui -name '*.cheby' -exec sh -c 'cp "$1" corpus/check/$(echo "$1" | tr / _)' _ {} \;
 //! RUSTFLAGS='--cfg cheby_sanitize="address"' ASAN_OPTIONS=detect_leaks=0 \
-//!   cargo +nightly-2026-10-01 fuzz run check -- -rss_limit_mb=6144
+//!   cargo +nightly-2026-11-17 fuzz run check -- -rss_limit_mb=6144
 //! ```
 //!
 //! The cfg turns on the runtime's fiber annotations for the sanitizer.

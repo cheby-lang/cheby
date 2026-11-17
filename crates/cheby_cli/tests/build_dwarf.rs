@@ -116,18 +116,14 @@ impl Dwarf {
             let text = |value| {
                 dwarf
                     .attr_string(&unit, value)
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default()
+                    .map_or_default(|s| s.to_string_lossy().into_owned())
             };
             let mut entries = unit.entries();
             let Some(root) = entries.next_dfs().unwrap() else {
                 continue;
             };
             let mut read = Unit {
-                name: root
-                    .attr_value(gimli::DW_AT_name)
-                    .map(text)
-                    .unwrap_or_default(),
+                name: root.attr_value(gimli::DW_AT_name).map_or_default(text),
                 comp_dir: root.attr_value(gimli::DW_AT_comp_dir).map(text),
                 ..Unit::default()
             };
@@ -144,10 +140,7 @@ impl Dwarf {
                     if row.end_sequence() {
                         continue;
                     }
-                    let name = row
-                        .file(header)
-                        .map(|f| text(f.path_name()))
-                        .unwrap_or_default();
+                    let name = row.file(header).map_or_default(|f| text(f.path_name()));
                     read.rows
                         .push((name, row.line().map_or(0, std::num::NonZero::get)));
                 }
