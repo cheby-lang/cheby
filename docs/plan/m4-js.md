@@ -108,4 +108,5 @@ Still to come for 4.6: the final reading of the cost gate (D-1577, D-1586, D-159
 - An edit to one function body regenerates only the JS of functions whose suspension status or IR changed.
 - Deno and Bun run the conformance suite in CI. Browser support is checked with a smoke test.
 - `std::context`, clocks in context and seeded random streams pass their spec tests on native and on Node (D-1049).
+- `std::log` passes its spec tests on native and on Node. It has no `.mjs` file of its own (D-1614, D-1635).
 - `fiber::raise`, `map`, `try_map` and `yield_now`, `channel::send_now` and `receive_now`, and `selector::select_now` pass their spec tests on native and on Node, and the JS kernels of `float::to_fixed`, `string::words` and `bytes::index_of`, and `duration::scale`'s safe-range check, pass the std tests on Node (D-1085, D-1092, D-1094, D-1097 to D-1099, D-1101, D-1102).

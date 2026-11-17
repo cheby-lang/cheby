@@ -434,6 +434,11 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1586    | Context's cost gate: one benchmark's median `main` time at 1.05 stops, after a rerun; no x86-64     |
 | D-1592    | Context's final reading also times three provided values against an empty context, with no stop     |
 | D-1596    | Context's cost gate also reads `rc/map_updates` and the `collections` group, stop at 1.05           |
+| D-1614    | `std::log` is a tier-4 module in Cheby with no kernels, and ships on native before M4               |
+| D-1628    | `@std_call_site` passes a log call's path, line and column to the function's constructor            |
+| D-1631    | The checker swaps in the constructor, MIR lowering makes the location; cache and AOT tests          |
+| D-1633    | No std module is planned once `std::log` ships; E0038 keeps only its made-up probe module           |
+| D-1635    | `std::log` is built in four committed steps; example 034 `logging` binds as an M3 example           |
 
 ## Open questions
 
