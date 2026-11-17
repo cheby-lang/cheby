@@ -77,8 +77,10 @@ Tier 3 is implemented on native in M3, in the order `std::time` with `std::time:
 | ------------------------------ | -------------------------------------------------------------------------------------------- |
 | [`std::context`](context.md)   | values provided for the duration of a callback, inherited by spawned fibers, and captured    |
 | [`std::filepath`](filepath.md) | lexical paths: joining, taking apart and comparing them, the same on every platform          |
+| [`std::function`](function.md) | repeating a step: `iterate` a given number of times, and `fixpoint` until nothing changes    |
+| [`std::heap`](heap.md)         | `Heap<T>`, a priority queue that pops its smallest or its largest element first              |
 
-Tier 4 belongs to M4. `std::context` is implemented on native first, as workstream 4.6, and its JS side follows with M4's JS runtime, workstream 4.3, and passes the same tests (D-1049, D-1563). `std::filepath` is Cheby with no kernels, so it ships before M4 and runs on JS unchanged (D-1432). `std::context` also changes three earlier modules, on native already: `std::time` reads its clock from context (D-1047), `std::random`'s host functions draw from a seeded stream when one is provided (D-1048), and every spawn of `std::fiber` copies the spawning fiber's context (D-1044). Their tests in the pages of those modules run, and none of them is pending (D-741). `std::context` is written in Cheby over seven `@std_context` kernels, `std::random` gains five for its stream, and `std::time` two that read the system clock unless a clock is provided (D-1573, D-1574, D-1597). As in tier 3, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986).
+Tier 4 belongs to M4. `std::context` is implemented on native first, as workstream 4.6, and its JS side follows with M4's JS runtime, workstream 4.3, and passes the same tests (D-1049, D-1563). `std::filepath` is Cheby with no kernels, so it ships before M4 and runs on JS unchanged (D-1432). So is `std::function` (D-1611). `std::heap` ships before M4 over native kernels, and its `./heap.mjs` follows with M4's JS runtime (D-1612, D-1613). `std::context` also changes three earlier modules, on native already: `std::time` reads its clock from context (D-1047), `std::random`'s host functions draw from a seeded stream when one is provided (D-1048), and every spawn of `std::fiber` copies the spawning fiber's context (D-1044). Their tests in the pages of those modules run, and none of them is pending (D-741). `std::context` is written in Cheby over seven `@std_context` kernels, `std::random` gains five for its stream, and `std::time` two that read the system clock unless a clock is provided (D-1573, D-1574, D-1597). As in tier 3, every kernel declares its JS binding now, and the `.mjs` files follow in M4 (D-986).
 
 ## Entry format
 
@@ -283,6 +285,15 @@ pub fn wrapping_neg(n: T) -> T
 ```
 
 Each computes the result modulo 2ⁿ, where n is the type's width in bits (D-025). For `Int` the width is 64 on every target, and on JS a result outside the safe-integer range panics (D-037).
+
+### Divisors (integer types)
+
+```cheby
+pub fn gcd(a: T, b: T) -> T
+pub fn lcm(a: T, b: T) -> T
+```
+
+`gcd` is the greatest common divisor, never negative, and `gcd(0, 0)` is `0`. `lcm` is the least common multiple, the absolute value of `a / gcd(a, b) * b`, and `0` when either argument is `0`. Each panics only when its result does not fit `T`, as `gcd(min_value, 0)` does for a signed type (D-025, D-1606). Both are Cheby with no kernels, so they run in constants.
 
 ## Gaps
 

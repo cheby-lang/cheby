@@ -1,0 +1,27 @@
+// @mode: run-fail
+// @decisions: D-526, D-1613
+//! A panic inside the `compare` that a heap's kernel calls back is
+//! reported like any other panic, at its own location, even after the
+//! kernel has moved elements of the heap in place.
+
+import std::heap
+import std::int
+import std::list
+
+type Fragile {
+  Fragile(Int),
+}
+
+fn compare(a: Fragile, b: Fragile) -> Order {
+  let Fragile(x) = a
+  let Fragile(y) = b
+  // 1, except that comparing -1 with 4 divides by zero.
+  let one = (x * y + 4) / (x * y + 4)
+  int::compare(x * one, y * one)
+}
+
+fn main() {
+  let h = heap::from_list(list::map(list::range(0, 40), Fragile))
+  let pushed = heap::push(h, Fragile(-1))
+  assert heap::size(pushed) == 0
+}

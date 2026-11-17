@@ -302,3 +302,25 @@ test "filter keeps the matching entries" {
   let odd = filter(counts, fn(_, value) { value % 2 == 1 })
   assert odd == from_list([("a", 1), ("c", 3)])
 }
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns how many times each element occurs in `xs` (D-1610).
+pub fn frequencies<K>(xs: List<K>) -> Map<K, Int> {
+  list::fold(xs, new(), fn(counts, x) {
+    upsert(counts, x, fn(previous) {
+      case previous {
+        Some(count) => count + 1
+        None => 1
+      }
+    })
+  })
+}
+
+test "frequencies counts each element" {
+  let counts = frequencies(["a", "b", "a", "c", "a"])
+  assert counts == from_list([("a", 3), ("b", 1), ("c", 1)])
+  assert frequencies(list::new::<Int>()) == new()
+  assert frequencies([(1, 2), (1, 2)]) == from_list([((1, 2), 2)])
+}

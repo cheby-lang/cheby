@@ -544,8 +544,8 @@ test "zip pairs by position" {
 }
 
 /// Splits a list of pairs into the list of first elements and the list of second elements.
-pub fn unzip<T, U>(pairs: List<(T, U)>) -> (List<T>, List<U>) {
-  fold(pairs, ([], []), fn((firsts, seconds), (a, b)) { (push(firsts, a), push(seconds, b)) })
+pub fn unzip<T, U>(items: List<(T, U)>) -> (List<T>, List<U>) {
+  fold(items, ([], []), fn((firsts, seconds), (a, b)) { (push(firsts, a), push(seconds, b)) })
 }
 
 test "unzip splits pairs" {
@@ -978,4 +978,149 @@ test "strings compare by code point" {
   assert string::compare("Z", "a") == Less
   assert string::compare("é", "z") == Greater
   assert sort(["b", "c", "a"]) == ["a", "b", "c"]
+}
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns every run of `n` adjacent elements of `xs`, in order, and `[]`
+/// when `n` exceeds the length. It panics when `n` is below 1 (D-1607).
+pub fn windows<T>(xs: List<T>, n: Int) -> List<List<T>> {
+  guard n >= 1 else {
+    panic as "list::windows needs a size of at least 1"
+  }
+  // `start + n` cannot overflow: `start` stays at most the length.
+  fn step(found: List<List<T>>, start: Int) -> List<List<T>> {
+    case start + n > length(xs) {
+      True => found
+      False => step(push(found, slice(xs, start, start + n)), start + 1)
+    }
+  }
+  step([], 0)
+}
+
+test "windows slides over adjacent elements" {
+  assert windows([1, 2, 3, 4], 2) == [[1, 2], [2, 3], [3, 4]]
+  assert windows([1, 2, 3], 3) == [[1, 2, 3]]
+  assert windows([1, 2, 3], 4) == []
+  assert windows(new::<Int>(), 1) == []
+}
+
+/// Returns `xs` cut into runs of `n` elements from the front, the last of
+/// which may be shorter. It panics when `n` is below 1 (D-1607).
+pub fn chunks<T>(xs: List<T>, n: Int) -> List<List<T>> {
+  guard n >= 1 else {
+    panic as "list::chunks needs a size of at least 1"
+  }
+  // `start + n` cannot overflow: `start` stays below the length here.
+  fn step(found: List<List<T>>, start: Int) -> List<List<T>> {
+    case start >= length(xs) {
+      True => found
+      False => step(push(found, slice(xs, start, start + n)), start + n)
+    }
+  }
+  step([], 0)
+}
+
+test "chunks cuts from the front" {
+  assert chunks([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+  assert chunks([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]
+  assert chunks([1, 2], 5) == [[1, 2]]
+  assert chunks(new::<Int>(), 3) == []
+}
+
+/// Returns the columns of `rows`: row `i` of the result holds element `i`
+/// of each row that has one, in row order, so a missing cell is skipped
+/// (D-1608).
+pub fn transpose<T>(rows: List<List<T>>) -> List<List<T>> {
+  let width = fold(rows, 0, fn(widest, row) { int::max(widest, length(row)) })
+  range(0, width)
+  |> map(_, fn(i) { filter_map(rows, fn(row) { get(row, i) }) })
+}
+
+test "transpose turns rows into columns" {
+  assert transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]
+  assert transpose([[1, 2, 3], [4]]) == [[1, 4], [2], [3]]
+  assert transpose([[1], [], [2, 3]]) == [[1, 2], [3]]
+  assert transpose(new::<List<Int>>()) == []
+  assert transpose([new::<Int>()]) == []
+}
+
+/// Returns every pair `(xs[i], xs[j])` with `i < j`, in order of the
+/// positions (D-1609).
+pub fn pairs<T>(xs: List<T>) -> List<(T, T)> {
+  fn step(rest: List<T>, found: List<(T, T)>) -> List<(T, T)> {
+    case rest {
+      [] => found
+      [x, ..tail] => step(tail, fold(tail, found, fn(more, y) { push(more, (x, y)) }))
+    }
+  }
+  step(xs, [])
+}
+
+test "pairs lists every pair once" {
+  assert pairs([1, 2, 3]) == [(1, 2), (1, 3), (2, 3)]
+  assert pairs([7, 7]) == [(7, 7)]
+  assert pairs([1]) == []
+  assert pairs(new::<Int>()) == []
+}
+
+/// Returns every choice of `k` elements of `xs`, keeping their order, in
+/// lexicographic order of the positions. Equal elements are not merged.
+/// `combinations(xs, 0)` is `[[]]`, a `k` beyond the length gives `[]`,
+/// and a negative `k` panics (D-1609).
+pub fn combinations<T>(xs: List<T>, k: Int) -> List<List<T>> {
+  guard k >= 0 else {
+    panic as "list::combinations needs a size of at least 0"
+  }
+  // Taking `x` before leaving it out lists the results in order.
+  fn step(rest: List<T>, chosen: List<T>, left: Int, found: List<List<T>>) -> List<List<T>> {
+    case left, rest {
+      0, _ => push(found, chosen)
+      _, _ when length(rest) < left => found
+      _, [] => found
+      _, [x, ..tail] => step(tail, chosen, left, step(tail, push(chosen, x), left - 1, found))
+    }
+  }
+  step(xs, [], k, [])
+}
+
+test "combinations chooses k elements in order" {
+  assert combinations([1, 2, 3], 2) == [[1, 2], [1, 3], [2, 3]]
+  assert combinations([1, 2, 3, 4], 3) == [[1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4]]
+  assert combinations([1, 2], 0) == [[]]
+  assert combinations([1, 2], 3) == []
+  assert combinations([5, 5], 1) == [[5], [5]]
+}
+
+/// Returns every ordering of `xs`, in lexicographic order of the
+/// positions. Equal elements are not merged, and `permutations([])` is
+/// `[[]]` (D-1609).
+pub fn permutations<T>(xs: List<T>) -> List<List<T>> {
+  fn step(rest: List<T>, chosen: List<T>, found: List<List<T>>) -> List<List<T>> {
+    case rest {
+      [] => push(found, chosen)
+      _ => fold(range(0, length(rest)), found, fn(more, i) {
+        case split_at(rest, i) {
+          (before, [x, ..after]) => step(append(before, after), push(chosen, x), more)
+          (_, []) => more
+        }
+      })
+    }
+  }
+  step(xs, [], [])
+}
+
+test "permutations lists every ordering" {
+  assert permutations([1, 2, 3]) == [
+    [1, 2, 3],
+    [1, 3, 2],
+    [2, 1, 3],
+    [2, 3, 1],
+    [3, 1, 2],
+    [3, 2, 1],
+  ]
+  assert permutations([1]) == [[1]]
+  assert permutations(new::<Int>()) == [[]]
+  assert length(permutations([4, 4])) == 2
 }

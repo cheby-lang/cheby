@@ -593,3 +593,136 @@ test "wrapping_neg wraps around" {
   assert wrapping_neg(5) == -5
   assert wrapping_neg(min_value) == min_value
 }
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns every integer written in `text`, in order (D-1605). A number is
+/// a run of the ASCII digits `0` to `9`, and a `-` right before the run
+/// makes it negative unless the character before that `-` is a digit too,
+/// so `"2-4"` gives `[2, 4]` and `"p=3,-4"` gives `[3, -4]`. Every other
+/// character separates numbers, and a run that does not fit panics.
+pub fn find_all(text: String) -> List<Int> {
+  find_numbers(code_points(text), False, [])
+}
+
+/// Walks `rest` between numbers. `after_digit` tells whether the code
+/// point before `rest` is a digit, which stops a `-` from being a sign.
+priv fn find_numbers(rest: List<Int>, after_digit: Bool, found: List<Int>) -> List<Int> {
+  case rest {
+    [] => found
+    [45, d, ..tail] when !after_digit && is_digit(d) => read_digits(tail, 48 - d, -1, found)
+    [c, ..tail] when is_digit(c) => read_digits(tail, c - 48, 1, found)
+    [_, ..tail] => find_numbers(tail, False, found)
+  }
+}
+
+/// Reads the rest of a number whose value so far is `value`. A negative
+/// number is built downward, so `min_value` fits.
+priv fn read_digits(rest: List<Int>, value: Int, sign: Int, found: List<Int>) -> List<Int> {
+  case rest {
+    [c, ..tail] when is_digit(c) => read_digits(tail, value * 10 + sign * (c - 48), sign, found)
+    _ => find_numbers(rest, True, [..found, value])
+  }
+}
+
+/// Whether the code point `c` is an ASCII decimal digit.
+priv fn is_digit(c: Int) -> Bool {
+  c >= 48 && c <= 57
+}
+
+/// `string::to_code_point_values`'s own kernel, for `find_all`. A call of
+/// `std::string` would make every program that uses `std::int` compile all
+/// of `std::string` and `std::bytes` with it (D-1177, D-1605).
+@external(native, "cheby_string_to_code_point_values")
+@external(js, "./string.mjs", "to_code_point_values")
+priv fn code_points(text: String) -> List<Int>
+
+test "find_all reads every integer in order" {
+  assert find_all("p=3,-4 v=12") == [3, -4, 12]
+  assert find_all("Game 17: 3 blue, 40 red") == [17, 3, 40]
+  assert find_all("x=-5..-3") == [-5, -3]
+  assert find_all("007") == [7]
+  assert find_all("") == []
+  assert find_all("no numbers") == []
+}
+
+test "find_all reads a dash between digits as a separator" {
+  assert find_all("2-4,6-8") == [2, 4, 6, 8]
+  assert find_all("1--2") == [1, -2]
+  assert find_all("-") == []
+  assert find_all("a-b-3") == [-3]
+}
+
+test "find_all takes no plus sign and only ASCII digits" {
+  assert find_all("+5 -6") == [5, -6]
+  assert find_all("1.5") == [1, 5]
+  assert find_all("٣ 4") == [4]
+  assert find_all("line\r\n12\n") == [12]
+}
+
+@target(native)
+test "find_all reads the limits of Int" {
+  assert find_all("-9223372036854775808 9223372036854775807") == [min_value, max_value]
+}
+
+/// Returns the greatest common divisor of `a` and `b`, which is never
+/// negative, and `0` for `gcd(0, 0)` (D-1606). It panics only when the
+/// result does not fit, as for `gcd(min_value, 0)`.
+pub fn gcd(a: Int, b: Int) -> Int {
+  // Euclid's steps on values made non-positive, whose range holds the
+  // negation of every `Int`, so only the last `-` can overflow.
+  fn step(x: Int, y: Int) -> Int {
+    case y {
+      0 => -x
+      _ => step(y, x % y)
+    }
+  }
+  step(non_positive(a), non_positive(b))
+}
+
+/// `n` with its sign made negative, which always fits.
+priv fn non_positive(n: Int) -> Int {
+  case {
+    n > 0 => -n
+    _ => n
+  }
+}
+
+/// Returns the least common multiple of `a` and `b`, which is never
+/// negative, and `0` when either is `0` (D-1606). It panics when the result
+/// does not fit.
+pub fn lcm(a: Int, b: Int) -> Int {
+  case a, b {
+    0, _ => 0
+    _, 0 => 0
+    _, _ => abs(a / gcd(a, b) * b)
+  }
+}
+
+test "gcd is the greatest common divisor" {
+  assert gcd(12, 18) == 6
+  assert gcd(-12, 18) == 6
+  assert gcd(12, -18) == 6
+  assert gcd(7, 13) == 1
+  assert gcd(0, 5) == 5
+  assert gcd(-5, 0) == 5
+  assert gcd(0, 0) == 0
+}
+
+test "lcm is the least common multiple" {
+  assert lcm(4, 6) == 12
+  assert lcm(-4, 6) == 12
+  assert lcm(0, 6) == 0
+  assert lcm(6, 0) == 0
+  assert lcm(7, 7) == 7
+}
+
+@target(native)
+test "gcd and lcm reach the limits of Int" {
+  assert gcd(min_value, 6) == 2
+  assert gcd(min_value, -1) == 1
+  assert gcd(min_value, max_value) == 1
+  assert lcm(max_value, 1) == max_value
+  assert lcm(min_value + 1, -1) == max_value
+}

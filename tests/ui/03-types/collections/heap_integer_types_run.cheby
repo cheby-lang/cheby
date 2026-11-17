@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-1613
+//! The heap's kernels compare every sized integer type and the limits of
+//! `I64` and `U64` as their built-in `compare` does, including values that
+//! do not fit a tagged word.
+
+import std::heap
+import std::i64
+import std::i8
+import std::io
+import std::u64
+
+fn main() {
+  let wide = [i64::max_value, -1, i64::min_value, 0]
+  let wide_sorted = heap::to_list(heap::from_list(wide))
+  io::println("{wide_sorted:?}")
+  let small: List<I8> = [-3, 5, -128, 127]
+  let small_sorted = heap::to_list(heap::from_list(small))
+  io::println("{small_sorted:?}")
+  let large: List<U64> = [18_446_744_073_709_551_615, 0, 4_611_686_018_427_387_904, 7]
+  let large_sorted = heap::to_list(heap::from_list_max(large))
+  io::println("{large_sorted:?}")
+  let largest = u64::max_value
+  io::println("{largest}")
+  let first = i8::min_value
+  io::println("{first}")
+}

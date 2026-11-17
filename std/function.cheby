@@ -1,0 +1,48 @@
+//! Helpers that repeat a step: `iterate` applies a function a given number
+//! of times, and `fixpoint` applies it until the value stops changing
+//! (D-1611). Both are Cheby with no kernels, so they run in constants and
+//! on every target.
+
+/// Applies `f` to `x` `n` times, so `iterate(x, 0, f)` is `x`. It panics
+/// when `n` is negative (D-1611).
+pub fn iterate<T>(x: T, n: Int, f: fn(T) -> T) -> T {
+  guard n >= 0 else {
+    panic as "function::iterate needs a count of at least 0"
+  }
+  fn step(value: T, left: Int) -> T {
+    case left {
+      0 => value
+      _ => step(f(value), left - 1)
+    }
+  }
+  step(x, n)
+}
+
+test "iterate applies a function n times" {
+  assert iterate(1, 10, fn(n) { n * 2 }) == 1024
+  assert iterate("a", 0, fn(_) { "b" }) == "a"
+  assert iterate([1], 2, fn(xs) { [0, ..xs] }) == [0, 0, 1]
+}
+
+/// Applies `f`, starting from `x`, until a result is `==` to the value it
+/// came from, and returns that value. It does not stop when no fixed point
+/// is reached (D-1611).
+pub fn fixpoint<T>(x: T, f: fn(T) -> T) -> T {
+  let next = f(x)
+  case next == x {
+    True => x
+    False => fixpoint(next, f)
+  }
+}
+
+test "fixpoint stops when the value stops changing" {
+  assert fixpoint(100, fn(n) { n / 2 }) == 0
+  assert fixpoint(7, fn(n) { n }) == 7
+  let halve_evens = fn(n) {
+    case n % 2 {
+      0 => n / 2
+      _ => n
+    }
+  }
+  assert fixpoint(96, halve_evens) == 3
+}

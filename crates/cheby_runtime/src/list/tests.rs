@@ -811,10 +811,14 @@ fn kernels_are_registered_with_their_std_symbols() {
             "cheby_list_split_at",
             "cheby_list_unique",
             "cheby_list_sort_with",
+            "cheby_heap_sys_push",
+            "cheby_heap_sys_pop",
+            "cheby_heap_sys_from_list",
+            "cheby_heap_sys_to_list",
         ]
     );
     assert!(table.iter().all(|(_, address)| !address.is_null()));
-    assert_eq!(super::COMPLETE, ["list"]);
+    assert_eq!(super::COMPLETE, ["list", "heap"]);
 }
 
 // ---------------------------------------------------------------------

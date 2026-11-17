@@ -86,7 +86,7 @@
 
 == src/main.cheby:17:13 completion Show Sized
 {
-  "count": 81,
+  "count": 82,
   "isIncomplete": false,
   "items": [
     {
@@ -135,7 +135,7 @@
   "absent": [
     "Compare"
   ],
-  "count": 108,
+  "count": 109,
   "isIncomplete": false,
   "items": [
     {
@@ -180,7 +180,7 @@
 
 == src/main.cheby:23:18 completion ops::Compare Show
 {
-  "count": 15,
+  "count": 16,
   "isIncomplete": false,
   "items": [
     {

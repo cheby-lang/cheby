@@ -24,9 +24,12 @@
 {
   "isIncomplete": false,
   "items": [
+    "list::chunks(xs, n) | Function | pub fn chunks<T>(xs: List<T>, n: Int) -> List<List<T>> | (std::list) | `list::chunks(_, ${1:n})$0` | +1 edit",
     "list::count(xs, predicate) | Function | pub fn count<T>(xs: List<T>, predicate: fn(T) -> Bool) -> Int | (std::list) | `list::count(_, ${1:predicate})$0` | +1 edit",
+    "list::permutations(xs) | Function | pub fn permutations<T>(xs: List<T>) -> List<List<T>> | (std::list) | +1 edit",
     "list::unique(xs) | Function | pub fn unique<T>(xs: List<T>) -> List<T> | (std::list) | +1 edit",
-    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`"
+    "Show | Interface | pub interface Show {\n  fn show(Self) -> String\n} | `Show::`",
+    "map::frequencies(xs) | Function | pub fn frequencies<K>(xs: List<K>) -> map::Map<K, Int> | (std::map) | +1 edit"
   ]
 }
 

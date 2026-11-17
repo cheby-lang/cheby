@@ -4,9 +4,9 @@
 //!
 //! [`symbols`] lists the runtime's own symbols first, in the order of
 //! [`sym::ALL`], then every kernel module's kernels. Each kernel module
-//! (`io`, `num`, `list`, `text`, `bytes`, `env`, `hamt`, `consteval`,
-//! `fiber_ops`, `random`, `runtime_info`, `time`, `net`, `file`, `http`,
-//! `process`, `context`) registers its kernels through its own `kernels`
+//! (`io`, `num`, `list`, which also holds `std::heap`'s, `text`, `bytes`,
+//! `env`, `hamt`, `consteval`, `fiber_ops`, `random`, `runtime_info`,
+//! `time`, `net`, `file`, `http`, `process`, `context`) registers its kernels through its own `kernels`
 //! function and names the std modules it implements completely in its
 //! `COMPLETE`, so kernel packages never edit this file.
 //!
@@ -813,6 +813,31 @@ mod tests {
             "the kernels that take the context pointer and the `@std_context` declarations differ"
         );
         assert_eq!(registered.len(), 7);
+    }
+
+    /// `std::heap`'s kernels have the C signatures of their `@external`
+    /// declarations in `std/heap.cheby`, and none is `@std_context`: they
+    /// call `compare` back through `callback::call`, as `list::sort_with`
+    /// does (D-1613, D-526).
+    #[test]
+    fn heap_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("heap.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            assert!(!context, "{symbol} is `@std_context`");
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> =
+            list::heap_signatures()
+                .into_iter()
+                .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+                .collect();
+        assert_eq!(registered, declared);
+        assert_eq!(registered.len(), 4);
     }
 
     #[test]

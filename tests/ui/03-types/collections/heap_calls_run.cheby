@@ -1,0 +1,46 @@
+// @mode: run-pass
+// @decisions: D-1612, D-1613
+//! `std::heap` calls a type's own `compare` back with the arguments and
+//! in the order of D-1613: `from_list` sifts down from the middle to the
+//! front, `push` compares the new element with each parent, and a pop
+//! compares the right child with the left and then the chosen child with
+//! the element it moves down, so a comparison that prints sees the same
+//! calls on every target.
+
+import std::heap
+import std::int
+import std::io
+import std::list
+
+type Score {
+  Score(Int),
+}
+
+fn compare(a: Score, b: Score) -> Order {
+  let Score(x) = a
+  let Score(y) = b
+  io::println("  {x} {y}")
+  int::compare(x, y)
+}
+
+fn values(scores: List<Score>) -> List<Int> {
+  list::map(scores, fn(Score(n)) { n })
+}
+
+fn main() {
+  io::println("from_list")
+  let h = heap::from_list(list::map([5, 3, 9, 1, 3, 7, 2], Score))
+  io::println("push 0")
+  let pushed = heap::push(h, Score(0))
+  io::println("pop")
+  let assert Some((Score(top), rest)) = heap::pop(pushed)
+  io::println("top {top}")
+  io::println("to_list")
+  let listed = values(heap::to_list(rest))
+  io::println("{listed:?}")
+  io::println("from_list_max")
+  let largest = heap::from_list_max(list::map([2, 8, 4], Score))
+  io::println("to_list")
+  let listed_max = values(heap::to_list(largest))
+  io::println("{listed_max:?}")
+}

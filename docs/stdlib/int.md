@@ -8,11 +8,11 @@ pub type Int
 
 All arithmetic on `Int` is checked: a result that does not fit panics (D-025). On JS, an `Int` result outside ±(2⁵³−1) also panics (D-037), so a program panics at the same points or earlier on JS, but never computes a different value (§12.4, D-232).
 
-This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div` and `checked_modulo`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
+This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div`, `checked_modulo` and `find_all`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
-`clamp`, `pow`, `checked_pow` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-1090).
+`clamp`, `pow`, `checked_pow`, `find_all` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-1090).
 
-The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign`, `is_even` or `gcd`: `int::compare(n, 0)` and `n % 2 == 0` say the same, and Euclid's algorithm is a three-line function (example 028).
+The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign` or `is_even`: `int::compare(n, 0)` and `n % 2 == 0` say the same. `gcd` and `lcm` are a family of every integer module (D-1606).
 
 There are no bit-manipulation functions such as `count_ones` or `rotate_left` in tier 1. They can be written with the built-in operators (D-391).
 
@@ -374,6 +374,46 @@ test "to_base writes other bases" {
 
 `to_base` is the inverse of `parse_base`. Text in another base is a different operation from `show`, so it does not break D-307 (D-390). Every sized integer module has a `to_base` with the same digits (D-1090).
 
+### `find_all`
+
+```cheby
+pub fn find_all(text: String) -> List<Int>
+```
+
+Returns every integer written in `text`, in order. A number is a maximal run of the ASCII digits `0` to `9`. A `-` directly before the run makes it negative, unless the character before that `-` is also an ASCII digit, so a range such as `2-4` reads as `2` and `4`. Every other character separates numbers, and `+` is never a sign (D-1605). The sized modules have no `find_all`.
+
+- **Panics:** when a run's value does not fit `Int` (D-025), and on JS when it is outside ±(2⁵³−1) (D-037).
+- **Cost:** O(n) in the length of `text`. Informative.
+
+```cheby
+test "find_all reads every integer in order" {
+  assert int::find_all("p=3,-4 v=12") == [3, -4, 12]
+  assert int::find_all("Game 17: 3 blue, 40 red") == [17, 3, 40]
+  assert int::find_all("x=-5..-3") == [-5, -3]
+  assert int::find_all("007") == [7]
+  assert int::find_all("") == []
+  assert int::find_all("no numbers") == []
+}
+```
+
+```cheby
+test "find_all reads a dash between digits as a separator" {
+  assert int::find_all("2-4,6-8") == [2, 4, 6, 8]
+  assert int::find_all("1--2") == [1, -2]
+  assert int::find_all("-") == []
+  assert int::find_all("a-b-3") == [-3]
+}
+```
+
+```cheby
+test "find_all takes no plus sign and only ASCII digits" {
+  assert int::find_all("+5 -6") == [5, -6]
+  assert int::find_all("1.5") == [1, 5]
+  assert int::find_all("٣ 4") == [4]
+  assert int::find_all("line\r\n12\n") == [12]
+}
+```
+
 ## Comparison
 
 ### `compare`
@@ -659,6 +699,50 @@ test "pow multiplies repeatedly" {
 ```
 
 The exponent is a clamped count, so the functions stay total, and a negative literal warns (D-303, D-392).
+
+### `gcd`
+
+```cheby
+pub fn gcd(a: Int, b: Int) -> Int
+```
+
+Returns the greatest common divisor of `a` and `b`, which is never negative. `gcd(0, 0)` is `0`. Every integer module has `gcd` (D-1606).
+
+- **Panics:** when the result does not fit, which happens only for `gcd(min_value, 0)`, `gcd(0, min_value)` and `gcd(min_value, min_value)` (D-025).
+- **Cost:** O(log min(|a|, |b|)). Informative.
+
+```cheby
+test "gcd is the greatest common divisor" {
+  assert int::gcd(12, 18) == 6
+  assert int::gcd(-12, 18) == 6
+  assert int::gcd(12, -18) == 6
+  assert int::gcd(7, 13) == 1
+  assert int::gcd(0, 5) == 5
+  assert int::gcd(-5, 0) == 5
+  assert int::gcd(0, 0) == 0
+}
+```
+
+### `lcm`
+
+```cheby
+pub fn lcm(a: Int, b: Int) -> Int
+```
+
+Returns the least common multiple of `a` and `b`, the absolute value of `a / gcd(a, b) * b`, which is never negative. It is `0` when either argument is `0`. Every integer module has `lcm` (D-1606). The least common multiple of a list is `list::fold(xs, 1, int::lcm)`.
+
+- **Panics:** when the result does not fit (D-025), and on JS when it is outside ±(2⁵³−1) (D-037).
+- **Cost:** O(log min(|a|, |b|)). Informative.
+
+```cheby
+test "lcm is the least common multiple" {
+  assert int::lcm(4, 6) == 12
+  assert int::lcm(-4, 6) == 12
+  assert int::lcm(0, 6) == 0
+  assert int::lcm(6, 0) == 0
+  assert int::lcm(7, 7) == 7
+}
+```
 
 ## Checked arithmetic
 
