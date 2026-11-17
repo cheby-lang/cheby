@@ -206,6 +206,7 @@ fn missing_bound(input: &TypesInput<'_>, err: &Unsatisfied) -> Option<(ParamIdx,
         Reason::Missing { .. }
         | Reason::LessVisible { .. }
         | Reason::KeyFunction { .. }
+        | Reason::CallSiteFunction { .. }
         | Reason::Signature { .. }
         | Reason::HomeNotInDeps { .. }
         | Reason::NoModule

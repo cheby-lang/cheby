@@ -1,0 +1,28 @@
+// @mode: check-fail
+// @decisions: D-1634, D-533
+//! The log functions, `with_fields` and `capture` read the context, so a
+//! constant whose computation reaches one is E0077. The note names the
+//! first kernel reached (§4.5).
+
+import std::io
+import std::log
+
+fn logged() -> Int {
+  log::info("from a constant")
+  1
+}
+
+const by_log_call: Int = logged()
+
+const by_with_fields: Int = log::with_fields([log::int("n", 1)], fn() { 2 })
+
+fn captured() -> Int {
+  let (n, _) = log::capture(fn() { 3 })
+  n
+}
+
+const by_capture: Int = captured()
+
+fn main() {
+  io::println("{by_log_call} {by_with_fields} {by_capture}")
+}

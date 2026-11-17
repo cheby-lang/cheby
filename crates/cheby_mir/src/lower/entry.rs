@@ -236,6 +236,7 @@ fn show_call(
         && let [f] = fns.as_ref()
         && f.dicts.is_empty()
     {
+        cx.defs.replaced(f.def)?;
         return Ok(ShowCall::Direct(f.def));
     }
     if !dict_closed(cx, dict) {

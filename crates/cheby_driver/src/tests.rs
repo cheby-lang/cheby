@@ -87,8 +87,8 @@ fn examples_check_cleanly() {
         }
         checked += 1;
     }
-    // 32 since 033 checks with `std::context` shipped (D-1563, D-1582).
-    assert_eq!(checked, 32);
+    // 33 since 034 checks with `std::log` shipped (D-1614, D-1635).
+    assert_eq!(checked, 33);
 }
 
 /// No example needs a std module of a later tier since `std::http` ships
@@ -309,8 +309,8 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    // 32 since 033 lowers with `std::context` shipped (D-1563, D-1582).
-    assert_eq!(lowered + not_yet, 32, "{}", failures.join("\n"));
+    // 33 since 034 lowers with `std::log` shipped (D-1614, D-1635).
+    assert_eq!(lowered + not_yet, 33, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);
@@ -554,16 +554,16 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::ioo\nimport std::log\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::ioo\nimport std::unshipped_probe\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
-    // D-989, D-1213: tier 3 ships whole, and `std::context` ships with
-    // M4's native work, so `std::log` (D-1575) is the real planned module
-    // of the probe.
+    // D-1633: no real std module is planned once `std::log` ships, so the
+    // planned half uses the made-up module that only this crate's tests
+    // see (D-1296).
     assert!(
-        rendered.contains("error[E0038]: the module `std::log` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::unshipped_probe` is not supported yet"),
         "{rendered}"
     );
     assert!(
@@ -574,13 +574,16 @@ fn missing_and_planned_std_modules() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// D-1587: a package's key constant calls the package-visible
+/// D-1587, D-1630: a package's key constant calls the package-visible
 /// constructors `context::key_at` and `key_without_default_at` through the
-/// compiler's rewrite, with the convention of a call of std's `pub`
-/// functions, which own their arguments (D-787). So std's masks, which
-/// only std's units take, must hold no entry for them: neither borrows.
+/// compiler's rewrite, and a package's call of a function with
+/// `@std_call_site` calls its constructor, with the convention of a call
+/// of std's `pub` functions, which own their arguments (D-787). So std's
+/// masks, which only std's units take, must hold no entry for any function
+/// that an `@std_initializer` or `@std_call_site` names: none borrows. The
+/// rule reads the attributes; the key constructors keep it tested.
 #[test]
-fn the_key_constructors_borrow_nothing() {
+fn the_attribute_constructors_borrow_nothing() {
     let whole = std_cache::whole_std().unwrap();
     let modules = whole.modules();
     assert!(modules.iter().any(|path| path == "std::context"));
@@ -589,16 +592,24 @@ fn the_key_constructors_borrow_nothing() {
     for (module, item, _) in whole.named() {
         assert!(modules.contains(module), "{module}::{item}");
     }
-    let borrowing: Vec<&str> = whole
-        .named()
-        .iter()
-        .filter(|(module, _, _)| module == "std::context")
-        .map(|(_, item, _)| item.as_str())
-        .collect();
-    for constructor in ["key_at", "key_without_default_at"] {
+    let constructors = whole.constructors();
+    for key in ["key_at", "key_without_default_at"] {
         assert!(
-            !borrowing.contains(&constructor),
-            "std::context::{constructor} borrows: {borrowing:?}"
+            constructors
+                .iter()
+                .any(|(module, item)| module == "std::context" && item == key),
+            "std::context::{key} is not named by an attribute: {constructors:?}"
+        );
+    }
+    for (module, item) in constructors {
+        assert!(modules.contains(module), "{module}::{item}");
+        assert!(
+            !whole
+                .named()
+                .iter()
+                .any(|(m, i, _)| m == module && i == item),
+            "{module}::{item} borrows: {:?}",
+            whole.named()
         );
     }
 }

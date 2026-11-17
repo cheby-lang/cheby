@@ -179,7 +179,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cheby_iface::{DefId, DefKind, Ice, ItemSig, Ty, Vis};
+use cheby_iface::{DefId, DefKind, Ice, ItemSig, ModuleInterface, Namespace, Ty, Vis};
 use cheby_types::thir;
 
 use crate::defs::Defs;
@@ -849,19 +849,49 @@ pub trait Eligibility {
 pub struct IfaceEligibility<'a> {
     defs: Defs<'a>,
     externals: BTreeSet<DefId>,
+    constructors: BTreeSet<DefId>,
 }
 
 impl<'a> IfaceEligibility<'a> {
     /// The eligibility of the module `defs.own`, whose checked THIR is
     /// `thir`: its `priv` and package-visible functions, never its `pub`
-    /// ones (D-787).
+    /// ones (D-787), nor the constructors its `@std_initializer` and
+    /// `@std_call_site` attributes name (D-1630).
     #[must_use]
     pub fn new(defs: Defs<'a>, thir: &thir::Module) -> Self {
         Self {
             defs,
             externals: externals(thir),
+            constructors: defs.own.map_or_else(BTreeSet::new, attr_constructors),
         }
     }
+}
+
+/// The functions of `own` that an `@std_initializer` or `@std_call_site`
+/// of the module names as its constructor. A call of the attribute's
+/// function in another package becomes a call of the constructor, which
+/// that package compiles without the constructor's body and so with the
+/// convention of a `pub` function, whose arguments are owned (D-787): the
+/// constructor never borrows, so both sides agree (D-1587, D-1630).
+fn attr_constructors(own: &ModuleInterface) -> BTreeSet<DefId> {
+    own.items
+        .iter()
+        .filter_map(|item| match &item.sig {
+            ItemSig::Fn(sig) => Some([sig.initializer, sig.call_site]),
+            ItemSig::Error
+            | ItemSig::Type(_)
+            | ItemSig::Ctor(_)
+            | ItemSig::Alias(_)
+            | ItemSig::Const(_)
+            | ItemSig::Interface(_)
+            | ItemSig::InterfaceFn(_)
+            | ItemSig::Test => None,
+        })
+        .flatten()
+        .flatten()
+        .filter_map(|name| own.lookup(Namespace::Value, name))
+        .map(|index| DefId::new(own.module, index))
+        .collect()
 }
 
 impl Eligibility for IfaceEligibility<'_> {
@@ -880,7 +910,7 @@ impl Eligibility for IfaceEligibility<'_> {
                     Vis::Priv | Vis::Package => true,
                     Vis::Pub => false,
                 }
-        })
+        }) && !self.constructors.contains(&def)
     }
 
     fn is_external_wrapper(&self, def: DefId) -> bool {

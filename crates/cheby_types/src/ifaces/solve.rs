@@ -8,7 +8,7 @@ use cheby_iface::{
 
 use super::tyutil::{match_ty, mentions, params_of, subst};
 use super::{IfaceCx, OpFn, Reason, SELF, Unsatisfied, Want, is_builtin_numeric};
-use crate::check::key_fn;
+use crate::check::{call_site_fn, key_fn};
 use crate::infer::contains_error;
 use crate::thir::{Callee, Dict, DictFn, OpImpl};
 
@@ -222,6 +222,22 @@ impl<'a> IfaceCx<'a> {
 
     /// The function of `home` that meets `req` for `Self` = `ty`, with its
     /// type arguments and the dictionaries of its own bounds (D-064).
+    /// Why `found` never counts, whatever its signature, so that no
+    /// dictionary of a program that compiles holds it: it carries
+    /// `@std_initializer`, as the key functions of `std::context` do
+    /// (D-1593, D-1599), or `@std_call_site`, as the log functions of
+    /// `std::log` do, since a dictionary holds a function with no place to
+    /// pass it (D-1630).
+    fn never_counts(&self, found: DefId, func: Option<DefId>) -> Result<Option<Reason>, Ice> {
+        Ok(if key_fn(self.input, self.own, found)?.is_some() {
+            Some(Reason::KeyFunction { found, func })
+        } else if call_site_fn(self.input, self.own, found)?.is_some() {
+            Some(Reason::CallSiteFunction { found, func })
+        } else {
+            None
+        })
+    }
+
     fn find_fn(
         &self,
         home: &TypeHome<'a>,
@@ -283,16 +299,10 @@ impl<'a> IfaceCx<'a> {
             // at its declaration.
             return Ok(Ok(silent));
         };
-        // A function that carries `@std_initializer`, today the key
-        // functions of `std::context`, never counts, whatever its
-        // signature, so no dictionary of a program that compiles holds one
-        // (D-1593, D-1599). The two cases above are errors reported
-        // elsewhere, and stay silent for such a function too.
-        if key_fn(self.input, self.own, found)?.is_some() {
-            return Ok(Err(Reason::KeyFunction {
-                found,
-                func: req.func,
-            }));
+        // The two cases above are errors reported elsewhere, and stay
+        // silent for a function that never counts too.
+        if let Some(reason) = self.never_counts(found, req.func)? {
+            return Ok(Err(reason));
         }
         let (Some(pattern), Some(&target)) = (sig.params.get(k), want_params.get(k)) else {
             return Ok(Err(mismatch));

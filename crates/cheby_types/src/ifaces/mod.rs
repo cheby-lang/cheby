@@ -200,6 +200,16 @@ pub enum Reason {
         /// The interface function, if any.
         func: Option<DefId>,
     },
+    /// `found` is a function that carries `@std_call_site`, as the log
+    /// functions of `std::log` do, which never counts: the compiler passes
+    /// it the place of its call, and a call through an interface has no
+    /// place to pass (D-1630).
+    CallSiteFunction {
+        /// The call-site function of that name.
+        found: DefId,
+        /// The interface function, if any.
+        func: Option<DefId>,
+    },
     /// `found` has the wrong signature: `actual` instead of `required`.
     Signature {
         /// The function of that name.

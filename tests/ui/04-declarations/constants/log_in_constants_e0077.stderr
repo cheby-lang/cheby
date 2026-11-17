@@ -1,0 +1,24 @@
+error[E0077]: evaluating the constant `by_log_call` reached an effect
+  --> tests/ui/04-declarations/constants/log_in_constants_e0077.cheby:15:7
+   |
+15 | const by_log_call: Int = logged()
+   |       ^^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_get`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `by_with_fields` reached an effect
+  --> tests/ui/04-declarations/constants/log_in_constants_e0077.cheby:17:7
+   |
+17 | const by_with_fields: Int = log::with_fields([log::int("n", 1)], fn() { 2 })
+   |       ^^^^^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_context_sys_get`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `by_capture` reached an effect
+  --> tests/ui/04-declarations/constants/log_in_constants_e0077.cheby:24:7
+   |
+24 | const by_capture: Int = captured()
+   |       ^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_channel_new`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

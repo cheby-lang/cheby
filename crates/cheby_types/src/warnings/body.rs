@@ -136,6 +136,7 @@ impl BodyCx<'_, '_> {
                 | ExprKind::Closure { .. }
                 | ExprKind::LocalFn { .. }
                 | ExprKind::SelfRef { .. }
+                | ExprKind::CallSite(_)
                 | ExprKind::Case { .. }
                 | ExprKind::Field { .. }
                 | ExprKind::Record { .. }

@@ -74,6 +74,7 @@ pub(crate) fn free_locals(
             | ExprKind::Interpolate { .. }
             | ExprKind::Panic { .. }
             | ExprKind::DynCoerce { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Error
             | _ => continue,
         };

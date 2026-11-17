@@ -213,6 +213,7 @@ fn implicit_uses(body: &thir::Body, out: &mut UseSink) {
             | ExprKind::Closure { .. }
             | ExprKind::LocalFn { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Field { .. }
             | ExprKind::RecordUpdate { .. }

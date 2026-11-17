@@ -254,8 +254,9 @@ const ATTRIBUTES: &[(&str, &str)] = &[
     ("target", "target($1)$0"),
 ];
 /// The attributes only package `std` may write (§4.8, D-482, D-692,
-/// D-1599).
+/// D-1599, D-1628).
 const STD_ATTRIBUTES: &[(&str, &str)] = &[
+    ("std_call_site", "std_call_site($1)$0"),
     ("std_clamped", "std_clamped($1)$0"),
     ("std_context", "std_context"),
     ("std_hooks", "std_hooks($1)$0"),

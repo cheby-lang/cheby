@@ -258,6 +258,7 @@ pub fn type_hooks(ty: DefId, defs: &Defs<'_>) -> Result<Option<[DefId; 3]>, Ice>
         })?;
         let def = DefId::new(ty.module, index);
         defs.fn_sig(def)?;
+        defs.replaced(def)?;
         Ok(def)
     };
     Ok(Some([

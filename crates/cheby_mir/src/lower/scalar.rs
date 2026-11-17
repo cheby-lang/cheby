@@ -1,5 +1,6 @@
-//! Literals and operators (D2, D9): numeric literals, `Binary`, `!`,
-//! unary `-` and operators implemented by calls (`OpImpl::Call`).
+//! Literals and operators (D2, D9): numeric literals, the parts of a call
+//! site's place, `Binary`, `!`, unary `-` and operators implemented by
+//! calls (`OpImpl::Call`).
 //!
 //! Built-in operators work on unboxed values (D-278): integer arithmetic
 //! and shifts are [`Rvalue::Checked`] (they panic at the operator's
@@ -24,7 +25,9 @@
 
 use cheby_diag::Span;
 use cheby_iface::{Ice, Ty};
-use cheby_types::thir::{BinOpKind, Callee as ThirCallee, ExprId, FloatLit, Lit, OpImpl};
+use cheby_types::thir::{
+    BinOpKind, CallSitePart, Callee as ThirCallee, ExprId, FloatLit, Lit, OpImpl,
+};
 
 use crate::ir::{ArithOp, BitOp, CmpOp, Const, Operand, Rvalue, TagType};
 use crate::lower::body::BodyCx;
@@ -58,6 +61,31 @@ impl BodyCx<'_, '_> {
                 self.show(ty)
             ))
         })
+    }
+
+    /// One part of the place of the call site at the start of `span`, of
+    /// type `ty`, lowered as the literal it stands for: the path a `String`,
+    /// the line and the column `Int`s, the values of the `path:line:col` a
+    /// panic report at that place writes (D-421, D-1628). The checker has
+    /// no source map and a REPL entry's spans move after it is checked, so
+    /// the place is read here (D-1631).
+    pub(super) fn call_site(
+        &mut self,
+        part: CallSitePart,
+        ty: Ty,
+        span: Span,
+    ) -> Result<Option<Operand>, Ice> {
+        let location = self
+            .cx
+            .sources
+            .location(span)
+            .ok_or_else(|| Ice::new(format!("no source file for span {span:?}")))?;
+        let lit = match part {
+            CallSitePart::Path => Lit::Str(location.path.into()),
+            CallSitePart::Line => Lit::Int(location.line.into()),
+            CallSitePart::Column => Lit::Int(location.col.into()),
+        };
+        self.lit(&lit, ty, span)
     }
 
     /// `lhs op rhs`, implemented as `imp` says, of type `ty`; `tail`

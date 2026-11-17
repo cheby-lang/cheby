@@ -1,0 +1,44 @@
+// @mode: run-pass
+// @decisions: D-1616, D-1619, D-1625
+//! The logger and the scoped fields of `with_fields` follow spawns, as
+//! every context value does. Scoped fields come first, outermost first,
+//! then the call's own, and a field whose name is already there takes the
+//! later value in place. When `with_fields`' body returns, the fields are
+//! gone again. A custom logger's function runs under the silent logger,
+//! so a log call inside it does nothing (§10.11).
+
+import std::channel
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::list
+import std::log
+import std::time
+
+fn main() {
+  let opening = time::from_unix(duration::seconds(1_794_909_600))
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  let (lines_tx, lines) = channel::new::<String>(16)
+  let collect = log::custom_logger(log::Debug, fn(record) {
+    log::error("never logged: the handler runs under the silent logger")
+    let _ = channel::send(lines_tx, log::text_line(record))
+  })
+  context::provide(log::logger, collect, fn() {
+    use <- log::with_fields([log::field("request", "a17"), log::int("try", 1)])
+    let _ = {
+      use owner <- fiber::scope()
+      let worker = fiber::spawn(owner, fn() {
+        use <- log::with_fields([log::field("worker", "w1")])
+        log::info_with("in the fiber", [log::int("try", 2)])
+      })
+      fiber::join(worker)
+    }
+    log::with_fields([log::int("try", 3), log::bool("retry", True)], fn() {
+      log::info_with("inner", [log::field("request", "b42")])
+    })
+    log::info("after the inner scope")
+  })
+  log::info("outside")
+  list::each(channel::to_list(lines), io::println)
+}

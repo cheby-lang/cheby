@@ -1,0 +1,5 @@
+test ui_test "a passing test shows its lines" ... ok
+test ui_test "capture writes nothing" ... ok
+test ui_test "the silent logger writes nothing" ... ok
+
+test result: ok. 3 passed; 0 failed; 0 filtered out

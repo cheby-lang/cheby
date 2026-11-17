@@ -196,6 +196,7 @@ impl Statics<'_, '_> {
         );
         fields.push(self.desc(ty)?);
         for (n, f) in fns.iter().enumerate() {
+            self.cx.defs.replaced(f.def)?;
             self.pending.request_shim(f.def);
             if f.dicts.is_empty() {
                 fields.push(Const::FnValue(f.def));

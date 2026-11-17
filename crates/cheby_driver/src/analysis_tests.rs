@@ -419,7 +419,7 @@ fn recording_changes_nothing() {
     for (n, (case, _)) in ui_cases().into_iter().enumerate() {
         packages.push(ui_package(&case, &format!("record_{n}")));
     }
-    assert_eq!(examples, 33);
+    assert_eq!(examples, 34);
     assert!(packages.len() > 900, "{}", packages.len());
     let failures: Vec<String> = std::thread::scope(|scope| {
         let chunks: Vec<_> = packages

@@ -105,6 +105,38 @@ fn main() {
 }
 ";
 
+/// Logs a line with scoped fields under a fixed clock: `std::log` reads its
+/// `priv` key of scoped fields (D-1619), and the line names the place of
+/// the call (D-1631). Its test reads the scoped fields through `capture`.
+const LOGS: &str = "//! Logs a line with scoped fields.
+
+import std::context
+import std::duration
+import std::log
+import std::time
+
+fn main() {
+  let at = time::from_unix(duration::milliseconds(1_794_909_600_500))
+  use <- context::provide(time::clock, time::fixed_clock(at))
+  use <- log::with_fields([log::field(\"request\", \"a17\")])
+  log::info_with(\"listening\", [log::int(\"port\", 8080)])
+}
+
+test \"the scoped fields come first\" {
+  let (_, records) = log::capture(fn() {
+    use <- log::with_fields([log::field(\"request\", \"a17\")])
+    log::info_with(\"in\", [log::int(\"n\", 1)])
+  })
+  let assert [record] = records
+  assert record.fields == [log::field(\"request\", \"a17\"), log::int(\"n\", 1)]
+  assert record.location.line == 18
+}
+";
+
+/// The line `LOGS` writes to standard error.
+const LOGGED: &str =
+    "2026-11-17T10:00:00.5Z INFO src/main.cheby:12:3: listening request=a17 port=8080\n";
+
 /// One `cheby` command's output and the lines of its `CHEBY_CACHE_LOG`.
 struct Ran {
     out: RunOutput,
@@ -293,4 +325,67 @@ fn std_cache_error_against_std_is_reported_from_source() {
     assert_eq!(warm.out.status, cold.status);
     let again = cheby(&private, &["check"], &cache, &s.path().join("again.log"));
     assert_eq!(again.out.stderr, warm.out.stderr);
+}
+
+/// D-1619, D-1631, D-1262: a program that logs with scoped fields reads
+/// `std::log`'s `priv` key, and logs the same line, with the same place,
+/// on std's first use, on a warm run, from an executable that `cheby
+/// build` made from std's records, and with std checked from source
+/// (`CHEBY_DUMP_DIR`, D-965); the first run evaluates the key and the
+/// warm one takes it from its entry; and `cheby test` passes.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code and executables; Windows support is M6 (D-545, D-935)"
+)]
+fn std_cache_priv_constant_logs_on_every_path() {
+    let s = Scratch::new("logs");
+    let app = s.package("app", LOGS);
+    let cache = s.path().join("cache");
+    let cold = cheby(&app, &["run"], &cache, &s.path().join("cold.log"));
+    assert_eq!(cold.out.status, Some(0), "{}", cold.out.stderr);
+    assert_eq!(cold.out.stderr, LOGGED);
+    assert!(!cold.lines("parse.std").is_empty(), "{:?}", cold.log);
+    assert!(
+        cold.log.contains(&"const std::log::scoped miss".to_owned()),
+        "{:?}",
+        cold.log
+    );
+    let warm = cheby(&app, &["run"], &cache, &s.path().join("warm.log"));
+    assert_eq!(warm.out.status, Some(0), "{}", warm.out.stderr);
+    assert_eq!(warm.out.stderr, LOGGED);
+    assert!(warm.lines("parse.std").is_empty(), "{:?}", warm.log);
+    assert!(
+        warm.log.contains(&"const std::log::scoped hit".to_owned()),
+        "{:?}",
+        warm.log
+    );
+    let exe = s.path().join("exe").join("app");
+    let built = cheby(
+        &app,
+        &["build", "-o", exe.to_str().unwrap_or_default()],
+        &cache,
+        &s.path().join("build.log"),
+    );
+    assert_eq!(built.out.status, Some(0), "{}", built.out.stderr);
+    assert!(built.lines("parse.std").is_empty(), "{:?}", built.log);
+    let Ok(ran) = process::run(Command::new(&exe), None, TIMEOUT) else {
+        panic!("the executable did not run");
+    };
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stderr, LOGGED);
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"])
+        .current_dir(&app)
+        .env("NO_COLOR", "1")
+        .env(CACHE_ENV, s.path().join("bypass"))
+        .env("CHEBY_DUMP_DIR", s.path().join("dump"))
+        .env_remove("CHEBY_RC");
+    let Ok(source) = process::run(cmd, None, TIMEOUT) else {
+        panic!("`cheby run` did not run");
+    };
+    assert_eq!(source.status, Some(0), "{}", source.stderr);
+    assert_eq!(source.stderr, LOGGED);
+    let tested = cheby(&app, &["test"], &cache, &s.path().join("test.log"));
+    assert_eq!(tested.out.status, Some(0), "{}", tested.out.stdout);
 }

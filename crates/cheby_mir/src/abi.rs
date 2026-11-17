@@ -246,6 +246,7 @@ mod tests {
             ret,
             clamped: Box::new([]),
             initializer: None,
+            call_site: None,
         }
     }
 

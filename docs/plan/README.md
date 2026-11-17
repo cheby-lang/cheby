@@ -24,7 +24,7 @@ The plan is a living document. When a milestone starts, its file is refined into
 1. A reference implementation of the whole spec, shipping as one `cheby` binary with every tool of [§13.1](../spec/13-tooling.md#131-the-cheby-command) (D-031).
 2. The build order of D-099: the single-fiber core first, because the REPL gives the fastest feedback on the language design itself.
 3. Compile speed from the first milestone: the locality rule (D-246) shapes the compiler's structure, and the budgets of D-247 and D-267 are measured in CI from M1.
-4. The 33 examples in [`../examples/`](../examples/) become the end-to-end conformance suite, and every milestone is defined by which of them run.
+4. The 34 examples in [`../examples/`](../examples/) become the end-to-end conformance suite, and every milestone is defined by which of them run.
 5. Spec gaps found while implementing go back into the decision log, never into ad-hoc compiler behavior.
 
 ## Milestones
@@ -434,6 +434,12 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1586    | Context's cost gate: one benchmark's median `main` time at 1.05 stops, after a rerun; no x86-64     |
 | D-1592    | Context's final reading also times three provided values against an empty context, with no stop     |
 | D-1596    | Context's cost gate also reads `rc/map_updates` and the `collections` group, stop at 1.05           |
+| D-1614    | `std::log` is a tier-4 module in Cheby with no kernels, and ships on native before M4               |
+| D-1628    | `@std_call_site` passes a log call's path, line and column to the function's constructor            |
+| D-1631    | The checker swaps in the constructor, MIR lowering makes the location; cache and AOT tests          |
+| D-1633    | No std module is planned once `std::log` ships; E0038 keeps only its made-up probe module           |
+| D-1635    | `std::log` is built in four committed steps; example 034 `logging` binds as an M3 example           |
+| D-1636    | A warm build reaches and evaluates a `priv` constant of std; no encoding or hash changes            |
 
 ## Open questions
 

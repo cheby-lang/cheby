@@ -175,6 +175,30 @@ fn shipped() -> Vec<(String, String)> {
     out
 }
 
+/// A std module for the lowering tests of `@std_call_site` (D-1628): no
+/// shipped module carries the attribute yet. Every build of
+/// [`lower_package_with`] can import it as `std::call_site_probe`; the
+/// builds of all of std ([`lower_std_inferred`]) never do.
+const CALL_SITE_PROBE: &str = r#"//! Functions with `@std_call_site`, for the lowering tests.
+
+/// The place of the call.
+@std_call_site(here_at)
+pub fn here(tag: String) -> (String, Int, Int) {
+  let _ = tag
+  panic as "the compiler did not replace this call of `here` (D-1630)"
+}
+
+fn here_at(tag: String, path: String, line: Int, column: Int) -> (String, Int, Int) {
+  let _ = tag
+  (path, line, column)
+}
+
+/// The place of a call in this module.
+pub fn inside() -> (String, Int, Int) {
+  here("inside")
+}
+"#;
+
 /// Standard-library modules the spec plans, by path under `std`.
 fn planned() -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(repo().join("docs/stdlib"))
@@ -378,7 +402,8 @@ fn lower_package_with(
     let mut modules = ModuleTable::new();
     let mut sources = SourceMap::new();
     let mut trees: BTreeMap<ModuleId, SyntaxTree> = BTreeMap::new();
-    let shipped = shipped();
+    let mut shipped = shipped();
+    shipped.push(("call_site_probe".to_owned(), CALL_SITE_PROBE.to_owned()));
     let planned: Vec<String> = planned()
         .into_iter()
         .filter(|p| !shipped.iter().any(|(s, _)| s == p))

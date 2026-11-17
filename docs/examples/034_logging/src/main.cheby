@@ -1,0 +1,113 @@
+//! Imports batches of orders and logs what it does with `std::log`.
+//!
+//! The default logger writes text lines to standard error and drops
+//! `Debug`. Each batch adds its name as a scoped field, which the fiber
+//! of each order inherits, and each order adds its own id. One part runs
+//! at `Debug`, at a level read from text, so a lazy summary that was
+//! dropped before is built and logged. Another part logs JSON lines. The
+//! last batch runs under a logger of our own that prints only warnings
+//! and errors, as JSON lines on standard output.
+//!
+//! A fixed clock is provided around everything that logs, and the fibers
+//! run one at a time, so the output is the same on every run.
+
+import std::context
+import std::duration
+import std::fiber
+import std::io
+import std::list
+import std::log
+import std::time
+
+/// The time that the clock in context gives: 2026-11-17T10:00:00Z.
+const opening: time::Timestamp = time::from_unix(duration::seconds(1_794_909_600))
+
+/// The level of the verbose part, spelled as a config file would.
+const verbose_level: String = "DEBUG"
+
+/// The level of the JSON part, misspelled.
+const json_level: String = "warning"
+
+/// The orders of the first batch: each id and its quantity.
+const morning: List<(String, Int)> = [("a17", 3), ("b42", 0), ("c08", 12)]
+
+/// The orders of the last batch.
+const evening: List<(String, Int)> = [("d11", 5), ("e23", 0)]
+
+fn main() {
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  log::info("importer started")
+  log::warn_with("disk almost full", [
+    log::field("volume", "/data"),
+    log::int("free_mb", 120),
+    log::bool("read_only", False),
+  ])
+  list::each(["loading prices", "loading stock"], log::info)
+  summarize(morning)
+  import_batch("morning", morning)
+  context::provide(log::logger, log::text_logger(level_named(verbose_level)), fn() {
+    summarize(morning)
+  })
+  context::provide(log::logger, log::json_logger(level_named(json_level)), fn() {
+    log::info_with("report written", [log::field("path", "reports/morning.csv")])
+  })
+  context::provide(log::logger, alerts(), fn() { import_batch("evening", evening) })
+  log::info("importer stopped")
+}
+
+/// Imports each order of `orders` in a fiber of its own, one order after
+/// another, with the batch's name as a scoped field.
+fn import_batch(name: String, orders: List<(String, Int)>) {
+  use <- log::with_fields([log::field("batch", name)])
+  let outcome = {
+    use owner <- fiber::scope()
+    list::each(orders, fn((id, quantity)) {
+      fiber::join(fiber::spawn(owner, fn() { import_order(id, quantity) }))
+    })
+  }
+  case outcome {
+    Ok(Nil) => log::info_with("batch imported", [log::int("orders", list::length(orders))])
+    Err(failure) => log::error_with("batch failed", [log::field("reason", fiber::message(failure))])
+  }
+}
+
+/// Imports one order, with its id as a scoped field.
+fn import_order(id: String, quantity: Int) {
+  use <- log::with_fields([log::field("order", id)])
+  case quantity {
+    0 => log::warn("order has no items, skipped")
+    _ => log::info_with("order imported", [log::int("quantity", quantity)])
+  }
+}
+
+/// Logs the number of orders and items in `orders` at `Debug`. The summary
+/// is built, and says so on standard output, only when the logger takes it.
+fn summarize(orders: List<(String, Int)>) {
+  log::debug_with_lazy(fn() {
+    io::println("building the summary")
+    let items = list::fold(orders, 0, fn(sum, (_, quantity)) { sum + quantity })
+    ("summary", [log::int("orders", list::length(orders)), log::int("items", items)])
+  })
+}
+
+/// The level that `text` names, or `Info` with a warning when it names none.
+fn level_named(text: String) -> log::Level {
+  case log::parse(text) {
+    Ok(level) => level
+    Err(Nil) => {
+      log::warn_with("unknown level, using info", [log::field("level", text)])
+      log::Info
+    }
+  }
+}
+
+/// A logger that prints each warning and error as a JSON line on standard
+/// output, and drops the rest.
+fn alerts() -> log::Logger {
+  log::custom_logger(log::Debug, fn(record) {
+    case record.level >= log::Warn {
+      True => io::println(log::json_line(record))
+      False => Nil
+    }
+  })
+}

@@ -11,9 +11,13 @@
 //!   hooks' shapes (D-342): see [`hooks`].
 //! - The constructor of a standard-library function's `@std_initializer`
 //!   has the shape its function gives it (D-1599): see [`initializer`].
+//! - The constructor of a standard-library function's `@std_call_site` has
+//!   the shape, the visibility and the targets its function gives it
+//!   (D-1630): see [`call_site`].
 //! - Outside std, a native foreign result type holds an external type only
 //!   at its top level (§12.5.1, D-948, E0079): see [`foreign`].
 
+pub(crate) mod call_site;
 mod foreign;
 mod hooks;
 pub(crate) mod initializer;
@@ -44,6 +48,7 @@ pub(crate) fn check_decls(
     visibility::check(input, own, &mut diags)?;
     hooks::check(input, own, &mut diags);
     initializer::check(input, own, &mut diags);
+    call_site::check(input, own, &mut diags);
     foreign::check(input, own, &mut diags)?;
     Ok(diags)
 }
