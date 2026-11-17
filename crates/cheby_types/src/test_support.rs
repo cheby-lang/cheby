@@ -125,6 +125,72 @@ fn key_without_default_at<T>(path: String, type_text: String) -> Key<Option<T>> 
 pub const own_key: Key<Int> = key(0)
 "#;
 
+/// A small std module with functions that carry `@std_call_site`, for the
+/// checker's tests (D-1628, D-1630): no shipped module carries the
+/// attribute yet. Given to [`build_with_std`] as `("site", STD_SITE)`.
+/// `log` takes one argument, `fold` is generic with a bound and takes a
+/// callback last, as a `use` calls it, and `text` takes the module's type
+/// first, so an interface could ask for it. `Note` satisfies `Tagged`.
+pub(crate) const STD_SITE: &str = r#"//! Call-site functions, for the checker's tests.
+
+/// A note, the first parameter of `text`.
+pub exposed type Note {
+  Note(String),
+}
+
+/// Logs `message`.
+@std_call_site(log_at)
+pub fn log(message: String) {
+  let _ = message
+  panic as "the compiler did not replace this call of `site::log` (D-1630)"
+}
+
+fn log_at(message: String, path: String, line: Int, column: Int) {
+  let _ = (message, path, line, column)
+  Nil
+}
+
+/// What `fold` asks of its value.
+pub interface Tagged {
+  fn tag(Self) -> String
+}
+
+/// A note's tag.
+pub fn tag(note: Note) -> String {
+  let Note(content) = note
+  content
+}
+
+/// Folds `value` into the result of `body`.
+@std_call_site(fold_at)
+pub fn fold<T: Tagged>(value: T, body: fn(String) -> Int) -> Int {
+  let _ = (value, body)
+  panic as "the compiler did not replace this call of `site::fold` (D-1630)"
+}
+
+fn fold_at<T: Tagged>(
+  value: T,
+  body: fn(String) -> Int,
+  path: String,
+  line: Int,
+  column: Int,
+) -> Int {
+  body(Tagged::tag(value)) + line + column
+}
+
+/// The text of a note.
+@std_call_site(text_at)
+pub fn text(note: Note) -> String {
+  let _ = note
+  panic as "the compiler did not replace this call of `site::text` (D-1630)"
+}
+
+fn text_at(note: Note, path: String, line: Int, column: Int) -> String {
+  let Note(content) = note
+  content
+}
+"#;
+
 /// Standard-library modules the spec plans, by path under `std`.
 fn planned() -> Vec<String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/stdlib");

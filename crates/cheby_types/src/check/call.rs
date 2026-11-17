@@ -40,6 +40,9 @@ pub(crate) enum Target {
         def: DefId,
         args: Box<[InferTy]>,
         bounds: Vec<(InferTy, DefId)>,
+        /// The start of the path that names the function, its call site
+        /// when it carries `@std_call_site` (D-1629).
+        site: Span,
     },
     /// A positional constructor, with the type's type arguments.
     Ctor { def: DefId, args: Box<[InferTy]> },
@@ -237,6 +240,7 @@ impl BodyCx<'_> {
                         def,
                         args: inst.args,
                         bounds,
+                        site: spans.callee,
                     },
                     named,
                     fact: None,
@@ -433,6 +437,7 @@ impl BodyCx<'_> {
                 def,
                 args: ty_args,
                 bounds,
+                site,
             } => {
                 let dicts: Box<[Dict]> = bounds
                     .iter()
@@ -451,6 +456,7 @@ impl BodyCx<'_> {
                     span,
                 )?;
                 self.record_instance(id, def, ty_args, bounds);
+                self.note_call_site(id, def, site)?;
                 Ok(id)
             }
             Target::Ctor { def, args: ty_args } => {

@@ -256,6 +256,9 @@ pub(crate) struct WholeStd {
     /// The same masks of std's functions that borrow something, by module
     /// path and item, sorted.
     named: Vec<(String, String, BorrowMask)>,
+    /// The constructors that std's `@std_initializer` and `@std_call_site`
+    /// attributes name, by module path and item, sorted (D-1630).
+    constructors: Vec<(String, String)>,
     /// Every std module's path, in build order.
     modules: Vec<String>,
     /// Every std module's front record but its blobs, in build order.
@@ -294,6 +297,12 @@ impl WholeStd {
     /// Every std module's path, in build order: what a first use parsed.
     pub(crate) fn modules(&self) -> &[String] {
         &self.modules
+    }
+
+    /// The constructors that std's `@std_initializer` and `@std_call_site`
+    /// attributes name, by module path and item, sorted (D-1630).
+    pub(crate) fn constructors(&self) -> &[(String, String)] {
+        &self.constructors
     }
 }
 
@@ -387,6 +396,7 @@ fn compute_whole_std() -> Result<WholeStd, Error> {
         }
     }
     named.sort();
+    let constructors = attr_constructors(&front, &std)?;
     // The units keep no mask: a build applies them only under borrowing.
     units.retain(|unit| matches!(unit.unit, UnitKind::Code(_)));
     let modules = std
@@ -401,9 +411,33 @@ fn compute_whole_std() -> Result<WholeStd, Error> {
         units,
         by_def,
         named,
+        constructors,
         modules,
         fronts,
     })
+}
+
+/// The functions of the std modules `std` that an `@std_initializer` or an
+/// `@std_call_site` names as its constructor, by module path and item,
+/// sorted (D-1630).
+fn attr_constructors(front: &Frontend, std: &[ModuleId]) -> Result<Vec<(String, String)>, Ice> {
+    let mut out = Vec::new();
+    for &module in std {
+        let path = front.modules.try_get(module)?.path.to_string();
+        let checked = front
+            .checked(module)
+            .ok_or_else(|| Ice::new(format!("std module `{path}` was not checked")))?;
+        for item in &checked.interface.items {
+            let cheby_iface::ItemSig::Fn(sig) = &item.sig else {
+                continue;
+            };
+            for name in [sig.initializer, sig.call_site].into_iter().flatten() {
+                out.push((path.clone(), front.globals.names.get(name).to_owned()));
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Std module `module`'s front record parts, from `front`, std's own front

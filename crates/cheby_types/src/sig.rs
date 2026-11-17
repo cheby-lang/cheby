@@ -168,22 +168,26 @@ impl<'a> SigCx<'a> {
             return Ok(ItemSig::Error);
         }
         let clamped = clamped_params(&sig.params, item);
-        let initializer = self.initializer(item);
+        let initializer = self.constructor(item.attrs.initializer);
+        let call_site = self.constructor(item.attrs.call_site);
         Ok(ItemSig::Fn(FnSig {
             generics: sig.generics,
             params: sig.params.into(),
             ret: sig.ret,
             clamped,
             initializer,
+            call_site,
         }))
     }
 
-    /// The constructor named by `@std_initializer(constructor)` on `item`
-    /// (D-1599), when it names a function of the module: the resolver has
-    /// reported a name that does not (E0042), and such a function records
-    /// none. `decl::initializer` checks the constructor's shape.
-    fn initializer(&self, item: &ItemDef) -> Option<Name> {
-        let (name, _) = item.attrs.initializer?;
+    /// The constructor named by `@std_initializer(constructor)` (D-1599)
+    /// or `@std_call_site(constructor)` (D-1628) on an item, when it names
+    /// a function of the module: the resolver has reported a name that
+    /// does not (E0042), and such a function records none.
+    /// `decl::initializer` and `decl::call_site` check the constructor's
+    /// shape.
+    fn constructor(&self, attr: Option<(Name, Span)>) -> Option<Name> {
+        let (name, _) = attr?;
         self.input
             .resolved
             .items

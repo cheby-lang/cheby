@@ -365,6 +365,7 @@ impl BodyCx<'_, '_> {
                 | thir::ExprKind::Interpolate { .. }
                 | thir::ExprKind::Panic { .. }
                 | thir::ExprKind::DynCoerce { .. }
+                | thir::ExprKind::CallSite(_)
                 | thir::ExprKind::Error
                 | _ => return Ok(e.span),
             }

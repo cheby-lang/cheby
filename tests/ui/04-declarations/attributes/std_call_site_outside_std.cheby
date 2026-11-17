@@ -1,0 +1,20 @@
+// @mode: check-fail
+// @decisions: D-482, D-1628
+//! Only the standard library may name a function that the compiler calls
+//! with the place of each call in place of the one written. The attribute
+//! is unknown outside std (§4.8).
+
+import std::io
+
+@std_call_site(note_at)
+pub fn note(message: String) {
+  io::println(message)
+}
+
+pub fn note_at(message: String, path: String, line: Int, column: Int) {
+  io::println("{path}:{line}:{column}: {message}")
+}
+
+pub fn main() {
+  note("hello")
+}

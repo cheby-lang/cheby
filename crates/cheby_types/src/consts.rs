@@ -349,6 +349,7 @@ fn first_reference(body: &thir::Body, targets: &[DefId]) -> Option<(DefId, Span)
             | ExprKind::Closure { .. }
             | ExprKind::LocalFn { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Field { .. }
             | ExprKind::Record { .. }

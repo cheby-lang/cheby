@@ -172,6 +172,7 @@ impl BodyCx<'_, '_> {
             | ExprKind::Interpolate { .. }
             | ExprKind::Panic { .. }
             | ExprKind::DynCoerce { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Error
             | _ => None,
         })

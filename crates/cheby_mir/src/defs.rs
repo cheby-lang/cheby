@@ -37,6 +37,28 @@ impl<'a> Defs<'a> {
             .ok_or_else(|| Ice::new(format!("MIR lowering cannot see {def:?}")))
     }
 
+    /// Checks that lowered code may call `def` or hold it as a value: a
+    /// function with `@std_call_site` is never one, since the checker
+    /// replaces every call and mention of it by its constructor (D-1628,
+    /// D-1631), so one that reaches lowering is a fault of the compiler,
+    /// not a call that would panic at run time in the function's body
+    /// (D-1630). The function's own item is still lowered. Anything this
+    /// cannot read is left to the lookups that follow.
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] if `def` is a function with `@std_call_site`.
+    pub fn replaced(&self, def: DefId) -> Result<(), Ice> {
+        match self.item(def).map(|item| &item.sig) {
+            Ok(ItemSig::Fn(sig)) if sig.call_site.is_some() => Err(Ice::new(format!(
+                "a call of a function with `@std_call_site` reached MIR lowering unreplaced: \
+                 `{}`",
+                self.name(def)?.path()
+            ))),
+            Ok(_) | Err(_) => Ok(()),
+        }
+    }
+
     /// The signature of the function `def`.
     ///
     /// # Errors

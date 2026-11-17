@@ -28,6 +28,8 @@
 //! ([`crate::reach`], D-510).
 
 mod body;
+#[cfg(test)]
+mod call_site_tests;
 mod closure;
 mod coerce;
 mod consts;

@@ -19,9 +19,11 @@
 //! `desugar`, `coerce`, `constraints` and `interp` the expression core;
 //! `pat`, `case` and `record` patterns, `case` and records; `facts` the
 //! hooks of a recording run (D-1380); `key` the rules of context keys
-//! (§10.11).
+//! (§10.11); `call_site` the rules of functions with `@std_call_site`
+//! (D-1628).
 
 mod call;
+mod call_site;
 mod case;
 mod closure;
 mod coerce;
@@ -35,6 +37,7 @@ mod pat;
 mod record;
 mod stmt;
 
+pub(crate) use call_site::call_site_fn;
 pub(crate) use constraints::Deferred;
 pub(crate) use key::{is_key_type, key_fn};
 pub(crate) use pat::PatSite;
@@ -748,6 +751,10 @@ pub(crate) struct BodyCx<'a> {
     /// of `context::key` or `context::key_without_default`: the one
     /// mention of them that is not E0080 (D-1565, D-1581).
     pub key_site: Option<cheby_syntax::NodeId>,
+    /// The calls of functions with `@std_call_site` and those functions
+    /// as values, each with its call site, which the finished body
+    /// replaces (D-1628, D-1629).
+    pub call_sites: Vec<(ExprId, Span)>,
 }
 
 impl<'a> BodyCx<'a> {
@@ -785,6 +792,7 @@ impl<'a> BodyCx<'a> {
             facts: record.then(Box::default),
             facts_out: None,
             key_site: None,
+            call_sites: Vec::new(),
         })
     }
 
@@ -864,6 +872,7 @@ impl<'a> BodyCx<'a> {
             | ExprKind::Closure { .. }
             | ExprKind::LocalFn { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Field { .. }
             | ExprKind::Record { .. }
@@ -1110,7 +1119,7 @@ impl<'a> BodyCx<'a> {
         if exprs.iter().any(|e| matches!(e.kind, ExprKind::Error)) {
             return Err(Ice::new("an error expression in a body without errors"));
         }
-        let body = Body {
+        let mut body = Body {
             params: self.res.params.clone(),
             locals,
             exprs,
@@ -1121,6 +1130,11 @@ impl<'a> BodyCx<'a> {
         let errored = has_error(&found);
         self.diags.extend(found);
         if errored {
+            return Ok(None);
+        }
+        // After the facts, so the language server keeps the written
+        // function (D-1631).
+        if !self.replace_call_sites(&mut body)? {
             return Ok(None);
         }
         Ok(Some(body))
@@ -1375,6 +1389,7 @@ fn set_ty_args(kind: &mut ExprKind, args: Box<[Ty]>) -> Result<(), Ice> {
         | ExprKind::Closure { .. }
         | ExprKind::LocalFn { .. }
         | ExprKind::SelfRef { .. }
+        | ExprKind::CallSite(_)
         | ExprKind::Case { .. }
         | ExprKind::Field { .. }
         | ExprKind::RecordUpdate { .. }

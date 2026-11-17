@@ -115,6 +115,9 @@ impl BodyCx<'_, '_> {
     /// `def`'s value shim holding them. Also how a dictionary entry is
     /// built for a satisfying function (W3-A, D-453).
     pub(super) fn fn_value(&mut self, def: DefId, dicts: Vec<Operand>) -> Result<Operand, Ice> {
+        // A value shim calls `def`; this and the static dictionaries are
+        // where one is requested, so its own call needs no check.
+        self.cx.defs.replaced(def)?;
         self.pending.request_shim(def);
         if dicts.is_empty() {
             return Ok(Operand::Const(Const::FnValue(def)));

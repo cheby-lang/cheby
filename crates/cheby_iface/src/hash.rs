@@ -349,12 +349,14 @@ impl Encoder<'_> {
                 for &index in &f.clamped {
                     out.u32(index);
                 }
-                match f.initializer {
-                    Some(constructor) => {
-                        out.byte(1);
-                        self.name(out, constructor)?;
+                for constructor in [f.initializer, f.call_site] {
+                    match constructor {
+                        Some(constructor) => {
+                            out.byte(1);
+                            self.name(out, constructor)?;
+                        }
+                        None => out.byte(0),
                     }
-                    None => out.byte(0),
                 }
             }
             ItemSig::Type(t) => {
@@ -527,6 +529,7 @@ mod tests {
                 ret: Ty::NIL,
                 clamped: Box::new([]),
                 initializer: None,
+                call_site: None,
             }),
         }
     }
@@ -658,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn hash_covers_targets_deprecation_clamps_initializers_and_hooks() {
+    fn hash_covers_targets_deprecation_clamps_constructors_and_hooks() {
         let s = setup();
         let base_items = || vec![func(&s, "take", Vis::Pub, Ty::INT, 0)];
         let base = hash_of(&s, base_items());
@@ -690,6 +693,17 @@ mod tests {
         };
         assert_ne!(base, initializer("take_at"));
         assert_ne!(initializer("take_at"), initializer("take_here"));
+        let call_site = |constructor: &str| {
+            with(&|item| {
+                if let ItemSig::Fn(f) = &mut item.sig {
+                    f.call_site = Some(s.globals.names.intern(constructor));
+                }
+            })
+        };
+        assert_ne!(base, call_site("take_at"));
+        assert_ne!(call_site("take_at"), call_site("take_here"));
+        // The two attributes name their constructors in different places.
+        assert_ne!(initializer("take_at"), call_site("take_at"));
         // The span is not part of the hash.
         assert_eq!(base, with(&|item| item.span = Some(span(77))));
 

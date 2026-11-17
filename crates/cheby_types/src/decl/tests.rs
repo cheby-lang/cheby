@@ -618,6 +618,86 @@ fn std_initializer_results_need_one_type_argument() {
     assert_eq!(errors, 3, "{}", b.rendered());
 }
 
+/// The constructor of `@std_call_site` has its function's type parameters
+/// with their bounds, its parameters followed by a `String` and two `Int`s,
+/// and its result; it is not `priv`, exists on the function's targets and
+/// carries neither `@std_call_site` nor `@std_initializer` (D-1630): E0045
+/// for each one that does not. A function whose constructor fits records it
+/// in its signature, and the constructor records nothing.
+#[test]
+fn std_call_site_constructors_need_their_shapes() {
+    let lib = "//! A fake std module.\n\n\
+               @std_call_site(good_at)\npub fn good<T: Show>(value: T) -> List<T> {\n  todo\n}\n\n\
+               fn good_at<T: Show>(value: T, path: String, line: Int, column: Int) -> List<T> {\n  todo\n}\n\n\
+               @std_call_site(short_at)\npub fn short(value: Int) {\n  todo\n}\n\n\
+               fn short_at(value: Int, path: String, line: Int) {\n  todo\n}\n\n\
+               @std_call_site(order_at)\npub fn order(value: Int) {\n  todo\n}\n\n\
+               fn order_at(value: Int, line: Int, column: Int, path: String) {\n  todo\n}\n\n\
+               @std_call_site(generic_at)\npub fn generic<T>(value: T) {\n  todo\n}\n\n\
+               fn generic_at<T, U>(value: T, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(bound_at)\npub fn bound<T>(value: T) {\n  todo\n}\n\n\
+               fn bound_at<T: Show>(value: T, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(params_at)\npub fn params(value: Int) {\n  todo\n}\n\n\
+               fn params_at(value: String, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(result_at)\npub fn result(value: Int) -> Int {\n  todo\n}\n\n\
+               fn result_at(value: Int, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(hidden_at)\npub fn hidden(value: Int) {\n  todo\n}\n\n\
+               priv fn hidden_at(value: Int, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(native_at)\npub fn everywhere(value: Int) {\n  todo\n}\n\n\
+               @target(native)\nfn native_at(value: Int, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @target(native)\n@std_call_site(narrow_at)\npub fn narrow(value: Int) {\n  todo\n}\n\n\
+               fn narrow_at(value: Int, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(chained_at)\npub fn chained(value: Int) {\n  todo\n}\n\n\
+               @std_call_site(narrow_at)\nfn chained_at(value: Int, path: String, line: Int, column: Int) {\n  todo\n}\n\n\
+               @std_call_site(keyed_at)\npub fn keyed(value: Int) -> List<Int> {\n  todo\n}\n\n\
+               @std_initializer(keyed_key_at)\nfn keyed_at(value: Int, path: String, line: Int, column: Int) -> List<Int> {\n  todo\n}\n\n\
+               fn keyed_key_at(value: Int, path: String, line: Int, column: Int, a: String, b: String) -> List<Int> {\n  todo\n}\n";
+    let b = build_with_std(
+        &[("site", lib)],
+        &[(
+            "",
+            &module("import std::site\n\npub fn f(n: Int) -> Int {\n  n\n}\n"),
+        )],
+    );
+    assert_eq!(
+        messages(&b, "E0045"),
+        [
+            "E0045: `bound_at` cannot be the call-site constructor of `bound` [\"named here\"]",
+            "E0045: `generic_at` cannot be the call-site constructor of `generic` [\"named here\"]",
+            "E0045: `narrow_at` cannot be the call-site constructor of `chained_at` [\"named here\"]",
+            "E0045: `order_at` cannot be the call-site constructor of `order` [\"named here\"]",
+            "E0045: `params_at` cannot be the call-site constructor of `params` [\"named here\"]",
+            "E0045: `result_at` cannot be the call-site constructor of `result` [\"named here\"]",
+            "E0045: `short_at` cannot be the call-site constructor of `short` [\"named here\"]",
+            "E0045: the call-site constructor `chained_at` of `chained` carries `@std_call_site` [\"named here\"]",
+            "E0045: the call-site constructor `hidden_at` of `hidden` is `priv` [\"named here\"]",
+            "E0045: the call-site constructor `keyed_at` of `keyed` carries `@std_initializer` [\"named here\"]",
+            "E0045: the call-site constructor `native_at` of `everywhere` does not exist on every target of `everywhere` [\"named here\"]",
+        ],
+        "{}",
+        b.rendered()
+    );
+    let ItemSig::Fn(good) = b.fn_sig("std::site", "good") else {
+        panic!("good has no signature");
+    };
+    assert_eq!(
+        good.call_site.map(|n| b.globals.names.get(n)),
+        Some("good_at")
+    );
+    assert_eq!(good.initializer, None);
+    let ItemSig::Fn(narrow) = b.fn_sig("std::site", "narrow") else {
+        panic!("narrow has no signature");
+    };
+    assert_eq!(
+        narrow.call_site.map(|n| b.globals.names.get(n)),
+        Some("narrow_at")
+    );
+    let ItemSig::Fn(plain) = b.fn_sig("std::site", "good_at") else {
+        panic!("good_at has no signature");
+    };
+    assert_eq!(plain.call_site, None);
+}
+
 /// Editing bodies, initializers and tests never changes the interface or
 /// its hash (B8, D-460); editing a signature does.
 #[test]

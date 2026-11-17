@@ -359,6 +359,7 @@ fn expr_dicts(kind: &ExprKind) -> Vec<&Dict> {
         | ExprKind::Not(_)
         | ExprKind::Neg { .. }
         | ExprKind::Panic { .. }
+        | ExprKind::CallSite(_)
         | ExprKind::Error
         | _ => Vec::new(),
     }

@@ -574,13 +574,16 @@ fn missing_and_planned_std_modules() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// D-1587: a package's key constant calls the package-visible
+/// D-1587, D-1630: a package's key constant calls the package-visible
 /// constructors `context::key_at` and `key_without_default_at` through the
-/// compiler's rewrite, with the convention of a call of std's `pub`
-/// functions, which own their arguments (D-787). So std's masks, which
-/// only std's units take, must hold no entry for them: neither borrows.
+/// compiler's rewrite, and a package's call of a function with
+/// `@std_call_site` calls its constructor, with the convention of a call
+/// of std's `pub` functions, which own their arguments (D-787). So std's
+/// masks, which only std's units take, must hold no entry for any function
+/// that an `@std_initializer` or `@std_call_site` names: none borrows. The
+/// rule reads the attributes; the key constructors keep it tested.
 #[test]
-fn the_key_constructors_borrow_nothing() {
+fn the_attribute_constructors_borrow_nothing() {
     let whole = std_cache::whole_std().unwrap();
     let modules = whole.modules();
     assert!(modules.iter().any(|path| path == "std::context"));
@@ -589,16 +592,24 @@ fn the_key_constructors_borrow_nothing() {
     for (module, item, _) in whole.named() {
         assert!(modules.contains(module), "{module}::{item}");
     }
-    let borrowing: Vec<&str> = whole
-        .named()
-        .iter()
-        .filter(|(module, _, _)| module == "std::context")
-        .map(|(_, item, _)| item.as_str())
-        .collect();
-    for constructor in ["key_at", "key_without_default_at"] {
+    let constructors = whole.constructors();
+    for key in ["key_at", "key_without_default_at"] {
         assert!(
-            !borrowing.contains(&constructor),
-            "std::context::{constructor} borrows: {borrowing:?}"
+            constructors
+                .iter()
+                .any(|(module, item)| module == "std::context" && item == key),
+            "std::context::{key} is not named by an attribute: {constructors:?}"
+        );
+    }
+    for (module, item) in constructors {
+        assert!(modules.contains(module), "{module}::{item}");
+        assert!(
+            !whole
+                .named()
+                .iter()
+                .any(|(m, i, _)| m == module && i == item),
+            "{module}::{item} borrows: {:?}",
+            whole.named()
         );
     }
 }

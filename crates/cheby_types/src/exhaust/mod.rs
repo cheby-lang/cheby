@@ -304,6 +304,7 @@ fn check(cx: &TyCx<'_>, body: &thir::Body) -> Result<Vec<Diagnostic>, Ice> {
             | ExprKind::FnRef { .. }
             | ExprKind::ConstRef { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Field { .. }
             | ExprKind::Record { .. }

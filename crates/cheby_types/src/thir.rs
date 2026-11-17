@@ -5,9 +5,11 @@
 //! callee, and every interface use its resolved dictionary, so lowering
 //! never infers types or searches interfaces. `use`, pipes, captures,
 //! holes and parenthesized expressions are already desugared (C7); a
-//! positional constructor or an interface function used as a value is a
-//! [`ExprKind::Closure`] (D-500). Tail position is not
-//! marked here; MIR lowering marks it (§5.15.2).
+//! positional constructor, an interface function or a function with
+//! `@std_call_site` used as a value is a [`ExprKind::Closure`] (D-500,
+//! D-1629), and a call of a function with `@std_call_site` calls its
+//! constructor (D-1628). Tail position is not marked here; MIR lowering
+//! marks it (§5.15.2).
 //!
 //! Rules that go with the shape:
 //!
@@ -312,8 +314,28 @@ pub enum ExprKind {
         iface: DefId,
         dict: Dict,
     },
+    /// One part of the place of a call site, the start of the
+    /// expression's span: the path as a `String`, or the line or the
+    /// column as an `Int`, the values a panic report at that place writes
+    /// (D-421). The checker appends the three to the arguments of a call of
+    /// a function with `@std_call_site`, whose callee it replaces by the
+    /// constructor (D-1628, D-1629), and MIR lowering, which has the source
+    /// map, makes them constants (D-1631).
+    CallSite(CallSitePart),
     /// An expression with a reported error. Never in a returned body.
     Error,
+}
+
+/// Which part of a call site's place an [`ExprKind::CallSite`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CallSitePart {
+    /// The path, a `String`: `src/main.cheby`, `std/log.cheby` or
+    /// `<repl:N>`.
+    Path,
+    /// The line, 1-based, an `Int`.
+    Line,
+    /// The column, 1-based and in code points, an `Int`.
+    Column,
 }
 
 impl ExprKind {
@@ -331,6 +353,7 @@ impl ExprKind {
             | Self::FnRef { .. }
             | Self::ConstRef { .. }
             | Self::SelfRef { .. }
+            | Self::CallSite(_)
             | Self::Error => {}
             Self::Call { callee, args } => {
                 callee.push_value(&mut out);
@@ -427,6 +450,7 @@ impl ExprKind {
             | Self::Interpolate { .. }
             | Self::Panic { .. }
             | Self::DynCoerce { .. }
+            | Self::CallSite(_)
             | Self::Error => Vec::new(),
         }
     }
@@ -468,6 +492,7 @@ impl ExprKind {
             | Self::Interpolate { .. }
             | Self::Panic { .. }
             | Self::DynCoerce { .. }
+            | Self::CallSite(_)
             | Self::Error => Vec::new(),
         }
     }

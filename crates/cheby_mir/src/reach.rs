@@ -880,6 +880,7 @@ impl Walk<'_, '_> {
             | ExprKind::List { .. }
             | ExprKind::Not(_)
             | ExprKind::Panic { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Error
             | _ => {}
         }

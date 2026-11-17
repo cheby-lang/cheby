@@ -53,6 +53,13 @@ pub struct FnSig {
     /// that is a constant's whole initializer, and that call calls the
     /// constructor instead (D-1599, D-482). Always `None` outside `std`.
     pub initializer: Option<Name>,
+    /// The constructor named by the std-only attribute
+    /// `@std_call_site(constructor)`, a function of the same module. Every
+    /// call of the function calls the constructor instead, with the path,
+    /// the line and the column of the call site as three more arguments,
+    /// and a mention of it as a value is a closure that does so (D-1628,
+    /// D-1629, D-1630). Always `None` outside `std`.
+    pub call_site: Option<Name>,
 }
 
 /// A type definition.
