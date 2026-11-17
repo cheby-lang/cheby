@@ -1,5 +1,5 @@
 // @mode: check-fail
-// @decisions: D-482, D-1628
+// @decisions: D-482, D-1628, D-1630
 //! Only the standard library may name a function that the compiler calls
 //! with the place of each call in place of the one written. The attribute
 //! is unknown outside std (§4.8).

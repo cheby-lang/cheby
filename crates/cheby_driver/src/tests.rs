@@ -87,8 +87,8 @@ fn examples_check_cleanly() {
         }
         checked += 1;
     }
-    // 32 since 033 checks with `std::context` shipped (D-1563, D-1582).
-    assert_eq!(checked, 32);
+    // 33 since 034 checks with `std::log` shipped (D-1614, D-1635).
+    assert_eq!(checked, 33);
 }
 
 /// No example needs a std module of a later tier since `std::http` ships
@@ -309,8 +309,8 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    // 32 since 033 lowers with `std::context` shipped (D-1563, D-1582).
-    assert_eq!(lowered + not_yet, 32, "{}", failures.join("\n"));
+    // 33 since 034 lowers with `std::log` shipped (D-1614, D-1635).
+    assert_eq!(lowered + not_yet, 33, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);
