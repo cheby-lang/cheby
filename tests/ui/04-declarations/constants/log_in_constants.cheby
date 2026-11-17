@@ -1,0 +1,35 @@
+// @mode: run-pass
+// @decisions: D-1634
+//! The field builders and accessors, `text_line`, `json_line`, `show`,
+//! `parse` and `compare` are plain Cheby, so they run in constants (§4.5).
+
+import std::duration
+import std::io
+import std::log
+import std::time
+
+const fields: List<log::Field> = [log::int("port", 8080), log::field("host", "my host")]
+
+const record: log::Record = log::Record {
+  timestamp: time::from_unix(duration::seconds(0)),
+  level: log::Warn,
+  location: log::Location { path: "src/server.cheby", line: 7, column: 3 },
+  message: "from a constant",
+  fields,
+}
+
+const text: String = log::text_line(record)
+
+const json: String = log::json_line(record)
+
+const names: List<String> = [log::field_name(log::bool("ok", True)), log::show(log::Error)]
+
+const parsed: Result<log::Level, Nil> = log::parse("DEBUG")
+
+const ordered: Order = log::compare(log::Info, log::Warn)
+
+fn main() {
+  io::println(text)
+  io::println(json)
+  io::println("{names:?} {parsed:?} {ordered:?} {fields:?}")
+}

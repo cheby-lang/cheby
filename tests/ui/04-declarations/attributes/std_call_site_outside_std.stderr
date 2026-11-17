@@ -1,0 +1,8 @@
+error[E0045]: unknown attribute `@std_call_site`
+ --> tests/ui/04-declarations/attributes/std_call_site_outside_std.cheby:9:1
+  |
+9 | @std_call_site(note_at)
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`
+

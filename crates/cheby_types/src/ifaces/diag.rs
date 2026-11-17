@@ -55,6 +55,7 @@ fn descriptor_leaf(err: &Unsatisfied) -> Option<(&Unsatisfied, ParamIdx)> {
         Reason::Missing { .. }
         | Reason::LessVisible { .. }
         | Reason::KeyFunction { .. }
+        | Reason::CallSiteFunction { .. }
         | Reason::Signature { .. }
         | Reason::HomeNotInDeps { .. }
         | Reason::NoModule
@@ -233,6 +234,13 @@ impl Writer<'_, '_> {
                 );
                 self.embedded_note(diag.with_note(note), err.want, *func)
             }
+            Reason::CallSiteFunction { found, func } => {
+                let note = format!(
+                    "`{}` exists but does not count, because the compiler passes it the place of its call, which a call through an interface does not have (§8.2, D-1630)",
+                    self.func(*found)
+                );
+                self.embedded_note(diag.with_note(note), err.want, *func)
+            }
             Reason::Signature {
                 found,
                 func,
@@ -333,6 +341,10 @@ impl Writer<'_, '_> {
             }
             Reason::KeyFunction { found, .. } => format!(
                 "`{}` does not count, because a key is made only by a constant's whole initializer",
+                self.func(*found)
+            ),
+            Reason::CallSiteFunction { found, .. } => format!(
+                "`{}` does not count, because the compiler passes it the place of its call",
                 self.func(*found)
             ),
             Reason::Signature {
@@ -677,6 +689,7 @@ impl Writer<'_, '_> {
             Reason::Missing { .. }
             | Reason::LessVisible { .. }
             | Reason::KeyFunction { .. }
+            | Reason::CallSiteFunction { .. }
             | Reason::Signature { .. }
             | Reason::HomeNotInDeps { .. }
             | Reason::NoModule

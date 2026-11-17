@@ -561,3 +561,237 @@ fn std_cache_repl_memory_verdict_equals_the_commands() {
         "the REPL fails at check's limit {high} KiB"
     );
 }
+
+/// A reference to `module::item`.
+fn item_ref(module: &str, item: &str) -> cache::front::ItemRef {
+    cache::front::ItemRef {
+        module: module.to_owned(),
+        item: item.to_owned(),
+    }
+}
+
+/// A summary of `item`, a `kind`, that mentions `mentions`.
+fn summary(
+    item: &str,
+    kind: cache::front::MentionerKind,
+    mentions: &[(&str, &str)],
+) -> cache::front::ReferenceSummary {
+    cache::front::ReferenceSummary {
+        item: item.to_owned(),
+        kind,
+        mentions: mentions.iter().map(|(m, i)| item_ref(m, i)).collect(),
+    }
+}
+
+/// D-1262, D-953: in a std front record's summaries, a mention of a `priv`
+/// function of the module is replaced by that function's mentions, a
+/// mention of a `priv` constant stays, also when the walk meets it only
+/// through a `priv` function or in another `priv` constant's initializer,
+/// and a mention of a `priv` type's constructor is left out.
+#[test]
+fn std_cache_walkable_keeps_private_constants() {
+    use cache::front::MentionerKind::{Constant, Function};
+    let entries = [
+        // `pub fn shown() { helper() }`, `priv fn helper() { a }`.
+        summary("shown", Function, &[("std::m", "helper")]),
+        summary("helper", Function, &[("std::m", "a")]),
+        // `priv const a = f(b)`, with `priv fn f(x) { list::length(x) }`.
+        summary("a", Constant, &[("std::m", "f"), ("std::m", "b")]),
+        summary("f", Function, &[("std::list", "length")]),
+        // `priv const b = Hidden::Make(list::range(0, 3))`.
+        summary(
+            "b",
+            Constant,
+            &[("std::m", "Hidden::Make"), ("std::list", "range")],
+        ),
+    ];
+    let visible = std::collections::BTreeSet::from(["shown".to_owned()]);
+    let walked = std_cache::walkable(&entries, "std::m", &visible);
+    let mentions = |item: &str| -> Vec<(String, String)> {
+        walked
+            .iter()
+            .find(|s| s.item == item)
+            .unwrap()
+            .mentions
+            .iter()
+            .map(|r| (r.module.clone(), r.item.clone()))
+            .collect()
+    };
+    let pairs = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+        list.iter()
+            .map(|(m, i)| ((*m).to_owned(), (*i).to_owned()))
+            .collect()
+    };
+    assert_eq!(mentions("shown"), pairs(&[("std::m", "a")]));
+    assert_eq!(mentions("helper"), pairs(&[("std::m", "a")]));
+    assert_eq!(
+        mentions("a"),
+        pairs(&[("std::list", "length"), ("std::m", "b")])
+    );
+    assert_eq!(mentions("b"), pairs(&[("std::list", "range")]));
+    // Every entry stays, in its order.
+    let items: Vec<&str> = walked.iter().map(|s| s.item.as_str()).collect();
+    assert_eq!(items, ["shown", "helper", "a", "f", "b"]);
+}
+
+/// The names of the `priv` constants a text declares are the identifiers
+/// after `priv const`, with their ranges, whatever trivia lies between;
+/// a package-visible constant, a comment and a string are no declaration.
+#[test]
+fn std_cache_private_constant_names() {
+    let text = "//! A module.\n\n/// priv const in_doc: Int = 1\npriv const first: Int = 1\n\n\
+                const shown: String = \"priv const in_text\"\n\npriv  const\n  second: Int = first\n";
+    let found = std_cache::private_constant_names(FileId::new(0), text);
+    let names: Vec<(&str, &str)> = found
+        .iter()
+        .map(|(name, range)| (*name, range.slice(text).unwrap()))
+        .collect();
+    assert_eq!(names, [("first", "first"), ("second", "second")]);
+}
+
+/// The span `add_private_constants` gives each `priv` constant of std is
+/// the one std's check gives its name, and std declares no `priv` constant
+/// that the lexer misses or mistakes (D-1262, D-1619).
+#[test]
+fn std_cache_private_constant_spans_equal_the_checks() {
+    let mut sources = SourceMap::new();
+    let mut diagnostics = Vec::new();
+    let package = test::std_test_package(&mut sources, &mut diagnostics).unwrap();
+    let front = frontend::run(
+        package,
+        frontend::Mode::StdTests,
+        &mut sources,
+        &mut diagnostics,
+    )
+    .unwrap();
+    let mut constants = Vec::new();
+    for &module in &front.order {
+        let info = front.modules.get(module).unwrap();
+        if info.package != cheby_iface::PackageId::STD {
+            continue;
+        }
+        let file = info.file.unwrap();
+        let text = sources.file(file).unwrap().text_arc();
+        let iface = &front.checked(module).unwrap().interface;
+        let declared: std::collections::BTreeMap<String, TextRange> = iface
+            .items
+            .iter()
+            .filter(|item| {
+                item.kind == cheby_iface::DefKind::Const && item.vis == cheby_iface::Vis::Priv
+            })
+            .map(|item| {
+                (
+                    front.globals.names.get(item.name).to_owned(),
+                    item.span.unwrap().range,
+                )
+            })
+            .collect();
+        let lexed: std::collections::BTreeMap<String, TextRange> =
+            std_cache::private_constant_names(file, &text)
+                .into_iter()
+                .map(|(name, range)| (name.to_owned(), range))
+                .collect();
+        assert_eq!(lexed, declared, "std::{}", info.path);
+        constants.extend(
+            declared
+                .into_keys()
+                .map(|name| format!("{}::{name}", info.path)),
+        );
+    }
+    // D-1619: the key of `with_fields`' scoped fields is `priv`.
+    assert!(
+        constants.contains(&"std::log::scoped".to_owned()),
+        "{constants:?}"
+    );
+}
+
+/// A program that logs with scoped fields: `main` reaches `std::log`'s
+/// `priv` key `scoped` through `with_fields`, and through the log call's
+/// package-visible helpers.
+const LOG_MAIN: &str = "//! Logs with scoped fields.\n\nimport std::log\n\nfn main() {\n  \
+    use <- log::with_fields([log::field(\"request\", \"a17\")])\n  \
+    log::info(\"listening\")\n}\n\ntest \"logs\" {\n  \
+    let (_, records) = log::capture(fn() { log::with_fields([log::int(\"n\", 1)], fn() { log::info(\"x\") }) })\n  \
+    let assert [_] = records\n}\n";
+
+/// D-1262, D-1619: a build that reads std's front records reaches and
+/// evaluates a `priv` constant of std as a build that checks std from
+/// source does: `cheby run`'s warm front end, whose `std::log` is a hit,
+/// gives the constants `main` reaches the paths, order, seeds and name
+/// spans that a front end without a cache gives them, `std::log::scoped`
+/// among them; and `cheby run`, `cheby test` and `cheby check` look its
+/// entry up, a miss on std's first use and a hit after.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn std_cache_priv_constant_of_std_is_evaluated() {
+    let mut f = Fixture::new("priv_const");
+    let app = f.package(&[("main.cheby", LOG_MAIN)]);
+    let cold = f.run(&app);
+    assert!(
+        cold.contains(&"const std::log::scoped miss".to_owned()),
+        "{cold:?}"
+    );
+    for log in [f.run(&app), f.test(&app)] {
+        assert!(
+            log.contains(&"const std::log::scoped hit".to_owned()),
+            "{log:?}"
+        );
+        assert!(lines(&log, "parse.std").is_empty(), "{log:?}");
+    }
+    let _ = f.check(&app);
+
+    let infos = |front: &frontend::Frontend, sources: &SourceMap| {
+        let root = front.local_module(&ModulePath::root("app")).unwrap();
+        let main = front.main_of(root).unwrap();
+        let summaries = load_set::Summaries::new(front).unwrap();
+        let reach = summaries.reach(&[load_set::Start::Main(main)]).unwrap();
+        backend::const_infos(front, sources, &reach)
+            .unwrap()
+            .into_iter()
+            .map(|info| {
+                (
+                    info.path.to_string(),
+                    info.seed,
+                    info.on_js,
+                    info.name_span.range,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let (cache, log) = f.open();
+    let mut out = CheckOutput::default();
+    let (warm, _) = front_end_family(
+        &app,
+        frontend::Mode::Build,
+        cache::index::CommandFamily::Run,
+        None,
+        &mut out,
+        Some(&cache),
+        Some((false, None)),
+    )
+    .unwrap()
+    .unwrap();
+    let from_records = infos(&warm, &out.sources);
+    cache.finish(false).unwrap();
+    let read = read_log(&log);
+    assert!(
+        read.contains(&"front.std std::log hit".to_owned()),
+        "{read:?}"
+    );
+    assert!(lines(&read, "parse.std").is_empty(), "{read:?}");
+    let mut plain = CheckOutput::default();
+    let (checked, _) = front_end(&app, frontend::Mode::Build, &mut plain)
+        .unwrap()
+        .unwrap();
+    let from_source = infos(&checked, &plain.sources);
+    assert_eq!(from_records, from_source);
+    assert!(
+        from_records
+            .iter()
+            .any(|(path, ..)| path == "std::log::scoped"),
+        "{from_records:?}"
+    );
+}

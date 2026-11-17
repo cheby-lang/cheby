@@ -189,6 +189,11 @@ pub struct ItemAttrs {
     /// constant's whole initializer, and the compiler calls `constructor`,
     /// a function of the same module, in its place (D-1599, D-482).
     pub initializer: Option<(Name, Span)>,
+    /// The function named by the standard library's
+    /// `@std_call_site(constructor)` on a function with a body: the
+    /// compiler calls `constructor`, a function of the same module, in its
+    /// place, with the place of the call (D-1628, D-482).
+    pub call_site: Option<(Name, Span)>,
 }
 
 impl Default for ItemAttrs {
@@ -203,6 +208,7 @@ impl Default for ItemAttrs {
             hooks: None,
             std_context: false,
             initializer: None,
+            call_site: None,
         }
     }
 }

@@ -276,6 +276,7 @@ impl BodyCx<'_> {
                     span,
                 )?;
                 self.record_instance(id, def, inst.args, bounds);
+                self.note_call_site(id, def, span)?;
                 Ok(id)
             }
             (ItemSig::Const(sig), _) => {

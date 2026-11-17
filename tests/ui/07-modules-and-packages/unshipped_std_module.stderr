@@ -1,6 +1,0 @@
-error[E0038]: the module `std::log` is not supported yet
- --> tests/ui/07-modules-and-packages/unshipped_std_module.cheby:9:8
-  |
-9 | import std::log
-  |        ^^^^^^^^
-

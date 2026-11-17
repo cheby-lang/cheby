@@ -1651,6 +1651,17 @@ impl BuildInputs<'_> {
         if cheby_iface::apply_spans(&mut iface, file, &artifact.spans).is_err() {
             return Ok(false);
         }
+        // A std hit's `priv` constants, which no encoding holds (D-953),
+        // from its record's summaries, after its items, so a build reaches
+        // and evaluates them (D-1262).
+        if info.package == PackageId::STD {
+            let text = self
+                .sources
+                .file(file)
+                .ok_or_else(|| Ice::new(format!("std module `{}` has no text", info.path)))?
+                .text_arc();
+            crate::std_cache::add_private_constants(record, file, &text, self.globals, &mut iface)?;
+        }
         // D-1250: a warm `cheby run` or `cheby test` adds the hit's private
         // items and tests, which no encoding holds (D-953, D-1121), from its
         // warm facts, after its items, so its own summaries and its tests

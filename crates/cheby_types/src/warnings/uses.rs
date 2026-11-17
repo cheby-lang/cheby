@@ -389,6 +389,7 @@ fn called_args<'b, 'i>(
             | ExprKind::Closure { .. }
             | ExprKind::LocalFn { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Field { .. }
             | ExprKind::Record { .. }
@@ -465,6 +466,7 @@ fn body_refs(body: &thir::Body, push: &mut dyn FnMut(DefId)) {
             | ExprKind::Closure { .. }
             | ExprKind::LocalFn { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Tuple(_)
             | ExprKind::List { .. }

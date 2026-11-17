@@ -1214,6 +1214,7 @@ fn same_fn(a: &FnSig, b: &FnSig) -> bool {
         && a.ret == b.ret
         && a.clamped == b.clamped
         && a.initializer == b.initializer
+        && a.call_site == b.call_site
         && a.params.len() == b.params.len()
         && a.params.iter().zip(&b.params).all(|(x, y)| x.ty == y.ty)
 }
@@ -1294,6 +1295,7 @@ fn thir_refs(thir: &thir::Module, def: DefId) -> BTreeSet<DefId> {
             | ExprKind::Closure { .. }
             | ExprKind::LocalFn { .. }
             | ExprKind::SelfRef { .. }
+            | ExprKind::CallSite(_)
             | ExprKind::Case { .. }
             | ExprKind::Field { .. }
             | ExprKind::Record { .. }
@@ -1559,6 +1561,7 @@ fn make_body(
             ret: tuple_ty,
             clamped: Box::new([]),
             initializer: None,
+            call_site: None,
         }),
     )?;
     Ok(MadeBody {
@@ -1722,6 +1725,7 @@ impl Move {
                 | ExprKind::FnRef { .. }
                 | ExprKind::ConstRef { .. }
                 | ExprKind::SelfRef { .. }
+                | ExprKind::CallSite(_)
                 | ExprKind::Field { .. }
                 | ExprKind::Record { .. }
                 | ExprKind::RecordUpdate { .. }
@@ -2325,6 +2329,7 @@ mod tests {
             ret: Ty::STRING,
             clamped: Box::new([]),
             initializer: None,
+            call_site: None,
         };
         let span = Span::new(FileId::new(1), TextRange::empty(0));
         let target = show.defines[0].def;
@@ -2372,5 +2377,36 @@ mod tests {
         assert_eq!(mv.span(at(1, 12, 15)), at(2, 2, 5));
         assert_eq!(mv.span(at(1, 3, 4)), at(1, 3, 4));
         assert_eq!(mv.span(at(3, 12, 15)), at(3, 12, 15));
+    }
+
+    /// The parts of a call site are expressions of the body, so they move
+    /// with the entry's text, and MIR lowering, which reads their places
+    /// after the move, writes `<repl:N>` and the entry's own lines
+    /// (D-1631).
+    #[test]
+    fn call_site_parts_move_with_the_entry() {
+        let mv = Move {
+            from: FileId::new(1),
+            to: FileId::new(2),
+            shift: 10,
+        };
+        let at = |file, start, end| Span::new(FileId::new(file), TextRange::new(start, end));
+        let mut exprs = cheby_iface::IndexVec::new();
+        let line = exprs
+            .push(thir::Expr {
+                kind: ExprKind::CallSite(thir::CallSitePart::Line),
+                ty: Ty::INT,
+                span: at(1, 14, 20),
+            })
+            .unwrap();
+        let mut body = thir::Body {
+            params: Vec::new(),
+            locals: cheby_iface::IndexVec::new(),
+            exprs,
+            value: line,
+            ret: Ty::INT,
+        };
+        mv.body(&mut body);
+        assert_eq!(body.expr(line).unwrap().span, at(2, 4, 10));
     }
 }

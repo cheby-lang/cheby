@@ -54,7 +54,7 @@
 
 == src/main.cheby:10:15 completion ops::Compare
 {
-  "count": 40,
+  "count": 41,
   "isIncomplete": false,
   "items": [
     {

@@ -1,0 +1,2 @@
+building the summary
+{"time":"2026-11-17T10:00:00Z","level":"warn","message":"order has no items, skipped","location":"src/main.cheby:78:10","fields":{"batch":"evening","order":"e23"}}

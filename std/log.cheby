@@ -1,0 +1,1441 @@
+//! Leveled, structured logging (D-1046, D-1614, D-1635).
+//!
+//! A log call makes a `Record`, with the time of the call, its level, the
+//! place it was written, its message and its fields, and hands it to the
+//! one logger in the calling fiber's context, the value of the key
+//! `logger` (D-1616, D-1620). The built-in loggers write the record's text
+//! line or JSON line to standard error in one write and ignore a failure
+//! (D-1621, D-1622, D-1624). A custom logger's function runs under the
+//! silent logger, so a log call inside it does nothing (D-1625).
+//!
+//! The sixteen log functions carry `@std_call_site`: the compiler calls
+//! their `_at` constructors in their place and passes the path, line and
+//! column of the place where the function is named (D-1628, D-1629,
+//! D-1630). Their bodies are never reached. The constructors forward to
+//! `write_at` and `write_lazy_at`, which read the logger, drop a record
+//! below its level, and only then call a lazy function and read the clock
+//! in context (D-1617, D-1620).
+//!
+//! The scoped fields of `with_fields` are the value of the `priv` key
+//! `scoped`, which no code outside this module can name (D-1619).
+//! `capture` collects records over a channel whose capacity is
+//! `int::max_safe` and ends with an end mark, so it needs no kernel and
+//! never waits (D-1626).
+//!
+//! The module has no kernels. It is written over `std::context`,
+//! `std::time`, `std::channel`, `io::write_stderr` and `std::string`'s
+//! package-visible `add_json_quoted`, so it runs on JS once those do
+//! (D-1614). Its functions have common names, so it imports `std::int`,
+//! `std::float` and `std::bool` under plural aliases (§5.2.3, D-062,
+//! D-1053).
+
+import std::bool as bools
+import std::channel
+import std::context
+import std::duration
+import std::fiber
+import std::float as floats
+import std::int as ints
+import std::io
+import std::list
+import std::map
+import std::option
+import std::set
+import std::string
+import std::time
+
+// Types
+
+/// How severe a record is: `Debug`, `Info`, `Warn` and `Error`, in rising
+/// order (D-1615). It satisfies `Show` and `Compare` through `show` and
+/// `compare`.
+pub exposed type Level {
+  Debug,
+  Info,
+  Warn,
+  Error,
+}
+
+/// Where a log call was written: the three parts of a panic report's
+/// location (D-421, D-1620).
+pub exposed type Location {
+  path: String,
+  line: Int,
+  column: Int,
+}
+
+/// What a log call that its logger accepts hands to the logger (D-1620).
+pub exposed type Record {
+  timestamp: time::Timestamp,
+  level: Level,
+  location: Location,
+  message: String,
+  fields: List<Field>,
+}
+
+/// A name with a value: text, an `Int`, a `Float` or a `Bool` (D-1618).
+/// Equality, hashing and debug printing go through `field_equal`,
+/// `field_hash` and `field_debug`: two fields are `==` when their names,
+/// kinds and values are, and a field prints as its part of the text line,
+/// as in `port=8080` (D-342, D-1627).
+@std_hooks(field_equal, field_hash, field_debug)
+pub type Field {
+  name: String,
+  content: Content,
+}
+
+/// The value of a field, of one of the four kinds the JSON line tells
+/// apart (D-1618, D-1622).
+type Content {
+  Text(String),
+  Whole(Int),
+  Real(Float),
+  Flag(Bool),
+}
+
+/// Where the records of a fiber go: a form and its level (D-1616). It
+/// prints as `<Logger>`, and it is compared and hashed by its form, so two
+/// built-in loggers of one form and level are `==`, and `==` or hashing
+/// panics when it reaches a custom logger's function or a collecting
+/// logger's channel (D-233, D-1627).
+@std_hooks(logger_equal, logger_hash, logger_debug)
+pub type Logger {
+  form: Form,
+}
+
+/// The forms of a logger. `Collecting` is the logger of `capture`, which
+/// takes every level (D-1624, D-1625, D-1626).
+type Form {
+  TextLines(Level),
+  JsonLines(Level),
+  Custom(Level, fn(Record) -> Nil),
+  Silent,
+  Collecting(channel::Sender<Option<Record>>),
+}
+
+/// Whether two fields have the same name, kind and value (D-1627).
+fn field_equal(a: Field, b: Field) -> Bool {
+  a.name == b.name && a.content == b.content
+}
+
+/// What two equal fields share, which the runtime hashes: the name and
+/// the value with its kind (D-1627).
+fn field_hash(entry: Field) -> (String, Content) {
+  (entry.name, entry.content)
+}
+
+/// The debug text of a field: its part of the text line (D-1627).
+fn field_debug(entry: Field) -> String {
+  text_part(entry)
+}
+
+/// Whether two loggers have the same form. It panics when it reaches a
+/// function or a channel (D-233, D-1627).
+fn logger_equal(a: Logger, b: Logger) -> Bool {
+  structurally_equal(a.form, b.form)
+}
+
+/// `a == b`. `logger_equal` compares through it because the panic on a
+/// custom or a collecting logger is the rule there (D-1627), and W0011,
+/// which warns of that panic, stops at a type parameter (D-518).
+fn structurally_equal<T>(a: T, b: T) -> Bool {
+  a == b
+}
+
+/// What two equal loggers share, which the runtime hashes: the form, never
+/// the logger itself, whose hash would come back here (D-1627).
+fn logger_hash(sink: Logger) -> Form {
+  sink.form
+}
+
+/// The debug text of a logger, `<Logger>`, as the handles of std print
+/// (D-647, D-1627).
+fn logger_debug(sink: Logger) -> String {
+  let _ = sink
+  "<Logger>"
+}
+
+/// 2026-11-17T10:00:00.5Z.
+const opening: time::Timestamp = time::from_unix(duration::milliseconds(1_794_909_600_500))
+
+/// A record of level `Info` with `message` and `fields`, logged at `opening`.
+fn sample(message: String, fields: List<Field>) -> Record {
+  Record {
+    timestamp: opening,
+    level: Info,
+    location: Location { path: "src/main.cheby", line: 12, column: 3 },
+    message,
+    fields,
+  }
+}
+
+/// The messages of `records`.
+fn messages(records: List<Record>) -> List<String> {
+  list::map(records, fn(record) { record.message })
+}
+
+// Levels
+
+/// A level's place in the rising order, from 0.
+fn rank(level: Level) -> Int {
+  case level {
+    Debug => 0
+    Info => 1
+    Warn => 2
+    Error => 3
+  }
+}
+
+/// Returns `debug`, `info`, `warn` or `error`. It makes `Level` satisfy
+/// `Show` (§8.8). The JSON line writes this text, and the text line writes
+/// it in upper case (D-1615).
+pub fn show(level: Level) -> String {
+  case level {
+    Debug => "debug"
+    Info => "info"
+    Warn => "warn"
+    Error => "error"
+  }
+}
+
+test "show names a level in lower case" {
+  assert show(Warn) == "warn"
+  let level = Error
+  assert "{level}" == "error"
+}
+
+test "show names every level" {
+  assert list::map([Debug, Info, Warn, Error], show) == ["debug", "info", "warn", "error"]
+}
+
+/// The code point `point` with an ASCII upper-case letter turned into its
+/// lower-case one.
+fn ascii_lower(point: Int) -> Int {
+  case 0x41 <= point && point <= 0x5A {
+    True => point + 0x20
+    False => point
+  }
+}
+
+/// Returns the level that `text` names, in any mix of ASCII upper and
+/// lower case, and nothing else: no spaces around the name and no other
+/// spelling (D-1615). Only ASCII letters are folded, so no other
+/// character can stand for one of a name's letters.
+///
+/// - **Fails:** `Err(Nil)` for every other text.
+pub fn parse(text: String) -> Result<Level, Nil> {
+  let points = list::map(string::to_code_point_values(text), ascii_lower)
+  case string::from_code_point_values(points) {
+    Ok("debug") => Ok(Debug)
+    Ok("info") => Ok(Info)
+    Ok("warn") => Ok(Warn)
+    Ok("error") => Ok(Error)
+    _ => Err(Nil)
+  }
+}
+
+test "parse reads a level in any case" {
+  assert parse("warn") == Ok(Warn)
+  assert parse("WARN") == Ok(Warn)
+  assert parse("Info") == Ok(Info)
+  assert parse("warning") == Err(Nil)
+  assert parse(" info") == Err(Nil)
+}
+
+test "parse reads every level and only ASCII case" {
+  assert list::map(["DEBUG", "iNfO", "Warn", "error"], parse) == [
+    Ok(Debug),
+    Ok(Info),
+    Ok(Warn),
+    Ok(Error),
+  ]
+  assert parse("") == Err(Nil)
+  assert parse("info\n") == Err(Nil)
+  // U+0130, whose lower case begins with `i`, and the Kelvin sign, whose
+  // lower case is `k`, are not ASCII letters.
+  assert parse("\u{130}nfo") == Err(Nil)
+  assert parse("in\u{212A}o") == Err(Nil)
+}
+
+/// Orders levels as `Debug`, `Info`, `Warn`, `Error`. It makes `Level`
+/// satisfy `Compare`, so the comparison operators work on levels (§8.7,
+/// D-1615).
+pub fn compare(a: Level, b: Level) -> Order {
+  ints::compare(rank(a), rank(b))
+}
+
+test "levels rise from Debug to Error" {
+  assert compare(Debug, Info) == Less
+  assert Error >= Warn
+  assert list::sort([Error, Debug, Warn]) == [Debug, Warn, Error]
+}
+
+test "compare orders each pair of levels" {
+  let levels = [Debug, Info, Warn, Error]
+  list::each(list::enumerate(levels), fn((i, a)) {
+    list::each(list::enumerate(levels), fn((j, b)) { assert compare(a, b) == ints::compare(i, j) })
+  })
+}
+
+// Loggers
+
+/// The key of the logger that the log functions hand their records to.
+/// Its default is `text_logger(Info)`. A program provides another with
+/// `context::provide`, for the code it calls and everything spawned
+/// meanwhile (D-1044, D-1616). Its value type holds a function, which a
+/// key's type may (D-1578), and its default holds none.
+pub const logger: context::Key<Logger> = context::key(text_logger(Info))
+
+/// The key of the scoped fields that `with_fields` adds, outermost first.
+/// It is `priv`, so no code outside this module can name it (D-1619).
+priv const scoped: context::Key<List<Field>> = context::key([])
+
+test "the logger in context decides what a call does" {
+  let (seen_tx, seen) = channel::new::<String>(4)
+  let sink = custom_logger(Debug, fn(record) { let _ = channel::send(seen_tx, record.message) })
+  context::provide(logger, sink, fn() { info("inside") })
+  assert channel::receive(seen) == Ok("inside")
+  assert channel::receive(seen) == Err(Nil)
+}
+
+test "the default logger writes text lines from Info" {
+  assert context::get(logger) == text_logger(Info)
+}
+
+/// Returns a logger that writes the text line of each record at or above
+/// `level`, and a line ending, to standard error in one write. A failed
+/// write is ignored (D-1616, D-1621, D-1624).
+pub fn text_logger(level: Level) -> Logger {
+  Logger { form: TextLines(level) }
+}
+
+/// Returns a logger that writes the JSON line of each record at or above
+/// `level`, and a line ending, to standard error in one write. A failed
+/// write is ignored (D-1616, D-1622, D-1624).
+pub fn json_logger(level: Level) -> Logger {
+  Logger { form: JsonLines(level) }
+}
+
+/// Returns a logger that calls `handle` with each record at or above
+/// `level`. `handle` runs on the fiber that logged, before the log call
+/// returns, and a panic in it is that fiber's panic. While it runs, the
+/// logger in context is the silent one, so a log call inside it does
+/// nothing, and a fiber spawned inside it keeps the silent logger. Several
+/// fibers may call `handle` at the same time (D-1616, D-1625).
+pub fn custom_logger(level: Level, handle: fn(Record) -> Nil) -> Logger {
+  Logger { form: Custom(level, handle) }
+}
+
+test "a logger drops the records below its level" {
+  let (seen_tx, seen) = channel::new::<String>(4)
+  let sink = custom_logger(Warn, fn(record) { let _ = channel::send(seen_tx, record.message) })
+  context::provide(logger, sink, fn() {
+    info("dropped")
+    warn("kept")
+  })
+  assert channel::receive(seen) == Ok("kept")
+  assert channel::receive(seen) == Err(Nil)
+}
+
+test "a log call inside a handler does nothing" {
+  let (seen_tx, seen) = channel::new::<String>(4)
+  let sink = custom_logger(Debug, fn(record) {
+    error("from the handler")
+    let _ = channel::send(seen_tx, record.message)
+  })
+  context::provide(logger, sink, fn() { info("once") })
+  assert channel::receive(seen) == Ok("once")
+  assert channel::receive(seen) == Err(Nil)
+}
+
+test "a handler runs under the silent logger, also in the fibers it spawns" {
+  let (seen_tx, seen) = channel::new::<Logger>(4)
+  let sink = custom_logger(Debug, fn(_) {
+    let _ = channel::send(seen_tx, context::get(logger))
+    let _ = {
+      use owner <- fiber::scope()
+      fiber::join(fiber::spawn(owner, fn() {
+        let _ = channel::send(seen_tx, context::get(logger))
+      }))
+    }
+  })
+  context::provide(logger, sink, fn() { info("once") })
+  assert channel::receive(seen) == Ok(silent_logger())
+  assert channel::receive(seen) == Ok(silent_logger())
+  assert channel::receive(seen) == Err(Nil)
+}
+
+test "a level of a logger takes that level and those above it" {
+  let (seen_tx, seen) = channel::new::<Level>(8)
+  let sink = custom_logger(Info, fn(record) { let _ = channel::send(seen_tx, record.level) })
+  context::provide(logger, sink, fn() {
+    debug("a")
+    info("b")
+    warn("c")
+    error("d")
+  })
+  assert channel::to_list(seen) == [Info, Warn, Error]
+}
+
+/// Returns a logger that drops every record. Under it a log call reads
+/// the context and returns (D-1616).
+pub fn silent_logger() -> Logger {
+  Logger { form: Silent }
+}
+
+test "the silent logger takes no record" {
+  let (built_tx, built) = channel::new::<String>(4)
+  context::provide(logger, silent_logger(), fn() {
+    error_lazy(fn() {
+      let _ = channel::send(built_tx, "built")
+      "never logged"
+    })
+  })
+  assert channel::receive(built) == Err(Nil)
+}
+
+test "a logger prints as <Logger> and compares by form and level" {
+  let sink = json_logger(Warn)
+  assert "{sink:?}" == "<Logger>"
+  let silent = silent_logger()
+  assert "{silent:?}" == "<Logger>"
+  assert text_logger(Warn) == text_logger(Warn)
+  assert text_logger(Warn) != text_logger(Error)
+  assert text_logger(Warn) != json_logger(Warn)
+  assert silent_logger() == silent_logger()
+  assert silent_logger() != text_logger(Debug)
+  let loggers = set::from_list([text_logger(Info), json_logger(Info), text_logger(Info)])
+  assert set::size(loggers) == 2
+}
+
+test "== on a custom logger panics" {
+  let outcome = {
+    use _ <- fiber::scope()
+    let handler = custom_logger(Info, fn(_) { Nil })
+    handler == handler
+  }
+  let assert Err(_) = outcome
+}
+
+test "hashing a collecting logger panics" {
+  let outcome = {
+    use _ <- fiber::scope()
+    capture(fn() { set::size(set::from_list([context::get(logger)])) })
+  }
+  let assert Err(_) = outcome
+}
+
+// Logging
+
+/// Whether `sink` takes a record of `level`. The logger of `capture`
+/// takes every level, and the silent logger none (D-1616, D-1626).
+fn takes(sink: Logger, level: Level) -> Bool {
+  case sink.form {
+    TextLines(least) => level >= least
+    JsonLines(least) => level >= least
+    Custom(least, _) => level >= least
+    Silent => False
+    Collecting(_) => True
+  }
+}
+
+/// The scoped fields followed by `own`, with no name twice: a field whose
+/// name is already there replaces that field in place, so the last value
+/// wins at the first position (D-1619).
+fn merged(own: List<Field>) -> List<Field> {
+  let all = list::append(context::get(scoped), own)
+  case all {
+    [] => all
+    [_] => all
+    _ => list::fold(all, [], put)
+  }
+}
+
+/// `kept` with `next` in place of the field of its name, or at the end
+/// (D-1619).
+fn put(kept: List<Field>, next: Field) -> List<Field> {
+  case list::position(kept, fn(seen) { seen.name == next.name }) {
+    Some(index) => list::set(kept, index, next)
+    None => list::push(kept, next)
+  }
+}
+
+/// Hands `entry` to `sink`: a built-in logger writes one line to standard
+/// error and ignores a failure, a custom logger's function runs under the
+/// silent logger, and the logger of `capture` sends it on (D-1624, D-1625,
+/// D-1626).
+fn deliver(sink: Logger, entry: Record) {
+  case sink.form {
+    TextLines(_) => write_line(text_line(entry))
+    JsonLines(_) => write_line(json_line(entry))
+    Custom(_, handle) => context::provide(logger, silent_logger(), fn() { handle(entry) })
+    Silent => Nil
+    Collecting(sender) => {
+      let _ = channel::send(sender, Some(entry))
+    }
+  }
+}
+
+/// One write of `text` and a line ending to standard error. A failure is
+/// ignored, so a pipe whose reader has gone does not end the program
+/// (D-1624).
+fn write_line(text: String) {
+  let _ = io::write_stderr(text + "\n")
+}
+
+/// The record of a call that its logger takes, read in the caller's
+/// context: the clock's time, then the merged fields (D-1619, D-1620).
+fn record_of(
+  level: Level,
+  message: String,
+  own: List<Field>,
+  path: String,
+  line: Int,
+  column: Int,
+) -> Record {
+  let at = time::now()
+  Record {
+    timestamp: at,
+    level,
+    location: Location { path, line, column },
+    message,
+    fields: merged(own),
+  }
+}
+
+/// A log call whose message and fields are ready. It reads the logger
+/// first, and does nothing else when the logger drops `level` (D-1620).
+fn write_at(level: Level, message: String, own: List<Field>, path: String, line: Int, column: Int) {
+  let sink = context::get(logger)
+  guard takes(sink, level) else {
+    Nil
+  }
+  deliver(sink, record_of(level, message, own, path, line, column))
+}
+
+/// A log call whose message and fields `build` returns. It reads the
+/// logger first, and calls `build` once, on the calling fiber, only when
+/// the logger takes `level`, before it reads the clock (D-1617, D-1620).
+fn write_lazy_at(
+  level: Level,
+  build: fn() -> (String, List<Field>),
+  path: String,
+  line: Int,
+  column: Int,
+) {
+  let sink = context::get(logger)
+  guard takes(sink, level) else {
+    Nil
+  }
+  let (message, own) = build()
+  deliver(sink, record_of(level, message, own, path, line, column))
+}
+
+/// Logs `message` at level `Info`, with the scoped fields. Through
+/// `@std_call_site`, the compiler calls `info_at` in its place with the
+/// place where it is named, so no program reaches this body (D-1617,
+/// D-1628, D-1630).
+@std_call_site(info_at)
+pub fn info(message: String) {
+  let _ = message
+  panic as "the compiler did not replace this call of `log::info` (D-1630)"
+}
+
+/// What a call of `info` at `path`:`line`:`column` does (D-1628).
+fn info_at(message: String, path: String, line: Int, column: Int) {
+  write_at(Info, message, [], path, line, column)
+}
+
+test "a call logs its message at its level" {
+  let (_, records) = capture(fn() {
+    info("started")
+    error("failed")
+  })
+  let assert [first, second] = records
+  assert first.level == Info
+  assert first.message == "started"
+  assert first.fields == []
+  assert second.level == Error
+}
+
+test "a record carries the place of its call" {
+  let (_, records) = capture(fn() { info("here") })
+  let assert [record] = records
+  assert record.location.path == "std/log.cheby"
+  assert record.location.line >= 1
+  assert record.location.column >= 1
+}
+
+test "a log function named as a value reports where it is named" {
+  let (_, records) = capture(fn() { list::each(["a", "b"], info) })
+  let assert [first, second] = records
+  assert messages(records) == ["a", "b"]
+  assert first.location == second.location
+}
+
+test "a pipe stage reports the line of its stage" {
+  let (_, records) = capture(fn() {
+    info("first")
+    "second"
+    |> info
+  })
+  let assert [first, second] = records
+  assert second.location.line == first.location.line + 2
+  assert second.location.column == first.location.column + 3
+}
+
+/// Logs `message` at level `Info` with the scoped fields followed by
+/// `fields` (D-1617, D-1628).
+@std_call_site(info_with_at)
+pub fn info_with(message: String, fields: List<Field>) {
+  let _ = (message, fields)
+  panic as "the compiler did not replace this call of `log::info_with` (D-1630)"
+}
+
+/// What a call of `info_with` at `path`:`line`:`column` does (D-1628).
+fn info_with_at(message: String, fields: List<Field>, path: String, line: Int, column: Int) {
+  write_at(Info, message, fields, path, line, column)
+}
+
+test "a call passes its fields" {
+  let (_, records) = capture(fn() {
+    info_with("listening", [field("host", "localhost"), int("port", 8080)])
+  })
+  let assert [record] = records
+  assert record.fields == [field("host", "localhost"), int("port", 8080)]
+}
+
+test "the last field of one name wins in place" {
+  let (_, records) = capture(fn() {
+    info_with("retry", [int("try", 1), bool("ok", False), int("try", 2)])
+  })
+  let assert [record] = records
+  assert record.fields == [int("try", 2), bool("ok", False)]
+}
+
+/// Logs the message that `build` returns, at level `Info`, with the scoped
+/// fields. `build` is called only when the logger in context accepts the
+/// level, once, on the calling fiber (D-1617, D-1628).
+@std_call_site(info_lazy_at)
+pub fn info_lazy(build: fn() -> String) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::info_lazy` (D-1630)"
+}
+
+/// What a call of `info_lazy` at `path`:`line`:`column` does (D-1628).
+fn info_lazy_at(build: fn() -> String, path: String, line: Int, column: Int) {
+  write_lazy_at(Info, fn() { (build(), []) }, path, line, column)
+}
+
+test "a lazy call builds only what a logger takes" {
+  let (built_tx, built) = channel::new::<String>(4)
+  let sink = custom_logger(Info, fn(_) { Nil })
+  context::provide(logger, sink, fn() {
+    debug_lazy(fn() {
+      let _ = channel::send(built_tx, "debug")
+      "never logged"
+    })
+    info_lazy(fn() {
+      let _ = channel::send(built_tx, "info")
+      "logged"
+    })
+  })
+  assert channel::receive(built) == Ok("info")
+  assert channel::receive(built) == Err(Nil)
+}
+
+test "a dropped call does not read the clock" {
+  let (read_tx, reads) = channel::new::<String>(4)
+  let counting = time::custom_clock(
+    fn() {
+      let _ = channel::send(read_tx, "now")
+      opening
+    },
+    fn() { time::monotonic_on(time::system_clock()) },
+  )
+  context::provide(time::clock, counting, fn() {
+    use <- context::provide(logger, custom_logger(Warn, fn(_) { Nil }))
+    info("dropped")
+    warn("kept")
+  })
+  assert channel::receive(reads) == Ok("now")
+  assert channel::receive(reads) == Err(Nil)
+}
+
+/// Logs the message and the fields that `build` returns, at level `Info`,
+/// after the scoped fields. `build` is called as `info_lazy`'s is (D-1617,
+/// D-1628).
+@std_call_site(info_with_lazy_at)
+pub fn info_with_lazy(build: fn() -> (String, List<Field>)) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::info_with_lazy` (D-1630)"
+}
+
+/// What a call of `info_with_lazy` at `path`:`line`:`column` does
+/// (D-1628).
+fn info_with_lazy_at(build: fn() -> (String, List<Field>), path: String, line: Int, column: Int) {
+  write_lazy_at(Info, build, path, line, column)
+}
+
+test "a lazy call may build its fields too" {
+  let (_, records) = capture(fn() { info_with_lazy(fn() { ("sized", [int("bytes", 512)]) }) })
+  let assert [record] = records
+  assert record.message == "sized"
+  assert record.fields == [int("bytes", 512)]
+}
+
+/// Logs `message` at level `Debug`, as `info` does at `Info` (D-1617).
+@std_call_site(debug_at)
+pub fn debug(message: String) {
+  let _ = message
+  panic as "the compiler did not replace this call of `log::debug` (D-1630)"
+}
+
+/// What a call of `debug` at `path`:`line`:`column` does (D-1628).
+fn debug_at(message: String, path: String, line: Int, column: Int) {
+  write_at(Debug, message, [], path, line, column)
+}
+
+/// Logs `message` at level `Debug` with fields, as `info_with` does at
+/// `Info` (D-1617).
+@std_call_site(debug_with_at)
+pub fn debug_with(message: String, fields: List<Field>) {
+  let _ = (message, fields)
+  panic as "the compiler did not replace this call of `log::debug_with` (D-1630)"
+}
+
+/// What a call of `debug_with` at `path`:`line`:`column` does (D-1628).
+fn debug_with_at(message: String, fields: List<Field>, path: String, line: Int, column: Int) {
+  write_at(Debug, message, fields, path, line, column)
+}
+
+/// Logs the message that `build` returns at level `Debug`, as `info_lazy`
+/// does at `Info` (D-1617).
+@std_call_site(debug_lazy_at)
+pub fn debug_lazy(build: fn() -> String) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::debug_lazy` (D-1630)"
+}
+
+/// What a call of `debug_lazy` at `path`:`line`:`column` does (D-1628).
+fn debug_lazy_at(build: fn() -> String, path: String, line: Int, column: Int) {
+  write_lazy_at(Debug, fn() { (build(), []) }, path, line, column)
+}
+
+/// Logs the message and the fields that `build` returns at level `Debug`,
+/// as `info_with_lazy` does at `Info` (D-1617).
+@std_call_site(debug_with_lazy_at)
+pub fn debug_with_lazy(build: fn() -> (String, List<Field>)) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::debug_with_lazy` (D-1630)"
+}
+
+/// What a call of `debug_with_lazy` at `path`:`line`:`column` does
+/// (D-1628).
+fn debug_with_lazy_at(build: fn() -> (String, List<Field>), path: String, line: Int, column: Int) {
+  write_lazy_at(Debug, build, path, line, column)
+}
+
+/// Logs `message` at level `Warn`, as `info` does at `Info` (D-1617).
+@std_call_site(warn_at)
+pub fn warn(message: String) {
+  let _ = message
+  panic as "the compiler did not replace this call of `log::warn` (D-1630)"
+}
+
+/// What a call of `warn` at `path`:`line`:`column` does (D-1628).
+fn warn_at(message: String, path: String, line: Int, column: Int) {
+  write_at(Warn, message, [], path, line, column)
+}
+
+/// Logs `message` at level `Warn` with fields, as `info_with` does at
+/// `Info` (D-1617).
+@std_call_site(warn_with_at)
+pub fn warn_with(message: String, fields: List<Field>) {
+  let _ = (message, fields)
+  panic as "the compiler did not replace this call of `log::warn_with` (D-1630)"
+}
+
+/// What a call of `warn_with` at `path`:`line`:`column` does (D-1628).
+fn warn_with_at(message: String, fields: List<Field>, path: String, line: Int, column: Int) {
+  write_at(Warn, message, fields, path, line, column)
+}
+
+/// Logs the message that `build` returns at level `Warn`, as `info_lazy`
+/// does at `Info` (D-1617).
+@std_call_site(warn_lazy_at)
+pub fn warn_lazy(build: fn() -> String) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::warn_lazy` (D-1630)"
+}
+
+/// What a call of `warn_lazy` at `path`:`line`:`column` does (D-1628).
+fn warn_lazy_at(build: fn() -> String, path: String, line: Int, column: Int) {
+  write_lazy_at(Warn, fn() { (build(), []) }, path, line, column)
+}
+
+/// Logs the message and the fields that `build` returns at level `Warn`,
+/// as `info_with_lazy` does at `Info` (D-1617).
+@std_call_site(warn_with_lazy_at)
+pub fn warn_with_lazy(build: fn() -> (String, List<Field>)) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::warn_with_lazy` (D-1630)"
+}
+
+/// What a call of `warn_with_lazy` at `path`:`line`:`column` does
+/// (D-1628).
+fn warn_with_lazy_at(build: fn() -> (String, List<Field>), path: String, line: Int, column: Int) {
+  write_lazy_at(Warn, build, path, line, column)
+}
+
+/// Logs `message` at level `Error`, as `info` does at `Info` (D-1617).
+@std_call_site(error_at)
+pub fn error(message: String) {
+  let _ = message
+  panic as "the compiler did not replace this call of `log::error` (D-1630)"
+}
+
+/// What a call of `error` at `path`:`line`:`column` does (D-1628).
+fn error_at(message: String, path: String, line: Int, column: Int) {
+  write_at(Error, message, [], path, line, column)
+}
+
+/// Logs `message` at level `Error` with fields, as `info_with` does at
+/// `Info` (D-1617).
+@std_call_site(error_with_at)
+pub fn error_with(message: String, fields: List<Field>) {
+  let _ = (message, fields)
+  panic as "the compiler did not replace this call of `log::error_with` (D-1630)"
+}
+
+/// What a call of `error_with` at `path`:`line`:`column` does (D-1628).
+fn error_with_at(message: String, fields: List<Field>, path: String, line: Int, column: Int) {
+  write_at(Error, message, fields, path, line, column)
+}
+
+/// Logs the message that `build` returns at level `Error`, as `info_lazy`
+/// does at `Info` (D-1617).
+@std_call_site(error_lazy_at)
+pub fn error_lazy(build: fn() -> String) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::error_lazy` (D-1630)"
+}
+
+/// What a call of `error_lazy` at `path`:`line`:`column` does (D-1628).
+fn error_lazy_at(build: fn() -> String, path: String, line: Int, column: Int) {
+  write_lazy_at(Error, fn() { (build(), []) }, path, line, column)
+}
+
+/// Logs the message and the fields that `build` returns at level `Error`,
+/// as `info_with_lazy` does at `Info` (D-1617).
+@std_call_site(error_with_lazy_at)
+pub fn error_with_lazy(build: fn() -> (String, List<Field>)) {
+  let _ = build
+  panic as "the compiler did not replace this call of `log::error_with_lazy` (D-1630)"
+}
+
+/// What a call of `error_with_lazy` at `path`:`line`:`column` does
+/// (D-1628).
+fn error_with_lazy_at(build: fn() -> (String, List<Field>), path: String, line: Int, column: Int) {
+  write_lazy_at(Error, build, path, line, column)
+}
+
+test "each level has its functions" {
+  let (_, records) = capture(fn() {
+    debug("a")
+    debug_with("b", [])
+    warn_lazy(fn() { "c" })
+    error_with_lazy(fn() { ("d", []) })
+  })
+  assert list::map(records, fn(record) { record.level }) == [Debug, Debug, Warn, Error]
+  assert messages(records) == ["a", "b", "c", "d"]
+}
+
+test "every log function logs at its level" {
+  let (_, records) = capture(fn() {
+    debug("1")
+    debug_with("2", [int("n", 2)])
+    debug_lazy(fn() { "3" })
+    debug_with_lazy(fn() { ("4", [int("n", 4)]) })
+    info("5")
+    info_with("6", [int("n", 6)])
+    info_lazy(fn() { "7" })
+    info_with_lazy(fn() { ("8", [int("n", 8)]) })
+    warn("9")
+    warn_with("10", [int("n", 10)])
+    warn_lazy(fn() { "11" })
+    warn_with_lazy(fn() { ("12", [int("n", 12)]) })
+    error("13")
+    error_with("14", [int("n", 14)])
+    error_lazy(fn() { "15" })
+    error_with_lazy(fn() { ("16", [int("n", 16)]) })
+  })
+  let expected = list::flat_map([Debug, Info, Warn, Error], fn(level) { list::repeat(level, 4) })
+  assert list::map(records, fn(record) { record.level }) == expected
+  assert messages(records) == list::map(list::range(1, 17), ints::show)
+  let counts = list::map(records, fn(record) { list::length(record.fields) })
+  assert counts == [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
+  let lines = list::map(records, fn(record) { record.location.line })
+  let steps = list::map(list::zip(lines, list::drop(lines, 1)), fn((a, b)) { b - a })
+  assert steps == list::repeat(1, 15)
+}
+
+// Fields
+
+/// Returns a field whose value is the text `show` gives for `value`. A
+/// `String` is kept as it is. The JSON line writes it as a string, also
+/// when `value` is a number (D-1618).
+pub fn field<T: Show>(name: String, value: T) -> Field {
+  Field { name, content: Text(Show::show(value)) }
+}
+
+test "field keeps the text of a value" {
+  assert field_value(field("host", "localhost")) == "localhost"
+  assert field_value(field("left", Some(3))) == "Some(3)"
+  assert field("n", "1") == field("n", 1)
+  assert field("n", 1) != int("n", 1)
+}
+
+test "a field's text is what show gives" {
+  let left = Some(3)
+  assert field_value(field("left", left)) == option::show(left)
+  assert field_value(field("ratio", 0.25)) == floats::show(0.25)
+  assert field_value(field("ok", False)) == bools::show(False)
+}
+
+/// Returns a field whose value is the integer `value`. The JSON line
+/// writes it as a number (D-1618).
+pub fn int(name: String, value: Int) -> Field {
+  Field { name, content: Whole(value) }
+}
+
+/// Returns a field whose value is the float `value`. The JSON line writes
+/// it as `std::json` writes a `Float`, so NaN and the infinities are
+/// `null` (D-1618, D-1622).
+pub fn float(name: String, value: Float) -> Field {
+  Field { name, content: Real(value) }
+}
+
+/// Returns a field whose value is `value`. The text line writes `True` or
+/// `False`, and the JSON line `true` or `false` (D-1618).
+pub fn bool(name: String, value: Bool) -> Field {
+  Field { name, content: Flag(value) }
+}
+
+test "typed fields keep their kind" {
+  assert field_value(int("port", 8080)) == "8080"
+  assert field_value(float("ratio", 0.5)) == "0.5"
+  assert field_value(bool("ready", True)) == "True"
+  assert int("port", 8080) == int("port", 8080)
+  assert int("port", 8080) != int("port", 8081)
+}
+
+test "fields of one name differ by kind and value" {
+  assert float("x", 1.0) != int("x", 1)
+  assert bool("x", True) != field("x", True)
+  assert float("x", 0.5) == float("x", 0.5)
+  assert int("x", 1) != int("y", 1)
+}
+
+/// Returns a field whose value is the debug text of `value` (§3.13), for a
+/// value whose type has no `show`, such as a record or a `Map`. The JSON
+/// line writes it as a string (D-1618).
+pub fn inspect<T>(name: String, value: T) -> Field {
+  Field { name, content: Text("{value:?}") }
+}
+
+test "inspect keeps the debug text of any value" {
+  assert field_value(inspect("pair", (1, "a"))) == "(1, \"a\")"
+  assert inspect("text", "a") == field("text", "\"a\"")
+}
+
+/// Returns the name of `entry` (D-1618).
+pub fn field_name(entry: Field) -> String {
+  entry.name
+}
+
+/// Returns the value of `entry` as text: the text of a `field` or an
+/// `inspect` field, and `show` of an `Int`, a `Float` or a `Bool`. It is
+/// the text that the text line writes, before any quoting (D-1618).
+pub fn field_value(entry: Field) -> String {
+  case entry.content {
+    Text(text) => text
+    Whole(n) => ints::show(n)
+    Real(x) => floats::show(x)
+    Flag(b) => bools::show(b)
+  }
+}
+
+test "a field is read by name and value" {
+  let entry = int("port", 8080)
+  assert field_name(entry) == "port"
+  assert field_value(entry) == "8080"
+}
+
+test "a field prints as the text line writes it" {
+  let port = int("port", 8080)
+  let host = field("host", "my host")
+  assert "{port:?}" == "port=8080"
+  assert "{host:?}" == "host=\"my host\""
+}
+
+test "a list of fields prints as the text line writes them" {
+  let pair = [bool("ok", False), field("a b", "\{x}")]
+  assert "{pair:?}" == "[ok=False, \"a b\"=\{x}]"
+}
+
+test "fields are set elements and map keys" {
+  let found = set::from_list([int("n", 1), int("n", 1), field("n", 1), float("n", 1.0)])
+  assert set::size(found) == 3
+  assert set::contains(found, field("n", "1"))
+  let named = map::from_list([(bool("ok", True), "yes"), (bool("ok", False), "no")])
+  assert map::get(named, bool("ok", False)) == Some("no")
+}
+
+/// Calls `body` on the calling fiber with `fields` added after the scoped
+/// fields it already has, and returns what `body` returns. Every record
+/// logged while `body` runs carries them before the call's own fields,
+/// also in the fibers spawned meanwhile. When `body` returns or unwinds,
+/// the fiber's scoped fields are again what they were, since they are the
+/// value of the private key `scoped` (D-1619).
+pub fn with_fields<R>(fields: List<Field>, body: fn() -> R) -> R {
+  context::provide(scoped, list::append(context::get(scoped), fields), body)
+}
+
+test "scoped fields come first, and a later field of one name wins in place" {
+  let (_, records) = capture(fn() {
+    use <- with_fields([field("request", "a17"), int("try", 1)])
+    use <- with_fields([field("user", "ada")])
+    info_with("done", [int("try", 2), bool("ok", True)])
+  })
+  let assert [record] = records
+  assert record.fields == [
+    field("request", "a17"),
+    int("try", 2),
+    field("user", "ada"),
+    bool("ok", True),
+  ]
+}
+
+test "a spawned fiber inherits the scoped fields" {
+  let (_, records) = capture(fn() {
+    use <- with_fields([field("request", "a17")])
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { info("in the fiber") }))
+  })
+  let assert [record] = records
+  assert list::map(record.fields, field_name) == ["request"]
+}
+
+test "scoped fields end with their body" {
+  let (_, records) = capture(fn() {
+    with_fields([field("request", "a17")], fn() { info("inside") })
+    info("outside")
+  })
+  let assert [_, outside] = records
+  assert outside.fields == []
+}
+
+test "nested scoped fields replace an outer one of the same name and end with their body" {
+  let (_, records) = capture(fn() {
+    use <- with_fields([int("depth", 1), field("a", "x")])
+    with_fields([int("depth", 2)], fn() {
+      info("inner")
+      with_fields([], fn() { info("empty") })
+    })
+    info("outer")
+  })
+  let assert [inner, empty, outer] = records
+  assert inner.fields == [int("depth", 2), field("a", "x")]
+  assert empty.fields == inner.fields
+  assert outer.fields == [int("depth", 1), field("a", "x")]
+}
+
+test "with_fields returns what its body returns" {
+  assert with_fields([int("n", 1)], fn() { 42 }) == 42
+}
+
+test "scoped fields are restored when their body unwinds" {
+  let (_, records) = capture(fn() {
+    let _ = {
+      use _ <- fiber::scope()
+      with_fields([int("n", 1)], fn() { panic as "boom" })
+    }
+    info("after")
+  })
+  let assert [after] = records
+  assert after.fields == []
+}
+
+// Records
+
+/// The location as `path:line:column`, as a panic report writes it
+/// (D-1621, D-1622).
+fn place_text(place: Location) -> String {
+  "{place.path}:{place.line}:{place.column}"
+}
+
+/// A level's name in upper case, as the text line writes it (D-1621).
+fn level_tag(level: Level) -> String {
+  case level {
+    Debug => "DEBUG"
+    Info => "INFO"
+    Warn => "WARN"
+    Error => "ERROR"
+  }
+}
+
+/// Whether the code point `point` is a control character: U+0000 to
+/// U+001F or U+007F to U+009F (D-1621).
+fn is_control(point: Int) -> Bool {
+  point <= 0x1F || 0x7F <= point && point <= 0x9F
+}
+
+/// Whether a code point makes a field's name or value stand between
+/// quotes: a space, `=`, `"`, `\` or a control character (D-1621).
+fn needs_quotes(point: Int) -> Bool {
+  case point {
+    0x20 => True
+    0x3D => True
+    0x22 => True
+    0x5C => True
+    _ => is_control(point)
+  }
+}
+
+/// The code point `piece`, whose value is `point`, as the text line writes
+/// it: a control character as `\n`, `\r`, `\t` or `\u{…}` in lower-case
+/// hexadecimal digits without leading zeros, and, between quotes, `"` as
+/// `\"` and `\` as `\\` (D-1621).
+fn escaped(piece: String, point: Int, quoted: Bool) -> String {
+  case point {
+    0x0A => "\\n"
+    0x0D => "\\r"
+    0x09 => "\\t"
+    0x22 when quoted => "\\\""
+    0x5C when quoted => "\\\\"
+    _ => case is_control(point) {
+      True => {
+        let assert Ok(digits) = ints::to_base(point, 16)
+        "\\u\{{digits}}"
+      }
+      False => piece
+    }
+  }
+}
+
+/// `text` with every code point written by `escaped`.
+fn escape_all(text: String, points: List<Int>, quoted: Bool) -> String {
+  list::zip(string::to_code_points(text), points)
+  |> list::fold(_, "", fn(out, (piece, point)) { out + escaped(piece, point, quoted) })
+}
+
+/// A message on one line: its control characters escaped and nothing else
+/// changed. Text without one is returned as it is (D-1621).
+fn one_line(text: String) -> String {
+  let points = string::to_code_point_values(text)
+  guard list::any(points, is_control) else {
+    text
+  }
+  escape_all(text, points, False)
+}
+
+/// A field's name or value, bare when it is not empty and holds nothing
+/// that `needs_quotes` names, and otherwise between `"` with `"`, `\` and
+/// the control characters escaped (D-1621).
+fn bare_or_quoted(text: String) -> String {
+  let points = string::to_code_point_values(text)
+  guard points == [] || list::any(points, needs_quotes) else {
+    text
+  }
+  "\"" + escape_all(text, points, True) + "\""
+}
+
+/// A field's part of the text line: its name, `=` and its value (D-1621).
+fn text_part(entry: Field) -> String {
+  bare_or_quoted(entry.name) + "=" + bare_or_quoted(field_value(entry))
+}
+
+/// Returns the text line of `record`, without a line ending: its time, its
+/// level in upper case, its location, its message on one line and its
+/// fields as `name=value`, each after one space. It writes the record's
+/// fields as they are, also when a record built by hand repeats a name
+/// (D-1621, D-1623).
+pub fn text_line(record: Record) -> String {
+  let at = time::show(record.timestamp)
+  let tag = level_tag(record.level)
+  let place = place_text(record.location)
+  let message = one_line(record.message)
+  let head = "{at} {tag} {place}: {message}"
+  list::fold(record.fields, head, fn(out, entry) { out + " " + text_part(entry) })
+}
+
+test "text_line writes a record for people" {
+  let record = sample("listening", [int("port", 8080), field("host", "my host")])
+  let line = "2026-11-17T10:00:00.5Z INFO src/main.cheby:12:3: listening port=8080 host=\"my host\""
+  assert text_line(record) == line
+}
+
+test "text_line quotes a name or a value that a reader could not split" {
+  let fields = [
+    field("empty", ""),
+    field("pair", "a=b"),
+    field("said", "say \"hi\""),
+    field("slash", "a\\b"),
+    field("lines", "a\nb"),
+    field("my name", "é"),
+    field("braces", "\{x}"),
+  ]
+  let line = text_line(sample("m", fields))
+  let tail =
+    r#": m empty="" pair="a=b" said="say \"hi\"" slash="a\\b" lines="a\nb" "my name"=é braces={x}"#
+  assert string::ends_with(line, tail)
+}
+
+test "text_line keeps a message on one line" {
+  let line = text_line(sample("a\nb\tc \"q\" \\ \u{1b}", []))
+  assert string::ends_with(line, r#": a\nb\tc "q" \ \u{1b}"#)
+  assert list::length(string::lines(line)) == 1
+}
+
+test "text_line escapes each control character and nothing else" {
+  let message = "\r\u{0}\u{1f}\u{7f}\u{80}\u{9f}\u{a0}é=\"x\""
+  let line = text_line(sample(message, []))
+  assert string::ends_with(line, r#": \r\u{0}\u{1f}\u{7f}\u{80}\u{9f}"# + "\u{a0}é=\"x\"")
+  let quoted = text_line(sample("m", [field("a\tb", "\r\u{85}"), field("x", "\u{a0}")]))
+  assert string::ends_with(quoted, r#": m "a\tb"="\r\u{85}" x="# + "\u{a0}")
+}
+
+test "text_line writes each kind of field" {
+  let fields = [
+    int("n", -3),
+    float("ratio", 0.5),
+    float("big", 1.0e21),
+    float("nan", floats::nan),
+    bool("ok", True),
+    inspect("pair", (1, "a")),
+  ]
+  let line = text_line(sample("m", fields))
+  let tail = r#": m n=-3 ratio=0.5 big=1.0e21 nan=NaN ok=True pair="(1, \"a\")""#
+  assert string::ends_with(line, tail)
+}
+
+test "text_line writes an empty message and the fields as they are" {
+  assert text_line(sample("", [])) == "2026-11-17T10:00:00.5Z INFO src/main.cheby:12:3: "
+  let repeated = text_line(sample("", [int("n", 1), int("n", 2)]))
+  assert string::ends_with(repeated, ":  n=1 n=2")
+}
+
+test "text_line writes the time and the level as they are" {
+  let record = Record {
+    timestamp: time::from_unix(duration::seconds(0)),
+    level: Debug,
+    location: Location { path: "src/a/b.cheby", line: 1, column: 1 },
+    message: "m",
+    fields: [],
+  }
+  assert text_line(record) == "1970-01-01T00:00:00Z DEBUG src/a/b.cheby:1:1: m"
+  assert string::contains(text_line(Record { ..record, level: Warn }), " WARN ")
+  assert string::contains(text_line(Record { ..record, level: Error }), " ERROR ")
+}
+
+/// Adds a field's value to `out` as JSON: text as a string, an `Int` with
+/// all its digits, a `Float` as `std::json` writes one, with `null` for
+/// NaN and the infinities, and a `Bool` as `true` or `false` (D-1622).
+fn add_json_content(out: String, content: Content) -> String {
+  case content {
+    Text(text) => string::add_json_quoted(out, text)
+    Whole(n) => out + ints::show(n)
+    Real(x) => case floats::is_finite(x) {
+      True => out + floats::show(x)
+      False => out + "null"
+    }
+    Flag(True) => out + "true"
+    Flag(False) => out + "false"
+  }
+}
+
+/// Adds the members of `entries` to `out`, with a comma between each two
+/// (D-1622).
+fn add_json_members(out: String, entries: List<Field>) -> String {
+  case entries {
+    [] => out
+    [entry] => add_json_member(out, entry)
+    [entry, ..rest] => add_json_members(add_json_member(out, entry) + ",", rest)
+  }
+}
+
+/// Adds one field to `out` as a member of the object `fields` (D-1622).
+fn add_json_member(out: String, entry: Field) -> String {
+  add_json_content(string::add_json_quoted(out, entry.name) + ":", entry.content)
+}
+
+/// Returns the JSON line of `record`, without a line ending: one object
+/// with no spaces and the keys `time`, `level`, `message`, `location` and
+/// `fields` in this order, the fields nested in their own object. Strings
+/// are escaped as `json::to_string` escapes them. It writes the record's
+/// fields as they are, so a record built by hand that repeats a name gives
+/// an object that repeats a key (D-1622, D-1623).
+pub fn json_line(record: Record) -> String {
+  "\{\"time\":"
+  |> string::add_json_quoted(_, time::show(record.timestamp))
+  |> string::add(_, ",\"level\":")
+  |> string::add_json_quoted(_, show(record.level))
+  |> string::add(_, ",\"message\":")
+  |> string::add_json_quoted(_, record.message)
+  |> string::add(_, ",\"location\":")
+  |> string::add_json_quoted(_, place_text(record.location))
+  |> string::add(_, ",\"fields\":\{")
+  |> add_json_members(_, record.fields)
+  |> string::add(_, "}}")
+}
+
+test "json_line writes five keys, with the fields nested" {
+  let record = sample("listening", [int("port", 8080), field("host", "my host")])
+  let line =
+    r#"{"time":"2026-11-17T10:00:00.5Z","level":"info","message":"listening","location":"src/main.cheby:12:3","fields":{"port":8080,"host":"my host"}}"#
+  assert json_line(record) == line
+  assert string::ends_with(json_line(sample("m", [])), r#""fields":{}}"#)
+}
+
+test "json_line writes each kind of field as JSON does" {
+  let fields = [
+    float("nan", floats::nan),
+    float("half", 0.5),
+    bool("ok", False),
+    field("text", "a\"b\n"),
+    field("five", 5),
+    inspect("pair", (1, "a")),
+  ]
+  let line = json_line(sample("say \"hi\"", fields))
+  let tail =
+    r#""fields":{"nan":null,"half":0.5,"ok":false,"text":"a\"b\n","five":"5","pair":"(1, \"a\")"}}"#
+  assert string::ends_with(line, tail)
+  assert string::contains(line, r#""message":"say \"hi\"""#)
+}
+
+test "json_line writes every number and escape as std::json does" {
+  let fields = [
+    int("big_int", -9_007_199_254_740_991),
+    float("big", 1.0e21),
+    float("neg", -0.0),
+    float("up", floats::infinity),
+    float("down", floats::neg_infinity),
+    bool("yes", True),
+    field("ctl", "\u{1f}\u{7f}\t"),
+    field("a\"b", "\{x}"),
+  ]
+  let line = json_line(sample("a\nb", fields))
+  assert string::contains(line, r#""big_int":-9007199254740991,"big":1.0e21,"neg":-0.0,"#)
+  assert string::contains(line, r#""up":null,"down":null,"yes":true,"#)
+  assert string::ends_with(line, r#""ctl":"\u001f"# + "\u{7f}" + r#"\t","a\"b":"{x}"}}"#)
+  assert string::contains(line, r#""message":"a\nb","location":"src/main.cheby:12:3","#)
+  let repeated = json_line(sample("m", [int("n", 1), int("n", 2)]))
+  assert string::ends_with(repeated, r#""fields":{"n":1,"n":2}}"#)
+}
+
+/// Calls `body` on the calling fiber with a collecting logger in context,
+/// and returns what `body` returns with the records logged until then, at
+/// every level, in the order they arrived. Nothing is written. It does not
+/// wait for fibers, a `capture` inside `body` takes its own records, and a
+/// panic of `body` passes through (D-1626).
+///
+/// The records travel over a channel whose capacity is `int::max_safe`,
+/// whose buffer is not allocated up front, so a send never waits. After
+/// `body` returns, `capture` sends `None` as an end mark and receives up to
+/// it, so it never waits either, and what a fiber that outlived `body`
+/// logs later goes nowhere (D-1626).
+///
+/// - **Cost:** O(n) in the number of records. Informative.
+pub fn capture<R>(body: fn() -> R) -> (R, List<Record>) {
+  let (sender, receiver) = channel::new::<Option<Record>>(ints::max_safe)
+  let result = context::provide(logger, Logger { form: Collecting(sender) }, body)
+  let _ = channel::send(sender, None)
+  (result, received(receiver, []))
+}
+
+/// The records on `receiver` before the end mark, in order, after `kept`,
+/// which holds the ones received so far, latest first (D-1626).
+fn received(receiver: channel::Receiver<Option<Record>>, kept: List<Record>) -> List<Record> {
+  case channel::receive(receiver) {
+    Ok(Some(entry)) => received(receiver, [entry, ..kept])
+    Ok(None) => list::reverse(kept)
+    Err(Nil) => list::reverse(kept)
+  }
+}
+
+test "capture returns the body's result and its records" {
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  let (outcome, records) = capture(fn() {
+    debug("first")
+    error("second")
+    7
+  })
+  assert outcome == 7
+  let assert [first, second] = records
+  assert first.level == Debug
+  assert first.timestamp == opening
+  assert second.message == "second"
+}
+
+test "capture collects what a scoped fiber logs" {
+  let (outcome, records) = capture(fn() {
+    use owner <- fiber::scope()
+    fiber::join(fiber::spawn(owner, fn() { info("from the fiber") }))
+    info("after the join")
+  })
+  assert outcome == Ok(Nil)
+  assert messages(records) == ["from the fiber", "after the join"]
+}
+
+test "captures nest, and the inner one takes its records" {
+  let ((_, inner), outer) = capture(fn() {
+    info("outer")
+    capture(fn() { info("inner") })
+  })
+  assert messages(inner) == ["inner"]
+  assert messages(outer) == ["outer"]
+}
+
+test "a panic of the body passes through capture" {
+  let outcome = {
+    use _ <- fiber::scope()
+    capture(fn() {
+      info("before")
+      panic as "boom"
+    })
+  }
+  let assert Err(failure) = outcome
+  assert fiber::message(failure) == "boom"
+}
+
+test "each fiber's records keep their order" {
+  let (_, records) = capture(fn() {
+    use owner <- fiber::scope()
+    list::each(list::range(0, 4), fn(worker) {
+      let _ = fiber::spawn(owner, fn() {
+        list::each(list::range(0, 50), fn(step) {
+          info_with("step", [int("worker", worker), int("step", step)])
+        })
+      })
+    })
+  })
+  assert list::length(records) == 200
+  list::each(list::range(0, 4), fn(worker) {
+    let own = list::filter(records, fn(record) {
+      list::first(record.fields) == Some(int("worker", worker))
+    })
+    let steps = list::map(own, fn(record) { list::map(record.fields, field_value) })
+    assert steps == list::map(list::range(0, 50), fn(step) {
+      [ints::show(worker), ints::show(step)]
+    })
+  })
+}
+
+test "a log function bound to a name logs through it" {
+  let (_, records) = capture(fn() {
+    let log_it = warn
+    log_it("once")
+  })
+  assert messages(records) == ["once"]
+}

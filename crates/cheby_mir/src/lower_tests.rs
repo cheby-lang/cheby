@@ -168,6 +168,7 @@ fn fn_sig(params: &[Ty], ret: Ty) -> ItemSig {
         ret,
         clamped: Box::new([]),
         initializer: None,
+        call_site: None,
     })
 }
 
@@ -1094,5 +1095,71 @@ pub type Color {
             "\nforeign_layout ctor app::colors::Green: Color.Green tag 1 key {key:016x} []\n"
         )),
         "{app}"
+    );
+}
+
+/// A call of a function with `@std_call_site` calls its constructor with
+/// the path, the line and the column of the start of the path that names
+/// the function, as constants (D-1628, D-1629, D-1631): the column counts
+/// code points, so the `é` before the second call counts once, and a pipe
+/// stage reports its own line, not the chain's.
+#[test]
+fn a_call_site_is_a_string_and_two_integers() {
+    let lowered = crate::test_support::lower_source(&[(
+        "",
+        r#"//! Call sites.
+
+import std::call_site_probe
+
+fn main() {
+  let a = call_site_probe::here("a")
+  let b = ("é", call_site_probe::here("b"))
+  let c =
+    "c"
+    |> call_site_probe::here
+  let d = call_site_probe::here
+  let _ = (a, b, c, d("d"), call_site_probe::inside())
+  Nil
+}
+"#,
+    )]);
+    let main = lowered.function("app", "app::main");
+    let here = "call std::call_site_probe::here_at";
+    for (tag, place) in [
+        ("str#1", "const int 6, const int 11"),
+        ("str#4", "const int 7, const int 17"),
+        ("str#5", "const int 10, const int 8"),
+    ] {
+        assert!(
+            main.contains(&format!("{here}(const {tag}, const str#2, {place})")),
+            "{main}"
+        );
+    }
+    assert!(main.contains("  str#2 = \"src/main.cheby\"\n"), "{main}");
+    assert!(!main.contains("call std::call_site_probe::here("), "{main}");
+    // A mention as a value is a closure that passes the mention's place.
+    let closure = lowered.function("app", "closure app::main#0");
+    assert!(
+        closure.contains(
+            "tail_call std::call_site_probe::here_at(_1, const str#1, const int 11, const int 11)"
+        ),
+        "{closure}"
+    );
+    assert!(
+        closure.contains("  str#1 = \"src/main.cheby\"\n"),
+        "{closure}"
+    );
+    // Std's own call names std's path (D-450).
+    let inside = lowered.function("std::call_site_probe", "std::call_site_probe::inside");
+    assert!(
+        inside.contains(
+            "tail_call std::call_site_probe::here_at(const str#1, const str#2, const int 17, const \
+             int 3)"
+        ),
+        "{inside}"
+    );
+    assert!(
+        inside.contains("  str#2 = \"std/call_site_probe.cheby\"\n"),
+        "{inside}"
     );
 }

@@ -188,6 +188,7 @@ impl Compare<'_> {
                     && self.ty(a.ret, b.ret)
                     && a.clamped == b.clamped
                     && a.initializer == b.initializer
+                    && a.call_site == b.call_site
             }
             (ItemSig::Type(a), ItemSig::Type(b)) => {
                 self.generics(&a.generics, &b.generics)

@@ -1,0 +1,43 @@
+// @mode: run-pass
+// @decisions: D-1618, D-1622, D-1624
+//! The JSON logger writes one object per record to standard error, with
+//! the five keys in order and the fields nested: text and `inspect` fields
+//! as strings, an `Int` with all its digits, a `Float` as `std::json`
+//! writes one, so NaN and the infinities are `null`, and a `Bool` as
+//! `true` or `false`. Records below the logger's level are dropped
+//! (§10.11).
+
+import std::context
+import std::duration
+import std::float
+import std::io
+import std::log
+import std::time
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let opening = time::from_unix(duration::seconds(1_794_909_600))
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  use <- context::provide(log::logger, log::json_logger(log::Info))
+  log::debug("dropped")
+  log::info("no fields")
+  log::warn_with("each kind", [
+    log::field("text", "a \"quoted\"\nline"),
+    log::field("shown", 5),
+    log::int("count", -9_007_199_254_740_991),
+    log::float("half", 0.5),
+    log::float("big", 1.0e21),
+    log::float("nan", float::nan),
+    log::float("up", float::infinity),
+    log::float("down", float::neg_infinity),
+    log::bool("ok", True),
+    log::bool("failed", False),
+    log::inspect("point", Point { x: 1, y: 2 }),
+  ])
+  log::error_with("a field named level", [log::field("level", "not the record's")])
+  io::println("done")
+}

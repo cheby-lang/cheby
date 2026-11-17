@@ -1,0 +1,41 @@
+// @mode: run-pass
+// @decisions: D-1614, D-1616, D-1617, D-1620, D-1621, D-1624, D-1628, D-1629
+//! The text logger writes one line per record to standard error, and each
+//! record names the place where its log function is named: a call, a pipe
+//! stage on a later line than its chain's start, a function passed as a
+//! value, whose records all name that mention, the path after the arrow of
+//! a `use`, and a lazy call. The default logger takes `Info` and above, so
+//! the first `debug` is dropped. Under a fixed clock the lines are the same
+//! on every run (§4.8, §10.11).
+
+import std::context
+import std::duration
+import std::io
+import std::list
+import std::log
+import std::string
+import std::time
+
+fn through_use() {
+  use <- log::warn_lazy
+  "through use"
+}
+
+fn main() {
+  let opening = time::from_unix(duration::milliseconds(1_794_909_600_500))
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  log::debug("dropped by the default logger")
+  log::info("the default logger")
+  use <- context::provide(log::logger, log::text_logger(log::Debug))
+  log::debug("a plain call")
+  ["piped", "stage"]
+  |> string::join(_, " ")
+  |> log::info
+  list::each(["first value", "second value"], log::info)
+  through_use()
+  log::error_lazy(fn() { "lazy" })
+  log::info_with("with fields", [log::int("port", 8080), log::field("host", "my host")])
+  log::info_with_lazy(fn() { ("lazy with fields", [log::bool("ok", True)]) })
+  log::warn("a\nsecond line")
+  io::println("done")
+}

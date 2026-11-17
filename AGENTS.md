@@ -13,7 +13,7 @@ Design documents:
 - `docs/spec/`: the language specification, one chapter per file, with the grammar in Appendix A.
 - `docs/stdlib/`: the standard-library specification, one file per module (D-220).
 - `docs/plan/`: the implementation plan, milestones M0-M6. Each milestone file has a `Status` section.
-- `docs/examples/`: 33 example programs with their goldens, the conformance suite (D-275).
+- `docs/examples/`: 34 example programs with their goldens, the conformance suite (D-275).
 - `docs/diagnostics/`: one explanation per diagnostic code, `E0001.md` and `W0001.md` onward (D-420).
 
 Implementation:

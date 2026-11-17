@@ -1,0 +1,3 @@
+2026-11-17T10:00:00Z INFO tests/ui/10-concurrency/log/scoped_fields_and_fibers.cheby:33:9: in the fiber request=a17 try=2 worker=w1
+2026-11-17T10:00:00Z INFO tests/ui/10-concurrency/log/scoped_fields_and_fibers.cheby:38:7: inner request=b42 try=3 retry=True
+2026-11-17T10:00:00Z INFO tests/ui/10-concurrency/log/scoped_fields_and_fibers.cheby:40:5: after the inner scope request=a17 try=1

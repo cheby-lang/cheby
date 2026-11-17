@@ -76,6 +76,7 @@ impl BodyCx<'_, '_> {
             ExprKind::DynCoerce { value, iface, dict } => {
                 self.dyn_coerce(*value, *iface, dict, span)
             }
+            ExprKind::CallSite(part) => self.call_site(*part, ty, span),
             ExprKind::Error => Err(Ice::new(format!(
                 "an expression with an error reached MIR lowering at {span:?}"
             ))),
@@ -177,6 +178,9 @@ impl BodyCx<'_, '_> {
         ret_ty: cheby_iface::Ty,
         tail: bool,
     ) -> Result<Option<Operand>, Ice> {
+        // Every direct call of a THIR callee, an operator's function and an
+        // interpolation's `show` included, comes here.
+        self.cx.defs.replaced(def)?;
         let mut ops = dicts;
         ops.extend(args);
         let callee = Callee::Direct(def);

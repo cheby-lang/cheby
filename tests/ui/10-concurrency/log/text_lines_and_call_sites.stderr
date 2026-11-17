@@ -1,0 +1,10 @@
+2026-11-17T10:00:00.5Z INFO tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:28:3: the default logger
+2026-11-17T10:00:00.5Z DEBUG tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:30:3: a plain call
+2026-11-17T10:00:00.5Z INFO tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:33:6: piped stage
+2026-11-17T10:00:00.5Z INFO tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:34:47: first value
+2026-11-17T10:00:00.5Z INFO tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:34:47: second value
+2026-11-17T10:00:00.5Z WARN tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:20:10: through use
+2026-11-17T10:00:00.5Z ERROR tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:36:3: lazy
+2026-11-17T10:00:00.5Z INFO tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:37:3: with fields port=8080 host="my host"
+2026-11-17T10:00:00.5Z INFO tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:38:3: lazy with fields ok=True
+2026-11-17T10:00:00.5Z WARN tests/ui/10-concurrency/log/text_lines_and_call_sites.cheby:39:3: a\nsecond line

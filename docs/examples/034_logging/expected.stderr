@@ -1,0 +1,12 @@
+2026-11-17T10:00:00Z INFO src/main.cheby:39:3: importer started
+2026-11-17T10:00:00Z WARN src/main.cheby:40:3: disk almost full volume=/data free_mb=120 read_only=False
+2026-11-17T10:00:00Z INFO src/main.cheby:45:51: loading prices
+2026-11-17T10:00:00Z INFO src/main.cheby:45:51: loading stock
+2026-11-17T10:00:00Z INFO src/main.cheby:79:10: order imported batch=morning order=a17 quantity=3
+2026-11-17T10:00:00Z WARN src/main.cheby:78:10: order has no items, skipped batch=morning order=b42
+2026-11-17T10:00:00Z INFO src/main.cheby:79:10: order imported batch=morning order=c08 quantity=12
+2026-11-17T10:00:00Z INFO src/main.cheby:69:16: batch imported batch=morning orders=3
+2026-11-17T10:00:00Z DEBUG src/main.cheby:86:3: summary orders=3 items=15
+2026-11-17T10:00:00Z WARN src/main.cheby:98:7: unknown level, using info level=warning
+{"time":"2026-11-17T10:00:00Z","level":"info","message":"report written","location":"src/main.cheby:52:5","fields":{"path":"reports/morning.csv"}}
+2026-11-17T10:00:00Z INFO src/main.cheby:55:3: importer stopped
