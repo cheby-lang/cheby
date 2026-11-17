@@ -237,8 +237,7 @@ pub(super) fn lower(program: &super::super::Program) -> Result<Program, EvalErro
             }
             let segments: Vec<String> = import
                 .module_path()
-                .map(|p| p.segments().map(|s| s.text().to_owned()).collect())
-                .unwrap_or_default();
+                .map_or_default(|p| p.segments().map(|s| s.text().to_owned()).collect());
             let target = match segments.as_slice() {
                 [std, module] if std == "std" => STD_MODULES
                     .iter()
@@ -307,7 +306,7 @@ pub(super) fn lower(program: &super::super::Program) -> Result<Program, EvalErro
             ctors: &ctors,
             scope: Vec::new(),
         };
-        let fn_name = decl.name().map(|n| n.text().to_owned()).unwrap_or_default();
+        let fn_name = decl.name().map_or_default(|n| n.text().to_owned());
         let params = decl
             .params()
             .map(|param| lowerer.param(param))

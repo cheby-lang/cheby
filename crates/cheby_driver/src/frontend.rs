@@ -1831,7 +1831,7 @@ impl BuildInputs<'_> {
         };
         let drops = resolved.external_drops();
         Ok(ModuleOutput {
-            syntax: late_syntax.map(<[Diagnostic]>::to_vec).unwrap_or_default(),
+            syntax: late_syntax.map_or_default(<[Diagnostic]>::to_vec),
             early,
             natives,
             late,
@@ -1889,8 +1889,7 @@ impl BuildInputs<'_> {
             input
                 .resolved
                 .item(index)
-                .map(|item| self.globals.names.get(item.name).to_owned())
-                .unwrap_or_default()
+                .map_or_default(|item| self.globals.names.get(item.name).to_owned())
         };
         let mentioned = |def: cheby_iface::DefId| {
             let kind = if def.module == input.module {
@@ -3285,7 +3284,7 @@ fn run_inner(
     let mut natives = BTreeMap::new();
     for &id in &built {
         let at = index(id)?;
-        let (early, late) = printed.get_mut(at).map(std::mem::take).unwrap_or_default();
+        let (early, late) = printed.get_mut(at).map_or_default(std::mem::take);
         diagnostics.extend(early);
         let mut bindings = get(&module_natives, id)?.clone();
         if modules.try_get(id)?.package != PackageId::STD {

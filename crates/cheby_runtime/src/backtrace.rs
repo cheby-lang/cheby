@@ -80,9 +80,7 @@ pub(crate) fn parse_setting(value: Option<&OsStr>) -> Result<bool, RuntimeError>
         None | Some(Some("" | "0")) => Ok(false),
         Some(Some("1")) => Ok(true),
         Some(_) => Err(RuntimeError::InvalidBacktrace(
-            value
-                .map(|value| value.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            value.map_or_default(|value| value.to_string_lossy().into_owned()),
         )),
     }
 }

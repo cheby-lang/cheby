@@ -472,15 +472,11 @@ pub fn keep_entry_diagnostic(diag: &Diagnostic, file: FileId) -> bool {
     {
         return false;
     }
-    if diag.code == codes::SHADOWED_NAME
+    !(diag.code == codes::SHADOWED_NAME
         && diag
             .labels
             .iter()
-            .any(|l| l.style == LabelStyle::Secondary && l.span.file != file)
-    {
-        return false;
-    }
-    true
+            .any(|l| l.style == LabelStyle::Secondary && l.span.file != file))
 }
 
 /// The names `request` binds, with their namespaces: the module's name,
@@ -490,8 +486,7 @@ fn import_bindings(request: &ImportRequest, names: &Interner) -> Vec<(Namespace,
     match &request.items {
         None => request
             .module_binding()
-            .map(|(name, _)| vec![(Namespace::Value, name)])
-            .unwrap_or_default(),
+            .map_or_default(|(name, _)| vec![(Namespace::Value, name)]),
         Some(items) => {
             let mut out = Vec::new();
             for item in items {

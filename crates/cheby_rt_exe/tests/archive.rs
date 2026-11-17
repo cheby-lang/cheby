@@ -15,12 +15,16 @@ mod archive {
     use object::read::archive::ArchiveFile;
     use object::{BinaryFormat, Object as _, ObjectSymbol as _};
 
-    /// The archive's path: `target/<profile>/libcheby_rt_exe.a` next to
-    /// the `deps/` directory this test runs from.
+    /// The archive's path: `target/<profile>/libcheby_rt_exe.a`. The test
+    /// runs from `target/<profile>/deps/`, or from under
+    /// `target/<profile>/build/` in the layout of cargo 1.100.
     fn archive_path() -> PathBuf {
         let exe = std::env::current_exe().unwrap();
-        let deps = exe.parent().unwrap();
-        let profile = deps.parent().unwrap();
+        let profile = exe
+            .ancestors()
+            .find(|p| p.file_name().is_some_and(|n| n == "deps" || n == "build"))
+            .and_then(std::path::Path::parent)
+            .unwrap();
         profile.join("libcheby_rt_exe.a")
     }
 

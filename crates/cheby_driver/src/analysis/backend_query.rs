@@ -389,16 +389,14 @@ impl Files {
         sources: &SourceMap,
         front: Option<&Frontend>,
     ) -> Result<Self, BackendError> {
-        let std_files: Vec<FileId> = front
-            .map(|front| {
-                front
-                    .modules
-                    .iter()
-                    .filter(|(_, info)| info.package != PackageId::LOCAL)
-                    .filter_map(|(_, info)| info.file)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let std_files: Vec<FileId> = front.map_or_default(|front| {
+            front
+                .modules
+                .iter()
+                .filter(|(_, info)| info.package != PackageId::LOCAL)
+                .filter_map(|(_, info)| info.file)
+                .collect()
+        });
         let mut by_id = BTreeMap::new();
         let mut manifest = None;
         for (id, file) in sources.files() {

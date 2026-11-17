@@ -273,8 +273,7 @@ fn body_mutants(tree: &SyntaxTree, resolved: &ResolvedModule) -> Vec<(&'static s
                 K::CALL_EXPR => {
                     let args: Vec<_> = n
                         .first_child_of_kind(K::ARG_LIST)
-                        .map(|list| list.children().collect())
-                        .unwrap_or_default();
+                        .map_or_default(|list| list.children().collect());
                     if let Some(&first) = args.first() {
                         put("open_call", end_of(first), ne, ", ");
                     }

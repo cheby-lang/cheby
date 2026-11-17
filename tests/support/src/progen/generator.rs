@@ -212,11 +212,7 @@ impl<'c> Gen<'c> {
     /// Binds a new local of type `ty`; returns its placeholder.
     fn bind(&mut self, base: &str, ty: Ty) -> String {
         let (text, id) = self.binder(base);
-        let name = self
-            .binders
-            .get(id)
-            .map(|b| b.name.clone())
-            .unwrap_or_default();
+        let name = self.binders.get(id).map_or_default(|b| b.name.clone());
         self.env.push(Var {
             name,
             binder: id,
@@ -550,8 +546,7 @@ impl<'c> Gen<'c> {
             .types
             .recs
             .get(index)
-            .map(|r| r.fields.clone())
-            .unwrap_or_default();
+            .map_or_default(|r| r.fields.clone());
         let inits: Vec<String> = fields
             .iter()
             .map(|(name, ty)| {
@@ -569,8 +564,7 @@ impl<'c> Gen<'c> {
             .types
             .adts
             .get(adt)
-            .map(|a| a.variants.clone())
-            .unwrap_or_default();
+            .map_or_default(|a| a.variants.clone());
         let mut choice = forced.unwrap_or_else(|| self.src.below(variants.len()));
         let kind = variants.get(choice).cloned().unwrap_or(VariantKind::Unit);
         let recursive = match &kind {
@@ -1024,8 +1018,7 @@ impl<'c> Gen<'c> {
                     .types
                     .recs
                     .get(index)
-                    .map(|r| r.fields.clone())
-                    .unwrap_or_default();
+                    .map_or_default(|r| r.fields.clone());
                 let Some((name, ty)) = self.src.pick(&fields).cloned() else {
                     return base;
                 };
@@ -1093,8 +1086,7 @@ impl<'c> Gen<'c> {
             .types
             .recs
             .get(index)
-            .map(|r| r.fields.clone())
-            .unwrap_or_default();
+            .map_or_default(|r| r.fields.clone());
         let Some((name, ty)) = self.src.pick(&fields).cloned() else {
             return base.to_owned();
         };
@@ -1601,7 +1593,7 @@ impl<'c> Gen<'c> {
         if self.src.chance(50) {
             let arm = self.scoped(|g| {
                 let k = g.bind("k", Ty::Int);
-                let name = g.env.last().map(|v| v.name.clone()).unwrap_or_default();
+                let name = g.env.last().map_or_default(|v| v.name.clone());
                 if let Some(b) = g.env.last().and_then(|v| g.binders.get_mut(v.binder)) {
                     b.used = true;
                 }
@@ -1688,7 +1680,7 @@ impl<'c> Gen<'c> {
         if self.src.chance(40) {
             let arm = self.scoped(|g| {
                 let v = g.bind("v", Ty::Int);
-                let name = g.env.last().map(|v| v.name.clone()).unwrap_or_default();
+                let name = g.env.last().map_or_default(|v| v.name.clone());
                 if let Some(b) = g.env.last().and_then(|v| g.binders.get_mut(v.binder)) {
                     b.used = true;
                 }
@@ -1721,8 +1713,7 @@ impl<'c> Gen<'c> {
             .types
             .adts
             .get(adt)
-            .map(|a| a.variants.clone())
-            .unwrap_or_default();
+            .map_or_default(|a| a.variants.clone());
         let guard_at = self.src.below(variants.len());
         let fallback = self.src.chance(25) && variants.len() > 2;
         let mut arms = Vec::new();
@@ -1833,8 +1824,7 @@ impl<'c> Gen<'c> {
                     .types
                     .recs
                     .get(index)
-                    .map(|r| r.fields.clone())
-                    .unwrap_or_default();
+                    .map_or_default(|r| r.fields.clone());
                 let (field, ty) = self
                     .src
                     .pick(&fields)
@@ -1912,11 +1902,7 @@ impl<'c> Gen<'c> {
         let ind = self.ind();
         let ty = self.random_type(false);
         let (fname, fid) = self.binder("step");
-        let fn_name = self
-            .binders
-            .get(fid)
-            .map(|b| b.name.clone())
-            .unwrap_or_default();
+        let fn_name = self.binders.get(fid).map_or_default(|b| b.name.clone());
         if let Some(b) = self.binders.get_mut(fid) {
             b.used = true;
         }
@@ -1929,7 +1915,7 @@ impl<'c> Gen<'c> {
         let body = self.with_mult(times, |g| {
             g.scoped(|g| {
                 let n = g.bind("n", Ty::Int);
-                let n_name = g.env.last().map(|v| v.name.clone()).unwrap_or_default();
+                let n_name = g.env.last().map_or_default(|v| v.name.clone());
                 if let Some(b) = g.env.last().and_then(|v| g.binders.get_mut(v.binder)) {
                     b.used = true;
                 }

@@ -7,7 +7,7 @@ exclude = ["fuzz"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/cheby-lang/cheby"
 
@@ -234,3 +234,13 @@ opt-level = 2
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+# Rust 1.100's std follows Unicode 18.0.0, and unicode-segmentation's latest
+# release, 1.13.3, still follows 17.0.0. Its master moved to 18.0.0 in
+# unicode-rs/unicode-segmentation#184, unreleased. D-552 needs both on one
+# version (crates/cheby_runtime/src/text/tests.rs), so the crate comes from
+# that commit's descendant until a release has it; then drop this patch and
+# deny.toml's allow-git entry. A patch, not a git dependency, so rustyline
+# uses the same copy.
+[patch.crates-io]
+unicode-segmentation = { git = "https://github.com/unicode-rs/unicode-segmentation", rev = "2368a49833e4b6dd0e933a8485dd96599e72c870" }

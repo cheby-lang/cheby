@@ -41,3 +41,6 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# unicode-segmentation at Unicode 18.0.0 until a release has it (Cargo.toml's
+# [patch.crates-io]).
+allow-git = ["https://github.com/unicode-rs/unicode-segmentation"]

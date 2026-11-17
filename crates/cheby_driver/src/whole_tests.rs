@@ -53,8 +53,7 @@ fn keys_of(units: &[MirModule], path: &str) -> Vec<FnKey> {
     units
         .iter()
         .find(|u| matches!(u.unit, UnitKind::Code(_)) && &*u.path == path)
-        .map(|u| u.functions.iter().map(|f| f.key).collect())
-        .unwrap_or_default()
+        .map_or_default(|u| u.functions.iter().map(|f| f.key).collect())
 }
 
 /// The item named `name` of module `path`.
@@ -551,7 +550,7 @@ fn unreached_e0053_set_is_d510s_on_the_ffi_packages() {
     for path in entries {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
         let (dir, temporary) = if path.join("cheby.toml").is_file() {
-            (path.clone(), false)
+            (path, false)
         } else if path.extension().is_some_and(|e| e == "cheby") {
             let text = std::fs::read_to_string(&path).unwrap();
             (
@@ -637,10 +636,13 @@ fn unreached_build_links_and_hides_the_stub() {
         file.symbols()
             .any(|s| s.is_undefined() && s.name().is_ok_and(|n| plain(n) == stub))
     );
-    // The archive beside the target directory's `cheby`.
+    // The archive beside the target directory's `cheby`. The test runs
+    // from `target/<profile>/deps/`, or from under `target/<profile>/build/`
+    // in the layout of cargo 1.100.
     let target = std::env::current_exe()
         .unwrap()
-        .parent()
+        .ancestors()
+        .find(|p| p.file_name().is_some_and(|n| n == "deps" || n == "build"))
         .and_then(Path::parent)
         .unwrap()
         .join("cheby");

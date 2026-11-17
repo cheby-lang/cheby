@@ -202,9 +202,7 @@ impl Example {
             ),
             None => None,
         };
-        let args = read("args")?
-            .map(|t| t.lines().map(str::to_owned).collect())
-            .unwrap_or_default();
+        let args = read("args")?.map_or_default(|t| t.lines().map(str::to_owned).collect());
         let env = match read("env")? {
             Some(text) => text
                 .lines()

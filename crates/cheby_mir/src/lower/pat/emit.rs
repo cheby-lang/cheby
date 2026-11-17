@@ -162,11 +162,7 @@ impl BodyCx<'_, '_> {
                 continue;
             };
             self.switch_to(block)?;
-            let locals = m
-                .arms
-                .get(arm)
-                .map(|a| a.locals.clone())
-                .unwrap_or_default();
+            let locals = m.arms.get(arm).map_or_default(|a| a.locals.clone());
             for (&id, &param) in locals.iter().zip(&params) {
                 self.bind_local(id, Operand::Local(param))?;
             }
@@ -394,11 +390,7 @@ impl BodyCx<'_, '_> {
         let block = if let Some((b, _)) = slot {
             *b
         } else {
-            let locals = m
-                .arms
-                .get(arm)
-                .map(|a| a.locals.clone())
-                .unwrap_or_default();
+            let locals = m.arms.get(arm).map_or_default(|a| a.locals.clone());
             let b = self.new_block()?;
             let mut params = Vec::with_capacity(locals.len());
             for id in locals {

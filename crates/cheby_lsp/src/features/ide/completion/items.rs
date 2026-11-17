@@ -1198,8 +1198,7 @@ fn patterns(cx: &CompletionCx<'_>, subject: Subject<'_>, out: &mut Items) {
     };
     let ctors = subject_ty
         .and_then(|ty| cx.head(ty))
-        .map(|head| ctors_of(cx, head))
-        .unwrap_or_default();
+        .map_or_default(|head| ctors_of(cx, head));
     if ctors.is_empty() {
         scope_ctors(cx, out);
     } else {

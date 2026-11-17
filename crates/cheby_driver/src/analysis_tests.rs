@@ -252,7 +252,7 @@ fn check_lists(
                 severity: diag.severity(),
                 message: diag.message.clone(),
                 range,
-                primary_message: primary_label.map(|l| l.message.clone()).unwrap_or_default(),
+                primary_message: primary_label.map_or_default(|l| l.message.clone()),
                 related,
                 notes: diag.notes.clone(),
                 helps,
@@ -590,7 +590,7 @@ fn symbol_round_trips() {
         for missing in [
             Symbol::item(main.clone(), SymbolNs::Value, "no_such_item_anywhere"),
             Symbol::item(main.child("no_such_module"), SymbolNs::Value, "main"),
-            Symbol::field(main.clone(), "NoSuchType", "x"),
+            Symbol::field(main, "NoSuchType", "x"),
         ] {
             assert_eq!(snapshot.find(&missing), None, "{missing:?}");
         }

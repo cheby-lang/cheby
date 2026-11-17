@@ -1121,10 +1121,7 @@ impl Runner<'_, '_> {
         if let Some(domains) = &mut self.hooks.domains {
             domains.push((index, Arc::clone(&started.domain)));
         }
-        let chunks = started
-            .capture
-            .map(|capture| capture.take())
-            .unwrap_or_default();
+        let chunks = started.capture.map_or_default(|capture| capture.take());
         Ok(Ended::Test(outcome, chunks))
     }
 }
@@ -1396,8 +1393,7 @@ fn run_std_tests(
         RunEnd::Exited { index, status } => {
             let name = tests
                 .get(index)
-                .map(|test| test.name.to_string())
-                .unwrap_or_default();
+                .map_or_default(|test| test.name.to_string());
             Err(terminated(path, &name, status))
         }
         RunEnd::WriteFailed => Err(Ice::new("the std self-test could not keep a result").into()),

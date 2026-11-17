@@ -782,8 +782,7 @@ fn import_items<'t>(list: SyntaxNode<'t>, partial: Option<SyntaxToken<'t>>) -> C
     let module = list
         .parent()
         .and_then(|decl| decl.first_child_of_kind(K::MODULE_PATH))
-        .map(|path| segments_before(path, path.text_range().end()))
-        .unwrap_or_default();
+        .map_or_default(|path| segments_before(path, path.text_range().end()));
     let written = list
         .children()
         .filter(|item| item.kind() == K::IMPORT_ITEM)

@@ -245,13 +245,12 @@ fn compiler_verdict(path: &Path, line_offset: usize) -> Result<Option<String>, S
         let at = error
             .primary_span()
             .and_then(|span| sources.location(span))
-            .map(|loc| {
+            .map_or_default(|loc| {
                 let line = usize::try_from(loc.line)
                     .unwrap_or(usize::MAX)
                     .saturating_add(line_offset);
                 format!("{line}:{}: ", loc.col)
-            })
-            .unwrap_or_default();
+            });
         format!("{at}error[{}]: {}", error.code, error.message)
     }))
 }

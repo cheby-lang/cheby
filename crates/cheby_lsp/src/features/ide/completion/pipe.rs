@@ -402,9 +402,7 @@ pub(super) fn call_text(
 
 /// The parameter names of function `def`.
 pub(super) fn param_names(cx: &CompletionCx<'_>, def: DefId) -> Vec<&'static str> {
-    fn_sig(cx, def)
-        .map(|sig| sig.params.iter().map(|p| cx.name_text(p.name)).collect())
-        .unwrap_or_default()
+    fn_sig(cx, def).map_or_default(|sig| sig.params.iter().map(|p| cx.name_text(p.name)).collect())
 }
 
 /// The text of [`call_text`] over `range`: the snippet for a client that
@@ -497,8 +495,7 @@ pub(crate) fn complete(
             .snapshot
             .table()
             .get(candidate.def.module)
-            .map(|info| path_text(&info.path))
-            .unwrap_or_default();
+            .map_or_default(|info| path_text(&info.path));
         if candidate.path.contains("::") {
             entry.filter_text = Some(name.to_owned());
             entry.description = Some(path.clone());

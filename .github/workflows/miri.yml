@@ -51,9 +51,7 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-10-01

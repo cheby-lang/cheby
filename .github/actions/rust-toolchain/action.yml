@@ -1,0 +1,36 @@
+# Installs the stable toolchain that rust-toolchain.toml pins (D-277).
+#
+# rust-toolchain.toml is the one place the stable version is written. This
+# action reads its `channel` and hands it to dtolnay/rust-toolchain, so a
+# bump changes that file alone. The toml's own `components` (clippy and
+# rustfmt) are installed by rustup when cargo first runs; `components`
+# here installs them up front, as the job asks. The dated nightly of
+# nightly.yml and miri.yml is pinned separately.
+
+name: Rust toolchain
+description: Install the stable toolchain that rust-toolchain.toml pins
+
+inputs:
+  components:
+    description: Comma-separated components to install with the toolchain
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Read the pin
+      id: pin
+      shell: bash
+      run: |
+        channel=$(sed -n 's/^channel *= *"\([^"]*\)" *$/\1/p' rust-toolchain.toml)
+        if [ -z "$channel" ] || [ "$(printf '%s\n' "$channel" | wc -l)" -ne 1 ]; then
+          echo "::error::rust-toolchain.toml must have exactly one \`channel = \"…\"\` line (D-277)"
+          exit 1
+        fi
+        echo "Pinned toolchain: $channel"
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.pin.outputs.channel }}
+        components: ${{ inputs.components }}

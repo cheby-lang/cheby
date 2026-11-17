@@ -5,7 +5,7 @@
 #
 # Excluded from the workspace, because cargo-fuzz needs a nightly toolchain.
 # The scheduled workflow (.github/workflows/nightly.yml, D-781) pins the
-# dated nightly below; it must be at least 1.99-nightly, the workspace's
+# dated nightly below; it must be at least the nightly of the workspace's
 # `rust-version`. cargo-fuzz builds under AddressSanitizer, so the build
 # also needs `--cfg cheby_sanitize="address"`, which cargo-fuzz appends to
 # its own flags from `RUSTFLAGS`, for the runtime's fiber annotations and

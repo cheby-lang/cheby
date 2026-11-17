@@ -244,13 +244,12 @@ fn first_block<'t>(
 fn import_key(import: SyntaxNode<'_>) -> (String, String) {
     let path = import
         .first_child_of_kind(K::MODULE_PATH)
-        .map(|p| {
+        .map_or_default(|p| {
             p.tokens()
                 .filter(|t| !t.kind().is_trivia() && t.kind() != K::NEWLINE)
                 .map(SyntaxToken::text)
                 .collect::<String>()
-        })
-        .unwrap_or_default();
+        });
     let whole: Vec<&str> = import
         .tokens()
         .filter(|t| !t.kind().is_trivia() && t.kind() != K::NEWLINE)

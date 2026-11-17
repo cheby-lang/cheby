@@ -196,8 +196,7 @@ impl<'f> Summaries<'f> {
                     .get(&(MentionerKind::Test, test.name.to_string()))?;
                 s.entries.get(at)
             })
-            .map(|s| s.mentions.clone())
-            .unwrap_or_default()
+            .map_or_default(|s| s.mentions.clone())
     }
 
     /// What `starts` reach, walking summaries (module documentation): the

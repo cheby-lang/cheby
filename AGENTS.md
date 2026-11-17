@@ -109,7 +109,7 @@ If the grammar or the queries need updating, do that in the sibling repositories
 
 Follow `docs/plan/`, especially `architecture.md`, `testing.md` and the file of the milestone in progress.
 
-- Rust is pinned at 1.99 on edition 2024 in `rust-toolchain.toml` (D-277). Bump it only in its own change.
+- Rust is pinned on edition 2024 in `rust-toolchain.toml` (D-277), the only place the stable version is written. CI reads it through `.github/actions/rust-toolchain`. A bump also updates `rust-version` in `Cargo.toml`. Bump it only in its own change.
 - The locality rule (D-246): type-checking a module may use only the interfaces of its dependencies, never their bodies.
 - The parser is hand-written over a lossless CST (D-272, D-280).
 - Gaps found while implementing go into the decision log and the spec before the code relies on an answer. Never resolve them with ad-hoc compiler behavior.

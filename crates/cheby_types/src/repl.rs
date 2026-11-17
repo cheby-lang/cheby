@@ -1943,8 +1943,7 @@ mod tests {
                         let at = d
                             .primary_span()
                             .and_then(|s| self.b.sources.location(s))
-                            .map(|l| format!("{}:{}:{}", l.path, l.line, l.col))
-                            .unwrap_or_default();
+                            .map_or_default(|l| format!("{}:{}:{}", l.path, l.line, l.col));
                         format!("{} {} at {at}", d.code, d.message)
                     })
                     .collect(),

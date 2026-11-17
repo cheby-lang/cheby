@@ -249,24 +249,21 @@ pub(crate) fn pipe_interfaces(
     // `Compare::`, from the scope (D-1550): not again as `ops::Compare::`
     // through its imported module, and not with an import edit, which
     // would also leave the first import unused (W0003).
-    let by_name: BTreeSet<DefId> = view
-        .resolved()
-        .map(|resolved| {
-            resolved
-                .scope
-                .iter(Namespace::Type)
-                .filter_map(|(_, entry)| match entry.res {
-                    Res::Def(def) if matches!(entry.source, ScopeSource::Import(_)) => Some(def),
-                    Res::Local(_)
-                    | Res::Def(_)
-                    | Res::Module(_)
-                    | Res::TyParam(_)
-                    | Res::SelfTy
-                    | Res::Err => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let by_name: BTreeSet<DefId> = view.resolved().map_or_default(|resolved| {
+        resolved
+            .scope
+            .iter(Namespace::Type)
+            .filter_map(|(_, entry)| match entry.res {
+                Res::Def(def) if matches!(entry.source, ScopeSource::Import(_)) => Some(def),
+                Res::Local(_)
+                | Res::Def(_)
+                | Res::Module(_)
+                | Res::TyParam(_)
+                | Res::SelfTy
+                | Res::Err => None,
+            })
+            .collect()
+    });
     imported.retain(|(_, _, def, _)| !by_name.contains(def));
     push_imported(cx, imported, want, false, out);
     if !importing {
