@@ -2,6 +2,12 @@
 {
   "capabilities": {
     "callHierarchyProvider": true,
+    "codeActionProvider": {
+      "codeActionKinds": [
+        "refactor.rewrite"
+      ],
+      "resolveProvider": false
+    },
     "completionProvider": {
       "resolveProvider": true,
       "triggerCharacters": [

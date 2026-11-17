@@ -1,0 +1,72 @@
+// @decisions: D-1645
+//! "Use a field path" rewrites a nested update of the same base's field
+//! into field paths, flattening every level of that form. It is not
+//! offered when the base is a call, when the inner base is another
+//! value, or when the rewrite would drop a comment.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Player {
+  position: Point,
+  moves: Int,
+}
+
+type Game {
+  player: Player,
+  turn: Int,
+}
+
+fn step(game: Game) -> Game {
+  Game {
+    ..game,
+    turn: game.turn + 1,
+    player: Player {
+      ..game.player,
+      position: Point { ..game.player.position, x: game.player.position.x + 1 },
+      moves: game.player.moves + 1,
+    },
+  }
+}
+// The marker sits outside the update, since a comment inside it stops
+// the rewrite, which would drop the comment.
+//> 28:24 codeAction refactor.rewrite
+
+fn drop_to(shape: Player, y: Int) -> Player {
+  Player { ..shape, position: Point { ..shape.position, y } }
+  //                          ^ codeAction
+}
+
+fn start() -> Player {
+  Player { position: Point { x: 0, y: 0 }, moves: 0 }
+}
+
+fn from_call() -> Player {
+  Player { ..start(), position: Point { ..start().position, x: 1 } }
+  //                            ^ codeAction
+}
+
+fn commented(p: Player) -> Player {
+  Player {
+    ..p,
+    position: Point {
+      ..p.position,
+      // Only the column.
+      x: 1,
+    },
+  }
+}
+//> 54:15 codeAction
+
+fn other_base(a: Player, b: Player) -> Player {
+  Player { ..a, position: Point { ..b.position, x: 1 } }
+  //                      ^ codeAction
+}
+
+fn main() {
+  let game = Game { player: start(), turn: 0 }
+  assert step(game).turn == 1
+  assert drop_to(from_call(), 2) == other_base(start(), commented(start()))
+}

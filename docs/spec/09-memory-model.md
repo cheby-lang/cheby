@@ -46,7 +46,7 @@ fn take(rx: Receiver<Int>, remaining: Int, found: List<Int>) -> List<Int> {
 
 When the compiler can prove that a value is uniquely referenced at the point where a new value of the same size is built from it, it may reuse the old memory in place ("functional but in-place") (D-005, D-017). Typical cases:
 
-- a record update `T { ..base, field: v }` where `base` is not used afterwards,
+- a record update `T { ..base, field: v }` where `base` is not used afterwards, at every level of a field path such as `T { ..base, inner.field: v }` (D-1642),
 - inserting into a `List`, `Map` or `Set` that is not used afterwards,
 - appending to a `Bytes` value that is not used afterwards (D-316),
 - pattern-matching a value and constructing a new value of the same shape in the same arm.

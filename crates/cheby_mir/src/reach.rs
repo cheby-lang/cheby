@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cheby_iface::{DefId, Ice, ModuleId};
 use cheby_types::thir::{
-    self, Callee, Dict, EntryInfo, ExprKind, InterpPart, OpImpl, Pat, PatKind,
+    self, Callee, Dict, EntryInfo, ExprKind, InterpPart, OpImpl, Pat, PatKind, UpdateField,
 };
 
 /// The checked bodies of every module of a program, by module.
@@ -844,8 +844,8 @@ impl Walk<'_, '_> {
                 }
             }
             ExprKind::RecordUpdate { fields, .. } => {
-                for field in fields {
-                    for &(ctor, _) in &field.index_per_ctor {
+                for step in fields.iter().flat_map(UpdateField::steps) {
+                    for &(ctor, _) in step {
                         self.ctor(ctor);
                     }
                 }

@@ -481,7 +481,8 @@ constructor   = ctor_path "{" [ NL ] [ field_init { "," [ NL ] field_init } [ ",
 record_update = ctor_path "{" [ NL ] ".." expr { "," [ NL ] field_init } [ "," ] [ NL ] "}" ;   (* the type name, D-156, D-429 *)
 ctor_path     = [ LOWER "::" ] UPPER ;
 (* a unit or positional constructor used as a value, `None`, `Some(1)` or `Some`, is a path_expr, §5.17 *)
-field_init  = LOWER [ ":" expr ] ;
+field_init    = field_path [ ":" expr ] ;
+field_path    = LOWER { "." LOWER } ;   (* more than one name only in a record update, D-1638, D-1643 *)
 ```
 
 ### 5.11.1 Construction
@@ -490,6 +491,7 @@ field_init  = LOWER [ ":" expr ] ;
 - A positional variant is called like a function: `Some(1)`, `Node(left, value, right)`. Used without arguments, it is a function value, for example `list::map(xs, Some)`.
 - A named-field variant is built with braces and must initialize every field exactly once, in any order: `Circle { radius: 1.0 }`.
 - **Field punning** (D-113): `Point { x, y }` is short for `Point { x: x, y: y }`.
+- A field is named by one name. A field path such as `origin.y` belongs to a record update ([§5.11.2](#5112-record-update)), and in a construction it is a compile error (D-1643).
 
 Field initializers are evaluated in the order written.
 
@@ -514,6 +516,32 @@ With Perceus reuse, updating a uniquely owned record happens in place ([§9.3](0
 let moved = Point { ..origin, x: 10.0 }
 ```
 
+A listed field may be a **field path**, names joined by `.`, which replaces a field inside another field and keeps everything else (D-1638):
+
+```cheby
+let dropped = Shape { ..shape, origin.y: 0.0 }
+```
+
+This means `Shape { ..shape, origin: Point { ..shape.origin, y: 0.0 } }`, except that `shape` is evaluated once and the inner type is not named, so it need not be imported. A path may have any number of names:
+
+- The first name is a field of `T`. Each later name is a field of the type of the field before it. At every step, that type must already be known (D-213), must show its fields here ([§5.11.3](#5113-field-access)), and every variant of it must have the next field with one type (D-071). A tuple, a type parameter or a type without named fields along the path is a compile error (D-1639).
+- Each record along the path keeps its variant and its type arguments. The value is checked against the type of the last field of the path (D-1639).
+- A punned path binds its last name: `Shape { ..shape, origin.y }` is short for `Shape { ..shape, origin.y: y }` (D-1640).
+- A path must not equal another listed path or start with one, so `origin: p, origin.y: 0.0` and a path listed twice are compile errors. Paths that share a beginning, as in `origin.x: 1.0, origin.y: 2.0`, update one copy of what they share (D-1641).
+- `base` is evaluated first, then the values in the order written, whatever their paths. Then each record along the paths is copied, innermost first. Reading the fields along a path has no observable effect (D-1642).
+- As with field access, a path cannot span lines (D-1644).
+
+```cheby
+let next = Game {
+  ..game,
+  player.position.x: game.player.position.x + 1,
+  player.moves: game.player.moves + 1,
+  turn: game.turn + 1,
+}
+```
+
+Here `game.player` is copied once, with a new `position` and new `moves`.
+
 ### 5.11.3 Field access
 
 ```ebnf
@@ -521,7 +549,7 @@ field_access = postfix "." LOWER ;
 ```
 
 - `x.name` reads a named field. If `x`'s type has several variants, every variant must have a field `name` of the same type (D-071). Otherwise, use `case`.
-- `x`'s type must already be known at the point of the access, from an annotation, a signature or a use checked earlier (D-213). Statements are checked in order, and closure arguments after the other arguments of a call ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234), so `list::filter(books, fn(entry) { entry.format == format::Paperback })` knows `entry`'s type from `books`. Field names are not unique across types, so the compiler does not guess the type from the field name or wait for later uses. Otherwise it is a compile error that asks for a type annotation. The same rule applies to record update ([§5.11](#511-constructors-and-records)). In local functions and closures, whose parameter types are inferred, this usually means annotating the parameter: `fn step(current: Input) { current.rest }`.
+- `x`'s type must already be known at the point of the access, from an annotation, a signature or a use checked earlier (D-213). Statements are checked in order, and closure arguments after the other arguments of a call ([§3.12.4](03-types.md#3124-order-of-inference)) (D-234), so `list::filter(books, fn(entry) { entry.format == format::Paperback })` knows `entry`'s type from `books`. Field names are not unique across types, so the compiler does not guess the type from the field name or wait for later uses. Otherwise it is a compile error that asks for a type annotation. The same rule applies to record update and to each step of its field paths ([§5.11](#511-constructors-and-records)). In local functions and closures, whose parameter types are inferred, this usually means annotating the parameter: `fn step(current: Input) { current.rest }`.
 - There is no positional access. Tuple elements and positional variant fields are read with a pattern ([§3.7](03-types.md#37-tuples), [§6.5](06-patterns.md#65-tuple-patterns)) (D-241). `x.0` is a compile error that suggests a tuple pattern.
 - Reading fields of a `priv` type is possible only in its own module (D-151). Reading fields of a type from another package requires the type to be `exposed` (D-048).
 

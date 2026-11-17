@@ -1,0 +1,13 @@
+// @mode: parse-fail
+// @decisions: D-1644
+//! Every name after a `.` of a field path is a field name (§5.11).
+
+type Shape {
+  pair: (Int, Int),
+}
+
+fn main() {
+  let shape = Shape { pair: (1, 2) }
+  let moved = Shape { ..shape, pair.0: 3 }
+  assert moved == shape
+}

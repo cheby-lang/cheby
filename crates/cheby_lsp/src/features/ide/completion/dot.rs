@@ -2,8 +2,8 @@
 //! D-1394, plan §1.11).
 //!
 //! [`complete`] is called for [`Context::Dot`](super::context::Context::Dot): after
-//! `x.`, while typing `x.fo`, and after `.` in an interpolation, where
-//! only fields apply. Everything needs the receiver's type, from the facts:
+//! `x.`, while typing `x.fo`, and after `.` in an interpolation or in a
+//! record update's field path (D-1645), where only fields apply. Everything needs the receiver's type, from the facts:
 //! an unknown receiver gives an empty list, since guessing by name would
 //! be worse than nothing.
 //!
@@ -54,6 +54,11 @@ pub(crate) fn complete(
                 fields(cx, ty, out);
             }
         }
+        Receiver::FieldPath { names } => {
+            if let Some(ty) = path_ty(cx, names) {
+                fields(cx, ty, out);
+            }
+        }
         Receiver::Expr(node) => {
             let Some(ty) = cx.expr_ty(*node) else { return };
             fields(cx, ty, out);
@@ -98,6 +103,14 @@ fn interpolated_ty(
         ty = facts.field_at(name.text_range().start())?.ty?;
     }
     cx.known(ty)
+}
+
+/// The type of the last of `names`, a record update's field path before
+/// a `.`, from the facts (D-1645).
+fn path_ty(cx: &CompletionCx<'_>, names: &[SyntaxToken<'_>]) -> Option<Ty> {
+    let (_, facts) = cx.body()?;
+    let last = names.last()?;
+    cx.known(facts.field_at(last.text_range().start())?.ty?)
 }
 
 /// Pushes the fields of `ty` (D-071): those every constructor has with

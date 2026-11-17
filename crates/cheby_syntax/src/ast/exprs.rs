@@ -266,10 +266,32 @@ impl<'t> RecordExpr<'t> {
 }
 
 impl<'t> FieldInit<'t> {
-    /// The field's name.
+    /// The field's name: the first name of a field path `origin.y`
+    /// (D-1638), which is a field of the record itself.
     #[must_use]
     pub fn name(self) -> Option<Ident<'t>> {
         child_token(self.0)
+    }
+
+    /// The names of the field path, in order: one for a plain field,
+    /// `origin` and `y` for `origin.y` (D-1638).
+    #[must_use]
+    pub fn path(self) -> AstTokens<'t, Ident<'t>> {
+        AstTokens::new(self.0)
+    }
+
+    /// The last name of the field path, which a punned field binds:
+    /// `origin.y` alone means `origin.y: y` (D-113, D-1640).
+    #[must_use]
+    pub fn last_name(self) -> Option<Ident<'t>> {
+        self.path().last()
+    }
+
+    /// Whether the field is a path of more than one name, `origin.y`
+    /// (D-1638).
+    #[must_use]
+    pub fn is_path(self) -> bool {
+        token(self.0, SyntaxKind::DOT).is_some()
     }
 
     /// The value. `None` when punned: `Point { x }` means `Point { x: x }`

@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @flags: --reuse-report
+// @decisions: D-1642
+//! A record update through a field path reuses a uniquely owned value in
+//! place at every level of the path (§9.3).
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Player {
+  position: Point,
+  moves: Int,
+}
+
+fn step(player: Player) -> Player {
+  Player { ..player, position.x: player.position.x + 1, moves: player.moves + 1 }
+}
+
+fn main() {
+  let player = Player { position: Point { x: 0, y: 0 }, moves: 0 }
+  let moved = step(step(player))
+  io::println("{moved:?}")
+}

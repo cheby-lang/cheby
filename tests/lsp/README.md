@@ -124,6 +124,10 @@ The goldens under `hover/`, `definition/`, `references/`, `highlight/`, `hierarc
 
 Paths are relative to the package, and materialized std files show as `<std>/…`, so goldens hold no absolute path (D-264). The server's version in `serverInfo` shows as `<version>`. Locations of `references` and the edits of `rename` are sorted by path, line and column.
 
+### Field paths
+
+The goldens under `field_paths/` pin what the server does with a record update's field paths (D-1645). `names` checks that each name of a path is a field of its own step's type, for hover, definition and references, and that the last name of a punned path is also its variable. `use_field_path` checks the `refactor.rewrite` action "Use a field path". It flattens every level of a nested update of the same base's field, and it is not offered for a base that is a call, for an inner base that is another value, or when a comment would be lost. Its markers sit outside the updates for that reason. `completion/dot/field_path` checks completion after a `.` of a path.
+
 ### Constants
 
 The goldens under `constants/` pin plan W9: constants are evaluated by a child process (D-1349, D-1410), and its diagnostics and values reach the client. Each waits for `cheby/idle` with `@steps`, except `std_constant_shows_initializer`, since std constants show their initializer as written and no child evaluates them (D-1413).

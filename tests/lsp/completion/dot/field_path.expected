@@ -1,0 +1,48 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "message": "expected a field name, found `}`",
+      "range": {
+        "end": {
+          "character": 43,
+          "line": 27
+        },
+        "start": {
+          "character": 42,
+          "line": 27
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:21:34 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "x | Field | Int",
+    "y | Field | Int"
+  ]
+}
+
+== src/main.cheby:21:25 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "position | Field | Point",
+    "moves | Field | Int"
+  ]
+}
+
+== src/main.cheby:28:42 completion
+{
+  "isIncomplete": false,
+  "items": [
+    "position | Field | Point",
+    "moves | Field | Int"
+  ]
+}

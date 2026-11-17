@@ -769,7 +769,8 @@ impl Cx<'_, '_> {
                         RecordEntry::Field(field) => match field.value() {
                             Some(value) => self.expr(value)?,
                             None => {
-                                if let Some(name) = field.name() {
+                                // A punned path binds its last name (D-1640).
+                                if let Some(name) = field.last_name() {
                                     let res = self.name_ref(name)?;
                                     self.res.names.insert(field.syntax().id(), res);
                                 }

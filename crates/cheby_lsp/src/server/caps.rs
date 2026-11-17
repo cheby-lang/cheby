@@ -15,13 +15,13 @@
 //! at `initialized` when the client allows dynamic registration (A §8.1).
 
 use lsp_types::{
-    CallHierarchyServerCapability, CompletionOptions, DeclarationCapability, DocumentLinkOptions,
-    FoldingRangeProviderCapability, HoverProviderCapability, InlayHintOptions,
-    InlayHintServerCapabilities, OneOf, PositionEncodingKind, SaveOptions,
-    SelectionRangeProviderCapability, ServerCapabilities, SignatureHelpOptions,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, TypeDefinitionProviderCapability, WorkDoneProgressOptions,
-    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    CallHierarchyServerCapability, CodeActionKind, CodeActionOptions, CodeActionProviderCapability,
+    CompletionOptions, DeclarationCapability, DocumentLinkOptions, FoldingRangeProviderCapability,
+    HoverProviderCapability, InlayHintOptions, InlayHintServerCapabilities, OneOf,
+    PositionEncodingKind, SaveOptions, SelectionRangeProviderCapability, ServerCapabilities,
+    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TypeDefinitionProviderCapability,
+    WorkDoneProgressOptions, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use serde_json::Value;
 
@@ -121,7 +121,8 @@ impl ClientCaps {
 /// The server's capabilities: the position encoding, incremental text sync
 /// with open, close and save, which is what diagnostics need, the requests
 /// of `routes` (plan §1.10), and workspace folders with their changes
-/// (A §6.5). Completion triggers on `.`, `:`, `@` and `>` and resolves
+/// (A §6.5). Code actions are `refactor.rewrite` only, sent whole
+/// (D-1645). Completion triggers on `.`, `:`, `@` and `>` and resolves
 /// its items' docs later, signature help triggers on `(` and `,`
 /// (D-1379, X §9.2), and inlay hints are whole when sent (plan §1.10).
 /// Semantic tokens are `full` and `range` with no `delta` (D-1396).
@@ -144,6 +145,11 @@ pub(crate) fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilit
         selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_range_formatting_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::REFACTOR_REWRITE]),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+            resolve_provider: Some(false),
+        })),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some([".", ":", "@", ">"].map(str::to_owned).to_vec()),
@@ -201,6 +207,7 @@ mod tests {
             "textDocument/selectionRange" => "selectionRangeProvider",
             "textDocument/formatting" => "documentFormattingProvider",
             "textDocument/rangeFormatting" => "documentRangeFormattingProvider",
+            "textDocument/codeAction" => "codeActionProvider",
             "textDocument/hover" => "hoverProvider",
             "textDocument/completion" | "completionItem/resolve" => "completionProvider",
             "textDocument/signatureHelp" => "signatureHelpProvider",

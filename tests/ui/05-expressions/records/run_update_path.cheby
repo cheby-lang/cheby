@@ -1,0 +1,70 @@
+// @mode: run-pass
+// @decisions: D-1638, D-1639, D-1640, D-1641, D-1642
+//! A record update replaces a field inside a field through a field path:
+//! `base` is evaluated once and first, then the values in the order
+//! written, whatever their paths. Paths that share a beginning update one
+//! copy, a punned path binds its last name, and every record on a path
+//! keeps its variant (§5.11.2).
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Labeled<T> {
+  value: T,
+  label: String,
+}
+
+type Shape {
+  Circle { center: Point, radius: Int },
+  Rect { corner: Point, center: Point },
+}
+
+type Player {
+  position: Point,
+  moves: Int,
+}
+
+type Game {
+  player: Player,
+  shape: Shape,
+  marker: Labeled<Point>,
+  turn: Int,
+}
+
+type Board = Game
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn start() -> Game {
+  io::println("evaluating base")
+  Game {
+    player: Player { position: Point { x: 0, y: 0 }, moves: 0 },
+    shape: Rect { corner: Point { x: 1, y: 1 }, center: Point { x: 2, y: 2 } },
+    marker: Labeled { value: Point { x: 3, y: 3 }, label: "m" },
+    turn: 0,
+  }
+}
+
+fn main() {
+  let y = 9
+  let game = Game {
+    ..start(),
+    player.position.x: trace("x", 1),
+    turn: trace("turn", 1),
+    player.moves: trace("moves", 1),
+    shape.center.y: trace("center", 5),
+    marker.value.y,
+  }
+  io::println("{game.player:?}")
+  io::println("{game.shape:?}")
+  io::println("{game.marker:?} {game.turn}")
+  let board = Board { ..game, shape.center.x: 7 }
+  io::println("{board.shape:?} {game.shape:?}")
+}

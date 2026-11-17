@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-1643
+//! A construction sets every field directly, so it does not take a field
+//! path; only a record update does (§5.11.1).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  origin: Point,
+  size: Int,
+}
+
+fn main() {
+  let shape = Shape { origin.x: 1, size: 2 }
+  assert shape.size == 2
+}

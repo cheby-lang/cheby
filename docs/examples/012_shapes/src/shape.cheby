@@ -39,11 +39,13 @@ fn rename(shape: Shape, label: String) -> Shape {
 /// Moves `shape` straight down, or up, so that its origin is at
 /// height `y`.
 fn drop_to(shape: Shape, y: Float) -> Shape {
-  // Updates nest. The inner one replaces `y` and keeps `x`, and the
-  // outer one replaces `origin` and keeps the rest of the shape.
-  // `Point` is declared in the `point` module, so its name is
-  // qualified, as in a construction.
-  Shape { ..shape, origin: point::Point { ..shape.origin, y } }
+  // A field path updates a field inside a field. `origin.y` replaces
+  // the `y` of the shape's origin, keeps its `x` and keeps the rest of
+  // the shape. It means the nested update
+  // `Shape { ..shape, origin: point::Point { ..shape.origin, y } }`,
+  // without naming `Point`. As with a plain field, `origin.y` alone is
+  // short for `origin.y: y`.
+  Shape { ..shape, origin.y }
 }
 
 /// Makes `shape` `factor` times larger, keeping its origin in place.

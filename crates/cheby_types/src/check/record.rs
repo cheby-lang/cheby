@@ -17,7 +17,7 @@ use cheby_syntax::ast::{self, AstNode, AstToken, FieldInit, RecordEntry};
 use super::{BodyCx, Expected};
 use crate::facts::FieldSite;
 use crate::infer::{InferTy, VarKind, instantiate};
-use crate::thir::{ExprId, ExprKind, UpdateField};
+use crate::thir::{CtorIndexes, ExprId, ExprKind, UpdateField};
 
 /// A constructor whose signature and type checked, as the pattern and
 /// record checkers see it.
@@ -58,6 +58,14 @@ impl CtorInfo {
 /// A field common to every variant: its index in each constructor and
 /// its type (D-071).
 type CommonField = (Box<[(DefId, u32)]>, Ty);
+
+/// The steps of a field path, each the field's index in every constructor
+/// of its type, and the type of its last field (D-1639).
+type PathSteps = (Vec<CtorIndexes>, InferTy);
+
+/// A named type whose field a path updates next: its definition,
+/// constructors and type arguments.
+type StepType = (DefId, Vec<CtorInfo>, Vec<InferTy>);
 
 /// The named fields of `all` whose index is not in `seen`.
 pub(super) fn unlisted<'n>(all: &[&'n str], seen: &[(u32, Span)]) -> Vec<&'n str> {
@@ -362,6 +370,11 @@ impl BodyCx<'_> {
             let found = info.named_field(names, name.text());
             let label = (name.span(), name.text());
             let (owner, ctor) = (info.ty_def, Some(info.def));
+            if field.is_path() {
+                let index = found.map(|(index, _)| (index, name.span()));
+                seen.extend(self.path_in_construction(field, name.text(), index)?);
+                continue;
+            }
             let Some((index, field_ty)) = found else {
                 self.note_field_label(label, FieldSite::Init, owner, ctor, None);
                 self.unknown_field(&info, name.text(), name.span(), &all_fields);
@@ -418,6 +431,39 @@ impl BodyCx<'_> {
             self.inst.push((id, args));
         }
         Ok(id)
+    }
+
+    /// E0059 for a field path `origin.y` in a construction, which only a
+    /// record update takes (D-1643). Its value is checked alone, and
+    /// `index`, its first field's, comes back to count as initialized, so
+    /// no missing field is reported for it.
+    fn path_in_construction(
+        &mut self,
+        field: FieldInit<'_>,
+        first: &str,
+        index: Option<(u32, Span)>,
+    ) -> Result<Option<(u32, Span)>, Ice> {
+        let shown = path_text(field);
+        self.report(
+            Diagnostic::new(
+                codes::INVALID_RECORD,
+                format!("the field path `{shown}` needs a record update"),
+            )
+            .with_primary(
+                field_path_span(field).unwrap_or_else(|| field.significant_span()),
+                "",
+            )
+            .with_note(
+                "a construction sets every field directly; a path updates a field inside \
+                 another one and keeps the rest (§5.11.2)",
+            )
+            .with_help(format!(
+                "set `{first}` to a whole value, or start the braces with `..base` to update \
+                 a copy"
+            )),
+        );
+        self.field_value(field, None)?;
+        Ok(index)
     }
 
     /// E0059 for braces after a unit or positional constructor.
@@ -540,42 +586,40 @@ impl BodyCx<'_> {
             return self.propagated_error_expr(span);
         };
         let mut fields: Vec<UpdateField> = Vec::new();
-        let mut seen: Vec<(&str, Span)> = Vec::new();
+        let mut seen: Vec<(Vec<&str>, Span)> = Vec::new();
         for field in rec.fields() {
-            let Some(name) = field.name() else {
+            let path: Vec<ast::Ident<'_>> = field.path().collect();
+            let Some(span) = field_path_span(field) else {
                 self.errored = true;
                 continue;
             };
-            let text = name.text();
-            if let Some(&(_, first)) = seen.iter().find(|(n, _)| *n == text) {
-                self.report(
-                    Diagnostic::new(
-                        codes::INVALID_RECORD,
-                        format!("field `{text}` is listed twice"),
-                    )
-                    .with_primary(name.span(), "listed again here")
-                    .with_secondary(first, "first listed here"),
-                );
-            } else {
-                seen.push((text, name.span()));
+            let texts: Vec<&str> = path.iter().map(|name| name.text()).collect();
+            let clash = self.path_clash(&seen, &texts, span);
+            if !clash {
+                seen.push((texts, span));
             }
-            let Some((index_per_ctor, field_ty)) =
-                self.common_field(ty_def, &ctors, text, name.span(), "updated")
-            else {
-                let label = (name.span(), text);
-                self.note_field_label(label, FieldSite::Update, ty_def, None, None);
+            let Some((steps, field_ty)) = self.update_path(ty_def, &ctors, &args, &path)? else {
                 if let Some(value) = field.value() {
                     self.check_expr(value, None)?;
+                } else {
+                    // A punned path still uses its variable (D-1640).
+                    self.field_value(field, None)?;
                 }
                 continue;
             };
-            let expected = Expected::new(self.field_ty(field_ty, &args), None);
-            let label = (name.span(), text);
-            self.note_field_label(label, FieldSite::Update, ty_def, None, Some(&expected.ty));
+            let expected = Expected::new(field_ty, None);
             let value = self.field_value(field, Some(&expected))?;
+            if clash {
+                continue;
+            }
+            let mut steps = steps.into_iter();
+            let index_per_ctor = steps
+                .next()
+                .ok_or_else(|| Ice::new("a field path without a step"))?;
             fields.push(UpdateField {
                 value,
                 index_per_ctor,
+                inner: steps.collect(),
             });
         }
         self.push(
@@ -586,6 +630,135 @@ impl BodyCx<'_> {
             base_ty,
             span,
         )
+    }
+
+    /// Each step of the field path `path` of an update of `ty_def`, whose
+    /// constructors are `ctors` and type arguments `args` (D-1638,
+    /// D-1639): the field's index in every constructor of its step's
+    /// type, and the type of the last field. Each later name is a field
+    /// of the type of the field before it, which must be known here
+    /// (D-213), show its fields (§4.3.4) and have the field in every
+    /// variant with one type (D-071). `None` when a step was reported.
+    fn update_path(
+        &mut self,
+        ty_def: DefId,
+        ctors: &[CtorInfo],
+        args: &[InferTy],
+        path: &[ast::Ident<'_>],
+    ) -> Result<Option<PathSteps>, Ice> {
+        let mut steps = Vec::with_capacity(path.len());
+        let (mut def, mut ctors, mut args) = (ty_def, ctors.to_vec(), args.to_vec());
+        let mut before: Option<(ast::Ident<'_>, InferTy)> = None;
+        for &name in path {
+            let text = name.text();
+            if let Some((prev, prev_ty)) = &before {
+                let Some(next) = self.path_step(prev, prev_ty, name)? else {
+                    return Ok(None);
+                };
+                (def, ctors, args) = next;
+            }
+            let Some((index_per_ctor, field_ty)) =
+                self.common_field(def, &ctors, text, name.span(), "updated")
+            else {
+                let label = (name.span(), text);
+                self.note_field_label(label, FieldSite::Update, def, None, None);
+                return Ok(None);
+            };
+            let ty = self.field_ty(field_ty, &args);
+            let label = (name.span(), text);
+            self.note_field_label(label, FieldSite::Update, def, None, Some(&ty));
+            steps.push(index_per_ctor);
+            before = Some((name, ty));
+        }
+        Ok(before.map(|(_, ty)| (steps, ty)))
+    }
+
+    /// The type of the field `prev`, of type `ty`, whose field `name` a
+    /// path updates next: its definition, constructors and type
+    /// arguments. `None` when that type is unknown (E0057), has no named
+    /// fields (E0058) or hides them here (E0043), each reported at `name`,
+    /// or is the error type.
+    fn path_step(
+        &mut self,
+        prev: &ast::Ident<'_>,
+        ty: &InferTy,
+        name: ast::Ident<'_>,
+    ) -> Result<Option<StepType>, Ice> {
+        let (text, prev_text) = (name.text(), prev.text());
+        let Some(known) = self.known_ty(ty)? else {
+            self.report(
+                Diagnostic::new(codes::TYPE_ANNOTATION_NEEDED, "type annotation needed")
+                    .with_primary(
+                        prev.span(),
+                        format!("the type of `{prev_text}` must be known here to update its field `{text}`"),
+                    )
+                    .with_note(
+                        "field names are not unique across types, so the type must come from an \
+                         annotation, a signature or a use checked earlier (D-213)",
+                    )
+                    .with_help("annotate the type of the updated value"),
+            );
+            return Ok(None);
+        };
+        if known == InferTy::ERROR {
+            self.propagated = true;
+            return Ok(None);
+        }
+        let parts = self.named_parts(&known)?;
+        let ctors = match parts {
+            Some((def, _)) => self.adt_ctors(def)?,
+            None => None,
+        };
+        let (Some((def, args)), Some(ctors)) = (parts, ctors) else {
+            self.no_fields(&known, text, name.span(), prev.span());
+            return Ok(None);
+        };
+        if !self.check_structure(def, Structure::Fields, name.span())? {
+            return Ok(None);
+        }
+        Ok(Some((def, ctors, args.into_vec())))
+    }
+
+    /// Whether the field path `path` at `span` repeats or overlaps one of
+    /// `seen`, which is E0059 (D-1641): a path must not equal another or
+    /// start with it.
+    fn path_clash(&mut self, seen: &[(Vec<&str>, Span)], path: &[&str], span: Span) -> bool {
+        let Some((other, first)) = seen
+            .iter()
+            .find(|(other, _)| other.starts_with(path) || path.starts_with(other))
+        else {
+            return false;
+        };
+        let (shown, other_shown) = (path.join("."), other.join("."));
+        let diag = if other.len() == path.len() {
+            Diagnostic::new(
+                codes::INVALID_RECORD,
+                format!("field `{shown}` is listed twice"),
+            )
+            .with_primary(span, "listed again here")
+            .with_secondary(*first, "first listed here")
+        } else {
+            let (whole, inner) = if other.len() < path.len() {
+                (&other_shown, &shown)
+            } else {
+                (&shown, &other_shown)
+            };
+            Diagnostic::new(
+                codes::INVALID_RECORD,
+                format!("`{whole}` is replaced, so `{inner}` cannot be updated too"),
+            )
+            .with_primary(span, "overlaps an earlier field")
+            .with_secondary(*first, "listed here")
+            .with_note(
+                "in one record update, a field is either replaced or updated through paths, \
+                 not both (D-1641)",
+            )
+            .with_help(format!(
+                "drop one of them, or set `{whole}` to a value that has the change"
+            ))
+        };
+        self.report(diag);
+        true
     }
 
     /// The fields of an update that cannot be checked against a type:
@@ -1048,6 +1221,19 @@ impl BodyCx<'_> {
         }
         self.report(diag);
     }
+}
+
+/// The span of `field`'s path, from its first name to its last.
+fn field_path_span(field: FieldInit<'_>) -> Option<Span> {
+    let first = field.name()?.span();
+    let last = field.last_name()?.span();
+    Some(Span::new(first.file, first.range.cover(last.range)))
+}
+
+/// `field`'s path as written without spaces: `origin.y`.
+fn path_text(field: FieldInit<'_>) -> String {
+    let names: Vec<&str> = field.path().map(AstToken::text).collect();
+    names.join(".")
 }
 
 #[cfg(test)]

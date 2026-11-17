@@ -1,0 +1,30 @@
+error[E0059]: `origin` is replaced, so `origin.y` cannot be updated too
+  --> tests/ui/05-expressions/records/update_path_overlap.cheby:18:31
+   |
+18 |   Shape { ..shape, origin: p, origin.y: 1 }
+   |                    ------     ^^^^^^^^ overlaps an earlier field
+   |                    |
+   |                    listed here
+   |
+   = note: in one record update, a field is either replaced or updated through paths, not both (D-1641)
+   = help: drop one of them, or set `origin` to a value that has the change
+
+error[E0059]: `origin` is replaced, so `origin.y` cannot be updated too
+  --> tests/ui/05-expressions/records/update_path_overlap.cheby:22:33
+   |
+22 |   Shape { ..shape, origin.y: 1, origin: p }
+   |                    --------     ^^^^^^ overlaps an earlier field
+   |                    |
+   |                    listed here
+   |
+   = note: in one record update, a field is either replaced or updated through paths, not both (D-1641)
+   = help: drop one of them, or set `origin` to a value that has the change
+
+error[E0059]: field `origin.y` is listed twice
+  --> tests/ui/05-expressions/records/update_path_overlap.cheby:26:42
+   |
+26 |   Shape { ..shape, origin.y: 1, size: 2, origin.y: 3 }
+   |                    --------              ^^^^^^^^ listed again here
+   |                    |
+   |                    first listed here
+

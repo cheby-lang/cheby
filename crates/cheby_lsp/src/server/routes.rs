@@ -15,8 +15,8 @@ use super::Server;
 use crate::features::handlers::nav::NavEnv;
 use crate::features::handlers::workspace_symbol::StdSymbols;
 use crate::features::handlers::{
-    completion, folding, format, hierarchy, hover, inlay, links, nav, selection, signature,
-    symbols, tokens, workspace_symbol,
+    code_action, completion, folding, format, hierarchy, hover, inlay, links, nav, selection,
+    signature, symbols, tokens, workspace_symbol,
 };
 use crate::features::ide::completion::StdAccess;
 use crate::features::ide::hover::StdDocs;
@@ -110,6 +110,12 @@ const QUERIES: &[Route] = &[
     Route {
         method: "textDocument/rangeFormatting",
         class: Class::Text(format::range_formatting),
+        fallback: null,
+        edits: true,
+    },
+    Route {
+        method: "textDocument/codeAction",
+        class: Class::Text(code_action::code_action),
         fallback: null,
         edits: true,
     },

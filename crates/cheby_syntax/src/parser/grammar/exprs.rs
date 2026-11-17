@@ -284,6 +284,11 @@ fn path_or_record(p: &mut Parser<'_>, r: Restrictions) -> CompletedMarker {
             } else {
                 let m = p.start();
                 p.bump(LOWER_IDENT);
+                // A field path `origin.y` (D-1638, D-1644). Only a record
+                // update takes one, which the checker enforces (D-1643).
+                while p.eat(DOT) {
+                    path_field_name(p);
+                }
                 if p.eat(COLON) {
                     expr(p);
                 }
@@ -293,6 +298,19 @@ fn path_or_record(p: &mut Parser<'_>, r: Restrictions) -> CompletedMarker {
         return m.complete(p, RECORD_EXPR);
     }
     m.complete(p, PATH_EXPR)
+}
+
+/// A name after a `.` of a field path. Unlike field access, a number is a
+/// grammar error here, as in `tree-sitter-cheby` (D-424).
+fn path_field_name(p: &mut Parser<'_>) {
+    if p.at(LOWER_IDENT) {
+        p.bump(LOWER_IDENT);
+    } else {
+        p.expected("a field name");
+        if p.at(UPPER_IDENT) {
+            p.bump(UPPER_IDENT);
+        }
+    }
 }
 
 fn expr_or_spread(p: &mut Parser<'_>) {
