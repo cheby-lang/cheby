@@ -1,0 +1,3 @@
+1970-01-01T00:00:00Z WARN src/server.cheby:7:3: from a constant port=8080 host="my host"
+{"time":"1970-01-01T00:00:00Z","level":"warn","message":"from a constant","location":"src/server.cheby:7:3","fields":{"port":8080,"host":"my host"}}
+["ok", "error"] Ok(Debug) Less [port=8080, host="my host"]

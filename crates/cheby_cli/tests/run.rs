@@ -183,28 +183,27 @@ fn compile_errors_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Unsupported.\n\nimport std::io\nimport std::log\n\nfn main() {\n  io::println(\"never\")\n}\n",
+                "//! A type error.\n\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  io::println(1)\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
-    // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
-    // of an unshipped std module stays E0038 (D-480). Tier 3 ships whole
-    // and `std::context` ships with M4's native work, so `std::log` is the
-    // planned module of the probe (D-989, D-1213, D-1575).
+    // No std module is planned once `std::log` ships, so the probe is a
+    // type error, not E0038 (D-1633).
     assert!(
         out.stderr
-            .starts_with("error[E0038]: the module `std::log` is not supported yet"),
+            .starts_with("error[E0047]: mismatched types\n --> src/main.cheby:7:15\n"),
         "{}",
         out.stderr
     );
     assert_eq!(out.status, Some(1));
 }
 
-/// A construct that the compiler cannot run yet, in code that `main`
-/// reaches, is a compile error at the construct with status 1, never an
-/// internal error, whichever phase finds it (D-464, D-480, D-510).
+/// A compile error in a module that `main` reaches, such as a construct
+/// that the compiler cannot run yet, is reported at its place with status
+/// 1, never as an internal error, whichever phase finds it (D-464, D-480,
+/// D-510).
 #[test]
 fn unsupported_constructs_reached_from_main_exit_with_one() {
     let dir = package(
@@ -217,21 +216,18 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             ),
             (
                 "src/pick.cheby",
-                "//! Reaches an unshipped module.\n\nimport std::log\n\npub fn pick(text: String) -> String {\n  text\n}\n",
+                "//! Imports a module that does not exist.\n\nimport std::ioo\n\npub fn pick(text: String) -> String {\n  text\n}\n",
             ),
         ],
     );
     let out = cheby(&dir, &["run"]);
     assert_eq!(out.stdout, "");
-    // MIR lowering reports no E0038 since `dyn` lowers (D-554); an import
-    // of an unshipped std module in a module `main` reaches stays E0038
-    // (D-480), with `std::log` the planned one since tier 3 ships whole
-    // and `std::context` ships with M4's native work (D-989, D-1213,
-    // D-1575).
+    // No std module is planned once `std::log` ships, so the error in the
+    // module `main` reaches is an import of a module that does not exist,
+    // not E0038 (D-480, D-1633).
     assert!(
-        out.stderr.starts_with(
-            "error[E0038]: the module `std::log` is not supported yet\n --> src/pick.cheby:3:8\n"
-        ),
+        out.stderr
+            .starts_with("error[E0039]: there is no module `std::ioo`\n --> src/pick.cheby:3:8\n"),
         "{}",
         out.stderr
     );

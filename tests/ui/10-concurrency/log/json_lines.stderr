@@ -1,0 +1,3 @@
+{"time":"2026-11-17T10:00:00Z","level":"info","message":"no fields","location":"tests/ui/10-concurrency/log/json_lines.cheby:27:3","fields":{}}
+{"time":"2026-11-17T10:00:00Z","level":"warn","message":"each kind","location":"tests/ui/10-concurrency/log/json_lines.cheby:28:3","fields":{"text":"a \"quoted\"\nline","shown":"5","count":-9007199254740991,"half":0.5,"big":1.0e21,"nan":null,"up":null,"down":null,"ok":true,"failed":false,"point":"Point { x: 1, y: 2 }"}}
+{"time":"2026-11-17T10:00:00Z","level":"error","message":"a field named level","location":"tests/ui/10-concurrency/log/json_lines.cheby:41:3","fields":{"level":"not the record's"}}

@@ -1,0 +1,10 @@
+error[E0068]: the constant `quiet` has a type that contains a function
+  --> tests/ui/04-declarations/constants/log_logger_constant.cheby:10:14
+   |
+10 | const quiet: log::Logger = log::silent_logger()
+   |              ^^^^^^^^^^^ this type contains `fn(log::Record) -> Nil`
+   |
+   = note: `log::Form` has a field of type `fn(log::Record) -> Nil`
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold functions
+   = help: declare a function instead, which can be called wherever the constant would be used
+

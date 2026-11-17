@@ -281,9 +281,10 @@ fn index_covers_every_identifier_of_std() {
     assert!(stray.is_empty(), "{stray:#?}");
 }
 
-/// F §5.3's `ATTR` row on `std::context`: the names in `@std_hooks(…)` and
-/// in `@std_initializer(…)` are uses of the module's functions, so go to
-/// definition, references and rename see them (D-1599).
+/// F §5.3's `ATTR` row on `std::context` and `std::log`: the names in
+/// `@std_hooks(…)`, `@std_initializer(…)` and `@std_call_site(…)` are uses
+/// of the module's functions, so go to definition, references and rename
+/// see them (D-1599, D-1628).
 #[test]
 #[cfg_attr(
     windows,
@@ -293,42 +294,51 @@ fn attribute_arguments_name_functions_of_the_module() {
     let base = StdBase::build(Arc::new(Globals::new())).expect("std checks");
     let analyzed = Analyzed::new(Arc::clone(base.snapshot()));
     let index = analyzed.index();
-    let context = module_named(index, &std_path("context"));
-    let view = analyzed
-        .snapshot
-        .module(context.module)
-        .expect("the module");
-    let text = view.tree().expect("a tree").text();
-    // The range of `word` in the first `line` that starts a line.
-    let within = |line: &str, word: &str| {
-        let start = text
-            .match_indices(&format!("\n{line}"))
-            .map(|(at, _)| at.saturating_add(1))
-            .next()
-            .unwrap_or_else(|| panic!("no line {line}"));
-        let offset = line
-            .find(word)
-            .unwrap_or_else(|| panic!("no {word} in {line}"));
-        TextRange::at(
-            u32::try_from(start.saturating_add(offset)).unwrap(),
-            u32::try_from(word.len()).unwrap(),
-        )
-    };
-    let occurrence = |range: TextRange| {
-        let Classified::Occurrence(o) = context.classify(range) else {
-            panic!("{range:?}: {:?}", context.classify(range));
-        };
-        (context.entry(o.symbol).unwrap().symbol.clone(), o.role)
-    };
-    for (attr, word, decl) in [
-        ("@std_hooks(equal, hash, debug)", "hash", "fn hash<T>"),
-        ("@std_initializer(key_at)", "key_at", "fn key_at<T>"),
+    for (module, attr, word, decl) in [
         (
+            "context",
+            "@std_hooks(equal, hash, debug)",
+            "hash",
+            "fn hash<T>",
+        ),
+        (
+            "context",
+            "@std_initializer(key_at)",
+            "key_at",
+            "fn key_at<T>",
+        ),
+        (
+            "context",
             "@std_initializer(key_without_default_at)",
             "key_without_default_at",
             "fn key_without_default_at<T>",
         ),
+        ("log", "@std_call_site(info_at)", "info_at", "fn info_at"),
     ] {
+        let found = module_named(index, &std_path(module));
+        let view = analyzed.snapshot.module(found.module).expect("the module");
+        let text = view.tree().expect("a tree").text();
+        // The range of `word` in the first `line` that starts a line.
+        let within = |line: &str, word: &str| {
+            let start = text
+                .match_indices(&format!("\n{line}"))
+                .map(|(at, _)| at.saturating_add(1))
+                .next()
+                .unwrap_or_else(|| panic!("no line {line}"));
+            let offset = line
+                .find(word)
+                .unwrap_or_else(|| panic!("no {word} in {line}"));
+            TextRange::at(
+                u32::try_from(start.saturating_add(offset)).unwrap(),
+                u32::try_from(word.len()).unwrap(),
+            )
+        };
+        let occurrence = |range: TextRange| {
+            let Classified::Occurrence(o) = found.classify(range) else {
+                panic!("{range:?}: {:?}", found.classify(range));
+            };
+            (found.entry(o.symbol).unwrap().symbol.clone(), o.role)
+        };
         let used = within(attr, word);
         let declared = within(decl, word);
         let (symbol, role) = occurrence(used);
@@ -338,7 +348,7 @@ fn attribute_arguments_name_functions_of_the_module() {
         let ranges: Vec<TextRange> = refs
             .hits
             .iter()
-            .filter(|hit| hit.module.module == context.module)
+            .filter(|hit| hit.module.module == found.module)
             .map(|hit| hit.occurrence.range)
             .collect();
         assert!(

@@ -45,7 +45,7 @@ pub type Logger
 - **Names.** Use the module qualified. Its functions have common names, such as `error`, `debug` and `int`, and an item import of one bans that name for locals in the importing module (§5.2.3, D-062). A module that imports `std::log` cannot have a local named `log`. `std/log.cheby` itself imports `std::int`, `std::float` and `std::bool` under the plural aliases `ints`, `floats` and `bools` (D-1053).
 - **Constants.** The log functions, `with_fields` and `capture` are E0077 in a constant, because they read the context. Every other function of the module is plain Cheby, and the logger builders run in the initializer of [`logger`](#logger). A constant cannot hold a `Logger`, whose type holds a function (§4.5).
 - **Written in Cheby.** The module has no kernels. It is written over `std::context`, `std::time`, `std::channel` and `io::write_stderr`, so it runs on JS once those do (D-1614). The sixteen log functions carry the standard-library-only attribute `@std_call_site`, through which the compiler passes the place of each call (§4.8, D-1628). A backtrace names their frames `std::log::info_at` and the like, which are the functions the compiler calls in their place.
-- **Status.** This module is in tier 4. It is specified and not implemented yet: until it ships, `import std::log` reports E0038 (D-1575, D-1633).
+- **Status.** This module is in tier 4. It is implemented on native, in `std/log.cheby`, and it needs no JS file of its own: its tests pass on Node once `std::context`, `std::time` and `std::channel` do. No std module is planned since it shipped (D-1633, D-1635).
 
 The examples use this time and this record:
 

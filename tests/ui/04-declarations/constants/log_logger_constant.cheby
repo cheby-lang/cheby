@@ -1,0 +1,14 @@
+// @mode: check-fail
+// @decisions: D-1634
+//! A `Logger` holds a function, so a constant cannot hold one, built-in or
+//! not. The key `log::logger` may, since a key's type may hold a function
+//! (§4.5).
+
+import std::io
+import std::log
+
+const quiet: log::Logger = log::silent_logger()
+
+fn main() {
+  io::println("{quiet:?}")
+}

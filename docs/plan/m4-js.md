@@ -55,7 +55,7 @@ This workstream is built on native first, as one piece of work, before the JS ba
 - Captured contexts: the external type `Context` with `capture`, `with`, which replaces the fiber's context while its body runs, and `empty` (D-1566, D-1568, ADR-0080).
 - `std::time`'s clocks in context, with timers left on the runtime's monotonic clock, and the readers `now_on` and `monotonic_on` (D-1047, D-1570). `now` and `monotonic` read the system clock through a kernel that looks at the context, with no lookup in Cheby unless a clock is provided (D-1597).
 - `std::random`'s seeded stream per fiber, held in fiber fields beside the bindings, advanced by each host draw, and derived for a spawned fiber and for a capture from the fiber's state and spawn number without advancing the fiber's stream (D-1048, D-1567, D-1574).
-- `std::log` replaces `std::context` in the compiler's list of planned std modules, and E0038's probes and `E0038.md` import it (D-1575).
+- `std::log` ships on native, so the compiler's list of planned std modules is empty. E0038 stays tested on a made-up module, and `E0038.md` says that no current toolchain emits it (D-1633).
 - The example `request_context`, under the next free number, whose `test.toml` names M3, so it binds at once, as the new UI tests and REPL transcripts do (D-1576, D-1582).
 - The cost gate: the fiber group of `bench/runtime` and a loop of `time::now` calls in a new group `bench/runtime/time/`, timed before and after on one machine. Any one benchmark whose median run time of `main` reaches a ratio of 1.05, after a rerun, stops the work (D-1577, D-1586). The gate also reads `rc/map_updates` and the `collections` group, and the final measurement reports the new build under three provided values against an empty context, with no stop line (D-1592, D-1596).
 - The tests of these parts in `context.md`, `time.md` and `random.md` leave `PENDING_SPEC_TESTS` when the native side passes them (D-741, D-1049, D-1563).
@@ -96,7 +96,7 @@ The JS work, 4.1 to 4.4, has not started. Two workstreams run ahead of it. The L
 - The key rewrite through `@std_initializer`, E0080 and E0081 with their explanations and UI tests, and the key's identity in the REPL and after `:reload` (D-1580, D-1589, D-1599, D-1600).
 - Scopes and entries restore the context, and a test pins the runtime's catch points (D-1573, D-1594).
 - `std::time`'s clocks in context, with D-1597's kernels, and `std::random`'s seeded streams, where a spawn takes its number once the fiber exists and a capture once its object is allocated (D-1047, D-1048, D-1567, D-1585, D-1597).
-- `std::log` is the planned std module, and E0038's probes import it (D-1575).
+- `std::log` ships on native, so no std module is planned, and E0038's probes use the made-up module `unshipped_probe` (D-1633).
 - The tests of `context.md`, `time.md` and `random.md` run, so none of them is in `PENDING_SPEC_TESTS`. Example 033, `request_context`, passes as an M3 example (D-1582).
 
 Still to come for 4.6: the final reading of the cost gate (D-1577, D-1586, D-1592, D-1596) and the full CI run, then, with 4.3, the JS side: `context.mjs` over `map.mjs`, the stream and clock kernels of `random.mjs` and `time.mjs`, and the context of a foreign callback's fiber, whose stream state per call is still open (D-1569).

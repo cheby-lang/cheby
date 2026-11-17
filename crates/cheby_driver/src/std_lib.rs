@@ -125,6 +125,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/list.cheby"),
     },
     StdModule {
+        path: "log",
+        source: include_str!("../../../std/log.cheby"),
+    },
+    StdModule {
         path: "map",
         source: include_str!("../../../std/map.cheby"),
     },
@@ -244,12 +248,12 @@ pub const STAGED_STD_MODULES: &[StdModule] = &[];
 /// Modules the standard-library spec plans that `std/` does not ship yet.
 /// Importing one is E0038, not E0039 (D-451). Sorted.
 ///
-/// Tier 3 ships whole in M3 (D-989), and tier 4's `std::context` ships
-/// with M4's native work (D-1049, D-1563), so only `std::log`, which
-/// reads its logger from context (D-1046) and is not specified yet,
-/// stays, so that `import std::log` keeps D-480's "not supported yet".
-/// D-1295, D-1575.
-pub const PLANNED_STD_MODULES: &[&str] = &["log"];
+/// Empty, which is D-989's end state: tier 3 shipped whole in M3, and
+/// tier 4's `std::context` and `std::log` shipped on native before M4's
+/// JS runtime (D-1049, D-1563, D-1614). E0038 stays in the compiler for a
+/// later tier, and this crate's unit tests keep it tested on the made-up
+/// module of `PROBE_PLANNED_STD_MODULES` (D-1296, D-1633).
+pub const PLANNED_STD_MODULES: &[&str] = &[];
 
 /// Spec tests of shipped modules that `std/` may lack while a milestone is
 /// in progress (D-728), as `(module, test name, milestone)`: the module's
@@ -623,8 +627,8 @@ mod tests {
     /// `std::url`, `std::base64` and `std::hex` (D-1054), and
     /// `std::process` (D-1022), each with its file in `std/`. No tier-3
     /// module stays planned. Tier 4's `std::context` ships with M4's native
-    /// work (D-1049, D-1563), and the planned list holds only `std::log`
-    /// (D-1295, D-1575).
+    /// work (D-1049, D-1563), and `std::log` ships on native before M4's JS
+    /// runtime, so the planned list is empty (D-1614, D-1633).
     #[test]
     fn m3_tier3_modules_ship() {
         for path in [
@@ -653,8 +657,35 @@ mod tests {
         );
         assert!(find("context").is_some(), "std::context is not shipped");
         assert!(!is_planned("context"), "std::context is still planned");
-        assert_eq!(PLANNED_STD_MODULES, &["log"]);
-        assert!(find("log").is_none(), "std::log is shipped");
+        assert!(
+            repo().join(display_path("log")).exists(),
+            "{} is missing",
+            display_path("log")
+        );
+        assert!(find("log").is_some(), "std::log is not shipped");
+        assert!(!is_planned("log"), "std::log is still planned");
+        let none: &[&str] = &[];
+        assert_eq!(PLANNED_STD_MODULES, none);
+    }
+
+    /// No std module declares a `priv` constant. A decoded std interface
+    /// holds no `priv` item (D-953), so a build that takes a std module from
+    /// the cache walks through a `priv` item's mentions (D-1262) and never
+    /// evaluates a `priv` constant: code that reads one finds its slot
+    /// empty, a fatal error at run time. So `std::log`'s key of scoped
+    /// fields is package-visible (D-1619).
+    #[test]
+    fn std_declares_no_priv_constant() {
+        for module in STD_MODULES {
+            for (number, line) in module.source.lines().enumerate() {
+                assert!(
+                    !line.starts_with("priv const "),
+                    "{}:{}: a `priv` constant",
+                    display_path(module.path),
+                    number.saturating_add(1)
+                );
+            }
+        }
     }
 
     /// M2 ships tier 1's seven collections, written in Cheby (D-664,

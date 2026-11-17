@@ -1,0 +1,33 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-1626, D-1634
+//! Under `cheby test`, a test that logs to the default logger shows its
+//! lines with its captured output, also when it passes. A test that wants
+//! none uses `log::capture` or provides `log::silent_logger()` (§10.11).
+
+import std::context
+import std::duration
+import std::list
+import std::log
+import std::time
+
+fn main() {
+  Nil
+}
+
+test "a passing test shows its lines" {
+  use <- context::provide(time::clock, time::fixed_clock(time::from_unix(duration::seconds(0))))
+  log::info("shown")
+  log::debug("dropped by the default logger")
+  assert True
+}
+
+test "capture writes nothing" {
+  let (_, records) = log::capture(fn() { log::warn("captured") })
+  assert list::length(records) == 1
+}
+
+test "the silent logger writes nothing" {
+  use <- context::provide(log::logger, log::silent_logger())
+  log::error("silent")
+}

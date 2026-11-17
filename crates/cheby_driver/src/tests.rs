@@ -554,16 +554,16 @@ fn missing_and_planned_std_modules() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Imports.\n\nimport std::ioo\nimport std::log\n\nfn main() {\n  Nil\n}\n",
+                b"//! Imports.\n\nimport std::ioo\nimport std::unshipped_probe\n\nfn main() {\n  Nil\n}\n",
             ),
         ],
     );
     let rendered = check(&dir).unwrap().render();
-    // D-989, D-1213: tier 3 ships whole, and `std::context` ships with
-    // M4's native work, so `std::log` (D-1575) is the real planned module
-    // of the probe.
+    // D-1633: no real std module is planned once `std::log` ships, so the
+    // planned half uses the made-up module that only this crate's tests
+    // see (D-1296).
     assert!(
-        rendered.contains("error[E0038]: the module `std::log` is not supported yet"),
+        rendered.contains("error[E0038]: the module `std::unshipped_probe` is not supported yet"),
         "{rendered}"
     );
     assert!(
