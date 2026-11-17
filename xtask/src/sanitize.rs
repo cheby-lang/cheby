@@ -95,7 +95,7 @@ use cheby_test_support::milestone::{Expectation, Setting, VERDICTS_ENV, Verdicts
 use cheby_test_support::{example, golden, process, threads};
 
 /// The dated nightly of `nightly.yml` and `miri.yml` (D-781, D-721).
-pub(crate) const NIGHTLY: &str = "nightly-2026-10-01";
+pub(crate) const NIGHTLY: &str = "nightly-2026-11-17";
 
 /// `CHEBY_HARNESS_SCALE` of every sanitizer step (D-748, D-725).
 const HARNESS_SCALE: u32 = 10;

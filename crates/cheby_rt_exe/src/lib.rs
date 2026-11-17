@@ -10,6 +10,10 @@
 #[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// Sanitizer builds still depend on mimalloc; this keeps cargo's
+// `unused_dependencies` lint quiet in them.
+#[cfg(any(cheby_sanitize = "address", cheby_sanitize = "thread"))]
+use mimalloc as _;
 
 /// Every exported symbol of the runtime, so the archive holds them all.
 pub use cheby_runtime;

@@ -31,7 +31,7 @@
 //! mkdir -p /tmp/rc && cp target/debug/cheby /tmp/rc/cheby
 //! cd fuzz
 //! RUSTFLAGS='--cfg cheby_sanitize="address"' CHEBY_DIFF_BIN=/tmp/rc/cheby \
-//!   cargo +nightly-2026-10-01 fuzz run rc_differential -- -max_total_time=1800
+//!   cargo +nightly-2026-11-17 fuzz run rc_differential -- -max_total_time=1800
 //! ```
 //!
 //! A `cheby` built under AddressSanitizer also watches the programs, at
