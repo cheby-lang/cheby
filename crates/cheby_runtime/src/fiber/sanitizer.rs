@@ -46,7 +46,9 @@
 //! (D-878), the block cache poisons the blocks it
 //! keeps (D-880, [`poison`] and [`unpoison`]), and the
 //! shared count's last release loads where it would fence
-//! (D-879, `rc.rs`).
+//! (D-879, `rc.rs`), and an object that becomes static is kept for good
+//! (D-1637, [`keep_for_good`], from `alloc::leave_domain` and
+//! `alloc::freeze`).
 //!
 //! JIT code is not instrumented (D-721). The fields of [`SanFiber`] are
 //! atomics used with `Relaxed` only so that the type is `Send` and `Sync`
@@ -103,6 +105,9 @@ mod asan {
         pub(super) fn __lsan_register_root_region(begin: *const c_void, size: usize);
         /// Undoes one `__lsan_register_root_region` of exactly that range.
         pub(super) fn __lsan_unregister_root_region(begin: *const c_void, size: usize);
+        /// Makes the leak checker treat the heap block at `p` as reachable,
+        /// with everything it points to.
+        pub(super) fn __lsan_ignore_object(p: *const c_void);
     }
 }
 
@@ -428,6 +433,24 @@ pub(crate) fn unpoison(block: *const u8, len: usize) {
     }
     #[cfg(not(cheby_sanitize = "address"))]
     let _ = (block, len);
+}
+
+/// D-1637: tells the leak sanitizer that the heap object at `obj`, which
+/// just became static (D-454), is kept for good. A constant's objects are
+/// held only by its slot in the JIT's data memory, which the sanitizer
+/// does not scan (D-539, D-979), so without this every program that reads
+/// a constant would report them at exit (D-863: told to the sanitizer,
+/// never suppressed). What the object reaches stays reachable through it.
+#[inline(always)]
+pub(crate) fn keep_for_good(obj: *const u8) {
+    #[cfg(cheby_sanitize = "address")]
+    // SAFETY: `__lsan_ignore_object` only reads and marks the allocator's
+    // metadata of the live heap block that `obj` points into.
+    unsafe {
+        asan::__lsan_ignore_object(obj.cast());
+    }
+    #[cfg(not(cheby_sanitize = "address"))]
+    let _ = obj;
 }
 
 /// D-881: makes the leak sanitizer scan the stack slot

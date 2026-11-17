@@ -621,7 +621,8 @@ pub unsafe fn forget(word: Word) {
 
 /// Makes `word` and every object it reaches static in place (D-539): each
 /// gets count 0 and leaves the current domain once, so it is never freed
-/// and never counted as a leak. Objects that are already static, and what
+/// and never counted as a leak, and the leak sanitizer is told (D-1637).
+/// Objects that are already static, and what
 /// they reach, are left alone. Used for the results of constant evaluation
 /// before code reads them. The walk is a worklist on the heap, so a
 /// million-deep value freezes without deep Rust recursion (plan §0).
@@ -676,10 +677,12 @@ pub unsafe fn freeze(word: Word) {
         // thread in M1. It leaves the domain with its allocation's size.
         unsafe { store_rc(obj, abi::RC_STATIC) };
         charge(-1, to_u64(object_layout(shape.size).size()));
+        sanitizer::keep_for_good(obj);
     }
 }
 
-/// Removes an object that just became static from the current domain.
+/// Removes an object that just became static from the current domain,
+/// and tells the leak sanitizer it is kept for good (D-1637).
 ///
 /// # Safety
 ///
@@ -689,6 +692,7 @@ pub(crate) unsafe fn leave_domain(obj: *mut u8) {
     let shape = unsafe { shape_of(obj) };
     // The allocation's size, as `alloc_object` charged it.
     charge(-1, to_u64(object_layout(shape.size).size()));
+    sanitizer::keep_for_good(obj);
     #[cfg(debug_assertions)]
     {
         // SAFETY: forwarded from the caller.
