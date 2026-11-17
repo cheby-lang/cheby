@@ -188,8 +188,7 @@ fn written(item: &Value) -> Option<&str> {
 fn additional(item: &Value) -> &[Value] {
     item.get("additionalTextEdits")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .map_or_default(Vec::as_slice)
 }
 
 /// Whether `item` is deprecated, by its tags or its old flag.
@@ -771,8 +770,7 @@ pub fn inlay_hints(
             for edit in hint
                 .get("textEdits")
                 .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default()
+                .map_or_default(Vec::as_slice)
             {
                 let range = edit.get("range").unwrap_or(&Value::Null);
                 let (sl, sc) = at(range.get("start").unwrap_or(&Value::Null));

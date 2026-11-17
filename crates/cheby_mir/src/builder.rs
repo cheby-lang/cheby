@@ -579,8 +579,7 @@ impl FunctionBuilder {
         }
         let positions = self
             .positions
-            .map(|table| table.finish(self.entry_pos))
-            .unwrap_or_default();
+            .map_or_default(|table| table.finish(self.entry_pos));
         Ok(Function {
             key: self.key,
             abi: self.abi,

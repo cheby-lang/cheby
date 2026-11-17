@@ -828,8 +828,7 @@ impl<'a> Numbering<'a> {
     fn children_of(&self, parent: DefIndex) -> Box<[DefIndex]> {
         self.children
             .get(&parent)
-            .map(|kids| kids.iter().map(|&(_, index)| index).collect())
-            .unwrap_or_default()
+            .map_or_default(|kids| kids.iter().map(|&(_, index)| index).collect())
     }
 }
 

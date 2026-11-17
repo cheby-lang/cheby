@@ -198,8 +198,7 @@ impl Manifest {
             .map_err(|_| PackageError::too_large(MANIFEST_FILE))?;
         let text = sources
             .file(file)
-            .map(cheby_diag::SourceFile::text_arc)
-            .unwrap_or_default();
+            .map_or_default(cheby_diag::SourceFile::text_arc);
         if let Some(at) = bad_utf8 {
             diagnostics.push(
                 Diagnostic::new(codes::INVALID_MANIFEST, "`cheby.toml` is not valid UTF-8")

@@ -1,9 +1,10 @@
 # Scheduled checks on a pinned, dated nightly toolchain (D-721, D-781).
 #
-# D-277 pins every other job to stable 1.99.0. This workflow and miri.yml
+# D-277 pins every other job to the stable toolchain of rust-toolchain.toml,
+# through .github/actions/rust-toolchain. This workflow and miri.yml
 # use a dated nightly, because cargo-fuzz, the sanitizers and Miri need one
 # (D-721). The date is pinned so that a run never changes because the
-# nightly did, and it is at least 1.99-nightly, the workspace's
+# nightly did, and it is at least the nightly of the workspace's
 # `rust-version` (nightly-2026-10-01 is 1.101.0-nightly). fuzz/Cargo.toml,
 # miri.yml and xtask/src/sanitize.rs (`NIGHTLY`) name the same toolchain. A
 # scheduled run never blocks a pull request. Miri has its own workflow,
@@ -160,9 +161,7 @@ jobs:
             cheby: address
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-10-01
@@ -226,9 +225,7 @@ jobs:
         sanitizer: [thread, address]
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-10-01

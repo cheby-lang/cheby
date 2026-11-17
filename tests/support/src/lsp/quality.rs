@@ -225,8 +225,7 @@ pub fn mutants(file: &str, text: &str) -> Vec<Mutant> {
                 K::CALL_EXPR => {
                     let args: Vec<_> = n
                         .first_child_of_kind(K::ARG_LIST)
-                        .map(|list| list.children().collect())
-                        .unwrap_or_default();
+                        .map_or_default(|list| list.children().collect());
                     if let Some(&first) = args.first() {
                         let key = n.first_child().and_then(last_ident).map(|at| KeyProbe {
                             clean: at,

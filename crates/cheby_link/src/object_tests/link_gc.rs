@@ -190,7 +190,7 @@ fn link_gc_entries_are_tied_to_their_functions() {
             }
         }
         targets.sort();
-        let mut wanted = function_names.clone();
+        let mut wanted = function_names;
         wanted.sort();
         assert_eq!(targets, wanted, "{format:?}");
     }

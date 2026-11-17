@@ -286,8 +286,7 @@ fn child_text(node: roxmltree::Node<'_, '_>, name: &str) -> String {
     elements(node, &[name])
         .next()
         .and_then(|child| child.text())
-        .map(clean)
-        .unwrap_or_default()
+        .map_or_default(clean)
 }
 
 /// The text directly inside `node`, without its child elements' text.

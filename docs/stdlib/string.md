@@ -8,7 +8,7 @@ pub type String
 
 String literals, `+` and interpolation are part of the language (§2.5, §5.3.2, D-067). This module is how text is measured, searched, split and changed, since a string has no indexing (§3.5).
 
-Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim`, `words` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310). On native, case mapping uses the Rust standard library's tables and grapheme segmentation the `unicode-segmentation` crate, and a test asserts that both follow the same version (D-552). The native runtime follows Unicode 17.0.0, the version of both Rust 1.99's tables and `unicode-segmentation` 1.13.3.
+Every length, position and count in this module is in code points, and grapheme clusters appear only in `to_graphemes` and `grapheme_length` (README "Text", D-302, ADR-0050). The Unicode tables that `lowercase`, `uppercase`, `trim`, `words` and the grapheme functions need come from the one Unicode version the toolchain fixes (D-310). On native, case mapping uses the Rust standard library's tables and grapheme segmentation the `unicode-segmentation` crate, and a test asserts that both follow the same version (D-552). The native runtime follows Unicode 18.0.0, the version of both Rust 1.100's tables and `unicode-segmentation` at the commit that `Cargo.toml` patches in, until a release follows it.
 
 `String` satisfies `Add` through `add`, `Compare` through `compare` and `Show` through `show` (§8.7, §8.8).
 

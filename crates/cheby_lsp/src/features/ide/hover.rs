@@ -209,8 +209,7 @@ pub(crate) fn hover(
         printer: Printer::new(snapshot, view),
         imports: view
             .resolved()
-            .map(|resolved| resolved.scope.import_names())
-            .unwrap_or_default(),
+            .map_or_default(|resolved| resolved.scope.import_names()),
         std,
         constants,
     };

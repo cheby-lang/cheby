@@ -338,8 +338,7 @@ fn folders(params: &Value) -> Vec<PathBuf> {
     params
         .get("rootPath")
         .and_then(Value::as_str)
-        .map(|path| vec![normalize(std::path::Path::new(path))])
-        .unwrap_or_default()
+        .map_or_default(|path| vec![normalize(std::path::Path::new(path))])
 }
 
 impl Server {

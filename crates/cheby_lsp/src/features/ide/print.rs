@@ -52,8 +52,7 @@ impl<'s> Printer<'s> {
     pub(crate) fn new(snapshot: &'s Snapshot, view: ModuleView<'s>) -> Self {
         let imports = view
             .resolved()
-            .map(|resolved| resolved.scope.import_names())
-            .unwrap_or_default();
+            .map_or_default(|resolved| resolved.scope.import_names());
         Self {
             snapshot,
             view,

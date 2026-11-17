@@ -608,8 +608,7 @@ fn subdirectories(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 fn file_name(path: &Path) -> String {
     path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .map_or_default(|n| n.to_string_lossy().into_owned())
 }
 
 /// Runs the benchmark in `dir` `runs` times, then once with the counters.

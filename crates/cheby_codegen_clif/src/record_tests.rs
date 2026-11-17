@@ -457,7 +457,7 @@ fn record_decode_checks_counts() {
 fn record_same_unit_twice_same_bytes() {
     for unit in units() {
         let first = record(&unit);
-        let second = record(&unit.clone());
+        let second = record(&unit);
         assert_eq!(first, second);
         assert_eq!(first.encode(), second.encode());
     }

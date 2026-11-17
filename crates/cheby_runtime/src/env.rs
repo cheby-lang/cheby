@@ -46,8 +46,7 @@ pub(crate) extern "C" fn cheby_env_program_name() -> Word {
         let name = entry::program_name_if_set().unwrap_or_else(|| {
             std::env::args_os()
                 .next()
-                .map(|first| lossy(&first))
-                .unwrap_or_default()
+                .map_or_default(|first| lossy(&first))
         });
         values::string(&name)
     })

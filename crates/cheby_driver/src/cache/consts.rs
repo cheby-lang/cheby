@@ -1098,7 +1098,7 @@ fn misses_among(
                 let key = const_key(build, settings, limits, package, module, &s.item, &deps);
                 store.find(&path, &key)
             });
-            let reads = walked.map(|w| w.reads).unwrap_or_default();
+            let reads = walked.map_or_default(|w| w.reads);
             found.insert(path, (hit, reads));
         }
     }

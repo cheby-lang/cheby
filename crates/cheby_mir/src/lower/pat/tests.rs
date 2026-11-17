@@ -735,7 +735,7 @@ fn tested_twice(decision: &Decision) -> Vec<String> {
                     work.push((t, seen.clone(), guards.clone()));
                 }
                 if let Some(t) = default {
-                    work.push((t, seen.clone(), guards.clone()));
+                    work.push((t, seen.clone(), guards));
                 }
             }
         }

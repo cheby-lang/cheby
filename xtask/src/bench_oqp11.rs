@@ -1186,7 +1186,7 @@ mod tests {
         let three_phases = json!({"oqp11": {"lines": 1_000_000, "rounds": 1, "shapes": {
             "deep": {"modules": 4000, "cold_ns": 1, "body_edit": split(8_000_000_000)},
             "wide": {"modules": 40, "cold_ns": 1, "body_edit": split(800_000_000)}}}});
-        let gated = render(&three_phases).map(|r| r.1).unwrap_or_default();
+        let gated = render(&three_phases).map_or_default(|r| r.1);
         for fired in [
             "the gate of our own loader (D-914) triggers.",
             "the gate of lazy compilation (D-923) triggers.",
@@ -1212,7 +1212,7 @@ mod tests {
             json!({"restarts": {"rows": [{"shape": "wide", "cause": "mask", "runs_ns": []}]}});
         let rendered = render(&no_runs);
         assert_eq!(rendered.as_ref().map(|r| r.0), Some(0));
-        let text = rendered.map(|r| r.1).unwrap_or_default();
+        let text = rendered.map_or_default(|r| r.1);
         assert!(text.contains("not a reading: no runs"), "{text}");
         assert!(!text.contains("0 of 0"), "{text}");
     }

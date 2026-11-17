@@ -438,7 +438,7 @@ fn link_replay_is_byte_stable() {
         let (record, first) = replayed(&unit, format);
         let again = replay(&record, format.isa(), "app").unwrap();
         assert_eq!(first, again, "{format:?}");
-        let (_, recompiled) = replayed(&unit.clone(), format);
+        let (_, recompiled) = replayed(&unit, format);
         assert_eq!(first, recompiled, "{format:?}");
         let file = ::object::File::parse(&*first).unwrap();
         if format == Format::Elf {

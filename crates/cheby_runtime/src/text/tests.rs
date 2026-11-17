@@ -819,7 +819,7 @@ fn unicode_versions_agree() {
     );
     assert_eq!(
         char::UNICODE_VERSION,
-        (17, 0, 0),
+        (18, 0, 0),
         "update string.md's recorded version"
     );
 }

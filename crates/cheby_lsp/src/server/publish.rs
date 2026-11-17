@@ -312,8 +312,7 @@ impl Server {
                 .packages
                 .get(root)
                 .and_then(|package| package.published.get(&path))
-                .map(|published| published.diagnostics.clone())
-                .unwrap_or_default();
+                .map_or_default(|published| published.diagnostics.clone());
             self.publish(root, &path, diagnostics, Some(version));
         }
     }

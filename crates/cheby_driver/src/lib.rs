@@ -47,6 +47,11 @@
 //! nothing after the front end runs, and [`CheckOutput::render_with`]
 //! renders each as `error[W…]`, the first with a note naming the flag.
 
+// Dependencies of the planned crate graph (docs/plan/architecture.md) that
+// no code uses yet; these keep cargo's `unused_dependencies` lint quiet
+// until the milestone named on each line uses them.
+use cheby_js as _; // M4
+
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};

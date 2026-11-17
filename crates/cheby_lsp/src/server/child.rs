@@ -1522,8 +1522,7 @@ fn fixture_outcome(path: &Path, run: u64) -> ChildOutcome {
             documents
                 .get(n)
                 .or_else(|| documents.last())
-                .map(Value::to_string)
-                .unwrap_or_default()
+                .map_or_default(Value::to_string)
         }
         Ok(document) => document.to_string(),
         Err(e) => return ChildOutcome::Io(format!("{FIXTURE_VAR}: {e}")),

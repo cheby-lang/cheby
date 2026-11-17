@@ -289,8 +289,7 @@ impl UiTest {
             Err(e) => return Err(format!("{}: {e}", stdin_path.display())),
         };
         let args = crate::golden::read(&self.golden("args"))?
-            .map(|text| text.lines().map(str::to_owned).collect())
-            .unwrap_or_default();
+            .map_or_default(|text| text.lines().map(str::to_owned).collect());
         Ok(RunInput { stdin, args })
     }
 

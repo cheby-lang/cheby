@@ -184,8 +184,7 @@ impl Store {
 /// The paths in `dir`, sorted; none when it cannot be read.
 fn entries(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut paths: Vec<_> = fs::read_dir(dir)
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
-        .unwrap_or_default();
+        .map_or_default(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect());
     paths.sort();
     paths
 }

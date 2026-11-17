@@ -701,8 +701,7 @@ fn cache_dir(base: &Path, top: &str, name: &str) -> PathBuf {
 }
 
 fn jobs_args(jobs: Option<usize>) -> Vec<String> {
-    jobs.map(|n| vec!["--jobs".to_owned(), n.to_string()])
-        .unwrap_or_default()
+    jobs.map_or_default(|n| vec!["--jobs".to_owned(), n.to_string()])
 }
 
 /// Runs `cmd` in `dir` with `CHEBY_DUMP_DIR=dump` and writes its exit

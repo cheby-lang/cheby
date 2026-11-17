@@ -659,7 +659,7 @@ fn file_kernel_cancelled_write_waits_for_a_close() {
         let closed = Arc::new(AtomicBool::new(false));
         {
             let (path, hook, slot, closed) = (
-                path.clone(),
+                path,
                 Arc::clone(&hook),
                 Arc::clone(&slot),
                 Arc::clone(&closed),
@@ -714,7 +714,7 @@ fn file_kernel_cancelled_refill_leaves_its_line_for_the_next_read() {
         let rest: Arc<Mutex<Vec<Got>>> = Arc::default();
         {
             let (path, hook, first, next, rest) = (
-                path.clone(),
+                path,
                 Arc::clone(&hook),
                 Arc::clone(&first),
                 Arc::clone(&next),

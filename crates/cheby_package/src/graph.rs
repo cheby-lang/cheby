@@ -141,9 +141,7 @@ pub fn topological_order(g: &Graph) -> Result<Vec<u32>, Vec<Cycle>> {
     let mut order = Vec::with_capacity(len);
     while let Some(Reverse(node)) = ready.pop() {
         order.push(node);
-        let dependents = slot(&mut importers, node)
-            .map(std::mem::take)
-            .unwrap_or_default();
+        let dependents = slot(&mut importers, node).map_or_default(std::mem::take);
         for importer in dependents {
             if let Some(count) = slot(&mut remaining, importer) {
                 *count = count.saturating_sub(1);

@@ -1804,7 +1804,7 @@ fn log_lookups(
         let path = cx.front.modules.try_get(module)?.path.to_string();
         let hit = matches!(placed, Placed::Cached { .. });
         let subject = match at.1 {
-            UnitPart::Code => path.clone(),
+            UnitPart::Code => path,
             UnitPart::Tests => format!("{path}#tests"),
         };
         sink.log_lookup(&format!("{}.{}", at.1.tag(), kind.tag()), &subject, hit);

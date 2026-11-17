@@ -148,9 +148,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/rust-toolchain
         with:
-          toolchain: "1.99.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
@@ -204,9 +203,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/rust-toolchain
         with:
-          toolchain: "1.99.0"
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -214,9 +212,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: taiki-e/install-action@v2
         with:
           tool: typos@1.52.2,taplo@0.10.0,cargo-deny@0.20.2
@@ -244,9 +240,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - name: rustdoc, private items included
         run: cargo doc --workspace --no-deps --document-private-items --locked
@@ -257,9 +251,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
         with:
@@ -272,9 +264,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - name: Run the standard library's tests
         run: cargo xtask test-std
@@ -283,9 +273,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
       - uses: taiki-e/install-action@v2
@@ -325,9 +313,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
       # `check-determinism` builds executables (D-929, D-934); its own
@@ -347,9 +333,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
       - uses: actions/setup-node@v5
@@ -393,9 +377,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.99.0"
+      - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/c-compiler
       - name: Find the base
@@ -457,9 +439,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/rust-toolchain
         with:
-          toolchain: "1.99.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:

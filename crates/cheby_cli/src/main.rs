@@ -39,6 +39,12 @@
 //! Color only adds escapes: the text is the same. Panic reports of a
 //! running program stay plain (D-449).
 
+// Dependencies of the planned crate graph (docs/plan/architecture.md) that
+// no code uses yet; these keep cargo's `unused_dependencies` lint quiet
+// until the milestone named on each line uses them.
+use cheby_doc as _; // M5
+use cheby_pkg as _; // M5
+
 mod build_id;
 mod color;
 mod new;

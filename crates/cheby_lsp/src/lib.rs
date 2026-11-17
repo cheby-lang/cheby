@@ -68,7 +68,6 @@ pub struct ServerOptions {
 
 /// `cheby lsp`: serves stdio until `exit` or the end of input. The status
 /// is 0 after `shutdown`, else 1.
-#[must_use]
 pub fn run(options: ServerOptions) -> ExitCode {
     // The std base is checked once per process. It starts now, so the
     // first request that needs it seldom waits (A §7).

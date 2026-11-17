@@ -70,7 +70,6 @@ pub struct ReplOptions {
 
 /// Runs a session until the end of input and returns the process's exit
 /// status: 0, or 1 when the package cannot be loaded or output fails.
-#[must_use]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "plan §4.5 fixes the signature"
@@ -82,7 +81,6 @@ pub fn run(options: ReplOptions) -> ExitCode {
 /// [`run`], with diagnostics and tool errors colored as `colors` says: the
 /// global `--color` option and the environment decide, as for the other
 /// commands (D-467).
-#[must_use]
 pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
     run_with(options, colors, None)
 }
@@ -94,7 +92,6 @@ pub fn run_colored(options: &ReplOptions, colors: Colors) -> ExitCode {
 /// lookups logged to `CHEBY_CACHE_LOG` (D-973); a fallback to a temporary
 /// cache is noted first, and a relative `CHEBY_CACHE` or an unsafe root is
 /// a tool error, as for the other commands.
-#[must_use]
 pub fn run_cached(
     options: &ReplOptions,
     colors: Colors,

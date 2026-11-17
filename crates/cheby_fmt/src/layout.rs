@@ -1062,6 +1062,5 @@ fn sort_import_blocks(entries: &mut [Entry<'_>]) {
 fn import_path(node: SyntaxNode<'_>) -> String {
     node.children()
         .find(|c| c.kind() == SyntaxKind::MODULE_PATH)
-        .map(compact_text)
-        .unwrap_or_default()
+        .map_or_default(compact_text)
 }

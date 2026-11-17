@@ -96,7 +96,6 @@ const WINDOWS: &str = "constants are not evaluated on Windows until M6 (D-1414)"
 const OWNERSHIP_LATER: &str = "the ownership job is not implemented yet";
 
 /// Runs the child: one JSON document on stdout (module docs).
-#[must_use]
 pub fn main(args: Args) -> ExitCode {
     watch_stdin();
     write(&answer(args))

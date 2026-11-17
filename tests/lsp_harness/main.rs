@@ -1148,8 +1148,7 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
         let diagnostics = client
             .published()
             .get(uri)
-            .map(client::diagnostics_of)
-            .unwrap_or_default();
+            .map_or_default(client::diagnostics_of);
         let mut requests = Vec::new();
         let mut renames = Vec::new();
         for (start, end) in case::identifiers(text) {
@@ -2313,8 +2312,7 @@ fn golden_blocks(
         let diagnostics = client
             .published()
             .get(uri)
-            .map(client::diagnostics_of)
-            .unwrap_or_default();
+            .map_or_default(client::diagnostics_of);
         for marker in case::markers(&text).map_err(|e| format!("{file}: {e}"))? {
             let (start, end) = marker_range(&lines, encoding, &marker);
             let (method, mut params) =
@@ -2499,8 +2497,7 @@ fn next_idle(client: &mut Client, root: &str) -> Result<Vec<Value>, String> {
     let params = client::params(&idle);
     let mut keys: Vec<&str> = params
         .as_object()
-        .map(|map| map.keys().map(String::as_str).collect())
-        .unwrap_or_default();
+        .map_or_default(|map| map.keys().map(String::as_str).collect());
     keys.sort_unstable();
     let generation = params.get("generation").and_then(Value::as_u64);
     if keys != ["generation", "root"] || generation.is_none() {
