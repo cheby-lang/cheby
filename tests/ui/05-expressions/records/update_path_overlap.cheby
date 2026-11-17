@@ -1,0 +1,34 @@
+// @mode: check-fail
+// @decisions: D-1641
+//! In one record update, a field path must not equal another listed path
+//! or start with one: a field is either replaced or updated through
+//! paths (§5.11.2).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  origin: Point,
+  size: Int,
+}
+
+fn replaced_and_updated(shape: Shape, p: Point) -> Shape {
+  Shape { ..shape, origin: p, origin.y: 1 }
+}
+
+fn updated_then_replaced(shape: Shape, p: Point) -> Shape {
+  Shape { ..shape, origin.y: 1, origin: p }
+}
+
+fn listed_twice(shape: Shape) -> Shape {
+  Shape { ..shape, origin.y: 1, size: 2, origin.y: 3 }
+}
+
+fn main() {
+  let shape = Shape { origin: Point { x: 0, y: 0 }, size: 1 }
+  let p = Point { x: 1, y: 1 }
+  assert replaced_and_updated(shape, p) == updated_then_replaced(shape, p)
+  assert listed_twice(shape).size == 2
+}

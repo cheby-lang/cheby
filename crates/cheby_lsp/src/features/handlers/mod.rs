@@ -1,5 +1,6 @@
 //! Request handlers: protocol in, protocol out, over `features::ide`.
 
+pub(crate) mod code_action;
 pub(crate) mod completion;
 pub(crate) mod folding;
 pub(crate) mod format;

@@ -1,0 +1,50 @@
+// @mode: check-fail
+// @decisions: D-1639
+//! Each later name of a field path is a field of the type of the field
+//! before it, which every variant has with one type. A tuple, a type
+//! parameter or a type without named fields along the path has no such
+//! field, and the value has the last field's type (§5.11.2).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Mark {
+  Dot { at: Point },
+  Line { from: Point, to: Point },
+}
+
+type Holder<T> {
+  item: T,
+  pair: (Int, Int),
+  name: String,
+  mark: Mark,
+  point: Point,
+}
+
+fn unknown_field(h: Holder<Point>) -> Holder<Point> {
+  Holder { ..h, item.z: 1 }
+}
+
+fn through_a_tuple(h: Holder<Point>) -> Holder<Point> {
+  Holder { ..h, pair.x: 1 }
+}
+
+fn through_a_string(h: Holder<Point>) -> Holder<Point> {
+  Holder { ..h, name.size: 1 }
+}
+
+fn through_a_type_parameter<T>(h: Holder<T>) -> Holder<T> {
+  Holder { ..h, item.x: 1 }
+}
+
+fn not_in_every_variant(h: Holder<Point>) -> Holder<Point> {
+  Holder { ..h, mark.at.x: 1 }
+}
+
+fn wrong_value(h: Holder<Point>) -> Holder<Point> {
+  Holder { ..h, point.x: "one" }
+}
+
+fn main() {}

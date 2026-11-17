@@ -133,6 +133,12 @@ pub(crate) enum Receiver<'t> {
         /// The root and the fields read before the `.`.
         names: Vec<SyntaxToken<'t>>,
     },
+    /// The names of a record update's field path before the `.`,
+    /// `origin.|` (D-1645).
+    FieldPath {
+        /// The names, the base type's field first.
+        names: Vec<SyntaxToken<'t>>,
+    },
 }
 
 /// What a pattern matches, from the tree.
@@ -431,6 +437,16 @@ fn by_partial(partial: SyntaxToken<'_>) -> Option<Context<'_>> {
             let record = parent.parent().filter(|r| r.kind() == K::RECORD_EXPR)?;
             Some(record_field(record, Some(partial)))
         }
+        // A later name of a field path, `origin.po|` (D-1645).
+        K::FIELD_INIT => {
+            let dot = parent
+                .tokens()
+                .take_while(|t| t.text_range().end() <= partial.text_range().start())
+                .filter(|t| is_significant(t.kind()))
+                .last()
+                .filter(|t| t.kind() == K::DOT)?;
+            Some(field_path(parent, dot))
+        }
         K::ERROR if parent.parent().is_some_and(|p| p.kind() == K::SOURCE_FILE) => {
             Some(Context::Item {
                 after_visibility: false,
@@ -578,6 +594,7 @@ fn open_anchor<'t>(anchor: SyntaxToken<'t>, at: TextSize) -> Option<Context<'t>>
                 dot: anchor,
             }),
             K::INTERPOLATION => Some(interpolation(parent, at)),
+            K::FIELD_INIT => Some(field_path(parent, anchor)),
             // `"{p.}"` holds the `.` in an `ERROR`.
             K::ERROR => Some(
                 parent
@@ -784,8 +801,10 @@ fn record_field<'t>(record: SyntaxNode<'t>, partial: Option<SyntaxToken<'t>>) ->
         .children()
         .filter(|c| c.kind() == K::FIELD_INIT)
         .collect();
+    // A field updated through a path may take more paths (D-1641).
     let written: Vec<String> = inits
         .iter()
+        .filter(|init| !init.children_with_tokens().any(|e| e.kind() == K::DOT))
         .filter_map(|init| init.first_token())
         .filter(|name| Some(*name) != partial && is_name(name.kind()))
         .map(|name| name.text().to_owned())
@@ -796,6 +815,20 @@ fn record_field<'t>(record: SyntaxNode<'t>, partial: Option<SyntaxToken<'t>>) ->
         record,
         empty: written.is_empty() && !spread,
         written,
+    }
+}
+
+/// The context of a name after `dot` in the field path of `node`, a
+/// `FIELD_INIT`: a field of the type of the name before the `.` (D-1645).
+fn field_path<'t>(node: SyntaxNode<'t>, dot: SyntaxToken<'t>) -> Context<'t> {
+    let names = node
+        .tokens()
+        .take_while(|t| t.text_range().end() <= dot.text_range().start())
+        .filter(|t| t.kind() == K::LOWER_IDENT)
+        .collect();
+    Context::Dot {
+        receiver: Receiver::FieldPath { names },
+        dot,
     }
 }
 

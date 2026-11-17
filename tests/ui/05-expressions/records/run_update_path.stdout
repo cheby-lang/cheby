@@ -1,0 +1,9 @@
+evaluating base
+evaluating x
+evaluating turn
+evaluating moves
+evaluating center
+Player { position: Point { x: 1, y: 0 }, moves: 1 }
+Rect { corner: Point { x: 1, y: 1 }, center: Point { x: 2, y: 5 } }
+Labeled { value: Point { x: 3, y: 9 }, label: "m" } 1
+Rect { corner: Point { x: 1, y: 1 }, center: Point { x: 7, y: 5 } } Rect { corner: Point { x: 1, y: 1 }, center: Point { x: 2, y: 5 } }

@@ -498,8 +498,12 @@ fn syntactic(token: SyntaxToken<'_>) -> Option<TokenType> {
         K::IDENT_PAT if parent.parent().is_some_and(|p| p.kind() == K::PARAM) => {
             TokenType::Parameter
         }
-        // A punned field is also its value or binding (X §5.5).
-        K::FIELD_INIT | K::FIELD_PAT if !has_token(parent, K::COLON) => TokenType::Variable,
+        // A punned field is also its value or binding (X §5.5). A punned
+        // path `origin.y` binds its last name only (D-1640).
+        K::FIELD_INIT if !has_token(parent, K::COLON) && last_ident(parent) == Some(token) => {
+            TokenType::Variable
+        }
+        K::FIELD_PAT if !has_token(parent, K::COLON) => TokenType::Variable,
         K::INTERPOLATION if first_ident(parent) == Some(token) => TokenType::Variable,
         K::CONST_DECL | K::IDENT_PAT | K::AS_PAT | K::REST_PAT => TokenType::Variable,
         K::RECORD_FIELD | K::FIELD_EXPR | K::FIELD_INIT | K::FIELD_PAT | K::INTERPOLATION => {
@@ -599,6 +603,14 @@ fn first_ident(node: SyntaxNode<'_>) -> Option<SyntaxToken<'_>> {
     node.children_with_tokens()
         .filter_map(cheby_syntax::SyntaxElement::as_token)
         .find(|t| matches!(t.kind(), K::LOWER_IDENT | K::UPPER_IDENT))
+}
+
+/// The last name among `node`'s direct tokens.
+fn last_ident(node: SyntaxNode<'_>) -> Option<SyntaxToken<'_>> {
+    node.children_with_tokens()
+        .filter_map(cheby_syntax::SyntaxElement::as_token)
+        .filter(|t| matches!(t.kind(), K::LOWER_IDENT | K::UPPER_IDENT))
+        .last()
 }
 
 /// Whether `node` has a direct token of `kind`.

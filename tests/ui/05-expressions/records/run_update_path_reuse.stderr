@@ -1,0 +1,4 @@
+reuse: tests/ui/05-expressions/records/run_update_path_reuse.cheby:20:3: building `Player` reuses `player` when it is unique
+reuse: tests/ui/05-expressions/records/run_update_path_reuse.cheby:20:3: building `Point` reuses a temporary value when it is unique
+reuse: tests/ui/05-expressions/records/run_update_path_reuse.cheby:24:16: building `Player` allocates: no value of the same size dies before it
+reuse: tests/ui/05-expressions/records/run_update_path_reuse.cheby:24:35: building `Point` allocates: no value of the same size dies before it

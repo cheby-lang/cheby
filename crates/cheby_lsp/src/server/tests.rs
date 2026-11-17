@@ -321,6 +321,10 @@ fn advertised(encoding: &str) -> Value {
         "documentSymbolProvider": true,
         "documentFormattingProvider": true,
         "documentRangeFormattingProvider": true,
+        "codeActionProvider": {
+            "codeActionKinds": ["refactor.rewrite"],
+            "resolveProvider": false,
+        },
         "foldingRangeProvider": true,
         "hoverProvider": true,
         "completionProvider": {

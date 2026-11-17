@@ -25,6 +25,7 @@ enum Shape {
     Qualified(Vec<&'static str>, PathNs, bool),
     Dot(&'static str),
     DotInterp(Vec<&'static str>),
+    DotPath(Vec<&'static str>),
     Pipe(&'static str),
     Type,
     Pattern(&'static str),
@@ -58,6 +59,10 @@ fn shape(found: &Found<'_>) -> Shape {
             receiver: Receiver::Interpolation { names, .. },
             ..
         } => Shape::DotInterp(names.iter().map(|t| leak(t.text())).collect()),
+        Context::Dot {
+            receiver: Receiver::FieldPath { names },
+            ..
+        } => Shape::DotPath(names.iter().map(|t| leak(t.text())).collect()),
         Context::Pipe { lhs, .. } => Shape::Pipe(leak(lhs.text())),
         Context::Type => Shape::Type,
         Context::Pattern { subject } => Shape::Pattern(match subject {
@@ -402,6 +407,35 @@ fn record_fields() {
             "",
         ),
         ("fn f() {\n  P { x: ‸\n}\n", Shape::Expr(false, "field"), ""),
+        // A field updated through a path may take more paths (D-1641).
+        (
+            "fn f() {\n  P { ..p, a.b: 1, ‸ }\n}\n",
+            Shape::RecordField(vec![], false),
+            "",
+        ),
+    ]);
+}
+
+/// After a `.` of a record update's field path, the names before it
+/// (D-1645).
+#[test]
+fn field_paths() {
+    check(&[
+        (
+            "fn f() {\n  P { ..p, a.‸ }\n}\n",
+            Shape::DotPath(vec!["a"]),
+            "",
+        ),
+        (
+            "fn f() {\n  P { ..p, a.b.c‸: 1 }\n}\n",
+            Shape::DotPath(vec!["a", "b"]),
+            "c",
+        ),
+        (
+            "fn f() {\n  P { ..p, a‸.b: 1 }\n}\n",
+            Shape::RecordField(vec![], false),
+            "a",
+        ),
     ]);
 }
 

@@ -280,7 +280,9 @@ pub enum ExprKind {
         fields: Box<[(u32, ExprId)]>,
     },
     /// `T { ..base, … }`: a copy of `base` in the same variant, with the
-    /// listed fields replaced, in written order (D-156).
+    /// listed fields replaced, in written order (D-156). A field path
+    /// `origin.y: v` replaces a field inside a field (D-1638), and no
+    /// path equals another or starts with one (D-1641).
     RecordUpdate {
         base: ExprId,
         fields: Box<[UpdateField]>,
@@ -512,6 +514,9 @@ pub enum PatOrigin {
     Param(ParamOrigin),
 }
 
+/// A field's index in every constructor of its type (D-071).
+pub type CtorIndexes = Box<[(DefId, u32)]>;
+
 /// A replaced field of a record update.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateField {
@@ -519,6 +524,17 @@ pub struct UpdateField {
     pub value: ExprId,
     /// The field's index in every constructor of the base type (D-071).
     pub index_per_ctor: Box<[(DefId, u32)]>,
+    /// The later steps of a field path `origin.y` (D-1638), empty for a
+    /// plain field: each the next field's index in every constructor of
+    /// the type of the field before it.
+    pub inner: Box<[CtorIndexes]>,
+}
+
+impl UpdateField {
+    /// Every step of the field's path, the base type's field first.
+    pub fn steps(&self) -> impl Iterator<Item = &[(DefId, u32)]> {
+        std::iter::once(&*self.index_per_ctor).chain(self.inner.iter().map(|step| &**step))
+    }
 }
 
 /// A literal.
@@ -1024,10 +1040,12 @@ mod tests {
                 UpdateField {
                     value: e(7),
                     index_per_ctor: Box::new([]),
+                    inner: Box::new([]),
                 },
                 UpdateField {
                     value: e(8),
                     index_per_ctor: Box::new([]),
+                    inner: Box::new([]),
                 },
             ]),
         };

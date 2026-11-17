@@ -1,0 +1,24 @@
+// @mode: check-fail
+// @decisions: D-1639, D-213
+//! Each step of a field path needs its type known at that point, as a
+//! field access does (§3.12.4, §5.11.2).
+
+type Holder<T> {
+  item: T,
+}
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn empty<T>(_items: List<T>) -> Holder<T> {
+  panic as "never called"
+}
+
+fn main() {
+  let holder = empty([])
+  let moved = Holder { ..holder, item.x: 1 }
+  let typed: Holder<Point> = moved
+  assert typed.item.y == 0
+}

@@ -1,0 +1,34 @@
+// @decisions: D-1645
+// @requests: semanticTokens
+//! Every name of a field path is a field of its own step's type, for
+//! hover, definition and references. The last name of a punned path is
+//! also the variable it reads.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  origin: Point,
+  size: Int,
+}
+
+fn drop_to(shape: Shape, y: Int) -> Shape {
+  Shape { ..shape, origin.y }
+  //               ^ hover
+  //                      ^ hover
+  //                      ^ definition
+  //                      ^ documentHighlight
+}
+
+fn widen(shape: Shape) -> Shape {
+  Shape { ..shape, origin.x: shape.origin.x + 1 }
+  //                      ^ references
+  //               ^ definition
+}
+
+fn main() {
+  let shape = Shape { origin: Point { x: 0, y: 0 }, size: 1 }
+  assert widen(drop_to(shape, 2)).origin.y == 2
+}

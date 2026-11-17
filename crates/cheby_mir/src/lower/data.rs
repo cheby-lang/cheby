@@ -186,7 +186,10 @@ impl BodyCx<'_, '_> {
 
     /// `T { ..base, fields }` (D-156, D-501): `base`, then the new values
     /// in the order written (§5.11.2), then a new object of `base`'s
-    /// constructor with the fields not listed copied from `base`.
+    /// constructor with the fields not listed copied from `base`. A field
+    /// path `origin.y: v` copies `base.origin` the same way, innermost
+    /// first, and paths that share a beginning share its copy (D-1638,
+    /// D-1642).
     pub(super) fn record_update(
         &mut self,
         base: ExprId,
@@ -207,26 +210,56 @@ impl BodyCx<'_, '_> {
         let want = self.repr_of(ty);
         // §5.11.2 requires at least one field, and the checker reports an
         // update without one; with none the copy would equal the base.
-        let Some(first) = fields.first() else {
+        if fields.is_empty() {
             return Ok(Some(base_op));
-        };
+        }
         let base = self.base_local(base_op)?;
-        let mut ctors = Vec::with_capacity(first.index_per_ctor.len());
-        for &(ctor, _) in &first.index_per_ctor {
+        let paths: Vec<Vec<&[(DefId, u32)]>> =
+            fields.iter().map(|field| field.steps().collect()).collect();
+        let entries: Vec<PathEntry<'_>> = paths
+            .iter()
+            .enumerate()
+            .map(|(n, path)| (path.as_slice(), n))
+            .collect();
+        self.update_object(base, &entries, &values, want, span)
+            .map(Some)
+    }
+
+    /// A copy of the object `base` with `entries` applied: each a field
+    /// path, whose first step is a field of `base`'s type, and the index
+    /// of its value in `values`. The object's constructor is one of
+    /// those the first step names (D-071), switched on by tag when there
+    /// are several.
+    fn update_object(
+        &mut self,
+        base: Local,
+        entries: &[PathEntry<'_>],
+        values: &[(Operand, Ty)],
+        want: Repr,
+        span: Span,
+    ) -> Result<Operand, Ice> {
+        let first = entries
+            .first()
+            .and_then(|(path, _)| path.first())
+            .ok_or_else(|| Ice::new(format!("a record update without fields at {span:?}")))?;
+        let mut ctors = Vec::with_capacity(first.len());
+        for &(ctor, _) in *first {
             ctors.push(ctor_layout(ctor, &self.cx.defs)?);
         }
         ctors.sort_by_key(|d| d.tag);
-        // The new values by field index, per constructor (D-071: every
+        // The new fields by field index, per constructor (D-071: every
         // constructor has every listed field).
-        let mut updates: Vec<Vec<(u32, usize)>> = Vec::with_capacity(ctors.len());
+        let mut updates: Vec<Vec<(u32, NewField<'_>)>> = Vec::with_capacity(ctors.len());
         for desc in &ctors {
             let LayoutRef::Ctor(ctor) = desc.layout else {
                 return Err(Ice::new("a constructor layout that is not a constructor's"));
             };
-            let mut own = Vec::with_capacity(fields.len());
-            for (n, field) in fields.iter().enumerate() {
-                let index = field
-                    .index_per_ctor
+            let mut own: Vec<(u32, NewField<'_>)> = Vec::with_capacity(entries.len());
+            for &(path, n) in entries {
+                let Some((step, rest)) = path.split_first() else {
+                    return Err(Ice::new("an empty field path"));
+                };
+                let index = step
                     .iter()
                     .find(|(c, _)| *c == ctor)
                     .map(|&(_, i)| i)
@@ -236,15 +269,24 @@ impl BodyCx<'_, '_> {
                             desc.name
                         ))
                     })?;
-                own.push((index, n));
+                if rest.is_empty() {
+                    own.push((index, NewField::Value(n)));
+                } else if let Some((_, NewField::Nested(inner))) = own
+                    .iter_mut()
+                    .find(|(at, new)| *at == index && matches!(new, NewField::Nested(_)))
+                {
+                    inner.push((rest, n));
+                } else {
+                    own.push((index, NewField::Nested(vec![(rest, n)])));
+                }
             }
             updates.push(own);
         }
         let [only] = ctors.as_slice() else {
-            return self.update_by_tag(base, &ctors, &updates, &values, want, span);
+            return self.update_by_tag(base, &ctors, &updates, values, want, span);
         };
         let own = updates.first().map_or(&[][..], Vec::as_slice);
-        self.rebuild(base, only, own, &values).map(Some)
+        self.rebuild(base, only, own, values, span)
     }
 
     /// A tuple of `elems`, evaluated left to right (§5.12), each a uniform
@@ -400,11 +442,11 @@ impl BodyCx<'_, '_> {
         &mut self,
         base: Local,
         ctors: &[LayoutDesc],
-        updates: &[Vec<(u32, usize)>],
+        updates: &[Vec<(u32, NewField<'_>)>],
         values: &[(Operand, Ty)],
         want: Repr,
         span: Span,
-    ) -> Result<Option<Operand>, Ice> {
+    ) -> Result<Operand, Ice> {
         let reads: Vec<Read> = ctors
             .iter()
             .map(|d| Read {
@@ -422,49 +464,85 @@ impl BodyCx<'_, '_> {
         let result = self.block_param(join, want)?;
         for ((desc, own), block) in ctors.iter().zip(updates).zip(blocks) {
             self.switch_to(block)?;
-            let value = self.rebuild(base, desc, own, values)?;
+            let value = self.rebuild(base, desc, own, values, span)?;
             self.goto(join, vec![value])?;
         }
         self.switch_to(join)?;
-        Ok(Some(Operand::Local(result)))
+        Ok(Operand::Local(result))
     }
 
     /// A new object of `desc`'s constructor: field `i` is the value
-    /// `values[n]` when `(i, n)` is in `own`, else `base`'s field `i`.
+    /// `values[n]` when `(i, Value(n))` is in `own`, a copy of `base`'s
+    /// field `i` updated along the paths of `(i, Nested(paths))`, and
+    /// otherwise `base`'s field `i`.
     fn rebuild(
         &mut self,
         base: Local,
         desc: &LayoutDesc,
-        own: &[(u32, usize)],
+        own: &[(u32, NewField<'_>)],
         values: &[(Operand, Ty)],
+        span: Span,
     ) -> Result<Operand, Ice> {
         let mut fields = Vec::with_capacity(desc.fields.len());
         for (i, field) in desc.fields.iter().enumerate() {
             let index = u32::try_from(i).map_err(|_| Ice::new("constructor too large"))?;
             // The last listing wins; the checker rejects a field listed
-            // twice.
-            let op = if let Some(&(_, n)) = own.iter().rev().find(|&&(at, _)| at == index) {
-                let (op, ty) = values
-                    .get(n)
-                    .cloned()
-                    .ok_or_else(|| Ice::new("an update value out of range"))?;
-                let from = self.repr_of(ty);
-                self.to_repr(op, from, field.repr, ty)?
-            } else {
-                let local = self.define(
-                    field.repr,
-                    Rvalue::Field {
-                        base,
-                        layout: desc.layout,
-                        field: index,
-                    },
-                )?;
-                Operand::Local(local)
+            // twice or overlapping a path (D-1641).
+            let op = match own.iter().rev().find(|(at, _)| *at == index) {
+                Some((_, NewField::Value(n))) => {
+                    let (op, ty) = values
+                        .get(*n)
+                        .cloned()
+                        .ok_or_else(|| Ice::new("an update value out of range"))?;
+                    let from = self.repr_of(ty);
+                    self.to_repr(op, from, field.repr, ty)?
+                }
+                Some((_, NewField::Nested(paths))) => {
+                    // A record with named fields is always a uniform word.
+                    if field.repr != Repr::Value {
+                        return Err(Ice::new(format!(
+                            "a field path through an unboxed field of `{}` at {span:?}",
+                            desc.name
+                        )));
+                    }
+                    let inner = self.define(
+                        Repr::Value,
+                        Rvalue::Field {
+                            base,
+                            layout: desc.layout,
+                            field: index,
+                        },
+                    )?;
+                    self.update_object(inner, paths, values, Repr::Value, span)?
+                }
+                None => {
+                    let local = self.define(
+                        field.repr,
+                        Rvalue::Field {
+                            base,
+                            layout: desc.layout,
+                            field: index,
+                        },
+                    )?;
+                    Operand::Local(local)
+                }
             };
             fields.push(op);
         }
         self.alloc_ctor(desc, fields)
     }
+}
+
+/// The rest of a field path of a record update, each step a field's index
+/// in every constructor of its type, and the index of its new value.
+type PathEntry<'f> = (&'f [&'f [(DefId, u32)]], usize);
+
+/// What a field of a rebuilt object gets (D-1638).
+enum NewField<'f> {
+    /// The new value at this index.
+    Value(usize),
+    /// A copy of the old field, updated along these paths.
+    Nested(Vec<PathEntry<'f>>),
 }
 
 /// Where one constructor holds a field.

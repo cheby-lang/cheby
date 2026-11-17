@@ -1,0 +1,65 @@
+== diagnostics
+{}
+
+== src/main.cheby:28:24 codeAction refactor.rewrite
+[
+  {
+    "edit": {
+      "changes": {
+        "src/main.cheby": [
+          {
+            "newText": "player.position.x: game.player.position.x + 1,\n    player.moves: game.player.moves + 1",
+            "range": {
+              "end": {
+                "character": 5,
+                "line": 29
+              },
+              "start": {
+                "character": 4,
+                "line": 25
+              }
+            }
+          }
+        ]
+      }
+    },
+    "kind": "refactor.rewrite",
+    "title": "Use a field path"
+  }
+]
+
+== src/main.cheby:38:31 codeAction
+[
+  {
+    "edit": {
+      "changes": {
+        "src/main.cheby": [
+          {
+            "newText": "position.y",
+            "range": {
+              "end": {
+                "character": 59,
+                "line": 37
+              },
+              "start": {
+                "character": 20,
+                "line": 37
+              }
+            }
+          }
+        ]
+      }
+    },
+    "kind": "refactor.rewrite",
+    "title": "Use a field path"
+  }
+]
+
+== src/main.cheby:47:33 codeAction
+[]
+
+== src/main.cheby:54:15 codeAction
+[]
+
+== src/main.cheby:64:27 codeAction
+[]

@@ -1,0 +1,9 @@
+error[E0059]: the field path `origin.x` needs a record update
+  --> tests/ui/05-expressions/records/update_path_in_construction.cheby:17:23
+   |
+17 |   let shape = Shape { origin.x: 1, size: 2 }
+   |                       ^^^^^^^^
+   |
+   = note: a construction sets every field directly; a path updates a field inside another one and keeps the rest (§5.11.2)
+   = help: set `origin` to a whole value, or start the braces with `..base` to update a copy
+

@@ -1,0 +1,424 @@
+== diagnostics
+{}
+
+== src/main.cheby:18:20 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\norigin: Point\n```\n\n---\n\nField of `Shape`."
+  },
+  "range": {
+    "end": {
+      "character": 25,
+      "line": 17
+    },
+    "start": {
+      "character": 19,
+      "line": 17
+    }
+  }
+}
+
+== src/main.cheby:18:27 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\n(parameter) y: Int\n```\n\n---\n\nAlso the field `y` of `Point`."
+  },
+  "range": {
+    "end": {
+      "character": 27,
+      "line": 17
+    },
+    "start": {
+      "character": 26,
+      "line": 17
+    }
+  }
+}
+
+== src/main.cheby:18:27 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 27,
+        "line": 17
+      },
+      "start": {
+        "character": 26,
+        "line": 17
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 26,
+        "line": 16
+      },
+      "start": {
+        "character": 25,
+        "line": 16
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 26,
+        "line": 16
+      },
+      "start": {
+        "character": 25,
+        "line": 16
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:18:27 documentHighlight
+[
+  {
+    "kind": 3,
+    "range": {
+      "end": {
+        "character": 26,
+        "line": 16
+      },
+      "start": {
+        "character": 25,
+        "line": 16
+      }
+    }
+  },
+  {
+    "kind": 2,
+    "range": {
+      "end": {
+        "character": 27,
+        "line": 17
+      },
+      "start": {
+        "character": 26,
+        "line": 17
+      }
+    }
+  }
+]
+
+== src/main.cheby:26:27 references
+[
+  {
+    "range": {
+      "end": {
+        "character": 3,
+        "line": 7
+      },
+      "start": {
+        "character": 2,
+        "line": 7
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 27,
+        "line": 25
+      },
+      "start": {
+        "character": 26,
+        "line": 25
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 43,
+        "line": 25
+      },
+      "start": {
+        "character": 42,
+        "line": 25
+      }
+    },
+    "uri": "src/main.cheby"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 39,
+        "line": 31
+      },
+      "start": {
+        "character": 38,
+        "line": 31
+      }
+    },
+    "uri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby:26:20 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 25,
+        "line": 25
+      },
+      "start": {
+        "character": 19,
+        "line": 25
+      }
+    },
+    "targetRange": {
+      "end": {
+        "character": 15,
+        "line": 12
+      },
+      "start": {
+        "character": 2,
+        "line": 12
+      }
+    },
+    "targetSelectionRange": {
+      "end": {
+        "character": 8,
+        "line": 12
+      },
+      "start": {
+        "character": 2,
+        "line": 12
+      }
+    },
+    "targetUri": "src/main.cheby"
+  }
+]
+
+== src/main.cheby semanticTokens
+{
+  "data": [
+    6,
+    5,
+    5,
+    3,
+    1,
+    1,
+    2,
+    1,
+    8,
+    1,
+    0,
+    3,
+    3,
+    1,
+    4,
+    1,
+    2,
+    1,
+    8,
+    1,
+    0,
+    3,
+    3,
+    1,
+    4,
+    3,
+    5,
+    5,
+    3,
+    1,
+    1,
+    2,
+    6,
+    8,
+    1,
+    0,
+    8,
+    5,
+    3,
+    0,
+    1,
+    2,
+    4,
+    8,
+    1,
+    0,
+    6,
+    3,
+    1,
+    4,
+    3,
+    3,
+    7,
+    10,
+    1,
+    0,
+    8,
+    5,
+    6,
+    1,
+    0,
+    7,
+    5,
+    3,
+    0,
+    0,
+    7,
+    1,
+    6,
+    1,
+    0,
+    3,
+    3,
+    1,
+    4,
+    0,
+    8,
+    5,
+    3,
+    0,
+    1,
+    2,
+    5,
+    3,
+    0,
+    0,
+    10,
+    5,
+    6,
+    0,
+    0,
+    7,
+    6,
+    8,
+    0,
+    0,
+    7,
+    1,
+    6,
+    0,
+    7,
+    3,
+    5,
+    10,
+    1,
+    0,
+    6,
+    5,
+    6,
+    1,
+    0,
+    7,
+    5,
+    3,
+    0,
+    0,
+    10,
+    5,
+    3,
+    0,
+    1,
+    2,
+    5,
+    3,
+    0,
+    0,
+    10,
+    5,
+    6,
+    0,
+    0,
+    7,
+    6,
+    8,
+    0,
+    0,
+    7,
+    1,
+    8,
+    0,
+    0,
+    3,
+    5,
+    6,
+    0,
+    0,
+    6,
+    6,
+    8,
+    0,
+    0,
+    7,
+    1,
+    8,
+    0,
+    5,
+    3,
+    4,
+    10,
+    1,
+    1,
+    6,
+    5,
+    7,
+    1,
+    0,
+    8,
+    5,
+    3,
+    0,
+    0,
+    8,
+    6,
+    8,
+    0,
+    0,
+    8,
+    5,
+    3,
+    0,
+    0,
+    8,
+    1,
+    8,
+    0,
+    0,
+    6,
+    1,
+    8,
+    0,
+    0,
+    8,
+    4,
+    8,
+    0,
+    1,
+    9,
+    5,
+    10,
+    0,
+    0,
+    6,
+    7,
+    10,
+    0,
+    0,
+    8,
+    5,
+    7,
+    0,
+    0,
+    11,
+    6,
+    8,
+    0,
+    0,
+    7,
+    1,
+    8,
+    0
+  ]
+}

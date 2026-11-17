@@ -1,0 +1,9 @@
+error[E0057]: type annotation needed
+  --> tests/ui/05-expressions/records/update_path_type_unknown.cheby:21:34
+   |
+21 |   let moved = Holder { ..holder, item.x: 1 }
+   |                                  ^^^^ the type of `item` must be known here to update its field `x`
+   |
+   = note: field names are not unique across types, so the type must come from an annotation, a signature or a use checked earlier (D-213)
+   = help: annotate the type of the updated value
+

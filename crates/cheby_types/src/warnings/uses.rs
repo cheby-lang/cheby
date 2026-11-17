@@ -13,7 +13,7 @@ use cheby_syntax::NodeId;
 use cheby_syntax::ast::{AstNode, AstToken, FieldInit, Interpolation, PathNode};
 
 use crate::ifaces::{self, IfaceCx};
-use crate::thir::{self, Callee, Dict, ExprKind, InterpPart, OpImpl, PatKind};
+use crate::thir::{self, Callee, Dict, ExprKind, InterpPart, OpImpl, PatKind, UpdateField};
 use crate::{Tests, TypesInput};
 
 /// A written path, or a name that is not a path (the root of an
@@ -225,7 +225,7 @@ fn name_use(
         .ok_or_else(|| Ice::new("a resolved name is not in the tree"))?;
     let ident = Interpolation::cast(node)
         .and_then(Interpolation::root)
-        .or_else(|| FieldInit::cast(node).and_then(FieldInit::name))
+        .or_else(|| FieldInit::cast(node).and_then(FieldInit::last_name))
         .ok_or_else(|| Ice::new("a resolved name is neither an interpolation nor a field"))?;
     Ok(PathUse {
         res,
@@ -435,8 +435,8 @@ fn body_refs(body: &thir::Body, push: &mut dyn FnMut(DefId)) {
                 }
             }
             ExprKind::RecordUpdate { fields, .. } => {
-                for field in fields {
-                    for &(ctor, _) in &field.index_per_ctor {
+                for step in fields.iter().flat_map(UpdateField::steps) {
+                    for &(ctor, _) in step {
                         push(ctor);
                     }
                 }

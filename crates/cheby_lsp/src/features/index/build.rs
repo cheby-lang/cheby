@@ -449,7 +449,9 @@ impl<'s> Cx<'s> {
             K::IDENT_PAT | K::AS_PAT | K::REST_PAT | K::LOCAL_FN => self.binding(parent),
             K::FIELD_EXPR => single(self.field(parent, token), Role::FieldRead),
             K::FIELD_INIT => {
-                let value = (!has_token(parent, K::COLON)).then(|| self.name_of(parent, token));
+                // A punned path `origin.y` binds its last name (D-1640).
+                let punned = !has_token(parent, K::COLON) && idents(parent).last() == Some(&token);
+                let value = punned.then(|| self.name_of(parent, token));
                 pair(self.field(parent, token), value, Role::FieldInit)
             }
             K::FIELD_PAT => {

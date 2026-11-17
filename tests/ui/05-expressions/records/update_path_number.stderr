@@ -1,0 +1,6 @@
+error[E0013]: expected a field name, found integer
+  --> tests/ui/05-expressions/records/update_path_number.cheby:11:37
+   |
+11 |   let moved = Shape { ..shape, pair.0: 3 }
+   |                                     ^
+

@@ -3,6 +3,7 @@
 pub(crate) mod completion;
 pub(crate) mod cursor;
 pub(crate) mod edits;
+pub(crate) mod field_path;
 pub(crate) mod hierarchy;
 pub(crate) mod hints;
 pub(crate) mod hover;
