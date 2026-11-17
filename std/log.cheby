@@ -16,10 +16,11 @@
 //! below its level, and only then call a lazy function and read the clock
 //! in context (D-1617, D-1620).
 //!
-//! The scoped fields of `with_fields` are the value of the key `scoped`,
-//! which no package outside std can name (D-1619). `capture` collects records over a channel whose
-//! capacity is `int::max_safe` and ends with an end mark, so it needs no
-//! kernel and never waits (D-1626).
+//! The scoped fields of `with_fields` are the value of the `priv` key
+//! `scoped`, which no code outside this module can name (D-1619).
+//! `capture` collects records over a channel whose capacity is
+//! `int::max_safe` and ends with an end mark, so it needs no kernel and
+//! never waits (D-1626).
 //!
 //! The module has no kernels. It is written over `std::context`,
 //! `std::time`, `std::channel`, `io::write_stderr` and `std::string`'s
@@ -286,12 +287,8 @@ test "compare orders each pair of levels" {
 pub const logger: context::Key<Logger> = context::key(text_logger(Info))
 
 /// The key of the scoped fields that `with_fields` adds, outermost first.
-/// It is not `pub`, so no package outside std can name it (D-1619). It is
-/// package-visible rather than `priv`: a decoded std interface holds no
-/// `priv` item (D-953), so a build that takes `std::log` from the cache
-/// would never evaluate a `priv` constant, and reading the key would find
-/// its slot empty (D-1262).
-const scoped: context::Key<List<Field>> = context::key([])
+/// It is `priv`, so no code outside this module can name it (D-1619).
+priv const scoped: context::Key<List<Field>> = context::key([])
 
 test "the logger in context decides what a call does" {
   let (seen_tx, seen) = channel::new::<String>(4)

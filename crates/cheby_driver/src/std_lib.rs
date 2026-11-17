@@ -668,26 +668,6 @@ mod tests {
         assert_eq!(PLANNED_STD_MODULES, none);
     }
 
-    /// No std module declares a `priv` constant. A decoded std interface
-    /// holds no `priv` item (D-953), so a build that takes a std module from
-    /// the cache walks through a `priv` item's mentions (D-1262) and never
-    /// evaluates a `priv` constant: code that reads one finds its slot
-    /// empty, a fatal error at run time. So `std::log`'s key of scoped
-    /// fields is package-visible (D-1619).
-    #[test]
-    fn std_declares_no_priv_constant() {
-        for module in STD_MODULES {
-            for (number, line) in module.source.lines().enumerate() {
-                assert!(
-                    !line.starts_with("priv const "),
-                    "{}:{}: a `priv` constant",
-                    display_path(module.path),
-                    number.saturating_add(1)
-                );
-            }
-        }
-    }
-
     /// M2 ships tier 1's seven collections, written in Cheby (D-664,
     /// D-336). Each has its file in `std/`, is shipped and is no longer
     /// planned, so importing it is no longer E0038 (D-480).

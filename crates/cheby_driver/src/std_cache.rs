@@ -526,13 +526,19 @@ fn std_front_of(front: &Frontend, module: ModuleId) -> Result<StdFront, Ice> {
 }
 
 /// Std module `path`'s summaries `entries` (the walk's form) as a command
-/// walks them over decoded interfaces (D-1262): a decoded
-/// interface holds no `priv` item (D-953), so a mention of one of the
-/// module's own `priv` items (`visible` lacks its name; `priv` is module
-/// private, so no other module mentions it) is replaced by that item's
-/// mentions, recursively, in the order the walk meets them, each kept once.
-/// The `priv` items' own entries stay, for the load set's closure.
-fn walkable(
+/// walks them over decoded interfaces (D-1262). A decoded interface holds
+/// no `priv` item (D-953), and `visible` lacks their names; `priv` is
+/// module private, so no other module mentions one. A mention of one of
+/// the module's own `priv` functions is replaced by that function's
+/// mentions, recursively, in the order the walk meets them, each kept
+/// once: its code is in the module's code record, and nothing else of it
+/// is needed. A mention of a `priv` type's constructor is left out, since
+/// its module is the walk's own. A mention of a `priv` constant stays: the
+/// constant must be reached to be evaluated, and the front end adds it to
+/// the module's decoded interface ([`add_private_constants`]). The `priv`
+/// items' own entries stay, for the load set's closure and the walk from a
+/// `priv` constant.
+pub(crate) fn walkable(
     entries: &[crate::cache::front::ReferenceSummary],
     path: &str,
     visible: &BTreeSet<String>,
@@ -540,9 +546,14 @@ fn walkable(
     use crate::cache::front::{ItemRef, MentionerKind};
     let hidden: BTreeMap<String, Vec<ItemRef>> = entries
         .iter()
-        .filter(|e| matches!(e.kind, MentionerKind::Function | MentionerKind::Constant))
+        .filter(|e| e.kind == MentionerKind::Function)
         .filter(|e| !visible.contains(&e.item))
         .map(|e| (e.item.clone(), e.mentions.clone()))
+        .collect();
+    let constants: BTreeSet<&str> = entries
+        .iter()
+        .filter(|e| e.kind == MentionerKind::Constant)
+        .map(|e| e.item.as_str())
         .collect();
     let expand = |mentions: &[ItemRef]| -> Vec<ItemRef> {
         let mut out = Vec::new();
@@ -554,7 +565,12 @@ fn walkable(
                 stack.pop();
                 continue;
             };
-            if mention.module == path && !visible.contains(&mention.item) {
+            let own_hidden = mention.module == path
+                && !visible.contains(&mention.item)
+                && !constants.contains(mention.item.as_str());
+            if own_hidden {
+                // A `priv` function's mentions, or nothing for a `priv`
+                // type's constructor.
                 if let Some(inner) = hidden.get(&mention.item)
                     && entered.insert(mention.item.clone())
                 {
@@ -574,6 +590,94 @@ fn walkable(
             mentions: expand(&entry.mentions),
         })
         .collect()
+}
+
+/// Adds std module `iface`'s `priv` constants to its interface decoded from
+/// its front record `record` (D-1262), after its items, so a build that
+/// reads the record reaches and evaluates them as it does the module's
+/// other constants: the record's summaries keep every mention of one
+/// ([`walkable`]), and the module's code record holds its initializer and
+/// its slot. A decoded interface holds no `priv` item (D-953), so each is
+/// a constant entry of the record's summaries that the interface lacks.
+/// Like a package hit's private items ([`crate::warm_keys::add_hidden`]),
+/// it has no signature (`ItemSig::Error`, [`ModuleInterface::is_hidden`]):
+/// a module that names it reports E0043 and is checked again with std from
+/// source (D-1136), and E0078's range check, which reads a constant's type,
+/// passes over it. Its span, where its diagnostics point, is its name's in
+/// the module's text `text` (file `file`), the identifier after the
+/// declaration's `priv const`: the record holds no span of a `priv` item,
+/// and the build ID fixes std's text (D-957).
+///
+/// [`ModuleInterface::is_hidden`]: cheby_iface::ModuleInterface::is_hidden
+///
+/// # Errors
+///
+/// An internal error when the text declares no such constant or the
+/// interface refuses the item.
+pub(crate) fn add_private_constants(
+    record: &FrontRecord,
+    file: cheby_diag::FileId,
+    text: &str,
+    globals: &cheby_iface::Globals,
+    iface: &mut cheby_iface::ModuleInterface,
+) -> Result<(), Ice> {
+    use crate::cache::front::MentionerKind;
+    use cheby_iface::{DefKind, IfaceItem, ItemSig, Namespace, Vis};
+    let mut spans: Option<BTreeMap<&str, cheby_diag::TextRange>> = None;
+    for entry in &record.references {
+        if entry.kind != MentionerKind::Constant {
+            continue;
+        }
+        let name = globals.names.intern(&entry.item);
+        if iface.lookup(Namespace::Value, name).is_some() {
+            continue;
+        }
+        let found = spans.get_or_insert_with(|| private_constant_names(file, text));
+        let range = *found.get(entry.item.as_str()).ok_or_else(|| {
+            Ice::new(format!(
+                "std's front record names a `priv` constant `{}` that its text does not declare",
+                entry.item
+            ))
+        })?;
+        iface.push_hidden(IfaceItem {
+            name,
+            kind: DefKind::Const,
+            vis: Vis::Priv,
+            parent: None,
+            span: Some(cheby_diag::Span::new(file, range)),
+            targets: cheby_package::Targets::ALL,
+            deprecated: None,
+            sig: ItemSig::Error,
+        })?;
+    }
+    Ok(())
+}
+
+/// The name of each `priv` constant that `text` declares, with its range:
+/// each lower-case identifier that follows the tokens `priv` and `const`,
+/// trivia and line breaks between them aside. Only a top-level item can be
+/// `priv`, and a string or a comment is one token, so nothing else matches.
+pub(crate) fn private_constant_names(
+    file: cheby_diag::FileId,
+    text: &str,
+) -> BTreeMap<&str, cheby_diag::TextRange> {
+    use cheby_syntax::SyntaxKind;
+    let lexed = cheby_syntax::lexer::lex(file, text);
+    let tokens: Vec<usize> = (0..lexed.len())
+        .filter(|&i| !lexed.kind(i).is_trivia() && lexed.kind(i) != SyntaxKind::NEWLINE)
+        .collect();
+    let mut out = BTreeMap::new();
+    for window in tokens.windows(3) {
+        if let [first, second, third] = *window
+            && lexed.kind(first) == SyntaxKind::PRIV_KW
+            && lexed.kind(second) == SyntaxKind::CONST_KW
+            && lexed.kind(third) == SyntaxKind::LOWER_IDENT
+        {
+            out.entry(lexed.text(text, third))
+                .or_insert_with(|| lexed.range(third));
+        }
+    }
+    out
 }
 
 /// The std modules of `front`, in build order.

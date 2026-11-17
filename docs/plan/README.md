@@ -439,6 +439,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1631    | The checker swaps in the constructor, MIR lowering makes the location; cache and AOT tests          |
 | D-1633    | No std module is planned once `std::log` ships; E0038 keeps only its made-up probe module           |
 | D-1635    | `std::log` is built in four committed steps; example 034 `logging` binds as an M3 example           |
+| D-1636    | A warm build reaches and evaluates a `priv` constant of std; no encoding or hash changes            |
 
 ## Open questions
 
