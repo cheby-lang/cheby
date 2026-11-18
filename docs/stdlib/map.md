@@ -9,7 +9,7 @@ pub type Map<K, V>
 `Map` is opaque. It is a persistent hash array mapped trie, so every update returns a new map, and the old one stays usable and shares most of its nodes with the new one (D-039).
 
 - **Keys.** Keys need no interface. They are compared with `==` and hashed with the built-in structural hash (§3.13).
-- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find` and the callbacks of `filter` and `map_values` visit the entries in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
+- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count` and the callbacks of `filter` and `map_values` visit the entries in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
 - **Kernels.** `new`, `from_list`, `size`, `is_empty`, `get`, `has_key`, `insert`, `remove`, `upsert`, `keys`, `values` and `to_list` are runtime kernels, and their costs are required (D-274, D-300). The other functions are written in Cheby over them, and their costs are informative. `insert`, `remove` and `upsert` update the map in place when it is unique (§9.3).
 - **Equality, hashing and printing.** Two maps are `==` when they hold the same entries, in any order, and equal maps hash equally (D-093, §3.13). Debug printing writes `map::from_list([…])` with the entries sorted by the debug text of each `(key, value)` pair, so it is the same on every run (D-344).
 - **Interfaces.** `Map` satisfies neither `Show` nor `Compare`, because its order changes between runs (§8.8, D-344).
@@ -137,6 +137,24 @@ test "get looks a key up" {
   let ages = map::from_list([("ada", 36), ("alan", 41)])
   assert map::get(ages, "ada") == Some(36)
   assert map::get(ages, "grace") == None
+}
+```
+
+### `get_or`
+
+```cheby
+pub fn get_or<K, V>(m: Map<K, V>, key: K, default: V) -> V
+```
+
+Returns the value stored under `key`, or `default` when `key` is not in the map, so `get_or(m, k, 0)` says what `option::unwrap_or(map::get(m, k), 0)` says (D-1648).
+
+- **Cost:** O(log n), effectively constant. Informative.
+
+```cheby
+test "get_or falls back for a missing key" {
+  let ages = map::from_list([("ada", 36), ("alan", 41)])
+  assert map::get_or(ages, "ada", 0) == 36
+  assert map::get_or(ages, "grace", 0) == 0
 }
 ```
 
@@ -362,10 +380,10 @@ Combines the entries like `fold`, in the map's per-process order (D-093), with a
 
 ```cheby
 test "try_fold stops at the first error" {
-  fn add_stock(total: Int, name: String, count: Int) -> Result<Int, String> {
-    case count {
+  fn add_stock(total: Int, name: String, units: Int) -> Result<Int, String> {
+    case units {
       0 => Err("no {name}")
-      _ => Ok(total + count)
+      _ => Ok(total + units)
     }
   }
   let stock = map::from_list([("pear", 3), ("fig", 0), ("apple", 5)])
@@ -438,6 +456,24 @@ test "find returns a matching entry" {
   let ages = map::from_list([("ada", 36), ("alan", 41)])
   assert map::find(ages, fn(_, age) { age > 40 }) == Some(("alan", 41))
   assert map::find(ages, fn(_, age) { age > 50 }) == None
+}
+```
+
+### `count`
+
+```cheby
+pub fn count<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Int
+```
+
+Returns the number of entries for which `predicate` returns `True`, as `list::count` does for a list (D-1659). It calls `predicate` once per entry, in the map's per-process order (D-093).
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "count counts the matching entries" {
+  let scores = map::from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert map::count(scores, fn(_, value) { value > 1 }) == 2
+  assert map::count(map::new::<String, Int>(), fn(_, _) { True }) == 0
 }
 ```
 

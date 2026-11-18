@@ -56,7 +56,7 @@
 
 == src/main.cheby:8:27 completion slice length
 {
-  "count": 30,
+  "count": 34,
   "isIncomplete": false,
   "items": [
     {

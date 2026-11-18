@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-1656, D-115
+//! Several strings inside one interpolation, such as a separator, are still
+//! one error.
+
+import std::string
+
+fn main() {
+  let words = ["a", "b"]
+  let s = "words: {string::join(words, ", ")}"
+  assert s == "words: a, b"
+}

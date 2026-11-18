@@ -726,3 +726,58 @@ test "gcd and lcm reach the limits of Int" {
   assert lcm(max_value, 1) == max_value
   assert lcm(min_value + 1, -1) == max_value
 }
+
+/// Returns the values of the ASCII digits of `text`, in order, or
+/// `Err(Nil)` when `text` is empty or holds any other character
+/// (D-1654).
+pub fn digits(text: String) -> Result<List<Int>, Nil> {
+  fn step(rest: List<Int>, found: List<Int>) -> Result<List<Int>, Nil> {
+    case rest {
+      [] => Ok(found)
+      [c, ..tail] when is_digit(c) => step(tail, [..found, c - 48])
+      [_, ..] => Err(Nil)
+    }
+  }
+  case text {
+    "" => Err(Nil)
+    _ => step(code_points(text), [])
+  }
+}
+
+test "digits reads one digit per character" {
+  assert digits("0123") == Ok([0, 1, 2, 3])
+  assert digits("9") == Ok([9])
+  assert digits("") == Err(Nil)
+  assert digits("12a") == Err(Nil)
+  assert digits("-1") == Err(Nil)
+  assert digits("1 2") == Err(Nil)
+  assert digits("4\n") == Err(Nil)
+  assert digits("٣") == Err(Nil)
+}
+
+/// Returns the decimal digits of `n`'s absolute value, from the most
+/// significant, so `to_digits(0)` is `[0]` (D-1654). It reads the digits
+/// off the value made non-positive, which always fits.
+pub fn to_digits(n: Int) -> List<Int> {
+  fn step(rest: Int, found: List<Int>) -> List<Int> {
+    let next = [0 - rest % 10, ..found]
+    case rest / 10 {
+      0 => next
+      higher => step(higher, next)
+    }
+  }
+  step(non_positive(n), [])
+}
+
+test "to_digits writes the digits of the absolute value" {
+  assert to_digits(120) == [1, 2, 0]
+  assert to_digits(-120) == [1, 2, 0]
+  assert to_digits(0) == [0]
+  assert to_digits(7) == [7]
+  assert to_digits(max_safe) == [9, 0, 0, 7, 1, 9, 9, 2, 5, 4, 7, 4, 0, 9, 9, 1]
+}
+
+@target(native)
+test "to_digits reaches the limits of Int" {
+  assert to_digits(min_value) == [9, 2, 2, 3, 3, 7, 2, 0, 3, 6, 8, 5, 4, 7, 7, 5, 8, 0, 8]
+}

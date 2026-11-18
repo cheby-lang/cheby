@@ -1,0 +1,22 @@
+// @mode: check-fail
+// @decisions: D-1658, D-1662
+//! A fixed table of names from other languages gives the help: the item
+//! in another module, or a "did you mean" in the same one. It comes before
+//! the same name in other std modules, so `list::size` points to
+//! `list::length`, not to `file::size`, `heap::size` or `map::size`.
+
+import std::file
+import std::int
+import std::io
+import std::list
+import std::string
+
+fn main() {
+  let text = file::read_text("input.txt")
+  let count = list::len([1, 2])
+  let number = string::parse_int("12")
+  let size = list::size([1, 2])
+  let index = list::index_of([1, 2], 2)
+  let parsed = int::from_string("3")
+  io::println("{text} {count} {number} {size} {index:?} {parsed:?}")
+}

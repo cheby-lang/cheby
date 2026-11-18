@@ -372,9 +372,12 @@ enum Quoted {
 ///   (§2, D-114, D-130).
 /// - An interpolation ends at the next `}` (§2.5.4). The lexer also ends it
 ///   at a `"`, which then ends the string, and at a line break, after which
-///   the string goes on. The parser skips the brackets inside it, so they
-///   are not counted (D-1541), and there `//` starts no comment, `/*` no
-///   error token and `r"` no raw string.
+///   the string goes on. A `"` whose string closes on the same line, with a
+///   `}` after it there, starts a string inside the interpolation instead,
+///   and a `}` in that string's text ends nothing (D-1656). The parser
+///   skips the brackets inside an interpolation, so they are not counted
+///   (D-1541), and there `//` starts no comment, `/*` no error token and
+///   `r"` no raw string.
 /// - `/*` starts an error token, which the parser skips, so the brackets
 ///   inside it are not counted (D-078, D-1541). The scan ends it after a
 ///   `*/` on the same line, as the lexer does, or else at the end of the
@@ -400,7 +403,12 @@ fn scan(text: &str) -> Scan {
             },
             Some(Quoted::Interpolation) => match c {
                 '}' | '\n' => quoted = Some(Quoted::Text),
-                '"' => quoted = None,
+                // A string inside the interpolation, closed on its line with
+                // a `}` after it there, is skipped whole (D-1656).
+                '"' => match inner_string_end(&chars, at) {
+                    Some(end) => at = end,
+                    None => quoted = None,
+                },
                 _ => {}
             },
             None => match c {
@@ -454,6 +462,30 @@ fn scan(text: &str) -> Scan {
     } else {
         Scan::Closed
     }
+}
+
+/// For a `"` inside an interpolation that ends before `at`, the position
+/// after the string it starts there, when that string closes on the same
+/// line and a `}` follows it on that line, as the lexer reads it (D-1656).
+/// An escape does not close the string, and a `\` before a line break
+/// does not carry it onto the next line.
+fn inner_string_end(chars: &[char], at: usize) -> Option<usize> {
+    let mut i = at;
+    let end = loop {
+        match *chars.get(i)? {
+            '"' => break i.saturating_add(1),
+            '\n' => return None,
+            '\\' if chars.get(i.saturating_add(1)) == Some(&'\n') => return None,
+            '\\' => i = i.saturating_add(2),
+            _ => i = i.saturating_add(1),
+        }
+    };
+    chars
+        .get(end..)?
+        .iter()
+        .take_while(|&&c| c != '\n')
+        .any(|&c| c == '}')
+        .then_some(end)
 }
 
 /// The position after an escape in a string whose `\` ends before `at`:
@@ -643,6 +675,33 @@ mod tests {
         // No comment and no raw string inside an interpolation.
         assert!(!is_open("\"{ // }\""));
         assert!(!is_open("\"{r}\""));
+    }
+
+    /// A `"` inside an interpolation starts a string there when that string
+    /// closes on its line and a `}` follows it on that line, as the lexer
+    /// reads it, and its text counts for nothing (D-1656, D-1541).
+    #[test]
+    fn strings_inside_interpolations_follow_the_lexer() {
+        assert!(!is_open(r#""{f("x")}""#));
+        assert!(!is_open(r#"g("{f("x")}")"#));
+        assert!(is_open(r#"g("{f("x")}""#));
+        assert!(!is_open(r#""{f("a", "b")}""#));
+        // Its brackets, quotes and braces end nothing.
+        assert!(!is_open(r#""{f("(", "{")}""#));
+        assert!(!is_open(r#""{f("a\"b")}""#));
+        assert!(!is_open(r#""{f("}")}""#));
+        assert!(is_open(r#"g("{f(")")}""#));
+        assert!(!is_open(r#""price {" + "}""#));
+        // With no `}` after it on its line, the `"` ends the interpolation
+        // and the string, as before.
+        assert!(!is_open(r#""{""#));
+        assert!(!is_open(r#""price {""#));
+        // Here the `}` or `)` after `x` matches nothing and ends the entry.
+        assert!(!is_open(r#"("{f("x}")""#));
+        assert!(!is_open(r#"("{f("x)}"#));
+        // A `}` on the next line does not count.
+        assert!(!is_open("\"{f(\"x\"\n)}\""));
+        assert!(is_open("\"{f(\"x\"\n)}\"\""));
     }
 
     /// The error token of a `/*` runs through the next `*/` on its line,

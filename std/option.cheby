@@ -2,7 +2,9 @@
 //! tests, lists of options and conversions.
 //!
 //! `Option`, `Some` and `None` are builtin items whose home module is this
-//! one (D-447). Everything here is written in Cheby.
+//! one (D-447). Everything here is written in Cheby but the package-visible
+//! kernel `panic_at`, through which `expect` and `result::expect` panic at
+//! the place of their call (D-1647).
 
 import std::list
 
@@ -82,6 +84,36 @@ test "lazy_unwrap_or calls the default only for None" {
   assert lazy_unwrap_or(list::get([5], 0), fn() { panic as "not called" }) == 5
   assert lazy_unwrap_or(list::get([5], 3), fn() { 0 }) == 0
 }
+
+/// Returns the value of a `Some`, and panics with `message` on `None`
+/// (D-1646). Through `@std_call_site`, the compiler calls `expect_at` in
+/// its place with the place where it is named, so the panic reports the
+/// caller's location and no program reaches this body (D-1647, D-1630).
+@std_call_site(expect_at)
+pub fn expect<T>(o: Option<T>, message: String) -> T {
+  let _ = (o, message)
+  panic as "the compiler did not replace this call of `option::expect` (D-1630)"
+}
+
+/// What a call of `expect` at `path`:`line`:`column` does (D-1647).
+fn expect_at<T>(o: Option<T>, message: String, path: String, line: Int, column: Int) -> T {
+  case o {
+    Some(value) => value
+    None => panic_at(message, path, line, column)
+  }
+}
+
+test "expect returns the value of a Some" {
+  assert expect(list::get([5], 0), "no first element") == 5
+  assert expect(Some("text"), "no text") == "text"
+}
+
+/// Ends the calling fiber with a panic whose message is `message`, located
+/// at `path`:`line`:`column`, as a `panic` written there does (§11.6,
+/// D-1647). Package-visible: `result::expect_at` panics through it too.
+@external(native, "cheby_option_panic_at")
+@external(js, "./option.mjs", "panic_at")
+fn panic_at(message: String, path: String, line: Int, column: Int) -> Never
 
 /// Returns `first` if it is `Some`, and `second` otherwise.
 pub fn or<T>(first: Option<T>, second: Option<T>) -> Option<T> {

@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/expect/result_err.cheby:30:15:
+the total parses: not a number: twelve

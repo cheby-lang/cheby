@@ -1,0 +1,24 @@
+// @mode: check-fail
+// @decisions: D-1660, D-1647
+//! `option::expect` and `result::expect` run in constants. One that
+//! fails is E0075, as a failing `let assert` is, and its note gives the
+//! place of the call in the caller's file, not E0077 for the kernel it
+//! panics through (§4.5, §11.6).
+
+import std::int
+import std::io
+import std::list
+import std::option
+import std::result
+
+const first: Int = option::expect(list::get([4, 5], 0), "the list has a first element")
+
+const missing: Int = option::expect(list::get([4, 5], 2), "the list has a third element")
+
+const parsed: Int = result::expect(int::parse("12"), "the text is a number")
+
+const unparsed: Int = result::expect(int::parse("1x"), "the text is a number")
+
+fn main() {
+  io::println("{first} {missing} {parsed} {unparsed}")
+}

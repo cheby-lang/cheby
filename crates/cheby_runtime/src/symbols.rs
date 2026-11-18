@@ -6,7 +6,7 @@
 //! [`sym::ALL`], then every kernel module's kernels. Each kernel module
 //! (`io`, `num`, `list`, which also holds `std::heap`'s, `text`, `bytes`,
 //! `env`, `hamt`, `consteval`, `fiber_ops`, `random`, `runtime_info`,
-//! `time`, `net`, `file`, `http`, `process`, `context`) registers its kernels through its own `kernels`
+//! `time`, `net`, `file`, `http`, `process`, `context`, `option`) registers its kernels through its own `kernels`
 //! function and names the std modules it implements completely in its
 //! `COMPLETE`, so kernel packages never edit this file.
 //!
@@ -162,6 +162,7 @@ pub fn symbols() -> Vec<(&'static str, *const u8)> {
     crate::http::kernels(&mut out);
     crate::process::kernels(&mut out);
     context::kernels(&mut out);
+    crate::option::kernels(&mut out);
     // `cheby.h`'s functions, which C code calls (D-945): runtime exports,
     // so E0055 and the C-object check reserve them (D-944, D-1204).
     crate::ffi::kernels(&mut out);
@@ -190,6 +191,7 @@ pub fn complete_modules() -> Vec<&'static str> {
         crate::http::COMPLETE,
         crate::process::COMPLETE,
         context::COMPLETE,
+        crate::option::COMPLETE,
     ]
     .concat()
 }
@@ -737,6 +739,30 @@ mod tests {
                 .collect();
         assert_eq!(registered, declared);
         assert!(registered.contains_key("cheby_process_sys_exit"));
+    }
+
+    /// `std::option`'s one kernel, `panic_at`, has the C signature of its
+    /// `@external` declaration in `std/option.cheby` and is not
+    /// `@std_context`: it finds the running fiber itself (D-1647).
+    #[test]
+    fn option_kernels_match_their_declarations() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+        let source = std::fs::read_to_string(root.join("option.cheby")).unwrap();
+        let mut declared = BTreeMap::new();
+        for (symbol, context, signature) in kernel_declarations(&source) {
+            assert!(!context, "{symbol} is `@std_context`");
+            assert!(
+                declared.insert(symbol.clone(), signature).is_none(),
+                "{symbol} is declared twice"
+            );
+        }
+        let registered: BTreeMap<String, (Vec<&'static str>, &'static str)> =
+            crate::option::signatures()
+                .into_iter()
+                .map(|(name, params, result)| (name.to_owned(), (params.to_vec(), result)))
+                .collect();
+        assert_eq!(registered, declared);
+        assert!(registered.contains_key("cheby_option_panic_at"));
     }
 
     #[test]

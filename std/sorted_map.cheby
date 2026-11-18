@@ -918,26 +918,26 @@ test "the tree stays balanced through random inserts and removes" {
   fn next(seed: Int) -> Int {
     (seed * 1_103_515_245 + 12_345) % 2_147_483_648
   }
-  // Inserts or removes `count` pseudo-random keys below 500 in `m` and in
+  // Inserts or removes `steps` pseudo-random keys below 500 in `m` and in
   // the reference `seen`, one remove for two inserts, checking the tree
   // after each step.
   fn churn(
     m: SortedMap<Int, Int>,
     seen: set::Set<Int>,
     seed: Int,
-    count: Int,
+    steps: Int,
   ) -> (SortedMap<Int, Int>, set::Set<Int>) {
-    case count {
+    case steps {
       0 => (m, seen)
       _ => {
         let key = seed / 65_536 % 500
-        let (changed, changed_keys) = case count % 3 {
+        let (changed, changed_keys) = case steps % 3 {
           0 => (remove(m, key), set::remove(seen, key))
           _ => (insert(m, key, key * 2), set::insert(seen, key))
         }
         assert valid(changed, 0, 500)
         assert count_entries(changed) == set::size(changed_keys)
-        churn(changed, changed_keys, next(seed), count - 1)
+        churn(changed, changed_keys, next(seed), steps - 1)
       }
     }
   }
@@ -1024,4 +1024,41 @@ test "split and at work on a large map" {
   assert size(low) + size(high) == 19_999
   assert weighed(low) && weighed(high)
   assert at(high, 0) == Some((30_002, 15_001))
+}
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the value stored under the key that compares `Equal` to `key`,
+/// or `default` when there is none (D-1648, D-1659).
+pub fn get_or<K: Compare, V>(m: SortedMap<K, V>, key: K, default: V) -> V {
+  case get(m, key) {
+    Some(value) => value
+    None => default
+  }
+}
+
+test "get_or falls back for a missing key" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert get_or(ages, "ada", 0) == 36
+  assert get_or(ages, "grace", 0) == 0
+  assert get_or(new::<String, Int>(), "ada", -1) == -1
+}
+
+/// Returns the number of entries for which `predicate` returns `True`,
+/// calling it once per entry from the smallest key to the largest (D-1659).
+pub fn count<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Int {
+  fold_entries(m, 0, fn(found, key, value) {
+    case predicate(key, value) {
+      True => found + 1
+      False => found
+    }
+  })
+}
+
+test "count counts the matching entries" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert count(scores, fn(_, value) { value > 1 }) == 2
+  assert count(scores, fn(key, _) { key == "z" }) == 0
+  assert count(new::<String, Int>(), fn(_, _) { True }) == 0
 }

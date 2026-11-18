@@ -427,3 +427,66 @@ pub fn read_i64_be(data: Bytes, offset: Int) -> Option<I64>
 @external(native, "cheby_bytes_read_i64_le")
 @external(js, "./bytes.mjs", "read_i64_le")
 pub fn read_i64_le(data: Bytes, offset: Int) -> Option<I64>
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the byte at `index`, or `default` when `index` is outside the
+/// bytes (D-1648, D-1659).
+pub fn get_or(data: Bytes, index: Int, default: U8) -> U8 {
+  case get(data, index) {
+    Some(byte) => byte
+    None => default
+  }
+}
+
+test "get_or falls back outside the bytes" {
+  let data = from_list([10, 20, 30])
+  let negative = -1
+  assert get_or(data, 1, 0) == 20
+  assert get_or(data, 3, 0) == 0
+  assert get_or(data, negative, 255) == 255
+  assert get_or(new(), 0, 7) == 7
+}
+
+/// Returns the last `count` bytes of `data` (D-1653, D-1659).
+@std_clamped(count)
+pub fn take_last(data: Bytes, count: Int) -> Bytes {
+  case count > 0 {
+    True => slice(data, length(data) - count, length(data))
+    False => new()
+  }
+}
+
+test "take_last keeps a suffix" {
+  let data = from_list([1, 2, 3])
+  let negative = -1
+  let huge = 9_007_199_254_740_991
+  assert take_last(data, 2) == from_list([2, 3])
+  assert take_last(data, 10) == data
+  assert take_last(data, 0) == new()
+  assert take_last(data, negative) == new()
+  assert take_last(data, 0 - huge) == new()
+  assert take_last(data, huge) == data
+}
+
+/// Returns `data` without its last `count` bytes (D-1653, D-1659).
+@std_clamped(count)
+pub fn drop_last(data: Bytes, count: Int) -> Bytes {
+  case count > 0 {
+    True => slice(data, 0, length(data) - count)
+    False => data
+  }
+}
+
+test "drop_last removes a suffix" {
+  let data = from_list([1, 2, 3])
+  let negative = -1
+  let huge = 9_007_199_254_740_991
+  assert drop_last(data, 1) == from_list([1, 2])
+  assert drop_last(data, 10) == new()
+  assert drop_last(data, 0) == data
+  assert drop_last(data, negative) == data
+  assert drop_last(data, 0 - huge) == data
+  assert drop_last(data, huge) == new()
+}

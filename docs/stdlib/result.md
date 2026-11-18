@@ -9,7 +9,7 @@ pub exposed type Result<T, E> {
 }
 ```
 
-There are no functions that panic on an `Err`, such as Rust's `unwrap` and `expect`. `let assert Ok(value) = r` unwraps with a message instead (D-068, D-159, D-317).
+Only [`expect`](#expect) panics on an `Err`, with the caller's message and the error, at the place of its call (D-1646, D-1647). There is no `unwrap` without a message, such as Rust's. `let assert Ok(value) = r` unwraps with a pattern (D-068, D-159, D-317).
 
 ## Chaining
 
@@ -166,6 +166,27 @@ test "lazy_unwrap_or calls the default only for an error" {
   assert result::lazy_unwrap_or(int::parse("twelve"), fn() { 0 }) == 0
 }
 ```
+
+### `expect`
+
+```cheby
+pub fn expect<T, E: Show>(r: Result<T, E>, message: String) -> T
+```
+
+Returns the value of an `Ok`, and panics on an `Err` (D-1646). The panic's message is `message`, then `: ` and the `show` of the error, so `result::expect(int::parse("x"), "bad count")` panics with `bad count: Nil`.
+
+- **Panics:** on an `Err`, with the message above. The panic is located at the place of the call, the start of the path that names `expect`, as for [`option::expect`](option.md#expect) (§4.8, §11.6, D-1629, D-1647).
+- **Cost:** O(1), plus the `show` of the error on an `Err`. Informative.
+
+```cheby
+test "expect returns the value of an Ok" {
+  assert result::expect(int::parse("12"), "not a number") == 12
+  let good: Result<String, Int> = Ok("text")
+  assert result::expect(good, "no text") == "text"
+}
+```
+
+`expect` carries the standard-library-only attribute `@std_call_site`, so the compiler calls its package-visible constructor `expect_at` in its place with the path, line and column of the call, and `expect_at` panics through `std::option`'s kernel `panic_at` (D-1647). Constant evaluation runs that kernel, so a failing `expect` in a constant is E0075 at its caller (§4.5, D-1660). `let assert Ok(value) = r` remains the way to unwrap with a pattern (D-068).
 
 ### `or`
 

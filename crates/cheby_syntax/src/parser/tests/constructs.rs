@@ -459,6 +459,62 @@ fn interpolation_errors_are_e0012() {
     assert_ok(&in_fn("  \"{a} {a.b.c} {d:?} \\{e}\""));
 }
 
+/// A string inside an interpolation that closes on its line, with a `}`
+/// after it there, is skipped with the interpolation: one E0012 and nothing
+/// after it (D-1656).
+#[test]
+fn quote_in_interpolation_is_one_e0012() {
+    for text in [
+        r#""{f("x")}""#,
+        r#""{f("a", "b")}""#,
+        r#""{f("a\"b")}""#,
+        r#""{f("{x}")}""#,
+        r#""{f("(")}""#,
+        r#""{"x"}""#,
+        r#""{x + "y"}""#,
+        r#""{f(r"x")}""#,
+        r#""{f("\q")}""#,
+        r#""price {" + "}""#,
+        r#""{""#,
+        r#""price {""#,
+    ] {
+        let source = in_fn(&format!("  {text}"));
+        assert_eq!(codes_of(&source), ["E0012"], "{text}");
+        let (_, tree, _) = parse_text("test.cheby", &source);
+        assert!(crate::validate_tokens(&tree).is_empty(), "{text}");
+    }
+    // The message names the first token that is not a name.
+    let errors = errors_of(&in_fn(r#"  "{f("x")}""#));
+    assert!(
+        errors.contains("unexpected `(` in string interpolation"),
+        "{errors}"
+    );
+    let errors = errors_of(&in_fn(r#"  "{"x"}""#));
+    assert!(
+        errors.contains("unexpected string in string interpolation"),
+        "{errors}"
+    );
+}
+
+/// An interpolation whose first token is a string gets the help that `\{`
+/// writes a literal `{`, and any other one the help to bind a name
+/// (D-1661).
+#[test]
+fn string_first_in_interpolation_suggests_an_escaped_brace() {
+    let escape = "a `{` in a string starts an interpolation; `\\{` writes a literal `{`";
+    let bind = "bind other values to a name first";
+    for text in [r#""price {" + amount + "}""#, r#""{"x"}""#] {
+        let helps = helps_of(&in_fn(&format!("  {text}")));
+        assert!(helps.iter().any(|h| h == escape), "{text}: {helps:?}");
+        assert!(!helps.iter().any(|h| h.contains(bind)), "{text}: {helps:?}");
+    }
+    for text in [r#""{f("x")}""#, r#""{x + "y"}""#] {
+        let helps = helps_of(&in_fn(&format!("  {text}")));
+        assert!(helps.iter().any(|h| h.contains(bind)), "{text}: {helps:?}");
+        assert!(!helps.iter().any(|h| h == escape), "{text}: {helps:?}");
+    }
+}
+
 #[test]
 fn line_break_in_interpolation_names_the_line_break() {
     let errors = errors_of(&in_fn("  \"{x\n}\""));
@@ -661,6 +717,32 @@ fn reserved_words_explain_grammar_errors() {
     // A reserved word that parses as a name is not a grammar error: name
     // resolution reports it where it is bound (E0007).
     assert_eq!(codes_of(&in_fn("  let go = 1\n  go")), Vec::<String>::new());
+}
+
+/// Two pattern habits from other languages keep E0013 and get a help:
+/// Gleam's string prefix `"L" <> rest` and Rust's `.._` (D-1657). The rest
+/// of the arm or `let` adds no error.
+#[test]
+fn pattern_habits_explain_grammar_errors() {
+    let prefix = "a pattern cannot match a prefix of a string (D-113): test it with \
+                  `string::starts_with` and remove it with `string::drop_start`";
+    let rest = "write `..` to ignore the rest of the list, or `..name` to bind it";
+    let arm = in_fn("  case s {\n    \"L\" <> n => 1\n    _ => 0\n  }");
+    assert_eq!(codes_of(&arm), ["E0013"]);
+    assert_eq!(helps_of(&arm), [prefix]);
+    let let_stmt = in_fn("  let \"L\" <> n = s");
+    assert_eq!(codes_of(&let_stmt), ["E0013"]);
+    assert_eq!(helps_of(&let_stmt), [prefix]);
+    let list = in_fn("  case xs {\n    [x, .._] => x\n    _ => 0\n  }");
+    assert_eq!(codes_of(&list), ["E0013"]);
+    assert_eq!(helps_of(&list), [rest]);
+    let middle = in_fn("  let [a, .._, b] = xs");
+    assert_eq!(codes_of(&middle), ["E0013"]);
+    assert_eq!(helps_of(&middle), [rest]);
+    // A comparison after a string in an expression is not a pattern.
+    assert_eq!(helps_of(&in_fn("  \"a\" < > b")), Vec::<String>::new());
+    // `..` and `..name` stay valid.
+    assert_ok(&in_fn("  let [a, ..] = xs\n  let [b, ..more] = xs"));
 }
 
 #[test]

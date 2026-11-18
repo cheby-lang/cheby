@@ -168,6 +168,10 @@ pub(crate) struct Parser<'a> {
     /// follow until the next top-level item are consequences, and are not
     /// reported.
     unwinding: bool,
+    /// A help line for the error reported at the token with this raw
+    /// index, if one is, set by the grammar before the caller reports it
+    /// (D-1657).
+    pending_help: Option<(usize, &'static str)>,
 }
 
 /// The `{` and `}` tokens of the file matched like brackets, ignoring the
@@ -307,6 +311,7 @@ impl<'a> Parser<'a> {
             open_delims: Vec::new(),
             braces: Braces::new(lexed, text),
             unwinding: false,
+            pending_help: None,
         }
     }
 
@@ -611,7 +616,22 @@ impl<'a> Parser<'a> {
             return;
         }
         self.last_error_raw = Some(current.raw);
+        let diag = match self.pending_help {
+            Some((raw, help)) if raw == current.raw => {
+                self.pending_help = None;
+                diag.with_help(help)
+            }
+            _ => diag,
+        };
         self.errors.push(diag);
+    }
+
+    /// Adds `help` to the error that a caller reports at the current
+    /// token, if one does: the grammar knows the habit behind a token that
+    /// only its caller rejects, such as `<>` after a string pattern
+    /// (D-1657).
+    pub(crate) fn help_at_current(&mut self, help: &'static str) {
+        self.pending_help = Some((self.input.current().raw, help));
     }
 
     /// Whether an error was already reported at the current token.

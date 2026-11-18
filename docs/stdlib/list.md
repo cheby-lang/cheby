@@ -128,6 +128,25 @@ test "get reads by position" {
 }
 ```
 
+### `get_or`
+
+```cheby
+pub fn get_or<T>(xs: List<T>, index: Int, default: T) -> T
+```
+
+Returns the element at `index`, counting from 0, or `default` where `get` gives `None`, so a negative or past-the-end index gives `default` (D-318, D-1648).
+
+- **Cost:** O(log n). Informative.
+
+```cheby
+test "get_or falls back outside the list" {
+  assert list::get_or([10, 20, 30], 1, 0) == 20
+  assert list::get_or([10, 20, 30], 3, 0) == 0
+  assert list::get_or([10, 20, 30], -1, 0) == 0
+  assert list::get_or(list::new::<String>(), 0, "none") == "none"
+}
+```
+
 ### `first`
 
 ```cheby
@@ -300,6 +319,50 @@ test "drop removes a prefix" {
 }
 ```
 
+### `take_last`
+
+```cheby
+pub fn take_last<T>(xs: List<T>, count: Int) -> List<T>
+```
+
+Returns the last `count` elements of `xs`, sharing structure with `xs` (D-1653).
+
+- **Clamps:** `count` to `0` to `length`, as `take` does, so a negative count gives `[]` and a count past the end gives `xs` (D-298, D-303).
+- **Cost:** O(log n). Informative.
+
+```cheby
+test "take_last keeps a suffix" {
+  let negative = 0 - 1
+  assert list::take_last([1, 2, 3], 2) == [2, 3]
+  assert list::take_last([1, 2, 3], 10) == [1, 2, 3]
+  assert list::take_last([1, 2, 3], 0) == []
+  assert list::take_last([1, 2, 3], negative) == []
+}
+```
+
+### `drop_last`
+
+```cheby
+pub fn drop_last<T>(xs: List<T>, count: Int) -> List<T>
+```
+
+Returns `xs` without its last `count` elements, so `drop_last(xs, 1)` is every element but the last (D-1653).
+
+- **Clamps:** `count` to `0` to `length`, as `drop` does, so a negative count gives `xs` and a count past the end gives `[]` (D-298, D-303).
+- **Cost:** O(log n). Informative.
+
+```cheby
+test "drop_last removes a suffix" {
+  let negative = 0 - 1
+  assert list::drop_last([1, 2, 3], 1) == [1, 2]
+  assert list::drop_last([1, 2, 3], 10) == []
+  assert list::drop_last([1, 2, 3], 0) == [1, 2, 3]
+  assert list::drop_last([1, 2, 3], negative) == [1, 2, 3]
+}
+```
+
+`take_last` and `drop_last` count from the end, where `take` and `drop` count from the front, and `append(drop_last(xs, k), take_last(xs, k))` is `xs` for every `k`.
+
 ### `split_at`
 
 ```cheby
@@ -381,6 +444,29 @@ test "split_while splits after the matching prefix" {
   assert list::split_while(list::new::<String>(), is_digit) == ([], [])
 }
 ```
+
+### `split_when`
+
+```cheby
+pub fn split_when<T>(xs: List<T>, is_separator: fn(T) -> Bool) -> List<List<T>>
+```
+
+Returns the runs of elements between the elements for which `is_separator` returns `True`, in order. The separators are left out, and so are empty runs, so separators at either end or next to each other add nothing, and `split_when([], f)` is `[]` (D-1652). It calls `is_separator` once per element, front to back.
+
+- **Cost:** O(n), plus the calls to `is_separator`. Informative.
+
+```cheby
+test "split_when drops the separators and empty runs" {
+  let is_zero = fn(n) { n == 0 }
+  assert list::split_when([1, 0, 0, 2, 0], is_zero) == [[1], [2]]
+  assert list::split_when([0, 1, 2, 0, 3], is_zero) == [[1, 2], [3]]
+  assert list::split_when([1, 2], is_zero) == [[1, 2]]
+  assert list::split_when([0, 0], is_zero) == []
+  assert list::split_when(list::new::<Int>(), is_zero) == []
+}
+```
+
+`string::split` keeps empty parts instead, because `string::join` is its exact inverse (D-1652).
 
 ## Searching
 
@@ -755,6 +841,26 @@ test "fold combines from the front" {
 }
 ```
 
+### `scan`
+
+```cheby
+pub fn scan<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> List<A>
+```
+
+Returns the value of the fold after each element: the result of calling `f` with `initial` and the first element, then with that result and the second element, and so on. The result is as long as `xs` and does not start with `initial`, so for a non-empty `xs` its last element is `fold(xs, initial, f)` (D-1651).
+
+- **Cost:** O(n), plus the calls to `f`. Informative.
+
+```cheby
+test "scan keeps every running value" {
+  assert list::scan([1, 2, 3], 0, int::add) == [1, 3, 6]
+  assert list::scan(["a", "b", "c"], "", fn(text, s) { text + s }) == ["a", "ab", "abc"]
+  assert list::scan(list::new::<Int>(), 0, int::add) == []
+}
+```
+
+The result stays aligned with `xs`, as Gleam's and F#'s `scan` do. `[initial, ..scan(xs, initial, f)]` gives the longer list of Haskell's `scanl` (D-1651).
+
 ### `try_fold`
 
 ```cheby
@@ -963,6 +1069,44 @@ Returns the smallest element by `compare`, or `None` for `[]` (D-409). Among ele
 test "min_with returns the first of equal elements" {
   let by_count = fn((_, a), (_, b)) { int::compare(a, b) }
   assert list::min_with([("a", 2), ("b", 1), ("c", 1)], by_count) == Some(("b", 1))
+}
+```
+
+### `max_index`
+
+```cheby
+pub fn max_index<T: Compare>(xs: List<T>) -> Option<Int>
+```
+
+Returns the index of the element that `max` returns, or `None` for `[]`. Among elements that compare `Equal`, it is the index of the last, as `max` returns the last, so `get` at that index gives what `max` gives (D-408, D-1655).
+
+- **Fails:** `None` for `[]`.
+- **Cost:** O(n), plus the calls to `compare`. Informative.
+
+```cheby
+test "max_index finds the last of the largest elements" {
+  assert list::max_index([3, 9, 2, 9, 1]) == Some(3)
+  assert list::max_index(["pear", "apple"]) == Some(0)
+  assert list::max_index(list::new::<Int>()) == None
+}
+```
+
+### `min_index`
+
+```cheby
+pub fn min_index<T: Compare>(xs: List<T>) -> Option<Int>
+```
+
+Returns the index of the element that `min` returns, or `None` for `[]`. Among elements that compare `Equal`, it is the index of the first, as `min` returns the first (D-408, D-1655).
+
+- **Fails:** `None` for `[]`.
+- **Cost:** O(n), plus the calls to `compare`. Informative.
+
+```cheby
+test "min_index finds the first of the smallest elements" {
+  assert list::min_index([3, 1, 2, 1]) == Some(1)
+  assert list::min_index(["pear", "apple"]) == Some(1)
+  assert list::min_index(list::new::<Int>()) == None
 }
 ```
 

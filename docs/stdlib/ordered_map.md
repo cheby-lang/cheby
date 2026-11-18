@@ -8,7 +8,7 @@ pub type OrderedMap<K, V>
 
 `OrderedMap` is opaque. Values are immutable, so every update returns a new map, and the old one stays usable.
 
-- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the key inserted first to the key inserted last. Inserting a key that is already present keeps its position and replaces its value. Removing a key and inserting it again moves it to the end (D-340).
+- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count`, `show` and debug printing go from the key inserted first to the key inserted last. Inserting a key that is already present keeps its position and replaces its value. Removing a key and inserting it again moves it to the end (D-340).
 - **Keys.** Keys need no interface. They are compared with `==` and hashed with the built-in hash, as in `Map` (§3.13), so a key that contains a function or a handle panics when it is inserted or looked up (D-233).
 - **Written in Cheby.** The module is written in Cheby over `std::map` and `std::sorted_map`, with no kernel of its own (D-336). The representation is not specified. One that meets the costs below is a `Map` from each key to an insertion number and its value, plus a sorted map from insertion number to key. Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
 - **Equality, hashing and printing.** Maps with the same entries in the same order can hold different insertion numbers, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered maps are `==` only when they hold the same entries in the same order, and their hash covers the order (D-343). Debug printing writes `ordered_map::from_list([…])` with the entries in order, each one debug-printed (D-344).
@@ -118,6 +118,24 @@ test "get looks a key up" {
   let ages = ordered_map::from_list([("ada", 36), ("alan", 41)])
   assert ordered_map::get(ages, "alan") == Some(41)
   assert ordered_map::get(ages, "grace") == None
+}
+```
+
+### `get_or`
+
+```cheby
+pub fn get_or<K, V>(m: OrderedMap<K, V>, key: K, default: V) -> V
+```
+
+Returns the value stored under `key`, or `default` when `key` is not in the map, as `map::get_or` does for a `Map` (D-1648, D-1659).
+
+- **Cost:** O(log n), effectively constant. Informative.
+
+```cheby
+test "get_or falls back for a missing key" {
+  let ages = ordered_map::from_list([("ada", 36), ("alan", 41)])
+  assert ordered_map::get_or(ages, "ada", 0) == 36
+  assert ordered_map::get_or(ages, "grace", 0) == 0
 }
 ```
 
@@ -455,6 +473,24 @@ test "find returns the first match in insertion order" {
   let scores = ordered_map::from_list([("b", 2), ("c", 3), ("a", 1)])
   assert ordered_map::find(scores, fn(_, value) { value != 2 }) == Some(("c", 3))
   assert ordered_map::find(scores, fn(_, value) { value > 3 }) == None
+}
+```
+
+### `count`
+
+```cheby
+pub fn count<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Int
+```
+
+Returns the number of entries for which `predicate` returns `True`, as `list::count` does for a list (D-1659). It calls `predicate` once per entry, in the map's order.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "count counts the matching entries" {
+  let scores = ordered_map::from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert ordered_map::count(scores, fn(_, value) { value > 1 }) == 2
+  assert ordered_map::count(ordered_map::new::<String, Int>(), fn(_, _) { True }) == 0
 }
 ```
 

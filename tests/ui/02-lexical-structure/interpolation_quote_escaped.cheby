@@ -1,0 +1,13 @@
+// @mode: parse-fail
+// @decisions: D-1656, D-115
+//! An escaped quote does not end a string inside an interpolation, and a
+//! brace inside that string is text.
+
+fn wrap(text: String) -> String {
+  text
+}
+
+fn main() {
+  let s = "{wrap("a \"{b}\"")}"
+  assert s == "a \"b\""
+}

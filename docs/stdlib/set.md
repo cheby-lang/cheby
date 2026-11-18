@@ -9,7 +9,7 @@ pub type Set<T>
 `Set` is opaque. It is a persistent hash array mapped trie, so every update returns a new set, and the old one stays usable and shares most of its nodes with the new one (D-039).
 
 - **Elements.** Elements need no interface. They are compared with `==` and hashed with the built-in structural hash (§3.13).
-- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find` and the callbacks of `filter` and `map` visit the elements in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
+- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count` and the callbacks of `filter` and `map` visit the elements in an order that depends on a per-process random seed and changes between runs (D-093). Programs that print or compare that order sort first, for example with [`to_sorted_list`](#to_sorted_list).
 - **Kernels.** `new`, `from_list`, `size`, `is_empty`, `contains`, `insert`, `remove` and `to_list` are runtime kernels, and their costs are required (D-274, D-300). The other functions are written in Cheby over them, and their costs are informative. `insert` and `remove` update the set in place when it is unique (§9.3).
 - **Equality, hashing and printing.** Two sets are `==` when they hold the same elements, in any order, and equal sets hash equally (D-093, §3.13). Debug printing writes `set::from_list([…])` with the elements sorted by their debug text, compared as UTF-8 bytes, so it is the same on every run (D-344, D-382, D-587).
 - **Interfaces.** `Set` satisfies neither `Show` nor `Compare`, because its order changes between runs (§8.8, D-344).
@@ -317,6 +317,42 @@ test "find returns a matching element" {
   let digits = set::from_list([1, 2, 3])
   assert set::find(digits, fn(n) { n > 2 }) == Some(3)
   assert set::find(digits, fn(n) { n > 3 }) == None
+}
+```
+
+### `count`
+
+```cheby
+pub fn count<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Int
+```
+
+Returns the number of elements for which `predicate` returns `True`, as `list::count` does for a list (D-1650). It calls `predicate` once per element, in the set's per-process order (D-093).
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "count counts the matching elements" {
+  let digits = set::from_list([1, 2, 3, 4])
+  assert set::count(digits, fn(n) { n % 2 == 0 }) == 2
+  assert set::count(set::new::<Int>(), fn(_) { True }) == 0
+}
+```
+
+### `sum`
+
+```cheby
+pub fn sum<T: Add + Compare>(s: Set<T>, zero: T) -> T
+```
+
+Adds the elements to `zero`, so the result for an empty set is `zero`, as `list::sum` does for a list (D-381, D-1650). It adds in sorted order, by `compare`, so the result is the same on every run and every target, although the set's iteration order is not (D-093, D-281). A `Set<Float>` thus has one sum everywhere, and a sum whose partial sums leave `Int`'s range panics on every run or on none.
+
+- **Panics:** where `+` on `T` panics, such as `Int` overflow (D-025).
+- **Cost:** O(n log n), for the sort, plus the calls to `compare` and `add`. Informative.
+
+```cheby
+test "sum adds every element once" {
+  assert set::sum(set::from_list([1, 2, 3, 2]), 0) == 6
+  assert set::sum(set::new::<Int>(), 0) == 0
 }
 ```
 

@@ -38,7 +38,7 @@
 
 == src/main.cheby:7:15 completion case
 {
-  "count": 10,
+  "count": 11,
   "isIncomplete": false,
   "items": [
     {

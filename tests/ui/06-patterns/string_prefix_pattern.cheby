@@ -1,0 +1,16 @@
+// @mode: parse-fail
+// @decisions: D-113, D-1657
+//! A string pattern cannot match a prefix, as Gleam's `"L" <> rest` does.
+//! The help names `string::starts_with` and `string::drop_start`, and the
+//! rest of the arm adds no error.
+
+fn turn(line: String) -> Int {
+  case line {
+    "L" <> rest => 1
+    _ => 0
+  }
+}
+
+fn main() {
+  assert turn("L68") == 1
+}

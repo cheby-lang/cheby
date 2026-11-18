@@ -1547,7 +1547,10 @@ fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
             deps: DepView::new(&set, &deps),
             modules: &table,
             globals: &globals,
-            std: StdCatalog { known: &[] },
+            std: StdCatalog {
+                known: &[],
+                items: None,
+            },
             package_targets: Targets::ALL,
         })
         .unwrap();

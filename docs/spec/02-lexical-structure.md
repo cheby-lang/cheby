@@ -130,6 +130,10 @@ interpolation = "{" LOWER { "." LOWER } [ ":?" ] "}" ;
 
 The contents are a name, optionally followed by field accesses, optionally followed by `:?` (D-115). Whitespace is not allowed inside the braces. Anything else inside `{…}` is a compile error that suggests binding the value to a name first or escaping the brace as `\{`.
 
+An interpolation must fit on one line: a line break ends it, and a `}` on a later line does not close it. A `"` inside the braces starts a string there when that string closes on the same line and a `}` follows it on that line. The inner string has no interpolation of its own, the interpolation ends at that `}`, and it is a single error like any other content that is not a name (D-1656). A `"` with no such `}` after its string ends both the interpolation and the string.
+
+_Note:_ The rule for `"` changes only how an invalid program is reported. `"{f("x")}"` is one error for the interpolation, not an error for each token after the inner `"`.
+
 The meaning of interpolation is defined in [§5.3.2](05-expressions.md#532-string-interpolation).
 
 ```cheby

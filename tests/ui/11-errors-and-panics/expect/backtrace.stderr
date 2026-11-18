@@ -1,0 +1,5 @@
+panicked at tests/ui/11-errors-and-panics/expect/backtrace.cheby:14:14:
+every id has a name
+backtrace:
+  in ui_test::lookup at tests/ui/11-errors-and-panics/expect/backtrace.cheby:14:14
+  in ui_test::main at tests/ui/11-errors-and-panics/expect/backtrace.cheby:22:16

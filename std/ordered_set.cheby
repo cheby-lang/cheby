@@ -10,6 +10,7 @@
 //! routines, and no `compare` of the element type is ever called.
 
 import std::list
+import std::ops::{Add}
 import std::ordered_map
 import std::set
 
@@ -384,4 +385,35 @@ test "an element removed and inserted again goes to the end" {
   assert size(moved) == 100
   assert first(moved) == Some(50)
   assert last(moved) == Some(49)
+}
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the number of elements for which `predicate` returns `True`,
+/// calling it once per element in insertion order (D-1659).
+pub fn count<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Int {
+  ordered_map::count(s.items, fn(item, _) { predicate(item) })
+}
+
+test "count counts the matching elements" {
+  let digits = from_list([3, 1, 4, 2])
+  assert count(digits, fn(n) { n % 2 == 0 }) == 2
+  assert count(digits, fn(n) { n > 4 }) == 0
+  assert count(new::<Int>(), fn(_) { True }) == 0
+}
+
+/// Adds the elements to `zero` in insertion order, so the result is the
+/// same on every run and every target (D-1650, D-1659).
+pub fn sum<T: Add>(s: OrderedSet<T>, zero: T) -> T {
+  list::sum(to_list(s), zero)
+}
+
+test "sum adds in insertion order" {
+  assert sum(from_list([1, 2, 3, 2]), 0) == 6
+  assert sum(new::<Int>(), 0) == 0
+  // In this order the 1.0 is lost against 1.0e16; added last, it would
+  // be kept.
+  assert sum(from_list([1.0e16, 1.0, -1.0e16]), 0.0) == 0.0
+  assert sum(from_list([1.0e16, -1.0e16, 1.0]), 0.0) == 1.0
 }

@@ -8,7 +8,7 @@ pub type SortedSet<T>
 
 `SortedSet` is opaque. Values are immutable, so every update returns a new set, and the old one stays usable.
 
-- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest element to the largest, by the element type's `compare`, and `at` counts positions in that order.
+- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count`, `sum`, `show` and debug printing go from the smallest element to the largest, by the element type's `compare`, and `at` counts positions in that order.
 - **Elements.** Elements must satisfy `Compare`, and every public function has the bound `T: Compare` (D-385). The hooks of equality, hashing and debug printing take none and never call `compare` (D-845). Two elements are the same element when `compare` returns `Equal`, even if they are not `==`. Inserting such an element keeps the one already stored (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the set does with one.
 - **Written in Cheby.** The set is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). Every comparison is an ordinary call to the element type's `compare` through the bound (§8.5), so a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). Every node of the tree keeps the size of its subtree, which `size` and `at` need for their required costs. If the tree later moves into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-1083).
 - **Equality, hashing and printing.** Sets with the same elements can have trees of different shapes, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted sets are `==` when they hold the same elements, compared with `==`, and equal sets hash equally (D-343). Debug printing writes `sorted_set::from_list([…])` with the elements in order, each one debug-printed (D-344).
@@ -431,6 +431,43 @@ test "find returns the first match in order" {
   let digits = sorted_set::from_list([3, 1, 2])
   assert sorted_set::find(digits, fn(n) { n > 1 }) == Some(2)
   assert sorted_set::find(digits, fn(n) { n > 3 }) == None
+}
+```
+
+### `count`
+
+```cheby
+pub fn count<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Int
+```
+
+Returns the number of elements for which `predicate` returns `True`, as `list::count` does for a list (D-1659). It calls `predicate` once per element, from the smallest to the largest.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative. It never calls `compare`.
+
+```cheby
+test "count counts the matching elements" {
+  let digits = sorted_set::from_list([3, 1, 4, 2])
+  assert sorted_set::count(digits, fn(n) { n % 2 == 0 }) == 2
+  assert sorted_set::count(sorted_set::new::<Int>(), fn(_) { True }) == 0
+}
+```
+
+### `sum`
+
+```cheby
+pub fn sum<T: Compare + Add>(s: SortedSet<T>, zero: T) -> T
+```
+
+Adds the elements to `zero` from the smallest to the largest, so the result for an empty set is `zero`, as `list::sum` does for a list (D-381, D-1659). This is the order `set::sum` sorts into, and the set keeps it, so the result is the same on every run and every target (D-1650).
+
+- **Panics:** where `+` on `T` panics, such as `Int` overflow (D-025).
+- **Cost:** O(n), plus the calls to `add`. Informative. It never calls `compare`.
+
+```cheby
+test "sum adds in sorted order" {
+  assert sorted_set::sum(sorted_set::from_list([1, 2, 3, 2]), 0) == 6
+  assert sorted_set::sum(sorted_set::new::<Int>(), 0) == 0
+  assert sorted_set::sum(sorted_set::from_list([1.0e16, 1.0, -1.0e16]), 0.0) == 0.0
 }
 ```
 

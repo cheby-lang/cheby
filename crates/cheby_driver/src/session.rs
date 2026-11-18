@@ -898,7 +898,10 @@ impl Session {
             deps: DepView::new(set, &deps),
             modules: &display,
             globals: &self.front.globals,
-            std: StdCatalog { known: &self.known },
+            std: StdCatalog {
+                known: &self.known,
+                items: Some(std_lib::item_names),
+            },
             // The session runs natively (§13.5, the JIT): an entry is
             // checked for `native` only, so a native-only item of the
             // package is usable (D-606). That is also so in a package

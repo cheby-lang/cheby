@@ -1,0 +1,8 @@
+error[E0012]: unexpected `(` in string interpolation
+  --> tests/ui/02-lexical-structure/interpolation_quote_escaped.cheby:11:17
+   |
+11 |   let s = "{wrap("a \"{b}\"")}"
+   |                 ^
+   |
+   = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+

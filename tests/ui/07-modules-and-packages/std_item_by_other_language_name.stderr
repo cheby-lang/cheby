@@ -1,0 +1,60 @@
+error[E0042]: there is no value `read_text` in module `std::file`
+  --> tests/ui/07-modules-and-packages/std_item_by_other_language_name.cheby:15:20
+   |
+15 |   let text = file::read_text("input.txt")
+   |              ----  ^^^^^^^^^ not found
+   |              |
+   |              `std::file`
+   |
+   = help: `std::io` has `read_file`
+
+error[E0042]: there is no value `len` in module `std::list`
+  --> tests/ui/07-modules-and-packages/std_item_by_other_language_name.cheby:16:21
+   |
+16 |   let count = list::len([1, 2])
+   |               ----  ^^^ not found
+   |               |
+   |               `std::list`
+   |
+   = help: did you mean `length`?
+
+error[E0042]: there is no value `parse_int` in module `std::string`
+  --> tests/ui/07-modules-and-packages/std_item_by_other_language_name.cheby:17:24
+   |
+17 |   let number = string::parse_int("12")
+   |                ------  ^^^^^^^^^ not found
+   |                |
+   |                `std::string`
+   |
+   = help: `std::int` has `parse`
+
+error[E0042]: there is no value `size` in module `std::list`
+  --> tests/ui/07-modules-and-packages/std_item_by_other_language_name.cheby:18:20
+   |
+18 |   let size = list::size([1, 2])
+   |              ----  ^^^^ not found
+   |              |
+   |              `std::list`
+   |
+   = help: did you mean `length`?
+
+error[E0042]: there is no value `index_of` in module `std::list`
+  --> tests/ui/07-modules-and-packages/std_item_by_other_language_name.cheby:19:21
+   |
+19 |   let index = list::index_of([1, 2], 2)
+   |               ----  ^^^^^^^^ not found
+   |               |
+   |               `std::list`
+   |
+   = help: did you mean `position`?
+
+error[E0042]: there is no value `from_string` in module `std::int`
+  --> tests/ui/07-modules-and-packages/std_item_by_other_language_name.cheby:20:21
+   |
+20 |   let parsed = int::from_string("3")
+   |                ---  ^^^^^^^^^^^ not found
+   |                |
+   |                `std::int`
+   |
+   = help: did you mean `parse`?
+

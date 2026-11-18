@@ -343,10 +343,12 @@ pub(super) fn lower_js_only(
 }
 
 /// The std modules whose kernels constant evaluation may run (D-360,
-/// D-537): effect-free, with the same result on every target.
-const CONST_SAFE_MODULES: [&str; 16] = [
+/// D-537): effect-free, with the same result on every target. `option`'s
+/// one kernel, `panic_at`, only panics, so a failing `expect` in a
+/// constant is E0075 at its caller (D-1660).
+const CONST_SAFE_MODULES: [&str; 17] = [
     "list", "map", "set", "string", "bytes", "int", "float", "f32", "i8", "i16", "i32", "i64",
-    "u8", "u16", "u32", "u64",
+    "u8", "u16", "u32", "u64", "option",
 ];
 
 /// Whether constant evaluation may run `f`'s external: `f` is declared in

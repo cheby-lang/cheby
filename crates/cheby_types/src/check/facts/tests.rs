@@ -61,7 +61,10 @@ fn with_module<R>(text: &str, check: impl FnOnce(&TypesInput<'_>, &ModuleInterfa
         deps: DepView::new(&set, &deps),
         modules: &modules,
         globals: &globals,
-        std: StdCatalog { known: &[] },
+        std: StdCatalog {
+            known: &[],
+            items: None,
+        },
         package_targets: cheby_package::Targets::ALL,
     })
     .unwrap();

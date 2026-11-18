@@ -1,0 +1,20 @@
+// @mode: run-fail
+// @decisions: D-1629, D-1647
+//! `option::expect` named as a function value panics at the place where
+//! it is named, whichever call of the value panics (§4.8, §11.6).
+
+import std::io
+import std::list
+import std::option
+
+fn apply_all(options: List<Option<Int>>, unwrap: fn(Option<Int>, String) -> Int) -> List<Int> {
+  list::map(options, fn(o) { unwrap(o, "every option is a Some") })
+}
+
+fn main() {
+  let unwrap = option::expect
+  let values = apply_all([Some(1), Some(2)], unwrap)
+  io::println("{values}")
+  let more = apply_all([Some(3), None], unwrap)
+  io::println("never printed: {more}")
+}

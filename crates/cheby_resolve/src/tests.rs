@@ -514,7 +514,10 @@ fn build_with(package: &str, local: &[(&str, &str)], tolerant: bool) -> Build {
             deps: DepView::new(&set, &deps),
             modules: &modules,
             globals: &globals,
-            std: StdCatalog { known: &std_refs },
+            std: StdCatalog {
+                known: &std_refs,
+                items: None,
+            },
             package_targets: Targets::ALL,
         };
         let (module, d) = resolve_module(&input).unwrap();

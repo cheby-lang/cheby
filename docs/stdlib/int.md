@@ -8,9 +8,9 @@ pub type Int
 
 All arithmetic on `Int` is checked: a result that does not fit panics (D-025). On JS, an `Int` result outside ±(2⁵³−1) also panics (D-037), so a program panics at the same points or earlier on JS, but never computes a different value (§12.4, D-232).
 
-This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div`, `checked_modulo` and `find_all`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
+This module has every function of the integer families in [Numeric modules](README.md#numeric-modules), written out in full, plus `clamp`, `pow`, `checked_pow`, `floor_div`, `modulo`, `checked_floor_div`, `checked_modulo`, `find_all`, `digits` and `to_digits`. `compare`, `show` and the arithmetic functions make `Int` satisfy `Compare`, `Show`, `Add`, `Sub`, `Mul`, `Div` and `Neg` (§8.7, §8.8). On `Int` operands the compiler uses the built-in operations directly (§5.4.2), so these functions exist to be passed as values and to satisfy bounds.
 
-`clamp`, `pow`, `checked_pow`, `find_all` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-1090).
+`clamp`, `pow`, `checked_pow`, `find_all`, `digits`, `to_digits` and the floored division functions exist only in `std::int`, because the sized types are for FFI and binary data (D-105, D-389, D-1056). `to_base` is in every integer module, since the sized types write hex for binary data (D-1090).
 
 The bitwise operators `&`, `|`, `^`, `<<` and `>>` are built in on every integer type and cannot be overloaded (§5.4.6, D-092, D-118), so there are no functions for them. There is no `sign` or `is_even`: `int::compare(n, 0)` and `n % 2 == 0` say the same. `gcd` and `lcm` are a family of every integer module (D-1606).
 
@@ -411,6 +411,47 @@ test "find_all takes no plus sign and only ASCII digits" {
   assert int::find_all("1.5") == [1, 5]
   assert int::find_all("٣ 4") == [4]
   assert int::find_all("line\r\n12\n") == [12]
+}
+```
+
+### `digits`
+
+```cheby
+pub fn digits(text: String) -> Result<List<Int>, Nil>
+```
+
+Returns the values of the ASCII digits `0` to `9` of `text`, one per character, in order, so `digits("0123")` is `Ok([0, 1, 2, 3])` (D-1654). The sized integer modules have no `digits`.
+
+- **Fails:** `Err(Nil)` when `text` is empty or holds any character other than an ASCII digit, including a sign, whitespace and a line ending.
+- **Cost:** O(n) in the length of `text`. Informative.
+
+```cheby
+test "digits reads one digit per character" {
+  assert int::digits("0123") == Ok([0, 1, 2, 3])
+  assert int::digits("9") == Ok([9])
+  assert int::digits("") == Err(Nil)
+  assert int::digits("12a") == Err(Nil)
+  assert int::digits("-1") == Err(Nil)
+  assert int::digits("4\n") == Err(Nil)
+}
+```
+
+### `to_digits`
+
+```cheby
+pub fn to_digits(n: Int) -> List<Int>
+```
+
+Returns the decimal digits of the absolute value of `n`, from the most significant, with no leading zeros, so `to_digits(-120)` is `[1, 2, 0]` and `to_digits(0)` is `[0]` (D-1654). It works for `min_value` too, whose absolute value does not fit `Int`. The sized integer modules have no `to_digits`.
+
+- **Cost:** O(d) for d digits. Informative.
+
+```cheby
+test "to_digits writes the digits of the absolute value" {
+  assert int::to_digits(120) == [1, 2, 0]
+  assert int::to_digits(-120) == [1, 2, 0]
+  assert int::to_digits(0) == [0]
+  assert int::to_digits(7) == [7]
 }
 ```
 

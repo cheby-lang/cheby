@@ -412,7 +412,8 @@ fn interpolation_mode() {
             (STRING_END, "\""),
         ]
     );
-    // No comments or raw strings inside braces.
+    // No comments or raw strings inside braces: `r` is a name, and the
+    // `"x"` after it a string inside the interpolation (D-1656).
     assert_eq!(
         kinds(r#""{a // b} {r"x"}""#),
         [
@@ -426,10 +427,10 @@ fn interpolation_mode() {
             STRING_TEXT,
             INTERP_START,
             LOWER_IDENT,
-            STRING_END,
-            LOWER_IDENT,
             STRING_START,
             STRING_TEXT,
+            STRING_END,
+            INTERP_END,
             STRING_END,
         ]
     );
@@ -443,6 +444,173 @@ fn interpolation_mode() {
             INT_NUMBER,
             INTERP_END,
             STRING_END
+        ]
+    );
+}
+
+/// A `"` inside an interpolation starts a string there when that string
+/// closes on the same line and a `}` follows it on that line (D-1656).
+/// The inner string has no interpolation, and the outer one ends at its
+/// `}`.
+#[test]
+fn quote_inside_interpolation() {
+    assert_eq!(
+        tokens(r#""{f("x")}""#),
+        [
+            (STRING_START, "\""),
+            (INTERP_START, "{"),
+            (LOWER_IDENT, "f"),
+            (L_PAREN, "("),
+            (STRING_START, "\""),
+            (STRING_TEXT, "x"),
+            (STRING_END, "\""),
+            (R_PAREN, ")"),
+            (INTERP_END, "}"),
+            (STRING_END, "\""),
+        ]
+    );
+    // Several strings inside one interpolation.
+    assert_eq!(
+        kinds(r#""{f("a", "b")}""#),
+        [
+            STRING_START,
+            INTERP_START,
+            LOWER_IDENT,
+            L_PAREN,
+            STRING_START,
+            STRING_TEXT,
+            STRING_END,
+            COMMA,
+            STRING_START,
+            STRING_TEXT,
+            STRING_END,
+            R_PAREN,
+            INTERP_END,
+            STRING_END,
+        ]
+    );
+    // An escaped quote does not close the inner string, and a `{` or `}`
+    // inside it is text.
+    assert_eq!(
+        tokens(r#""{f("a\"}{b")}""#),
+        [
+            (STRING_START, "\""),
+            (INTERP_START, "{"),
+            (LOWER_IDENT, "f"),
+            (L_PAREN, "("),
+            (STRING_START, "\""),
+            (STRING_TEXT, "a"),
+            (STRING_ESCAPE, "\\\""),
+            (STRING_TEXT, "}{b"),
+            (STRING_END, "\""),
+            (R_PAREN, ")"),
+            (INTERP_END, "}"),
+            (STRING_END, "\""),
+        ]
+    );
+    // The `}` may come after other tokens and strings.
+    assert_eq!(
+        tokens(r#""price {" + "}""#),
+        [
+            (STRING_START, "\""),
+            (STRING_TEXT, "price "),
+            (INTERP_START, "{"),
+            (STRING_START, "\""),
+            (STRING_TEXT, " + "),
+            (STRING_END, "\""),
+            (INTERP_END, "}"),
+            (STRING_END, "\""),
+        ]
+    );
+    // In a string that spans lines, only the interpolation's line counts.
+    assert_eq!(
+        kinds("\"a\n{f(\"x\")}\nb\""),
+        [
+            STRING_START,
+            STRING_TEXT,
+            INTERP_START,
+            LOWER_IDENT,
+            L_PAREN,
+            STRING_START,
+            STRING_TEXT,
+            STRING_END,
+            R_PAREN,
+            INTERP_END,
+            STRING_TEXT,
+            STRING_END,
+        ]
+    );
+}
+
+/// A `"` inside an interpolation with no `}` after its string on the same
+/// line ends the interpolation and the string, as before (D-1656).
+#[test]
+fn quote_inside_interpolation_without_a_later_brace() {
+    // No `}` at all.
+    assert_eq!(kinds(r#""{""#), [STRING_START, INTERP_START, STRING_END]);
+    assert_eq!(
+        kinds(r#""price {""#),
+        [STRING_START, STRING_TEXT, INTERP_START, STRING_END]
+    );
+    // The only `}` is inside the would-be inner string.
+    assert_eq!(
+        kinds(r#""{f("x}")""#),
+        [
+            STRING_START,
+            INTERP_START,
+            LOWER_IDENT,
+            L_PAREN,
+            STRING_END,
+            LOWER_IDENT,
+            R_BRACE,
+            STRING_START,
+            STRING_TEXT,
+            STRING_END,
+        ]
+    );
+    // The inner string is not closed on its line.
+    assert_eq!(
+        kinds(r#""{f("x)}"#),
+        [
+            STRING_START,
+            INTERP_START,
+            LOWER_IDENT,
+            L_PAREN,
+            STRING_END,
+            LOWER_IDENT,
+            R_PAREN,
+            R_BRACE,
+        ]
+    );
+    assert_eq!(
+        kinds("\"{f(\"a\\\n\")}\""),
+        [
+            STRING_START,
+            INTERP_START,
+            LOWER_IDENT,
+            L_PAREN,
+            STRING_END,
+            LOWER_IDENT,
+            ERROR_TOKEN,
+            NEWLINE,
+            STRING_START,
+            STRING_TEXT,
+            STRING_END,
+        ]
+    );
+    // The `}` is on the next line.
+    assert_eq!(
+        kinds("\"{f(\"x\"\n)}\""),
+        [
+            STRING_START,
+            INTERP_START,
+            LOWER_IDENT,
+            L_PAREN,
+            STRING_END,
+            LOWER_IDENT,
+            STRING_START,
+            STRING_TEXT,
+            STRING_END,
         ]
     );
 }

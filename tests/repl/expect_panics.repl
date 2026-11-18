@@ -1,0 +1,15 @@
+// @decisions: D-1631, D-1646, D-1647
+> import std::option
+> import std::result
+> option::expect(Some(1), "never shown")
+1 : Int
+> let empty: Option<Int> = None
+> option::expect(empty, "no value")
+panicked at <repl:5>:1:1:
+no value
+> let failed: Result<Int, String> = Err("broken")
+> 1 + result::expect(failed, "a number")
+panicked at <repl:7>:1:5:
+a number: broken
+> "the session continues"
+"the session continues" : String

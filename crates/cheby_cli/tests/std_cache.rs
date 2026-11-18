@@ -389,3 +389,43 @@ fn std_cache_priv_constant_logs_on_every_path() {
     let tested = cheby(&app, &["test"], &cache, &s.path().join("test.log"));
     assert_eq!(tested.out.status, Some(0), "{}", tested.out.stdout);
 }
+
+/// Panics through `option::expect`, whose call the compiler replaces by a
+/// call of `option::expect_at` with the place of the call (D-1647).
+const EXPECTS: &str = "//! Panics through `option::expect`.
+
+import std::list
+import std::option
+
+fn main() {
+  let words = [\"alpha\"]
+  let second = option::expect(list::get(words, 1), \"a second word\")
+  assert second == \"beta\"
+}
+";
+
+/// The report `EXPECTS` writes to standard error.
+const EXPECT_PANIC: &str = "panicked at src/main.cheby:8:16:\na second word\n";
+
+/// D-1647, D-1631: the panic of `option::expect` names the place of the
+/// call on std's first use and on a warm run, which reads the attribute
+/// and the constructor from std's records, so both runs replace the call
+/// the same way.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545, D-935)"
+)]
+fn std_cache_expect_panics_at_its_call_on_every_run() {
+    let s = Scratch::new("expects");
+    let app = s.package("app", EXPECTS);
+    let cache = s.path().join("cache");
+    let cold = cheby(&app, &["run"], &cache, &s.path().join("cold.log"));
+    assert_eq!(cold.out.status, Some(101), "{}", cold.out.stderr);
+    assert_eq!(cold.out.stderr, EXPECT_PANIC);
+    assert!(!cold.lines("parse.std").is_empty(), "{:?}", cold.log);
+    let warm = cheby(&app, &["run"], &cache, &s.path().join("warm.log"));
+    assert_eq!(warm.out.status, Some(101), "{}", warm.out.stderr);
+    assert_eq!(warm.out.stderr, EXPECT_PANIC);
+    assert!(warm.lines("parse.std").is_empty(), "{:?}", warm.log);
+}

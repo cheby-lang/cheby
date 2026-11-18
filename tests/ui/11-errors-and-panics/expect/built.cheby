@@ -1,0 +1,17 @@
+// @mode: run-fail
+// @milestone: M3
+// @command: build
+// @decisions: D-1647
+//! An executable from `cheby build` links `std::option`'s kernel
+//! `panic_at`, and its `expect` panics at the place of the call as under
+//! `cheby run` (§4.8, §11.6, §13.4).
+
+import std::io
+import std::list
+import std::option
+
+fn main() {
+  let words = ["alpha", "beta"]
+  io::println(option::expect(list::get(words, 1), "a second word"))
+  io::println(option::expect(list::get(words, 2), "a third word"))
+}

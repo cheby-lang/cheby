@@ -1,0 +1,8 @@
+error[E0013]: expected `,` or `]`, found `_`
+ --> tests/ui/06-patterns/wildcard_rest_in_list.cheby:9:11
+  |
+9 |     [x, .._] => x
+  |           ^
+  |
+  = help: write `..` to ignore the rest of the list, or `..name` to bind it
+

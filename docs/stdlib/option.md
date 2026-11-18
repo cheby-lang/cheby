@@ -9,7 +9,7 @@ pub exposed type Option<T> {
 }
 ```
 
-A value that may be absent has type `Option<T>`. There is no `null` (D-091). There are no functions that panic on `None`, such as Rust's `unwrap` and `expect`. `let assert Some(value) = o` unwraps with a message instead (D-068, D-159, D-317).
+A value that may be absent has type `Option<T>`. There is no `null` (D-091). Only [`expect`](#expect) panics on `None`, with the caller's message, at the place of its call (D-1646, D-1647). There is no `unwrap` without a message, such as Rust's. `let assert Some(value) = o` unwraps with a pattern (D-068, D-159, D-317).
 
 ## Chaining
 
@@ -109,6 +109,28 @@ test "lazy_unwrap_or calls the default only for None" {
   assert option::lazy_unwrap_or(list::get([5], 3), fn() { 0 }) == 0
 }
 ```
+
+### `expect`
+
+```cheby
+pub fn expect<T>(o: Option<T>, message: String) -> T
+```
+
+Returns the value of a `Some`, and panics with `message` on `None` (D-1646). It is for a lookup that cannot fail, such as a parent in a union-find, where the reason stays next to the call.
+
+- **Panics:** on `None`, with `message` as the panic's message. The panic is located at the place of the call, the start of the path that names `expect`, as a `let assert` is located at its pattern: in a pipe stage that is the stage, and for `expect` passed as a function value the place where it is named (§4.8, §11.6, D-1629, D-1647).
+- **Cost:** O(1). Informative.
+
+```cheby
+test "expect returns the value of a Some" {
+  assert option::expect(list::get([5], 0), "no first element") == 5
+  assert option::expect(Some("text"), "no text") == "text"
+}
+```
+
+`expect` carries the standard-library-only attribute `@std_call_site`, so the compiler calls its package-visible constructor `expect_at` in its place with the path, line and column of the call. `expect_at` panics through the package-visible kernel `panic_at(message: String, path: String, line: Int, column: Int) -> Never`, bound on native and in `option.mjs`, which ends the fiber as a `panic` written at that place does (§11.6, D-1647). It is the module's only kernel, and it has no effect besides the panic, so constant evaluation runs it: a failing `expect` in a constant is E0075 with the caller's location in its note, as a failing `let assert` is (§4.5, D-1660). A backtrace shows the function that called `expect`, at that call, and not `expect_at`.
+
+`let assert Some(value) = o` remains the way to unwrap with a pattern (D-068).
 
 ### `or`
 

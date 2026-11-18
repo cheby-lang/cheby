@@ -186,7 +186,10 @@ fn build(package: &str, main: &str) -> String {
             deps: DepView::new(&set, &deps),
             modules: &modules.table,
             globals: &globals,
-            std: StdCatalog { known: &["io"] },
+            std: StdCatalog {
+                known: &["io"],
+                items: None,
+            },
             package_targets: cheby_package::Targets::ALL,
         };
         let (resolved, d) = resolve_module(&input).unwrap();

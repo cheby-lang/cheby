@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1656, D-1661, D-115
+//! A `{` meant as a literal brace, with a `}` in a later string on the same
+//! line: the text between the quotes is a string inside the interpolation,
+//! which ends at that `}`. Its help says that `\{` writes a literal `{`.
+
+fn main() {
+  let amount = "3"
+  let s = "price {" + amount + "}"
+  assert s != ""
+}

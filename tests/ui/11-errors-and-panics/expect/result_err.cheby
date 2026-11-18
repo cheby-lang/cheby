@@ -1,0 +1,32 @@
+// @mode: run-fail
+// @decisions: D-1646, D-1647
+//! `result::expect` returns the value of an `Ok`, and on an `Err` panics
+//! with its message, `: ` and the error's `show`, located at the call in
+//! the caller's file (§4.8, §11.6).
+
+import std::int
+import std::io
+import std::result
+
+type ParseError {
+  NotANumber(String),
+}
+
+/// Makes `ParseError` satisfy `Show`.
+fn show(error: ParseError) -> String {
+  case error {
+    NotANumber(text) => "not a number: {text}"
+  }
+}
+
+fn parse(text: String) -> Result<Int, ParseError> {
+  int::parse(text)
+  |> result::replace_error(_, NotANumber(text))
+}
+
+fn main() {
+  let count = result::expect(parse("12"), "the count parses")
+  io::println("count: {count}")
+  let total = result::expect(parse("twelve"), "the total parses")
+  io::println("never printed: {total}")
+}

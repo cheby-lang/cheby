@@ -1084,6 +1084,8 @@ mod tests {
         ("panic.rs", "stack_slow_frame_from", SLOW_BODY),
         ("ffi.rs", "cheby_rt_ffi_value", STUB),
         ("ffi.rs", "ffi_value_from", RAISES_ITSELF),
+        ("option.rs", "cheby_option_panic_at", STUB),
+        ("option.rs", "panic_at_from", RAISES_ITSELF),
         ("unwind/entry_slow.rs", "stack_slow_unwind_from", RELEASES),
         (
             "unwind/entry_slow.rs",

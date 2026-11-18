@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-1658
+//! A std module without the item a path names gets a help with the std
+//! modules that have an item of that name, imported or not, up to three
+//! in module order. A close spelling in the module keeps its "did you
+//! mean".
+
+import std::file
+import std::io
+import std::string
+
+fn main() {
+  let text = string::read_file("input.txt")
+  let size = io::length([1, 2])
+  let handle = file::read_lines("input.txt")
+  io::println("{text} {size} {handle}")
+}
