@@ -1095,10 +1095,13 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: miri_cases(48), ..ProptestConfig::default() })]
 
     /// Every operation against `Vec`, on lists up to 100,000 elements,
-    /// including slices of slices, at count one and shared.
+    /// including slices of slices, at count one and shared. Under Miri the
+    /// lists stay under 3,000 elements, still three levels deep: a case
+    /// that drew a list near 100,000 took over two hours there, since every
+    /// operation is followed by a full check (D-1664).
     #[test]
     fn operations_match_vec(
-        start in prop_oneof![0..40_usize, 0..2_000_usize, 0..100_000_usize],
+        start in prop_oneof![0..40_usize, 0..2_000_usize, 0..sized(100_000, 3_000) as usize],
         ops in prop::collection::vec((op(), any::<bool>()), 1..24),
     ) {
         balanced(|| {
@@ -1497,6 +1500,14 @@ fn borrowed_uncons_matches_get_and_slice() {
     });
 }
 
+/// Whether `uncons_matches_get_and_owned_slice` checks the whole rest at
+/// length `len`: always, but under Miri only near the ends, near the edge
+/// of a level of `M` or `M * M`, and at every 64th length.
+fn thorough(len: usize) -> bool {
+    let near = |edge: usize| len.abs_diff(edge) <= 2;
+    !cfg!(miri) || len <= 40 || near(M) || near(M * M) || len.is_multiple_of(64)
+}
+
 /// A bound of `0..=n`, as the helpers clamp them.
 fn clamped(i: i64, n: i64) -> usize {
     usize::try_from(i.clamp(0, n)).unwrap()
@@ -1506,7 +1517,11 @@ fn clamped(i: i64, n: i64) -> usize {
 /// that `cheby_rt_list_get` and `cheby_rt_list_slice_owned` give, front and
 /// back, on unique and shared lists of one to three levels: it moves the
 /// element out of a unique path (count unchanged, slot cleared) and dups it
-/// under a shared one, and every walk balances.
+/// under a shared one, and every walk balances. Under Miri the whole rest
+/// is checked only near the ends, near a level's edge and at every 64th
+/// step, since a check after every step is quadratic in the length and
+/// took most of two hours there (D-1664); the element is checked at every
+/// step.
 #[test]
 fn uncons_matches_get_and_owned_slice() {
     balanced(|| {
@@ -1548,7 +1563,9 @@ fn uncons_matches_get_and_owned_slice() {
                         assert_eq!(value(head), want, "n {n} shared {shared} front {front}");
                         drop_word(head);
                         xs = root(rest);
-                        check(xs, &left);
+                        if thorough(left.len()) {
+                            check(xs, &left);
+                        }
                     }
                     release(xs);
                     if let Some(original) = keep {

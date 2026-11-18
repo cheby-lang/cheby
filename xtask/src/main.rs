@@ -41,8 +41,8 @@
 //! - `junit-report`: renders nextest's `JUnit` report as one HTML page and as
 //!   a Markdown summary, for the CI runs (D-1559; [`junit`]).
 //! - `sanitize`: the thread-sanitizer and address-sanitizer jobs of
-//!   `nightly.yml` and the job of `miri.yml`, step by step, for the workflows
-//!   and for local runs (D-721, D-862, D-1322).
+//!   `nightly.yml` and the jobs of `miri.yml`, step by step, for the workflows
+//!   and for local runs (D-721, D-862, D-1322, D-1663).
 //! - `bench-build` (hidden): checks and compiles every function of a
 //!   package on `--jobs` threads and prints the times, the bytes of code
 //!   and the RC operations; `bench-compile` and `check-determinism` run it
@@ -148,7 +148,7 @@ enum Cmd {
     /// Render nextest's `JUnit` report as an HTML page and a Markdown summary
     /// (D-1559)
     JunitReport(junit::Args),
-    /// Run a sanitizer job of nightly.yml or the job of miri.yml, or some of
+    /// Run a sanitizer job of nightly.yml or the jobs of miri.yml, or some of
     /// its steps, on the pinned nightly (D-721, D-862, D-1322)
     Sanitize(sanitize::Args),
     /// Check and compile every function of a package and print the front
