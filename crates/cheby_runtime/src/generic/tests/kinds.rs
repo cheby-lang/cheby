@@ -18,8 +18,10 @@ fn list(items: Vec<Word>) -> Word {
     crate::list::from_iter(items)
 }
 
-/// The empty list.
+/// The empty list. Registers the list layouts first, as the JIT's symbol
+/// table and an image's install do, since no list kernel may have run yet.
 fn empty_list() -> Word {
+    crate::list::register_kinds();
     object::ptr_to_word(std::ptr::from_ref(&cheby_rt_static_empty_list).cast::<u8>())
 }
 
@@ -54,6 +56,21 @@ fn viewed(items: Vec<Word>) -> Word {
     let view = unsafe { cheby_list_slice(whole, 1, len.wrapping_add(1)) };
     release([front, middle, back, whole]);
     view
+}
+
+/// The static empty list compares, hashes and prints in a process that
+/// has built no list yet: the property test below can draw such a case
+/// first, and nextest runs each test in its own process.
+#[test]
+fn the_static_empty_list_works_before_any_list_is_built() {
+    let domain = Domain::new();
+    alloc::with_domain(Arc::clone(&domain), || {
+        let (a, b) = (prepended(Vec::new()), empty_list());
+        assert_eq!(eq(a, b), Ok(true));
+        assert_eq!(hashed(a), hashed(b));
+        assert_eq!(text(a), "[]");
+    });
+    assert_eq!(domain.live_objects(), 0);
 }
 
 #[test]
