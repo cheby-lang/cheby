@@ -167,7 +167,7 @@ Takes a value from a ready arm of `selector` without waiting, and returns `Some`
 - **Mapping.** It calls the chosen arm's mapping function exactly once, on the calling fiber, as `select` does, and calls none when no arm is ready.
 - **No suspension.** It is not a suspension point, so a loop that only polls keeps its thread, and on JS it starves the other fibers ([§10.6](../spec/10-concurrency.md#106-selectors), D-185).
 
-It is written in Cheby over a private kernel, `sys_select_now`, implemented after M3, and its tests are pending for M4 (D-741).
+It is written in Cheby over a private kernel, `sys_select_now`, implemented on native, whose JS side comes with the JS back end.
 
 - **Cost:** O(k) in the number of arms. Informative.
 

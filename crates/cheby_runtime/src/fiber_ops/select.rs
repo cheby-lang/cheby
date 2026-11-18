@@ -455,54 +455,22 @@ pub(crate) unsafe extern "C" fn cheby_selector_sys_wait(ctx: *mut ExecCtx, selec
 /// # Safety
 ///
 /// As for [`cheby_selector_sys_wait`].
-#[expect(
-    clippy::too_many_lines,
-    reason = "the select's steps read in order, as the module documentation lists them"
-)]
 unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
     // SAFETY: forwarded from the caller.
     let me = unsafe { running(ctx) };
     // Step 1: the arms, each timer's clock started now.
     // SAFETY: a live selector, borrowed for the whole call.
     let mut arms = unsafe { gather(selector) };
-    // Step 2: a uniformly random order (Fisher-Yates).
-    let mut order: Vec<usize> = (0..arms.len()).collect();
-    for last in (1..order.len()).rev() {
-        let pick = me.conc.select.below(last.saturating_add(1));
-        order.swap(last, pick);
-    }
+    // Step 2: a uniformly random order.
+    let order = random_order(me, arms.len());
     // Step 3: lock the channels in address order and scan.
     let chans = channels_in_lock_order(&mut arms);
-    let mut guards: Vec<MutexGuard<'_, ChanInner>> = Vec::with_capacity(chans.len());
-    for chan in &chans {
-        guards.push(chan.lock());
-    }
-    for &index in &order {
-        let arm = arm_of(&arms, index);
-        let ready = match &arm.kind {
-            Kind::Receive { lock, .. } => match held(&mut guards, *lock).take_ready() {
-                Some(ready) => Some(ready),
-                None => continue,
-            },
-            Kind::After(Deadline::Elapsed, _) => None,
-            Kind::After(..) => continue,
-        };
-        drop(guards);
-        let chosen = match ready {
-            Some(Ready::Value(value, woken)) => {
-                wake_released(woken);
-                Some(ok(value))
-            }
-            // A closed arm found without suspending reads no chain (D-769).
-            Some(Ready::Closed) => Some(err_nil()),
-            None => None,
-        };
-        if let Some(chosen) = chosen {
-            me.conc.select.put(chosen);
-        }
+    let mut guards = lock_all(&chans);
+    guards = match take_ready_arm(me, &arms, &order, guards) {
         // SAFETY: the closure is held by the borrowed selector.
-        return unsafe { dup(arm.apply) };
-    }
+        Ok(apply) => return unsafe { dup(apply) },
+        Err(guards) => guards,
+    };
     // Step 4: wait.
     let Some(shared) = me.sched.runtime() else {
         drop(guards);
@@ -611,6 +579,108 @@ unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
     }
     // SAFETY: the closure is held by the borrowed selector.
     unsafe { dup(arm.apply) }
+}
+
+/// `selector::sys_select_now`, private, which `selector::select_now` calls
+/// (D-1099): `select`'s steps 1 to 3 without the wait. When an arm is
+/// ready, it chooses one uniformly at random among the ready ones, takes
+/// its value into the fiber, as `select` does, and returns `Some` of that
+/// arm's apply closure, owned; otherwise `None`, having taken nothing. A
+/// timer arm is ready only when its span is zero or less, since its clock
+/// starts in this call (D-652). The selector is borrowed (D-187); Cheby
+/// releases it before it calls the closure, as in `select` (D-205, D-670).
+/// It never parks, so it needs no scheduler (D-692).
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context and `selector` a live selector,
+/// borrowed.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_selector_sys_select_now(
+    ctx: *mut ExecCtx,
+    selector: Word,
+) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let me = unsafe { running(ctx) };
+        // SAFETY: a live selector, borrowed for the whole call.
+        let mut arms = unsafe { gather(selector) };
+        let order = random_order(me, arms.len());
+        let chans = channels_in_lock_order(&mut arms);
+        let guards = lock_all(&chans);
+        match take_ready_arm(me, &arms, &order, guards) {
+            Ok(apply) => {
+                // SAFETY: the closure is held by the borrowed selector; the
+                // guard owns the reference `dup` gives.
+                let apply = unsafe { Owned::new(dup(apply)) };
+                let chosen = values::some(apply.word());
+                let _ = apply.into_word();
+                chosen
+            }
+            Err(guards) => {
+                drop(guards);
+                values::none()
+            }
+        }
+    })
+}
+
+/// The indices of `len` arms in a uniformly random order (Fisher-Yates),
+/// from the fiber's select state (D-673).
+fn random_order(me: &ExecCtx, len: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len).collect();
+    for last in (1..order.len()).rev() {
+        let pick = me.conc.select.below(last.saturating_add(1));
+        order.swap(last, pick);
+    }
+    order
+}
+
+/// The locks of `chans`, taken in their order, which is address order
+/// ([`channels_in_lock_order`]).
+fn lock_all(chans: &[Arc<Chan>]) -> Vec<MutexGuard<'_, ChanInner>> {
+    chans.iter().map(|chan| chan.lock()).collect()
+}
+
+/// A select's step 3, under the locks `guards` of its channels: the first
+/// arm in `order` that is ready, a receive arm whose channel has a value or
+/// is closed and empty, or a timer arm whose deadline has passed. For it, it
+/// releases the locks, wakes the sender the take released, puts the arm's
+/// value in the fiber for `take_selected` (a closed arm's `Err(Nil)` read
+/// without suspending reads no chain, D-769) and returns the arm's apply
+/// closure, borrowed from the selector. When no arm is ready, it gives the
+/// locks back, having taken nothing.
+fn take_ready_arm<'c>(
+    me: &ExecCtx,
+    arms: &[Arm],
+    order: &[usize],
+    mut guards: Vec<MutexGuard<'c, ChanInner>>,
+) -> Result<Word, Vec<MutexGuard<'c, ChanInner>>> {
+    for &index in order {
+        let arm = arm_of(arms, index);
+        let ready = match &arm.kind {
+            Kind::Receive { lock, .. } => match held(&mut guards, *lock).take_ready() {
+                Some(ready) => Some(ready),
+                None => continue,
+            },
+            Kind::After(Deadline::Elapsed, _) => None,
+            Kind::After(..) => continue,
+        };
+        drop(guards);
+        let chosen = match ready {
+            Some(Ready::Value(value, woken)) => {
+                wake_released(woken);
+                Some(ok(value))
+            }
+            Some(Ready::Closed) => Some(err_nil()),
+            None => None,
+        };
+        if let Some(chosen) = chosen {
+            me.conc.select.put(chosen);
+        }
+        return Ok(arm.apply);
+    }
+    Err(guards)
 }
 
 /// The earliest deadline among `arms`' timer arms and the index of its

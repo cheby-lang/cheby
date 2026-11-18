@@ -647,12 +647,15 @@ mod tests {
             registered_context, declared_context,
             "the kernels that take the context pointer and the `@std_context` declarations differ"
         );
-        // channel and fiber 10 (`fiber::cancel`'s `sys_cancel`, D-1060, and
-        // `fiber::interruptible`'s `sys_arm_interrupt`, D-1073), selector 5,
+        // channel and fiber 14 (`fiber::cancel`'s `sys_cancel`, D-1060,
+        // `fiber::interruptible`'s `sys_arm_interrupt`, D-1073, `fiber::raise`'s
+        // `sys_raise`, D-1097, `fiber::yield_now`'s `sys_yield_now`, D-1102,
+        // and `channel`'s `sys_send_now` and `sys_receive_now`, D-1099),
+        // selector 6 (`sys_select_now`, D-1099),
         // random 6 (`host_bits` and the seeded stream's five, D-1574),
         // runtime 3.
-        assert_eq!(registered.len(), 10 + 5 + 6 + 3);
-        assert_eq!(registered_context.len(), 10 + 5 + 5 + 2);
+        assert_eq!(registered.len(), 14 + 6 + 6 + 3);
+        assert_eq!(registered_context.len(), 14 + 6 + 5 + 2);
     }
 
     /// Every kernel of `std::net` has the C signature of its `@external`

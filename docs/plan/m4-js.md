@@ -63,7 +63,7 @@ This workstream is built on native first, as one piece of work, before the JS ba
 
 ### 4.7 Standard-library additions after M3
 
-- The native kernels first, which need no JS work: `sys_raise` of `std::fiber`, a panic from a stored message and location in `crates/cheby_runtime/src/panic.rs` (D-1097), and `sys_send_now` and `sys_receive_now` of `std::channel` and `sys_select_now` of `std::selector`, over the runtime's existing checks of ready arms and claims of waiting fibers in `crates/cheby_runtime/src/fiber_ops/channel.rs` and the select code (D-1099). Then, in Cheby, `fiber::raise`, `fiber::map` and `fiber::try_map` over `scope`, `spawn`, a channel, S5's `fiber::cancel` and `raise` (D-1098), and `channel::send_now`, `channel::receive_now`, the type `channel::Refused` and `selector::select_now` over their kernels. A raised panic's backtrace starts with `  in fiber::raise`, with no location, and its report keeps the original location (D-1097, §11.6).
+- The native kernels first, which need no JS work: `sys_raise` of `std::fiber`, a panic from a stored message and location in `crates/cheby_runtime/src/panic.rs` (D-1097), and `sys_send_now` and `sys_receive_now` of `std::channel` and `sys_select_now` of `std::selector`, over the runtime's existing checks of ready arms and claims of waiting fibers in `crates/cheby_runtime/src/fiber_ops/channel.rs` and the select code (D-1099). Then, in Cheby, `fiber::raise`, `fiber::map` and `fiber::try_map` over `scope`, `spawn`, a channel, S5's `fiber::cancel` and `raise` (D-1098), and `channel::send_now`, `channel::receive_now`, the type `channel::Refused` and `selector::select_now` over their kernels. A raised panic's backtrace starts with `  in std::fiber::raise`, with no location, and its report keeps the original location (D-1097, §11.6).
 - `fiber::yield_now` with the JS scheduler: the private `@std_context` kernel `sys_yield_now` on both targets, a real suspension point on JS that the suspension analysis counts (4.2, D-014), and `("std::fiber", "yield_now")` in `crates/cheby_mir/src/waits.rs` (D-1102, D-1059).
 - The `.mjs` side of these five kernels, bound as D-484 binds every kernel: `./fiber.mjs` `sys_raise` and `sys_yield_now`, `./channel.mjs` `sys_send_now` and `sys_receive_now`, `./selector.mjs` `sys_select_now`.
 - `./list.mjs` `sort_with(xs, by)` (D-1448): the bottom-up merge sort of `list.md`, with runs of one element merged in adjacent pairs, front to back, a last run without a partner waiting for the next round, and the right element taken only when `by` returns `Greater`. It must call `by` on the same pairs in the same order as the native kernel, `cheby_list_sort_with` in `crates/cheby_runtime/src/list/kernels.rs`, and the std test "sort_with merges in the same order for any comparison" and the UI test `03-types/collections/sort_with_calls_run` pin both. A panic in `by` propagates.
@@ -90,7 +90,7 @@ This workstream is built on native first, as one piece of work, before the JS ba
 
 ## Status
 
-The JS work, 4.1 to 4.4, has not started. Two workstreams run ahead of it. The LSP core, 4.5, has its own status in [m5-tooling.md](m5-tooling.md#status). The native side of 4.6 is implemented:
+The JS work, 4.1 to 4.4, has not started. Three workstreams run ahead of it. The LSP core, 4.5, has its own status in [m5-tooling.md](m5-tooling.md#status). The native side of 4.6 is implemented:
 
 - `std::context` with keys, `get`, `provide`, `Context`, `capture`, `with` and `empty`, over seven `@std_context` kernels. A fiber's bindings are a map in the runtime's HAMT, and a captured context is runtime kind 48 (D-1566, D-1571, D-1583).
 - The key rewrite through `@std_initializer`, E0080 and E0081 with their explanations and UI tests, and the key's identity in the REPL and after `:reload` (D-1580, D-1589, D-1599, D-1600).
@@ -100,6 +100,8 @@ The JS work, 4.1 to 4.4, has not started. Two workstreams run ahead of it. The L
 - The tests of `context.md`, `time.md` and `random.md` run, so none of them is in `PENDING_SPEC_TESTS`. Example 033, `request_context`, passes as an M3 example (D-1582).
 
 Still to come for 4.6: the final reading of the cost gate (D-1577, D-1586, D-1592, D-1596) and the full CI run, then, with 4.3, the JS side: `context.mjs` over `map.mjs`, the stream and clock kernels of `random.mjs` and `time.mjs`, and the context of a foreign callback's fiber, whose stream state per call is still open (D-1569).
+
+The native side of 4.7's first two items is implemented: `fiber::raise`, `map`, `try_map` and `yield_now`, `channel::send_now`, `receive_now` and `Refused`, and `selector::select_now`, over the kernels `sys_raise` (`crates/cheby_runtime/src/fiber_ops/raise.rs`), `sys_yield_now` (`fiber_ops/yielding.rs`), `sys_send_now` and `sys_receive_now` (`fiber_ops/channel.rs`) and `sys_select_now` (`fiber_ops/select.rs`). A raised panic's backtrace starts at `sys_raise`'s caller under the line `  in std::fiber::raise`, and the UI test `11-errors-and-panics/backtrace/raised_panic` pins it. `yield_now` is in `waits.rs`. Their spec tests run, so `PENDING_SPEC_TESTS` is empty (D-1097 to D-1099, D-1102). Still to come for 4.7: the `.mjs` side of these five kernels and the other JS kernels, with 4.3, and `yield_now` as a suspension point in the suspension analysis, with 4.2.
 
 ## Exit criteria
 

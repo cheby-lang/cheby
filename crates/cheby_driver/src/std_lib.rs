@@ -268,59 +268,10 @@ pub const PLANNED_STD_MODULES: &[&str] = &[];
 /// M2's first slice shipped `std::fiber`, `std::channel` and
 /// `std::duration` before cancellation, timers, selectors and detached
 /// fibers existed (D-754). Their spec tests have all moved into `std/`
-/// since (D-728). An entry's comment names what its test needs and the
+/// since (D-728), and so have those of M4's native kernels (D-1097 to
+/// D-1099, D-1102). An entry's comment names what its test needs and the
 /// package that brings it.
-pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[
-    // `fiber::raise` needs the private kernel `sys_raise` (D-1097), and
-    // `fiber::map` and `try_map` need it and S5's `fiber::cancel` (D-1098).
-    // Both are built after M3.
-    (
-        "fiber",
-        "raise keeps the message and location of a caught panic",
-        "M4",
-    ),
-    (
-        "fiber",
-        "a raised panic fails a scope like the original",
-        "M4",
-    ),
-    ("fiber", "map keeps the order of its input", "M4"),
-    ("fiber", "map clamps its limit to at least 1", "M4"),
-    ("fiber", "map raises the panic of a call again", "M4"),
-    ("fiber", "try_map returns the Err of the lowest index", "M4"),
-    (
-        "fiber",
-        "try_map calls each element before the Err exactly once",
-        "M4",
-    ),
-    ("fiber", "try_map cancels the calls in flight", "M4"),
-    // `channel::send_now`, `receive_now` and `Refused` need the kernels
-    // `sys_send_now` and `sys_receive_now`, and `selector::select_now`
-    // needs `sys_select_now`, after M3 (D-1099).
-    (
-        "channel",
-        "send_now reports a full buffer and gives the value back",
-        "M4",
-    ),
-    ("channel", "send_now without receivers is Closed", "M4"),
-    (
-        "channel",
-        "send_now on capacity 0 needs a waiting receiver",
-        "M4",
-    ),
-    ("channel", "receive_now never waits", "M4"),
-    ("selector", "select_now takes from a ready arm", "M4"),
-    (
-        "selector",
-        "a timer arm is ready in select_now only when it is zero",
-        "M4",
-    ),
-    // `fiber::yield_now` needs the `@std_context` kernel `sys_yield_now`
-    // and the JS scheduler, M4 (D-1102). Its first test also needs
-    // `channel::receive_now` (D-1099).
-    ("fiber", "a loop that yields lets other fibers run", "M4"),
-    ("fiber", "a cancellation is delivered at yield_now", "M4"),
-];
+pub const PENDING_SPEC_TESTS: &[(&str, &str, &str)] = &[];
 
 include!(concat!(env!("OUT_DIR"), "/std_hashes.rs"));
 

@@ -12,8 +12,12 @@
 //! - [`detached`]: the kernel `sys_spawn_detached` and the base frame of a
 //!   detached fiber, with its base scope (D-669, D-694).
 //! - [`join`]: the kernel `sys_join` (D-668, D-707).
+//! - [`raise`]: the kernel `sys_raise` of `fiber::raise` (D-1097).
+//! - [`yielding`]: the kernel `sys_yield_now` of `fiber::yield_now`
+//!   (D-1102).
 //! - [`channel`]: Go's `hchan` (D-704): the kernels `new`, `send` and
-//!   `receive`, and the handles' finalizers (D-672).
+//!   `receive`, the kernels `sys_send_now` and `sys_receive_now`, which
+//!   never wait (D-1099), and the handles' finalizers (D-672).
 //!
 //! Every kernel here is `@std_context` (D-692): it gets the running fiber's
 //! control block first, runs its whole body in U3's `guarded` and raises
@@ -125,11 +129,13 @@ pub(crate) mod channel;
 pub(crate) mod detached;
 pub(crate) mod interrupt;
 pub(crate) mod join;
+pub(crate) mod raise;
 pub(crate) mod scope;
 pub(crate) mod select;
 pub(crate) mod spawn;
 #[cfg(test)]
 pub(crate) mod testing;
+pub(crate) mod yielding;
 
 use std::sync::Arc;
 
@@ -292,7 +298,11 @@ type Entry = (
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn all() -> [Entry; 15] {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry per kernel, read as a table"
+)]
+fn all() -> [Entry; 20] {
     [
         (
             "cheby_selector_sys_new",
@@ -319,6 +329,12 @@ fn all() -> [Entry; 15] {
             "Word",
         ),
         (
+            "cheby_selector_sys_select_now",
+            select::cheby_selector_sys_select_now as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
             "cheby_selector_take_selected",
             select::cheby_selector_take_selected as *const u8,
             &["Word"],
@@ -339,6 +355,18 @@ fn all() -> [Entry; 15] {
         (
             "cheby_channel_receive",
             channel::cheby_channel_receive as *const u8,
+            &["Word"],
+            "Word",
+        ),
+        (
+            "cheby_channel_sys_send_now",
+            channel::cheby_channel_sys_send_now as *const u8,
+            &["Word", "Word"],
+            "i64",
+        ),
+        (
+            "cheby_channel_sys_receive_now",
+            channel::cheby_channel_sys_receive_now as *const u8,
             &["Word"],
             "Word",
         ),
@@ -382,6 +410,18 @@ fn all() -> [Entry; 15] {
             "cheby_fiber_sys_arm_interrupt",
             interrupt::cheby_fiber_sys_arm_interrupt as *const u8,
             &["Word"],
+            "()",
+        ),
+        (
+            "cheby_fiber_sys_raise",
+            raise::cheby_fiber_sys_raise as *const u8,
+            &["Word", "Word"],
+            "Word",
+        ),
+        (
+            "cheby_fiber_sys_yield_now",
+            yielding::cheby_fiber_sys_yield_now as *const u8,
+            &[],
             "()",
         ),
     ]
@@ -487,6 +527,8 @@ pub(crate) mod detached_tests;
 mod interrupt_tests;
 #[cfg(test)]
 mod models;
+#[cfg(test)]
+mod now_tests;
 #[cfg(test)]
 mod root_scope_tests;
 #[cfg(test)]

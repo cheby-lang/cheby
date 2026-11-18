@@ -1086,6 +1086,8 @@ mod tests {
         ("ffi.rs", "ffi_value_from", RAISES_ITSELF),
         ("option.rs", "cheby_option_panic_at", STUB),
         ("option.rs", "panic_at_from", RAISES_ITSELF),
+        ("fiber_ops/raise.rs", "cheby_fiber_sys_raise", STUB),
+        ("fiber_ops/raise.rs", "raise_from", RAISES_ITSELF),
         ("unwind/entry_slow.rs", "stack_slow_unwind_from", RELEASES),
         (
             "unwind/entry_slow.rs",

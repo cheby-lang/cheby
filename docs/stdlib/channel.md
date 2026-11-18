@@ -264,7 +264,7 @@ test "send_all stops when the last Receiver goes" {
 
 ## Not waiting
 
-`send_now` and `receive_now` do what `send` and `receive` do when those would not wait, and otherwise return at once (D-1099). Neither waits or is a suspension point, so a fiber that polls in a loop keeps its thread, and on JS it starves the other fibers until it suspends elsewhere ([§10.5](../spec/10-concurrency.md#105-channels), D-185). Across several channels, [`selector::select_now`](selector.md#select_now) takes from whichever is ready. The names follow D-1050's suffix `_now`. Both are written in Cheby over private kernels, implemented after M3, and their tests are pending for M4 (D-741).
+`send_now` and `receive_now` do what `send` and `receive` do when those would not wait, and otherwise return at once (D-1099). Neither waits or is a suspension point, so a fiber that polls in a loop keeps its thread, and on JS it starves the other fibers until it suspends elsewhere ([§10.5](../spec/10-concurrency.md#105-channels), D-185). Across several channels, [`selector::select_now`](selector.md#select_now) takes from whichever is ready. The names follow D-1050's suffix `_now`. Both are written in Cheby over private kernels, implemented on native, whose JS side comes with the JS back end.
 
 ### `Refused`
 
@@ -296,6 +296,7 @@ test "send_now reports a full buffer and gives the value back" {
   assert channel::send_now(tx, 2) == Err(channel::Full(2))
   assert channel::receive_now(rx) == Some(Ok(1))
   assert channel::send_now(tx, 3) == Ok(Nil)
+  assert channel::receive_now(rx) == Some(Ok(3))
 }
 
 test "send_now without receivers is Closed" {

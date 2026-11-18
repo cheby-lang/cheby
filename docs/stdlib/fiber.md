@@ -496,7 +496,7 @@ test "a timeout cancels the scopes inside it without their returning" {
 - **The limit.** At most `limit` calls of `f` run at a time, each on a fiber of its own. `limit` is clamped to at least 1 (D-298), and a `limit` above the length of the list runs every call at once.
 - **Sharing.** The elements, `f`'s captures and the results cross fibers, so they become shared (§9.4).
 - **Written in Cheby.** Both are written over `scope`, `spawn`, a channel, [`cancel`](#cancel) and [`raise`](#raise), with no kernel. They call function values, so tail calls to them stay tail calls (D-1059).
-- They are implemented after M3, once `cancel` exists, and their tests are pending for M4 (D-741).
+- They are implemented on native. On JS they need nothing of their own beyond the kernels they are written over.
 
 ### `map`
 
@@ -608,7 +608,7 @@ Suspends the calling fiber once and puts it behind the fibers that can run, then
 
 - **On JS.** It is a real suspension point, so the functions that call it are compiled as suspending (D-014). A CPU-bound loop that calls it now and then lets the other fibers run, which nothing else guarantees: `time::sleep` of zero returns at once (D-652), and a zero timer arm is ready at once (D-673), so neither is sure to suspend ([§10.2](../spec/10-concurrency.md#102-scheduling), [§10.8](../spec/10-concurrency.md#108-timeouts), D-185).
 - **On native.** The yield checks at function entries already keep a fiber from holding a thread (§10.2, D-028), so `yield_now` only makes the switch happen at once.
-- It is written in Cheby over a private `@std_context` kernel. It waits and calls no function value, so a tail call to it keeps its caller's frame (D-1059). It is implemented in M4, with the JS scheduler, and its tests are pending for M4 (D-741).
+- It is written in Cheby over a private `@std_context` kernel. It waits and calls no function value, so a tail call to it keeps its caller's frame (D-1059). It is implemented on native, and its JS kernel comes with the JS scheduler.
 - **Cost:** O(1), plus the time the other fibers run. Informative.
 
 ```cheby
@@ -709,9 +709,9 @@ pub fn raise(failure: Panic) -> Never
 
 Panics on the calling fiber with `failure`'s message and location (D-1097). A scope that catches it gets a `Panic` that is `==` to `failure`, and an uncaught one prints the original `panicked at <location>:` line and message ([§11.6](../spec/11-errors-and-panics.md#116-panic-and-todo)). So code that catches a panic, cleans up and passes it on keeps the first panic's report, where `panic as fiber::message(p)` would report its own location.
 
-- The backtrace, when it is on, starts with the line `  in fiber::raise`, with no location, and goes on with the calling fiber's stack at the call of `raise`, since the original stack has unwound. The report's two lines keep the original location ([§11.6](../spec/11-errors-and-panics.md#116-panic-and-todo), D-1039).
+- The backtrace, when it is on, starts with the line `  in std::fiber::raise`, with no location, and goes on with the calling fiber's stack at the call of `raise`, since the original stack has unwound. The report's two lines keep the original location ([§11.6](../spec/11-errors-and-panics.md#116-panic-and-todo), D-1039, D-1665).
 - It is a panic that the caller asks for, like `panic as`, so it is the one deliberate exception to D-297's rule that std panics only where a language rule does. There is still no accessor for the location (D-648).
-- It is written in Cheby over a private kernel, implemented after M3 with [`map`](#map), and its tests are pending for M4 (D-741).
+- It is written in Cheby over a private kernel, implemented on native, whose JS side comes with the JS back end.
 - **Cost:** O(1), plus the unwinding. Informative.
 
 ```cheby

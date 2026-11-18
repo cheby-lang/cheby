@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1039, D-1041, D-1097, D-1665
+//! With `CHEBY_BACKTRACE=1`, a panic raised again with `fiber::raise`
+//! keeps the report of the panic it repeats, while its backtrace is the
+//! stack at the call of `raise`: its first line is `fiber::raise`, with no
+//! location, and its second the call of `raise` (§11.6).
+
+import std::fiber
+import std::io
+
+fn fail() -> Int {
+  panic as "original"
+}
+
+fn pass_on(failure: fiber::Panic) -> Int {
+  let value = fiber::raise(failure)
+  value + 1
+}
+
+fn main() {
+  let assert Err(first) = {
+    use _scope <- fiber::scope()
+    fail()
+  }
+  io::println("caught: {first}")
+  let value = pass_on(first)
+  io::println("never printed: {value}")
+}

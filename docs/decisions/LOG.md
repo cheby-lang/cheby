@@ -2813,3 +2813,14 @@ Goal: bring `miri.yml` back under its limit, which its runs of 2026-11-17 and 20
 Open:
 
 - The first scheduled run of `miri.yml` reads the four jobs and D-1664's sizes on x86-64.
+
+## 2026-11-19: M4's native kernels of 4.7
+
+Goal: build the native side of `fiber::raise`, `map`, `try_map` and `yield_now`, `channel::send_now` and `receive_now`, and `selector::select_now` (D-1097 to D-1099, D-1102).
+
+- **D-1665 The first line of a raised panic's backtrace**: The backtrace of a panic raised with `fiber::raise` starts with the line `  in std::fiber::raise`, with no location, then the call of `raise`. §11.6 and `fiber.md` wrote `  in fiber::raise`. Why: D-1041 names a std function by its full path, as `std::list::fold`, and every other std line of a backtrace follows it, so the short name would be the one special case. The user chose the full path. Refines D-1097.
+- **D-1666 `yield_now` on native before the JS scheduler**: `fiber::yield_now` and its kernel `sys_yield_now` ship on native with the other kernels of 4.7, ahead of the JS scheduler that D-1102 paired them with. On native the kernel requeues the fiber once, as the entry check's yield does, and delivers a pending cancellation before and after the switch. Its JS kernel and its place in the suspension analysis still come with the JS back end. Why: the user chose to build every native kernel of 4.7 in one piece of work, and `yield_now`'s spec tests need only the native kernel. Refines D-1102.
+
+Open:
+
+- None.

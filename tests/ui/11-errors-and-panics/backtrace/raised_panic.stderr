@@ -1,0 +1,6 @@
+panicked at tests/ui/11-errors-and-panics/backtrace/raised_panic.cheby:13:3:
+original
+backtrace:
+  in std::fiber::raise
+  in ui_test::pass_on at tests/ui/11-errors-and-panics/backtrace/raised_panic.cheby:17:15
+  in ui_test::main at tests/ui/11-errors-and-panics/backtrace/raised_panic.cheby:27:15
