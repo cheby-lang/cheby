@@ -1,0 +1,2 @@
+panicked at tests/ui/11-errors-and-panics/expect/option_direct_call.cheby:16:16:
+the list has a fourth element

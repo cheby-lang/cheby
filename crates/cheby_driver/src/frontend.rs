@@ -790,7 +790,10 @@ pub(crate) fn check_extra_module(
         deps: DepView::new(&set, &deps),
         modules: &table,
         globals: &front.globals,
-        std: StdCatalog { known: &known },
+        std: StdCatalog {
+            known: &known,
+            items: Some(std_lib::item_names),
+        },
         package_targets: front.package_targets,
     };
     let (resolved, resolve_diags) = resolve_module(&input)?;
@@ -894,7 +897,10 @@ pub(crate) fn check_reloaded(
         deps: DepView::new(&front.set, &deps),
         modules: display,
         globals: &front.globals,
-        std: StdCatalog { known: &known },
+        std: StdCatalog {
+            known: &known,
+            items: Some(std_lib::item_names),
+        },
         package_targets: front.package_targets,
     };
     let (resolved, mut diags) = resolve_module(&input)?;
@@ -1748,7 +1754,10 @@ impl BuildInputs<'_> {
             deps: view,
             modules: self.modules,
             globals: self.globals,
-            std: StdCatalog { known: self.known },
+            std: StdCatalog {
+                known: self.known,
+                items: Some(std_lib::item_names),
+            },
             package_targets: if info.package == PackageId::LOCAL {
                 self.local_targets
             } else {

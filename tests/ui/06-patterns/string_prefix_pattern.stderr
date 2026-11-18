@@ -1,0 +1,8 @@
+error[E0013]: expected `=>`, found `<`
+ --> tests/ui/06-patterns/string_prefix_pattern.cheby:9:9
+  |
+9 |     "L" <> rest => 1
+  |         ^
+  |
+  = help: a pattern cannot match a prefix of a string (D-113): test it with `string::starts_with` and remove it with `string::drop_start`
+

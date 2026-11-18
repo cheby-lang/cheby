@@ -14,7 +14,7 @@
 import std::int
 import std::list
 import std::map as maps
-import std::ops::{Compare}
+import std::ops::{Add, Compare}
 
 // Building
 
@@ -352,4 +352,39 @@ test "sets compare by contents and print sorted" {
   let words = from_list(["pear", "apple", "pear"])
   assert words == from_list(["apple", "pear"])
   assert "{words:?}" == "set::from_list([\"apple\", \"pear\"])"
+}
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the number of elements for which `predicate` returns `True`,
+/// calling it once per element in the set's per-process order (D-093,
+/// D-1650).
+pub fn count<T>(s: Set<T>, predicate: fn(T) -> Bool) -> Int {
+  list::count(to_list(s), predicate)
+}
+
+test "count counts the matching elements" {
+  let digits = from_list([1, 2, 3, 4])
+  assert count(digits, fn(n) { n % 2 == 0 }) == 2
+  assert count(digits, fn(n) { n > 4 }) == 0
+  assert count(new::<Int>(), fn(_) { True }) == 0
+}
+
+/// Adds the elements to `zero` in sorted order, so the result is the same
+/// on every run and every target (D-1650).
+pub fn sum<T: Add + Compare>(s: Set<T>, zero: T) -> T {
+  list::sum(to_sorted_list(s), zero)
+}
+
+test "sum adds every element once" {
+  assert sum(from_list([1, 2, 3, 2]), 0) == 6
+  assert sum(new::<Int>(), 0) == 0
+  assert sum(from_list([0.5, 0.25]), 0.0) == 0.75
+}
+
+test "sum adds in sorted order" {
+  // Sorted, the 1.0 is lost against -1.0e16. An order that added the two
+  // large values first would keep it and give 1.0.
+  assert sum(from_list([1.0, -1.0e16, 1.0e16]), 0.0) == 0.0
 }

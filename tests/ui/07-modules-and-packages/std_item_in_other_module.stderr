@@ -1,0 +1,30 @@
+error[E0042]: there is no value `read_file` in module `std::string`
+  --> tests/ui/07-modules-and-packages/std_item_in_other_module.cheby:13:22
+   |
+13 |   let text = string::read_file("input.txt")
+   |              ------  ^^^^^^^^^ not found
+   |              |
+   |              `std::string`
+   |
+   = help: `std::io` has `read_file`
+
+error[E0042]: there is no value `length` in module `std::io`
+  --> tests/ui/07-modules-and-packages/std_item_in_other_module.cheby:14:18
+   |
+14 |   let size = io::length([1, 2])
+   |              --  ^^^^^^ not found
+   |              |
+   |              `std::io`
+   |
+   = help: `std::bytes`, `std::list` and `std::string` have `length`
+
+error[E0042]: there is no value `read_lines` in module `std::file`
+  --> tests/ui/07-modules-and-packages/std_item_in_other_module.cheby:15:22
+   |
+15 |   let handle = file::read_lines("input.txt")
+   |                ----  ^^^^^^^^^^ not found
+   |                |
+   |                `std::file`
+   |
+   = help: did you mean `read_line`?
+

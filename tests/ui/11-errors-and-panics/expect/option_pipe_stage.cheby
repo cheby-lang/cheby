@@ -1,0 +1,16 @@
+// @mode: run-fail
+// @decisions: D-1629, D-1647
+//! In a pipe stage, the panic of `option::expect` is located at the
+//! stage's path, on its own line, not at the start of the chain (§4.8,
+//! §11.6).
+
+import std::list
+import std::option
+
+fn main() {
+  let doubled = [1, 2, 3]
+    |> list::map(_, fn(n) { n * 2 })
+    |> list::find(_, fn(n) { n > 10 })
+    |> option::expect(_, "no doubled number is above ten")
+  assert doubled > 10
+}

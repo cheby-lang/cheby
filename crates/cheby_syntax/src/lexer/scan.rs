@@ -1,5 +1,6 @@
 //! The lexer's main loop: a hand-written scanner over bytes with three
-//! modes (normal, string, interpolation).
+//! modes (normal, string, interpolation). A string inside an
+//! interpolation (D-1656) is lexed whole, without a mode of its own.
 //!
 //! Token rules follow §2.2-§2.6 and mirror `tree-sitter-cheby` where the
 //! spec leaves room, so that what tree-sitter accepts lexes without a
@@ -500,9 +501,11 @@ impl<'a> Scanner<'a> {
     // ---- interpolation mode ---------------------------------------------
 
     /// One token inside `{…}` of a string (§2.5.4). `}` ends the
-    /// interpolation. A `"` or a line break ends it without being consumed,
-    /// and is then lexed in string mode. Everything else is a normal-mode
-    /// token; the parser checks the shape (E0012).
+    /// interpolation. A `"` starts a string inside the interpolation when
+    /// that string closes on the same line and a `}` follows it there
+    /// (D-1656). Any other `"`, and a line break, ends the interpolation
+    /// without being consumed, and is then lexed in string mode. Everything
+    /// else is a normal-mode token; the parser checks the shape (E0012).
     fn interp(&mut self, start: usize) {
         let pos = self.pos;
         match (self.at(pos), self.peek(1)) {
@@ -510,11 +513,59 @@ impl<'a> Scanner<'a> {
                 self.push(SyntaxKind::INTERP_END, pos + 1);
                 self.mode = Mode::Str { start };
             }
-            (Some(b'"' | b'\n'), _) | (Some(b'\r'), Some(b'\n')) => {
+            (Some(b'"'), _) => match self.inner_string_end(pos) {
+                Some(end) => self.inner_string(end),
+                None => self.mode = Mode::Str { start },
+            },
+            (Some(b'\n'), _) | (Some(b'\r'), Some(b'\n')) => {
                 self.mode = Mode::Str { start };
             }
             _ => self.normal(true),
         }
+    }
+
+    /// For a `"` at `quote` inside an interpolation, the end of the string
+    /// it starts there (D-1656): the position after its closing `"`, when
+    /// that `"` is on the same line and a `}` follows it on that line.
+    /// An escape, `\"` included, does not close the string, and `{` and
+    /// `}` inside it are text.
+    fn inner_string_end(&self, quote: usize) -> Option<usize> {
+        let mut i = quote + 1;
+        let end = loop {
+            match self.at(i)? {
+                b'"' => break i + 1,
+                b'\n' => return None,
+                // An escape is `\` and one character, or `\u{…}`, which
+                // holds no `"`; a line break after the `\` still ends the
+                // line.
+                b'\\' if self.at(i + 1) == Some(b'\n') => return None,
+                b'\\' => i += 2,
+                _ => i += 1,
+            }
+        };
+        let rest = self.bytes.get(end..)?;
+        rest.iter()
+            .take_while(|&&b| b != b'\n')
+            .any(|&b| b == b'}')
+            .then_some(end)
+    }
+
+    /// The string inside an interpolation that [`Self::inner_string_end`]
+    /// found, ending at `end`: `STRING_START`, its text and escapes, and
+    /// `STRING_END`. It has no interpolation of its own, so a `{` in it is
+    /// text. The scanner stays in interpolation mode.
+    fn inner_string(&mut self, end: usize) {
+        let closer = end - 1;
+        self.push(SyntaxKind::STRING_START, self.pos + 1);
+        while self.pos < closer {
+            if self.at(self.pos) == Some(b'\\') {
+                self.escape();
+            } else {
+                let text_end = self.run_while(self.pos, |b| b != b'\\').min(closer);
+                self.push(SyntaxKind::STRING_TEXT, text_end);
+            }
+        }
+        self.push(SyntaxKind::STRING_END, end);
     }
 }
 

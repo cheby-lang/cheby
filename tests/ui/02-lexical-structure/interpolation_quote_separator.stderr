@@ -1,0 +1,8 @@
+error[E0012]: unexpected `::` in string interpolation
+  --> tests/ui/02-lexical-structure/interpolation_quote_separator.cheby:10:26
+   |
+10 |   let s = "words: {string::join(words, ", ")}"
+   |                          ^^
+   |
+   = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+

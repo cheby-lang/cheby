@@ -8,7 +8,7 @@ pub type SortedMap<K, V>
 
 `SortedMap` is opaque. Values are immutable, so every update returns a new map, and the old one stays usable and shares most of its nodes with the new one.
 
-- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`, and `at` counts positions in that order.
+- **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count`, `show` and debug printing go from the smallest key to the largest, by the key type's `compare`, and `at` counts positions in that order.
 - **Keys.** Keys must satisfy `Compare`, and every function has the bound `K: Compare`. Two keys are the same key when `compare` returns `Equal`, even if they are not `==`. Inserting such a key keeps the key already stored and replaces only the value (D-341). A `compare` that disagrees with `==` is a program bug (§8.7). The second example of [`insert`](#insert) shows what the map does with one.
 - **Written in Cheby.** The map is a persistent balanced tree written in Cheby, with no runtime kernel (D-336). The kind of tree is not specified, except that every node keeps the size of its subtree, which `size` and `at` need for their required costs (D-1083). Every comparison is an ordinary call to the key type's `compare` through the bound (§8.5), so a `compare` written in Cheby costs what any call costs, and a panic inside it unwinds through this module's functions like any other panic. The number and order of the calls to `compare` are not specified, but they are the same on every target (D-232, D-354). If a benchmark later moves the tree into a runtime kernel (D-336), the API and the costs below stay the same, so that tree keeps subtree sizes too (D-1083).
 - **Equality, hashing and printing.** Maps with the same entries can have trees of different shapes, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two sorted maps are `==` when they hold the same entries, however they were built, and equal maps hash equally (D-343). Keys and values are compared here with `==`, not with `compare`. Debug printing writes `sorted_map::from_list([…])` with the entries in key order, each one debug-printed (D-344).
@@ -119,6 +119,24 @@ test "get looks a key up" {
   let ages = sorted_map::from_list([("ada", 36), ("alan", 41)])
   assert sorted_map::get(ages, "ada") == Some(36)
   assert sorted_map::get(ages, "grace") == None
+}
+```
+
+### `get_or`
+
+```cheby
+pub fn get_or<K: Compare, V>(m: SortedMap<K, V>, key: K, default: V) -> V
+```
+
+Returns the value stored under the key that compares `Equal` to `key`, or `default` when there is none, as `map::get_or` does for a `Map` (D-1648, D-1659).
+
+- **Cost:** O(log n). Informative.
+
+```cheby
+test "get_or falls back for a missing key" {
+  let ages = sorted_map::from_list([("ada", 36), ("alan", 41)])
+  assert sorted_map::get_or(ages, "ada", 0) == 36
+  assert sorted_map::get_or(ages, "grace", 0) == 0
 }
 ```
 
@@ -543,6 +561,24 @@ test "find returns the first match in key order" {
   let scores = sorted_map::from_list([("b", 2), ("c", 3), ("a", 1)])
   assert sorted_map::find(scores, fn(_, value) { value > 1 }) == Some(("b", 2))
   assert sorted_map::find(scores, fn(_, value) { value > 3 }) == None
+}
+```
+
+### `count`
+
+```cheby
+pub fn count<K: Compare, V>(m: SortedMap<K, V>, predicate: fn(K, V) -> Bool) -> Int
+```
+
+Returns the number of entries for which `predicate` returns `True`, as `list::count` does for a list (D-1659). It calls `predicate` once per entry, from the smallest key to the largest.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative. It never calls `compare`.
+
+```cheby
+test "count counts the matching entries" {
+  let scores = sorted_map::from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert sorted_map::count(scores, fn(_, value) { value > 1 }) == 2
+  assert sorted_map::count(sorted_map::new::<String, Int>(), fn(_, _) { True }) == 0
 }
 ```
 

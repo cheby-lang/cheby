@@ -529,3 +529,40 @@ test "a long map keeps its order through removals" {
   assert keys(odd) == list::filter(list::map(numbers, fn(n) { 999 - n }), fn(key) { key % 2 == 1 })
   assert from_list(to_list(odd)) == odd
 }
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the value stored under `key`, or `default` when `key` is not
+/// in the map (D-1648, D-1659).
+pub fn get_or<K, V>(m: OrderedMap<K, V>, key: K, default: V) -> V {
+  case get(m, key) {
+    Some(value) => value
+    None => default
+  }
+}
+
+test "get_or falls back for a missing key" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert get_or(ages, "ada", 0) == 36
+  assert get_or(ages, "grace", 0) == 0
+  assert get_or(new::<String, Int>(), "ada", -1) == -1
+}
+
+/// Returns the number of entries for which `predicate` returns `True`,
+/// calling it once per entry in the map's order (D-1659).
+pub fn count<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Int {
+  fold(m, 0, fn(found, key, value) {
+    case predicate(key, value) {
+      True => found + 1
+      False => found
+    }
+  })
+}
+
+test "count counts the matching entries" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert count(scores, fn(_, value) { value > 1 }) == 2
+  assert count(scores, fn(key, _) { key == "z" }) == 0
+  assert count(new::<String, Int>(), fn(_, _) { True }) == 0
+}

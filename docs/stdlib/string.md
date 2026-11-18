@@ -566,6 +566,89 @@ test "slice takes code points by position" {
 
 `start` and `end` are clamped parameters, so a negative literal for either warns (D-303, D-375).
 
+### `first`
+
+```cheby
+pub fn first(text: String) -> Option<String>
+```
+
+Returns the first code point of `text` as a string of one code point (D-302, D-1649).
+
+- **Fails:** `None` for `""`.
+- **Cost:** O(1), required.
+
+```cheby
+test "first reads the first code point" {
+  assert string::first("L68") == Some("L")
+  assert string::first("éa") == Some("é")
+  assert string::first("") == None
+}
+```
+
+### `last`
+
+```cheby
+pub fn last(text: String) -> Option<String>
+```
+
+Returns the last code point of `text` as a string of one code point, so a combining mark at the end is returned alone (D-302, D-1649).
+
+- **Fails:** `None` for `""`.
+- **Cost:** O(n), required.
+
+```cheby
+test "last reads the last code point" {
+  assert string::last("L68") == Some("8")
+  assert string::last("a😀") == Some("😀")
+  assert string::last("e\u{301}") == Some("\u{301}")
+  assert string::last("") == None
+}
+```
+
+### `drop_start`
+
+```cheby
+pub fn drop_start(text: String, count: Int) -> String
+```
+
+Returns `text` without its first `count` code points (D-302, D-1649).
+
+- **Clamps:** `count` to `0` to the length of `text`, so a negative count gives `text` and a count past the end gives `""` (D-298, D-303).
+- **Cost:** O(n), required.
+
+```cheby
+test "drop_start removes code points from the front" {
+  let negative = -2
+  assert string::drop_start("L68", 1) == "68"
+  assert string::drop_start("héllo", 2) == "llo"
+  assert string::drop_start("abc", 5) == ""
+  assert string::drop_start("abc", negative) == "abc"
+}
+```
+
+### `drop_end`
+
+```cheby
+pub fn drop_end(text: String, count: Int) -> String
+```
+
+Returns `text` without its last `count` code points (D-302, D-1649).
+
+- **Clamps:** `count` to `0` to the length of `text`, so a negative count gives `text` and a count past the end gives `""` (D-298, D-303).
+- **Cost:** O(n), required.
+
+```cheby
+test "drop_end removes code points from the back" {
+  let negative = -2
+  assert string::drop_end("L68", 2) == "L"
+  assert string::drop_end("héllo", 4) == "h"
+  assert string::drop_end("abc", 5) == ""
+  assert string::drop_end("abc", negative) == "abc"
+}
+```
+
+Puzzle lines such as `L68` start with a letter and end with a number, and a pattern cannot match a prefix of a string (D-113), so `first` and `drop_start` take such a line apart. `drop_start` and `drop_end` remove a number of code points, where `remove_prefix` and `remove_suffix` remove a given text. The names follow Gleam's (D-1649).
+
 ## Conversions
 
 ### `from_bytes`

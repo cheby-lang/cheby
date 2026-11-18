@@ -34,6 +34,7 @@ mod naming;
 mod paths;
 pub mod repl;
 mod scope;
+mod std_names;
 
 use std::cmp::Reverse;
 
@@ -53,6 +54,7 @@ pub use imports::{
 };
 pub use items::runtime_export_reserved;
 pub use scope::{ModuleScope, ScopeEntry, ScopeSource};
+pub use std_names::{StdItemName, public_names};
 
 cheby_iface::newtype_index! {
     /// A local binding of a top-level item's body: a parameter, a `let`,
@@ -90,6 +92,11 @@ pub struct StdCatalog<'a> {
     /// Every module the spec defines, shipped or not, for the help line of
     /// "`list` is not imported".
     pub known: &'a [&'a str],
+    /// The public items of every shipped module, in module order, for the
+    /// help of E0042 that names a std item in another module (D-1658).
+    /// Called only when that help is needed, since building the list may
+    /// parse all of std. `None` gives no such help.
+    pub items: Option<fn() -> &'static [StdItemName]>,
 }
 
 /// The result of resolving one module.

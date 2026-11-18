@@ -122,7 +122,7 @@ pub fn lines(text: String) -> List<String> {
     case parts {
       [] => done
       [""] => done
-      [last] => [..done, last]
+      [final] => [..done, final]
       [part, ..rest] => ended(rest, [..done, remove_suffix(part, "\r")])
     }
   }
@@ -195,9 +195,9 @@ test "to_graphemes keeps clusters together" {
 pub fn add(a: String, b: String) -> String
 
 test "add concatenates" {
-  let first = "Ada"
+  let given = "Ada"
   assert add("con", "cat") == "concat"
-  assert first + " " + "Lovelace" == "Ada Lovelace"
+  assert given + " " + "Lovelace" == "Ada Lovelace"
 }
 
 /// Returns `out` followed by `text` between `"`, escaped as JSON text:
@@ -504,4 +504,77 @@ test "from_string encodes UTF-8" {
   assert bytes::length(bytes::from_string("café")) == 5
   assert from_bytes(bytes::from_string("café")) == Ok("café")
   assert bytes::from_string("") == bytes::new()
+}
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the first code point of `text` as a one-code-point string, or
+/// `None` for `""` (D-302, D-1649).
+pub fn first(text: String) -> Option<String> {
+  case slice(text, 0, 1) {
+    "" => None
+    head => Some(head)
+  }
+}
+
+test "first reads the first code point" {
+  assert first("L68") == Some("L")
+  assert first("éa") == Some("é")
+  assert first("x") == last("x")
+  assert first("") == None
+}
+
+/// Returns the last code point of `text` as a one-code-point string, or
+/// `None` for `""` (D-302, D-1649).
+pub fn last(text: String) -> Option<String> {
+  let size = length(text)
+  case slice(text, size - 1, size) {
+    "" => None
+    tail => Some(tail)
+  }
+}
+
+test "last reads the last code point" {
+  assert last("L68") == Some("8")
+  assert last("a😀") == Some("😀")
+  assert last("e\u{301}") == Some("\u{301}")
+  assert last("") == None
+}
+
+/// Returns `text` without its first `count` code points (D-302, D-1649).
+@std_clamped(count)
+pub fn drop_start(text: String, count: Int) -> String {
+  slice(text, count, length(text))
+}
+
+test "drop_start removes code points from the front" {
+  let negative = -2
+  let far = 0 - 9_007_199_254_740_991
+  assert drop_start("L68", 1) == "68"
+  assert drop_start("héllo", 2) == "llo"
+  assert drop_start("abc", 0) == "abc"
+  assert drop_start("abc", 5) == ""
+  assert drop_start("abc", negative) == "abc"
+  assert drop_start("abc", far) == "abc"
+}
+
+/// Returns `text` without its last `count` code points (D-302, D-1649).
+@std_clamped(count)
+pub fn drop_end(text: String, count: Int) -> String {
+  case count > 0 {
+    True => slice(text, 0, length(text) - count)
+    False => text
+  }
+}
+
+test "drop_end removes code points from the back" {
+  let negative = -2
+  let far = 0 - 9_007_199_254_740_991
+  assert drop_end("L68", 2) == "L"
+  assert drop_end("héllo", 4) == "h"
+  assert drop_end("abc", 0) == "abc"
+  assert drop_end("abc", 5) == ""
+  assert drop_end("abc", negative) == "abc"
+  assert drop_end("abc", far) == "abc"
 }

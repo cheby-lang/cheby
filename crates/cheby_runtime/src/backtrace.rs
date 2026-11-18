@@ -15,7 +15,9 @@
 //! `crate::panic`, `crate::unwind::entry_slow`) start at the caller's
 //! frame; `joined fiber failed` and `spawn into a scope that has ended`
 //! start at the control block's wait-frame word (D-868,
-//! [`wait_start`]); every other raise in Rust code has no start and
+//! [`wait_start`]), and `option::panic_at`, whose naked stub passes the
+//! frame pointer of the std function that called it, starts there the
+//! same way (D-1647); every other raise in Rust code has no start and
 //! prints the no-frames line. Rust frames are never walked.
 //!
 //! # What it shows (D-1039)

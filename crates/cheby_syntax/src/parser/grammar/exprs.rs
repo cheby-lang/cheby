@@ -545,6 +545,17 @@ pub(super) fn string_lit(p: &mut Parser<'_>) -> CompletedMarker {
     m.complete(p, STRING_LIT)
 }
 
+/// Skips a string inside an interpolation, which the lexer closes on its
+/// line and gives no interpolation (D-1656). Its text and its `"` do not
+/// end the interpolation, so nothing after the E0012 is reported.
+fn inner_string(p: &mut Parser<'_>) {
+    p.bump(STRING_START);
+    while p.at(STRING_TEXT) || p.at(STRING_ESCAPE) {
+        p.bump_any();
+    }
+    p.eat(STRING_END);
+}
+
 /// Tokens that end the inside of an interpolation.
 const INTERP_LIMIT: TokenSet = TokenSet::new(&[
     INTERP_END,
@@ -587,19 +598,28 @@ fn interpolation(p: &mut Parser<'_>) {
     if !p.at_ts(INTERP_LIMIT) {
         reported = true;
         let found = p.current().describe();
+        // An interpolation that starts with a string almost always meant a
+        // literal `{`, as in `"price {" + amount + "}"` (D-1661).
+        let help = if !named && p.at(STRING_START) {
+            "a `{` in a string starts an interpolation; `\\{` writes a literal `{`"
+        } else {
+            "an interpolation holds a name, optionally with fields and `:?`, such as \
+             `{user.name}`; bind other values to a name first"
+        };
         let diag = Diagnostic::new(
             codes::INVALID_INTERPOLATION,
             format!("unexpected {found} in string interpolation"),
         )
         .with_primary(p.current_span(), "")
-        .with_help(
-            "an interpolation holds a name, optionally with fields and `:?`, such as \
-             `{user.name}`; bind other values to a name first",
-        );
+        .with_help(help);
         p.report(diag);
         let error = p.start();
         while !p.at_ts(INTERP_LIMIT) {
-            p.bump_any();
+            if p.at(STRING_START) {
+                inner_string(p);
+            } else {
+                p.bump_any();
+            }
         }
         error.complete(p, ERROR);
     }

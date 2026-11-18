@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1656, D-115
+//! A `"` with no `}` after its string on the same line ends the
+//! interpolation and the string, so the `{` is never closed.
+
+fn main() {
+  let s = "price {"
+  assert s == "price"
+}

@@ -1,0 +1,16 @@
+// @mode: parse-fail
+// @decisions: D-158, D-1657
+//! The rest of a list pattern is `..` or `..name`, never Rust's `.._`.
+//! The help says which to write, and the rest of the pattern adds no
+//! error.
+
+fn first(items: List<Int>) -> Int {
+  case items {
+    [x, .._] => x
+    _ => 0
+  }
+}
+
+fn main() {
+  assert first([1, 2]) == 1
+}

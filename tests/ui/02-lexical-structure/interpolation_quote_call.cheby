@@ -1,0 +1,14 @@
+// @mode: parse-fail
+// @decisions: D-1656, D-115
+//! A call with a string argument inside an interpolation is one error:
+//! the inner string is read as a string, and the interpolation ends at its
+//! `}`.
+
+fn shout(text: String) -> String {
+  text
+}
+
+fn main() {
+  let s = "say {shout("hi")}!"
+  assert s == "say hi!"
+}

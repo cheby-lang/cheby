@@ -1,0 +1,8 @@
+error[E0012]: unexpected `(` in string interpolation
+  --> tests/ui/02-lexical-structure/interpolation_quote_call.cheby:12:22
+   |
+12 |   let s = "say {shout("hi")}!"
+   |                      ^
+   |
+   = help: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first
+

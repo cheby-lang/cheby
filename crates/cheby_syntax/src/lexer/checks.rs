@@ -28,7 +28,9 @@ pub(crate) fn check_tokens(tree: &SyntaxTree, out: &mut Vec<Diagnostic>) {
     for token in tree.root().tokens() {
         match token.kind() {
             SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER => number(token, out),
-            SyntaxKind::STRING_ESCAPE => escape(token, out),
+            // The escapes of a string inside an interpolation (D-1656) are
+            // not checked: the interpolation is already E0012.
+            SyntaxKind::STRING_ESCAPE if !inside_interpolation(token) => escape(token, out),
             SyntaxKind::INTERP_START => in_interpolation = true,
             SyntaxKind::INTERP_END | SyntaxKind::STRING_TEXT | SyntaxKind::STRING_END => {
                 in_interpolation = false;
@@ -52,6 +54,16 @@ pub(crate) fn check_tokens(tree: &SyntaxTree, out: &mut Vec<Diagnostic>) {
             _ => {}
         }
     }
+}
+
+/// Whether `token` lies inside an interpolation's node, as the tokens of a
+/// string inside an interpolation do (D-1656).
+fn inside_interpolation(token: SyntaxToken<'_>) -> bool {
+    token.parent().is_some_and(|parent| {
+        parent
+            .ancestors()
+            .any(|node| node.kind() == SyntaxKind::INTERPOLATION)
+    })
 }
 
 /// Whether `token` lies in an interpolation with a grammar error: one

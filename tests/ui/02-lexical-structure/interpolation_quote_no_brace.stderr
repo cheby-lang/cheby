@@ -1,0 +1,8 @@
+error[E0012]: unclosed string interpolation
+ --> tests/ui/02-lexical-structure/interpolation_quote_no_brace.cheby:7:18
+  |
+7 |   let s = "price {"
+  |                  ^ this `{` is never closed
+  |
+  = help: close it with `}`, or escape the brace as `\{`
+

@@ -1,0 +1,18 @@
+// @mode: run-fail
+// @decisions: D-1646, D-1647
+//! `option::expect` returns the value of a `Some`, and on `None` panics
+//! with its message, located at the start of the path of the call in the
+//! caller's file, as a `let assert` is, not in `std/option.cheby` (§4.8,
+//! §11.6).
+
+import std::io
+import std::list
+import std::option
+
+fn main() {
+  let numbers = [3, 5, 8]
+  let first = option::expect(list::get(numbers, 0), "the list has a first element")
+  io::println("first: {first}")
+  let fourth = option::expect(list::get(numbers, 3), "the list has a fourth element")
+  io::println("never printed: {fourth}")
+}

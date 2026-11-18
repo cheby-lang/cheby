@@ -2,11 +2,13 @@
 //! tests, lists of results and conversions.
 //!
 //! `Result`, `Ok` and `Err` are builtin items whose home module is this one
-//! (D-447). Everything here is written in Cheby.
+//! (D-447). Everything here is written in Cheby. `expect` panics through
+//! `std::option`'s kernel `panic_at`, at the place of its call (D-1647).
 
 import std::int
 import std::list
 import std::nil
+import std::option
 import std::string
 
 // Chaining
@@ -146,6 +148,37 @@ pub fn lazy_unwrap_or<T, E>(r: Result<T, E>, default: fn() -> T) -> T {
 test "lazy_unwrap_or calls the default only for an error" {
   assert lazy_unwrap_or(int::parse("12"), fn() { panic as "not called" }) == 12
   assert lazy_unwrap_or(int::parse("twelve"), fn() { 0 }) == 0
+}
+
+/// Returns the value of an `Ok`, and panics on an `Err` with `message`,
+/// then `: ` and the error's `show` (D-1646). Through `@std_call_site`,
+/// the compiler calls `expect_at` in its place with the place where it is
+/// named, so the panic reports the caller's location and no program
+/// reaches this body (D-1647, D-1630).
+@std_call_site(expect_at)
+pub fn expect<T, E: Show>(r: Result<T, E>, message: String) -> T {
+  let _ = (r, message)
+  panic as "the compiler did not replace this call of `result::expect` (D-1630)"
+}
+
+/// What a call of `expect` at `path`:`line`:`column` does (D-1647).
+fn expect_at<T, E: Show>(
+  r: Result<T, E>,
+  message: String,
+  path: String,
+  line: Int,
+  column: Int,
+) -> T {
+  case r {
+    Ok(value) => value
+    Err(error) => option::panic_at("{message}: {error}", path, line, column)
+  }
+}
+
+test "expect returns the value of an Ok" {
+  assert expect(int::parse("12"), "not a number") == 12
+  let good: Result<String, Int> = Ok("text")
+  assert expect(good, "no text") == "text"
 }
 
 /// Returns `first` if it is `Ok`, and `second` otherwise.

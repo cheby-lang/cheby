@@ -1,0 +1,8 @@
+error[E0012]: unexpected string in string interpolation
+ --> tests/ui/02-lexical-structure/interpolation_quote_brace_later.cheby:9:19
+  |
+9 |   let s = "price {" + amount + "}"
+  |                   ^
+  |
+  = help: a `{` in a string starts an interpolation; `\{` writes a literal `{`
+

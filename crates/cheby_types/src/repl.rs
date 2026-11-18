@@ -1918,7 +1918,10 @@ mod tests {
                 deps: DepView::new(&self.b.set, &deps),
                 modules: &display,
                 globals: &self.b.globals,
-                std: StdCatalog { known: &[] },
+                std: StdCatalog {
+                    known: &[],
+                    items: None,
+                },
                 package_targets: Targets::ALL,
             };
             let checked = self.repl.check_entry(&input, &self.b.modules, shape)?;

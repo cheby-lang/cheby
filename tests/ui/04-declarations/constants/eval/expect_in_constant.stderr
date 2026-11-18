@@ -1,0 +1,16 @@
+error[E0075]: evaluating the constant `missing` panicked
+  --> tests/ui/04-declarations/constants/eval/expect_in_constant.cheby:16:7
+   |
+16 | const missing: Int = option::expect(list::get([4, 5], 2), "the list has a third element")
+   |       ^^^^^^^ its initializer panicked
+   |
+   = note: panicked at tests/ui/04-declarations/constants/eval/expect_in_constant.cheby:16:22: the list has a third element
+
+error[E0075]: evaluating the constant `unparsed` panicked
+  --> tests/ui/04-declarations/constants/eval/expect_in_constant.cheby:20:7
+   |
+20 | const unparsed: Int = result::expect(int::parse("1x"), "the text is a number")
+   |       ^^^^^^^^ its initializer panicked
+   |
+   = note: panicked at tests/ui/04-declarations/constants/eval/expect_in_constant.cheby:20:23: the text is a number: Nil
+

@@ -86,7 +86,7 @@
 
 == src/main.cheby:8:23 completion key
 {
-  "count": 98,
+  "count": 100,
   "isIncomplete": false,
   "items": [
     {
@@ -122,7 +122,7 @@
 
 == src/main.cheby:11:23 completion key
 {
-  "count": 98,
+  "count": 100,
   "isIncomplete": false,
   "items": [
     {
@@ -160,7 +160,7 @@
   "absent": [
     "key"
   ],
-  "count": 95,
+  "count": 97,
   "isIncomplete": false,
   "items": []
 }
@@ -170,7 +170,7 @@
   "absent": [
     "key"
   ],
-  "count": 95,
+  "count": 97,
   "isIncomplete": false,
   "items": []
 }

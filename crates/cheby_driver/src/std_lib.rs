@@ -388,6 +388,34 @@ pub fn known() -> Vec<&'static str> {
     all
 }
 
+/// The public items of every shipped module, in the order of
+/// [`STD_MODULES`], each module's in declaration order: the catalog of
+/// [`cheby_resolve::StdCatalog::items`], for the help of E0042 that names a
+/// std item in another module (D-1658). The sources are parsed once per
+/// process, on the first call.
+#[must_use]
+pub fn item_names() -> &'static [cheby_resolve::StdItemName] {
+    static NAMES: std::sync::OnceLock<Vec<cheby_resolve::StdItemName>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        STD_MODULES
+            .iter()
+            .flat_map(|module| {
+                let parse = cheby_syntax::parse(
+                    cheby_diag::FileId::new(0),
+                    std::sync::Arc::from(module.source),
+                );
+                cheby_resolve::public_names(parse.tree())
+                    .into_iter()
+                    .map(|(name, namespace)| cheby_resolve::StdItemName {
+                        module: module.path,
+                        name: name.into_boxed_str(),
+                        namespace,
+                    })
+            })
+            .collect()
+    })
+}
+
 /// The path a std file is shown with in diagnostics and panic locations:
 /// `std/io.cheby`, `std/json/decode.cheby` (D-450).
 #[must_use]
@@ -419,6 +447,27 @@ mod tests {
                 out.push(format!("{prefix}{stem}"));
             }
         }
+    }
+
+    /// The catalog of D-1658 lists the public items of every module, in
+    /// module order, and leaves out the others.
+    #[test]
+    fn item_names_list_public_items_in_module_order() {
+        let names = item_names();
+        let has = |module: &str, name: &str| {
+            names.iter().any(|item| {
+                item.module == module
+                    && &*item.name == name
+                    && item.namespace == cheby_iface::Namespace::Value
+            })
+        };
+        assert!(has("io", "read_file"));
+        assert!(has("list", "length"));
+        assert!(!has("io", "length"));
+        assert!(names.windows(2).all(|pair| match pair {
+            [a, b] => a.module <= b.module,
+            _ => true,
+        }));
     }
 
     #[test]

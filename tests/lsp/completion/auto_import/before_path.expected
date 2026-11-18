@@ -205,7 +205,7 @@
 
 == src/main.cheby:19:13 completion string::starts_with
 {
-  "count": 127,
+  "count": 130,
   "isIncomplete": true,
   "items": [
     {

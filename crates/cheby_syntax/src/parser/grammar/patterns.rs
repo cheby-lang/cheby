@@ -12,14 +12,24 @@ use cheby_diag::{Diagnostic, codes};
 use super::exprs::string_lit;
 use super::{List, comma_list, list_rest, name, path};
 use crate::SyntaxKind::{
-    AS_KW, AS_PAT, COLON, COLON2, CTOR_PAT, DOT2, FIELD_PAT, FIELD_PAT_LIST, FLOAT_NUMBER,
-    IDENT_PAT, INT_NUMBER, L_BRACE, L_BRACK, L_PAREN, LIST_PAT, LITERAL_PAT, LOWER_IDENT, MINUS,
-    OR_PAT, PAREN_PAT, PIPE, POS_PAT_LIST, RAW_STRING, REST_PAT, STRING_START, TUPLE_PAT,
+    AS_KW, AS_PAT, COLON, COLON2, CTOR_PAT, DOT2, FIELD_PAT, FIELD_PAT_LIST, FLOAT_NUMBER, GT,
+    IDENT_PAT, INT_NUMBER, L_BRACE, L_BRACK, L_PAREN, LIST_PAT, LITERAL_PAT, LOWER_IDENT, LT,
+    MINUS, OR_PAT, PAREN_PAT, PIPE, POS_PAT_LIST, RAW_STRING, REST_PAT, STRING_START, TUPLE_PAT,
     UNDERSCORE, UPPER_IDENT, WILDCARD_PAT,
 };
 use crate::TokenSet;
 use crate::parser::recovery::{EXPR_RECOVERY, PAT_FIRST};
 use crate::parser::{CompletedMarker, Parser};
+
+/// The help for `<>` after a string pattern, Gleam's prefix pattern
+/// (D-113, D-1657).
+const STRING_PREFIX_HELP: &str = "a pattern cannot match a prefix of a string (D-113): test it \
+                                  with `string::starts_with` and remove it with \
+                                  `string::drop_start`";
+
+/// The help for `.._` in a list pattern, Rust's habit (D-1657).
+const WILDCARD_REST_HELP: &str =
+    "write `..` to ignore the rest of the list, or `..name` to bind it";
 
 /// A pattern. Reports and returns `None` if there is none here.
 pub(super) fn pattern(p: &mut Parser<'_>) -> Option<CompletedMarker> {
@@ -86,6 +96,9 @@ fn primary(p: &mut Parser<'_>) -> CompletedMarker {
             // Interpolation is rejected by validation (E0034).
             let m = p.start();
             string_lit(p);
+            if p.at(LT) && p.nth_at(1, GT) {
+                p.help_at_current(STRING_PREFIX_HELP);
+            }
             m.complete(p, LITERAL_PAT)
         }
         L_BRACK => list(p),
@@ -155,6 +168,8 @@ fn field_pat(p: &mut Parser<'_>) {
 }
 
 /// `[p, ..rest, q]`. More than one rest is rejected by validation (E0032).
+/// A `_` after `..` is not a name, so the list reports it, with a help
+/// (D-1657).
 fn list(p: &mut Parser<'_>) -> CompletedMarker {
     let list = List {
         open: L_BRACK,
@@ -167,7 +182,11 @@ fn list(p: &mut Parser<'_>) -> CompletedMarker {
         if p.at(DOT2) {
             let m = p.start();
             p.bump(DOT2);
-            p.eat(LOWER_IDENT);
+            if p.at(UNDERSCORE) {
+                p.help_at_current(WILDCARD_REST_HELP);
+            } else {
+                p.eat(LOWER_IDENT);
+            }
             m.complete(p, REST_PAT);
         } else {
             pattern(p);

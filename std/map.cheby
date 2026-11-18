@@ -216,10 +216,10 @@ pub fn try_fold<K, V, A, E>(
 }
 
 test "try_fold stops at the first error" {
-  fn add_stock(total: Int, name: String, count: Int) -> Result<Int, String> {
-    case count {
+  fn add_stock(total: Int, name: String, units: Int) -> Result<Int, String> {
+    case units {
       0 => Err("no {name}")
-      _ => Ok(total + count)
+      _ => Ok(total + units)
     }
   }
   let stock = from_list([("pear", 3), ("fig", 0), ("apple", 5)])
@@ -311,7 +311,7 @@ pub fn frequencies<K>(xs: List<K>) -> Map<K, Int> {
   list::fold(xs, new(), fn(counts, x) {
     upsert(counts, x, fn(previous) {
       case previous {
-        Some(count) => count + 1
+        Some(tally) => tally + 1
         None => 1
       }
     })
@@ -323,4 +323,34 @@ test "frequencies counts each element" {
   assert counts == from_list([("a", 3), ("b", 1), ("c", 1)])
   assert frequencies(list::new::<Int>()) == new()
   assert frequencies([(1, 2), (1, 2)]) == from_list([((1, 2), 2)])
+}
+
+/// Returns the value stored under `key`, or `default` when `key` is not
+/// in the map (D-1648).
+pub fn get_or<K, V>(m: Map<K, V>, key: K, default: V) -> V {
+  case get(m, key) {
+    Some(value) => value
+    None => default
+  }
+}
+
+test "get_or falls back for a missing key" {
+  let ages = from_list([("ada", 36), ("alan", 41)])
+  assert get_or(ages, "ada", 0) == 36
+  assert get_or(ages, "grace", 0) == 0
+  assert get_or(new::<String, Int>(), "ada", -1) == -1
+}
+
+/// Returns the number of entries for which `predicate` returns `True`,
+/// calling it once per entry in the map's per-process order (D-093,
+/// D-1659).
+pub fn count<K, V>(m: Map<K, V>, predicate: fn(K, V) -> Bool) -> Int {
+  list::count(to_list(m), fn((key, value)) { predicate(key, value) })
+}
+
+test "count counts the matching entries" {
+  let scores = from_list([("b", 2), ("c", 3), ("a", 1)])
+  assert count(scores, fn(_, value) { value > 1 }) == 2
+  assert count(scores, fn(key, _) { key == "z" }) == 0
+  assert count(new::<String, Int>(), fn(_, _) { True }) == 0
 }

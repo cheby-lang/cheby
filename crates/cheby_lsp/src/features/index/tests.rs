@@ -281,10 +281,10 @@ fn index_covers_every_identifier_of_std() {
     assert!(stray.is_empty(), "{stray:#?}");
 }
 
-/// F §5.3's `ATTR` row on `std::context` and `std::log`: the names in
-/// `@std_hooks(…)`, `@std_initializer(…)` and `@std_call_site(…)` are uses
-/// of the module's functions, so go to definition, references and rename
-/// see them (D-1599, D-1628).
+/// F §5.3's `ATTR` row on `std::context`, `std::log`, `std::option` and
+/// `std::result`: the names in `@std_hooks(…)`, `@std_initializer(…)` and
+/// `@std_call_site(…)` are uses of the module's functions, so go to
+/// definition, references and rename see them (D-1599, D-1628, D-1647).
 #[test]
 #[cfg_attr(
     windows,
@@ -314,6 +314,18 @@ fn attribute_arguments_name_functions_of_the_module() {
             "fn key_without_default_at<T>",
         ),
         ("log", "@std_call_site(info_at)", "info_at", "fn info_at"),
+        (
+            "option",
+            "@std_call_site(expect_at)",
+            "expect_at",
+            "fn expect_at<T>",
+        ),
+        (
+            "result",
+            "@std_call_site(expect_at)",
+            "expect_at",
+            "fn expect_at<T, E: Show>",
+        ),
     ] {
         let found = module_named(index, &std_path(module));
         let view = analyzed.snapshot.module(found.module).expect("the module");

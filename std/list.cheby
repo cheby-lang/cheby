@@ -1124,3 +1124,167 @@ test "permutations lists every ordering" {
   assert permutations(new::<Int>()) == [[]]
   assert length(permutations([4, 4])) == 2
 }
+
+/// Returns the element at `index`, counting from 0, or `default` outside
+/// the list, including at a negative index (D-318, D-1648).
+pub fn get_or<T>(xs: List<T>, index: Int, default: T) -> T {
+  case get(xs, index) {
+    Some(item) => item
+    None => default
+  }
+}
+
+test "get_or falls back outside the list" {
+  assert get_or([10, 20, 30], 1, 0) == 20
+  assert get_or([10, 20, 30], 3, 0) == 0
+  assert get_or([10, 20, 30], -1, 0) == 0
+  assert get_or(new::<String>(), 0, "none") == "none"
+}
+
+/// Returns the value of the fold after each element, front to back, so the
+/// result is as long as `xs` and does not start with `initial` (D-1651).
+pub fn scan<T, A>(xs: List<T>, initial: A, f: fn(A, T) -> A) -> List<A> {
+  fn step(rest: List<T>, running: A, found: List<A>) -> List<A> {
+    case rest {
+      [] => found
+      [head, ..tail] => {
+        let next = f(running, head)
+        step(tail, next, push(found, next))
+      }
+    }
+  }
+  step(xs, initial, [])
+}
+
+test "scan keeps every running value" {
+  assert scan([1, 2, 3], 0, int::add) == [1, 3, 6]
+  assert scan(["a", "b", "c"], "", fn(text, s) { text + s }) == ["a", "ab", "abc"]
+  assert scan(new::<Int>(), 0, int::add) == []
+  assert last(scan([4, 5, 6], 1, int::mul)) == Some(fold([4, 5, 6], 1, int::mul))
+}
+
+/// Returns the runs of elements between the elements for which
+/// `is_separator` returns `True`, in order, without the separators and
+/// without empty runs (D-1652). It calls `is_separator` once per element.
+pub fn split_when<T>(xs: List<T>, is_separator: fn(T) -> Bool) -> List<List<T>> {
+  fn ended(found: List<List<T>>, run: List<T>) -> List<List<T>> {
+    case run {
+      [] => found
+      _ => push(found, run)
+    }
+  }
+  fn step(rest: List<T>, run: List<T>, found: List<List<T>>) -> List<List<T>> {
+    case rest {
+      [] => ended(found, run)
+      [head, ..tail] when is_separator(head) => step(tail, [], ended(found, run))
+      [head, ..tail] => step(tail, push(run, head), found)
+    }
+  }
+  step(xs, [], [])
+}
+
+test "split_when drops the separators and empty runs" {
+  let is_zero = fn(n) { n == 0 }
+  assert split_when([1, 0, 0, 2, 0], is_zero) == [[1], [2]]
+  assert split_when([0, 1, 2, 0, 3], is_zero) == [[1, 2], [3]]
+  assert split_when([1, 2], is_zero) == [[1, 2]]
+  assert split_when([0, 0], is_zero) == []
+  assert split_when(new::<Int>(), is_zero) == []
+}
+
+// The stdlib spec calls the count of `take_last` and `drop_last` `count`,
+// the name of this module's `count` function, so their bodies call it
+// `amount` (D-483).
+
+/// Returns the last `count` elements of `xs` (D-1653).
+@std_clamped(amount)
+pub fn take_last<T>(xs: List<T>, amount: Int) -> List<T> {
+  case amount > 0 {
+    True => drop(xs, length(xs) - amount)
+    False => []
+  }
+}
+
+test "take_last keeps a suffix" {
+  let negative = 0 - 1
+  assert take_last([1, 2, 3], 2) == [2, 3]
+  assert take_last([1, 2, 3], 10) == [1, 2, 3]
+  assert take_last([1, 2, 3], 0) == []
+  assert take_last([1, 2, 3], negative) == []
+  assert take_last([1, 2, 3], int::min_safe) == []
+}
+
+/// Returns `xs` without its last `count` elements (D-1653).
+@std_clamped(amount)
+pub fn drop_last<T>(xs: List<T>, amount: Int) -> List<T> {
+  case amount > 0 {
+    True => take(xs, length(xs) - amount)
+    False => xs
+  }
+}
+
+test "drop_last removes a suffix" {
+  let negative = 0 - 1
+  assert drop_last([1, 2, 3], 1) == [1, 2]
+  assert drop_last([1, 2, 3], 10) == []
+  assert drop_last([1, 2, 3], 0) == [1, 2, 3]
+  assert drop_last([1, 2, 3], negative) == [1, 2, 3]
+  assert drop_last([1, 2, 3], int::min_safe) == [1, 2, 3]
+}
+
+/// Returns the index of the element that `max` returns, the last of equal
+/// largest elements (D-408, D-1655).
+pub fn max_index<T: Compare>(xs: List<T>) -> Option<Int> {
+  extreme_index(xs, fn(item, best) { Compare::compare(item, best) != Less })
+}
+
+test "max_index finds the last of the largest elements" {
+  assert max_index([3, 9, 2, 9, 1]) == Some(3)
+  assert max_index(["pear", "apple"]) == Some(0)
+  assert max_index([0.0, -0.0]) == Some(1)
+  assert max_index([float::nan, 1.0, float::nan]) == Some(2)
+  assert max_index(new::<Int>()) == None
+}
+
+/// Returns the index of the element that `min` returns, the first of equal
+/// smallest elements (D-408, D-1655).
+pub fn min_index<T: Compare>(xs: List<T>) -> Option<Int> {
+  extreme_index(xs, fn(item, best) { Compare::compare(item, best) == Less })
+}
+
+test "min_index finds the first of the smallest elements" {
+  assert min_index([3, 1, 2, 1]) == Some(1)
+  assert min_index(["pear", "apple"]) == Some(1)
+  assert min_index([0.0, -0.0]) == Some(0)
+  assert min_index(new::<Int>()) == None
+}
+
+/// The index of the element that a scan from the front keeps, where
+/// `replaces(item, best)` tells whether `item` takes the place of the
+/// element kept so far.
+priv fn extreme_index<T>(xs: List<T>, replaces: fn(T, T) -> Bool) -> Option<Int> {
+  fn step(rest: List<T>, best: T, at: Int, index: Int) -> Int {
+    case rest {
+      [] => at
+      [head, ..tail] => case replaces(head, best) {
+        True => step(tail, head, index, index + 1)
+        False => step(tail, best, at, index + 1)
+      }
+    }
+  }
+  case xs {
+    [] => None
+    [head, ..tail] => Some(step(tail, head, 0, 1))
+  }
+}
+
+test "max_index and min_index point at max and min" {
+  let xs = [4, 8, 1, 8, 1, 6]
+  assert max_index(xs) == Some(3)
+  assert min_index(xs) == Some(2)
+  let at_max = case max_index(xs) {
+    Some(i) => get(xs, i)
+    None => None
+  }
+  assert at_max == max(xs)
+}

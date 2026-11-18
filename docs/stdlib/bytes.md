@@ -130,6 +130,25 @@ test "get reads one byte" {
 }
 ```
 
+### `get_or`
+
+```cheby
+pub fn get_or(data: Bytes, index: Int, default: U8) -> U8
+```
+
+Returns the byte at `index`, or `default` when `get` gives `None`, so a negative or past-the-end index gives `default`, as `list::get_or` does for a list (D-1648, D-1659).
+
+- **Cost:** O(1), required.
+
+```cheby
+test "get_or falls back outside the bytes" {
+  let data = bytes::from_list([10, 20, 30])
+  assert bytes::get_or(data, 1, 0) == 20
+  assert bytes::get_or(data, 3, 0) == 0
+  assert bytes::get_or(data, -1, 255) == 255
+}
+```
+
 ### `index_of`
 
 ```cheby
@@ -174,6 +193,48 @@ test "slice takes a range of bytes" {
   assert bytes::slice(data, 2, 100) == bytes::from_list([3, 4])
   assert bytes::slice(data, negative, 1) == bytes::from_list([1])
   assert bytes::slice(data, 3, 1) == bytes::new()
+}
+```
+
+### `take_last`
+
+```cheby
+pub fn take_last(data: Bytes, count: Int) -> Bytes
+```
+
+Returns the last `count` bytes of `data`, as `list::take_last` does for a list (D-1653, D-1659).
+
+- **Clamps:** `count` to `0` to `length`, so a negative count gives empty bytes and a count past the end gives `data` (D-298, D-303).
+- **Cost:** O(count), required.
+
+```cheby
+test "take_last keeps a suffix" {
+  let data = bytes::from_list([1, 2, 3])
+  let negative = -1
+  assert bytes::take_last(data, 2) == bytes::from_list([2, 3])
+  assert bytes::take_last(data, 10) == data
+  assert bytes::take_last(data, negative) == bytes::new()
+}
+```
+
+### `drop_last`
+
+```cheby
+pub fn drop_last(data: Bytes, count: Int) -> Bytes
+```
+
+Returns `data` without its last `count` bytes, as `list::drop_last` does for a list (D-1653, D-1659).
+
+- **Clamps:** `count` to `0` to `length`, so a negative count gives `data` and a count past the end gives empty bytes (D-298, D-303).
+- **Cost:** O(n - count), required.
+
+```cheby
+test "drop_last removes a suffix" {
+  let data = bytes::from_list([1, 2, 3])
+  let negative = -1
+  assert bytes::drop_last(data, 1) == bytes::from_list([1, 2])
+  assert bytes::drop_last(data, 10) == bytes::new()
+  assert bytes::drop_last(data, negative) == data
 }
 ```
 

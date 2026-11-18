@@ -64,7 +64,7 @@
       "detail": "Some(T)\nof type Option<T>",
       "documentation": {
         "kind": "markdown",
-        "value": "Helpers for the built-in `Option` type (D-317): chaining, defaults,\ntests, lists of options and conversions.\n\n`Option`, `Some` and `None` are builtin items whose home module is this\none (D-447). Everything here is written in Cheby."
+        "value": "Helpers for the built-in `Option` type (D-317): chaining, defaults,\ntests, lists of options and conversions.\n\n`Option`, `Some` and `None` are builtin items whose home module is this\none (D-447). Everything here is written in Cheby but the package-visible\nkernel `panic_at`, through which `expect` and `result::expect` panic at\nthe place of their call (D-1647)."
       },
       "insertTextFormat": 2,
       "kind": 20,
@@ -196,7 +196,7 @@
       "detail": "pub exposed type Option<T> {\n  Some(T),\n  None,\n}",
       "documentation": {
         "kind": "markdown",
-        "value": "Helpers for the built-in `Option` type (D-317): chaining, defaults,\ntests, lists of options and conversions.\n\n`Option`, `Some` and `None` are builtin items whose home module is this\none (D-447). Everything here is written in Cheby."
+        "value": "Helpers for the built-in `Option` type (D-317): chaining, defaults,\ntests, lists of options and conversions.\n\n`Option`, `Some` and `None` are builtin items whose home module is this\none (D-447). Everything here is written in Cheby but the package-visible\nkernel `panic_at`, through which `expect` and `result::expect` panic at\nthe place of their call (D-1647)."
       },
       "kind": 13,
       "label": "Option",

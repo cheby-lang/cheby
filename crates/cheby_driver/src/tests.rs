@@ -601,6 +601,15 @@ fn the_attribute_constructors_borrow_nothing() {
             "std::context::{key} is not named by an attribute: {constructors:?}"
         );
     }
+    // D-1647: the constructors of the two `expect` functions.
+    for module in ["std::option", "std::result"] {
+        assert!(
+            constructors
+                .iter()
+                .any(|(m, item)| m == module && item == "expect_at"),
+            "{module}::expect_at is not named by an attribute: {constructors:?}"
+        );
+    }
     for (module, item) in constructors {
         assert!(modules.contains(module), "{module}::{item}");
         assert!(

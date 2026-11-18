@@ -1,0 +1,25 @@
+// @mode: run-pass
+// @decisions: D-1646, D-1647
+//! A scope catches the panic of `expect` as any panic: its `fiber::Panic`
+//! carries the message, here `result::expect`'s message, `: ` and the
+//! error's `show` of `Nil`, and nothing is reported (§10.3, §11.6).
+
+import std::fiber
+import std::int
+import std::io
+import std::result
+
+fn main() {
+  let outcome = {
+    use owner <- fiber::scope()
+    let parsed = fiber::spawn(owner, fn() { result::expect(int::parse("x"), "bad count") })
+    fiber::join(parsed)
+  }
+  case outcome {
+    Ok(n) => io::println("never printed: {n}")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("caught: {text}")
+    }
+  }
+}

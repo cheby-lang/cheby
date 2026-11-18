@@ -554,7 +554,10 @@ fn build_package_with(
             deps: DepView::new(&set, &deps),
             modules: &modules,
             globals: &globals,
-            std: StdCatalog { known: &known_refs },
+            std: StdCatalog {
+                known: &known_refs,
+                items: None,
+            },
             package_targets: cheby_package::Targets::ALL,
         };
         let (resolved, d) = resolve_module(&input).unwrap();

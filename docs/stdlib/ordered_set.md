@@ -8,7 +8,7 @@ pub type OrderedSet<T>
 
 `OrderedSet` is opaque. Values are immutable, so every update returns a new set, and the old one stays usable.
 
-- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `show` and debug printing go from the element inserted first to the element inserted last. Inserting an element that is already present keeps its position. Removing an element and inserting it again moves it to the end (D-340).
+- **Order.** `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count`, `sum`, `show` and debug printing go from the element inserted first to the element inserted last. Inserting an element that is already present keeps its position. Removing an element and inserting it again moves it to the end (D-340).
 - **Elements.** Elements need no interface. They are compared with `==` and hashed with the built-in hash, as in `Set` (§3.13), so an element that contains a function or a handle panics when it is inserted or looked up (D-233).
 - **Written in Cheby.** The module is written in Cheby, with no kernel of its own (D-336), using the same representation as `std::ordered_map`. Elements are hashed and compared by the runtime's built-in routines, and no `compare` of the element type is ever called.
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered sets are `==` only when they hold the same elements in the same order, and their hash covers the order (D-343). Debug printing writes `ordered_set::from_list([…])` with the elements in order, each one debug-printed (D-344).
@@ -349,6 +349,44 @@ test "find returns the first match in insertion order" {
   let digits = ordered_set::from_list([3, 1, 2])
   assert ordered_set::find(digits, fn(n) { n < 3 }) == Some(1)
   assert ordered_set::find(digits, fn(n) { n > 3 }) == None
+}
+```
+
+### `count`
+
+```cheby
+pub fn count<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Int
+```
+
+Returns the number of elements for which `predicate` returns `True`, as `list::count` does for a list (D-1659). It calls `predicate` once per element, in insertion order.
+
+- **Cost:** O(n), plus the calls to `predicate`. Informative.
+
+```cheby
+test "count counts the matching elements" {
+  let digits = ordered_set::from_list([3, 1, 4, 2])
+  assert ordered_set::count(digits, fn(n) { n % 2 == 0 }) == 2
+  assert ordered_set::count(ordered_set::new::<Int>(), fn(_) { True }) == 0
+}
+```
+
+### `sum`
+
+```cheby
+pub fn sum<T: Add>(s: OrderedSet<T>, zero: T) -> T
+```
+
+Adds the elements to `zero` in insertion order, so the result for an empty set is `zero`, as `list::sum` does for a list (D-381, D-1659). The order is the set's, so the result is the same on every run and every target, as `set::sum`'s is (D-1650).
+
+- **Panics:** where `+` on `T` panics, such as `Int` overflow (D-025).
+- **Cost:** O(n), plus the calls to `add`. Informative.
+
+```cheby
+test "sum adds in insertion order" {
+  assert ordered_set::sum(ordered_set::from_list([1, 2, 3, 2]), 0) == 6
+  assert ordered_set::sum(ordered_set::new::<Int>(), 0) == 0
+  assert ordered_set::sum(ordered_set::from_list([1.0e16, 1.0, -1.0e16]), 0.0) == 0.0
+  assert ordered_set::sum(ordered_set::from_list([1.0e16, -1.0e16, 1.0]), 0.0) == 1.0
 }
 ```
 

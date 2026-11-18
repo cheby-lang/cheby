@@ -1918,7 +1918,10 @@ fn tolerant(text: &str) -> (Vec<String>, Vec<String>) {
         deps: DepView::new(&set, &[]),
         modules: &modules,
         globals: &globals,
-        std: StdCatalog { known: &[] },
+        std: StdCatalog {
+            known: &[],
+            items: None,
+        },
         package_targets: cheby_package::Targets::ALL,
     })
     .unwrap_or_else(|ice| panic!("{ice:?} in\n{text}"));

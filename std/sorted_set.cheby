@@ -10,7 +10,7 @@
 
 import std::int
 import std::list
-import std::ops::{Compare}
+import std::ops::{Add, Compare}
 import std::set
 import std::sorted_map
 
@@ -486,4 +486,33 @@ test "split and at work on a large set" {
   assert size(above) == 14_999
   assert at(above, 0) == Some(10_002)
   assert find(evens, fn(n) { n > 30_000 }) == Some(30_002)
+}
+
+// Puzzle helpers. They sit at the end of the file, so no std location that
+// a golden pins moves (D-1603).
+
+/// Returns the number of elements for which `predicate` returns `True`,
+/// calling it once per element from the smallest to the largest (D-1659).
+pub fn count<T: Compare>(s: SortedSet<T>, predicate: fn(T) -> Bool) -> Int {
+  sorted_map::count(tree(s), fn(item, _) { predicate(item) })
+}
+
+test "count counts the matching elements" {
+  let digits = from_list([3, 1, 4, 2])
+  assert count(digits, fn(n) { n % 2 == 0 }) == 2
+  assert count(digits, fn(n) { n > 4 }) == 0
+  assert count(new::<Int>(), fn(_) { True }) == 0
+}
+
+/// Adds the elements to `zero` from the smallest to the largest, so the
+/// result is the same on every run and every target (D-1650, D-1659).
+pub fn sum<T: Compare + Add>(s: SortedSet<T>, zero: T) -> T {
+  fold(s, zero, fn(total, item) { total + item })
+}
+
+test "sum adds in sorted order" {
+  assert sum(from_list([1, 2, 3, 2]), 0) == 6
+  assert sum(new::<Int>(), 0) == 0
+  // Sorted, the 1.0 is lost against -1.0e16.
+  assert sum(from_list([1.0e16, 1.0, -1.0e16]), 0.0) == 0.0
 }
