@@ -5,15 +5,18 @@
 //! functions the runtime supplies (D-101, D-647, D-703). Every function
 //! here is written in Cheby over private `@std_context` kernels (D-692)
 //! and one compiler intrinsic, `scope_run` (D-693), none of which calls a
-//! Cheby closure, so D-484 holds (D-675). Kernels cannot build this
-//! module's records, so a `Panic` is built here from the texts the runtime
-//! keeps for the scope that failed (D-484, D-648). Each kernel and the
-//! intrinsic also declares its JS binding, written with the JS back end
-//! (D-661).
+//! Cheby closure, so D-484 holds (D-675). `map` and `try_map` are written
+//! over the other functions, with no kernel of their own (D-1098). Kernels
+//! cannot build this module's records, so a `Panic` is built here from the
+//! texts the runtime keeps for the scope that failed (D-484, D-648). Each
+//! kernel and the intrinsic also declares its JS binding, written with the
+//! JS back end (D-661).
 
 import std::channel
 import std::duration
 import std::int
+import std::list
+import std::map as maps
 import std::string
 
 // Types
@@ -549,6 +552,251 @@ test "interruptible reports a panic as the panic" {
   assert message(failure) == "crash"
 }
 
+// Parallel work
+
+/// The work of `map` and `try_map` (D-1098). It starts the calls of `f`
+/// in the order of `xs`, each on a fiber of its own in a scope of its own,
+/// at most `limit` at a time, and starts the next one each time a call
+/// ends, until a call returns `Err`. Each call sends its index and its
+/// result back on a channel with room for all of them, so a call never
+/// waits to send. The results are put in order as they come: those that
+/// come before their turn wait in a map until it comes. The answer is known
+/// once every call before the lowest `Err` so far has returned `Ok`, or
+/// every call has returned `Ok`. Then the calls still running, all of them
+/// after that `Err`, are cancelled, and the scope ends once they have
+/// unwound. A panic of a call fails the scope, which cancels the others and
+/// the body, and its `Panic` is raised again (D-1097).
+fn run_parallel<T, U, E>(xs: List<T>, limit: Int, f: fn(T) -> Result<U, E>) -> Result<List<U>, E> {
+  let total = list::length(xs)
+  let width = int::min(int::max(limit, 1), total)
+  case total {
+    0 => Ok([])
+    _ => {
+      let outcome = {
+        use owner <- scope()
+        let (tx, rx) = channel::new::<(Int, Result<U, E>)>(width)
+        // Calls `f` on `x`, the element at `index`, on a fiber of its own.
+        fn launch(index, x) {
+          spawn(owner, fn() { channel::send(tx, (index, f(x))) })
+        }
+        // Starts the first `width` calls and returns the elements left.
+        fn start(index, rest) {
+          case rest {
+            [x, ..others] when index < width => {
+              launch(index, x)
+              start(index + 1, others)
+            }
+            _ => rest
+          }
+        }
+        // Moves the results that wait in `early` from index `at` on into
+        // `ready`, which holds the results before `at` in reverse order.
+        fn drain(at, ready, early) {
+          case maps::get(early, at) {
+            Some(value) => drain(at + 1, [value, ..ready], maps::remove(early, at))
+            None => (at, ready, early)
+          }
+        }
+        // `started` calls have started and `rest` holds the elements not
+        // started; `next` is the index of the first result not in `ready`,
+        // `early` holds the results after it, and `failed` the `Err` of the
+        // lowest index so far, with that index.
+        fn gather(started, rest, next, ready, early, failed) {
+          case failed {
+            Some((at, error)) when at == next => {
+              cancel(owner)
+              Err(error)
+            }
+            _ => case next == total {
+              True => Ok(list::reverse(ready))
+              False => {
+                // The body holds `tx` through `launch`, so the channel
+                // stays open.
+                let assert Ok((index, returned)) = channel::receive(rx)
+                let lowest = case returned, failed {
+                  Err(error), None => Some((index, error))
+                  Err(error), Some((at, _)) when index < at => Some((index, error))
+                  _, _ => failed
+                }
+                let (moved, in_order, waiting) = case returned {
+                  Ok(value) when index == next => drain(next + 1, [value, ..ready], early)
+                  Ok(value) => (next, ready, maps::insert(early, index, value))
+                  Err(_) => (next, ready, early)
+                }
+                // No call starts once one has returned `Err`: the calls
+                // before it have all started.
+                let (launched, left) = case lowest, rest {
+                  None, [x, ..others] => {
+                    launch(started, x)
+                    (started + 1, others)
+                  }
+                  _, _ => (started, rest)
+                }
+                gather(launched, left, moved, in_order, waiting, lowest)
+              }
+            }
+          }
+        }
+        let remaining = start(0, xs)
+        gather(width, remaining, 0, [], maps::new(), None)
+      }
+      case outcome {
+        Ok(answer) => answer
+        Err(failure) => raise(failure)
+      }
+    }
+  }
+}
+
+/// Calls `f` once per element of `xs`, on at most `limit` fibers at a
+/// time, in a scope of its own, and returns the results in the order of
+/// `xs`, as `list::map(xs, f)` does (D-1098). The calls start in the order
+/// of `xs`, and `limit` is clamped to at least 1 (D-298). When a call
+/// panics, the other calls are cancelled, and once they have unwound, the
+/// panic that the scope records is raised again with `raise`, so it keeps
+/// its message and location; which one that is can depend on timing when
+/// several calls panic (D-232). An empty list gives `[]` and spawns
+/// nothing. The elements, `f`'s captures and the results cross fibers, so
+/// they become shared (§9.4).
+@std_clamped(limit)
+pub fn map<T, U>(xs: List<T>, limit: Int, f: fn(T) -> U) -> List<U> {
+  case run_parallel::<T, U, Never>(xs, limit, fn(x) { Ok(f(x)) }) {
+    Ok(ys) => ys
+    Err(nothing) => nothing
+  }
+}
+
+test "map keeps the order of its input" {
+  let inputs = list::range(1, 101)
+  assert map(inputs, 8, fn(n) { n * n }) == list::map(inputs, fn(n) { n * n })
+}
+
+test "map clamps its limit to at least 1" {
+  assert map([3, 1, 2], 0, fn(n) { n * 2 }) == [6, 2, 4]
+  assert map::<Int, Int>([], 4, fn(n) { n * 2 }) == []
+}
+
+test "map raises the panic of a call again" {
+  let outcome = {
+    use _scope <- scope()
+    map([1, 2, 3], 2, fn(n) {
+      case n {
+        2 => panic as "two"
+        _ => n
+      }
+    })
+  }
+  let assert Err(failure) = outcome
+  assert message(failure) == "two"
+}
+
+/// Calls `f` on the elements of `xs`, on at most `limit` fibers at a time,
+/// in a scope of its own, and returns `Ok` with every result in the order
+/// of `xs`, or the `Err` of the element with the lowest index whose call
+/// returned `Err`, as `list::try_map(xs, f)` does when `f` has no effects,
+/// whatever the scheduling (D-1098). `f` is called exactly once for each
+/// element before that one and at most once for each element after it:
+/// once the answer is known, no more elements are handed out, and the calls
+/// in flight are cancelled and have unwound before it returns. A panic of
+/// a call before the answer is known is raised again, as in `map`.
+/// `limit` is clamped to at least 1 (D-298), and an empty list gives
+/// `Ok([])` and spawns nothing.
+@std_clamped(limit)
+pub fn try_map<T, U, E>(xs: List<T>, limit: Int, f: fn(T) -> Result<U, E>) -> Result<List<U>, E> {
+  run_parallel(xs, limit, f)
+}
+
+test "try_map returns the Err of the lowest index" {
+  let check = fn(n) {
+    case n > 2 {
+      True => Err(n)
+      False => Ok(n)
+    }
+  }
+  assert try_map([1, 2, 3, 4, 5], 4, check) == Err(3)
+  assert try_map([1, 2], 4, check) == Ok([1, 2])
+  assert try_map([], 4, check) == Ok([])
+}
+
+test "try_map calls each element before the Err exactly once" {
+  let (tx, rx) = channel::new::<Int>(4)
+  let outcome = try_map([1, 2, 3, 4], 1, fn(n) {
+    let assert Ok(Nil) = channel::send(tx, n)
+    case n {
+      2 => Err("two")
+      _ => Ok(n)
+    }
+  })
+  assert outcome == Err("two")
+  // The function, and with it `tx`, is released once `try_map` returns.
+  let calls = list::sort(channel::to_list(rx))
+  assert list::take(calls, 2) == [1, 2]
+  assert list::unique(calls) == calls
+}
+
+test "try_map cancels the calls in flight" {
+  let (keep, never) = channel::new::<Int>(1)
+  let outcome = try_map([1, 2], 2, fn(n) {
+    case n {
+      1 => Err("one")
+      _ => {
+        let _ = channel::receive(never)
+        Ok(n)
+      }
+    }
+  })
+  assert outcome == Err("one")
+  // The call for 2 was cancelled, and `never` was released.
+  assert channel::send(keep, 1) == Err(1)
+}
+
+// Yielding
+
+/// Puts the calling fiber behind the fibers that can run, once, and
+/// delivers a pending cancellation (D-1102).
+@std_context
+@external(native, "cheby_fiber_sys_yield_now")
+@external(js, "./fiber.mjs", "sys_yield_now")
+fn sys_yield_now() -> Nil
+
+/// Suspends the calling fiber once and puts it behind the fibers that can
+/// run, then returns (D-1102). A pending cancellation is delivered there,
+/// as at any suspension point (§10.7). On JS it is a real suspension point,
+/// the one portable way for a CPU-bound loop to let the other fibers run
+/// (§10.2, D-185). On native the entry checks already keep a fiber from
+/// holding a thread (D-028), so it only makes the switch happen at once.
+pub fn yield_now() {
+  sys_yield_now()
+}
+
+test "a loop that yields lets other fibers run" {
+  let (tx, rx) = channel::new::<Int>(1)
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { channel::send(tx, 1) })
+    fn poll() {
+      case channel::receive_now(rx) {
+        Some(received) => received
+        None => {
+          yield_now()
+          poll()
+        }
+      }
+    }
+    poll()
+  }
+  assert outcome == Ok(Ok(1))
+}
+
+test "a cancellation is delivered at yield_now" {
+  fn spin(n: Int) -> Int {
+    yield_now()
+    spin(n + 1)
+  }
+  let outcome = timeout(duration::milliseconds(10), fn() { spin(0) })
+  assert outcome == Err(TimedOut)
+}
+
 // Panics
 
 /// Returns the message of the panic: exactly the message line of its
@@ -596,6 +844,51 @@ test "panics compare by message and location" {
   }
   assert fail("same") == fail("same")
   assert fail("same") != fail("other")
+}
+
+/// Panics on the calling fiber with `text` as the message and `place` as
+/// the location, as they are (D-1097). `message` is a function of this
+/// module, so no parameter may take the name (D-051).
+@std_context
+@external(native, "cheby_fiber_sys_raise")
+@external(js, "./fiber.mjs", "sys_raise")
+fn sys_raise(text: String, place: String) -> Never
+
+/// Panics on the calling fiber with `failure`'s message and location
+/// (D-1097). A scope that catches it gets a `Panic` that is `==` to
+/// `failure`, and an uncaught one prints the original `panicked at
+/// <location>:` line and message (§11.6). The backtrace, when it is on,
+/// starts with the line `  in std::fiber::raise`, with no location, and goes on
+/// with the calling fiber's stack at the call of `raise`, since the
+/// original stack has unwound (D-1039).
+pub fn raise(failure: Panic) -> Never {
+  sys_raise(failure.message, failure.location)
+}
+
+test "raise keeps the message and location of a caught panic" {
+  let assert Err(first) = {
+    use _scope <- scope()
+    panic as "original"
+  }
+  let assert Err(again) = {
+    use _scope <- scope()
+    raise(first)
+  }
+  assert again == first
+  assert message(again) == "original"
+}
+
+test "a raised panic fails a scope like the original" {
+  let assert Err(first) = {
+    use _scope <- scope()
+    panic as "worker"
+  }
+  let outcome = {
+    use owner <- scope()
+    spawn(owner, fn() { raise(first) })
+    Nil
+  }
+  assert outcome == Err(first)
 }
 
 // Tests of `std::channel` that need this module.

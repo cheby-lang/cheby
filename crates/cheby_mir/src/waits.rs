@@ -10,7 +10,8 @@
 //! D-1059 extends the rule to every public std wait that calls no function
 //! value, such as `channel::to_list` and `channel::send_all` (D-1100), and
 //! `time::sleep` and `time::sleep_until`, which wait on a timer (D-1057,
-//! D-1058). A test reads each module's source and checks that the function
+//! D-1058), and `fiber::yield_now`, which waits behind the fibers that can
+//! run (D-1102). A test reads each module's source and checks that the function
 //! exists and calls no function value.
 
 /// `(module, function)`, sorted by module and function.
@@ -20,6 +21,7 @@ pub const FRAME_KEEPING_WAITS: &[(&str, &str)] = &[
     ("std::channel", "send_all"),
     ("std::channel", "to_list"),
     ("std::fiber", "join"),
+    ("std::fiber", "yield_now"),
     ("std::time", "sleep"),
     ("std::time", "sleep_until"),
 ];

@@ -10,8 +10,9 @@
 //! (§9.4, D-072).
 //!
 //! `new`, `send` and `receive` are kernels that receive the running
-//! fiber's context (D-692). Each also declares its JS binding, written
-//! with the JS back end (D-661). The tests of this module that need
+//! fiber's context (D-692), and `send_now` and `receive_now` are written
+//! over two more, which never wait (D-1099). Each kernel also declares its
+//! JS binding, written with the JS back end (D-661). The tests of this module that need
 //! `std::fiber` live there, because `std::fiber` imports this module
 //! (D-630).
 
@@ -100,6 +101,80 @@ test "values still buffered are released with the last Receiver" {
   let _ = rx
   assert receive(inner_rx) == Err(Nil)
   let assert Err(_) = send(tx, spare_tx)
+}
+
+// Not waiting
+
+/// Why `send_now` did not send, with the value given back either way
+/// (D-179, D-1099). `Full(value)`: the buffer had no room, or, for capacity
+/// 0, no receiver or selector was waiting. `Closed(value)`: every
+/// `Receiver` is gone.
+pub exposed type Refused<T> {
+  Full(T),
+  Closed(T),
+}
+
+/// `send` without the wait: 0 when `value` was enqueued or handed to a
+/// receiver or a selector that was waiting, 1 when it could not be, and 2
+/// when every `Receiver` is gone, which is checked first (D-1099).
+@std_context
+@external(native, "cheby_channel_sys_send_now")
+@external(js, "./channel.mjs", "sys_send_now")
+fn sys_send_now<T>(sender: Sender<T>, value: T) -> Int
+
+/// Enqueues `value` and returns `Ok(Nil)` when the buffer has room, or
+/// hands it to a receiver or a selector that is waiting now (D-1099). On
+/// capacity 0 it succeeds only when it wins a waiting receiver or selector,
+/// as `send` claims one (D-206), and it never waits for a selector's
+/// choice. It returns `Err(Closed(value))` when every `Receiver` is gone,
+/// which is checked first, and `Err(Full(value))` otherwise. It never waits
+/// and is not a suspension point (§10.5, D-185).
+pub fn send_now<T>(sender: Sender<T>, value: T) -> Result<Nil, Refused<T>> {
+  case sys_send_now(sender, value) {
+    0 => Ok(Nil)
+    1 => Err(Full(value))
+    _ => Err(Closed(value))
+  }
+}
+
+test "send_now reports a full buffer and gives the value back" {
+  let (tx, rx) = new::<Int>(1)
+  assert send_now(tx, 1) == Ok(Nil)
+  assert send_now(tx, 2) == Err(Full(2))
+  assert receive_now(rx) == Some(Ok(1))
+  assert send_now(tx, 3) == Ok(Nil)
+  assert receive_now(rx) == Some(Ok(3))
+}
+
+test "send_now without receivers is Closed" {
+  let (tx, _) = new::<Int>(0)
+  assert send_now(tx, 3) == Err(Closed(3))
+}
+
+/// `receive` without the wait: `Some` of what `receive` would return when
+/// it would not wait, and `None` otherwise (D-1099).
+@std_context
+@external(native, "cheby_channel_sys_receive_now")
+@external(js, "./channel.mjs", "sys_receive_now")
+fn sys_receive_now<T>(receiver: Receiver<T>) -> Option<Result<T, Nil>>
+
+/// Returns `Some` of what `receive` would return when `receive` would not
+/// wait, and `None` otherwise (D-1099). So `Some(Ok(value))` takes the next
+/// value, from the buffer or from a sender waiting on a capacity-0 channel,
+/// `Some(Err(Nil))` means that the channel is closed and empty, and `None`
+/// that it is empty and some `Sender` still exists. It never waits and is
+/// not a suspension point (§10.5, D-185).
+pub fn receive_now<T>(receiver: Receiver<T>) -> Option<Result<T, Nil>> {
+  sys_receive_now(receiver)
+}
+
+test "receive_now never waits" {
+  let (tx, rx) = new::<String>(1)
+  assert receive_now(rx) == None
+  let assert Ok(Nil) = send(tx, "ready")
+  assert receive_now(rx) == Some(Ok("ready"))
+  // `tx` is not used again, so the channel is closed and empty now.
+  assert receive_now(rx) == Some(Err(Nil))
 }
 
 // Draining and filling

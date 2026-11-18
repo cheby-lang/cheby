@@ -620,6 +620,131 @@ fn ok(value: Word) -> Word {
     result
 }
 
+/// `Some(result)`, consuming the reference to `result`, also when the
+/// allocation raises.
+fn some(result: Word) -> Word {
+    // SAFETY: the caller's reference, given up here.
+    let result = unsafe { Owned::new(result) };
+    let option = values::some(result.word());
+    let _ = result.into_word();
+    option
+}
+
+/// What `sys_send_now` returns (D-1099): the value was enqueued or handed
+/// to a waiting receiver or selector.
+pub(crate) const SENT: i64 = 0;
+/// What `sys_send_now` returns: the buffer had no room, or, for capacity 0,
+/// nobody was waiting.
+pub(crate) const FULL: i64 = 1;
+/// What `sys_send_now` returns: every `Receiver` is gone.
+pub(crate) const CLOSED: i64 = 2;
+
+/// `channel::sys_send_now`, private, which `channel::send_now` calls
+/// (D-1099): `send` without the wait. It returns [`CLOSED`] when every
+/// `Receiver` is gone, which it checks first, [`SENT`] when it hands
+/// `value` to the first waiting receiver or selector whose node it wins, as
+/// `send` does (D-206), or enqueues it in a buffer with room, and [`FULL`]
+/// otherwise. On capacity 0 it succeeds only by winning a waiter, and it
+/// never waits for a selector's choice. `value` is borrowed: the channel
+/// takes a reference of its own when it is sent, and `send_now` gives the
+/// caller's back in `Full` or `Closed` otherwise. It is marked shared before
+/// the lock, as `send` marks it (D-705), whether it is then sent or not. It
+/// never parks, so it needs no scheduler (D-692).
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context, `sender` a live `Sender` handle and
+/// `value` a live value, both borrowed.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_channel_sys_send_now(
+    ctx: *mut ExecCtx,
+    sender: Word,
+    value: Word,
+) -> i64 {
+    // SAFETY: forwarded from the caller.
+    guarded(Some(ctx), || unsafe { send_now(sender, value) })
+}
+
+/// The body of [`cheby_channel_sys_send_now`].
+///
+/// # Safety
+///
+/// As for [`cheby_channel_sys_send_now`].
+unsafe fn send_now(sender: Word, value: Word) -> i64 {
+    // SAFETY: a live `Sender` handle, borrowed by the caller for the whole
+    // call (D-187); nothing here parks, so the borrow is enough (D-826).
+    let end = unsafe { handles::payload::<SenderEnd>(sender, HandleKind::Sender) };
+    let chan: &Chan = &end.0;
+    // SAFETY: as in `send`: the reference taken is the channel's once the
+    // value is enqueued or handed over, and released below otherwise.
+    let value = unsafe {
+        rc::mark_shared(value);
+        rc::dup(value);
+        Owned::new(value)
+    };
+    let mut inner = chan.inner.lock();
+    if !inner.receivers {
+        drop(inner);
+        drop(value);
+        return CLOSED;
+    }
+    if let Some(node) = inner.recvq.pop_settled(WaitState::Claimed) {
+        // SAFETY: won under the lock.
+        let waiter = unsafe { won(node) };
+        // SAFETY: as above: only this caller touches the cell.
+        unsafe { waiter.payload().get().write(value.into_word()) };
+        let fiber = waiter.header().fiber();
+        drop(inner);
+        wake_settled(fiber, true);
+        return SENT;
+    }
+    if inner.buf.len() < inner.cap {
+        inner.buf.push_back(value.into_word());
+        return SENT;
+    }
+    drop(inner);
+    drop(value);
+    FULL
+}
+
+/// `channel::sys_receive_now`, private, which `channel::receive_now` calls
+/// (D-1099): `receive` without the wait. `Some` of what `receive` would
+/// return when it would not wait, from the same step
+/// ([`ChanInner::take_ready`]): `Some(Ok(value))` for the next value, from
+/// the buffer or from a sender waiting on a capacity-0 channel, which it
+/// wakes, and `Some(Err(Nil))` for a closed and empty channel; `None` when
+/// the channel is empty and its `Sender` is alive. It never parks, so it
+/// needs no scheduler (D-692).
+///
+/// # Safety
+///
+/// `ctx` is the running fiber's context and `receiver` a live `Receiver`
+/// handle, borrowed.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn cheby_channel_sys_receive_now(
+    ctx: *mut ExecCtx,
+    receiver: Word,
+) -> Word {
+    guarded(Some(ctx), || {
+        // SAFETY: a live `Receiver` handle, borrowed by the caller for the
+        // whole call (D-187); nothing here parks.
+        let end = unsafe { handles::payload::<ReceiverEnd>(receiver, HandleKind::Receiver) };
+        let mut inner = end.0.lock();
+        match inner.take_ready() {
+            Some(Ready::Value(value, woken)) => {
+                drop(inner);
+                wake_released(woken);
+                some(ok(value))
+            }
+            Some(Ready::Closed) => {
+                drop(inner);
+                values::some(cheby_rt_static_err_nil.word())
+            }
+            None => values::none(),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! The channel's own reference on the path that parks

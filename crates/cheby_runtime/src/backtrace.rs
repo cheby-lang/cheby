@@ -157,6 +157,17 @@ pub(crate) enum Start {
         /// The published frame pointer.
         fp: usize,
     },
+    /// `fiber::raise`'s kernel (D-1097): the frame record of the kernel's
+    /// Cheby caller, its `@external` function, which is not shown, as at
+    /// [`Start::Wait`]. The first line is `name`, the std function that
+    /// reached that caller by a tail call, with no location, as every std
+    /// function's line (§11.6); the next is its caller, at the call.
+    Named {
+        /// The frame pointer of the kernel's caller.
+        fp: usize,
+        /// The display name of the first line (D-1041).
+        name: &'static str,
+    },
 }
 
 /// The start a stub passes: [`Start::Frame`], or [`Start::Unknown`] when
@@ -179,6 +190,16 @@ pub(crate) fn wait_start(word: usize, sp: usize, stack_hi: usize) -> Start {
         Start::Wait { fp: word }
     } else {
         Start::Unknown
+    }
+}
+
+/// D-1097's start: [`Start::Named`] with `name` where [`wait_start`] gives
+/// a start for `fp`, the frame pointer of the kernel's caller; otherwise no
+/// start.
+pub(crate) fn named_start(fp: usize, sp: usize, stack_hi: usize, name: &'static str) -> Start {
+    match wait_start(fp, sp, stack_hi) {
+        Start::Wait { fp } => Start::Named { fp, name },
+        Start::Unknown | Start::Frame { .. } | Start::Named { .. } => Start::Unknown,
     }
 }
 
@@ -403,6 +424,10 @@ pub(crate) fn render(
     let (mut fp, mut inner_large) = match start {
         Start::Unknown => return out.no_frames(),
         Start::Wait { fp } => (fp, false),
+        Start::Named { fp, name } => {
+            out.frame(name, None);
+            (fp, false)
+        }
         Start::Frame { fp, ra } => match map.frame_at(reader.strip(ra)) {
             Some(frame) if frame.cheby_abi => {
                 if let Some(name) = frame.name {

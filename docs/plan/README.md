@@ -442,6 +442,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1636    | A warm build reaches and evaluates a `priv` constant of std; no encoding or hash changes            |
 | D-1663    | `miri.yml` runs the Miri groups in four jobs side by side, each with its own 350-minute limit       |
 | D-1664    | Three tests of the `list` group take a smaller size under Miri, where they ran for hours            |
+| D-1666    | `fiber::yield_now` ships on native with 4.7's other kernels, before the JS scheduler                |
 
 ## Open questions
 
