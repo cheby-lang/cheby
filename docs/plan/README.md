@@ -440,6 +440,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1633    | No std module is planned once `std::log` ships; E0038 keeps only its made-up probe module           |
 | D-1635    | `std::log` is built in four committed steps; example 034 `logging` binds as an M3 example           |
 | D-1636    | A warm build reaches and evaluates a `priv` constant of std; no encoding or hash changes            |
+| D-1663    | `miri.yml` runs the Miri groups in four jobs side by side, each with its own 350-minute limit       |
+| D-1664    | Three tests of the `list` group take a smaller size under Miri, where they ran for hours            |
 
 ## Open questions
 

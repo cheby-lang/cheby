@@ -287,10 +287,18 @@ fn kernels(values: &[i64], pushed: &[i64], max: bool) -> Vec<i64> {
     out
 }
 
+/// Under Miri the heaps stop at 1,025 elements, still three levels deep: a
+/// heap of 40,000 popped to the end ran for over 15 minutes there, in the
+/// `list` group of the Miri job (D-1664).
 #[test]
 fn the_tree_runs_the_algorithm_of_a_slice() {
+    let sizes: &[usize] = if cfg!(miri) {
+        &[0, 1, 2, 3, 31, 32, 33, 100, 1_025]
+    } else {
+        &[0, 1, 2, 3, 31, 32, 33, 100, 1_025, 40_000]
+    };
     balanced(|| {
-        for n in [0, 1, 2, 3, 31, 32, 33, 100, 1_025, 40_000] {
+        for &n in sizes {
             let values = scrambled(n);
             let pushed: Vec<i64> = scrambled(n / 3 + 1).iter().map(|v| v * 3).collect();
             for max in [false, true] {

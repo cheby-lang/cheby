@@ -1,5 +1,5 @@
 //! `cargo xtask sanitize <address|thread|miri>`: the sanitizer jobs of
-//! `nightly.yml` and the job of `miri.yml` (D-721, D-1322), one driver for
+//! `nightly.yml` and the jobs of `miri.yml` (D-721, D-1322), one driver for
 //! the workflows and for the local runs that stand as their evidence before
 //! the push (D-862; D-882).
 //!
@@ -27,7 +27,8 @@
 //!   (D-884), with [`MIRIFLAGS`] and `PROPTEST_CASES=4`. Each group runs
 //!   `-j 1`, so Miri interprets one test at a time on one core, and
 //!   `--jobs <n>` runs n groups at once. nextest starts one Miri process
-//!   per test (D-1553).
+//!   per test (D-1553). `--shard <k>/<n>` runs the groups of shard k of
+//!   [`MIRI_SHARDS`], as one job of `miri.yml`'s matrix does (D-1663).
 //!
 //! The harness steps (`ui-deadlock`, `conformance`, `aot`, `repl`) and the
 //! poison-off pass leave `CHEBY_MILESTONE`, `CHEBY_PENDING` and
@@ -179,6 +180,10 @@ pub(crate) struct Args {
     /// Miri only: how many groups run at once
     #[arg(long, default_value_t = NonZeroUsize::MIN)]
     jobs: NonZeroUsize,
+    /// Miri only: run the groups of shard K of N, as one job of `miri.yml`'s
+    /// matrix does; N must be the table's shard count
+    #[arg(long, value_name = "K/N", value_parser = parse_shard, conflicts_with = "steps")]
+    shard: Option<u8>,
     /// Also write each step's output, as it comes, to
     /// `<DIR>/<sanitizer>-<step>.log` (created if missing)
     #[arg(long, value_name = "DIR")]
@@ -199,11 +204,51 @@ pub(crate) struct Args {
 pub(crate) struct MiriGroup {
     /// The step is `miri-<name>`.
     pub name: &'static str,
+    /// The job of `miri.yml`'s matrix that runs the group, 1 to
+    /// [`MIRI_SHARDS`] (D-1663).
+    pub shard: u8,
     /// A substring of the test path (`test(~…)` in nextest's filterset).
     pub filter: &'static str,
     /// Substrings of the tests left out (`not test(~…)`, as libtest's
     /// `--skip`), with their reasons.
     pub skips: &'static [(&'static str, &'static str)],
+}
+
+/// How many jobs `miri.yml`'s matrix runs the Miri groups in (D-1663).
+pub(crate) const MIRI_SHARDS: u8 = 4;
+
+/// Parses `--shard K/N` into K, from 1. N must be [`MIRI_SHARDS`], so a
+/// workflow and the table cannot disagree on the count.
+fn parse_shard(text: &str) -> Result<u8, String> {
+    let (index, count) = text
+        .split_once('/')
+        .ok_or_else(|| format!("`{text}` is not K/N"))?;
+    let number = |part: &str| {
+        part.parse::<u8>()
+            .map_err(|_| format!("`{text}` is not K/N"))
+    };
+    let (index, count) = (number(index)?, number(count)?);
+    if count != MIRI_SHARDS {
+        return Err(format!(
+            "the Miri groups are in {MIRI_SHARDS} shards, not {count}"
+        ));
+    }
+    if index == 0 || index > count {
+        return Err(format!("shard {index} is not one of 1 to {count}"));
+    }
+    Ok(index)
+}
+
+/// The steps of the Miri groups in `shard`, in the plan's order.
+fn in_shard(planned: Vec<Planned>, shard: u8) -> Vec<Planned> {
+    planned
+        .into_iter()
+        .filter(|step| {
+            MIRI_GROUPS
+                .iter()
+                .any(|g| g.shard == shard && step.name == format!("miri-{}", g.name))
+        })
+        .collect()
 }
 
 /// The Miri subset (D-884): the runtime's pure modules, the
@@ -212,17 +257,22 @@ pub(crate) struct MiriGroup {
 /// and the `loom` models stay out: they switch stacks, start threads that
 /// park or call the poller, which Miri cannot run. A test is skipped only
 /// for its size; a test too slow under Miri at its normal size gets a
-/// `cfg!(miri)` size in its own file where it can. The four slowest groups
-/// come first, in no order among them, so `--jobs 4`, the job's setting,
-/// starts them at once and the job ends early.
+/// `cfg!(miri)` size in its own file where it can. `miri.yml` runs the
+/// groups in [`MIRI_SHARDS`] jobs side by side, each with a limit of its
+/// own (D-1663): `num`, the slowest, alone, then `hamt` alone, then `alloc`
+/// and `list`, then the rest. In each job, `--jobs 4` runs four groups at
+/// once, and the slowest groups of a shard come first, so the job ends
+/// early.
 pub(crate) const MIRI_GROUPS: &[MiriGroup] = &[
     MiriGroup {
         name: "hamt",
+        shard: 2,
         filter: "hamt::",
         skips: &[],
     },
     MiriGroup {
         name: "num",
+        shard: 1,
         filter: "num::",
         skips: &[
             (
@@ -239,6 +289,7 @@ pub(crate) const MIRI_GROUPS: &[MiriGroup] = &[
     },
     MiriGroup {
         name: "alloc",
+        shard: 3,
         filter: "alloc::",
         skips: &[
             (
@@ -274,62 +325,74 @@ pub(crate) const MIRI_GROUPS: &[MiriGroup] = &[
     },
     MiriGroup {
         name: "list",
+        shard: 3,
         filter: "list::",
         skips: &[],
     },
     MiriGroup {
         name: "generic",
+        shard: 4,
         filter: "generic::",
         skips: &[],
     },
     MiriGroup {
         name: "text",
+        shard: 4,
         filter: "text::",
         skips: &[("num::text::", "in the `num` group")],
     },
     MiriGroup {
         name: "bytes",
+        shard: 4,
         filter: "bytes::",
         skips: &[],
     },
     MiriGroup {
         name: "locate",
+        shard: 4,
         filter: "locate_tests::",
         skips: &[],
     },
     // D-1039, D-1042: the backtrace's walks on synthetic stacks (N7b).
     MiriGroup {
         name: "backtrace",
+        shard: 4,
         filter: "backtrace_tests::",
         skips: &[],
     },
     MiriGroup {
         name: "rc",
+        shard: 4,
         filter: "rc::",
         skips: &[],
     },
     MiriGroup {
         name: "layout",
+        shard: 4,
         filter: "layout::",
         skips: &[],
     },
     MiriGroup {
         name: "string",
+        shard: 4,
         filter: "string::",
         skips: &[],
     },
     MiriGroup {
         name: "abi",
+        shard: 4,
         filter: "abi::",
         skips: &[],
     },
     MiriGroup {
         name: "values",
+        shard: 4,
         filter: "values::",
         skips: &[],
     },
     MiriGroup {
         name: "timer",
+        shard: 4,
         filter: "sched::timer::tests::miri_timer_",
         skips: &[],
     },
@@ -912,9 +975,21 @@ impl Context {
     }
 }
 
+/// The steps that `--step` and `--shard` pick.
+fn picked(args: &Args) -> Result<Vec<Planned>, String> {
+    let planned = select(plan(args.sanitizer), &args.steps)?;
+    match args.shard {
+        Some(_) if args.sanitizer != Sanitizer::Miri => {
+            Err("--shard applies to miri only".to_owned())
+        }
+        Some(shard) => Ok(in_shard(planned, shard)),
+        None => Ok(planned),
+    }
+}
+
 /// `cargo xtask sanitize`.
 pub(crate) fn run(root: &Path, args: &Args) -> Result<(), String> {
-    let planned = select(plan(args.sanitizer), &args.steps)?;
+    let planned = picked(args)?;
     let name = args.sanitizer.name();
     if args.build_cheby.is_some() && args.sanitizer == Sanitizer::Miri {
         return Err("--build-cheby applies to address and thread only".to_owned());
@@ -1497,6 +1572,15 @@ mod tests {
         assert!(parse(&[]).is_err());
         assert!(parse(&["memory"]).is_err());
         assert!(parse(&["miri", "--jobs", "0"]).is_err());
+
+        assert_eq!(parse(&["miri", "--shard", "2/4"]).unwrap().shard, Some(2));
+        assert_eq!(parse(&["miri"]).unwrap().shard, None);
+        for bad in ["0/4", "5/4", "1/3", "2", "a/4", "2/b"] {
+            assert!(parse(&["miri", "--shard", bad]).is_err(), "{bad}");
+        }
+        assert!(parse(&["miri", "--shard", "1/4", "--step", "miri-num"]).is_err());
+        let err = picked(&parse(&["address", "--shard", "1/4"]).unwrap()).unwrap_err();
+        assert!(err.contains("miri only"), "{err}");
     }
 
     #[test]
@@ -1785,6 +1869,33 @@ mod tests {
             assert!(out[5].starts_with("(test(~@aot)) & not test(~"), "{out:?}");
         }
         assert_eq!(test_args(&args, Sanitizer::Address), args);
+    }
+
+    /// D-1663: every group is in one of the shards, no shard is empty, and
+    /// `miri.yml`'s matrix runs each shard once with the table's count.
+    #[test]
+    fn the_miri_shards_cover_every_group() {
+        let all = names(Sanitizer::Miri);
+        let mut covered = Vec::new();
+        for shard in 1..=MIRI_SHARDS {
+            let steps: Vec<_> = in_shard(plan(Sanitizer::Miri), shard)
+                .into_iter()
+                .map(|p| p.name)
+                .collect();
+            assert!(!steps.is_empty(), "shard {shard} has no group");
+            covered.extend(steps);
+        }
+        covered.sort_unstable();
+        let mut expected = all;
+        expected.sort_unstable();
+        assert_eq!(covered, expected);
+        let workflow = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/miri.yml");
+        let text = std::fs::read_to_string(&workflow).unwrap();
+        let shards: Vec<String> = (1..=MIRI_SHARDS).map(|k| k.to_string()).collect();
+        let matrix = format!("shard: [{}]", shards.join(", "));
+        assert!(text.contains(&matrix), "miri.yml has no `{matrix}`");
+        let flag = format!("--shard ${{{{ matrix.shard }}}}/{MIRI_SHARDS}");
+        assert!(text.contains(&flag), "miri.yml has no `{flag}`");
     }
 
     #[test]
