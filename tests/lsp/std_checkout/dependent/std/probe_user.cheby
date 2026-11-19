@@ -1,0 +1,7 @@
+//! A closed probe on disk that calls `probe_base::base`.
+
+import std::probe_base
+
+pub fn user() -> Int {
+  probe_base::base(1)
+}

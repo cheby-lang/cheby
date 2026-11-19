@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "std/probe_grammar_error.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 14
+        },
+        "start": {
+          "character": 15,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 14
+              },
+              "start": {
+                "character": 13,
+                "line": 14
+              }
+            },
+            "uri": "std/probe_grammar_error.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0015",
+      "message": "unclosed `{`\nexpected `}`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 14
+        },
+        "start": {
+          "character": 15,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 16,
+                "line": 14
+              },
+              "start": {
+                "character": 15,
+                "line": 14
+              }
+            },
+            "uri": "std/probe_grammar_error.cheby"
+          },
+          "message": "this `{` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== std/probe_grammar_error.cheby:11:9 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub fn length<T>(xs: List<T>) -> Int\n```\n```cheby\nfn(List<Int>) -> Int\n```\n\n---\n\nDefined in `std::list`.\n\n---\n\nReturns the number of elements in `xs` (D-301)."
+  },
+  "range": {
+    "end": {
+      "character": 14,
+      "line": 10
+    },
+    "start": {
+      "character": 8,
+      "line": 10
+    }
+  }
+}

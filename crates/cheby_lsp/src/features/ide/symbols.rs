@@ -458,7 +458,7 @@ test "adds \"two\"" {
             });
             let live = session.analyze_live(&Overlay::default()).expect("a run");
             let snapshot = live.snapshot.expect("a snapshot");
-            for module in snapshot.local_modules() {
+            for module in snapshot.own_modules() {
                 let (Some(tree), Some(resolved)) = (module.tree(), module.resolved()) else {
                     panic!("{}: a module with no tree or resolution", root.display());
                 };

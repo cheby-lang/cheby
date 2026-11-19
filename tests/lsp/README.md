@@ -12,6 +12,7 @@
 | `rename_sweep/<name>`      | At most 30 symbols of the example, taken by a fixed stride, each renamed once to a fresh name, the edit applied and checked as edit goldens are (D-1677, D-1716, D-1725)                           | none, the applied-edit check  |
 | `rename_run/<name>`        | Eight symbols of safe kinds renamed in a copy of the example, which must pass `cheby check` and print its `expected.stdout` with `cheby run` (D-1677)                                              | the example's own             |
 | `navigation/<name>`        | An answer followed into another file: `std_round_trip` goes from `io::println` into std's sources, opens that file and hovers in it (R-17)                                                         | none                          |
+| `std_checkout_sweep`       | Every module of a copy of this repository's `std/`, opened in turn in a std checkout session, leaves every published list empty, warnings included (D-1700, D-1704)                                | none                          |
 | `quality/hover_on_mutants` | The quality gate of plan W7: hover on seeded body mutants of the examples, graded against the clean text. Same at or above 90%, key probe at or above 95%                                          | none, the clean text's hovers |
 | `symbols/examples/<name>`  | The outline of every source file of an example equals its item list                                                                                                                                | none, the parser's items      |
 | `parity/examples/<name>`   | The published diagnostics, after `cheby/idle`, equal `cheby check`'s (D-1348)                                                                                                                      | none, `cheby check` runs      |
@@ -60,19 +61,21 @@ The files here are test input, not examples. They need not be valid Cheby, need 
 
 The file, or a package's `src/main.cheby`, starts with `// @key: value` lines:
 
-| Key           | Value                                         | Default             |
-| ------------- | --------------------------------------------- | ------------------- |
-| `@decisions`  | the decisions the test pins, `D-NNN, …`       | none                |
-| `@milestone`  | the milestone in which the test must pass     | `M1`                |
-| `@client`     | `empty`, `standard` or `full` capabilities    | `standard`          |
-| `@encoding`   | the only position encoding the client offers  | none                |
-| `@settings`   | the `cheby` settings object, as JSON (D-1376) | none                |
-| `@requests`   | document requests sent for every source file  | none                |
-| `@package`    | `none`: the file is opened outside a package  | `lsp_test`          |
-| `@clientInfo` | the `clientInfo.name` of `initialize`         | `cheby-lsp-harness` |
-| `@steps`      | what runs after the opens, in order           | none                |
-| `@rewrite`    | `bom`, `crlf` or both: the form of the copy   | none                |
-| `@newErrors`  | the error codes an applied edit may add       | none                |
+| Key           | Value                                                                           | Default             |
+| ------------- | ------------------------------------------------------------------------------- | ------------------- |
+| `@decisions`  | the decisions the test pins, `D-NNN, …`                                         | none                |
+| `@milestone`  | the milestone in which the test must pass                                       | `M1`                |
+| `@client`     | `empty`, `standard` or `full` capabilities                                      | `standard`          |
+| `@encoding`   | the only position encoding the client offers                                    | none                |
+| `@settings`   | the `cheby` settings object, as JSON (D-1376)                                   | none                |
+| `@requests`   | document requests sent for every source file                                    | none                |
+| `@package`    | `none`: the file is opened outside a package; `std-checkout`: in a std checkout | `lsp_test`          |
+| `@probes`     | `open`, `disk` or `none`: how a std checkout places its probes                  | none                |
+| `@open`       | the documents a std checkout opens, in order                                    | none                |
+| `@clientInfo` | the `clientInfo.name` of `initialize`                                           | `cheby-lsp-harness` |
+| `@steps`      | what runs after the opens, in order                                             | none                |
+| `@rewrite`    | `bom`, `crlf` or both: the form of the copy                                     | none                |
+| `@newErrors`  | the error codes an applied edit may add                                         | none                |
 
 The `standard` client announces every capability the server reads but no position encodings, so it runs on UTF-16 (D-1368). It announces `insertTextModeSupport` with `asIs` and `adjustIndentation`, so a completion item whose text spans lines shows `insertTextMode: 2` (D-1506). `full` adds all three encodings and `textDocument.rename.honorsChangeAnnotations`. Both take change annotations, so a rename's note is a `window/showMessage` with `standard` and only an annotation with `full` (D-1391). `@clientInfo: Zed` makes the client name itself as Zed does, for the one answer that depends on the name, `filterText` after `xs.` (`features.md` §4.2). `@settings` is sent as `initializationOptions` and as the answer to `workspace/configuration`.
 
@@ -81,6 +84,8 @@ The `standard` client announces every capability the server reads but no positio
 - `idle` waits for `cheby/idle` of the package, as "Waiting for the server" says.
 - `started` waits for the `$/progress` begin of a child run, whose token starts with `cheby/child/`.
 - `quiet` waits for `cheby/idle` as `idle` does, and fails the trial if a child run began since the last `cheby/idle` the client read.
+- `status` prints a block of `cheby/status`: each package it lists, by its `root` as goldens show paths, its `kind` and, where the server sets it, `stdDiffers` (D-1705), and every `window/showMessage` the server has sent since it started. The other fields of `cheby/status` depend on the platform and on timing.
+- `published` prints a block of the last published list of every file with a non-empty one at that point, as the `diagnostics` block shows them at the end.
 - `settings NAME` pushes the settings object in `NAME.json`, at the package's root, with `workspace/didChangeConfiguration`, and makes it the client's answer to `workspace/configuration`. It waits for nothing.
 - `edit DIR` makes each file under the test's `DIR/` the text of the open document at the same path below the package, `DIR/src/other.cheby` for `src/other.cheby`, unsaved, and waits for its publish.
 - `save DIR` does what `edit` does, and also writes the file to disk and sends `didSave`.
@@ -89,7 +94,23 @@ The `standard` client announces every capability the server reads but no positio
 - `close PATH` closes the open document at `PATH` below the package and waits for its publish as a closed file. Its markers are then not read.
 - `willRename OLD NEW …` sends `workspace/willRenameFiles` for each pair of paths below the package, of a file or a folder, and prints its block. An edit in the answer is applied and checked with the moves, as "Edits" below says. Then, whatever the answer, the files move on disk, as Zed moves them: each open document below `OLD` is closed and opened again at its new path with its text, from version 0, and each moved module file gets a watched change, deleted at its old path and created at its new one.
 
-A test with `edit`, `save`, `disk`, `close` or `willRename` is a package, and its markers are read from the text of each document open after the steps, in path order, so the files under `DIR/` hold the markers of the documents they replace, and a moved document's markers are read at its new path. `@rewrite: bom` starts every source file of the copy with a BOM, and `@rewrite: crlf` ends its lines with `\r\n`, which no file here can hold (`.gitattributes`). Files under a `DIR/` take the same form on disk. The documents are opened and edited as Zed holds such files, with no BOM and `\n` line ends, so the open text differs from disk as it does in the editor. `@requests` takes `documentSymbol`, `formatting`, `foldingRange`, `documentLink`, `codeLens`, `semanticTokens` (`full`), `semanticTokensRange` (the whole text) and `inlayHint`.
+A test with `edit`, `save`, `disk`, `close` or `willRename` is a package or a std checkout's directory, and its markers are read from the text of each document open after the steps, in path order, so the files under `DIR/` hold the markers of the documents they replace, and a moved document's markers are read at its new path. `@rewrite: bom` starts every source file of the copy with a BOM, and `@rewrite: crlf` ends its lines with `\r\n`, which no file here can hold (`.gitattributes`). Files under a `DIR/` take the same form on disk. The documents are opened and edited as Zed holds such files, with no BOM and `\n` line ends, so the open text differs from disk as it does in the editor. `@requests` takes `documentSymbol`, `formatting`, `foldingRange`, `documentLink`, `codeLens`, `semanticTokens` (`full`), `semanticTokensRange` (the whole text) and `inlayHint`.
+
+### Std checkout tests
+
+`@package: std-checkout` runs a test in a std checkout (D-1699). The harness copies this repository's `std/` into a scratch directory, beside an empty `crates/cheby_driver/src/std_lib.rs` and with no `cheby.toml` above it, and starts the server rooted there with the copy as its only workspace folder, as Zed opens the repository. The server checks the copy as package `std` (D-1700) in a session rooted at the copy, so its files show as `std/json/tree.cheby`, with `/` on every platform (D-450, D-1704). The test opens only what `@open` names, in its order, as paths below the copy, real modules and probes alike. The session starts at the first open document (D-1704), and a module not named stays closed.
+
+The copied real modules have no markers, and a committed copy of one with markers would replace the live module and rot with every std change. So a checkout test keeps every marker and edit in probes: modules of its own at `std/probe_<name>.cheby`, which import real modules and are modules of the run. Markers are read from probes only, a step's `DIR/` may hold probes only, and a probe whose path is a module of std is refused. Real modules are only opened, and expected clean. `@probes` says how the probes are placed:
+
+- `open`: never written to disk. Each is opened as an unsaved buffer, which routes (D-1707), so `@open` must name every probe. The disk then matches the binary's std, so D-1705's message is not sent.
+- `disk`: written before the server starts, so a probe that `@open` does not name is a closed module. The disk then differs from the binary's module set, so D-1705's message is sent.
+- `none`: no probe. The test's one file only carries the header, for a test that opens real modules only.
+
+A one-file test is one probe, `std/probe_<file name>.cheby`, unless `@probes: none`. A test of several probes is a directory with no `cheby.toml` whose `std/` holds them, each placed at the same path, such as `std_checkout/dependent/std/probe_base.cheby`. Its header is in the probe whose path sorts first. Its other entries, such as a step's `DIR/`, are copied beside `std/`, so `edit v2` makes `v2/std/probe_base.cheby` the text of `std/probe_base.cheby`. `@rewrite` is refused, since it would rewrite the copied std.
+
+In the marker blocks of a checkout test, a range in a real module, beside the `uri` or `targetUri` that names it, shows as the text it covers, cut at its first line end with ` …` after it, so a golden does not pin std's line numbers. The goldens under `std_checkout/` pin the merge plan's acceptance, `list_clean` and `json_clean`, and D-1700 to D-1705 and D-1707: a type error typed into an open-only probe that calls `list::map`, a closed probe broken by an edit of the probe it calls, a grammar error with hover still answering, a jump into `std/json/tree.cheby` that stays in the checkout, hover's "Defined in `std::list`" (D-1477), D-1705's message and `stdDiffers` from an on-disk probe, and test bodies checked only while their module is open (D-1701). Its `rename_*` and `move_*` goldens pin D-1706: a package-visible helper renamed across two probes and checked by `verify`, a name that `@std_hooks` gives renamed with its function, a `pub` item and a satisfying function refused, and a move of a file or a folder answered `null` with its warning.
+
+`std_checkout_sweep` opens every module of a copy of `std/` in turn, waits for `cheby/idle`, and expects every module to have been published with an empty list, warnings included, and no `window/showMessage`. It then closes the module. It is stricter than `cargo xtask test-std`, which prints errors only, on purpose: the editor shows warnings. It takes about 40 s on the Apple M3 and prints its time on standard error.
 
 ### Markers
 
@@ -116,7 +137,7 @@ The file is a list of blocks. Each block is a line `== <label>` followed by pret
 - `== diagnostics`: the last published list of every file with a non-empty one.
 - `== <file>:<line>:<col> <name>`: one block per marker, in file and line order. A request that fails shows `{"error": {"code", "message"}}`.
 - `== <file> <name>`: one block per `@requests` entry.
-- `== willRename OLD NEW …`: one block per `willRename` step, before the markers' blocks.
+- `== willRename OLD NEW …`, `== status` and `== published`: one block per such step, in step order, before the markers' blocks.
 
 `foldingRange` answers are sorted by start, then end, since their order means nothing. Whatever the golden says, a `formatting` answer applied to the file must give `cheby fmt -`'s output byte for byte, `[]` when the file is already in its form, and `null` when `cheby fmt` refuses it. Every edit of a `rangeFormatting` answer must touch the line of its marker (D-1399), except one that only removes and inserts `import` lines: the formatter sorts imports, and the other half of a moved import is kept with the half the range touches.
 
@@ -236,6 +257,6 @@ Protocol trials and golden tests use the header default, M1, so they fail CI fro
 CHEBY_PENDING=require cargo xtask test -E 'binary_id(cheby_cli::lsp)'
 ```
 
-On Windows, until M6, the `parity/examples/*` trials are ignored, since they run `cheby check`, which builds a JIT for a package that passes the front end, and so are the UI parity trials whose golden has no front-end error, as their check tests are (D-545, D-641). The server evaluates no constant there (D-1414), so a golden test whose `@steps` hold `idle` or `started` is ignored too, and so is every `rename_run/*` trial, which runs `cheby check` and `cheby run` (D-1677). The applied-edit check's own wait for `cheby/idle` is not such a step. The server never runs generated code (D-1349), so every other trial runs there.
+On Windows, until M6, the `parity/examples/*` trials are ignored, since they run `cheby check`, which builds a JIT for a package that passes the front end, and so are the UI parity trials whose golden has no front-end error, as their check tests are (D-545, D-641). The server evaluates no constant there (D-1414), so a golden test whose `@steps` hold `idle`, `started` or `quiet` is ignored too, and so is every `rename_run/*` trial, which runs `cheby check` and `cheby run` (D-1677). A `@package: std-checkout` test is not: a checkout session never starts the constants child (D-1700), so its `cheby/idle` comes on every platform, and it runs there, as `std_checkout_sweep` does. The applied-edit check's own wait for `cheby/idle` is not such a step. The server never runs generated code (D-1349), so every other trial runs there.
 
 Every `cheby` gets the harness's fresh `CHEBY_CACHE` (D-959). `CHEBY_HARNESS_SCALE` multiplies the timeout of each wait (D-722). `cargo xtask coverage` reads the `@decisions` of the tests here.

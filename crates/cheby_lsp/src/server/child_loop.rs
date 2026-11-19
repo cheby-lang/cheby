@@ -72,9 +72,10 @@ fn child_env<'a>(
     }
 }
 
-/// Whether a local module of `snapshot` declares a constant (A §11.4).
+/// Whether one of the session's own modules declares a constant
+/// (A §11.4, D-1700).
 fn has_constants(snapshot: &Snapshot) -> bool {
-    snapshot.local_modules().any(|module| {
+    snapshot.own_modules().any(|module| {
         module
             .interface()
             .is_some_and(|iface| iface.items.iter().any(|item| item.kind == DefKind::Const))
@@ -436,7 +437,9 @@ impl Server {
     }
 
     /// `cheby/status` (`progress`'s module docs). `params` may name a
-    /// `root` URI, else every package is listed.
+    /// `root` URI, else every package is listed. The entry of a std
+    /// checkout whose `std/` was not the binary's at the session's start
+    /// has `stdDiffers: true`, and no other entry has the field (D-1705).
     ///
     /// # Errors
     ///
@@ -471,11 +474,12 @@ impl Server {
             .filter(|(root, _)| only.as_ref().is_none_or(|only| only == *root))
             .map(|(root, package)| {
                 let snapshot = package.snapshot.as_ref();
-                json!({
+                let mut entry = json!({
                     "root": path_to_uri(root).map(|uri| uri.as_str().to_owned()).ok(),
                     "kind": match package.kind {
                         PackageKind::Package => "package",
                         PackageKind::SingleFile { .. } => "singleFile",
+                        PackageKind::StdCheckout { .. } => "stdCheckout",
                     },
                     "generation": self.generation(root),
                     "broken": snapshot.map_or_else(Vec::new, |s| {
@@ -493,12 +497,20 @@ impl Server {
                     "parked": self.parked.iter().filter(|p| &p.root == root).count(),
                     "children": self.children.status(
                         root,
-                        matches!(package.kind, PackageKind::Package),
+                        &package.kind,
                         snapshot.map(|snapshot| -> &dyn EditorText { &**snapshot }),
                         &env,
                         now,
                     ),
-                })
+                });
+                // Only on a std checkout whose `std/` is not the binary's
+                // (D-1705).
+                if package.std_differs
+                    && let Some(fields) = entry.as_object_mut()
+                {
+                    fields.insert("stdDiffers".to_owned(), Value::Bool(true));
+                }
+                entry
             })
             .collect();
         Ok(json!({

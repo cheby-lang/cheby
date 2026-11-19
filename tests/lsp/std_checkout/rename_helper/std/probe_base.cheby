@@ -1,0 +1,22 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_base.cheby, std/probe_user.cheby
+// @decisions: D-1700, D-1706
+//! A package-visible helper of one probe, which another probe calls, is
+//! renamed in both, and `verify` checks the edit over the checkout.
+
+/// One more than `n`.
+fn bump(n: Int) -> Int {
+  //^ rename increment
+  n + 1
+}
+
+/// A `priv` helper, renamed in its own module only.
+priv fn twice(n: Int) -> Int {
+  //    ^ rename doubled
+  bump(n) * 2
+}
+
+test "bump and twice" {
+  assert bump(1) == 2 && twice(1) == 4
+}

@@ -728,3 +728,92 @@ fn a_single_file_document_renames() {
         "the check runs in single-file mode"
     );
 }
+
+/// D-1706: in a std checkout's session, `prepareRename` refuses std's API
+/// with `RequestFailed` and its message, `rename` writes a package-visible
+/// helper across two std modules as a workspace edit with each open
+/// document's version, and `willRenameFiles` answers `null` with the
+/// message that says where std's modules are listed.
+#[test]
+fn a_std_checkout_renames_and_refuses() {
+    use crate::features::ide::checkout_tests::Checkout;
+
+    let checkout = Checkout::new("handler_rename");
+    let a = checkout.read("std/probe_a.cheby");
+    let b = checkout.read("std/probe_b.cheby");
+    let analyzed = checkout.analyze(&[("std/probe_a.cheby", &a), ("std/probe_b.cheby", &b)]);
+    let at = |display: &str, text: &str, needle: &str| {
+        let plain = needle.replace(CURSOR, "");
+        assert_eq!(text.matches(&plain).count(), 1, "`{plain}` occurs once");
+        let marked = text.replacen(&plain, needle, 1);
+        let (_, _, cursor) = take_cursor(&[(display, &marked)]);
+        position(&checkout.at(display), cursor)
+    };
+    let refused = run(&analyzed, EditCaps::default(), |cx, analyzed| {
+        prepare_in(
+            cx,
+            analyzed,
+            at("std/probe_b.cheby", &b, "list::‸map(doubled"),
+            Some(std_dir()),
+        )
+    });
+    assert_eq!(
+        failed(refused),
+        "`list::map` is `pub`: std's API also lives in `docs/stdlib/`, the examples and the tests"
+    );
+    let mut params = at("std/probe_a.cheby", &a, "fn ‸helper(");
+    params["newName"] = json!("doubler");
+    let output = run(&analyzed, documents(false), |cx, analyzed| {
+        rename_in(cx, analyzed, params, Some(std_dir()))
+    })
+    .expect("an edit");
+    assert_eq!(output.effects, []);
+    let changes = output.value["documentChanges"].as_array().expect("changes");
+    let files: Vec<(String, Value, Vec<String>)> = changes
+        .iter()
+        .map(|change| {
+            (
+                change["textDocument"]["uri"].as_str().unwrap().to_owned(),
+                change["textDocument"]["version"].clone(),
+                shown(&change["edits"]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (
+                uri(&checkout.at("std/probe_a.cheby")),
+                json!(1),
+                vec![
+                    "5:3-5:9 doubler".to_owned(),
+                    "14:9-14:15 doubler".to_owned()
+                ]
+            ),
+            (
+                uri(&checkout.at("std/probe_b.cheby")),
+                json!(1),
+                vec!["8:25-8:31 doubler".to_owned()]
+            ),
+        ]
+    );
+    let moved = json!({
+        "files": [{
+            "oldUri": uri(&checkout.at("std/probe_a.cheby")),
+            "newUri": uri(&checkout.at("std/probe_z.cheby")),
+        }],
+    });
+    let output = run(&analyzed, documents(true), |cx, analyzed| {
+        crate::features::handlers::file_ops::will_rename_files(cx, analyzed, moved)
+    })
+    .expect("an answer");
+    assert_eq!(output.value, Value::Null);
+    assert_eq!(
+        output.effects,
+        [Effect::show(
+            lsp_types::MessageType::WARNING,
+            "The imports were not updated: std's modules are listed in \
+             `crates/cheby_driver/src/std_lib.rs` and specified in `docs/stdlib/`"
+        )]
+    );
+}

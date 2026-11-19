@@ -145,6 +145,11 @@ pub(crate) struct Server {
     options: ServerOptions,
     /// The package whose job is on the analysis thread.
     running: Option<PathBuf>,
+    /// The session of the job on the analysis thread ended while the job
+    /// ran (`end_session`), so its events belong to no session, even when
+    /// a session of the other kind was made at the same root since, as
+    /// when a `cheby.toml` comes or goes at a std checkout (D-1699).
+    orphan_job: bool,
     /// `shutdown` was answered.
     shutting_down: bool,
     /// The client stopped reading.
@@ -270,6 +275,7 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         events,
         options,
         running: None,
+        orphan_job: false,
         shutting_down: false,
         closed: false,
         caps,
@@ -542,6 +548,15 @@ impl Server {
     /// One event of the analysis thread.
     fn on_event(&mut self, event: Event) {
         match event {
+            Event::Live {
+                root,
+                strict_follows,
+                ..
+            } if self.orphan_job => {
+                self.in_flight = None;
+                self.on_orphan(&root, !strict_follows);
+            }
+            Event::Strict { root, .. } if self.orphan_job => self.on_orphan(&root, true),
             Event::Live {
                 root,
                 result,

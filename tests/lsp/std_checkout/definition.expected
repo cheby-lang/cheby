@@ -1,0 +1,40 @@
+== diagnostics
+{}
+
+== std/probe_definition.cheby:12:22 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 26,
+        "line": 11
+      },
+      "start": {
+        "character": 21,
+        "line": 11
+      }
+    },
+    "targetRange": "/// Parses `text` into a `Tree`, as `parse_with` does. …",
+    "targetSelectionRange": "parse",
+    "targetUri": "std/json/tree.cheby"
+  }
+]
+
+== std/probe_definition.cheby:15:24 definition
+[
+  {
+    "originSelectionRange": {
+      "end": {
+        "character": 27,
+        "line": 14
+      },
+      "start": {
+        "character": 23,
+        "line": 14
+      }
+    },
+    "targetRange": "/// Returns the kind of `value` as `decode::Error` names it in `found` (D-323). …",
+    "targetSelectionRange": "kind",
+    "targetUri": "std/json/tree.cheby"
+  }
+]

@@ -1,0 +1,103 @@
+== diagnostics
+{}
+
+== std/probe_rename_hook.cheby:11:12 prepareRename
+{
+  "placeholder": "gauge_equal",
+  "range": {
+    "end": {
+      "character": 22,
+      "line": 10
+    },
+    "start": {
+      "character": 11,
+      "line": 10
+    }
+  }
+}
+
+== std/probe_rename_hook.cheby:11:12 rename gauge_same
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "gauge_same",
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 10
+              },
+              "start": {
+                "character": 11,
+                "line": 10
+              }
+            }
+          },
+          {
+            "newText": "gauge_same",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 17
+              },
+              "start": {
+                "character": 8,
+                "line": 17
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "std/probe_rename_hook.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== std/probe_rename_hook.cheby:18:9 rename gauge_same
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "gauge_same",
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 10
+              },
+              "start": {
+                "character": 11,
+                "line": 10
+              }
+            }
+          },
+          {
+            "newText": "gauge_same",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 17
+              },
+              "start": {
+                "character": 8,
+                "line": 17
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "std/probe_rename_hook.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

@@ -24,6 +24,7 @@ use super::schedule::{Parked, Want};
 use super::sessions::DocRoute;
 use super::state::package_root;
 use super::{ClientCaps, ConstValues, Effect, Server, Settings, codes};
+use crate::features::handlers::file_ops::std_move_refused;
 use crate::features::stdlib::StdService;
 use crate::features::{
     Analyzed, CancelToken, Class, HandlerOutput, LiveText, RequestCx, RequestError, Route,
@@ -281,6 +282,23 @@ impl Server {
             self.answer(id, Ok((route.fallback)()));
             return;
         }
+        // A move in a std checkout is refused from routing alone (D-1706): a
+        // folder routes to no session, and the checkout's session starts
+        // only at an open document (D-1704), so neither may decide it. Any
+        // old path of the request refuses it whole, the first or a later
+        // one, as files in several packages are (D-1675, D-1730).
+        if route.method == WILL_RENAME_FILES
+            && old_paths(&params)
+                .iter()
+                .any(|old| self.is_std_checkout_move(old))
+        {
+            let output = std_move_refused();
+            for effect in output.effects {
+                self.apply(effect);
+            }
+            self.answer(id, Ok(output.value));
+            return;
+        }
         let env = self.env();
         match route.class {
             Class::Text(_) => match self.live_text(&path) {
@@ -339,11 +357,18 @@ impl Server {
     }
 
     /// The package whose snapshots answer for `path`: an open document's
-    /// own, else the nearest package root that has a session.
+    /// own, else the std checkout whose `std/` holds it (D-1699), else the
+    /// nearest package root, when it has a session.
     fn root_of(&self, path: &Path) -> Option<PathBuf> {
         match self.docs.get(path) {
             Some(doc) => doc.root.clone(),
-            None => package_root(path),
+            None => match self.route_of(path) {
+                DocRoute::StdCheckout { checkout, .. } => Some(checkout),
+                DocRoute::Std
+                | DocRoute::Package(_)
+                | DocRoute::SingleFile { .. }
+                | DocRoute::Unowned => package_root(path),
+            },
         }
         .filter(|root| self.packages.contains_key(root))
     }
@@ -501,6 +526,23 @@ fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
         .parse()
         .map_err(|_| ())?;
     Ok(uri_to_path(&uri).map(|path| normalize(&path)))
+}
+
+/// The request that D-1706 may refuse from routing alone, by any of its
+/// old paths (D-1730).
+const WILL_RENAME_FILES: &str = "workspace/willRenameFiles";
+
+/// Every `files[].oldUri` of a `workspace/willRenameFiles` request that
+/// names a file, normalized as [`document_path`] does.
+fn old_paths(params: &Value) -> Vec<PathBuf> {
+    params
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("oldUri")?.as_str()?.parse::<Uri>().ok())
+        .filter_map(|uri| uri_to_path(&uri).map(|path| normalize(&path)))
+        .collect()
 }
 
 /// The parameter that names the document a request of `method` is routed

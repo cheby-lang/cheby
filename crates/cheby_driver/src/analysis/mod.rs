@@ -38,6 +38,8 @@ mod symbol;
 mod verify;
 
 #[cfg(test)]
+mod checkout_tests;
+#[cfg(test)]
 mod single_tests;
 #[cfg(test)]
 mod std_base_tests;

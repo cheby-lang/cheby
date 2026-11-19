@@ -786,37 +786,369 @@ fn verify_single_file_loose() {
     );
 }
 
-/// D-1667: a file of this repository's `std/` opens in single-file mode,
-/// where it has errors that std's own rules would not give. They are in
-/// "before" and "after" alike, so a rename passes, and a new error is
-/// still seen.
-#[test]
-fn verify_single_file_std() {
-    let text = crate::std_lib::find("option").unwrap().source;
-    let temp = directory("single_std", &[("std/option.cheby", text)]);
-    assert_eq!(crate::find_package_root(&temp.0), None, "a package above");
-    let file = temp.0.join("std/option.cheby");
-    let snapshot = single_snapshot(&file, true, text);
-    assert!(
-        snapshot
-            .baseline()
-            .iter()
-            .any(|(code, _, _)| code.severity() == Severity::Error),
-        "{:?}",
-        snapshot.baseline()
+/// A copy of this repository's `std/` in a fresh temporary directory,
+/// beside the marker file of D-1699, so a session over it is a std
+/// checkout's. Paths are built from components (ws-plan §9).
+fn std_checkout(name: &str) -> Temp {
+    let temp = directory(name, &[]);
+    copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("std"),
+        &temp.0.join("std"),
     );
-    let all = replace_all(&file, text, "inner_none", "nested_none");
-    assert_eq!(all.len(), 2);
-    let pair = [("inner_none", "nested_none")];
+    let marker = at(&temp.0, "crates/cheby_driver/src/std_lib.rs");
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, "").unwrap();
+    temp
+}
+
+/// Copies `from` into a new directory `to`, path by path.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let target = to.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).unwrap();
+        }
+    }
+}
+
+/// The file at `display` under `root`, such as `std/json/tree.cheby`.
+fn at(root: &Path, display: &str) -> PathBuf {
+    display
+        .split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// The snapshot of a std checkout's live run over `root` (D-1700), with
+/// these open documents by display path.
+fn checkout_snapshot(root: &Path, open: &[(&str, &str)]) -> Arc<Snapshot> {
+    let overlay = Overlay {
+        files: open
+            .iter()
+            .zip(1_u64..)
+            .map(|(&(display, text), stamp)| {
+                let file = OverlayFile {
+                    text: Arc::from(text),
+                    version: 1,
+                    stamp,
+                };
+                (at(root, display), file)
+            })
+            .collect(),
+    };
+    let mut session = Session::new(SessionConfig {
+        root: root.to_path_buf(),
+        kind: PackageKind::StdCheckout {
+            checkout: root.to_path_buf(),
+        },
+        target: None,
+        globals: Arc::new(Globals::new()),
+    });
+    let live = session.analyze_live(&overlay).unwrap();
+    assert_eq!(live.failed, None);
+    let snapshot = live.snapshot.unwrap();
+    assert!(snapshot.is_std_checkout());
+    snapshot
+}
+
+/// The errors of a snapshot's baseline, by code and display path.
+fn baseline_errors(snapshot: &Snapshot) -> Vec<(String, String)> {
+    snapshot
+        .baseline()
+        .iter()
+        .filter(|(code, _, _)| code.severity() == Severity::Error)
+        .map(|(code, path, _)| {
+            let path = path.as_deref().map_or_else(String::new, |p| {
+                cheby_diag::display_path(p, snapshot.root())
+            });
+            (code.to_string(), path)
+        })
+        .collect()
+}
+
+/// `time::civil_from_days`, a package-visible function of `std/time.cheby`
+/// that `std/http.cheby` calls, and the name it is renamed to.
+const HELPER: (&str, &str) = ("civil_from_days", "days_to_civil");
+
+/// A std checkout's `time` and `http`, each with its path and text.
+struct TimeHttp {
+    time: PathBuf,
+    time_text: String,
+    http: PathBuf,
+    http_text: String,
+}
+
+impl TimeHttp {
+    fn read(root: &Path) -> Self {
+        let time = at(root, "std/time.cheby");
+        let http = at(root, "std/http.cheby");
+        Self {
+            time_text: std::fs::read_to_string(&time).unwrap(),
+            http_text: std::fs::read_to_string(&http).unwrap(),
+            time,
+            http,
+        }
+    }
+
+    /// The rename of [`HELPER`] in `time`, with `time`'s text `time_text`.
+    fn in_time(&self, time_text: &str) -> Vec<PlainEdit> {
+        let (old, new) = HELPER;
+        let edits = replace_all(&self.time, time_text, old, new);
+        assert!(edits.len() >= 2, "a declaration and a use: {edits:?}");
+        edits
+    }
+
+    /// The rename of [`HELPER`] in `http`.
+    fn in_http(&self) -> Vec<PlainEdit> {
+        let (old, new) = HELPER;
+        let edits = replace_all(&self.http, &self.http_text, old, new);
+        assert_eq!(edits.len(), 1, "one call");
+        edits
+    }
+}
+
+/// D-1700, D-1706: in a std checkout, `verify` builds package `std` from
+/// the checkout's edited texts, as the Q run does, which replaces
+/// D-1667's single-file std. A package-visible helper renamed in its
+/// module and in another std module that calls it passes; the std is the
+/// checkout's, so no error of the single-file run is in "before".
+#[test]
+fn verify_std_checkout() {
+    let temp = std_checkout("std_checkout");
+    let files = TimeHttp::read(&temp.0);
+    let snapshot = checkout_snapshot(&temp.0, &[("std/time.cheby", &files.time_text)]);
+    assert_eq!(baseline_errors(&snapshot), [], "{:?}", snapshot.baseline());
+    let all = [files.in_time(&files.time_text), files.in_http()].concat();
+    let pair = [HELPER];
     assert_eq!(
         verify(&snapshot, &rename(&all, &pair)).unwrap(),
         VerifyOutcome::Clean
     );
-    let edit = [replace(&file, text, "inner_none", 1, "inner_nothing")];
+    // An edit that adds an error is seen, in the checkout's file.
+    let edit = [replace(
+        &files.time,
+        &files.time_text,
+        "days_to_epoch",
+        0,
+        "missing",
+    )];
+    let outcome = verify(&snapshot, &edits(&edit)).unwrap();
+    let VerifyOutcome::Introduces(found) = &outcome else {
+        panic!("{outcome:?}")
+    };
+    assert!(
+        found
+            .iter()
+            .any(|i| i.path == files.time && i.at.starts_with("std/time.cheby:")),
+        "{found:?}"
+    );
+}
+
+/// A test that compares `time::civil_from_days`'s tuple with an `Int`: a
+/// type error in a test body.
+const OPEN_TEST_ERROR: &str = "\ntest \"ws open error\" {\n  assert civil_from_days(0) == 1\n}\n";
+
+/// A test with a type error, in a module that stays closed.
+const CLOSED_TEST_ERROR: &str = "\ntest \"ws closed error\" {\n  assert 1 == \"x\"\n}\n";
+
+/// D-1701, D-1668: `verify` checks the test bodies the Q run checked,
+/// those of the open modules. An error in an open module's test body is in
+/// "before" and "after", so a rename in that module is not refused as
+/// hiding it, and the error stays until an edit removes it. A closed
+/// module's test body is checked in neither run, so its error is no new
+/// one.
+#[test]
+fn verify_std_checkout_open_test_error() {
+    let temp = std_checkout("std_checkout_test_error");
+    let files = TimeHttp::read(&temp.0);
+    let order = at(&temp.0, "std/order.cheby");
+    let closed = std::fs::read_to_string(&order).unwrap() + CLOSED_TEST_ERROR;
+    std::fs::write(&order, closed).unwrap();
+    let open = files.time_text.clone() + OPEN_TEST_ERROR;
+    let snapshot = checkout_snapshot(&temp.0, &[("std/time.cheby", &open)]);
+    let errors = baseline_errors(&snapshot);
+    assert_eq!(errors.len(), 1, "{:?}", snapshot.baseline());
+    assert!(
+        errors.iter().all(|(_, path)| path == "std/time.cheby"),
+        "{errors:?}"
+    );
+    let all = [files.in_time(&open), files.in_http()].concat();
+    let pair = [HELPER];
+    assert_eq!(
+        verify(&snapshot, &rename(&all, &pair)).unwrap(),
+        VerifyOutcome::Clean
+    );
+    // The error is in the run on the edited text: an edit that removes the
+    // test makes it go.
+    let at_test = open.find(OPEN_TEST_ERROR).unwrap();
+    let start = TextSize::try_from(at_test).unwrap();
+    let end = TextSize::try_from(open.len()).unwrap();
+    let remove = [PlainEdit {
+        path: files.time.clone(),
+        range: TextRange::new(start, end),
+        replacement: "\n".to_owned(),
+    }];
+    let gone = hidden(&verify(&snapshot, &rename(&remove, &[])).unwrap());
+    assert_eq!(gone.len(), 1, "{gone:?}");
+    assert!(
+        gone.iter()
+            .all(|(_, path, _)| path.as_ref() == Some(&files.time)),
+        "{gone:?}"
+    );
+}
+
+/// D-1700, D-1389: renaming the helper in its module alone breaks its
+/// caller in another std module, which `verify` sees there.
+#[test]
+fn verify_std_checkout_breaks_a_dependent() {
+    let temp = std_checkout("std_checkout_dependent");
+    let files = TimeHttp::read(&temp.0);
+    let snapshot = checkout_snapshot(&temp.0, &[("std/time.cheby", &files.time_text)]);
+    let only_time = files.in_time(&files.time_text);
+    let pair = [HELPER];
+    let outcome = verify(&snapshot, &rename(&only_time, &pair)).unwrap();
+    let VerifyOutcome::Introduces(found) = &outcome else {
+        panic!("{outcome:?}")
+    };
+    let call = files.http_text.find("time::civil_from_days").unwrap();
+    let line = files.http_text.get(..call).unwrap().matches('\n').count() + 1;
+    let place = format!("std/http.cheby:{line}:");
+    assert!(
+        found.iter().all(|i| i.path == files.http
+            && i.at.starts_with(&place)
+            && i.diagnostic.severity == Severity::Error),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|i| i.diagnostic.message.contains(HELPER.0)),
+        "{found:?}"
+    );
+}
+
+/// A function whose parameter list never closes: a grammar error.
+const GRAMMAR_ERROR: &str = "\n/// Broken.\npub fn ws_broken( -> Int {\n  1\n}\n";
+
+/// S-6, D-1347, D-1700: a std module with a grammar error is preloaded with
+/// its tree, as a package module is, so `verify` gives what it gives past
+/// a broken package module (`verify_sees_past_a_broken_module`): a new type
+/// error in a clean module is seen, an edit that adds none passes, and the
+/// grammar error is in "before" and "after", so a rename that leaves it is
+/// not refused as hiding it, while an edit that fixes it hides it.
+#[test]
+fn verify_std_checkout_grammar_error() {
+    let temp = std_checkout("std_checkout_grammar");
+    let files = TimeHttp::read(&temp.0);
+    let order = at(&temp.0, "std/order.cheby");
+    let broken = std::fs::read_to_string(&order).unwrap() + GRAMMAR_ERROR;
+    let snapshot = checkout_snapshot(
+        &temp.0,
+        &[
+            ("std/order.cheby", &broken),
+            ("std/time.cheby", &files.time_text),
+        ],
+    );
+    assert!(!snapshot.status().broken.is_empty());
+    let errors = baseline_errors(&snapshot);
+    assert!(
+        !errors.is_empty() && errors.iter().all(|(_, path)| path == "std/order.cheby"),
+        "{errors:?}"
+    );
+    // A new type error in a clean module.
+    let edit = [replace(
+        &files.http,
+        &files.http_text,
+        "civil_from_days(days)",
+        0,
+        "civil_from_days(\"x\")",
+    )];
     let found = introduced(&verify(&snapshot, &edits(&edit)).unwrap());
     assert!(
-        found.iter().any(|(_, m)| m.contains("inner_nothing")),
+        !found.is_empty() && found.iter().all(|(code, _)| code.starts_with('E')),
         "{found:?}"
+    );
+    // A rename that adds none, checked for hidden errors too.
+    let all = [files.in_time(&files.time_text), files.in_http()].concat();
+    let pair = [HELPER];
+    assert_eq!(
+        verify(&snapshot, &rename(&all, &pair)).unwrap(),
+        VerifyOutcome::Clean
+    );
+    assert_eq!(
+        verify(&snapshot, &rename(&[], &[])).unwrap(),
+        VerifyOutcome::Clean
+    );
+    // Closing the parameter list fixes the grammar error, which goes.
+    let fix = [replace(&order, &broken, "ws_broken(", 0, "ws_broken()")];
+    let gone = hidden(&verify(&snapshot, &rename(&fix, &[])).unwrap());
+    assert!(
+        !gone.is_empty()
+            && gone
+                .iter()
+                .all(|(_, path, _)| path.as_ref() == Some(&order)),
+        "{gone:?}"
+    );
+}
+
+/// D-1389, D-1669 in a std checkout: a closed std file that changed on
+/// disk makes any edit stale, touched or not, and so does a new module
+/// file under `std/`, which the run would read. An open file's change on
+/// disk does not, nor does a file under `std/` that names no module, which
+/// the Q run gives phase-A diagnostics only (D-1700); an edit of one is
+/// refused as an edit of no file of the package.
+#[test]
+fn verify_std_checkout_stale() {
+    let temp = std_checkout("std_checkout_stale");
+    let files = TimeHttp::read(&temp.0);
+    let loose = at(&temp.0, "std/main.cheby");
+    std::fs::write(&loose, "//! Names no module.\n").unwrap();
+    let snapshot = checkout_snapshot(&temp.0, &[("std/time.cheby", &files.time_text)]);
+    assert!(snapshot.file_of(&loose).is_some(), "the loose file is read");
+    let all = [files.in_time(&files.time_text), files.in_http()].concat();
+    let pair = [HELPER];
+    let request = rename(&all, &pair);
+    assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
+    // The open file and the loose one.
+    std::fs::write(&files.time, "//! Changed.\n").unwrap();
+    std::fs::write(&loose, "//! Changed.\n").unwrap();
+    assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
+    let edit = [PlainEdit {
+        path: loose,
+        range: TextRange::empty(0),
+        replacement: "//! Edited.\n".to_owned(),
+    }];
+    assert!(verify(&snapshot, &edits(&edit)).is_err());
+    // A closed file that no edit touches.
+    let order = at(&temp.0, "std/order.cheby");
+    let order_text = std::fs::read_to_string(&order).unwrap();
+    std::fs::write(&order, order_text.clone() + "\n").unwrap();
+    assert_eq!(
+        verify(&snapshot, &request).unwrap(),
+        VerifyOutcome::Stale(order.clone())
+    );
+    std::fs::write(&order, order_text).unwrap();
+    // A closed file that an edit touches.
+    std::fs::write(&files.http, files.http_text.clone() + "\n").unwrap();
+    assert_eq!(
+        verify(&snapshot, &request).unwrap(),
+        VerifyOutcome::Stale(files.http.clone())
+    );
+    std::fs::write(&files.http, &files.http_text).unwrap();
+    assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
+    // A new module under `std/`, which may call the helper.
+    let new = at(&temp.0, "std/json/ws_new.cheby");
+    std::fs::write(&new, "//! New.\n").unwrap();
+    assert_eq!(
+        verify(&snapshot, &request).unwrap(),
+        VerifyOutcome::Stale(new)
     );
 }
 

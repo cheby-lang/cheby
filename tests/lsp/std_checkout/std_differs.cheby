@@ -1,0 +1,12 @@
+// @package: std-checkout
+// @probes: disk
+// @open: std/probe_std_differs.cheby
+// @steps: idle, status
+// @decisions: D-1705
+//! A probe on disk makes the checkout's `std/` differ from the binary's,
+//! so the session's start shows D-1705's warning and `cheby/status` says
+//! `stdDiffers`.
+
+pub fn one() -> Int {
+  1
+}

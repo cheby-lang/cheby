@@ -37,7 +37,8 @@
 //!
 //! A session of [`PackageKind::SingleFile`] analyzes one file that is no
 //! module of any package, under a synthetic manifest (D-1371, A §6.4):
-//! `single`.
+//! `single`. A session of [`PackageKind::StdCheckout`] analyzes a
+//! checkout's `std/` as package `std` (D-1700): `checkout`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -53,9 +54,12 @@ use super::inputs::{DiskView, Loaded, LoadedFile, Overlay, OverlayFile, TextOrig
 use super::plain::{InputsKey, Placed, PlainDiagnostic, exact_key, plain};
 use super::snapshot::{Parts, PlacedEntry, Snapshot, SnapshotId};
 use crate::cache::Hash128;
-use crate::frontend::{CutCycles, Frontend, Retain, RunExtras, run_analysis};
+use crate::frontend::{CheckoutStd, CutCycles, Frontend, Retain, RunExtras, run_analysis};
 use crate::{Error, Module, Package, SourceHashes, parse_file};
 
+/// The checkout's loader, which `verify` builds the same std package with
+/// (D-1700).
+pub(super) mod checkout;
 mod single;
 
 /// Which files a session analyzes (A §1.3).
@@ -76,13 +80,23 @@ pub enum PackageKind {
         /// cannot resolve.
         strict: bool,
     },
+    /// The `std/` of a checkout of this repository, checked as package
+    /// `std` from the checkout's own texts (D-1699, D-1700). The session's
+    /// root is the checkout, so each file's display path is
+    /// `std/<path>.cheby` (D-1704).
+    StdCheckout {
+        /// The checkout: the directory that holds `std/` and
+        /// `crates/cheby_driver/src/std_lib.rs`, an absolute path.
+        checkout: PathBuf,
+    },
 }
 
 /// What a session analyzes and with what.
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
     /// The package root, the directory of `cheby.toml`. Ignored in
-    /// single-file mode, whose root is the directory of its file.
+    /// single-file mode, whose root is the directory of its file, and for a
+    /// std checkout, whose root is the checkout.
     pub root: PathBuf,
     /// A package, or one file in single-file mode.
     pub kind: PackageKind,
@@ -114,6 +128,13 @@ pub struct Session {
     /// Files that left the broken set since the last run that published
     /// them: a D run is due for them whatever the strict key.
     fixed: BTreeSet<PathBuf>,
+    /// A std checkout's session: the `.cheby` files under its `std/` on
+    /// disk, by absolute path, walked once until a change under `std/`
+    /// invalidates them (`checkout`).
+    std_walk: Option<Vec<PathBuf>>,
+    /// A std checkout's session: the modules whose test bodies the last
+    /// Q run checked, which its snapshot records (D-1701).
+    tested: BTreeSet<ModulePath>,
 }
 
 /// What [`Session::analyze_live`] gives.
@@ -165,7 +186,8 @@ pub struct Report {
     /// package is one that `cheby check` accepts (D-1359). The child may
     /// run when this holds for the latest report and the latest
     /// [`Live::broken`] is empty (A §11). Always false in single-file
-    /// mode, which has no child (A §6.4).
+    /// mode, which has no child (A §6.4). A std checkout's session has no
+    /// child either (D-1491).
     pub clean: bool,
     /// The run read a last good text or a stub in place of a live text.
     /// While it is true, no fix removes code for W0003, W0004 or W0005,
@@ -389,6 +411,12 @@ struct StrictLoad {
     live: BTreeSet<FileId>,
     /// The files given the empty text.
     stubs: BTreeSet<FileId>,
+    /// A checkout's D run: its std modules, which `package`'s synthetic
+    /// root imports (D-1700).
+    std: Option<CheckoutStd>,
+    /// A checkout's D run: the synthetic root's file, whose diagnostics
+    /// are dropped.
+    root_file: Option<FileId>,
 }
 
 impl Session {
@@ -403,9 +431,13 @@ impl Session {
                 strict,
             },
             PackageKind::Package => PackageKind::Package,
+            PackageKind::StdCheckout { checkout } => PackageKind::StdCheckout {
+                checkout: std::path::absolute(&checkout).unwrap_or(checkout),
+            },
         };
         let root = match &kind {
             PackageKind::SingleFile { file, .. } => file.parent().map(Path::to_path_buf),
+            PackageKind::StdCheckout { checkout } => Some(checkout.clone()),
             PackageKind::Package => None,
         }
         .unwrap_or_else(|| std::path::absolute(&config.root).unwrap_or(config.root));
@@ -422,6 +454,8 @@ impl Session {
             last_strict: None,
             last_broken: BTreeSet::new(),
             fixed: BTreeSet::new(),
+            std_walk: None,
+            tested: BTreeSet::new(),
         }
     }
 
@@ -431,20 +465,34 @@ impl Session {
         &self.root
     }
 
-    /// Forgets what the session read from these absolute paths.
+    /// Forgets what the session read from these absolute paths. In a std
+    /// checkout's session, a path under `std/`, or above it, also forgets
+    /// the walk of `std/`.
     pub fn invalidate(&mut self, paths: &[PathBuf]) {
         self.disk.invalidate(paths);
+        let std = self.root.join(checkout::STD_DIR);
+        if paths
+            .iter()
+            .any(|path| path.starts_with(&std) || std.starts_with(path))
+        {
+            self.std_walk = None;
+        }
     }
 
-    /// Forgets the walk of `src/` and every file read.
+    /// Forgets the walk of `src/`, or of a checkout's `std/`, and every
+    /// file read.
     pub fn invalidate_all(&mut self) {
         self.disk.invalidate_all();
+        self.std_walk = None;
     }
 
-    /// Stats every known file. True when one changed, appeared or went.
+    /// Stats every known file, and walks a checkout's `std/` again. True
+    /// when a file changed, appeared or went.
     #[must_use]
     pub fn sweep(&mut self) -> bool {
-        self.disk.sweep()
+        let files = self.disk.sweep();
+        let walk = self.sweep_std();
+        files || walk
     }
 
     /// A D run was skipped or failed: the next [`Session::analyze_live`]
@@ -462,7 +510,8 @@ impl Session {
     /// one for the run, and its own diagnostics go to `phase_a`. With no
     /// last good one, only the open files are parsed (A §2.7).
     ///
-    /// In single-file mode the run is `single`'s instead (D-1371).
+    /// In single-file mode the run is `single`'s instead (D-1371), and in a
+    /// std checkout's session `checkout`'s (D-1700).
     ///
     /// # Errors
     ///
@@ -473,6 +522,9 @@ impl Session {
         if let PackageKind::SingleFile { file, strict } = &self.kind {
             let (file, strict) = (file.clone(), *strict);
             return self.analyze_single(overlay, &file, strict);
+        }
+        if let PackageKind::StdCheckout { .. } = &self.kind {
+            return self.analyze_checkout(overlay);
         }
         let first = load(&self.root, overlay, &mut self.disk, self.target)?;
         let state = manifest_state(&first);
@@ -666,6 +718,8 @@ impl Session {
             targets: context.targets,
             manifest_is_last_good: context.manifest_is_last_good,
             single_file: matches!(self.kind, PackageKind::SingleFile { .. }),
+            checkout: matches!(self.kind, PackageKind::StdCheckout { .. })
+                .then(|| self.tested.clone()),
             sources,
         }))
     }
@@ -695,7 +749,14 @@ impl Session {
             mut files,
             live,
             stubs,
-        } = load_strict(&self.root, &plan, self.target)?;
+            std,
+            root_file,
+        } = match &self.kind {
+            PackageKind::StdCheckout { .. } => self.load_checkout_strict(&plan)?,
+            PackageKind::Package | PackageKind::SingleFile { .. } => {
+                load_strict(&self.root, &plan, self.target)?
+            }
+        };
         let single = matches!(self.kind, PackageKind::SingleFile { .. });
         if single {
             // The synthetic manifest is no file to publish: a diagnostic
@@ -707,14 +768,25 @@ impl Session {
             retain: Retain::BUILD,
             cut_cycles: None,
         };
-        let ran = catch_unwind(AssertUnwindSafe(|| {
-            run_analysis(package, &mut sources, &mut diagnostics, extras)
+        let ran = catch_unwind(AssertUnwindSafe(|| match std {
+            Some(std) => crate::frontend::run_analysis_checkout(
+                package,
+                &mut sources,
+                &mut diagnostics,
+                extras,
+                std,
+            ),
+            None => run_analysis(package, &mut sources, &mut diagnostics, extras),
         }));
         let front = match ran {
             Ok(Ok(front)) => front,
             Ok(Err(error)) => return Err(error),
             Err(payload) => return Err(Error::new(panic_message(payload.as_ref()))),
         };
+        // A checkout's synthetic root is no file of the session (D-1700).
+        if let Some(root) = root_file {
+            checkout::drop_root(&mut diagnostics, root);
+        }
         sources.sort(&mut diagnostics);
         let mut held = held(&front, &stubs);
         // A held file that just left the broken set would keep its phase-A
@@ -759,8 +831,18 @@ impl Session {
     /// good text. A broken open document with none takes its disk text if
     /// that is clean (D-1356). Files that left the package are forgotten.
     fn remember(&mut self, sources: &SourceMap, files: &[LoadedFile], broken: &BTreeSet<FileId>) {
+        self.remember_modules(sources, files.get(1..).unwrap_or_default(), broken);
+    }
+
+    /// [`Session::remember`] over `modules`, module files alone.
+    fn remember_modules(
+        &mut self,
+        sources: &SourceMap,
+        modules: &[LoadedFile],
+        broken: &BTreeSet<FileId>,
+    ) {
         let mut seen = BTreeSet::new();
-        for f in files.iter().skip(1) {
+        for f in modules {
             let Some(source) = sources.file(f.file) else {
                 continue;
             };
@@ -1053,6 +1135,8 @@ fn load_strict(
         files,
         live,
         stubs,
+        std: None,
+        root_file: None,
     })
 }
 

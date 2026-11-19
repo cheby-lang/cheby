@@ -516,7 +516,7 @@ fn build_with(package: &str, local: &[(&str, &str)], tolerant: bool) -> Build {
             globals: &globals,
             std: StdCatalog {
                 known: &std_refs,
-                items: None,
+                items: StdItems::None,
             },
             package_targets: Targets::ALL,
         };

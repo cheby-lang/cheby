@@ -1468,6 +1468,7 @@ struct Run<'a> {
     diags: &'a [Diagnostic],
     facts: &'a ModuleFacts,
     fns: usize,
+    tests: usize,
 }
 
 impl Run<'_> {
@@ -1508,7 +1509,18 @@ impl ModuleLookup for LocalModules<'_> {
 /// dependency order, and the root's path is empty. Unlike
 /// [`crate::test_support`], this keeps a source with a syntax error, as a
 /// tolerant run does.
-fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
+fn record(local: &[(String, String)], each: impl FnMut(&Run<'_>)) {
+    record_in(PackageId::LOCAL, local, each);
+}
+
+/// [`record`] with the modules in `package`, whose root is `std` for
+/// [`PackageId::STD`].
+fn record_in(package: PackageId, local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
+    let root = if package == PackageId::STD {
+        "std"
+    } else {
+        "app"
+    };
     let globals = Globals::new();
     let mut table = ModuleTable::new();
     let mut sources = SourceMap::new();
@@ -1519,11 +1531,11 @@ fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
         let module = path
             .split("::")
             .filter(|s| !s.is_empty())
-            .fold(ModulePath::root("app"), |p, s| p.child(s));
+            .fold(ModulePath::root(root), |p, s| p.child(s));
         let id = table
             .add(ModuleInfo {
                 path: module,
-                package: PackageId::LOCAL,
+                package,
                 file: Some(file),
             })
             .unwrap();
@@ -1536,11 +1548,10 @@ fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
         let imports = collect_imports(tree, &globals.names);
         let mut lookup = LocalModules(&table);
         let (targets, _) =
-            resolve_import_targets(&imports, PackageId::LOCAL, &mut lookup, &globals.names)
-                .unwrap();
+            resolve_import_targets(&imports, package, &mut lookup, &globals.names).unwrap();
         let (resolved, _) = resolve_module(&ResolveInput {
             module: *id,
-            package: PackageId::LOCAL,
+            package,
             tree,
             imports: &imports,
             targets: &targets,
@@ -1549,14 +1560,14 @@ fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
             globals: &globals,
             std: StdCatalog {
                 known: &[],
-                items: None,
+                items: cheby_resolve::StdItems::None,
             },
             package_targets: Targets::ALL,
         })
         .unwrap();
         let input = TypesInput {
             module: *id,
-            package: PackageId::LOCAL,
+            package,
             tree,
             resolved: &resolved,
             deps: DepView::new(&set, &deps),
@@ -1572,6 +1583,7 @@ fn record(local: &[(String, String)], mut each: impl FnMut(&Run<'_>)) {
             diags: &diags,
             facts: &facts,
             fns: module.fns.len(),
+            tests: module.tests.len(),
         });
         set.insert(Arc::new(own)).unwrap();
         deps.push(*id);
@@ -1968,4 +1980,110 @@ fn f(o: Option<Int>, b: Bool) -> Int {
         assert!(run.diags.is_empty(), "{:?}", run.diags);
         assert_eq!(run.cases().count(), 0);
     });
+}
+
+/// A function and a test, each with two W0008 (a `let assert` and a
+/// `let guard`) and one W0010, at lines 2, 3 and 8 of the function and
+/// 13, 15 and 20 of the test (D-1702).
+const STD_TEST_WARNINGS: &str = "\
+fn f(n: Int, pair: (Int, Int)) -> Int {
+  let assert m = n
+  let guard (a, b) = pair else {
+    0
+  }
+  case m {
+    _ => a + b
+    0 => 2
+  }
+}
+
+test \"t\" {
+  let assert m = 1
+  fn g(pair: (Int, Int)) -> Int {
+    let guard (a, b) = pair else {
+      0
+    }
+    case a {
+      _ => b
+      0 => 2
+    }
+  }
+  assert g((m, 2)) == 2
+}
+";
+
+/// The code and the 1-based line of each diagnostic of `text`, a module
+/// of `package`, in the order of the lines, and how many test bodies were
+/// checked.
+fn codes_by_line(package: PackageId, text: &str) -> (Vec<(String, usize)>, usize) {
+    let mut found = Vec::new();
+    let mut tests = 0;
+    record_in(package, &[(String::new(), text.to_owned())], |run| {
+        tests = run.tests;
+        for diag in run.diags {
+            let label = diag.labels.first().unwrap();
+            let start = usize::try_from(label.span.range.start()).unwrap();
+            let before = text.get(..start).unwrap();
+            let line = before.matches('\n').count().checked_add(1).unwrap();
+            found.push((diag.code.to_string(), line));
+        }
+    });
+    found.sort_by_key(|&(_, line)| line);
+    (found, tests)
+}
+
+fn found(rows: &[(&str, usize)]) -> Vec<(String, usize)> {
+    rows.iter()
+        .map(|&(code, line)| (code.to_owned(), line))
+        .collect()
+}
+
+#[test]
+fn a_std_test_body_drops_w0008_and_w0010() {
+    // The test body is checked, and only the function's warnings remain.
+    let (got, tests) = codes_by_line(PackageId::STD, STD_TEST_WARNINGS);
+    assert_eq!(tests, 1);
+    assert!(got.iter().all(|&(_, line)| line < 12), "{got:?}");
+}
+
+#[test]
+fn a_std_function_body_keeps_w0008_and_w0010() {
+    let (got, _) = codes_by_line(PackageId::STD, STD_TEST_WARNINGS);
+    assert_eq!(got, found(&[("W0008", 2), ("W0008", 3), ("W0010", 8)]));
+}
+
+#[test]
+fn a_user_test_body_keeps_w0008_and_w0010() {
+    let (got, tests) = codes_by_line(PackageId::LOCAL, STD_TEST_WARNINGS);
+    assert_eq!(tests, 1);
+    assert_eq!(
+        got,
+        found(&[
+            ("W0008", 2),
+            ("W0008", 3),
+            ("W0010", 8),
+            ("W0008", 13),
+            ("W0008", 15),
+            ("W0010", 20),
+        ])
+    );
+}
+
+#[test]
+fn a_std_test_body_keeps_exhaustiveness_errors() {
+    let src = "\
+test \"t\" {
+  let n = 1
+  let r = case n {
+    0 => 1
+  }
+  fn g(o: Option<Int>) -> Int {
+    let Some(k) = o
+    k
+  }
+  assert r + g(Some(n)) == 2
+}
+";
+    let (got, _) = codes_by_line(PackageId::STD, src);
+    assert_eq!(got, found(&[("E0061", 3), ("E0060", 7)]));
 }

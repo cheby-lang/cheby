@@ -20,11 +20,39 @@ use crate::StdCatalog;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StdItemName {
     /// The module's path under `std`, such as `io` or `json::decode`.
-    pub module: &'static str,
+    pub module: Box<str>,
     /// The item's name.
     pub name: Box<str>,
     /// The namespace it is named in.
     pub namespace: Namespace,
+}
+
+/// The list of [`StdCatalog::items`]: std's public items, in module
+/// order.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum StdItems<'a> {
+    /// No list: the help names no other module.
+    #[default]
+    None,
+    /// The binary's std, built once per process on the first call, which
+    /// may parse all of std, so it is called only when the help is needed.
+    Shared(fn() -> &'static [StdItemName]),
+    /// A list the run owns, such as a std checkout's, built from its own
+    /// texts (D-1700).
+    Owned(&'a [StdItemName]),
+}
+
+impl<'a> StdItems<'a> {
+    /// The items, built first if this is the binary's list and no run of
+    /// the process has needed it yet.
+    #[must_use]
+    pub fn list(self) -> &'a [StdItemName] {
+        match self {
+            Self::None => &[],
+            Self::Shared(items) => items(),
+            Self::Owned(items) => items,
+        }
+    }
 }
 
 /// A std item, as `(module, name)` with the module's path under `std`.
@@ -127,11 +155,12 @@ pub(crate) fn std_help(
         }
         return Some(StdHelp::Elsewhere(have(&[to_module], to_name)));
     }
-    let items: &[StdItemName] = std.items.map_or(&[], |items| items());
-    let mut modules: Vec<&str> = items
+    let mut modules: Vec<&str> = std
+        .items
+        .list()
         .iter()
         .filter(|item| item.namespace == ns && &*item.name == name)
-        .map(|item| item.module)
+        .map(|item| &*item.module)
         .chain(homes.iter().copied())
         .filter(|&m| m != module)
         .collect();
@@ -258,7 +287,7 @@ mod tests {
             ]
             .iter()
             .map(|&(module, name)| StdItemName {
-                module,
+                module: module.into(),
                 name: name.into(),
                 namespace: Namespace::Value,
             })
@@ -269,7 +298,7 @@ mod tests {
     fn help(module: &str, name: &str, ns: Namespace, homes: &[&'static str]) -> Option<String> {
         let std = StdCatalog {
             known: &[],
-            items: Some(fake_items),
+            items: StdItems::Shared(fake_items),
         };
         std_help(std, homes, module, name, ns).map(|help| match help {
             StdHelp::Rename(to) => format!("rename to {to}"),

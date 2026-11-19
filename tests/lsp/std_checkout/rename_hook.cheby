@@ -1,0 +1,37 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_rename_hook.cheby
+// @decisions: D-1706
+//! A `priv` hook that `@std_hooks` names is renamed with the attribute's
+//! name, from the attribute and from the declaration.
+
+import std::int
+
+/// A gauge, compared, hashed and printed through its hooks.
+@std_hooks(gauge_equal, gauge_hash, gauge_debug)
+//         ^ prepareRename
+//         ^ rename gauge_same
+type Gauge {
+  Gauge(Int),
+}
+
+priv fn gauge_equal(a: Gauge, b: Gauge) -> Bool {
+  //    ^ rename gauge_same
+  let Gauge(x) = a
+  let Gauge(y) = b
+  x == y
+}
+
+priv fn gauge_hash(g: Gauge) -> Int {
+  let Gauge(x) = g
+  x
+}
+
+priv fn gauge_debug(g: Gauge) -> String {
+  let Gauge(x) = g
+  "g{x}"
+}
+
+test "gauges" {
+  assert Gauge(1) == Gauge(1)
+}

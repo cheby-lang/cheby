@@ -15,6 +15,16 @@
 //! reformatted, and no comment is edited, doc comments included (D-1672).
 //! A doc comment that names the renamed item goes stale.
 //!
+//! In a std checkout's session (D-1706), rename works over the checkout's
+//! std modules as over a package's, with three differences. std's API is
+//! refused, since the examples, the tests and `docs/stdlib/` use it and the
+//! session sees none of them: a `pub` item, a constructor or field of a
+//! `pub` type, an interface function, and any function that makes a type
+//! satisfy an interface. A name in a std-only attribute's arguments, such
+//! as `@std_hooks(equal, hash, debug)`, is an occurrence and is written
+//! with the rest. And a parameter that `@std_clamped` names on a function
+//! with no body, where the index records no occurrence, is refused.
+//!
 //! What the check cannot see (plan §1.6):
 //!
 //! - A body with an error is dropped from the later checks (D-494), so a
@@ -37,7 +47,7 @@ use cheby_driver::analysis::{
     interface_fns, verify,
 };
 use cheby_syntax::names::{NameCase, check_candidate};
-use cheby_syntax::{SyntaxElement, SyntaxKind as K, SyntaxTree};
+use cheby_syntax::{SyntaxElement, SyntaxKind as K, SyntaxNode, SyntaxToken, SyntaxTree};
 
 use super::Refusal;
 use super::cursor::{pick_ident, token_at};
@@ -224,13 +234,15 @@ pub(crate) fn check(
 /// (X §3.5), with no check: the writer that W11's E0044 fix calls too
 /// (D-1668). Each symbol's old name is its text, and an occurrence whose
 /// token reads otherwise, a use through an import alias, is left alone.
-/// Implicit occurrences and names in attributes are never written
-/// (D-1390), nor are files outside the package. A punned field keeps both
-/// its meanings: renaming the value of `Book { title }` writes
+/// Implicit occurrences are never written, nor are names in attributes
+/// outside a std checkout (D-1390), nor files outside the package. A
+/// punned field keeps both its meanings: renaming the value of
+/// `Book { title }` writes
 /// `Book { title: new }`, renaming the field writes `Book { new: title }`,
 /// and at the end of a punned path, `origin.y` becomes `origin.y: new` or
 /// `origin.new: y` (D-1392, D-1640, D-1645). Sorted by path, then by start,
-/// each range once.
+/// each range once. In a std checkout, a name in a std-only attribute's
+/// arguments is an occurrence and is written too (D-1706).
 ///
 /// # Errors
 ///
@@ -242,12 +254,14 @@ pub(crate) fn write(
     cancel: &CancelToken,
 ) -> Result<Vec<PlainEdit>, RequestError> {
     let snapshot = index.snapshot();
+    let attrs = snapshot.is_std_checkout();
     let mut out: Vec<PlainEdit> = Vec::new();
     for symbol in symbols {
         let old = symbol.text();
         let field = matches!(symbol.member, Member::Field(_));
         for hit in index.references(symbol, cancel)?.hits {
-            if matches!(hit.occurrence.role, Role::Implicit(_) | Role::Attr) {
+            let role = hit.occurrence.role;
+            if matches!(role, Role::Implicit(_)) || (role == Role::Attr && !attrs) {
                 continue;
             }
             let Some(file) = hit.module.file else {
@@ -347,15 +361,16 @@ fn target(
         }
         // Only std's own attributes give names (`index::build`), and outside
         // std they are unknown (E0045) and give none, while a std document
-        // is refused above (D-1673). So this arm waits for a checkout of
-        // std that can be edited (D-1706).
-        Some(Role::Attr) => {
+        // is refused above (D-1673). In a std checkout they are occurrences,
+        // written with the rest (D-1706).
+        Some(Role::Attr) if !snapshot.is_std_checkout() => {
             return Err(Refusal(format!(
                 "`{old}` in an attribute is renamed where it is declared"
             )));
         }
         Some(
-            Role::Decl
+            Role::Attr
+            | Role::Decl
             | Role::Use
             | Role::Qualifier
             | Role::Import
@@ -367,7 +382,7 @@ fn target(
         )
         | None => {}
     }
-    allowed(snapshot, entry, &old)?;
+    allowed(snapshot, view, entry, &old)?;
     shared_import(index, entry, &old)?;
     Ok(Some(Target {
         origin,
@@ -399,6 +414,11 @@ fn unpicked<'a>(
     let range = token.text_range();
     let old = range.slice(text).unwrap_or_default();
     match module.classify(range) {
+        Classified::Unnamed(Unnamed::AttrArg)
+            if index.snapshot().is_std_checkout() && clamped_label(token) =>
+        {
+            Err(unrecorded(old))
+        }
         Classified::Unknown(_) if read_only => Err(not_editable(old, "std")),
         Classified::Unknown(name) => Err(Refusal(unknown_reason(name, old, None))),
         Classified::Unnamed(Unnamed::SelfType) => {
@@ -413,8 +433,15 @@ fn unpicked<'a>(
 }
 
 /// Refuses a symbol that a rename may not touch (D-1390): a module, a
-/// builtin, and what another package declares, std included.
-fn allowed(snapshot: &Snapshot, entry: &SymbolEntry, old: &str) -> Result<(), Refusal> {
+/// builtin, and what another package declares, std included. In a std
+/// checkout, also std's API (D-1706, `std_api`). `view` is the cursor's
+/// module.
+fn allowed(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    entry: &SymbolEntry,
+    old: &str,
+) -> Result<(), Refusal> {
     // An import's `as` name belongs to the importing module, whatever
     // it names (F §5.3).
     if matches!(entry.symbol.member, Member::ImportAlias(_)) {
@@ -434,11 +461,15 @@ fn allowed(snapshot: &Snapshot, entry: &SymbolEntry, old: &str) -> Result<(), Re
     if home == ModuleId::BUILTIN {
         return Err(Refusal(format!("`{old}` is part of the language")));
     }
-    let view = snapshot.module(home);
-    if view.is_some_and(ModuleView::is_local) {
-        return Ok(());
+    let home_view = snapshot.module(home);
+    if home_view.is_some_and(ModuleView::is_own) {
+        return if snapshot.is_std_checkout() {
+            std_api(snapshot, view, entry, old)
+        } else {
+            Ok(())
+        };
     }
-    let path = view.and_then(ModuleView::path);
+    let path = home_view.and_then(ModuleView::path);
     let package = path
         .and_then(|p| p.segments().first())
         .map_or("another package", String::as_str);
@@ -461,6 +492,210 @@ fn not_editable(shown: &str, package: &str) -> Refusal {
     Refusal(format!(
         "`{shown}` is in `{package}`, which cannot be edited here"
     ))
+}
+
+/// Where std's API also lives, which D-1706's refusals say.
+const STD_API: &str = "std's API also lives in `docs/stdlib/`, the examples and the tests";
+
+/// Refuses std's API in a std checkout (D-1706): a `pub` item, a
+/// constructor or field of a `pub` type, an interface function, and a
+/// function that makes a type satisfy an interface, which every package
+/// may use (D-447) and the session cannot see. `view` is the cursor's
+/// module.
+fn std_api(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    entry: &SymbolEntry,
+    old: &str,
+) -> Result<(), Refusal> {
+    let is_pub = |def: DefId| item(snapshot, def).is_some_and(|item| item.vis == Vis::Pub);
+    let def = match entry.meaning {
+        Meaning::Item(def) => def,
+        Meaning::Field { ty, .. } if is_pub(ty) => {
+            return Err(Refusal(format!(
+                "`{old}` is a field of the `pub` type `{}`: {STD_API}",
+                name_of(snapshot, ty)
+            )));
+        }
+        Meaning::Field { .. }
+        | Meaning::Module(_)
+        | Meaning::TypeParam { .. }
+        | Meaning::Local { .. } => return Ok(()),
+    };
+    let Some(found) = item(snapshot, def) else {
+        return Ok(());
+    };
+    let parent = found.parent.map(|parent| DefId::new(def.module, parent));
+    if found.kind == DefKind::InterfaceFn {
+        let interface = parent.map_or_default(|p| format!(" `{}`", name_of(snapshot, p)));
+        return Err(Refusal(format!(
+            "`{old}` is a function of the interface{interface}: {STD_API}"
+        )));
+    }
+    if let Some(ty) = parent.filter(|&ty| found.kind == DefKind::Ctor && is_pub(ty)) {
+        return Err(Refusal(format!(
+            "`{old}` is a constructor of the `pub` type `{}`: {STD_API}",
+            name_of(snapshot, ty)
+        )));
+    }
+    if found.vis == Vis::Pub {
+        let module = snapshot
+            .module(def.module)
+            .and_then(ModuleView::path)
+            .and_then(|path| path.segments().last())
+            .map_or_default(|last| format!("{last}::"));
+        return Err(Refusal(format!("`{module}{old}` is `pub`: {STD_API}")));
+    }
+    match found.kind {
+        DefKind::Fn => match satisfied(snapshot, view, def)? {
+            Some((ty, interface)) => Err(Refusal(format!(
+                "`{old}` makes `{}` satisfy `{}`, which packages outside the checkout may use",
+                name_of(snapshot, ty),
+                name_of(snapshot, interface)
+            ))),
+            None => Ok(()),
+        },
+        DefKind::Type
+        | DefKind::Alias
+        | DefKind::Const
+        | DefKind::Interface
+        | DefKind::InterfaceFn
+        | DefKind::Ctor
+        | DefKind::Test => Ok(()),
+    }
+}
+
+/// The first type and interface that the function `def` makes the type
+/// satisfy (§8.2, D-1706): over the types of `def`'s module and the
+/// builtin types, whose home modules are std's (D-447), and every interface
+/// with a function of `def`'s name. An `@external` counts, unlike in
+/// `nav::provisions`. `view` is the cursor's module.
+///
+/// # Errors
+///
+/// A [`Refusal`] when the satisfaction cannot be read, since a rename
+/// that may break one must not pass unseen.
+fn satisfied(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    def: DefId,
+) -> Result<Option<(DefId, DefId)>, Refusal> {
+    let interfaces = snapshot.interfaces();
+    let Some(func) = item(snapshot, def) else {
+        return Ok(None);
+    };
+    let unreadable = || {
+        Refusal(format!(
+            "cannot tell which interfaces `{}` satisfies",
+            name_of(snapshot, def)
+        ))
+    };
+    let types: Vec<DefId> = [def.module, ModuleId::BUILTIN]
+        .into_iter()
+        .filter_map(|module| Some((module, interfaces.get(module)?)))
+        .flat_map(|(module, iface)| {
+            iface
+                .items
+                .iter_enumerated()
+                .filter(|(_, item)| item.kind == DefKind::Type)
+                .map(move |(index, _)| DefId::new(module, index))
+        })
+        .collect();
+    if types.is_empty() {
+        return Ok(None);
+    }
+    let item_of = |d: DefId| interfaces.get(d.module).and_then(|i| i.item(d.index));
+    for &module in snapshot.all_ids() {
+        let Some(iface) = interfaces.get(module) else {
+            continue;
+        };
+        for (index, candidate) in iface.items.iter_enumerated() {
+            if candidate.kind != DefKind::Interface {
+                continue;
+            }
+            let interface = DefId::new(module, index);
+            let fns = interface_fns(interface, &item_of).map_err(|_| unreadable())?;
+            if !fns
+                .iter()
+                .any(|&f| item_of(f).is_some_and(|f| f.name == func.name))
+            {
+                continue;
+            }
+            let input = snapshot
+                .query_input(def.module, view)
+                .ok_or_else(unreadable)?;
+            let found = implementors(&input, interface, &types).map_err(|_| unreadable())?;
+            for (ty, verdict) in found {
+                if let Verdict::Yes {
+                    fns: satisfying, ..
+                } = verdict
+                    && satisfying.contains(&def)
+                {
+                    return Ok(Some((ty, interface)));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The attribute whose arguments name its function's parameters: on a
+/// function with no body they are labels, and the index records no
+/// occurrence of them (`index::build`, `attr_arg`).
+const CLAMPED: &str = "std_clamped";
+
+/// D-1706's refusal of a parameter that `@std_clamped` names on a
+/// function with no body, where rename cannot find the name.
+fn unrecorded(old: &str) -> Refusal {
+    Refusal(format!(
+        "`{old}` is named in `@{CLAMPED}` of a function with no body, where rename cannot edit it"
+    ))
+}
+
+/// The name of the attribute `attr`: `std_clamped` in `@std_clamped(n)`.
+fn attr_name(attr: SyntaxNode<'_>) -> Option<&str> {
+    attr.children_with_tokens().find_map(|child| match child {
+        SyntaxElement::Token(t) if t.kind() == K::LOWER_IDENT => Some(t.text()),
+        SyntaxElement::Token(_) | SyntaxElement::Node(_) => None,
+    })
+}
+
+/// The names that the argument list `args` writes.
+fn arg_names(args: SyntaxNode<'_>) -> Vec<&str> {
+    args.children_with_tokens()
+        .filter_map(|child| match child {
+            SyntaxElement::Token(t) if t.kind() == K::LOWER_IDENT => Some(t.text()),
+            SyntaxElement::Token(_) | SyntaxElement::Node(_) => None,
+        })
+        .collect()
+}
+
+/// Whether the function `decl` carries `@std_clamped` with `name` among
+/// its arguments.
+fn clamps(decl: SyntaxNode<'_>, name: &str) -> bool {
+    decl.children()
+        .filter(|node| node.kind() == K::ATTR && attr_name(*node) == Some(CLAMPED))
+        .filter_map(|attr| attr.first_child_of_kind(K::ATTR_ARG_LIST))
+        .any(|args| arg_names(args).contains(&name))
+}
+
+/// Whether `token`, an argument of `@std_clamped`, names a parameter of a
+/// function with no body: a name the index does not record (D-1706).
+fn clamped_label(token: SyntaxToken<'_>) -> bool {
+    let decl = token
+        .parent()
+        .filter(|node| node.kind() == K::ATTR_ARG_LIST)
+        .and_then(SyntaxNode::parent)
+        .filter(|attr| attr.kind() == K::ATTR && attr_name(*attr) == Some(CLAMPED))
+        .and_then(SyntaxNode::parent)
+        .filter(|decl| decl.kind() == K::FN_DECL && decl.first_child_of_kind(K::BLOCK).is_none());
+    let Some(list) = decl.and_then(|decl| decl.first_child_of_kind(K::PARAM_LIST)) else {
+        return false;
+    };
+    list.children()
+        .filter(|node| node.kind() == K::PARAM)
+        .filter_map(|param| param.first_child_of_kind(K::IDENT_PAT))
+        .any(|pat| arg_names(pat).contains(&token.text()))
 }
 
 /// The case a new name of a symbol of `kind` must have: the old name's
@@ -488,7 +723,8 @@ const fn name_case(kind: NameKind) -> NameCase {
 /// named in their own module only, so it alone must parse and place every
 /// name of the old text. An item or a field needs every module to parse,
 /// and every name of the old text placed; an item also no import through a
-/// cut cycle.
+/// cut cycle. An item does not count a name in a field position whose
+/// field is unknown, which cannot name it (D-061, D-1727).
 fn gates(index: Index<'_>, target: &Target<'_>) -> Result<(), Refusal> {
     let snapshot = index.snapshot();
     let old = target.old.as_str();
@@ -523,7 +759,8 @@ fn gates(index: Index<'_>, target: &Target<'_>) -> Result<(), Refusal> {
             shown_path(snapshot, path)
         )));
     }
-    match index.partial(old) {
+    let item = matches!(target.entry.meaning, Meaning::Item(_));
+    match index.partial_where(old, |name| !(item && name.field)) {
         Some(partial) => Err(partial_reason(index, &partial, old)),
         None => Ok(()),
     }
@@ -558,15 +795,18 @@ fn unknown_reason(name: &UnknownName, old: &str, place: Option<&str>) -> String 
             Some(place) => format!("`{place}` may refer to `{old}` but does not resolve"),
             None => format!("`{old}` does not resolve"),
         },
-        Unknown::FieldOfUnknownType => format!("cannot tell what `.{}`{at} refers to", name.text),
+        // A body of std that was not checked, a test of a closed module of a
+        // std checkout (D-1701), has no facts for its fields, the only names
+        // the index cannot place there (D-1706).
+        Unknown::FieldOfUnknownType | Unknown::Unchecked => {
+            format!("cannot tell what `.{}`{at} refers to", name.text)
+        }
         // Only at the cursor: a name inside an error node elsewhere is in a
         // file with syntax errors, which `gates` refuses first, the
         // cursor's file for a local and every file for an item (D-1709).
         Unknown::InErrorNode => "fix the syntax errors in this file first".to_owned(),
         Unknown::BodyLost => format!("an internal error stopped the check of the code{at}"),
-        Unknown::Unchecked | Unknown::NotRecorded => {
-            format!("cannot tell what `{}`{at} refers to", name.text)
-        }
+        Unknown::NotRecorded => format!("cannot tell what `{}`{at} refers to", name.text),
     }
 }
 
@@ -854,7 +1094,7 @@ fn satisfiers(
         };
         if !snapshot
             .module(satisfier.module)
-            .is_some_and(ModuleView::is_local)
+            .is_some_and(ModuleView::is_own)
         {
             // A builtin type has no module to name (§7.6).
             let module = snapshot
@@ -1053,7 +1293,7 @@ fn bodiless_param(
     let Some(param) = token
         .parent()
         .filter(|node| node.kind() == K::IDENT_PAT)
-        .and_then(cheby_syntax::SyntaxNode::parent)
+        .and_then(SyntaxNode::parent)
         .filter(|node| node.kind() == K::PARAM)
     else {
         return Ok(None);
@@ -1098,6 +1338,9 @@ fn bodiless_param(
         return Err(Refusal(
             "fix the syntax errors in this file first".to_owned(),
         ));
+    }
+    if snapshot.is_std_checkout() && clamps(decl, &old) {
+        return Err(unrecorded(&old));
     }
     Ok(Some(BodilessParam {
         range,

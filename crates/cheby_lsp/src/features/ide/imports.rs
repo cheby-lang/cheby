@@ -11,7 +11,10 @@
 //!   name would clash with a local or an item (E0044, E0041, D-1395).
 //! - A module that imports the file's module, directly or not, is refused,
 //!   since the import would close a cycle (E0040). So is the module itself,
-//!   a std module std does not ship, and a module of another package.
+//!   a std module std does not ship, and a module of another package. In a
+//!   std checkout, std's modules are the session's own: the cycle rule
+//!   holds among them, and a std module the checkout lacks is refused
+//!   (D-1700).
 //! - It goes where `cheby fmt` would keep it (D-1030, D-1148): into the
 //!   first block of imports, before the first whose module path sorts
 //!   after it in byte order, else after the block's last. A file with no
@@ -85,7 +88,10 @@ pub(crate) fn import_plan(
 }
 
 /// Whether `view` may import the module at `target`: a std module std
-/// ships, or a module of its own package that does not import it.
+/// ships, or a module of its own package that does not import it. In a
+/// std checkout, std's modules are the session's own (D-1700): one that
+/// imports `view` is refused (E0040), and a module the run did not load
+/// is not in the checkout, so importing it is E0039.
 fn importable(
     snapshot: &Snapshot,
     view: ModuleView<'_>,
@@ -101,13 +107,17 @@ fn importable(
                 return false;
             };
             if theirs.package == PackageId::STD {
-                return true;
+                return !snapshot.is_std_checkout() || !imports_module(snapshot, id, view.id());
             }
             let ours = table.get(view.id()).map(|i| i.package);
             !is_std && ours == Some(theirs.package) && !imports_module(snapshot, id, view.id())
         }
         // A std module the run did not load: one std ships, by its index.
-        None => is_std && std.is_some_and(|index| index.module(&path_text(target)).is_some()),
+        None => {
+            is_std
+                && !snapshot.is_std_checkout()
+                && std.is_some_and(|index| index.module(&path_text(target)).is_some())
+        }
     }
 }
 

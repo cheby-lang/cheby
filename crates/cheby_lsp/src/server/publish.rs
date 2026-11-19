@@ -11,9 +11,11 @@
 //! Zed restarts versions at 0 on reopen (cp-notes, CP1). A file that
 //! leaves the package gets one empty publish, and is then forgotten. Only
 //! the session that owns a path under `sessions::route` publishes it, so a
-//! nested package's list is its own (A §6.5). Std is never published. A
-//! single-file session publishes its one document by the same rules
-//! (D-1371).
+//! nested package's list is its own (A §6.5). The materialized std is
+//! never published. A single-file session publishes its one document by
+//! the same rules (D-1371), and a std checkout's session every file of its
+//! `std/`, open or closed, as a package's (D-1704), paths shown from the
+//! checkout as `std/…`.
 //!
 //! A file's list is the front end's, then the constants child's, as
 //! `report_back_end` appends them in `cheby check` (A §11.6). A child
@@ -92,6 +94,19 @@ impl Server {
             self.catch_up(root);
             self.finish(root);
         }
+    }
+
+    /// An event of a job whose session ended while it ran (`orphan_job`):
+    /// nothing of it reaches a session, not even one made at the same
+    /// root since, whose snapshot, publishes and constants child would
+    /// otherwise take the old session's run (D-1699). Its last event
+    /// (`done`) frees the analysis thread for the next job.
+    pub(crate) fn on_orphan(&mut self, root: &Path, done: bool) {
+        if done {
+            self.orphan_job = false;
+            self.finish(root);
+        }
+        self.wake(root);
     }
 
     /// The D run of a job, its last event.
@@ -466,7 +481,7 @@ impl Server {
         // to the file's directory.
         let shown_root = match self.packages.get(root).map(|package| &package.kind) {
             Some(PackageKind::SingleFile { .. }) => root.parent().unwrap_or(root),
-            Some(PackageKind::Package) | None => root,
+            Some(PackageKind::Package | PackageKind::StdCheckout { .. }) | None => root,
         };
         for label in &d.related {
             let Some((other, other_lines)) = self.placed(&label.path, files, texts) else {

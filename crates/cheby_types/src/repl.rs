@@ -1920,7 +1920,7 @@ mod tests {
                 globals: &self.b.globals,
                 std: StdCatalog {
                     known: &[],
-                    items: None,
+                    items: cheby_resolve::StdItems::None,
                 },
                 package_targets: Targets::ALL,
             };

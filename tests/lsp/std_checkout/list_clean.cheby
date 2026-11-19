@@ -1,0 +1,9 @@
+// @package: std-checkout
+// @probes: none
+// @open: std/list.cheby
+// @steps: idle, status
+// @decisions: D-1699, D-1700, D-1704, D-1705
+//! Opens the real `std/list.cheby` of a std checkout: no module shows a
+//! diagnostic, warnings included, the session is the checkout's, and no
+//! message says the checkout differs from the binary. This file only
+//! carries the header.

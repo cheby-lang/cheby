@@ -8,15 +8,21 @@
 //! `barrier` sends `cheby/testSettings`, which the main loop answers after
 //! every notification of the messages before it, and which waits for no
 //! job.
+//!
+//! The tests of a std checkout (D-1699 to D-1707) run over a copy of this
+//! repository's `std/` beside an empty `crates/cheby_driver/src/std_lib.rs`
+//! ([`Checkout`]). They are front end only, so they run on Windows too.
 
-use std::path::Path;
-use std::time::Instant;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use super::sessions::STD_DIFFERS;
 use super::tests::{
     B, BAD, Client, MAIN, MAIN_BAD, MANIFEST, Temp, WAIT, change, has_error, is_empty, open, uri,
 };
+use crate::features::ide::file_ops::STD_MOVE;
 
 /// A root module that uses the package's module `b`.
 const MAIN_USES_B: &str = "//! Root.\n\nimport app::b\n\nfn main() {\n  let _ = b::g()\n}\n";
@@ -677,5 +683,585 @@ fn recreated_manifest_restarts_the_folder_session() {
     std::fs::write(&manifest, MANIFEST).unwrap();
     watched(&client, &manifest, 1);
     later(&mut client, &bad, has_error);
+    client.stop();
+}
+
+/// A checkout of this repository in a fresh temporary directory: a copy of
+/// its `std/`, an empty `crates/cheby_driver/src/std_lib.rs` and no
+/// `cheby.toml`, removed on drop (D-1699).
+struct Checkout(PathBuf);
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Checkout {
+    /// A checkout named `name` in the temporary directory.
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("cheby_lsp_co_{}_{name}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        Self::fill(&dir);
+        Self(crate::text::uri::normalize(
+            &std::path::absolute(dir).unwrap(),
+        ))
+    }
+
+    /// Writes a checkout at `dir`: `std/` copied from this repository, and
+    /// the marker file.
+    fn fill(dir: &Path) {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        copy_tree(&repository.join("std"), &dir.join("std"));
+        let marker = ["crates", "cheby_driver", "src", "std_lib.rs"]
+            .iter()
+            .fold(dir.to_path_buf(), |path, part| path.join(part));
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, "").unwrap();
+    }
+
+    /// The path of `file`, `/`-separated, under the checkout, built from
+    /// components.
+    fn at(&self, file: &str) -> PathBuf {
+        file.split('/')
+            .fold(self.0.clone(), |path, part| path.join(part))
+    }
+
+    /// Writes `text` at `file` under the checkout.
+    fn write(&self, file: &str, text: &str) -> PathBuf {
+        let path = self.at(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// `initialize` parameters with the checkout as the one workspace
+    /// folder.
+    fn folder(&self, extra: &Value) -> Value {
+        let mut params = json!({
+            "capabilities": {},
+            "rootUri": uri(&self.0),
+            "workspaceFolders": [{ "uri": uri(&self.0), "name": "cheby" }],
+            "initializationOptions": { "analysis": { "debounceMs": 0 } },
+        });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                params.insert(key.clone(), value.clone());
+            }
+        }
+        params
+    }
+}
+
+/// Copies the files under `from` to `to`.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let path = entry.unwrap().path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_tree(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).unwrap();
+        }
+    }
+}
+
+/// Opens `path` with its text on disk.
+fn open_from_disk(client: &Client, path: &Path, version: i32) {
+    open(
+        client,
+        path,
+        &std::fs::read_to_string(path).unwrap(),
+        version,
+    );
+}
+
+/// The root of every session, sorted.
+fn sessions(client: &mut Client) -> Vec<String> {
+    let roots = client.request("cheby/testSessions", Value::Null).unwrap();
+    serde_json::from_value(roots).unwrap()
+}
+
+/// A session's root as `cheby/testSessions` names it.
+fn root_name(path: &Path) -> String {
+    path.display().to_string()
+}
+
+/// The `cheby/status` entry of the session at `root`.
+fn status_of(client: &mut Client, root: &Path) -> Value {
+    let status = client.request("cheby/status", Value::Null).unwrap();
+    status["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["root"] == uri(root))
+        .cloned()
+        .unwrap_or_else(|| panic!("no session at {}: {status}", root.display()))
+}
+
+/// Waits until `accept` takes the session roots.
+fn wait_sessions(client: &mut Client, accept: impl Fn(&[String]) -> bool) {
+    let deadline = Instant::now().checked_add(WAIT).unwrap();
+    loop {
+        let roots = sessions(client);
+        if accept(&roots) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "sessions stayed {roots:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Waits until no session has a run running or due.
+fn wait_runs_idle(client: &mut Client) {
+    let deadline = Instant::now().checked_add(WAIT).unwrap();
+    loop {
+        let status = client.request("cheby/status", Value::Null).unwrap();
+        let packages = status["packages"].as_array().unwrap();
+        if packages.iter().all(|entry| entry["run"] == "idle") {
+            return;
+        }
+        assert!(Instant::now() < deadline, "runs never ended: {status}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Holds the analysis thread, or lets it go.
+fn hold(client: &mut Client, on: bool) {
+    client
+        .request("cheby/testHold", json!({ "hold": on }))
+        .unwrap();
+}
+
+/// How many times D-1705's warning was shown.
+fn differs_shown(client: &Client) -> usize {
+    client
+        .notifications
+        .iter()
+        .filter(|n| n.method == "window/showMessage")
+        .filter(|n| n.params["type"] == 2 && n.params["message"] == STD_DIFFERS)
+        .count()
+}
+
+/// The watchers of every `client/registerCapability` with relative
+/// patterns.
+fn relative_watchers(client: &Client) -> Vec<Value> {
+    client
+        .requests
+        .iter()
+        .filter_map(|r| file_watchers(&r.params))
+        .filter(|w| w[0]["globPattern"].is_object())
+        .cloned()
+        .collect()
+}
+
+/// A probe module of a checkout whose test body has a type error.
+const PROBE_TESTS: &str = "//! Probe.\n\npub fn one() -> Int {\n  1\n}\n\ntest \"one is one\" {\n  let x: Int = \"no\"\n  assert one() == x\n}\n";
+
+/// A probe module of a checkout, and one that calls it.
+const PROBE_LIB: &str = "//! Probe.\n\npub fn f() -> Int {\n  1\n}\n";
+const PROBE_LIB_CHANGED: &str = "//! Probe.\n\npub fn f(x: Int) -> Int {\n  x\n}\n";
+const PROBE_DEP: &str =
+    "//! Probe dependent.\n\nimport std::probe_lib\n\npub fn g() -> Int {\n  probe_lib::f()\n}\n";
+
+/// A checkout's session starts at its first open document, never at
+/// `initialized` for a workspace folder that is a checkout, publishes every
+/// std file, open or closed, and registers no watcher of its own inside a
+/// folder (D-1704). A copy equal to the binary's std shows no warning and
+/// has no `stdDiffers` (D-1705).
+#[test]
+fn checkout_session_starts_at_open() {
+    let co = Checkout::new("start");
+    let (mut client, _) = Client::start(co.folder(&watching()), Vec::new());
+    barrier(&mut client);
+    assert_eq!(sessions(&mut client), Vec::<String>::new());
+    let list = co.at("std/list.cheby");
+    open_from_disk(&client, &list, 1);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    let entry = status_of(&mut client, &co.0);
+    assert_eq!(entry["kind"], "stdCheckout", "{entry}");
+    assert!(entry.get("stdDiffers").is_none(), "{entry}");
+    assert_eq!(
+        entry["children"]["notEvaluated"], "a std checkout evaluates no constants (D-1491, D-1700)",
+        "{entry}"
+    );
+    let published = client.wait_publish(&list, |p| p["version"] == 1);
+    assert!(is_empty(&published), "{published}");
+    // A closed module is published too, with no version.
+    let closed = client.wait_publish(&co.at("std/json/tree.cheby"), |_| true);
+    assert!(is_empty(&closed), "{closed}");
+    assert!(closed.get("version").is_none_or(Value::is_null), "{closed}");
+    assert_eq!(differs_shown(&client), 0);
+    assert_eq!(relative_watchers(&client), Vec::<Value>::new());
+    client.stop();
+}
+
+/// Outside every workspace folder, a checkout's session registers
+/// `std/**/*.cheby` under the checkout, and the manifests whose coming
+/// ends it, `std/**/cheby.toml` and the root `cheby.toml`, and nothing
+/// else (D-1704, D-1729). A root `cheby.toml` reported through that
+/// watcher then routes the open document again at once. No Windows
+/// ignore, for the reason `checkout_ends_when_no_longer_a_checkout` gives.
+#[test]
+fn checkout_outside_folders_watches_std_and_manifests() {
+    let co = Checkout::new("watch_own");
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(rooted_at(&co.at("std"), &watching()), Vec::new());
+    open_from_disk(&client, &list, 1);
+    let own = client.wait_request_that("client/registerCapability", |p| {
+        file_watchers(p).is_some_and(|w| w[0]["globPattern"].is_object())
+    });
+    assert_eq!(
+        file_watchers(&own.params),
+        Some(&json!([
+            { "globPattern": { "baseUri": uri(&co.0), "pattern": "std/**/*.cheby" }, "kind": 7 },
+            { "globPattern": { "baseUri": uri(&co.0), "pattern": "std/**/cheby.toml" }, "kind": 7 },
+            { "globPattern": { "baseUri": uri(&co.0), "pattern": "cheby.toml" }, "kind": 7 },
+        ]))
+    );
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    let manifest = co.write("cheby.toml", MANIFEST);
+    watched(&client, &manifest, 1);
+    assert_eq!(sessions(&mut client), [root_name(&list)]);
+    client.stop();
+}
+
+/// A checkout's session is rooted at the whole repository, but a change
+/// outside its `std/` starts no run of it, while one inside does (D-1704).
+#[test]
+fn checkout_holds_only_its_std() {
+    let co = Checkout::new("holds");
+    let example = co.write("docs/examples/x/src/main.cheby", MAIN);
+    let (mut client, _) = Client::start(co.folder(&watching()), Vec::new());
+    open_from_disk(&client, &co.at("std/list.cheby"), 1);
+    wait_runs_idle(&mut client);
+    hold(&mut client, true);
+    std::fs::write(&example, MAIN_BAD).unwrap();
+    watched(&client, &example, 2);
+    barrier(&mut client);
+    let entry = status_of(&mut client, &co.0);
+    assert_eq!(entry["run"], "idle", "{entry}");
+    let bool_file = co.at("std/bool.cheby");
+    watched(&client, &bool_file, 2);
+    barrier(&mut client);
+    let entry = status_of(&mut client, &co.0);
+    assert_eq!(entry["run"], "debouncing", "{entry}");
+    hold(&mut client, false);
+    client.stop();
+}
+
+/// A checkout nested in another, such as a worktree under `.claude/`, has
+/// a session of its own, and a change to its `std/` reaches that session
+/// only (D-1704).
+#[test]
+fn nested_checkout_reaches_only_its_session() {
+    let outer = Checkout::new("nest_outer");
+    let nested_dir = outer.at(".claude/worktrees/agent/x");
+    Checkout::fill(&nested_dir);
+    let nested = |file: &str| {
+        file.split('/')
+            .fold(nested_dir.clone(), |path, part| path.join(part))
+    };
+    let (mut client, _) = Client::start(outer.folder(&watching()), Vec::new());
+    open_from_disk(&client, &outer.at("std/list.cheby"), 1);
+    open_from_disk(&client, &nested("std/list.cheby"), 1);
+    let mut roots = vec![root_name(&outer.0), root_name(&nested_dir)];
+    roots.sort();
+    assert_eq!(sessions(&mut client), roots);
+    wait_runs_idle(&mut client);
+    hold(&mut client, true);
+    watched(&client, &nested("std/bool.cheby"), 2);
+    barrier(&mut client);
+    assert_eq!(status_of(&mut client, &nested_dir)["run"], "debouncing");
+    assert_eq!(status_of(&mut client, &outer.0)["run"], "idle");
+    watched(&client, &outer.at("std/bool.cheby"), 2);
+    barrier(&mut client);
+    assert_eq!(status_of(&mut client, &outer.0)["run"], "debouncing");
+    hold(&mut client, false);
+    client.stop();
+}
+
+/// With no watcher, the checkout's sweep stats its `std/` and sees a
+/// closed module changed on disk (D-1374, D-1704).
+#[test]
+fn checkout_sweep_sees_a_changed_std_file() {
+    let co = Checkout::new("sweep");
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(rooted_at(&co.at("std"), &json!({})), Vec::new());
+    open_from_disk(&client, &list, 1);
+    client.wait_publish(&list, |p| p["version"] == 1);
+    let bool_file = co.at("std/bool.cheby");
+    let mut text = std::fs::read_to_string(&bool_file).unwrap();
+    text.push_str("\npub fn probe_broken() -> Int {\n  \"x\"\n}\n");
+    std::fs::write(&bool_file, text).unwrap();
+    let swept = client.wait_publish(&bool_file, has_error);
+    assert!(swept.get("version").is_none_or(Value::is_null), "{swept}");
+    client.stop();
+}
+
+/// With no watcher, the checkout's sweep stats its root `cheby.toml` too,
+/// so a manifest created there ends the checkout at the next sweep, and
+/// the document leaves for single-file mode (D-1699, D-1729). No Windows
+/// ignore, for the reason `checkout_ends_when_no_longer_a_checkout` gives.
+#[test]
+fn checkout_sweep_sees_a_root_manifest() {
+    let co = Checkout::new("sweep_manifest");
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(rooted_at(&co.at("std"), &json!({})), Vec::new());
+    open_from_disk(&client, &list, 1);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    co.write("cheby.toml", MANIFEST);
+    let alone = [root_name(&list)];
+    wait_sessions(&mut client, |roots| roots == alone);
+    client.stop();
+}
+
+/// An edit of an open module that breaks a closed one publishes the closed
+/// one's error (D-1704).
+#[test]
+fn checkout_publishes_a_closed_module_an_edit_broke() {
+    let co = Checkout::new("dependent");
+    let lib = co.write("std/probe_lib.cheby", PROBE_LIB);
+    let dep = co.write("std/probe_dep.cheby", PROBE_DEP);
+    let (mut client, _) = Client::start(co.folder(&watching()), Vec::new());
+    open(&client, &lib, PROBE_LIB, 1);
+    client.wait_publish(&lib, |p| p["version"] == 1);
+    let clean = client.wait_publish(&dep, |_| true);
+    assert!(is_empty(&clean), "{clean}");
+    change(&client, &lib, PROBE_LIB_CHANGED, 2);
+    let broken = later(&mut client, &dep, has_error);
+    assert!(broken.get("version").is_none_or(Value::is_null), "{broken}");
+    client.stop();
+}
+
+/// The test bodies of an open module are checked and those of a closed one
+/// are not, so an error in one is published while its module is open and
+/// cleared by its close, which runs the session though no text changed
+/// (D-1701).
+#[test]
+fn checkout_test_body_errors_follow_open() {
+    let co = Checkout::new("tests");
+    let probe = co.write("std/probe_tests.cheby", PROBE_TESTS);
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(co.folder(&watching()), Vec::new());
+    open_from_disk(&client, &list, 1);
+    client.wait_publish(&list, |p| p["version"] == 1);
+    let closed = client.wait_publish(&probe, |_| true);
+    assert!(is_empty(&closed), "{closed}");
+    open(&client, &probe, PROBE_TESTS, 1);
+    let opened = later(&mut client, &probe, |p| p["version"] == 1);
+    assert!(has_error(&opened), "{opened}");
+    close(&client, &probe);
+    let cleared = later(&mut client, &probe, |p| p["version"].is_null());
+    assert!(is_empty(&cleared), "{cleared}");
+    // The close ran the session, which `list` keeps open.
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    client.stop();
+}
+
+/// A checkout's session outlives its last document's close, as a
+/// package's does, and then ends (D-1375, D-1704).
+#[test]
+fn checkout_session_lingers_then_ends() {
+    let co = Checkout::new("linger");
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(rooted_at(&co.at("std"), &json!({})), Vec::new());
+    open_from_disk(&client, &list, 1);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    close(&client, &list);
+    // The close runs the session (D-1701), so it cannot end before that
+    // run, and its 120 s start after it.
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    wait_sessions(&mut client, <[String]>::is_empty);
+    client.stop();
+}
+
+/// A `cheby.toml` that appears above the checkout's `std/` ends its session
+/// and routes its documents again, and so does a marker file that goes
+/// (D-1699, D-1707).
+///
+/// It runs a package session too, yet carries no Windows ignore, unlike
+/// the manifest tests above: `Client::start` gives the server no
+/// constants child, and the front end that the session runs builds no JIT
+/// code, which only the child's work does (`backend_query`, D-641,
+/// D-1516).
+#[test]
+fn checkout_ends_when_no_longer_a_checkout() {
+    let co = Checkout::new("unroot");
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(co.folder(&watching()), Vec::new());
+    open_from_disk(&client, &list, 1);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    // A package's rules now: `std/list.cheby` is no module of it, and the
+    // folder is a package root with its eager session (D-1375).
+    let manifest = co.write("cheby.toml", MANIFEST);
+    watched(&client, &manifest, 1);
+    let mut both = vec![root_name(&co.0), root_name(&list)];
+    both.sort();
+    assert_eq!(sessions(&mut client), both);
+    assert_eq!(status_of(&mut client, &co.0)["kind"], "package");
+    std::fs::remove_file(&manifest).unwrap();
+    watched(&client, &manifest, 3);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    assert_eq!(status_of(&mut client, &co.0)["kind"], "stdCheckout");
+    // At `std/` itself.
+    let inner = co.write("std/cheby.toml", MANIFEST);
+    watched(&client, &inner, 1);
+    assert_eq!(sessions(&mut client), [root_name(&list)]);
+    std::fs::remove_file(&inner).unwrap();
+    watched(&client, &inner, 3);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    // No watcher reports a marker that goes; the next route sees it.
+    std::fs::remove_file(co.at("crates/cheby_driver/src/std_lib.rs")).unwrap();
+    save(&client, &list);
+    assert_eq!(sessions(&mut client), [root_name(&list)]);
+    client.stop();
+}
+
+/// D-1705: a checkout whose `std/` on disk is the binary's shows nothing;
+/// one with a changed file, an added module or a removed one shows the
+/// warning once at its session's start and has `stdDiffers: true`, and a
+/// session that ends and starts again shows it again.
+#[test]
+fn checkout_std_differs_warns_at_each_start() {
+    let same = Checkout::new("differs_same");
+    let changed = Checkout::new("differs_changed");
+    let added = Checkout::new("differs_added");
+    let removed = Checkout::new("differs_removed");
+    let list_text = std::fs::read_to_string(changed.at("std/list.cheby")).unwrap();
+    changed.write("std/list.cheby", &format!("{list_text}\n"));
+    added.write("std/probe_extra.cheby", "//! Extra.\n");
+    std::fs::remove_file(removed.at("std/bool.cheby")).unwrap();
+    let (mut client, _) = Client::start(rooted_at(&same.0, &json!({})), Vec::new());
+    open_from_disk(&client, &same.at("std/list.cheby"), 1);
+    barrier(&mut client);
+    assert_eq!(differs_shown(&client), 0);
+    assert!(status_of(&mut client, &same.0).get("stdDiffers").is_none());
+    for (shown, co) in [(1, &changed), (2, &added), (3, &removed)] {
+        open_from_disk(&client, &co.at("std/list.cheby"), 1);
+        barrier(&mut client);
+        assert_eq!(differs_shown(&client), shown, "{}", co.0.display());
+        let entry = status_of(&mut client, &co.0);
+        assert_eq!(entry["stdDiffers"], true, "{entry}");
+        assert_eq!(entry["kind"], "stdCheckout", "{entry}");
+    }
+    // The session of `changed` ends after its close, and its next start
+    // warns again.
+    close(&client, &changed.at("std/list.cheby"));
+    let gone = root_name(&changed.0);
+    wait_sessions(&mut client, |roots| !roots.contains(&gone));
+    open_from_disk(&client, &changed.at("std/list.cheby"), 2);
+    barrier(&mut client);
+    assert_eq!(differs_shown(&client), 4);
+    client.stop();
+}
+
+/// D-1706: a move of a checkout's std file, of a folder under its `std/`
+/// or of that `std/` itself answers `null` with the move's warning from
+/// routing alone: with no std document open, so with no session (D-1704),
+/// and with the session alive for a folder, which routes to no session. A
+/// move of a folder outside `std/` is not refused so. A request with
+/// files in a package and in the checkout is refused whole (D-1730).
+#[test]
+fn checkout_moves_are_refused_from_routing() {
+    let co = Checkout::new("moves");
+    let (mut client, _) = Client::start(co.folder(&json!({})), Vec::new());
+    barrier(&mut client);
+    let refused = format!("The imports were not updated: {STD_MOVE}");
+    let shown = |client: &Client| {
+        client
+            .notifications
+            .iter()
+            .filter(|n| n.method == "window/showMessage")
+            .filter(|n| n.params["type"] == 2 && n.params["message"] == refused.as_str())
+            .count()
+    };
+    let moves = |client: &mut Client, old: &str, new: &str| {
+        let files =
+            json!({ "files": [{ "oldUri": uri(&co.at(old)), "newUri": uri(&co.at(new)) }] });
+        let answer = client.request("workspace/willRenameFiles", files).unwrap();
+        assert_eq!(answer, Value::Null, "{old}");
+        barrier(client);
+    };
+    let pairs = [
+        ("std/list.cheby", "std/lists.cheby"),
+        ("std/json", "std/js"),
+        ("std", "stdlib"),
+    ];
+    for (count, (old, new)) in (1..).zip(pairs) {
+        moves(&mut client, old, new);
+        assert_eq!(shown(&client), count, "{old} with no session");
+    }
+    assert_eq!(sessions(&mut client), Vec::<String>::new());
+    moves(&mut client, "crates", "crates_moved");
+    assert_eq!(shown(&client), 3, "a folder outside std/");
+    open_from_disk(&client, &co.at("std/list.cheby"), 1);
+    assert_eq!(sessions(&mut client), [root_name(&co.0)]);
+    for (count, (old, new)) in (4..).zip(pairs) {
+        moves(&mut client, old, new);
+        assert_eq!(shown(&client), count, "{old} with the session");
+    }
+    // A request whose files lie in a package and in the checkout is refused
+    // whole, whichever comes first (D-1730).
+    co.write("docs/examples/x/cheby.toml", MANIFEST);
+    co.write("docs/examples/x/src/main.cheby", MAIN);
+    co.write("docs/examples/x/src/a.cheby", "//! A.\n");
+    let package_move = json!({
+        "oldUri": uri(&co.at("docs/examples/x/src/a.cheby")),
+        "newUri": uri(&co.at("docs/examples/x/src/b.cheby")),
+    });
+    let std_move = json!({
+        "oldUri": uri(&co.at("std/list.cheby")),
+        "newUri": uri(&co.at("std/lists.cheby")),
+    });
+    for (count, files) in (7..).zip([
+        json!([package_move, std_move]),
+        json!([std_move, package_move]),
+    ]) {
+        let answer = client
+            .request("workspace/willRenameFiles", json!({ "files": files }))
+            .unwrap();
+        assert_eq!(answer, Value::Null, "{files}");
+        barrier(&mut client);
+        assert_eq!(shown(&client), count, "{files}");
+    }
+    client.stop();
+}
+
+/// A job of a checkout's session still on the analysis thread when a
+/// `cheby.toml` makes the checkout a package reaches no session: the
+/// package's session made at the same root counts only its own run, and
+/// never takes the checkout's snapshot (D-1699). A checkout's run takes
+/// far longer than the main loop takes for the two notifications, so the
+/// job is still running at the flip. No Windows ignore, for the reason
+/// `checkout_ends_when_no_longer_a_checkout` gives.
+#[test]
+fn checkout_job_in_flight_reaches_no_new_session() {
+    let co = Checkout::new("orphan");
+    let list = co.at("std/list.cheby");
+    let (mut client, _) = Client::start(co.folder(&watching()), Vec::new());
+    open_from_disk(&client, &list, 1);
+    client.wait_publish(&list, |p| p["version"] == 1);
+    wait_runs_idle(&mut client);
+    let before = status_of(&mut client, &co.0)["generation"]
+        .as_u64()
+        .unwrap();
+    let text = std::fs::read_to_string(&list).unwrap();
+    change(&client, &list, &format!("{text}\n"), 2);
+    let manifest = co.write("cheby.toml", MANIFEST);
+    watched(&client, &manifest, 1);
+    barrier(&mut client);
+    assert_eq!(status_of(&mut client, &co.0)["kind"], "package");
+    wait_runs_idle(&mut client);
+    let entry = status_of(&mut client, &co.0);
+    assert_eq!(entry["kind"], "package", "{entry}");
+    assert_eq!(
+        entry["generation"].as_u64().unwrap(),
+        before + 1,
+        "the package's own run only: {entry}"
+    );
     client.stop();
 }

@@ -32,6 +32,10 @@
 //!
 //! The client moves the files whatever the answer, so a move with nothing to
 //! edit has no plan, and a refusal says why.
+//!
+//! In a std checkout's session every move is refused (D-1706): it renames a
+//! std module, which leaves `std_lib.rs`'s list stale, so the refusal says
+//! where std's modules are listed and specified.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -49,6 +53,9 @@ use crate::features::{Analyzed, CancelToken};
 
 /// The directory of a package's modules (§7.2).
 const SOURCE_DIR: &str = "src";
+
+/// D-1706's refusal of a move in a std checkout.
+pub(crate) const STD_MOVE: &str = "std's modules are listed in `crates/cheby_driver/src/std_lib.rs` and specified in `docs/stdlib/`";
 
 /// One module file that a request moves.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,7 +81,8 @@ pub(crate) struct Move {
 /// # Errors
 ///
 /// [`RenameError::Refused`] for a move with no module meaning (D-1675), a
-/// module that does not parse, or an edit that `verify` refuses (D-1389);
+/// move in a std checkout (D-1706), a module that does not parse, or an
+/// edit that `verify` refuses (D-1389);
 /// [`RenameError::Stale`] when a closed file changed on disk, whose
 /// refusal says the imports were not updated (D-1711); and
 /// [`RenameError::Cancelled`].
@@ -84,6 +92,11 @@ pub(crate) fn will_rename(
     cancel: &CancelToken,
 ) -> Result<Option<RenamePlan>, RenameError> {
     let snapshot = &*analyzed.snapshot;
+    // The request reached the checkout's session by its first old path,
+    // a file of the checkout's `std/` (D-1699, D-1706).
+    if snapshot.is_std_checkout() && !requested.is_empty() {
+        return Err(Refusal(STD_MOVE.to_owned()).into());
+    }
     if snapshot.is_single_file() {
         return Ok(None);
     }
@@ -227,7 +240,7 @@ fn onto_modules(snapshot: &Snapshot, moves: &[Move]) -> Result<(), Refusal> {
         let taken = snapshot
             .file_of(&m.new)
             .and_then(|file| snapshot.module_at(file))
-            .is_some_and(ModuleView::is_local);
+            .is_some_and(ModuleView::is_own);
         if !taken {
             continue;
         }
@@ -247,7 +260,7 @@ fn onto_modules(snapshot: &Snapshot, moves: &[Move]) -> Result<(), Refusal> {
 /// The name of the package: the first segment of its modules' paths.
 fn package_name(snapshot: &Snapshot) -> Option<String> {
     snapshot
-        .local_modules()
+        .own_modules()
         .find_map(|view| view.path()?.segments().first().cloned())
 }
 
@@ -257,12 +270,12 @@ fn moved_files<'s>(snapshot: &'s Snapshot, old: &Path) -> Vec<(PathBuf, ModuleVi
     if let Some(view) = snapshot
         .file_of(old)
         .and_then(|file| snapshot.module_at(file))
-        .filter(|view| view.is_local())
+        .filter(|view| view.is_own())
     {
         return vec![(old.to_path_buf(), view)];
     }
     let mut found: Vec<(PathBuf, ModuleView<'s>)> = snapshot
-        .local_modules()
+        .own_modules()
         .filter_map(|view| match snapshot.location(view.file()?)? {
             FileLocation::Package(path) if path.starts_with(old) && path != old => {
                 Some((path.clone(), view))
@@ -381,7 +394,7 @@ fn edits(
 ) -> Result<Vec<PlainEdit>, RenameError> {
     let snapshot = index.snapshot();
     let mut out = Vec::new();
-    for view in snapshot.local_modules() {
+    for view in snapshot.own_modules() {
         cancel.check()?;
         let (Some(file), Some(tree)) = (view.file(), view.tree()) else {
             continue;
@@ -1324,6 +1337,35 @@ mod tests {
             }
             other => panic!("expected stale, got {other:?}"),
         }
+    }
+
+    /// D-1706: in a std checkout's session every move is refused, a file's
+    /// and a folder's, with the message that says where std's modules are
+    /// listed and specified, since a move renames a std module. The server
+    /// refuses them from routing before a session is asked
+    /// (`checkout_moves_are_refused_from_routing`); this is the session's
+    /// own guard.
+    #[test]
+    fn a_move_in_a_std_checkout_is_refused() {
+        let checkout = crate::features::ide::checkout_tests::Checkout::new("file_ops_move");
+        let analyzed = checkout.analyze(&[]);
+        for (old, new) in [
+            ("std/list.cheby", "std/lists.cheby"),
+            ("std/json", "std/js"),
+            ("std/probe_a.cheby", "std/inner/probe_a.cheby"),
+        ] {
+            let pairs = [(checkout.at(old), checkout.at(new))];
+            assert_eq!(
+                will_rename(&analyzed, &pairs, &CancelToken::new()),
+                Err(RenameError::Refused(Refusal(super::STD_MOVE.to_owned()))),
+                "{old}"
+            );
+        }
+        assert_eq!(
+            super::STD_MOVE,
+            "std's modules are listed in `crates/cheby_driver/src/std_lib.rs` and specified in \
+             `docs/stdlib/`"
+        );
     }
 
     /// Paths are shown from the package's root with `/`.

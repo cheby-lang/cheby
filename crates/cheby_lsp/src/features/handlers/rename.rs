@@ -17,6 +17,9 @@
 //!   warning that says so, since an error answer carries no effects, and
 //!   the package is swept first (`Effect::Sweep`, G1 plan §3 E), so the
 //!   next try reads the file again (D-1711).
+//!
+//! In a std checkout's session both run as in a package, over the
+//! checkout's std modules, and `ide::rename` refuses std's API (D-1706).
 
 use std::path::Path;
 

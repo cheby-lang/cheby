@@ -1,0 +1,13 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_hover.cheby
+// @steps: idle
+// @decisions: D-1477, D-1700
+//! Hover in a probe names the module a std item is defined in.
+
+import std::list
+
+pub fn doubled(xs: List<Int>) -> List<Int> {
+  list::map(xs, fn(x) { x * 2 })
+  //    ^ hover
+}

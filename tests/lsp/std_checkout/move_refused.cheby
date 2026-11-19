@@ -1,0 +1,12 @@
+// @package: std-checkout
+// @probes: disk
+// @open: std/probe_move_refused.cheby
+// @steps: willRename std/probe_move_refused.cheby std/probe_moved.cheby
+// @decisions: D-1706
+//! Moving a file of the checkout's `std/` is refused with a message that
+//! says where std's modules are listed and specified, since a move renames
+//! a std module.
+
+pub fn one() -> Int {
+  1
+}

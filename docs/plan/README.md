@@ -453,6 +453,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1716    | `rename_sweep` takes its symbols by a fixed stride; its measured cost is logged                     |
 | D-1721    | The applied-edit check polls `cheby/status` with the `empty` client and compares errors only        |
 | D-1725    | The sweeps shrink to 30 renames per `rename_sweep` trial and 50 per `examples/*` trial              |
+| D-1726    | E0042's help in a std checkout lists the checkout's items, from a list its run owns                 |
 
 ## Open questions
 

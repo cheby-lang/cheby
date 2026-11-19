@@ -12,6 +12,9 @@ use cheby_driver::analysis::{ModulePath, SymbolNs, TextOrigin, exact_key};
 use super::*;
 use crate::child::wire::{FileHash, Sections, WireHash, WireRange, WireValue};
 
+/// A package session's kind, for `Children::status`.
+const PKG: &PackageKind = &PackageKind::Package;
+
 const MAIN: &str = "pub const limit: Int = 20\npub const boom: Int = 1\n";
 
 /// A package directory of its own, emptied first.
@@ -621,7 +624,7 @@ fn package_with_no_constants_starts_no_child() {
         ConstReading::NotYet
     );
     assert_eq!(
-        children.status(&root, true, None, &env(&none), t1)["notEvaluated"],
+        children.status(&root, PKG, None, &env(&none), t1)["notEvaluated"],
         "the package has no constants"
     );
 }
@@ -893,10 +896,10 @@ fn status_names_the_state_and_why_not() {
         &env(&none),
         now,
     );
-    let status = children.status(&root, true, None, &env(&none), now);
+    let status = children.status(&root, PKG, None, &env(&none), now);
     assert_eq!(status["constants"]["state"], "waiting");
     children.schedule(&env(&none), now, &mut Outbox::default());
-    let status = children.status(&root, true, None, &env(&none), now);
+    let status = children.status(&root, PKG, None, &env(&none), now);
     assert_eq!(status["constants"]["state"], "idle");
     assert_eq!(status["constants"]["values"], 1);
     assert!(
@@ -911,12 +914,23 @@ fn status_names_the_state_and_why_not() {
         ..env(&none)
     };
     assert_eq!(
-        children.status(&root, true, None, &off, now)["notEvaluated"],
+        children.status(&root, PKG, None, &off, now)["notEvaluated"],
         "`constants.evaluate` is off"
     );
+    let single = PackageKind::SingleFile {
+        file: root.join("main.cheby"),
+        strict: true,
+    };
     assert_eq!(
-        children.status(&root, false, None, &env(&none), now)["notEvaluated"],
+        children.status(&root, &single, None, &env(&none), now)["notEvaluated"],
         "single-file mode evaluates no constants (D-1371)"
+    );
+    let checkout = PackageKind::StdCheckout {
+        checkout: root.clone(),
+    };
+    assert_eq!(
+        children.status(&root, &checkout, None, &env(&none), now)["notEvaluated"],
+        "a std checkout evaluates no constants (D-1491, D-1700)"
     );
 }
 
@@ -996,7 +1010,7 @@ fn a_value_is_current_only_while_the_modules_it_reaches_are() {
     assert!(!reads_stale(&children, &root, "limit", &saved));
     assert!(!reads_stale(&children, &root, "boom", &saved));
     let stale_status = |editor: &BTreeMap<PathBuf, Hash128>| {
-        children.status(&root, true, Some(editor), &env(&none), now)["constants"]["stale"].clone()
+        children.status(&root, PKG, Some(editor), &env(&none), now)["constants"]["stale"].clone()
     };
     assert_eq!(stale_status(&saved), Value::Bool(false));
     // `util` edited and unsaved: `limit` reaches it, `boom` does not.
@@ -1784,9 +1798,8 @@ mod processes {
                 .reading(&symbol("fresh"), &editor(&root, normalized_key(MAIN)))
         };
         let skipped = |children: &Children| {
-            children.status(&root, true, None, &exe_env, Instant::now())["constants"]["skippedForErrors"]
-                .as_bool()
-                .unwrap()
+            let status = children.status(&root, PKG, None, &exe_env, Instant::now());
+            status["constants"]["skippedForErrors"].as_bool().unwrap()
         };
         let mut now = Instant::now();
         write_main(&root, MAIN);
@@ -2297,9 +2310,8 @@ fn a_save_that_leaves_errors_on_disk_reads_as_skipped() {
             .reading(&symbol(name), &editor(&root, normalized_key(MAIN)))
     };
     let skipped = |children: &Children| {
-        children.status(&root, true, None, &env(&none), Instant::now())["constants"]["skippedForErrors"]
-            .as_bool()
-            .unwrap()
+        let status = children.status(&root, PKG, None, &env(&none), Instant::now());
+        status["constants"]["skippedForErrors"].as_bool().unwrap()
     };
     let broken = ReportFacts {
         disk_unclean: true,
@@ -2417,8 +2429,7 @@ fn values_read_as_stale_while_errors_on_disk_start_no_run() {
         evaluating: false,
     };
     let status_stale = |children: &Children| {
-        children.status(&root, true, None, &env(&none), Instant::now())["constants"]["stale"]
-            .clone()
+        children.status(&root, PKG, None, &env(&none), Instant::now())["constants"]["stale"].clone()
     };
     let util = root.join("src").join("util.cheby");
     let mut now = Instant::now();
@@ -2505,9 +2516,8 @@ fn a_broken_file_with_unsaved_edits_keeps_the_mark() {
             .reading(&symbol("fresh"), &editor(&root, normalized_key(MAIN)))
     };
     let skipped = |children: &Children| {
-        children.status(&root, true, None, &env(&none), Instant::now())["constants"]["skippedForErrors"]
-            .as_bool()
-            .unwrap()
+        let status = children.status(&root, PKG, None, &env(&none), Instant::now());
+        status["constants"]["skippedForErrors"].as_bool().unwrap()
     };
     let util = root.join("src").join("util.cheby");
     let mut now = Instant::now();
@@ -2694,7 +2704,7 @@ fn a_package_with_no_constants_gets_no_mark() {
     );
     now = now.checked_add(COALESCE).unwrap();
     children.schedule(&env(&none), now, &mut Outbox::default());
-    let status = children.status(&root, true, None, &env(&none), now);
+    let status = children.status(&root, PKG, None, &env(&none), now);
     assert_eq!(status["notEvaluated"], "the package has no constants");
     assert_eq!(status["constants"]["skippedForErrors"], false);
     assert!(!children.packages[&root].values.disk_errors);

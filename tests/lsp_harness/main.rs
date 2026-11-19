@@ -2,7 +2,7 @@
 //! stdio, one process per trial (D-1352, docs/plan/testing.md,
 //! `tests/lsp/README.md`). The client is `cheby_test_support::lsp`.
 //!
-//! Ten groups of trials:
+//! Eleven groups of trials:
 //!
 //! - `protocol/<name>`: the handshake, `shutdown` and `exit` and their exit
 //!   codes, the end of input, a frame that is not JSON-RPC (D-1430), error
@@ -38,6 +38,9 @@
 //!   `std_round_trip`, definition on `io::println` leads into std's
 //!   materialized sources, that file is opened, and hover in it answers
 //!   (R-17).
+//! - `std_checkout_sweep`: every module of a copy of this repository's
+//!   `std/`, opened in turn in a std checkout session, leaves every
+//!   published list empty, warnings included (D-1700, D-1704).
 //! - `quality/hover_on_mutants`: the quality gate of plan W7 (`facts.md`
 //!   §0.1, §10). Seeded body mutants of the examples go to a warm server,
 //!   and hover at each identifier of the edited item is graded against
@@ -67,7 +70,10 @@
 //!   form (`editing`). A test's `@steps` run after the opens: waits for
 //!   `cheby/idle` and for a child run to start, edits and saves of files
 //!   the test holds (`tests/lsp/constants/`), files written with no
-//!   notification, closes, and `willRenameFiles` with its moves.
+//!   notification, closes, `willRenameFiles` with its moves, and blocks of
+//!   `cheby/status` and of the published lists. A `@package: std-checkout`
+//!   test runs in a copy of `std/` with probes of its own
+//!   (`case::place_checkout`, D-1699, D-1700).
 //!
 //! Waits (D-1442): a publish comes for each new version of an open
 //! document and after each `didOpen` and `didClose`, but not for a run
@@ -101,8 +107,8 @@
 //! front-end error are ignored too, as their check tests are
 //! (`UiTest::builds_a_jit`). The server never evaluates constants there
 //! (D-1414), so a golden test whose `@steps` wait for the child is ignored
-//! too, and so is `rename_run/*`, which runs `cheby check` and `cheby
-//! run`. The server process never runs generated code (D-1349), so every
+//! too, except in a std checkout, whose session never starts it (D-1700),
+//! and so is `rename_run/*`, which runs `cheby check` and `cheby run`. The server process never runs generated code (D-1349), so every
 //! other trial runs there.
 #![expect(
     clippy::wildcard_enum_match_arm,
@@ -249,6 +255,7 @@ fn main() -> ExitCode {
         ));
     }
     trials.push(quality_trial(&examples, &env, current, &verdicts, bless));
+    trials.push(std_checkout_sweep_trial(&env, current, &verdicts, bless));
     for test in golden_tests {
         trials.push(golden_trial(test, &env, current, &verdicts, bless));
     }
@@ -3142,6 +3149,114 @@ fn compare_parity(
 }
 
 // ---------------------------------------------------------------------
+// std_checkout_sweep
+
+/// The trial `std_checkout_sweep`: every module of a copy of this
+/// repository's `std/` is opened in turn and must leave every published
+/// list empty, warnings included (D-1700, D-1701, D-1702, D-1704).
+fn std_checkout_sweep_trial(
+    env: &Arc<Env>,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+) -> Trial {
+    let name = "std_checkout_sweep".to_owned();
+    let expectation = current.expectation(Milestone::M1);
+    let env = Arc::clone(env);
+    let trial_name = name.clone();
+    // It has no golden. It is front end only, since a checkout session
+    // never starts the constants child (D-1700), so it runs on Windows.
+    trial(
+        name,
+        Milestone::M1,
+        expectation,
+        verdicts,
+        bless,
+        move || {
+            let scratch = Scratch::new(&trial_name)?;
+            std_checkout_sweep(&env, scratch.path())
+        },
+    )
+}
+
+/// [`std_checkout_sweep_trial`]'s body in the empty directory `dir`. Each
+/// module is opened, the server is waited for until `cheby/idle`, every
+/// file's last published list must be empty, since the session publishes
+/// every module (D-1704), and the module is closed again. It is stricter
+/// than `cargo xtask test-std`, which prints errors only, on purpose: the
+/// editor shows warnings. The open module's test bodies are checked
+/// (D-1701), with no body warning (D-1702). The copy's disk is the binary's
+/// std, so no `window/showMessage` may come, D-1705's included. It says on
+/// standard error how long it took.
+fn std_checkout_sweep(env: &Env, dir: &Path) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    case::copy_std(&env.root, dir)?;
+    let modules: Vec<String> = files_with_extension(&dir.join("std"), "cheby")
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .iter()
+        .map(|path| cheby_test_support::display_relative(path, dir))
+        .collect();
+    if modules.is_empty() {
+        return Err("the copy of `std/` holds no module".to_owned());
+    }
+    let (mut client, _) = session(env, dir, ClientKind::Standard, None, None)?;
+    // The checkout's own session, rooted at the copy (D-1704).
+    let mut settle = editing::Settle::new("", true, &client);
+    let mut failures = Vec::new();
+    for module in &modules {
+        let uri = client.open(Path::new(module))?;
+        settle.after(&mut client, &[(uri.clone(), Some(1))])?;
+        settle.wait(&mut client)?;
+        let mut problems = Vec::new();
+        // The session publishes every module, open or closed (D-1704), so a
+        // module never published was never checked.
+        let unpublished: Vec<&String> = modules
+            .iter()
+            .filter(|other| {
+                client
+                    .uri(Path::new(other))
+                    .is_ok_and(|uri| !client.published().contains_key(&uri))
+            })
+            .collect();
+        if !unpublished.is_empty() {
+            problems.push(format!("never published: {unpublished:?}"));
+        }
+        let lists = non_empty_lists(client.published(), client.paths());
+        if lists.as_object().is_some_and(|lists| !lists.is_empty()) {
+            problems.push(serde_json::to_string_pretty(&lists).unwrap_or_default());
+        }
+        let messages = client.take_where(editing::is_show_message);
+        if !messages.is_empty() {
+            problems.push(format!("shown: {}", editing::shown_messages(&messages)));
+        }
+        if !problems.is_empty() {
+            failures.push(format!("with {module} open:\n{}", problems.join("\n")));
+        }
+        drop(client.take_notifications());
+        client.close(&uri)?;
+        settle.after(&mut client, &[(uri, None)])?;
+        settle.wait(&mut client)?;
+        drop(client.take_notifications());
+    }
+    client.shutdown()?.expect(0)?;
+    eprintln!(
+        "std_checkout_sweep: {} modules in {:.1} s",
+        modules.len(),
+        started.elapsed().as_secs_f64()
+    );
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} of {} std modules, each open in turn, left a diagnostic or a message:\n{}",
+            failures.len(),
+            modules.len(),
+            failures.join("\n")
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------
 // golden/*
 
 fn golden_trial(
@@ -3157,26 +3272,36 @@ fn golden_trial(
         Ok(header) => (header.milestone, current.expectation(header.milestone)),
         Err(_) => (Milestone::M1, Expectation::Pass),
     };
-    // D-545, D-1414: the server evaluates no constant on Windows until M6.
-    let ignored = platform::runs_skipped()
-        && test
-            .header
-            .as_ref()
-            .is_ok_and(|header| header.steps.iter().any(waits_for_child));
+    // D-545, D-1414: the server evaluates no constant on Windows until M6,
+    // and a std checkout never starts the child (D-1700).
+    let ignored = test
+        .header
+        .as_ref()
+        .is_ok_and(|header| header.ignored_on(platform::runs_skipped()));
     let env = Arc::clone(env);
     let trial_name = name.clone();
     trial(name, milestone, expectation, verdicts, ignored, move || {
         let bless = bless && expectation != Expectation::Fail;
         let header = test.header.clone()?;
         let scratch = Scratch::new(&trial_name)?;
-        match (test.layout, header.loose) {
-            (Layout::File, false) => {
+        // The texts of a std checkout's open-only probes, never on disk.
+        let mut unsaved = BTreeMap::new();
+        match (test.layout, header.loose, header.checkout.is_some()) {
+            (_, _, true) => {
+                unsaved = case::place_checkout(&env.root, &test, &header, scratch.path())?;
+            }
+            (Layout::File, false, false) => {
                 single_file_package(scratch.path(), case::PACKAGE_NAME, &test.path)?;
             }
-            (Layout::File, true) => loose_file(scratch.path(), &test.path)?,
-            (Layout::Package, false) => copy_dir(&test.path, scratch.path())?,
-            (Layout::Package, true) => {
+            (Layout::File, true, false) => loose_file(scratch.path(), &test.path)?,
+            (Layout::Package, false, false) => copy_dir(&test.path, scratch.path())?,
+            (Layout::Package, true, false) => {
                 return Err("`@package: none` needs a test that is one file".to_owned());
+            }
+            (Layout::Checkout, _, false) => {
+                return Err("a test with a `std/` and no `cheby.toml` needs \
+                            `@package: std-checkout`"
+                    .to_owned());
             }
         }
         if header.bom || header.crlf {
@@ -3191,7 +3316,7 @@ fn golden_trial(
                 std::fs::write(&path, rewritten).map_err(|e| format!("{}: {e}", path.display()))?;
             }
         }
-        let answers = golden_answers(&env, scratch.path(), &header)?;
+        let answers = golden_answers(&env, scratch.path(), &header, &unsaved)?;
         if bless {
             return golden::write(&test.golden(), &answers, false);
         }
@@ -3201,9 +3326,15 @@ fn golden_trial(
 
 /// The golden text of a test: its diagnostics, then one block per marker
 /// and per document request, in file and line order.
-fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String, String> {
+/// `unsaved` holds the texts of a std checkout's open-only probes by path.
+fn golden_answers(
+    env: &Env,
+    dir: &Path,
+    header: &case::Header,
+    unsaved: &BTreeMap<String, String>,
+) -> Result<String, String> {
     let (client, files, capabilities) = golden_session(env, dir, header)?;
-    golden_blocks(env, dir, header, client, &files, &capabilities)
+    golden_blocks(env, dir, header, client, &files, unsaved, &capabilities)
 }
 
 /// A golden test's initialized server, its source files, and the
@@ -3213,10 +3344,12 @@ fn golden_session(
     dir: &Path,
     header: &case::Header,
 ) -> Result<(Client, Vec<String>, Value), String> {
-    let files = if header.loose {
-        loose_sources(dir)?
-    } else {
-        sources(dir)?
+    // A std checkout opens what `@open` names, and starts the server
+    // rooted at the checkout as Zed does for a workspace folder.
+    let files = match (&header.checkout, header.loose) {
+        (Some(checkout), _) => checkout.open.clone(),
+        (None, true) => loose_sources(dir)?,
+        (None, false) => sources(dir)?,
     };
     let mut client = start(env, dir)?;
     if let Some(settings) = &header.settings {
@@ -3268,17 +3401,19 @@ fn marker_range(
 }
 
 /// The blocks of [`golden_answers`], from a `client` that has not opened
-/// `files` yet, of a server that advertised `capabilities`.
+/// `files` yet, of a server that advertised `capabilities`. `unsaved`
+/// holds the texts of a std checkout's open-only probes.
 fn golden_blocks(
     env: &Env,
     dir: &Path,
     header: &case::Header,
     mut client: Client,
     files: &[String],
+    unsaved: &BTreeMap<String, String>,
     capabilities: &Value,
 ) -> Result<String, String> {
     let paths = client.paths().clone();
-    let mut texts = open_as_editor(&mut client, dir, header, files)?;
+    let mut texts = open_as_editor(&mut client, dir, header, files, unsaved)?;
     // The `empty` client does not ask for `cheby/idle`.
     let mut settle = editing::Settle::new(
         &idle_root(header, &texts),
@@ -3308,7 +3443,14 @@ fn golden_blocks(
             .published()
             .get(uri)
             .map_or_default(client::diagnostics_of);
-        for marker in case::markers(&text).map_err(|e| format!("{file}: {e}"))? {
+        // A std checkout's real modules hold no markers, only its probes
+        // do, so a comment of std is never read as one.
+        let markers = if header.checkout.is_none() || case::is_probe(file) {
+            case::markers(&text).map_err(|e| format!("{file}: {e}"))?
+        } else {
+            Vec::new()
+        };
+        for marker in markers {
             let (start, end) = marker_range(&lines, encoding, &marker);
             let (method, mut params) =
                 case::position_params(&marker.name, uri, start, end, &marker.args, &diagnostics)?;
@@ -3353,6 +3495,9 @@ fn golden_blocks(
                 check_range_formatting(&answer, &text, marker.line)
                     .map_err(|e| format!("{}: {e}", marker.label(file)))?;
             }
+            if header.checkout.is_some() {
+                answer = std_ranges_as_text(&answer, &paths, dir, encoding);
+            }
             blocks.push(case::block(&label, &paths.normalize(&answer)));
         }
         let last = lines.position(text.len(), encoding);
@@ -3381,14 +3526,7 @@ fn golden_blocks(
 /// every file with a non-empty one when the session `ended`, then
 /// `blocks`.
 fn golden_text(ended: &Ended, paths: &Paths, blocks: Vec<String>) -> String {
-    let mut published = serde_json::Map::new();
-    for (uri, params) in &ended.published {
-        let list = client::diagnostics_of(params);
-        if !list.is_empty() {
-            published.insert(paths.display(uri), paths.normalize(&Value::Array(list)));
-        }
-    }
-    let mut text = case::block("diagnostics", &Value::Object(published));
+    let mut text = case::block("diagnostics", &non_empty_lists(&ended.published, paths));
     for block in blocks {
         text.push('\n');
         text.push_str(&block);
@@ -3396,27 +3534,53 @@ fn golden_text(ended: &Ended, paths: &Paths, blocks: Vec<String>) -> String {
     text
 }
 
-/// Whether `step` waits for the constants child, which never runs on
-/// Windows until M6 (D-1414).
-const fn waits_for_child(step: &Step) -> bool {
-    matches!(step, Step::Idle | Step::Started | Step::Quiet)
+/// The last published list of every file with a non-empty one, by its
+/// path as goldens show it, from `published`, the latest
+/// `publishDiagnostics` params by URI.
+fn non_empty_lists(published: &BTreeMap<String, Value>, paths: &Paths) -> Value {
+    let mut lists = serde_json::Map::new();
+    for (uri, params) in published {
+        let list = client::diagnostics_of(params);
+        if !list.is_empty() {
+            lists.insert(paths.display(uri), paths.normalize(&Value::Array(list)));
+        }
+    }
+    Value::Object(lists)
 }
 
 /// Opens each of `files` below `dir` as an editor holds it
 /// ([`editor_text`]) and waits for its first publish: their open texts by
-/// path.
+/// path. A file of `unsaved`, a std checkout's open-only probe, is opened
+/// with its text there, since it is not on disk.
 fn open_as_editor(
     client: &mut Client,
     dir: &Path,
     header: &case::Header,
     files: &[String],
+    unsaved: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, String> {
     let mut texts: BTreeMap<String, String> = BTreeMap::new();
     for file in files {
-        let path = dir.join(file);
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = if let Some(text) = unsaved.get(file) {
+            text.clone()
+        } else {
+            let path = dir.join(file);
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?
+        };
         texts.insert(file.clone(), editor_text(&text, header));
+    }
+    if !unsaved.is_empty() {
+        // In `@open`'s order, as the opens of a package are in path order.
+        let mut uris = Vec::with_capacity(files.len());
+        for file in files {
+            let uri = client.uri(Path::new(file))?;
+            client.open_text(&uri, texts.get(file).map_or("", String::as_str))?;
+            uris.push(uri);
+        }
+        for uri in &uris {
+            client.diagnostics(uri, Some(1))?;
+        }
+        return Ok(texts);
     }
     if !(header.bom || header.crlf) {
         open_all(client, files)?;
@@ -3684,6 +3848,11 @@ fn run_step(
         Step::WillRename(moves) => {
             return will_rename_step(client, texts, settle, header, moves).map(Some);
         }
+        Step::Status => return status_step(client).map(Some),
+        Step::Published => {
+            let lists = non_empty_lists(client.published(), client.paths());
+            return Ok(Some(case::block("published", &lists)));
+        }
         Step::Edit(from) => (from, false),
         Step::Save(from) | Step::ZedSave(from) => (from, true),
     };
@@ -3696,6 +3865,7 @@ fn run_step(
     let mut sent = Vec::new();
     for path in found {
         let file = cheby_test_support::display_relative(&path, &base);
+        only_probes(header, from, &file)?;
         if !texts.contains_key(&file) {
             return Err(format!(
                 "`@steps`: `{from}/{file}` is not a source file of the test"
@@ -3741,6 +3911,7 @@ fn write_unseen(dir: &Path, header: &case::Header, from: &str) -> Result<(), Str
     }
     for path in found {
         let file = cheby_test_support::display_relative(&path, &base);
+        only_probes(header, from, &file)?;
         let target = dir.join(&file);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -3749,6 +3920,113 @@ fn write_unseen(dir: &Path, header: &case::Header, from: &str) -> Result<(), Str
         std::fs::write(&target, text).map_err(|e| format!("{}: {e}", target.display()))?;
     }
     Ok(())
+}
+
+/// `answer` of a std checkout test with each range in a real module of
+/// std, beside the `uri` or `targetUri` that names it, shown as the text
+/// it covers, cut at its first line end with ` …` after it, so a golden
+/// does not pin std's line numbers, which any edit above them moves. The
+/// probes keep their ranges. The text is the copy's on disk, which no test
+/// edits.
+fn std_ranges_as_text(answer: &Value, paths: &Paths, dir: &Path, encoding: Encoding) -> Value {
+    match answer {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| std_ranges_as_text(item, paths, dir, encoding))
+                .collect(),
+        ),
+        Value::Object(map) => {
+            let module = ["targetUri", "uri"]
+                .iter()
+                .find_map(|key| map.get(*key))
+                .and_then(Value::as_str)
+                .and_then(|uri| paths.relative(uri))
+                .filter(|path| case::is_std_path(path) && !case::is_probe(path));
+            let text = module.and_then(|path| std::fs::read_to_string(dir.join(path)).ok());
+            let covered = |range: &Value| -> Option<Value> {
+                let text = text.as_deref()?;
+                let start = Position::from_json(range.get("start")?).ok()?;
+                let end = Position::from_json(range.get("end")?).ok()?;
+                let lines = Lines::new(text, Bom::Counted);
+                let (from, to) = (lines.offset(start, encoding), lines.offset(end, encoding));
+                let slice = text.get(from..to)?;
+                Some(Value::String(match slice.split_once('\n') {
+                    Some((first, _)) => format!("{first} …"),
+                    None => slice.to_owned(),
+                }))
+            };
+            Value::Object(
+                map.iter()
+                    .map(|(key, value)| {
+                        let shown = match key.as_str() {
+                            "range" | "targetRange" | "targetSelectionRange" => covered(value),
+                            _ => None,
+                        };
+                        (
+                            key.clone(),
+                            shown
+                                .unwrap_or_else(|| std_ranges_as_text(value, paths, dir, encoding)),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        other => other.clone(),
+    }
+}
+
+/// In a std checkout, a step's `DIR/` may hold probes only: the real
+/// modules are opened and expected clean, never edited, so no committed
+/// copy of one rots as std changes.
+fn only_probes(header: &case::Header, from: &str, file: &str) -> Result<(), String> {
+    if header.checkout.is_some() && !case::is_probe(file) {
+        return Err(format!(
+            "`@steps`: `{from}/{file}` is not a probe, and a std checkout test edits only its \
+             probes"
+        ));
+    }
+    Ok(())
+}
+
+/// A `status` step's block: each package that `cheby/status` lists, by
+/// its root as goldens show paths, its `kind`, and `stdDiffers` where the
+/// server sets it (D-1705), sorted by root, and every `window/showMessage`
+/// the server has sent since it started, such as D-1705's warning. The
+/// other fields of `cheby/status` depend on the platform and on timing.
+fn status_step(client: &mut Client) -> Result<String, String> {
+    let status = client.request("cheby/status", Value::Null)?;
+    let mut packages: Vec<Value> = status
+        .get("packages")
+        .and_then(Value::as_array)
+        .map_or_default(|packages| {
+            packages
+                .iter()
+                .map(|package| {
+                    let mut entry = serde_json::Map::new();
+                    for key in ["root", "kind", "stdDiffers"] {
+                        if let Some(value) = package.get(key) {
+                            entry.insert(key.to_owned(), value.clone());
+                        }
+                    }
+                    client.normalize(&Value::Object(entry))
+                })
+                .collect()
+        });
+    packages.sort_by_key(|package| package.get("root").map(Value::to_string));
+    // From every message read, since a wait for `cheby/idle` drops the
+    // notifications it passes.
+    let shown: Vec<Value> = client
+        .received()
+        .iter()
+        .filter(|m| editing::is_show_message(m))
+        .cloned()
+        .collect();
+    let messages = editing::shown_messages(&shown);
+    Ok(case::block(
+        "status",
+        &json!({ "packages": packages, "showMessage": messages }),
+    ))
 }
 
 /// A call hierarchy marker's answer: `follow_up` sent with each item that

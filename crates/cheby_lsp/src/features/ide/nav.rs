@@ -566,6 +566,10 @@ impl<'a> Places<'a> {
             .and_then(|m| m.file)
         {
             Some(file) => NavFile::Run(file),
+            // A std checkout that lacks the home module has no target: a
+            // jump inside std stays in the checkout, never in the binary's
+            // copy (D-1703).
+            None if self.snapshot().is_std_checkout() => return Vec::new(),
             None => NavFile::Std(std_lib::display_path(segment)),
         };
         vec![NavTarget {

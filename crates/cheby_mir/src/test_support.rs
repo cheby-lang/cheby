@@ -512,7 +512,7 @@ fn lower_package_with(
             globals: &globals,
             std: StdCatalog {
                 known: &known_refs,
-                items: None,
+                items: cheby_resolve::StdItems::None,
             },
             package_targets: cheby_package::Targets::ALL,
         };

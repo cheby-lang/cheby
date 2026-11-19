@@ -582,12 +582,14 @@ impl Cx<'_> {
     /// ` = value` after the initializer of each constant of the module
     /// whose value reads current in the snapshot (D-1510, D-1679). Only a
     /// module of the package: a dependency's and std's constants are not
-    /// evaluated. A constant whose initializer is a literal is skipped.
+    /// evaluated, nor are those of a std checkout, whose modules are the
+    /// session's own (D-1700). A constant whose initializer is a literal
+    /// is skipped.
     fn constant_values(&self, values: &ConstValues, out: &mut Vec<Hint>) {
         let (Some(tree), Some(resolved)) = (self.view.tree(), self.view.resolved()) else {
             return;
         };
-        if !self.view.is_local() {
+        if !self.view.is_own() || self.snapshot.is_std_checkout() {
             return;
         }
         for (index, item) in resolved.items.iter_enumerated() {

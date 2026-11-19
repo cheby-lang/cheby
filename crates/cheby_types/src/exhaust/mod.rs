@@ -99,7 +99,10 @@ pub enum MissingPat {
 }
 
 /// Checks every `case`, `let`, `let assert` and parameter pattern of
-/// `body`, which has no other errors and closed types.
+/// `body`, which has no other errors and closed types. `std_test` says
+/// that `body` is a test body of a std module (`PackageId::STD`), where
+/// W0008 and W0010 are not reported, as D-479's other warnings are not
+/// (D-1702). Its errors, E0060 and E0061, are.
 ///
 /// # Errors
 ///
@@ -109,8 +112,15 @@ pub(crate) fn check_body(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
     body: &thir::Body,
+    std_test: bool,
 ) -> Result<Vec<Diagnostic>, Ice> {
-    check(&TyCx::new(input, own), body)
+    let mut diags = check(&TyCx::new(input, own), body)?;
+    if std_test {
+        diags.retain(|diag| {
+            diag.code != codes::IRREFUTABLE_LET_ASSERT && diag.code != codes::UNREACHABLE_ARM
+        });
+    }
+    Ok(diags)
 }
 
 /// A [`CaseFact`] for each `case` with subjects among `nodes`, sorted by

@@ -617,6 +617,65 @@ fn a_field_with_an_unknown_receiver_is_refused() {
     );
 }
 
+/// D-1727: an item does not count a field position of its name whose
+/// receiver is unknown, which cannot name it (D-061), while a field of
+/// that name stays refused (above).
+#[test]
+fn an_item_ignores_a_field_with_an_unknown_receiver() {
+    let text = "type Holder<T> {\n  item: T,\n}\n\ntype Point {\n  x: Int,\n  y: Int,\n}\n\nfn empty<T>(_items: List<T>) -> Holder<T> {\n  panic as \"never called\"\n}\n\nfn ‸x() -> Int {\n  0\n}\n\nfn main() {\n  let holder = empty([])\n  let moved = Holder { ..holder, item.x: 1 }\n  let typed: Holder<Point> = moved\n  assert typed.item.y == x()\n}\n";
+    assert_eq!(
+        renamed(text, "left"),
+        text.replace(CURSOR, "")
+            .replace("fn x()", "fn left()")
+            .replace("== x()", "== left()")
+    );
+    let field = text.replace(CURSOR, "").replace("  x: Int", "  ‸x: Int");
+    assert_eq!(
+        refused(&[("main.cheby", &field)], "left"),
+        "cannot tell what `.x` at `src/main.cheby:20` refers to"
+    );
+}
+
+/// D-1727: a punned field whose receiver is unknown still names the value
+/// it puns, so an item's rename spells the field out, while the field's
+/// rename stays refused.
+#[test]
+fn an_item_renames_a_punned_field_with_an_unknown_receiver() {
+    let text = "type Holder<T> {\n  item: T,\n}\n\ntype Point {\n  x: Int,\n  y: Int,\n}\n\nfn empty<T>(_items: List<T>) -> Holder<T> {\n  panic as \"never called\"\n}\n\nconst ‸x: Int = 0\n\nfn main() {\n  let holder = empty([])\n  let moved = Holder { ..holder, item.x }\n  let typed: Holder<Point> = moved\n  assert typed.item.y == x\n}\n";
+    assert_eq!(
+        renamed(text, "left"),
+        text.replace(CURSOR, "")
+            .replace("const x", "const left")
+            .replace("item.x }", "item.x: left }")
+            .replace("== x\n", "== left\n")
+    );
+    let field = text.replace(CURSOR, "").replace("  x: Int,", "  ‸x: Int,");
+    assert_eq!(
+        refused(&[("main.cheby", &field)], "left"),
+        "cannot tell what `.x` at `src/main.cheby:18` refers to"
+    );
+}
+
+/// D-1727: a punned field whose receiver and value are both unknown still
+/// counts against an item of its name.
+#[test]
+fn a_punned_field_unknown_both_ways_refuses_an_item() {
+    let main = "import app::util\nimport app::caller\n\nfn main() {\n  assert util::x() == caller::call()\n}\n";
+    let caller = "//! Caller.\n\ntype Holder<T> {\n  item: T,\n}\n\ntype Point {\n  x: Int,\n  y: Int,\n}\n\nfn empty<T>(_items: List<T>) -> Holder<T> {\n  panic as \"never called\"\n}\n\npub fn call() -> Int {\n  let holder = empty([])\n  let moved = Holder { ..holder, item.x }\n  let typed: Holder<Point> = moved\n  typed.item.y\n}\n";
+    let util = UTIL.replace("fn foo", "fn ‸x");
+    assert_eq!(
+        refused(
+            &[
+                ("main.cheby", main),
+                ("caller.cheby", caller),
+                ("util.cheby", &util)
+            ],
+            "left",
+        ),
+        "cannot tell what `.x` at `src/caller.cheby:18` refers to"
+    );
+}
+
 /// D-1391: renaming an interface function renames the functions that
 /// satisfy it, through an interface that embeds it too (D-1552).
 #[test]
@@ -1194,4 +1253,638 @@ fn a_name_in_an_unknown_attribute_is_no_rename_target() {
     let text = "@std_hooks(‸same)\npub type Pair {\n  Pair(Int, Int),\n}\n\npub fn same(a: Pair, b: Pair) -> Bool {\n  a == b\n}\n\nfn main() {\n  assert same(Pair(1, 2), Pair(1, 2))\n}\n";
     let case = Case::new(&[("main.cheby", text)]);
     assert_eq!(case.prepare(), Ok(None));
+}
+
+/// The rename tests in a std checkout's session (D-1706): the repository's
+/// `std/` copied beside D-1699's marker, with probe modules of the tests'
+/// own, as `ide::checkout_tests` makes it. Each runs only the front end,
+/// so it runs on Windows too (D-1516, ws-plan §9).
+mod checkout {
+    use std::path::{Path, PathBuf};
+
+    use cheby_driver::analysis::{DefId, DefKind, FileId, TextRange, TextSize};
+
+    use super::super::{RenameError, RenamePlan, prepare, rename, satisfied};
+    use super::CURSOR;
+    use crate::features::ide::Refusal;
+    use crate::features::ide::checkout_tests::Checkout;
+    use crate::features::{Analyzed, CancelToken};
+
+    /// Where std's API also lives, as D-1706's refusals end.
+    const API: &str = "std's API also lives in `docs/stdlib/`, the examples and the tests";
+
+    /// A probe with std's API and a satisfaction nothing uses.
+    const PROBE_API: &str = "//! A probe of the rename tests: std's API and a satisfaction.
+
+import std::int
+
+/// A text for a value.
+interface Shown {
+  fn shown(Self) -> String
+}
+
+/// A length.
+type Meter {
+  Meter(Int),
+}
+
+/// A length as text, which makes `Meter` satisfy `Shown`.
+fn shown(m: Meter) -> String {
+  let Meter(n) = m
+  \"{n} m\"
+}
+
+/// A point.
+pub type Pt {
+  px: Int,
+}
+
+/// A mark.
+pub type Mark {
+  Mark(Int),
+}
+
+/// The origin.
+pub fn origin() -> Pt {
+  Pt { px: 0 }
+}
+";
+
+    /// A probe whose type has hooks that are `priv` functions, and a
+    /// function with a body whose parameter `@std_clamped` names.
+    /// A probe of the rename tests: names that `@std_call_site` and
+    /// `@std_initializer` give (D-1706).
+    const PROBE_SITES: &str = "//! A probe of the rename tests: a call site and an initializer.
+
+import std::context
+
+/// Returns `x`, through the function its call site names.
+@std_call_site(echo_at)
+pub fn echo(x: Int) -> Int {
+  let _ = x
+  panic as \"the compiler did not replace this call\"
+}
+
+/// What a call of `echo` does.
+fn echo_at(x: Int, path: String, line: Int, column: Int) -> Int {
+  let _ = (path, line, column)
+  x
+}
+
+/// Returns a key, through the function its initializer names.
+@std_initializer(cell_at)
+pub fn cell<T>(default: T) -> context::Key<T> {
+  let _ = default
+  panic as \"the compiler did not replace this call\"
+}
+
+/// What a call of `cell` gives.
+fn cell_at<T>(default: T, path: String, type_text: String) -> context::Key<T> {
+  context::key_at(default, path, type_text)
+}
+";
+
+    const PROBE_HOOKS: &str = "//! A probe of the rename tests: hooks and a clamped parameter.
+
+import std::int
+
+/// A gauge, compared, hashed and printed through its hooks.
+@std_hooks(gauge_equal, gauge_hash, gauge_debug)
+type Gauge {
+  Gauge(Int),
+}
+
+priv fn gauge_equal(a: Gauge, b: Gauge) -> Bool {
+  let Gauge(x) = a
+  let Gauge(y) = b
+  x == y
+}
+
+priv fn gauge_hash(g: Gauge) -> Int {
+  let Gauge(x) = g
+  x
+}
+
+priv fn gauge_debug(g: Gauge) -> String {
+  let Gauge(x) = g
+  \"g{x}\"
+}
+
+/// `count` plus one, at least one.
+@std_clamped(count)
+fn bumped(count: Int) -> Int {
+  let next = count + 1
+  next
+}
+
+test \"gauges\" {
+  assert Gauge(1) == Gauge(1) && bumped(1) == 2
+}
+";
+
+    /// A probe with a package-visible record type.
+    const PROBE_CELL: &str = "//! A probe of the rename tests: a record type.
+
+/// A cell with a weight.
+type Cell {
+  probe_weight: Int,
+}
+
+/// A cell of weight `n`.
+fn cell(n: Int) -> Cell {
+  Cell { probe_weight: n }
+}
+";
+
+    /// A probe whose test body reads the field of `PROBE_CELL`'s type.
+    const PROBE_READER: &str = "//! A probe of the rename tests: a test that reads a field.
+
+import std::probe_cell
+
+test \"weight\" {
+  let c = probe_cell::cell(1)
+  assert c.probe_weight == 1
+}
+";
+
+    /// A probe with a function named as `PROBE_CELL`'s field.
+    const PROBE_WEIGHER: &str = "//! A probe of the rename tests: a function named as a field.
+
+/// A weight.
+fn probe_weight() -> Int {
+  1
+}
+
+/// Twice the weight.
+fn doubled_weight() -> Int {
+  probe_weight() * 2
+}
+";
+
+    /// A checkout with `probes` on disk, beside `ide::checkout_tests`'s
+    /// two, and the files of `open` open with their disk text.
+    struct Case {
+        checkout: Checkout,
+        analyzed: Analyzed,
+    }
+
+    impl Case {
+        fn new(name: &str, probes: &[(&str, &str)], open: &[&str]) -> Self {
+            let checkout = Checkout::new(name);
+            for (display, text) in probes {
+                std::fs::write(checkout.at(display), text).unwrap();
+            }
+            let texts: Vec<(&str, String)> = open
+                .iter()
+                .map(|display| (*display, checkout.read(display)))
+                .collect();
+            let open: Vec<(&str, &str)> = texts.iter().map(|(d, t)| (*d, t.as_str())).collect();
+            let analyzed = checkout.analyze(&open);
+            Self { checkout, analyzed }
+        }
+
+        /// The file at `display` and the offset of the cursor in `needle`,
+        /// which occurs once in the file's text with the cursor taken out.
+        #[track_caller]
+        fn point(&self, display: &str, needle: &str) -> (FileId, TextSize) {
+            let text = self.checkout.read(display);
+            let bar = needle.find(CURSOR).expect("a cursor");
+            let plain = needle.replace(CURSOR, "");
+            assert_eq!(text.matches(&plain).count(), 1, "`{plain}` occurs once");
+            let at = text.find(&plain).unwrap().checked_add(bar).unwrap();
+            let file = self
+                .analyzed
+                .snapshot
+                .file_of(&self.checkout.at(display))
+                .expect("a file of the session");
+            (file, TextSize::try_from(at).unwrap())
+        }
+
+        fn prepare(
+            &self,
+            display: &str,
+            needle: &str,
+        ) -> Result<Option<(TextRange, String)>, Refusal> {
+            let (file, offset) = self.point(display, needle);
+            prepare(&self.analyzed, file, offset)
+        }
+
+        fn rename(
+            &self,
+            display: &str,
+            needle: &str,
+            new: &str,
+        ) -> Result<Option<RenamePlan>, RenameError> {
+            let (file, offset) = self.point(display, needle);
+            rename(&self.analyzed, file, offset, new, &CancelToken::new())
+        }
+
+        /// The plan of a rename that must be accepted.
+        #[track_caller]
+        fn plan(&self, display: &str, needle: &str, new: &str) -> RenamePlan {
+            match self.rename(display, needle, new) {
+                Ok(Some(plan)) => plan,
+                other => panic!("expected a plan, got {other:?}"),
+            }
+        }
+
+        /// The message of a name that `prepareRename` and `rename` both
+        /// refuse, which must be the same.
+        #[track_caller]
+        fn refused(&self, display: &str, needle: &str, new: &str) -> String {
+            let at_prepare = match self.prepare(display, needle) {
+                Err(Refusal(message)) => message,
+                other => panic!("expected prepare to refuse, got {other:?}"),
+            };
+            match self.rename(display, needle, new) {
+                Err(RenameError::Refused(Refusal(message))) => {
+                    assert_eq!(message, at_prepare);
+                    message
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
+
+        /// The message of a rename that must be refused, whatever
+        /// `prepareRename` says.
+        #[track_caller]
+        fn rename_refused(&self, display: &str, needle: &str, new: &str) -> String {
+            match self.rename(display, needle, new) {
+                Err(RenameError::Refused(Refusal(message))) => message,
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
+
+        /// The checkout's directory.
+        fn root(&self) -> PathBuf {
+            self.checkout.at("std").parent().unwrap().to_path_buf()
+        }
+
+        /// Each file `plan` edits, by display path, with its disk text and
+        /// the edits applied, sorted by path.
+        fn applied(&self, plan: &RenamePlan) -> Vec<(String, String)> {
+            let root = self.root();
+            let mut paths: Vec<&Path> = plan.edits.iter().map(|e| e.path.as_path()).collect();
+            paths.dedup();
+            paths
+                .into_iter()
+                .map(|path| {
+                    let display = path
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let mut text = std::fs::read_to_string(path).unwrap();
+                    let mut edits: Vec<_> = plan.edits.iter().filter(|e| e.path == path).collect();
+                    edits.sort_by_key(|e| std::cmp::Reverse(e.range.start()));
+                    for edit in edits {
+                        let start = usize::try_from(edit.range.start()).unwrap();
+                        let end = usize::try_from(edit.range.end()).unwrap();
+                        text.replace_range(start..end, &edit.replacement);
+                    }
+                    (display, text)
+                })
+                .collect()
+        }
+    }
+
+    /// D-1706: std's API is refused at `prepareRename` and at `rename`, with
+    /// the message that it also lives in `docs/stdlib/`, the examples and
+    /// the tests: a `pub` item, a constructor and a field of a `pub` type,
+    /// and an interface function, `pub` or not.
+    #[test]
+    fn checkout_refuses_std_api() {
+        let case = Case::new(
+            "rename_api",
+            &[("std/probe_api.cheby", PROBE_API)],
+            &["std/probe_api.cheby", "std/list.cheby"],
+        );
+        let api = "std/probe_api.cheby";
+        assert_eq!(
+            case.refused("std/list.cheby", "pub fn ‸map<", "transform"),
+            format!("`list::map` is `pub`: {API}")
+        );
+        assert_eq!(
+            case.refused(api, "pub fn ‸origin", "zero"),
+            format!("`probe_api::origin` is `pub`: {API}")
+        );
+        assert_eq!(
+            case.refused(api, "pub type ‸Pt", "Spot"),
+            format!("`probe_api::Pt` is `pub`: {API}")
+        );
+        assert_eq!(
+            case.refused(api, "  ‸Mark(Int)", "Tick"),
+            format!("`Mark` is a constructor of the `pub` type `Mark`: {API}")
+        );
+        assert_eq!(
+            case.refused(api, "  ‸px: Int", "x_pos"),
+            format!("`px` is a field of the `pub` type `Pt`: {API}")
+        );
+        assert_eq!(
+            case.refused(api, "Pt { ‸px: 0 }", "x_pos"),
+            format!("`px` is a field of the `pub` type `Pt`: {API}")
+        );
+        assert_eq!(
+            case.refused(api, "fn ‸shown(Self)", "text"),
+            format!("`shown` is a function of the interface `Shown`: {API}")
+        );
+        // From a use in another module, the refusal is the same.
+        assert_eq!(
+            case.refused("std/probe_b.cheby", "list::‸map(doubled", "transform"),
+            format!("`list::map` is `pub`: {API}")
+        );
+    }
+
+    /// D-1706: a function that makes a type satisfy an interface is refused,
+    /// naming the interface, though nothing in the session uses the
+    /// satisfaction (D-1391's note does not apply). The type and the
+    /// interface themselves are package-visible, and rename.
+    #[test]
+    fn checkout_refuses_a_satisfier() {
+        let case = Case::new(
+            "rename_satisfier",
+            &[("std/probe_api.cheby", PROBE_API)],
+            &["std/probe_api.cheby"],
+        );
+        let api = "std/probe_api.cheby";
+        assert_eq!(
+            case.refused(api, "fn ‸shown(m: Meter)", "text"),
+            "`shown` makes `Meter` satisfy `Shown`, which packages outside the checkout may use"
+        );
+        let plan = case.plan(api, "type ‸Meter", "Metre");
+        assert_eq!(
+            case.applied(&plan),
+            [(
+                api.to_owned(),
+                PROBE_API
+                    .replace("type Meter", "type Metre")
+                    .replace("m: Meter", "m: Metre")
+            )]
+        );
+    }
+
+    /// D-1706, D-1700: a package-visible helper renames across two std
+    /// modules, a `priv` one in its own, and a parameter and a local in
+    /// their function, each checked by `verify` over the checkout.
+    #[test]
+    fn checkout_renames_helpers_locals_and_parameters() {
+        let case = Case::new(
+            "rename_helpers",
+            &[],
+            &["std/probe_a.cheby", "std/probe_b.cheby"],
+        );
+        let a = case.checkout.read("std/probe_a.cheby");
+        let b = case.checkout.read("std/probe_b.cheby");
+        let plan = case.plan("std/probe_a.cheby", "fn ‸helper(", "doubler");
+        assert_eq!(
+            case.applied(&plan),
+            [
+                (
+                    "std/probe_a.cheby".to_owned(),
+                    a.replace("helper(", "doubler(")
+                ),
+                (
+                    "std/probe_b.cheby".to_owned(),
+                    b.replace("helper(", "doubler(")
+                ),
+            ]
+        );
+        let plan = case.plan("std/probe_a.cheby", "priv fn ‸secret", "twice");
+        assert_eq!(
+            case.applied(&plan),
+            [("std/probe_a.cheby".to_owned(), a.replace("secret", "twice"))]
+        );
+        let plan = case.plan("std/probe_a.cheby", "fn helper(‸xs", "items");
+        assert_eq!(
+            case.applied(&plan),
+            [(
+                "std/probe_a.cheby".to_owned(),
+                a.replace("(xs: List", "(items: List")
+                    .replace("map(xs,", "map(items,")
+            )]
+        );
+        let plan = case.plan("std/probe_b.cheby", "let ‸doubled", "twofold");
+        assert_eq!(
+            case.applied(&plan),
+            [(
+                "std/probe_b.cheby".to_owned(),
+                b.replace("let doubled", "let twofold")
+                    .replace("map(doubled", "map(twofold")
+            )]
+        );
+    }
+
+    /// D-1706: a package-visible item of `std::json::tree`, renamed from
+    /// `std::json`, is written in both modules, and nowhere else.
+    #[test]
+    fn checkout_renames_a_json_tree_item_from_json() {
+        let case = Case::new("rename_json", &[], &["std/json.cheby"]);
+        let plan = case.plan(
+            "std/json.cheby",
+            "to_value(document: tree::Tree) -> Value {\n  tree::‸rebuild(",
+            "rebuild_with",
+        );
+        let mut edited: Vec<String> = case.applied(&plan).into_iter().map(|(d, _)| d).collect();
+        edited.sort();
+        assert_eq!(edited, ["std/json.cheby", "std/json/tree.cheby"]);
+        for (display, text) in case.applied(&plan) {
+            let before = case.checkout.read(&display);
+            // Doc comments keep the old name (D-1672).
+            let expected = before
+                .replace("fn rebuild<", "fn rebuild_with<")
+                .replace("rebuild(", "rebuild_with(");
+            assert!(text == expected, "{display} is not as expected");
+        }
+    }
+
+    /// D-1706 (S-Q13 A): a name in a std-only attribute is an occurrence,
+    /// written with the rest and never refused: a `priv` hook of
+    /// `@std_hooks`, renamed from its declaration and from the attribute,
+    /// and a parameter that `@std_clamped` names on a function with a
+    /// body.
+    #[test]
+    fn checkout_renames_names_in_std_attributes() {
+        let probe = "std/probe_hooks.cheby";
+        let case = Case::new("rename_attrs", &[(probe, PROBE_HOOKS)], &[probe]);
+        let renamed = PROBE_HOOKS.replace("gauge_equal", "gauge_same");
+        let plan = case.plan(probe, "priv fn ‸gauge_equal", "gauge_same");
+        assert_eq!(case.applied(&plan), [(probe.to_owned(), renamed.clone())]);
+        let (range, old) = case
+            .prepare(probe, "@std_hooks(‸gauge_equal")
+            .unwrap()
+            .expect("a name");
+        assert_eq!(old, "gauge_equal");
+        let (_, at) = case.point(probe, "@std_hooks(‸gauge_equal");
+        assert_eq!(range.start(), at);
+        let plan = case.plan(probe, "@std_hooks(‸gauge_equal", "gauge_same");
+        assert_eq!(case.applied(&plan), [(probe.to_owned(), renamed)]);
+        // The doc comment keeps the old name (D-1672).
+        let clamped = PROBE_HOOKS
+            .replace("(count)", "(amount)")
+            .replace("(count: Int)", "(amount: Int)")
+            .replace("count + 1", "amount + 1");
+        let plan = case.plan(probe, "fn bumped(‸count", "amount");
+        assert_eq!(case.applied(&plan), [(probe.to_owned(), clamped.clone())]);
+        let plan = case.plan(probe, "@std_clamped(‸count)", "amount");
+        assert_eq!(case.applied(&plan), [(probe.to_owned(), clamped)]);
+    }
+
+    /// D-1706: the names that `@std_call_site` and `@std_initializer` give
+    /// are occurrences, renamed with their function from its declaration
+    /// and from the attribute.
+    #[test]
+    fn checkout_renames_call_site_and_initializer_names() {
+        let probe = "std/probe_sites.cheby";
+        let case = Case::new("rename_sites", &[(probe, PROBE_SITES)], &[probe]);
+        for (old, new, needles) in [
+            (
+                "echo_at",
+                "echo_here",
+                ["fn ‸echo_at(", "@std_call_site(‸echo_at)"],
+            ),
+            (
+                "cell_at",
+                "cell_here",
+                ["fn ‸cell_at<", "@std_initializer(‸cell_at)"],
+            ),
+        ] {
+            let renamed = PROBE_SITES.replace(old, new);
+            for needle in needles {
+                let plan = case.plan(probe, needle, new);
+                assert_eq!(
+                    case.applied(&plan),
+                    [(probe.to_owned(), renamed.clone())],
+                    "{needle}"
+                );
+            }
+        }
+    }
+
+    /// D-1706: a parameter that `@std_clamped` names on a function with no
+    /// body is a label the index does not record in the attribute, so its
+    /// rename is refused, from the parameter and from the attribute.
+    #[test]
+    fn checkout_refuses_a_clamped_label() {
+        let case = Case::new("rename_label", &[], &["std/runtime.cheby"]);
+        let refusal = "`count` is named in `@std_clamped` of a function with no body, \
+                       where rename cannot edit it";
+        let runtime = "std/runtime.cheby";
+        assert_eq!(
+            case.refused(runtime, "fn set_thread_count(‸count: Int)", "threads"),
+            refusal
+        );
+        assert_eq!(
+            case.refused(runtime, "@std_clamped(‸count)", "threads"),
+            refusal
+        );
+    }
+
+    /// D-1706, D-1390, D-1701 (WR-6): a field whose name a closed module's
+    /// test body reads has no known receiver there, since that body is not
+    /// typed, so its rename is refused with D-1390's message; with that
+    /// module open, its test body is typed and the rename writes it.
+    #[test]
+    fn checkout_field_in_a_closed_test_body_is_refused() {
+        let probes = [
+            ("std/probe_cell.cheby", PROBE_CELL),
+            ("std/probe_reader.cheby", PROBE_READER),
+        ];
+        let closed = Case::new("rename_field_closed", &probes, &["std/probe_cell.cheby"]);
+        assert_eq!(
+            closed.rename_refused("std/probe_cell.cheby", "  ‸probe_weight: Int", "heft"),
+            "cannot tell what `.probe_weight` at `std/probe_reader.cheby:7` refers to"
+        );
+        let open = Case::new(
+            "rename_field_open",
+            &probes,
+            &["std/probe_cell.cheby", "std/probe_reader.cheby"],
+        );
+        let plan = open.plan("std/probe_cell.cheby", "  ‸probe_weight: Int", "heft");
+        assert_eq!(
+            open.applied(&plan),
+            [
+                (
+                    "std/probe_cell.cheby".to_owned(),
+                    PROBE_CELL.replace("probe_weight", "heft")
+                ),
+                (
+                    "std/probe_reader.cheby".to_owned(),
+                    PROBE_READER.replace("probe_weight", "heft")
+                ),
+            ]
+        );
+    }
+
+    /// D-1727: an item does not count a field position of its name in a
+    /// closed module's test body, which is not typed (D-1701) and cannot
+    /// name the item (D-061), so it renames, writing neither that body nor
+    /// the field; renaming the field stays refused there.
+    #[test]
+    fn checkout_item_named_as_a_field_in_a_closed_test_body() {
+        let weigher = "std/probe_weigher.cheby";
+        let probes = [
+            ("std/probe_cell.cheby", PROBE_CELL),
+            ("std/probe_reader.cheby", PROBE_READER),
+            (weigher, PROBE_WEIGHER),
+        ];
+        let case = Case::new(
+            "rename_item_field",
+            &probes,
+            &[weigher, "std/probe_cell.cheby"],
+        );
+        let plan = case.plan(weigher, "fn ‸probe_weight()", "heft");
+        assert_eq!(
+            case.applied(&plan),
+            [(
+                weigher.to_owned(),
+                PROBE_WEIGHER.replace("probe_weight", "heft")
+            )]
+        );
+        assert_eq!(
+            case.rename_refused("std/probe_cell.cheby", "  ‸probe_weight: Int", "heft"),
+            "cannot tell what `.probe_weight` at `std/probe_reader.cheby:7` refers to"
+        );
+        // The case the review found in std: `std/ordered_map.cheby`'s test
+        // bodies read a field `next` while it is closed.
+        let json = Case::new("rename_item_next", &[], &["std/json.cheby"]);
+        let plan = json.plan("std/json.cheby", "priv fn ‸next(", "advance");
+        let edited: Vec<String> = json.applied(&plan).into_iter().map(|(d, _)| d).collect();
+        assert_eq!(edited, ["std/json.cheby"]);
+    }
+
+    /// D-1728: when rename cannot read which interfaces a function
+    /// satisfies, it refuses with a text of its own. Here the module it
+    /// reads from is another snapshot's, so no query can be built; with
+    /// its own module it reads the satisfaction.
+    #[test]
+    fn checkout_unreadable_satisfactions_are_refused() {
+        let api = "std/probe_api.cheby";
+        let needle = "fn ‸shown(m: Meter)";
+        let case = Case::new("rename_unreadable", &[(api, PROBE_API)], &[api]);
+        let other = Case::new("rename_unreadable_other", &[(api, PROBE_API)], &[api]);
+        let snapshot = &case.analyzed.snapshot;
+        let view = snapshot.module_at(case.point(api, needle).0).unwrap();
+        let name = snapshot.globals().names.lookup("shown").unwrap();
+        let (index, _) = snapshot
+            .interfaces()
+            .get(view.id())
+            .unwrap()
+            .items
+            .iter_enumerated()
+            .find(|(_, item)| item.kind == DefKind::Fn && item.name == name)
+            .unwrap();
+        let def = DefId::new(view.id(), index);
+        let foreign = other
+            .analyzed
+            .snapshot
+            .module_at(other.point(api, needle).0)
+            .unwrap();
+        assert_eq!(
+            satisfied(snapshot, foreign, def).unwrap_err().0,
+            "cannot tell which interfaces `shown` satisfies"
+        );
+        assert!(satisfied(snapshot, view, def).unwrap().is_some());
+    }
 }

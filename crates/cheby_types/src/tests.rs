@@ -1920,7 +1920,7 @@ fn tolerant(text: &str) -> (Vec<String>, Vec<String>) {
         globals: &globals,
         std: StdCatalog {
             known: &[],
-            items: None,
+            items: cheby_resolve::StdItems::None,
         },
         package_targets: cheby_package::Targets::ALL,
     })

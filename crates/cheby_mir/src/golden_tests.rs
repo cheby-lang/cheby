@@ -188,7 +188,7 @@ fn build(package: &str, main: &str) -> String {
             globals: &globals,
             std: StdCatalog {
                 known: &["io"],
-                items: None,
+                items: cheby_resolve::StdItems::None,
             },
             package_targets: cheby_package::Targets::ALL,
         };

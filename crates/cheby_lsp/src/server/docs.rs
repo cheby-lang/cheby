@@ -18,7 +18,11 @@
 //!
 //! A document outside every package, or inside one without being one of
 //! its modules, gets a single-file session of its own at its open, which
-//! ends at its close with one empty publish (D-1371, `sessions`).
+//! ends at its close with one empty publish (D-1371, `sessions`). A
+//! document of a std checkout's `std/` joins the checkout's session, which
+//! lingers after a close as a package's does (D-1704). Its open and its
+//! close each run the session, even with no text change, since the run
+//! checks the test bodies of the open modules only (D-1701).
 //!
 //! An edit or a close may make a constant's value stale or current again
 //! (D-1510), so each looks at the package's constant inlay row again
@@ -157,7 +161,15 @@ impl Server {
             // Nothing refreshes a closed file outside every package, so its
             // session ends now, with one empty publish (D-1371, D-1373).
             Some((Some(root), DocRoute::SingleFile { .. })) => self.end_session(&root),
-            Some((Some(root), _)) => {
+            // A checkout's closed module no longer has its test bodies
+            // checked (D-1701), so its close runs as a package's does.
+            Some((
+                Some(root),
+                DocRoute::Package(_)
+                | DocRoute::StdCheckout { .. }
+                | DocRoute::Std
+                | DocRoute::Unowned,
+            )) => {
                 let stamp = self.next_stamp();
                 self.touch(&root, stamp);
                 self.mark_dirty(&root, SWEEP, Urgency::Flush);

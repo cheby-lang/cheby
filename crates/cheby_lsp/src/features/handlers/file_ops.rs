@@ -9,7 +9,12 @@
 //! file that changed on disk is refused with its own warning, "`path`
 //! changed on disk, so imports were not updated", and also makes the
 //! package read disk again (`Effect::Sweep`), as rename does (D-1711). A
-//! move with nothing to edit answers `null` with no message.
+//! move with nothing to edit answers `null` with no message. A move in a
+//! std checkout is refused, with a message that std's modules are listed in
+//! `crates/cheby_driver/src/std_lib.rs` and specified in `docs/stdlib/`
+//! (D-1706): a file's or a folder's under the checkout's `std/`, or that
+//! `std/` itself, refused by the main loop from routing alone
+//! ([`std_move_refused`]), with or without the checkout's session.
 
 use std::path::PathBuf;
 
@@ -18,7 +23,7 @@ use serde_json::Value;
 
 use crate::features::handlers::edit::to_workspace_edit;
 use crate::features::ide::Refusal;
-use crate::features::ide::file_ops::will_rename;
+use crate::features::ide::file_ops::{STD_MOVE, will_rename};
 use crate::features::ide::rename::RenameError;
 use crate::features::{Analyzed, HandlerOutput, RequestCx, RequestError, params};
 use crate::server::Effect;
@@ -66,6 +71,14 @@ pub(crate) fn will_rename_files(
         }),
         Err(RenameError::Cancelled) => Err(RequestError::Cancelled),
     }
+}
+
+/// D-1706's answer to a move in a std checkout: `null`, with the warning
+/// that std's modules are listed in `std_lib.rs` and specified in
+/// `docs/stdlib/`. The main loop sends it from routing alone, before any
+/// session is looked up (`dispatch_query`).
+pub(crate) fn std_move_refused() -> HandlerOutput {
+    refused(STD_MOVE)
 }
 
 /// The normalized path `uri` names, `None` for a URI that names no file.

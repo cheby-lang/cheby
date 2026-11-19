@@ -1,0 +1,15 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_grammar_error.cheby
+// @steps: idle
+// @decisions: D-1700
+//! A probe with a grammar error, where hover still answers.
+
+import std::list
+
+pub fn total(xs: List<Int>) -> Int {
+  list::length(xs)
+  //    ^ hover
+}
+
+pub fn broken( {

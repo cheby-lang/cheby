@@ -1662,7 +1662,8 @@ fn module_defs(
         return;
     };
     let Some(iface) = cx.snapshot.interfaces().get(module) else {
-        if let Some(index) = cx.std.get() {
+        // A std checkout's modules are never the std index's (D-1700).
+        if let Some(index) = cx.std.get().filter(|_| !cx.snapshot.is_std_checkout()) {
             let text = path.to_string();
             for item in index
                 .items
@@ -1734,7 +1735,8 @@ fn module_defs(
 
 /// A module path after `import` (X §4.1): the next segment of every
 /// module of the package and of std under `prefix`, the importing module
-/// left out.
+/// left out. In a std checkout, std's modules are the checkout's alone,
+/// never the std index's, and its synthetic root is none (D-1700).
 fn import_paths(cx: &CompletionCx<'_>, prefix: &[String], out: &mut Items) {
     let own: Option<&ModulePath> = cx.view.and_then(ModuleView::path);
     let mut paths: Vec<Vec<String>> = cx
@@ -1743,13 +1745,13 @@ fn import_paths(cx: &CompletionCx<'_>, prefix: &[String], out: &mut Items) {
         .filter_map(|view| {
             let path = view.path()?;
             let std = path.segments().first().is_some_and(|s| s == "std");
-            (view.is_local() || std)
+            (view.is_own() || std)
                 .then_some(path)
                 .filter(|p| Some(*p) != own)
                 .map(|p| p.segments().to_vec())
         })
         .collect();
-    if let Some(index) = cx.std.get() {
+    if let Some(index) = cx.std.get().filter(|_| !cx.snapshot.is_std_checkout()) {
         paths.extend(
             index
                 .modules
@@ -1801,7 +1803,8 @@ fn import_items(cx: &CompletionCx<'_>, module: &[String], written: &[String], ou
         .find(&path)
         .and_then(|m| Some((m, cx.snapshot.interfaces().get(m)?)));
     let Some((id, iface)) = loaded else {
-        if let Some(index) = cx.std.get() {
+        // A std checkout's modules are never the std index's (D-1700).
+        if let Some(index) = cx.std.get().filter(|_| !cx.snapshot.is_std_checkout()) {
             let text = path.to_string();
             for item in index
                 .items

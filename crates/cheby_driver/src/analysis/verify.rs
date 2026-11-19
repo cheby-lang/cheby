@@ -43,8 +43,20 @@
 //!
 //! A single-file snapshot (D-1371) is checked as its Q run ran: the
 //! one-module package `script` with the synthetic manifest, for a loose
-//! file and for a file of this repository's `std/` alike (D-1667). Its
-//! stale step lists no `src/`, since the file belongs to no package.
+//! file (D-1667). Its stale step lists no `src/`, since the file belongs
+//! to no package.
+//!
+//! A std checkout's snapshot (D-1700) is checked as its Q run ran too,
+//! which replaces D-1667's std half: the checkout's std modules, from the
+//! edited texts, are preloaded as package `std` under the synthetic root
+//! that imports each of them, and the root's diagnostics are dropped. The
+//! test bodies checked are those the Q run checked, of the modules that
+//! had an open document (D-1701), so an error in one is in "before" and
+//! "after" alike, and a closed module's test body is in neither. A file
+//! under `std/` that names no module gets phase-A diagnostics only in the
+//! Q run, so it is no input here, and an edit of it is refused as an edit
+//! of no file of the package. The new-module step walks `std/` in place
+//! of `src/`.
 //!
 //! Limits:
 //!
@@ -69,9 +81,12 @@ use cheby_diag::{Code, Diagnostic, FileId, SourceMap, Span, TextRange, TextSize,
 use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Targets};
 
 use super::plain::{Placed, PlainDiagnostic, PlainEdit, exact_key, plain};
+use super::session::checkout;
 use super::snapshot::{BaselineEntry, FileLocation, Snapshot};
 use crate::cache::Hash128;
-use crate::frontend::{Frontend, Retain, RunExtras, run_analysis};
+use crate::frontend::{
+    CheckoutStd, Frontend, Retain, RunExtras, run_analysis, run_analysis_checkout,
+};
 use crate::session::synthetic_manifest;
 use crate::{Error, Module, Package, SourceHashes, parse_file};
 
@@ -132,7 +147,8 @@ pub struct Introduced {
     pub at: String,
     /// The file it is in: a file of the edited package, under its new path
     /// for a moved file. A diagnostic with no span is the manifest's, or
-    /// in single-file mode the one module's.
+    /// in single-file mode the one module's, or in a std checkout, whose
+    /// manifest is no file either, the first module's.
     pub path: PathBuf,
     /// The diagnostic. Its ranges lie in the edited text of its file.
     pub diagnostic: PlainDiagnostic,
@@ -169,6 +185,7 @@ pub fn verify(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Verify
         )));
     }
     let texts = edited_texts(snapshot, request)?;
+    let kind = kind(snapshot, request)?;
     let not_utf8: BTreeSet<PathBuf> = not_utf8
         .into_iter()
         .map(|path| moved(request, &path))
@@ -176,12 +193,17 @@ pub fn verify(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Verify
     let mut sources = SourceMap::new();
     let mut diags = Vec::new();
     let (globals, targets) = snapshot.run_context();
-    let (package, files) = build(
+    let Built {
+        package,
+        files,
+        std,
+        root_file,
+    } = build(
         root,
         Texts {
             by_path: texts,
             not_utf8,
-            single: snapshot.is_single_file(),
+            kind,
         },
         targets,
         &mut sources,
@@ -193,8 +215,9 @@ pub fn verify(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Verify
             retain: Retain::VERIFY,
             cut_cycles: None,
         };
-        let ran = catch_unwind(AssertUnwindSafe(|| {
-            run_analysis(package, &mut sources, &mut diags, extras)
+        let ran = catch_unwind(AssertUnwindSafe(|| match std {
+            Some(std) => run_analysis_checkout(package, &mut sources, &mut diags, extras, std),
+            None => run_analysis(package, &mut sources, &mut diags, extras),
         }));
         let front = match ran {
             Ok(Ok(front)) => front,
@@ -204,6 +227,11 @@ pub fn verify(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Verify
         if let Some(reason) = lost_after(&front) {
             return Ok(VerifyOutcome::Blocked(reason));
         }
+    }
+    // A checkout's synthetic root is no file of the package, and the Q run
+    // dropped its diagnostics too (D-1700).
+    if let Some(root_file) = root_file {
+        checkout::drop_root(&mut diags, root_file);
     }
     sources.sort(&mut diags);
     let Compared { introduced, hidden } =
@@ -240,7 +268,7 @@ fn stale(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Option<Path
     let manifest = snapshot.root().join(MANIFEST_FILE);
     let last_good = snapshot.status().manifest_is_last_good;
     for (file, source) in snapshot.sources().files() {
-        let Some(FileLocation::Package(path)) = snapshot.location(file) else {
+        let Some(path) = input_path(snapshot, file) else {
             continue;
         };
         if snapshot.version_of(path).is_some()
@@ -276,10 +304,14 @@ fn stale(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Option<Path
 /// every occurrence in it. `None` for a single-file snapshot, whose file
 /// belongs to no package, and when `src/` cannot be walked: the Q run's
 /// walk failed then too, or fails on the next run, and reports it, and
-/// the files the snapshot has are compared all the same.
+/// the files the snapshot has are compared all the same. A std checkout's
+/// modules are under `std/` instead (`new_std_module`).
 fn new_module(snapshot: &Snapshot) -> Option<PathBuf> {
     if snapshot.is_single_file() {
         return None;
+    }
+    if snapshot.is_std_checkout() {
+        return new_std_module(snapshot);
     }
     let root = snapshot.root();
     // E0037 names are skipped, as the Q run's walk skips them, and its
@@ -291,6 +323,31 @@ fn new_module(snapshot: &Snapshot) -> Option<PathBuf> {
         .into_iter()
         .map(|module| root.join(&module.file))
         .find(|path| snapshot.file_of(path).is_none())
+}
+
+/// In a std checkout, the first file under `std/` on disk, in path order,
+/// that names a module of the checkout and that the snapshot does not
+/// have: D-1669 for a checkout, whose run reads every module under `std/`
+/// (D-1700). `None` when `std/` cannot be walked, as for `src/`.
+fn new_std_module(snapshot: &Snapshot) -> Option<PathBuf> {
+    let root = snapshot.root();
+    let found = checkout::walk_std(&root.join(checkout::STD_DIR)).ok()?;
+    found.into_iter().find(|path| {
+        checkout::checkout_module(root, path).is_some() && snapshot.file_of(path).is_none()
+    })
+}
+
+/// The path of `file` when it is an input of `verify`'s run: a file of the
+/// package (`FileLocation::Package`), and in a std checkout one that names
+/// a module of it. A file under `std/` that names none is no module of
+/// the Q run, which gives it phase-A diagnostics only (D-1700).
+fn input_path(snapshot: &Snapshot, file: FileId) -> Option<&PathBuf> {
+    match snapshot.location(file)? {
+        FileLocation::Package(path) => (!snapshot.is_std_checkout()
+            || checkout::checkout_module(snapshot.root(), path).is_some())
+        .then_some(path),
+        FileLocation::Std(_) | FileLocation::Synthetic => None,
+    }
 }
 
 /// The package files that were not UTF-8 in the Q run: those with E0001.
@@ -353,7 +410,7 @@ fn blocked(snapshot: &Snapshot) -> Option<String> {
             .map_or_else(|| "a module".to_owned(), |p| format!("`{p}`"));
         return Some(format!("an internal error stopped the check of {name}"));
     }
-    if let Some(module) = snapshot.local_modules().find(|m| {
+    if let Some(module) = snapshot.own_modules().find(|m| {
         m.facts()
             .is_some_and(|f| !f.lost.is_empty() || !f.lost_passes.is_empty())
     }) {
@@ -400,9 +457,8 @@ fn edited_texts(
     let mut texts: BTreeMap<PathBuf, String> = snapshot
         .sources()
         .files()
-        .filter_map(|(file, source)| match snapshot.location(file)? {
-            FileLocation::Package(path) => Some((path.clone(), source.text().to_owned())),
-            FileLocation::Std(_) | FileLocation::Synthetic => None,
+        .filter_map(|(file, source)| {
+            input_path(snapshot, file).map(|path| (path.clone(), source.text().to_owned()))
         })
         .collect();
     let mut by_path: BTreeMap<&Path, Vec<&PlainEdit>> = BTreeMap::new();
@@ -462,9 +518,69 @@ fn apply(text: &str, mut edits: Vec<&PlainEdit>) -> Option<String> {
 struct Texts {
     by_path: BTreeMap<PathBuf, String>,
     not_utf8: BTreeSet<PathBuf>,
-    /// The snapshot is of one file in single-file mode (D-1371):
-    /// `by_path` holds that file alone, and no manifest.
-    single: bool,
+    kind: Kind,
+}
+
+/// What a snapshot's run checked, and so what [`build`] loads.
+enum Kind {
+    /// A package: `by_path` holds its manifest and its modules.
+    Package,
+    /// One file in single-file mode (D-1371): `by_path` holds that file
+    /// alone, and no manifest.
+    Single,
+    /// A std checkout (D-1700): `by_path` holds the checkout's std
+    /// modules, and no manifest.
+    Checkout {
+        /// The synthetic root package's name, as the Q run named it.
+        name: String,
+        /// The files, after the moves, whose test bodies the Q run checked
+        /// (D-1701).
+        tested: BTreeSet<PathBuf>,
+    },
+}
+
+/// The kind of `snapshot`'s run, with a checkout's tested files after the
+/// moves of `request`.
+///
+/// # Errors
+///
+/// An [`Error`] for a checkout's snapshot with no synthetic root, an
+/// internal error.
+fn kind(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Kind, Error> {
+    if snapshot.is_single_file() {
+        return Ok(Kind::Single);
+    }
+    let Some(tested_std) = snapshot.tested_std() else {
+        return Ok(Kind::Package);
+    };
+    // The synthetic root is the run's one module of the package itself.
+    let name = snapshot
+        .local_modules()
+        .find_map(|m| m.path().map(|path| path.package().to_owned()))
+        .ok_or_else(|| Error::new("verify: a std checkout's run has no root".to_owned()))?;
+    let root = snapshot.root();
+    let tested = snapshot
+        .sources()
+        .files()
+        .filter_map(|(file, _)| input_path(snapshot, file))
+        .filter(|path| {
+            checkout::checkout_module(root, path).is_some_and(|m| tested_std.contains(&m))
+        })
+        .map(|path| moved(request, path))
+        .collect();
+    Ok(Kind::Checkout { name, tested })
+}
+
+/// What [`build`] loads.
+struct Built {
+    /// The package to run, `None` when the edited manifest cannot be used.
+    package: Option<Package>,
+    /// The files of the result, each with its path.
+    files: Vec<VerifyFile>,
+    /// A checkout's std modules, which the run preloads (D-1700).
+    std: Option<CheckoutStd>,
+    /// A checkout's synthetic root file, whose diagnostics are dropped.
+    root_file: Option<FileId>,
 }
 
 /// Loads the edited texts as `inputs::load` loads a package: the manifest
@@ -478,6 +594,11 @@ struct Texts {
 /// the one module `script`, displayed by its path from `root`, the file's
 /// directory.
 ///
+/// A std checkout's snapshot loads as its Q run does (D-1700): the
+/// synthetic manifest, each module of the checkout in display order as a
+/// std module that the run preloads, its test bodies checked when the Q
+/// run checked them, and the synthetic root that imports every module.
+///
 /// # Errors
 ///
 /// An [`Error`] for a missing manifest, a file that is not a module of the
@@ -489,33 +610,42 @@ fn build(
     Texts {
         by_path: mut texts,
         not_utf8,
-        single,
+        kind,
     }: Texts,
     targets: Targets,
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(Option<Package>, Vec<VerifyFile>), Error> {
-    let (mut manifest, mut files) = if single {
-        (
+) -> Result<Built, Error> {
+    let (mut manifest, mut files) = match &kind {
+        Kind::Single => (
             synthetic_manifest(SINGLE_PACKAGE, sources, diagnostics)?,
             Vec::new(),
-        )
-    } else {
-        let manifest_path = root.join(MANIFEST_FILE);
-        let manifest_text = texts
-            .remove(&manifest_path)
-            .ok_or_else(|| Error::new(format!("verify: the package has no {MANIFEST_FILE}")))?;
-        let file = sources
-            .add_file(MANIFEST_FILE, manifest_text.as_str())
-            .map_err(|_| Error::from(PackageError::too_large(MANIFEST_FILE)))?;
-        let files = vec![VerifyFile {
-            path: manifest_path,
-            file,
-        }];
-        let Some(manifest) = Manifest::parse_at(file, &manifest_text, root, diagnostics) else {
-            return Ok((None, files));
-        };
-        (manifest, files)
+        ),
+        Kind::Checkout { name, .. } => {
+            (synthetic_manifest(name, sources, diagnostics)?, Vec::new())
+        }
+        Kind::Package => {
+            let manifest_path = root.join(MANIFEST_FILE);
+            let manifest_text = texts
+                .remove(&manifest_path)
+                .ok_or_else(|| Error::new(format!("verify: the package has no {MANIFEST_FILE}")))?;
+            let file = sources
+                .add_file(MANIFEST_FILE, manifest_text.as_str())
+                .map_err(|_| Error::from(PackageError::too_large(MANIFEST_FILE)))?;
+            let files = vec![VerifyFile {
+                path: manifest_path,
+                file,
+            }];
+            let Some(manifest) = Manifest::parse_at(file, &manifest_text, root, diagnostics) else {
+                return Ok(Built {
+                    package: None,
+                    files,
+                    std: None,
+                    root_file: None,
+                });
+            };
+            (manifest, files)
+        }
     };
     // The snapshot's targets are the manifest's after `--target`, so this
     // narrows to the session's target and keeps an unedited manifest's.
@@ -525,29 +655,9 @@ fn build(
             "verify: the edited manifest keeps none of the run's targets".to_owned(),
         ));
     }
-    let mut listed: BTreeMap<String, (ModulePath, PathBuf, String)> = BTreeMap::new();
-    if single {
-        let mut texts = texts.into_iter();
-        let (Some((path, text)), None) = (texts.next(), texts.next()) else {
-            return Err(Error::new(
-                "verify: a single-file snapshot holds one file".to_owned(),
-            ));
-        };
-        let display = cheby_diag::display_path(&path, root);
-        listed.insert(display, (ModulePath::root(SINGLE_PACKAGE), path, text));
-    } else {
-        for (path, text) in texts {
-            let module =
-                cheby_package::module_file(root, &manifest.name, &path).ok_or_else(|| {
-                    Error::new(format!(
-                        "verify: `{}` is not a module of the package",
-                        cheby_diag::display_path(&path, root)
-                    ))
-                })?;
-            listed.insert(module.display, (module.path, path, text));
-        }
-    }
+    let listed = listed(root, &kind, &manifest.name, texts)?;
     let mut modules = Vec::with_capacity(listed.len());
+    let mut tested_std = BTreeSet::new();
     for (display, (module, path, text)) in listed {
         let hashes = SourceHashes::of(text.as_bytes());
         let mut own = Vec::new();
@@ -561,6 +671,11 @@ fn build(
             source.syntax = Some(tree);
         }
         diagnostics.extend(own.iter().cloned());
+        if let Kind::Checkout { tested, .. } = &kind
+            && tested.contains(&path)
+        {
+            tested_std.insert(checkout::under_std(&module));
+        }
         files.push(VerifyFile {
             path,
             file: source.file,
@@ -573,14 +688,85 @@ fn build(
             syntax_diagnostics: own,
         });
     }
-    Ok((
-        Some(Package {
-            root: root.to_path_buf(),
-            manifest,
-            modules,
+    match kind {
+        Kind::Package | Kind::Single => Ok(Built {
+            package: Some(Package {
+                root: root.to_path_buf(),
+                manifest,
+                modules,
+            }),
+            files,
+            std: None,
+            root_file: None,
         }),
-        files,
-    ))
+        Kind::Checkout { .. } => {
+            let paths: Vec<ModulePath> = modules.iter().map(|m| m.path.clone()).collect();
+            let (package, root_file) = checkout::checkout_root(root, manifest, &paths, sources)?;
+            let std = CheckoutStd {
+                modules: modules
+                    .into_iter()
+                    .map(|m| (checkout::under_std(&m.path), m))
+                    .collect(),
+                tested: tested_std,
+            };
+            Ok(Built {
+                package: Some(package),
+                files,
+                std: Some(std),
+                root_file: Some(root_file),
+            })
+        }
+    }
+}
+
+/// The modules of `texts` by display path, each with its module path, its
+/// path and its text, as `kind` names them; `package` is the manifest's
+/// name.
+///
+/// # Errors
+///
+/// An [`Error`] for a file that is not a module of the package, or a
+/// single-file snapshot that does not hold one file.
+fn listed(
+    root: &Path,
+    kind: &Kind,
+    package: &str,
+    texts: BTreeMap<PathBuf, String>,
+) -> Result<BTreeMap<String, (ModulePath, PathBuf, String)>, Error> {
+    let not_a_module = |path: &Path| {
+        Error::new(format!(
+            "verify: `{}` is not a module of the package",
+            cheby_diag::display_path(path, root)
+        ))
+    };
+    let mut listed = BTreeMap::new();
+    match kind {
+        Kind::Single => {
+            let mut texts = texts.into_iter();
+            let (Some((path, text)), None) = (texts.next(), texts.next()) else {
+                return Err(Error::new(
+                    "verify: a single-file snapshot holds one file".to_owned(),
+                ));
+            };
+            let display = cheby_diag::display_path(&path, root);
+            listed.insert(display, (ModulePath::root(SINGLE_PACKAGE), path, text));
+        }
+        Kind::Checkout { .. } => {
+            for (path, text) in texts {
+                let module =
+                    checkout::checkout_module(root, &path).ok_or_else(|| not_a_module(&path))?;
+                listed.insert(cheby_diag::display_path(&path, root), (module, path, text));
+            }
+        }
+        Kind::Package => {
+            for (path, text) in texts {
+                let module = cheby_package::module_file(root, package, &path)
+                    .ok_or_else(|| not_a_module(&path))?;
+                listed.insert(module.display, (module.path, path, text));
+            }
+        }
+    }
+    Ok(listed)
 }
 
 /// A file that was not UTF-8, by its lossy text, as [`parse_file`] gives
@@ -767,7 +953,8 @@ fn compare(
         })
     };
     // A diagnostic outside the files is the manifest's, or in single-file
-    // mode, whose manifest is no file, the one module's.
+    // mode, whose manifest is no file, the one module's; in a checkout,
+    // whose manifest is no file either, the first module's.
     let fallback = files.first().map(|f| f.file);
     let mut introduced = Vec::new();
     for ((diag, _, _), matched) in after.iter().zip(matched) {

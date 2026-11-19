@@ -68,11 +68,11 @@ pub(crate) struct Published {
 }
 
 /// One package, served by one session on the analysis thread (D-1375),
-/// or one file in single-file mode (D-1371).
+/// one file in single-file mode (D-1371), or a std checkout (D-1700).
 #[derive(Debug)]
 pub(crate) struct Package {
-    /// The directory of its `cheby.toml`, or in single-file mode the file,
-    /// which keys the session.
+    /// The directory of its `cheby.toml`, the checkout of a std checkout,
+    /// or in single-file mode the file, which keys the session.
     pub root: PathBuf,
     /// A package, or single-file mode on the file at `root`.
     pub kind: PackageKind,
@@ -114,6 +114,9 @@ pub(crate) struct Package {
     pub idle_since: Option<Instant>,
     /// How the package learns of disk changes (A §8.1, §8.3).
     pub watch: Watched,
+    /// A std checkout's `std/` was not the binary's std when the session
+    /// started (D-1705), for `cheby/status`. False for any other session.
+    pub std_differs: bool,
 }
 
 /// How a package learns of disk changes (D-1374).
@@ -153,6 +156,7 @@ impl Package {
             folder: false,
             idle_since: None,
             watch: Watched::Sweep,
+            std_differs: false,
         }
     }
 }

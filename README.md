@@ -144,11 +144,11 @@ These keys are accepted but do nothing yet: `diagnostics.explainLinks`, `lenses.
 
 - If no list appears after `::`, as after accepting a module's name, type the first letter of the item you want, and the module's items are listed.
 - Zed asks for no signature while a completion's placeholders are active. Run `editor: show signature help` (`editor::ShowSignatureHelp`) from the command palette, or bind it to a key, to show it then.
+- A file of this repository's `std/` is checked as a module of the standard library, from the files of your checkout. Point `binary.path` at this worktree's own build, `target/debug/cheby`, so the compiler matches the `std/` it checks. When the session starts and they differ, the server warns, and a rebuild clears an error that only the older compiler gives.
 - Constants are evaluated once the package first checks clean, then after each save that changes it. Hover marks a value that may be out of date, and says why a constant has no value.
 
 ### Known issues
 
-- This repository's own `std/*.cheby` files show false errors when opened: the server checks them as single files, not as the standard library.
 - An unpaired `"` while typing marks string errors down the rest of the file until it is closed.
 - On Windows, constants are not evaluated until M6, so hover shows no values and the back-end diagnostics of `cheby check` do not appear.
 

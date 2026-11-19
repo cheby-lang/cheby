@@ -1,0 +1,11 @@
+// @package: std-checkout
+// @probes: disk
+// @open: std/probe_base.cheby
+// @steps: edit v2, idle
+// @decisions: D-1700, D-1704
+//! An open probe whose signature the edit changes, which breaks the closed
+//! probe `probe_user` that calls it.
+
+pub fn base(n: Int, m: Int) -> Int {
+  n + m
+}

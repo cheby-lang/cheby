@@ -8,7 +8,10 @@
 //! 1. A package's items are the outline of each of its modules
 //!    (`ide::symbols`, X §5.1): items, variants and interface functions,
 //!    with no fields and no tests. The outline reads the snapshot's tree,
-//!    so a file with grammar errors gives what its tree holds.
+//!    so a file with grammar errors gives what its tree holds. A std
+//!    checkout's session gives its own std modules' items, each under its
+//!    module such as `std::list`, beside `StdIndex`'s: the two copies of
+//!    an item are told apart by their paths (D-1703).
 //! 2. Std's items come from [`StdIndex`], and only for a query of at
 //!    least two characters.
 //! 3. A name matches without regard to case: exactly, else by prefix,
@@ -169,7 +172,8 @@ impl Found {
     }
 }
 
-/// The items of `analyzed`'s package modules that match `query`.
+/// The items of `analyzed`'s own modules that match `query`: a package's
+/// modules, or a std checkout's std modules (D-1703).
 fn package_symbols(
     cx: &RequestCx<'_>,
     analyzed: &Analyzed,
@@ -178,7 +182,7 @@ fn package_symbols(
 ) -> Result<(), RequestError> {
     let snapshot = &analyzed.snapshot;
     let mut locator = Locator::new(snapshot, None, cx.encoding);
-    for view in snapshot.local_modules() {
+    for view in snapshot.own_modules() {
         cx.cancel.check()?;
         let (Some(tree), Some(file), Some(module)) = (view.tree(), view.file(), view.path()) else {
             continue;

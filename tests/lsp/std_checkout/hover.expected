@@ -1,0 +1,20 @@
+== diagnostics
+{}
+
+== std/probe_hover.cheby:11:9 hover
+{
+  "contents": {
+    "kind": "markdown",
+    "value": "```cheby\npub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>\n```\n```cheby\nfn(List<Int>, fn(Int) -> Int) -> List<Int>\n```\n\n---\n\nDefined in `std::list`.\n\n---\n\nReturns the results of calling `f` on each element, in order."
+  },
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 10
+    },
+    "start": {
+      "character": 8,
+      "line": 10
+    }
+  }
+}

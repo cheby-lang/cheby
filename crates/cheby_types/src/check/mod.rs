@@ -1126,7 +1126,15 @@ impl<'a> BodyCx<'a> {
             value,
             ret,
         };
-        let found = exhaust::check_body(self.input, self.own, &body)?;
+        // A test body of a std module, where D-479's warnings are not
+        // reported (D-1702).
+        let std_test = self.input.package == PackageId::STD
+            && self
+                .input
+                .resolved
+                .item(self.item)
+                .is_some_and(|item| item.kind == DefKind::Test);
+        let found = exhaust::check_body(self.input, self.own, &body, std_test)?;
         let errored = has_error(&found);
         self.diags.extend(found);
         if errored {
