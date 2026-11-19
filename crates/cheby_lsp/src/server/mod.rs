@@ -62,6 +62,7 @@ pub(crate) use self::caps::ClientCaps;
 use self::caps::server_capabilities;
 use self::child::Children;
 pub(crate) use self::child::{ConstReading, ConstValues};
+use self::child_loop::{Recheck, ShownConstants};
 pub(crate) use self::effects::Effect;
 use self::pool::{QueryDone, QueryPool};
 use self::schedule::{JobTexts, Parked, Served};
@@ -196,6 +197,10 @@ pub(crate) struct Server {
     /// (D-1495). It lasts for the server's life, so 0 means only that the
     /// root has had no snapshot since the server started (D-1499).
     generations: BTreeMap<PathBuf, u64>,
+    /// By package root, what its constant inlay row was last computed
+    /// from, while the row is on and the client takes
+    /// `workspace/inlayHint/refresh` (D-1679, `child_loop`).
+    shown_constants: BTreeMap<PathBuf, ShownConstants>,
     /// What tests switch on through `cheby/testHold`, `cheby/testPanicRun`
     /// and `cheby/testNoDebounce`.
     #[cfg(test)]
@@ -289,6 +294,7 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         texts: BTreeMap::new(),
         children: Children::new(),
         generations: BTreeMap::new(),
+        shown_constants: BTreeMap::new(),
         #[cfg(test)]
         test: TestSwitches::default(),
     };
@@ -654,6 +660,9 @@ impl Server {
         // The client asks again for the hints it shows (A §12.3).
         if inlays_changed && self.caps.inlay_refresh {
             self.request("workspace/inlayHint/refresh", Value::Null, Outgoing::Ignore);
+            // That refresh covers the constant row's values too, so they
+            // are only taken in, with no second refresh (D-1679).
+            self.recompute_constant_hints(Recheck::Values);
         }
         self.child_on_settings(target_changed);
     }

@@ -33,6 +33,9 @@
     },
     "positionEncoding": "utf-16",
     "referencesProvider": true,
+    "renameProvider": {
+      "prepareProvider": true
+    },
     "selectionRangeProvider": true,
     "semanticTokensProvider": {
       "full": true,
@@ -76,6 +79,26 @@
     },
     "typeDefinitionProvider": true,
     "workspace": {
+      "fileOperations": {
+        "willRename": {
+          "filters": [
+            {
+              "pattern": {
+                "glob": "**/*.cheby",
+                "matches": "file"
+              },
+              "scheme": "file"
+            },
+            {
+              "pattern": {
+                "glob": "**",
+                "matches": "folder"
+              },
+              "scheme": "file"
+            }
+          ]
+        }
+      },
       "workspaceFolders": {
         "changeNotifications": true,
         "supported": true

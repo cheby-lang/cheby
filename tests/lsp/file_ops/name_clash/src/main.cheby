@@ -1,0 +1,16 @@
+// @decisions: D-1675, D-1676
+// @steps: willRename src/util.cheby src/helpers.cheby
+//! The root module, which imports `util`.
+
+import moves::util
+import moves::util::{greet}
+import std::io
+
+fn main() {
+  let s: util::Shape = util::Shape(1)
+  let _ = s
+  io::println(util::greet())
+  io::println(greet())
+  let helpers = 2
+  assert helpers == 2
+}

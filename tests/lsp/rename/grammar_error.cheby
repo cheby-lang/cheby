@@ -1,0 +1,21 @@
+// @decisions: D-1390
+//! A grammar error in the file: a local needs its own file to parse, and
+//! an item or a field every module, so all three are refused.
+
+type Pair {
+  left: Int,
+  //> 6:3 rename first
+  right: Int,
+}
+
+fn sum(p: Pair) -> Int {
+// ^ rename add_up
+  p.left + p.right
+}
+
+fn main() {
+  let p = Pair { left: 1, right: 2 }
+  //  ^ rename q
+  let s = sum(p
+  assert s == 3
+}

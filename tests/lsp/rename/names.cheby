@@ -1,0 +1,36 @@
+// @decisions: D-1390, D-1673
+//! Names that cannot be renamed, refused at `prepareRename` and at
+//! `rename`: `Self`, a std item, a module and a builtin. New names that
+//! are refused at `rename`: not one identifier, a keyword, the wrong
+//! case, and a lower-case name not in snake_case. A test's name is a
+//! string, so `prepareRename` gives `null` there.
+
+import std::list
+
+interface Area {
+  fn area(Self) -> Int
+  //      ^ prepareRename
+  //      ^ rename Me
+}
+
+fn main() {
+  let total = list::map([1], fn(x) { x })
+  //  ^ prepareRename
+  //  ^ rename x-y
+  //  ^ rename let
+  //  ^ rename Total
+  //  ^ rename allOf
+  //                ^ prepareRename
+  //                ^ rename each
+  let n: Int = 1
+  //     ^ prepareRename
+  //     ^ rename Num
+  assert list::length(total) == n
+  //     ^ prepareRename
+  //     ^ rename lists
+}
+
+test "one" {
+//    ^ prepareRename
+  assert 1 == 1
+}

@@ -1,0 +1,24 @@
+// @decisions: D-1389, D-146, D-1671
+//! S-1's package: renaming a constructor to a prelude name hides the
+//! prelude's, which is only a warning (W0007, D-146). The check refuses it
+//! all the same, and a name that hides nothing passes.
+
+import std::io
+
+pub type Mine {
+  Foo(Int),
+}
+
+pub fn show(m: Mine) -> String {
+  "custom"
+}
+
+fn main() {
+  let x = Some(1)
+  io::println("{x}")
+  let m = Foo(2)
+  //      ^ prepareRename
+  //      ^ rename Some
+  //      ^ rename Bar
+  io::println("{m}")
+}

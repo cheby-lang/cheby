@@ -1,0 +1,28 @@
+//! Shapes.
+
+/// A point, a record: its type and its constructor share one name.
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+/// A type whose one variant has its name: two names, two symbols.
+pub type Id {
+  Id(Int),
+  //> 11:3 rename Code
+}
+
+/// What has a heft.
+pub interface Sized {
+  fn heft(Self) -> Int
+}
+
+/// The heft of a point, which makes it `Sized`.
+pub fn heft(p: Point) -> Int {
+  p.x + p.y
+}
+
+/// The area of the box under a point.
+pub fn area(p: Point) -> Int {
+  p.x * p.y
+}

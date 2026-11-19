@@ -1,0 +1,10 @@
+// @decisions: D-1674, D-1676
+// @steps: willRename src/alpha.cheby src/first.cheby src/beta.cheby src/lib/second.cheby
+//! The root module, which imports two modules that move in one request.
+
+import moves::alpha
+import moves::beta
+
+fn main() {
+  assert alpha::one() + beta::two() == 3
+}

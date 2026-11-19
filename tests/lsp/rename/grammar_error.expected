@@ -1,0 +1,72 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0015",
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 19
+        },
+        "start": {
+          "character": 2,
+          "line": 19
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 18
+              },
+              "start": {
+                "character": 13,
+                "line": 18
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:3 rename first
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`src/main.cheby` has syntax errors"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:11:4 rename add_up
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`src/main.cheby` has syntax errors"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:17:7 rename q
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "fix the syntax errors in this file first"
+    }
+  },
+  "showMessage": []
+}

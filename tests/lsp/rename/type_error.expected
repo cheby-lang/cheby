@@ -1,0 +1,181 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `String`, found `Int`",
+      "range": {
+        "end": {
+          "character": 24,
+          "line": 19
+        },
+        "start": {
+          "character": 18,
+          "line": 19
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 15,
+                "line": 19
+              },
+              "start": {
+                "character": 9,
+                "line": 19
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:3 rename first
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 6
+              },
+              "start": {
+                "character": 2,
+                "line": 6
+              }
+            }
+          },
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 8,
+                "line": 13
+              },
+              "start": {
+                "character": 4,
+                "line": 13
+              }
+            }
+          },
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 17
+              },
+              "start": {
+                "character": 17,
+                "line": 17
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:12:4 rename add_up
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "add_up",
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 11
+              },
+              "start": {
+                "character": 3,
+                "line": 11
+              }
+            }
+          },
+          {
+            "newText": "add_up",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 19
+              },
+              "start": {
+                "character": 18,
+                "line": 19
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:18:7 rename q
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "q",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 17
+              },
+              "start": {
+                "character": 6,
+                "line": 17
+              }
+            }
+          },
+          {
+            "newText": "q",
+            "range": {
+              "end": {
+                "character": 23,
+                "line": 19
+              },
+              "start": {
+                "character": 22,
+                "line": 19
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 5
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

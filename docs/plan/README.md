@@ -443,6 +443,16 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1663    | `miri.yml` runs the Miri groups in four jobs side by side, each with its own 350-minute limit       |
 | D-1664    | Three tests of the `list` group take a smaller size under Miri, where they ran for hours            |
 | D-1666    | `fiber::yield_now` ships on native with 4.7's other kernels, before the JS scheduler                |
+| D-1676    | Edit goldens are checked through the server's diagnostics and range formatting, not `cheby check`   |
+| D-1677    | The rename sweeps: a capped number of renames per example, plus `rename_sweep` and `rename_run`     |
+| D-1696    | "Satisfy interface…" is built in W11 with the other stubs, over its own scan for near misses        |
+| D-1697    | G1 (W10 and W11) also fixes the false errors of this repository's `std/` in the editor              |
+| D-1700    | A std checkout's files are checked in the editor as package `std`, from the checkout's texts        |
+| D-1708    | The std checkout's session is a wave of its own, WS, between W10 and W11                            |
+| D-1712    | The applied-edit check passes a reflow of whole-name swaps and opens each edited closed file        |
+| D-1716    | `rename_sweep` takes its symbols by a fixed stride; its measured cost is logged                     |
+| D-1721    | The applied-edit check polls `cheby/status` with the `empty` client and compares errors only        |
+| D-1725    | The sweeps shrink to 30 renames per `rename_sweep` trial and 50 per `examples/*` trial              |
 
 ## Open questions
 

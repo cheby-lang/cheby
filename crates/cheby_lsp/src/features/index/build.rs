@@ -932,17 +932,23 @@ impl<'s> Cx<'s> {
     }
 
     /// An imported item's name in `import m::{name}`: the item itself.
+    /// With an `as` name, which two items of the list may share, one in
+    /// each namespace (`{Circle as X, Shape as X}`), only the items of the
+    /// token's own name: the alias binds both.
     fn import_item(&self, item: SyntaxNode<'_>, token: SyntaxToken<'_>) -> Outcome {
         let decl = item.parent().and_then(SyntaxNode::parent);
         let n = self.import_index(decl);
-        let bound = item
+        let alias = item
             .children()
             .find(|c| c.kind() == K::RENAME)
-            .and_then(|rename| idents(rename).first().map(|t| t.text()))
-            .unwrap_or_else(|| token.text());
+            .and_then(|rename| idents(rename).first().map(|t| t.text()));
+        let own = self.lookup(token.text());
         let mut targets = self
-            .imported(n, bound)
+            .imported(n, alias.unwrap_or_else(|| token.text()))
             .into_iter()
+            .filter(|&def| {
+                alias.is_none() || own.is_some_and(|own| self.item_name(def) == Some(own))
+            })
             .map(|def| self.item(def));
         match targets.next() {
             Some(first) => pair(first, targets.next(), Role::Import),

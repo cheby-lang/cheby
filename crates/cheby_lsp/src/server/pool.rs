@@ -29,7 +29,7 @@ use crate::features::{
     Analyzed, CancelToken, Class, HandlerOutput, LiveText, RequestCx, RequestError, Route,
 };
 use crate::text::lines::PositionEncoding;
-use crate::text::uri::{normalize, uri_to_path};
+use crate::text::uri::{UriMap, normalize, uri_to_path};
 
 /// A query thread's stack: handlers recurse over trees and THIR, as the
 /// compiler does (D-601). It reserves address space only.
@@ -50,6 +50,8 @@ pub(crate) struct RequestEnv {
     /// The package's constant values, set when the request starts on a
     /// snapshot of its package, so it reads the newest ones (D-1413).
     pub constants: Option<Arc<ConstValues>>,
+    /// The client's spelling of each open document (A §6.1).
+    pub uris: UriMap,
 }
 
 /// What a handler reads.
@@ -172,6 +174,7 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         cancel: &cancel,
         std: &env.std,
         constants: env.constants.clone(),
+        uris: &env.uris,
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| match (route.class, &target) {
         (Class::Text(handler), QueryTarget::Text(live)) => match live.doc_text() {
@@ -259,8 +262,9 @@ impl Server {
             }
             Err(()) => {
                 let error = RequestError::InvalidParams(format!(
-                    "`{}`: no `textDocument.uri` that is a URI",
-                    route.method
+                    "`{}`: no `{}` that is a URI",
+                    route.method,
+                    routed_by(route.method)
                 ));
                 self.answer(id, Err(error));
                 return;
@@ -372,6 +376,7 @@ impl Server {
             encoding: self.encoding,
             std: Arc::clone(&self.std),
             constants: None,
+            uris: self.uris.clone(),
         })
     }
 
@@ -468,9 +473,20 @@ impl Server {
 
 /// The normalized path of `params.textDocument.uri`, or for a call
 /// hierarchy's calls of the document the item was prepared in,
-/// `params.item.data.origin`, else `params.item.uri`: `Ok(None)` for a URI
-/// that names no file, `Err` for malformed parameters.
+/// `params.item.data.origin`, else `params.item.uri`, or for
+/// `workspace/willRenameFiles` the first file's old URI,
+/// `params.files[0].oldUri` (D-1675): `Ok(None)` for a URI that names no
+/// file and for an empty list of files, which moves nothing, `Err` for
+/// malformed parameters.
 fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
+    if params.get("textDocument").is_none()
+        && params
+            .get("files")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    {
+        return Ok(None);
+    }
     let uri: Uri = params
         .pointer("/textDocument/uri")
         .or_else(|| {
@@ -479,9 +495,51 @@ fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
                 .filter(|v| v.is_string())
         })
         .or_else(|| params.pointer("/item/uri"))
+        .or_else(|| params.pointer("/files/0/oldUri"))
         .and_then(Value::as_str)
         .ok_or(())?
         .parse()
         .map_err(|_| ())?;
     Ok(uri_to_path(&uri).map(|path| normalize(&path)))
+}
+
+/// The parameter that names the document a request of `method` is routed
+/// by, as [`document_path`] reads it, for the text of `InvalidParams`.
+fn routed_by(method: &str) -> &'static str {
+    match method {
+        "workspace/willRenameFiles" => "files[0].oldUri",
+        "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls" => "item.uri",
+        _ => "textDocument.uri",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{document_path, routed_by};
+    use crate::text::uri::path_to_uri;
+
+    /// `workspace/willRenameFiles` names its document by the first file's
+    /// old URI, so it routes as a request on that document (D-1675).
+    #[test]
+    fn will_rename_files_routes_by_the_first_old_uri() {
+        let dir = std::env::temp_dir();
+        let uri = |name: &str| path_to_uri(&dir.join(name)).unwrap().as_str().to_owned();
+        let on_a = document_path(&json!({ "textDocument": { "uri": uri("a.cheby") } }));
+        assert!(matches!(on_a, Ok(Some(_))), "{on_a:?}");
+        let files = json!({ "files": [
+            { "oldUri": uri("a.cheby"), "newUri": uri("b.cheby") },
+            { "oldUri": uri("c.cheby"), "newUri": uri("d.cheby") },
+        ] });
+        assert_eq!(document_path(&files), on_a);
+        // Nothing to move: the route's fallback, `null`.
+        assert_eq!(document_path(&json!({ "files": [] })), Ok(None));
+        assert_eq!(
+            document_path(&json!({ "files": [{ "oldUri": 3 }] })),
+            Err(())
+        );
+        assert_eq!(routed_by("workspace/willRenameFiles"), "files[0].oldUri");
+        assert_eq!(routed_by("textDocument/rename"), "textDocument.uri");
+    }
 }

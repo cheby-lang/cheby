@@ -1,0 +1,9 @@
+//! Util.
+
+pub fn helper() -> Int {
+  1
+}
+
+pub fn twice() -> Int {
+  helper() + helper()
+}

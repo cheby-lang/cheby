@@ -15,8 +15,8 @@ use super::Server;
 use crate::features::handlers::nav::NavEnv;
 use crate::features::handlers::workspace_symbol::StdSymbols;
 use crate::features::handlers::{
-    code_action, completion, folding, format, hierarchy, hover, inlay, links, nav, selection,
-    signature, symbols, tokens, workspace_symbol,
+    code_action, completion, file_ops, folding, format, hierarchy, hover, inlay, links, nav,
+    rename, selection, signature, symbols, tokens, workspace_symbol,
 };
 use crate::features::ide::completion::StdAccess;
 use crate::features::ide::hover::StdDocs;
@@ -78,6 +78,10 @@ fn nav_env<'a>(cx: &RequestCx<'a>) -> NavEnv<'a> {
 /// is `Package`, so that place is where the client sees it; `declaration`
 /// is `Doc`, as plan §1.10 has it. `completionItem/resolve` names no
 /// document, only the item's `data`, so it is `Workspace`.
+/// `prepareRename` reads only its document and edits nothing, so a
+/// read-only document runs it and hears why (D-1673); `rename` and
+/// `willRenameFiles` edit the package's files, so they are `Package`, the
+/// latter routed by its first file's old URI (D-1675).
 const QUERIES: &[Route] = &[
     Route {
         method: "textDocument/documentSymbol",
@@ -277,6 +281,24 @@ const QUERIES: &[Route] = &[
         class: Class::Doc(tokens::range),
         fallback: null,
         edits: false,
+    },
+    Route {
+        method: "textDocument/prepareRename",
+        class: Class::Doc(rename::prepare_rename),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "textDocument/rename",
+        class: Class::Package(rename::rename),
+        fallback: null,
+        edits: true,
+    },
+    Route {
+        method: "workspace/willRenameFiles",
+        class: Class::Package(file_ops::will_rename_files),
+        fallback: null,
+        edits: true,
     },
 ];
 

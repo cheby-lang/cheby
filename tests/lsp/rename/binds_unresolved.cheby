@@ -1,0 +1,22 @@
+// @decisions: D-1668, D-1698
+//! A rename that would make an unresolved name resolve hides an error,
+//! so it is refused (D-1668), naming the error (D-1698): a function
+//! renamed to a name called elsewhere, a field to a name read elsewhere,
+//! and a local to a name used in its scope.
+
+type Box {
+  width: Int,
+  //> 8:3 rename wide
+}
+
+fn foo() -> Int {
+// ^ rename bar
+  1
+}
+
+fn main() {
+  let b = Box { width: 2 }
+  let total = foo() + b.width
+  //  ^ rename count
+  assert bar() + b.wide + count == 3
+}

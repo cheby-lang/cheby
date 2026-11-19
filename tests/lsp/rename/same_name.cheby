@@ -1,0 +1,8 @@
+// @decisions: D-1389
+//! A rename to the name it has is an empty edit, not `null`.
+
+fn main() {
+  let x = 1
+  //  ^ rename x
+  assert x == 1
+}

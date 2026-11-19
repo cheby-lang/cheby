@@ -41,6 +41,7 @@ use self::stdlib::StdService;
 use crate::server::codes;
 use crate::server::{ClientCaps, ConstValues, Effect, Settings};
 use crate::text::lines::{Bom, LspLines, PositionEncoding};
+use crate::text::uri::UriMap;
 
 /// One snapshot as handlers read it, with its memos (D-1364). The main
 /// loop makes one per snapshot and shares it with every request that the
@@ -189,6 +190,9 @@ pub(crate) struct RequestCx<'a> {
     /// mode, Windows (D-1414), `constants.evaluate` off, or a request on
     /// a std document.
     pub constants: Option<Arc<ConstValues>>,
+    /// The client's spelling of each open document, which an answer that
+    /// names one echoes (A §6.1).
+    pub uris: &'a UriMap,
 }
 
 /// A document's live text and its own parse, never a snapshot (A §3.3).

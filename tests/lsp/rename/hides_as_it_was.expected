@@ -1,0 +1,66 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `total`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_total`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 6
+        },
+        "start": {
+          "character": 6,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0044",
+      "message": "`total` is already bound\nbound again here\nhelp: give this binding a new name, such as `total_2`; names cannot be shadowed (§5.2.3)",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 7
+        },
+        "start": {
+          "character": 6,
+          "line": 7
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 6
+              },
+              "start": {
+                "character": 6,
+                "line": 6
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "first bound here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:7 rename sum
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would hide an error: error[E0044]: `total` is already bound at src/main.cheby:8:7"
+    }
+  },
+  "showMessage": []
+}

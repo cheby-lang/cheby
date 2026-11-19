@@ -1,0 +1,8 @@
+//! A module whose import names a module that does not exist yet.
+
+import moves::helpers
+
+/// The greeting twice.
+pub fn twice() -> String {
+  helpers::greet() + helpers::greet()
+}

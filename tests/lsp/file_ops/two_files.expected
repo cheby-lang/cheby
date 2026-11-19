@@ -1,0 +1,71 @@
+== diagnostics
+{}
+
+== willRename src/alpha.cheby src/first.cheby src/beta.cheby src/lib/second.cheby
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "moves::first",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 4
+              },
+              "start": {
+                "character": 7,
+                "line": 4
+              }
+            }
+          },
+          {
+            "newText": "moves::lib::second",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 5
+              },
+              "start": {
+                "character": 7,
+                "line": 5
+              }
+            }
+          },
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 8
+              },
+              "start": {
+                "character": 9,
+                "line": 8
+              }
+            }
+          },
+          {
+            "newText": "second",
+            "range": {
+              "end": {
+                "character": 28,
+                "line": 8
+              },
+              "start": {
+                "character": 24,
+                "line": 8
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

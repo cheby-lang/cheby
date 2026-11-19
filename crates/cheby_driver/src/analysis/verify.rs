@@ -10,8 +10,9 @@
 //! The steps, in order:
 //!
 //! 1. [`VerifyOutcome::Stale`]: a file that the snapshot read from disk
-//!    differs on disk now, touched or not, or a move's target appeared on
-//!    disk (D-1389, D-1393, S-7).
+//!    differs on disk now, touched or not, a module file under `src/`
+//!    that the snapshot does not have exists on disk (D-1669), or a
+//!    move's target appeared on disk (D-1389, D-1393, S-7).
 //! 2. [`VerifyOutcome::Blocked`]: "before" cannot be trusted, because of a
 //!    cut import, an E0040, or something lost to an internal error. Also
 //!    an edit of a file that is not UTF-8, whose bytes the snapshot does
@@ -23,10 +24,27 @@
 //!    its E0001.
 //! 4. [`VerifyOutcome::Introduces`]: the multiset difference of errors and
 //!    W0007 by code, file and message (S-1). It counts, since a set would
-//!    hide a second identical error. A rename reads `old` as `new` in the
-//!    messages of "before" first, so a message that names the symbol is
+//!    hide a second identical error. A rename, or a move's module paths,
+//!    reads each `old` as its `new` in the messages of "before" first,
+//!    every pair at once (D-1674), so a message that names the symbol is
 //!    not new; a message that names another binding of the old name, which
-//!    the rename leaves alone, is matched as it was.
+//!    the rename leaves alone, is matched as it was. A move that changes a
+//!    module's last segment also reads `old_last::` as `new_last::`, as a
+//!    file that imports the module writes its items (D-1715).
+//! 5. [`VerifyOutcome::Hides`], only when the request asks
+//!    ([`VerifyRequest::hides`], rename alone): the same multisets read the
+//!    other way, the errors of "before" that "after" no longer has
+//!    (D-1668). A W0007 that goes away is no error and does not count.
+//!    Where errors tie on code, file and message, an error of "after" takes
+//!    one of "before" on its own line first, since a rename writes tokens
+//!    only and moves no line, so the place quoted is that of one that went
+//!    (D-1698). When the tie cannot be told apart by line, only the file is
+//!    quoted (D-1709).
+//!
+//! A single-file snapshot (D-1371) is checked as its Q run ran: the
+//! one-module package `script` with the synthetic manifest, for a loose
+//! file and for a file of this repository's `std/` alike (D-1667). Its
+//! stale step lists no `src/`, since the file belongs to no package.
 //!
 //! Limits:
 //!
@@ -48,13 +66,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cheby_diag::{Code, Diagnostic, FileId, SourceMap, Span, TextRange, TextSize, codes};
-use cheby_package::{MANIFEST_FILE, Manifest, PackageError, Targets};
+use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Targets};
 
 use super::plain::{Placed, PlainDiagnostic, PlainEdit, exact_key, plain};
 use super::snapshot::{BaselineEntry, FileLocation, Snapshot};
 use crate::cache::Hash128;
 use crate::frontend::{Frontend, Retain, RunExtras, run_analysis};
+use crate::session::synthetic_manifest;
 use crate::{Error, Module, Package, SourceHashes, parse_file};
+
+/// The package, and the one module, of a single-file snapshot: the name
+/// `analysis/session/single.rs` gives the Q run's (A §6.4, D-1667).
+pub(super) const SINGLE_PACKAGE: &str = "script";
 
 /// An edit plan to check against a snapshot.
 #[derive(Clone, Copy, Debug)]
@@ -66,9 +89,14 @@ pub struct VerifyRequest<'a> {
     /// `willRenameFiles`: old path, new path, one module file each (the
     /// caller expands a folder). Applied after `edits`.
     pub moves: &'a [(PathBuf, PathBuf)],
-    /// A rename: messages of "before" are read with `old` as `new`, at
-    /// identifier boundaries.
-    pub renamed: Option<(&'a str, &'a str)>,
+    /// A rename, or a move's module paths: messages of "before" are read
+    /// with each `old` as its `new`, at identifier boundaries (D-1674).
+    /// Empty for neither.
+    pub renamed: &'a [(&'a str, &'a str)],
+    /// Rename's check that no error of "before" goes away (D-1668): an
+    /// edit that makes one go is [`VerifyOutcome::Hides`]. Fixes and moves
+    /// leave it off, since they exist to remove errors.
+    pub hides: bool,
 }
 
 /// What [`verify`] finds.
@@ -76,10 +104,9 @@ pub struct VerifyRequest<'a> {
 pub enum VerifyOutcome {
     /// The edits add no error and no W0007.
     Clean,
-    /// New errors, or a new W0007, in the order `cheby check` prints them.
-    /// Their ranges lie in the edited text of their file, under its new
-    /// path for a moved file.
-    Introduces(Vec<PlainDiagnostic>),
+    /// New errors, or a new W0007, in the order `cheby check` prints them,
+    /// each with its file and place (D-1671, D-1709).
+    Introduces(Vec<Introduced>),
     /// A closed file differs on disk from the snapshot's text, or a move's
     /// target that the snapshot does not have exists on disk.
     Stale(PathBuf),
@@ -87,6 +114,28 @@ pub enum VerifyOutcome {
     /// internal error. Also when the run on the edited text loses a module
     /// or a body, since "after" then cannot be trusted either.
     Blocked(String),
+    /// With [`VerifyRequest::hides`], errors of "before" that the edited
+    /// text no longer has (D-1668), in the baseline's order, each as the
+    /// snapshot has it, with `path:line:col` of its primary span in the
+    /// snapshot's text (D-1698). The place is the file's path alone when
+    /// errors that tie on code, file and message cannot be told apart, and
+    /// `None` for one with no span (D-1709).
+    Hides(Vec<(Option<String>, BaselineEntry)>),
+}
+
+/// A diagnostic that an edit plan adds (D-1671, D-1709).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Introduced {
+    /// `path:line:col` of its primary span as `cheby check` shows it, or
+    /// the path of [`Introduced::path`] as `cheby check` shows it for a
+    /// diagnostic with no span.
+    pub at: String,
+    /// The file it is in: a file of the edited package, under its new path
+    /// for a moved file. A diagnostic with no span is the manifest's, or
+    /// in single-file mode the one module's.
+    pub path: PathBuf,
+    /// The diagnostic. Its ranges lie in the edited text of its file.
+    pub diagnostic: PlainDiagnostic,
 }
 
 /// One package file of the run on the edited text.
@@ -129,7 +178,11 @@ pub fn verify(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Verify
     let (globals, targets) = snapshot.run_context();
     let (package, files) = build(
         root,
-        Texts { texts, not_utf8 },
+        Texts {
+            by_path: texts,
+            not_utf8,
+            single: snapshot.is_single_file(),
+        },
         targets,
         &mut sources,
         &mut diags,
@@ -153,19 +206,23 @@ pub fn verify(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Verify
         }
     }
     sources.sort(&mut diags);
-    let introduced = introduced(snapshot, request, &sources, &files, &diags);
-    Ok(if introduced.is_empty() {
-        VerifyOutcome::Clean
-    } else {
+    let Compared { introduced, hidden } =
+        compare(snapshot, request, root, &sources, &files, &diags);
+    Ok(if !introduced.is_empty() {
         VerifyOutcome::Introduces(introduced)
+    } else if request.hides && !hidden.is_empty() {
+        VerifyOutcome::Hides(hidden)
+    } else {
+        VerifyOutcome::Clean
     })
 }
 
 /// Step 1: the first file that the snapshot read from disk and that
 /// differs on disk now, or is gone, touched or not (D-1389), else the
-/// first move target that the snapshot does not have and that exists on
-/// disk. A manifest the run replaced by the last good one is compared only
-/// when touched, since it never equals the disk's.
+/// first module file on disk that the snapshot does not have (D-1669),
+/// else the first move target that the snapshot does not have and that
+/// exists on disk. A manifest the run replaced by the last good one is
+/// compared only when touched, since it never equals the disk's.
 ///
 /// # Errors
 ///
@@ -201,6 +258,9 @@ fn stale(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Option<Path
             return Ok(Some(path.clone()));
         }
     }
+    if let Some(path) = new_module(snapshot) {
+        return Ok(Some(path));
+    }
     Ok(request
         .moves
         .iter()
@@ -208,6 +268,29 @@ fn stale(snapshot: &Snapshot, request: &VerifyRequest<'_>) -> Result<Option<Path
             old != new && snapshot.file_of(new).is_none() && std::fs::symlink_metadata(new).is_ok()
         })
         .map(|(_, new)| new.clone()))
+}
+
+/// The first module file under `src/` on disk, in `discover`'s order, that
+/// the snapshot does not have (D-1669): a request may be answered before
+/// the watched-file job adds it (D-1443), and an edit plan would then miss
+/// every occurrence in it. `None` for a single-file snapshot, whose file
+/// belongs to no package, and when `src/` cannot be walked: the Q run's
+/// walk failed then too, or fails on the next run, and reports it, and
+/// the files the snapshot has are compared all the same.
+fn new_module(snapshot: &Snapshot) -> Option<PathBuf> {
+    if snapshot.is_single_file() {
+        return None;
+    }
+    let root = snapshot.root();
+    // E0037 names are skipped, as the Q run's walk skips them, and its
+    // diagnostics are the Q run's to report.
+    let mut skipped = Vec::new();
+    // The package's name only names the modules, which are not needed.
+    let found = cheby_package::discover(root, "main", &mut skipped).ok()?;
+    found
+        .into_iter()
+        .map(|module| root.join(&module.file))
+        .find(|path| snapshot.file_of(path).is_none())
 }
 
 /// The package files that were not UTF-8 in the Q run: those with E0001.
@@ -377,8 +460,11 @@ fn apply(text: &str, mut edits: Vec<&PlainEdit>) -> Option<String> {
 /// The edited texts of a package, by absolute path, and the files among
 /// them that were not UTF-8, whose texts are lossy.
 struct Texts {
-    texts: BTreeMap<PathBuf, String>,
+    by_path: BTreeMap<PathBuf, String>,
     not_utf8: BTreeSet<PathBuf>,
+    /// The snapshot is of one file in single-file mode (D-1371):
+    /// `by_path` holds that file alone, and no manifest.
+    single: bool,
 }
 
 /// Loads the edited texts as `inputs::load` loads a package: the manifest
@@ -387,34 +473,49 @@ struct Texts {
 /// The package is `None` when the edited manifest cannot be used; its
 /// diagnostics are then all there is.
 ///
+/// A single-file snapshot loads as `analyze_single` does instead (D-1667):
+/// the synthetic manifest, which is no file of the result, and the file as
+/// the one module `script`, displayed by its path from `root`, the file's
+/// directory.
+///
 /// # Errors
 ///
 /// An [`Error`] for a missing manifest, a file that is not a module of the
-/// package, a file too large for the source map, or an edited manifest
-/// that keeps none of the snapshot's `targets`.
+/// package, a single-file snapshot that does not hold one file, a file too
+/// large for the source map, or an edited manifest that keeps none of the
+/// snapshot's `targets`.
 fn build(
     root: &Path,
     Texts {
-        mut texts,
+        by_path: mut texts,
         not_utf8,
+        single,
     }: Texts,
     targets: Targets,
     sources: &mut SourceMap,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(Option<Package>, Vec<VerifyFile>), Error> {
-    let manifest_path = root.join(MANIFEST_FILE);
-    let manifest_text = texts
-        .remove(&manifest_path)
-        .ok_or_else(|| Error::new(format!("verify: the package has no {MANIFEST_FILE}")))?;
-    let file = sources
-        .add_file(MANIFEST_FILE, manifest_text.as_str())
-        .map_err(|_| Error::from(PackageError::too_large(MANIFEST_FILE)))?;
-    let mut files = vec![VerifyFile {
-        path: manifest_path,
-        file,
-    }];
-    let Some(mut manifest) = Manifest::parse_at(file, &manifest_text, root, diagnostics) else {
-        return Ok((None, files));
+    let (mut manifest, mut files) = if single {
+        (
+            synthetic_manifest(SINGLE_PACKAGE, sources, diagnostics)?,
+            Vec::new(),
+        )
+    } else {
+        let manifest_path = root.join(MANIFEST_FILE);
+        let manifest_text = texts
+            .remove(&manifest_path)
+            .ok_or_else(|| Error::new(format!("verify: the package has no {MANIFEST_FILE}")))?;
+        let file = sources
+            .add_file(MANIFEST_FILE, manifest_text.as_str())
+            .map_err(|_| Error::from(PackageError::too_large(MANIFEST_FILE)))?;
+        let files = vec![VerifyFile {
+            path: manifest_path,
+            file,
+        }];
+        let Some(manifest) = Manifest::parse_at(file, &manifest_text, root, diagnostics) else {
+            return Ok((None, files));
+        };
+        (manifest, files)
     };
     // The snapshot's targets are the manifest's after `--target`, so this
     // narrows to the session's target and keeps an unedited manifest's.
@@ -424,15 +525,27 @@ fn build(
             "verify: the edited manifest keeps none of the run's targets".to_owned(),
         ));
     }
-    let mut listed = BTreeMap::new();
-    for (path, text) in texts {
-        let module = cheby_package::module_file(root, &manifest.name, &path).ok_or_else(|| {
-            Error::new(format!(
-                "verify: `{}` is not a module of the package",
-                cheby_diag::display_path(&path, root)
-            ))
-        })?;
-        listed.insert(module.display.clone(), (module, path, text));
+    let mut listed: BTreeMap<String, (ModulePath, PathBuf, String)> = BTreeMap::new();
+    if single {
+        let mut texts = texts.into_iter();
+        let (Some((path, text)), None) = (texts.next(), texts.next()) else {
+            return Err(Error::new(
+                "verify: a single-file snapshot holds one file".to_owned(),
+            ));
+        };
+        let display = cheby_diag::display_path(&path, root);
+        listed.insert(display, (ModulePath::root(SINGLE_PACKAGE), path, text));
+    } else {
+        for (path, text) in texts {
+            let module =
+                cheby_package::module_file(root, &manifest.name, &path).ok_or_else(|| {
+                    Error::new(format!(
+                        "verify: `{}` is not a module of the package",
+                        cheby_diag::display_path(&path, root)
+                    ))
+                })?;
+            listed.insert(module.display, (module.path, path, text));
+        }
     }
     let mut modules = Vec::with_capacity(listed.len());
     for (display, (module, path, text)) in listed {
@@ -453,7 +566,7 @@ fn build(
             file: source.file,
         });
         modules.push(Module {
-            path: module.path,
+            path: module,
             source,
             hashes,
             parsed: true,
@@ -504,67 +617,148 @@ fn not_utf8_file(
 }
 
 /// Whether a diagnostic of `code` counts: every error, and W0007, which a
-/// rename that captures a prelude name gives alone (S-1).
+/// rename that captures a prelude name gives alone (S-1). E0037 does not:
+/// the Q run's walk of `src/` reports it, and the edited run, built from
+/// the snapshot's texts, walks nothing. No edit renames a file, and a move
+/// to a name that is not a module name is refused before `verify`
+/// (D-1675), so leaving it out on both sides hides nothing, where counting
+/// it would read each one as an error that a rename makes go away
+/// (D-1668).
 fn counts(code: Code) -> bool {
-    code.severity() == cheby_diag::Severity::Error || code == codes::HIDDEN_PRELUDE_NAME
+    code != codes::INVALID_MODULE_NAME
+        && (code.severity() == cheby_diag::Severity::Error || code == codes::HIDDEN_PRELUDE_NAME)
 }
 
-/// Step 4: the diagnostics of the edited run, sorted, that "before" does
-/// not account for, counted as a multiset.
+/// What [`compare`] finds.
+struct Compared {
+    /// The diagnostics of the edited run that "before" does not account
+    /// for, in the order `cheby check` prints them, each with its place.
+    introduced: Vec<Introduced>,
+    /// The errors of "before" that account for none, each with its place,
+    /// as the snapshot has them (not read as the request renames them), in
+    /// the baseline's order.
+    hidden: Vec<(Option<String>, BaselineEntry)>,
+}
+
+/// The line of `place`, `path:line:col` as `cheby check` shows it.
+fn place_line(place: &str) -> Option<u32> {
+    let mut parts = place.rsplitn(3, ':');
+    let _col: u32 = parts.next()?.parse().ok()?;
+    let line = parts.next()?.parse().ok()?;
+    parts.next().map(|_| line)
+}
+
+/// The path of `place`, `path:line:col`, without its line and column.
+fn place_file(place: &str) -> Option<&str> {
+    place_line(place)?;
+    place.rsplitn(3, ':').nth(2)
+}
+
+/// One entry of "before" in [`compare`].
+struct Entry {
+    /// Its index in the baseline, which a hidden error is reported by, as
+    /// it was and at its place.
+    index: usize,
+    /// The line of its place.
+    line: Option<u32>,
+    /// Its message with every pair read at once: one key per reading when
+    /// several pairs share an `old` (`readings`).
+    new_keys: Vec<BaselineEntry>,
+    /// Its message as it was, when the pairs change it.
+    old_key: Option<BaselineEntry>,
+    /// Whether a diagnostic of "after" took it.
+    used: bool,
+}
+
+/// Steps 4 and 5: the diagnostics of the edited run, sorted, that "before"
+/// does not account for, and the errors of "before" left over, both
+/// counted as multisets.
 ///
-/// With a rename, each "before" entry has two keys: its message with the
-/// old name read as the new one, and its message as it was, for a binding
+/// With a rename or a move, each "before" entry has two keys: its message
+/// with every pair read at once, and its message as it was, for a binding
 /// of the same name that the rename leaves alone. An "after" diagnostic
-/// takes an entry by the first key if one is left, then by the second,
-/// and each entry accounts for one diagnostic only.
-fn introduced(
+/// takes an entry on its own line first, by the first key, then by the
+/// second; then an entry on any line, by the first key, then by the
+/// second (module doc). Each entry accounts for one diagnostic only.
+/// The entries left over are what went away ([`left_over`]).
+fn compare(
     snapshot: &Snapshot,
     request: &VerifyRequest<'_>,
+    root: &Path,
     sources: &SourceMap,
     files: &[VerifyFile],
     diags: &[Diagnostic],
-) -> Vec<PlainDiagnostic> {
+) -> Compared {
     let mut by_new: BTreeMap<BaselineEntry, Vec<usize>> = BTreeMap::new();
     let mut by_old: BTreeMap<BaselineEntry, Vec<usize>> = BTreeMap::new();
-    let mut entries = 0_usize;
-    for (code, path, message) in snapshot.baseline() {
+    let mut entries: Vec<Entry> = Vec::new();
+    for (index, (code, path, message)) in snapshot.baseline().iter().enumerate() {
         if !counts(*code) {
             continue;
         }
         let path = path.as_ref().map(|path| moved(request, path));
-        if let Some((old, new)) = request.renamed {
-            let renamed = rename_in(message, old, new);
-            if renamed != *message {
-                by_old
-                    .entry((*code, path.clone(), message.clone()))
-                    .or_default()
-                    .push(entries);
-            }
-            by_new
-                .entry((*code, path, renamed))
-                .or_default()
-                .push(entries);
-        } else {
-            by_new
-                .entry((*code, path, message.clone()))
-                .or_default()
-                .push(entries);
+        let renamed = readings(message, request.renamed);
+        let at = entries.len();
+        let old_key = renamed
+            .iter()
+            .any(|r| r != message)
+            .then(|| (*code, path.clone(), message.clone()));
+        if let Some(key) = &old_key {
+            by_old.entry(key.clone()).or_default().push(at);
         }
-        entries = entries.saturating_add(1);
+        let new_keys: Vec<BaselineEntry> = renamed
+            .into_iter()
+            .map(|reading| (*code, path.clone(), reading))
+            .collect();
+        for key in &new_keys {
+            by_new.entry(key.clone()).or_default().push(at);
+        }
+        entries.push(Entry {
+            index,
+            line: snapshot.baseline_place(index).and_then(place_line),
+            new_keys,
+            old_key,
+            used: false,
+        });
     }
-    let mut used = vec![false; entries];
-    let mut take = |keys: &mut BTreeMap<BaselineEntry, Vec<usize>>, key: &BaselineEntry| {
-        let list = keys.get_mut(key)?;
-        while let Some(at) = list.pop() {
-            if let Some(slot) = used.get_mut(at)
-                && !*slot
-            {
-                *slot = true;
-                return Some(());
+    // The keys that had an entry taken off its diagnostic's line.
+    let mut loose: BTreeSet<BaselineEntry> = BTreeSet::new();
+    // Takes an unused entry of `key`, the last first: with `line`, only
+    // one on that line.
+    let mut take = |list: &mut BTreeMap<BaselineEntry, Vec<usize>>,
+                    key: &BaselineEntry,
+                    line: Option<Option<u32>>| {
+        let candidates = list.get_mut(key)?;
+        let found = candidates.iter().rposition(|&at| {
+            entries
+                .get(at)
+                .is_some_and(|e| !e.used && line.is_none_or(|line| e.line == line))
+        })?;
+        let at = candidates.remove(found);
+        if let Some(entry) = entries.get_mut(at) {
+            entry.used = true;
+        }
+        if line.is_none() {
+            loose.insert(key.clone());
+        }
+        Some(())
+    };
+    let after = after_keys(sources, files, diags);
+    // The entries on a diagnostic's own line first, by either key, since a
+    // rename moves no line: an error that stands where it stood keeps its
+    // entry, and a new one with the renamed reading of an unrelated entry
+    // cannot take it off its line (D-1709). Within each, the renamed keys
+    // first, so a diagnostic matched by its old message never takes an
+    // entry that a renamed one needs.
+    let mut matched = vec![false; after.len()];
+    for (old, on_line) in [(false, true), (true, true), (false, false), (true, false)] {
+        let list = if old { &mut by_old } else { &mut by_new };
+        for ((_, key, line), done) in after.iter().zip(matched.iter_mut()) {
+            if !*done {
+                *done = take(list, key, on_line.then_some(*line)).is_some();
             }
         }
-        None
-    };
+    }
     let place = |file: FileId| {
         let found = files.iter().find(|f| f.file == file)?;
         Some(Placed {
@@ -572,8 +766,44 @@ fn introduced(
             text: sources.file(file)?.text(),
         })
     };
-    let manifest = files.first().map(|f| f.file);
-    let after: Vec<(&Diagnostic, BaselineEntry)> = diags
+    // A diagnostic outside the files is the manifest's, or in single-file
+    // mode, whose manifest is no file, the one module's.
+    let fallback = files.first().map(|f| f.file);
+    let mut introduced = Vec::new();
+    for ((diag, _, _), matched) in after.iter().zip(matched) {
+        if matched {
+            continue;
+        }
+        let span = diag.primary_span();
+        let owner = span
+            .map(|span| span.file)
+            .filter(|&file| files.iter().any(|f| f.file == file))
+            .or(fallback)
+            .and_then(|owner| Some((owner, files.iter().find(|f| f.file == owner)?)));
+        if let Some((owner, file)) = owner {
+            let at = span.and_then(|span| sources.location(span)).map_or_else(
+                || cheby_diag::display_path(&file.path, root),
+                |at| at.to_string(),
+            );
+            introduced.push(Introduced {
+                at,
+                path: file.path.clone(),
+                diagnostic: plain(diag, owner, place),
+            });
+        }
+    }
+    let hidden = left_over(snapshot, &entries, &loose);
+    Compared { introduced, hidden }
+}
+
+/// The diagnostics of the edited run that count, each with its key, code,
+/// file and message, and the line of its primary span.
+fn after_keys<'d>(
+    sources: &SourceMap,
+    files: &[VerifyFile],
+    diags: &'d [Diagnostic],
+) -> Vec<(&'d Diagnostic, BaselineEntry, Option<u32>)> {
+    diags
         .iter()
         .filter(|d| counts(d.code))
         .map(|diag| {
@@ -584,53 +814,144 @@ fn introduced(
                     .map(|f| f.path.clone())
                     .or_else(|| sources.file(span.file).map(|s| PathBuf::from(s.path())))
             });
-            (diag, (diag.code, path, diag.message.clone()))
+            let line = diag
+                .primary_span()
+                .and_then(|span| sources.location(span))
+                .map(|at| at.line);
+            (diag, (diag.code, path, diag.message.clone()), line)
         })
-        .collect();
-    // The renamed keys first, so a diagnostic matched by its old message
-    // never takes an entry that a renamed one needs.
-    let matched: Vec<bool> = after
+        .collect()
+}
+
+/// The errors of "before" that no diagnostic of "after" took, each with
+/// its place, as the snapshot has them, in the baseline's order: what went
+/// away (D-1668). A W0007 is no error and is left out. One whose key also
+/// had an entry taken off its diagnostic's line (`loose`), or whose key
+/// and line it shares with an entry that was taken, may not be the one
+/// that went, so only its file is quoted (D-1709).
+fn left_over(
+    snapshot: &Snapshot,
+    entries: &[Entry],
+    loose: &BTreeSet<BaselineEntry>,
+) -> Vec<(Option<String>, BaselineEntry)> {
+    entries
         .iter()
-        .map(|(_, key)| take(&mut by_new, key).is_some())
-        .collect();
-    let mut out = Vec::new();
-    for ((diag, key), matched) in after.iter().zip(matched) {
-        if matched || take(&mut by_old, key).is_some() {
-            continue;
+        .enumerate()
+        .filter(|(_, entry)| !entry.used)
+        .filter_map(|(at, entry)| {
+            let found = snapshot.baseline().get(entry.index)?;
+            if found.0.severity() != cheby_diag::Severity::Error {
+                return None;
+            }
+            let tied = entry.line.is_some()
+                && entries.iter().enumerate().any(|(other, e)| {
+                    other != at
+                        && e.used
+                        && e.line == entry.line
+                        && e.new_keys.iter().any(|key| entry.new_keys.contains(key))
+                });
+            let unsure = tied
+                || entry.new_keys.iter().any(|key| loose.contains(key))
+                || entry
+                    .old_key
+                    .as_ref()
+                    .is_some_and(|key| loose.contains(key));
+            let place = snapshot.baseline_place(entry.index).map(|place| {
+                let file = place_file(place).filter(|_| unsure);
+                file.unwrap_or(place).to_owned()
+            });
+            Some((place, found.clone()))
+        })
+        .collect()
+}
+
+/// The readings of `message` with the pairs (`rename_all`): one, unless
+/// several pairs share an `old`, as two moves that give two modules of one
+/// last segment new last segments do (D-1715). Then each choice of one
+/// `new` per such `old` is a reading, since a message does not say which
+/// module it names, and an entry matches by any of them. At most
+/// `MAX_READINGS`, each once, the first the reading of the pairs in order.
+pub(super) fn readings(message: &str, pairs: &[(&str, &str)]) -> Vec<String> {
+    let mut olds: Vec<&str> = Vec::new();
+    for (old, _) in pairs {
+        if !olds.contains(old) {
+            olds.push(old);
         }
-        let span = diag.primary_span();
-        let owner = span
-            .map(|span| span.file)
-            .filter(|&file| files.iter().any(|f| f.file == file))
-            .or(manifest);
-        if let Some(owner) = owner {
-            out.push(plain(diag, owner, place));
+    }
+    if olds.len() == pairs.len() {
+        return vec![rename_all(message, pairs)];
+    }
+    let mut choices: Vec<Vec<(&str, &str)>> = vec![Vec::new()];
+    for old in olds {
+        let mut next = Vec::new();
+        for choice in &choices {
+            for &(o, new) in pairs.iter().filter(|(o, _)| *o == old) {
+                let mut longer = choice.clone();
+                longer.push((o, new));
+                next.push(longer);
+            }
+        }
+        next.truncate(MAX_READINGS);
+        choices = next;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for choice in choices {
+        let reading = rename_all(message, &choice);
+        if !out.contains(&reading) {
+            out.push(reading);
         }
     }
     out
 }
 
-/// `message` with each `old` that stands as a whole identifier read as
-/// `new`: `count` in "`count` is already bound", not in `counter`.
-pub(super) fn rename_in(message: &str, old: &str, new: &str) -> String {
-    if old.is_empty() {
+/// The most readings of one message (`readings`).
+const MAX_READINGS: usize = 16;
+
+/// `message` with the `old` of each pair that stands as a whole
+/// identifier read as its `new` (`count` in "`count` is already bound",
+/// not in `counter`), every pair at once (D-1674): a `new` is
+/// never read again, so the moves `b` to `c` and `a` to `b` read `a` as
+/// `b`, in either order. Where two `old`s start at one place, the longer
+/// is read, so `app::geo::x` is not read as `app::geo` followed by `::x`.
+/// An `old` that ends in `::`, a module's last segment as a qualifier
+/// (D-1715), is read before any name, and never after another `:`, so
+/// `util::` reads `util::Shape` but not `app::util::Shape` or `xutil::`.
+pub(super) fn rename_all(message: &str, pairs: &[(&str, &str)]) -> String {
+    let mut pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .copied()
+        .filter(|(old, _)| !old.is_empty())
+        .collect();
+    if pairs.is_empty() {
         return message.to_owned();
     }
+    pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(message.len());
     let mut rest = message;
     let mut previous: Option<char> = None;
-    while let Some(at) = rest.find(old) {
-        let (head, tail) = rest.split_at(at);
-        let after = tail.get(old.len()..).unwrap_or_default();
-        let before = head.chars().next_back().or(previous);
-        let whole = !before.is_some_and(ident) && !after.chars().next().is_some_and(ident);
-        out.push_str(head);
-        out.push_str(if whole { new } else { old });
-        previous = old.chars().next_back();
-        rest = after;
+    while let Some(c) = rest.chars().next() {
+        let found = if previous.is_some_and(ident) {
+            None
+        } else {
+            pairs.iter().find(|(old, _)| {
+                let qualifier = old.ends_with("::");
+                !(qualifier && previous == Some(':'))
+                    && rest
+                        .strip_prefix(old)
+                        .is_some_and(|after| qualifier || !after.chars().next().is_some_and(ident))
+            })
+        };
+        if let Some((old, new)) = found {
+            out.push_str(new);
+            rest = rest.get(old.len()..).unwrap_or_default();
+            previous = old.chars().next_back();
+        } else {
+            out.push(c);
+            rest = rest.get(c.len_utf8()..).unwrap_or_default();
+            previous = Some(c);
+        }
     }
-    out.push_str(rest);
     out
 }
 

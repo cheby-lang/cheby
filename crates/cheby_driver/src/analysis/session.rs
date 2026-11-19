@@ -51,7 +51,7 @@ use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Target, T
 
 use super::inputs::{DiskView, Loaded, LoadedFile, Overlay, OverlayFile, TextOrigin, load};
 use super::plain::{InputsKey, Placed, PlainDiagnostic, exact_key, plain};
-use super::snapshot::{BaselineEntry, Parts, Snapshot, SnapshotId};
+use super::snapshot::{Parts, PlacedEntry, Snapshot, SnapshotId};
 use crate::cache::Hash128;
 use crate::frontend::{CutCycles, Frontend, Retain, RunExtras, run_analysis};
 use crate::{Error, Module, Package, SourceHashes, parse_file};
@@ -646,7 +646,7 @@ impl Session {
         sources: SourceMap,
         files: &[LoadedFile],
         broken: &BTreeSet<FileId>,
-        baseline: Vec<BaselineEntry>,
+        baseline: Vec<PlacedEntry>,
         context: RunContext,
     ) -> Arc<Snapshot> {
         Arc::new(Snapshot::new(Parts {
@@ -1143,9 +1143,10 @@ fn newest_edit(root: &Path, package: &str, overlay: &Overlay) -> Option<ModulePa
         .map(|(_, path)| path)
 }
 
-/// The run's diagnostics as a sorted multiset of code, file and message.
-fn baseline(run: &RunFiles<'_>, diags: &[Diagnostic]) -> Vec<BaselineEntry> {
-    let mut entries: Vec<BaselineEntry> = diags
+/// The run's diagnostics as a sorted multiset of code, file and message,
+/// each with its place (D-1698).
+fn baseline(run: &RunFiles<'_>, diags: &[Diagnostic]) -> Vec<PlacedEntry> {
+    let mut entries: Vec<PlacedEntry> = diags
         .iter()
         .map(|d| {
             let path = d.primary_span().and_then(|span| {
@@ -1155,10 +1156,17 @@ fn baseline(run: &RunFiles<'_>, diags: &[Diagnostic]) -> Vec<BaselineEntry> {
                     .map(|f| f.path.clone())
                     .or_else(|| run.sources.file(span.file).map(|s| PathBuf::from(s.path())))
             });
-            (d.code, path, d.message.clone())
+            let place = d
+                .primary_span()
+                .and_then(|span| run.sources.location(span))
+                .map(|at| at.to_string());
+            ((d.code, path, d.message.clone()), place)
         })
         .collect();
-    entries.sort();
+    // By entry alone, and stably, so entries that tie keep the order of
+    // `diags`, which `SourceMap::sort` put in file order: a place's text
+    // would put `:10:` before `:5:` (D-1698).
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
 }
 

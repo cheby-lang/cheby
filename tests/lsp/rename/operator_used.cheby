@@ -1,0 +1,17 @@
+// @decisions: D-1391
+//! An operator's function that a `+` uses: renaming it is refused.
+
+type V {
+  V(Int),
+}
+
+fn add(a: V, b: V) -> V {
+// ^ rename plus
+  let V(x) = a
+  let V(y) = b
+  V(x + y)
+}
+
+fn main() {
+  assert V(1) + V(2) == V(3)
+}

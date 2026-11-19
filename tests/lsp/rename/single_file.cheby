@@ -1,0 +1,17 @@
+// @decisions: D-1667, D-1671
+// @package: none
+//! A file outside every package is renamed as a package's module is, and
+//! checked the same way (D-1667): a local and a function pass, and a name
+//! that would shadow a function is refused.
+
+fn double(n: Int) -> Int {
+// ^ rename twice
+  n * 2
+}
+
+fn main() {
+  let x = double(2)
+  //  ^ rename y
+  //  ^ rename double
+  assert x == 4
+}

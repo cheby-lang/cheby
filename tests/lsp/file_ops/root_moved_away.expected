@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== willRename src/main.cheby src/start.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: `src/main.cheby` is the package's root module and cannot move"
+  ]
+}

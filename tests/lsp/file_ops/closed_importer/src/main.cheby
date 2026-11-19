@@ -1,0 +1,12 @@
+// @decisions: D-1445, D-1674, D-1676, D-1712
+// @steps: close src/other.cheby, willRename src/util.cheby src/helpers.cheby
+//! The root module. `other` imports `util` and is closed, so its edit
+//! has `version: null` (D-1445), and the applied-edit check opens it from
+//! disk.
+
+import moves::other
+import std::io
+
+fn main() {
+  io::println(other::hello())
+}

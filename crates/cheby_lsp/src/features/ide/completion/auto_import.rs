@@ -39,8 +39,10 @@
 //!   to import ranks 40 for a loaded module and 60 for one of std's
 //!   index, as a pipe's function to import does (X §4.3), and one the
 //!   file imports by name comes only by that name, not through its
-//!   module (D-1550). In a type an interface is a type and is written
-//!   with no `::`.
+//!   module (D-1550). An interface with no function, embedded ones
+//!   counted, is left out wherever it starts a path, and after `|>` one
+//!   with no function that takes `Self` (D-1681). In a type an interface
+//!   is a type and is written with no `::`, so every one is offered.
 //! - **Order and cap**: the items to import by name, then module path, at
 //!   most [`CAP`] items. When more match, the list is incomplete, so the
 //!   client asks again as the word grows. [`admits`] and [`push_capped`]
@@ -396,6 +398,19 @@ fn fits(cx: &CompletionCx<'_>, want: Want, kind: DefKind) -> bool {
     }
 }
 
+/// Whether the item `def`, of `kind`, names a function where `want`
+/// writes an interface as a path's segment: an interface with no
+/// function, or after `|>` none that takes `Self`, is left out there,
+/// and kept as a type (D-1681). Any other item passes.
+fn names_functions(cx: &CompletionCx<'_>, want: Want, def: DefId, kind: DefKind) -> bool {
+    match want {
+        Want::Types => true,
+        Want::Values | Want::Interfaces { .. } => {
+            kind != DefKind::Interface || cx.interface_names_functions(def)
+        }
+    }
+}
+
 /// Whether `partial` is a subsequence of `name`, ignoring ASCII case.
 fn matches(partial: &str, name: &str) -> bool {
     let mut chars = name.chars();
@@ -454,7 +469,10 @@ fn loaded<'s>(
         for def in defs {
             let Some(item) = cx.item(def) else { continue };
             let name = cx.name_text(item.name);
-            if item.targets.intersection(targets) != targets || !matches(partial, name) {
+            if item.targets.intersection(targets) != targets
+                || !matches(partial, name)
+                || !names_functions(cx, want, def, item.kind)
+            {
                 continue;
             }
             match (binding, others.as_deref_mut()) {

@@ -16,16 +16,20 @@
 
 use lsp_types::{
     CallHierarchyServerCapability, CodeActionKind, CodeActionOptions, CodeActionProviderCapability,
-    CompletionOptions, DeclarationCapability, DocumentLinkOptions, FoldingRangeProviderCapability,
-    HoverProviderCapability, InlayHintOptions, InlayHintServerCapabilities, OneOf,
-    PositionEncodingKind, SaveOptions, SelectionRangeProviderCapability, ServerCapabilities,
-    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TypeDefinitionProviderCapability,
-    WorkDoneProgressOptions, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    CompletionOptions, DeclarationCapability, DocumentLinkOptions, FileOperationFilter,
+    FileOperationPattern, FileOperationPatternKind, FileOperationRegistrationOptions,
+    FoldingRangeProviderCapability, HoverProviderCapability, InlayHintOptions,
+    InlayHintServerCapabilities, OneOf, PositionEncodingKind, RenameOptions, SaveOptions,
+    SelectionRangeProviderCapability, ServerCapabilities, SignatureHelpOptions,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, TypeDefinitionProviderCapability, WorkDoneProgressOptions,
+    WorkspaceFileOperationsServerCapabilities, WorkspaceFoldersServerCapabilities,
+    WorkspaceServerCapabilities,
 };
 use serde_json::Value;
 
 use crate::features::handlers::completion::CompletionCaps;
+use crate::features::handlers::edit::EditCaps;
 use crate::features::handlers::folding::FoldingCaps;
 use crate::features::handlers::hover::HoverCaps;
 use crate::features::handlers::nav::LinkCaps;
@@ -70,6 +74,9 @@ pub(crate) struct ClientCaps {
     pub completion: CompletionCaps,
     /// `textDocument.signatureHelp.signatureInformation`.
     pub signature: SignatureCaps,
+    /// `workspace.workspaceEdit` and `textDocument.rename`: the shape of a
+    /// workspace edit and its annotations.
+    pub edit: EditCaps,
 }
 
 impl ClientCaps {
@@ -109,6 +116,7 @@ impl ClientCaps {
             links: LinkCaps::from_params(params),
             completion: CompletionCaps::from_params(params),
             signature: SignatureCaps::from_params(params),
+            edit: EditCaps::from_params(params),
         }
     }
 
@@ -126,6 +134,9 @@ impl ClientCaps {
 /// its items' docs later, signature help triggers on `(` and `,`
 /// (D-1379, X §9.2), and inlay hints are whole when sent (plan §1.10).
 /// Semantic tokens are `full` and `range` with no `delta` (D-1396).
+/// Rename has `prepareRename`, which refuses with a reason (D-1673), and
+/// `willRenameFiles` covers `.cheby` files and folders of `file` URIs, so
+/// a move edits its importers (D-1379, D-1675).
 pub(crate) fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
     ServerCapabilities {
         position_encoding: Some(encoding.kind()),
@@ -179,14 +190,40 @@ pub(crate) fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilit
         }),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         semantic_tokens_provider: Some(tokens::provider()),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        })),
         workspace: Some(WorkspaceServerCapabilities {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
                 change_notifications: Some(OneOf::Left(true)),
             }),
-            file_operations: None,
+            file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                will_rename: Some(will_rename_filters()),
+                ..WorkspaceFileOperationsServerCapabilities::default()
+            }),
         }),
         ..ServerCapabilities::default()
+    }
+}
+
+/// The files `willRenameFiles` is sent for: `.cheby` files and folders,
+/// which may hold some (D-1379).
+fn will_rename_filters() -> FileOperationRegistrationOptions {
+    let filter = |glob: &str, matches| FileOperationFilter {
+        scheme: Some("file".to_owned()),
+        pattern: FileOperationPattern {
+            glob: glob.to_owned(),
+            matches: Some(matches),
+            options: None,
+        },
+    };
+    FileOperationRegistrationOptions {
+        filters: vec![
+            filter("**/*.cheby", FileOperationPatternKind::File),
+            filter("**", FileOperationPatternKind::Folder),
+        ],
     }
 }
 
@@ -225,6 +262,8 @@ mod tests {
             "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
                 "semanticTokensProvider"
             }
+            "textDocument/prepareRename" | "textDocument/rename" => "renameProvider",
+            "workspace/willRenameFiles" => WILL_RENAME,
             other => panic!("no provider is known for `{other}`"),
         };
         let mut routed: Vec<&str> = super::super::routes::query_methods()
@@ -239,8 +278,41 @@ mod tests {
             .map(String::as_str)
             .filter(|key| key.ends_with("Provider"))
             .collect();
+        // File operations are advertised under `workspace`, not as a
+        // provider.
+        if caps.pointer(WILL_RENAME).is_some_and(|v| !v.is_null()) {
+            advertised.push(WILL_RENAME);
+        }
         advertised.sort_unstable();
         assert_eq!(advertised, routed);
+    }
+
+    /// Where `willRenameFiles` is advertised.
+    const WILL_RENAME: &str = "/workspace/fileOperations/willRename";
+
+    /// Rename asks `prepareRename` first, and `willRenameFiles` is sent
+    /// for `.cheby` files and for folders, on disk only (D-1379).
+    #[test]
+    fn rename_has_prepare_and_will_rename_covers_files_and_folders() {
+        let caps = serde_json::to_value(server_capabilities(PositionEncoding::Utf16))
+            .expect("capabilities serialize");
+        assert_eq!(
+            caps["renameProvider"],
+            serde_json::json!({ "prepareProvider": true })
+        );
+        assert_eq!(
+            caps.pointer(WILL_RENAME),
+            Some(&serde_json::json!({ "filters": [
+                { "scheme": "file", "pattern": { "glob": "**/*.cheby", "matches": "file" } },
+                { "scheme": "file", "pattern": { "glob": "**", "matches": "folder" } },
+            ] }))
+        );
+        assert_eq!(
+            caps.pointer("/workspace/fileOperations")
+                .and_then(Value::as_object)
+                .map(|ops| ops.keys().cloned().collect::<Vec<_>>()),
+            Some(vec!["willRename".to_owned()])
+        );
     }
 
     /// Semantic tokens are `full` and `range` with E's legend, and no

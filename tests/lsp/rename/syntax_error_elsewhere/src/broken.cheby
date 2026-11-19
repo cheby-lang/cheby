@@ -1,0 +1,5 @@
+//! A module with a grammar error.
+
+pub fn broken( -> Int {
+  1
+}

@@ -7,9 +7,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cheby_diag::{TextRange, TextSize, codes};
+use cheby_diag::{Severity, TextRange, TextSize, codes};
 use cheby_iface::Globals;
-use cheby_package::MANIFEST_FILE;
+use cheby_package::{MANIFEST_FILE, ModulePath};
 
 use super::{
     Overlay, OverlayFile, PackageKind, PlainEdit, Session, SessionConfig, Snapshot, VerifyOutcome,
@@ -29,11 +29,18 @@ impl Drop for Temp {
 
 /// A package `name` with these files, `cheby.toml` included.
 fn package(name: &str, files: &[(&str, &str)]) -> Temp {
+    let manifest = [(MANIFEST_FILE, MANIFEST)];
+    directory(name, &[&manifest, files].concat())
+}
+
+/// A fresh directory `name` with these files and nothing else.
+fn directory(name: &str, files: &[(&str, &str)]) -> Temp {
     let dir = std::env::temp_dir().join(format!("cheby_verify_{}_{name}", std::process::id()));
     if dir.exists() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
-    for (path, text) in std::iter::once(&(MANIFEST_FILE, MANIFEST)).chain(files) {
+    std::fs::create_dir_all(&dir).unwrap();
+    for (path, text) in files {
         let path = dir.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
@@ -68,6 +75,33 @@ fn snapshot(root: &Path, open: &[(&str, &str)]) -> Arc<Snapshot> {
     live.snapshot.unwrap()
 }
 
+/// The snapshot of a single-file session over `file` (D-1371), open with
+/// `text`. `strict` when no package is above the file.
+fn single_snapshot(file: &Path, strict: bool, text: &str) -> Arc<Snapshot> {
+    let open = OverlayFile {
+        text: Arc::from(text),
+        version: 1,
+        stamp: 1,
+    };
+    let overlay = Overlay {
+        files: [(file.to_path_buf(), open)].into(),
+    };
+    let mut session = Session::new(SessionConfig {
+        root: file.parent().unwrap().to_path_buf(),
+        kind: PackageKind::SingleFile {
+            file: file.to_path_buf(),
+            strict,
+        },
+        target: None,
+        globals: Arc::new(Globals::new()),
+    });
+    let live = session.analyze_live(&overlay).unwrap();
+    assert_eq!(live.failed, None);
+    let snapshot = live.snapshot.unwrap();
+    assert!(snapshot.is_single_file());
+    snapshot
+}
+
 /// The edit that replaces the `n`th `old` (from 0) of `text`, the file at
 /// `path`, with `new`.
 fn replace(path: &Path, text: &str, old: &str, n: usize, new: &str) -> PlainEdit {
@@ -93,7 +127,38 @@ const fn edits(edits: &[PlainEdit]) -> VerifyRequest<'_> {
     VerifyRequest {
         edits,
         moves: &[],
-        renamed: None,
+        renamed: &[],
+        hides: false,
+    }
+}
+
+/// A rename's request: these edits, `old` read as `new`, and the check
+/// that no error goes away (D-1668).
+const fn rename<'a>(edits: &'a [PlainEdit], pair: &'a [(&'a str, &'a str)]) -> VerifyRequest<'a> {
+    VerifyRequest {
+        edits,
+        moves: &[],
+        renamed: pair,
+        hides: true,
+    }
+}
+
+/// The codes and messages of an outcome's hidden errors.
+fn hidden(outcome: &VerifyOutcome) -> Vec<(String, Option<PathBuf>, String)> {
+    match outcome {
+        VerifyOutcome::Hides(entries) => entries
+            .iter()
+            .map(|(_, (code, path, message))| (code.to_string(), path.clone(), message.clone()))
+            .collect(),
+        other => panic!("expected hidden errors, got {other:?}"),
+    }
+}
+
+/// The places of an outcome's hidden errors.
+fn hidden_places(outcome: &VerifyOutcome) -> Vec<Option<String>> {
+    match outcome {
+        VerifyOutcome::Hides(entries) => entries.iter().map(|(at, _)| at.clone()).collect(),
+        other => panic!("expected hidden errors, got {other:?}"),
     }
 }
 
@@ -102,7 +167,7 @@ fn introduced(outcome: &VerifyOutcome) -> Vec<(String, String)> {
     match outcome {
         VerifyOutcome::Introduces(diags) => diags
             .iter()
-            .map(|d| (d.code.to_string(), d.message.clone()))
+            .map(|i| (i.diagnostic.code.to_string(), i.diagnostic.message.clone()))
             .collect(),
         other => panic!("expected new diagnostics, got {other:?}"),
     }
@@ -124,7 +189,7 @@ fn verify_refuses_prelude_capture() {
     let main = temp.0.join("src/main.cheby");
     let edit = [replace(&main, CAPTURE, "Foo", 0, "Some")];
     let request = VerifyRequest {
-        renamed: Some(("Foo", "Some")),
+        renamed: &[("Foo", "Some")],
         ..edits(&edit)
     };
     let outcome = verify(&snapshot, &request).unwrap();
@@ -135,15 +200,19 @@ fn verify_refuses_prelude_capture() {
     };
     let w0007 = diags
         .iter()
-        .find(|d| d.code == codes::HIDDEN_PRELUDE_NAME)
+        .find(|i| i.diagnostic.code == codes::HIDDEN_PRELUDE_NAME)
         .unwrap();
-    // The range lies in the edited text: the new name.
+    // The range lies in the edited text: the new name, which `at` places
+    // as `cheby check` does, in the file `path` names (D-1671, D-1709).
     let edited = CAPTURE.replacen("Foo", "Some", 1);
-    assert_eq!(w0007.range.unwrap().slice(&edited), Some("Some"));
+    let range = w0007.diagnostic.range.unwrap();
+    assert_eq!(range.slice(&edited), Some("Some"));
+    assert_eq!(w0007.at, "src/main.cheby:6:3");
+    assert_eq!(w0007.path, main);
     // A name that hides nothing passes.
     let edit = [replace(&main, CAPTURE, "Foo", 0, "Bar")];
     let request = VerifyRequest {
-        renamed: Some(("Foo", "Bar")),
+        renamed: &[("Foo", "Bar")],
         ..edits(&edit)
     };
     assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
@@ -184,9 +253,8 @@ fn verify_sees_past_a_broken_module() {
     };
     let edited = UTIL.replacen('1', "\"x\"", 1);
     assert!(
-        diags
-            .iter()
-            .any(|d| d.range.and_then(|r| r.slice(&edited)) == Some("\"x\"")),
+        diags.iter().any(|i| i.path == util
+            && i.diagnostic.range.and_then(|r| r.slice(&edited)) == Some("\"x\"")),
         "{diags:?}"
     );
     let edit = [replace(&util, UTIL, "1", 0, "2")];
@@ -252,7 +320,7 @@ fn verify_rename_keeps_old_messages() {
     let main = temp.0.join("src/main.cheby");
     let all = replace_all(&main, SHADOW, "total", "amount");
     let request = VerifyRequest {
-        renamed: Some(("total", "amount")),
+        renamed: &[("total", "amount")],
         ..edits(&all)
     };
     assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
@@ -473,7 +541,7 @@ fn verify_rename_keeps_another_binding_s_message() {
         replace(&main, TWO_TOTALS, "total", 4, "amount"),
     ];
     let request = VerifyRequest {
-        renamed: Some(("total", "amount")),
+        renamed: &[("total", "amount")],
         ..edits(&edit)
     };
     assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
@@ -486,7 +554,7 @@ fn verify_rename_keeps_another_binding_s_message() {
         replacement: "  let total = 4\n".to_owned(),
     });
     let request = VerifyRequest {
-        renamed: Some(("total", "amount")),
+        renamed: &[("total", "amount")],
         ..edits(&both)
     };
     let found = introduced(&verify(&snapshot, &request).unwrap());
@@ -554,10 +622,31 @@ fn verify_rejects_a_bad_request() {
 #[test]
 fn rename_reads_whole_names_only() {
     assert_eq!(
-        verify::rename_in("`count` and `counter` and count", "count", "n"),
+        verify::rename_all("`count` and `counter` and count", &[("count", "n")]),
         "`n` and `counter` and n"
     );
-    assert_eq!(verify::rename_in("aa", "a", "b"), "aa");
+    assert_eq!(verify::rename_all("aa", &[("a", "b")]), "aa");
+    assert_eq!(verify::rename_all("aa", &[("", "b")]), "aa");
+}
+
+/// D-1674: every pair is read at once, so a chain of moves in either order
+/// reads each path once, and the longer of two paths that start at one
+/// place is read.
+#[test]
+fn rename_reads_pairs_at_once() {
+    let message = "`app::a` and `app::b`";
+    let chain = [("app::a", "app::b"), ("app::b", "app::c")];
+    assert_eq!(verify::rename_all(message, &chain), "`app::b` and `app::c`");
+    let reversed = [("app::b", "app::c"), ("app::a", "app::b")];
+    assert_eq!(
+        verify::rename_all(message, &reversed),
+        "`app::b` and `app::c`"
+    );
+    let folder = [("app::geo", "app::shapes"), ("app::geo::x", "app::y")];
+    assert_eq!(
+        verify::rename_all("`app::geo::x`, `app::geo`, `app::geo::z`", &folder),
+        "`app::y`, `app::shapes`, `app::shapes::z`"
+    );
 }
 
 /// The diagnostics of a Q-run report, by path.
@@ -642,4 +731,633 @@ fn concurrent_runs_share_globals() {
             "round {round}"
         );
     }
+}
+
+/// A loose script: `total` is a local of `main`.
+const SCRIPT: &str = "//! A script.\n\nimport std::io\n\nfn main() {\n  let total = 1\n  io::println(\"{total}\")\n}\n";
+
+/// D-1667: a loose file is checked as the one-module package `script`,
+/// as its Q run is. A rename passes, an edit that adds an error is seen,
+/// and a `src/` beside the file is no package's, so it is not listed
+/// (D-1669). The same holds for a file in a package that is none of its
+/// modules.
+#[test]
+fn verify_single_file_loose() {
+    let temp = directory(
+        "single_loose",
+        &[("script.cheby", SCRIPT), ("src/main.cheby", MAIN_UTIL)],
+    );
+    assert_eq!(crate::find_package_root(&temp.0), None, "a package above");
+    let file = temp.0.join("script.cheby");
+    let snapshot = single_snapshot(&file, true, SCRIPT);
+    let modules: Vec<_> = snapshot
+        .local_modules()
+        .filter_map(|m| m.path().cloned())
+        .collect();
+    assert_eq!(modules, [ModulePath::root(verify::SINGLE_PACKAGE)]);
+    let all = replace_all(&file, SCRIPT, "total", "amount");
+    let pair = [("total", "amount")];
+    assert_eq!(
+        verify(&snapshot, &rename(&all, &pair)).unwrap(),
+        VerifyOutcome::Clean
+    );
+    let edit = [replace(&file, SCRIPT, "1", 0, "missing")];
+    let found = introduced(&verify(&snapshot, &edits(&edit)).unwrap());
+    assert!(
+        found
+            .iter()
+            .any(|(code, m)| code.starts_with('E') && m.contains("missing")),
+        "{found:?}"
+    );
+    // A file in a package that is not one of its modules.
+    let package = package(
+        "single_inside",
+        &[
+            ("src/main.cheby", MAIN_UTIL),
+            ("tools/script.cheby", SCRIPT),
+        ],
+    );
+    let file = package.0.join("tools/script.cheby");
+    let snapshot = single_snapshot(&file, false, SCRIPT);
+    let all = replace_all(&file, SCRIPT, "total", "amount");
+    assert_eq!(
+        verify(&snapshot, &rename(&all, &pair)).unwrap(),
+        VerifyOutcome::Clean
+    );
+}
+
+/// D-1667: a file of this repository's `std/` opens in single-file mode,
+/// where it has errors that std's own rules would not give. They are in
+/// "before" and "after" alike, so a rename passes, and a new error is
+/// still seen.
+#[test]
+fn verify_single_file_std() {
+    let text = crate::std_lib::find("option").unwrap().source;
+    let temp = directory("single_std", &[("std/option.cheby", text)]);
+    assert_eq!(crate::find_package_root(&temp.0), None, "a package above");
+    let file = temp.0.join("std/option.cheby");
+    let snapshot = single_snapshot(&file, true, text);
+    assert!(
+        snapshot
+            .baseline()
+            .iter()
+            .any(|(code, _, _)| code.severity() == Severity::Error),
+        "{:?}",
+        snapshot.baseline()
+    );
+    let all = replace_all(&file, text, "inner_none", "nested_none");
+    assert_eq!(all.len(), 2);
+    let pair = [("inner_none", "nested_none")];
+    assert_eq!(
+        verify(&snapshot, &rename(&all, &pair)).unwrap(),
+        VerifyOutcome::Clean
+    );
+    let edit = [replace(&file, text, "inner_none", 1, "inner_nothing")];
+    let found = introduced(&verify(&snapshot, &edits(&edit)).unwrap());
+    assert!(
+        found.iter().any(|(_, m)| m.contains("inner_nothing")),
+        "{found:?}"
+    );
+}
+
+/// `main` calls `util::fine`, which `util` does not have.
+const MAIN_FINE: &str = "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::ok()\n  let _ = util::fine()\n}\n";
+
+/// D-1668: renaming `ok` to `fine` binds the unresolved `util::fine`, so
+/// its error goes away and the rename is refused, by the error as it read.
+#[test]
+fn verify_hides_an_unresolved_path() {
+    let temp = package(
+        "hides_path",
+        &[("src/main.cheby", MAIN_FINE), ("src/util.cheby", UTIL)],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let util = temp.0.join("src/util.cheby");
+    let edit = [
+        replace(&util, UTIL, "ok", 0, "fine"),
+        replace(&main, MAIN_FINE, "ok", 0, "fine"),
+    ];
+    let pair = [("ok", "fine")];
+    let found = hidden(&verify(&snapshot, &rename(&edit, &pair)).unwrap());
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (code, path, message) = &found[0];
+    assert!(code.starts_with('E'), "{found:?}");
+    assert_eq!(path.as_deref(), Some(main.as_path()));
+    assert!(message.contains("`fine`"), "{found:?}");
+    // A name that binds nothing unresolved passes.
+    let edit = [
+        replace(&util, UTIL, "ok", 0, "good"),
+        replace(&main, MAIN_FINE, "ok", 0, "good"),
+    ];
+    assert_eq!(
+        verify(&snapshot, &rename(&edit, &[("ok", "good")])).unwrap(),
+        VerifyOutcome::Clean
+    );
+}
+
+/// A record with a field `x` and an access to a field `y` it lacks.
+const FIELD: &str = "//! Root.\n\ntype Point {\n  x: Int,\n}\n\nfn get(p: Point) -> Int {\n  p.y\n}\n\n\
+                     fn main() {\n  let _ = get\n}\n";
+
+/// D-1668: renaming the field `x` to `y` makes the access `p.y` legal,
+/// so its error goes away.
+#[test]
+fn verify_hides_a_field_error() {
+    let temp = package("hides_field", &[("src/main.cheby", FIELD)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let errors: Vec<_> = snapshot
+        .baseline()
+        .iter()
+        .filter(|(code, _, _)| code.severity() == Severity::Error)
+        .collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let main = temp.0.join("src/main.cheby");
+    let edit = [replace(&main, FIELD, "x: Int", 0, "y: Int")];
+    let found = hidden(&verify(&snapshot, &rename(&edit, &[("x", "y")])).unwrap());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, errors[0].0.to_string());
+}
+
+/// A body that binds `total` twice (E0044 at the second).
+const TWICE: &str =
+    "//! Root.\n\nfn main() {\n  let total = 1\n  let total = 2\n  assert total == 2\n}\n";
+
+/// D-1668, D-1698: renaming the second `total` to `sum` makes its E0044
+/// go away. The hidden error is the one the user sees, by its message as
+/// it was, which names `total`, never `sum`, and at its place.
+#[test]
+fn verify_hides_an_error_as_it_was() {
+    let temp = package("hides_as_was", &[("src/main.cheby", TWICE)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let edit = [
+        replace(&main, TWICE, "total", 1, "sum"),
+        replace(&main, TWICE, "total", 2, "sum"),
+    ];
+    let outcome = verify(&snapshot, &rename(&edit, &[("total", "sum")])).unwrap();
+    assert_eq!(
+        hidden(&outcome),
+        [(
+            "E0044".to_owned(),
+            Some(main),
+            "`total` is already bound".to_owned()
+        )]
+    );
+    assert_eq!(
+        hidden_places(&outcome),
+        [Some("src/main.cheby:5:7".to_owned())]
+    );
+}
+
+/// A root module, and a directory under `src/` whose name is no module
+/// name: the Q run's walk reports it as E0037.
+const ROOT_WITH_LOCAL: &str = "//! Root.\n\nfn main() {\n  let total = 1\n  assert total == 1\n}\n";
+
+/// D-1668: E0037, which only the Q run's walk of `src/` reports, is
+/// compared on neither side (`counts`), since the edited run walks nothing,
+/// so the E0037 of a directory with an invalid name never reads as an
+/// error that a rename makes go away.
+#[test]
+fn verify_does_not_hide_an_e0037() {
+    let temp = package(
+        "keeps_e0037",
+        &[
+            ("src/main.cheby", ROOT_WITH_LOCAL),
+            ("src/test-data/sample.txt", "data\n"),
+        ],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    assert!(
+        snapshot
+            .baseline()
+            .iter()
+            .any(|(code, _, _)| *code == codes::INVALID_MODULE_NAME),
+        "{:?}",
+        snapshot.baseline()
+    );
+    let main = temp.0.join("src/main.cheby");
+    let edit = replace_all(&main, ROOT_WITH_LOCAL, "total", "sum");
+    assert_eq!(
+        verify(&snapshot, &rename(&edit, &[("total", "sum")])).unwrap(),
+        VerifyOutcome::Clean
+    );
+}
+
+/// A body that reads a `b` it never binds, beside a local `a`.
+const LOCAL: &str =
+    "//! Root.\n\nfn main() {\n  let _ = f()\n}\n\nfn f() -> Int {\n  let a = 1\n  b\n}\n";
+
+/// D-1668: renaming the local `a` to `b` binds the unresolved `b`.
+#[test]
+fn verify_hides_a_local() {
+    let temp = package("hides_local", &[("src/main.cheby", LOCAL)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let at = TextSize::try_from(LOCAL.find("let a").unwrap().checked_add(4).unwrap()).unwrap();
+    let edit = [PlainEdit {
+        path: main.clone(),
+        range: TextRange::at(at, TextSize::from(1_u32)),
+        replacement: "b".to_owned(),
+    }];
+    let found = hidden(&verify(&snapshot, &rename(&edit, &[("a", "b")])).unwrap());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].1.as_deref(), Some(main.as_path()));
+    assert!(found[0].2.contains("`b`"), "{found:?}");
+    // `c` binds nothing.
+    let edit = [PlainEdit {
+        replacement: "c".to_owned(),
+        ..edit[0].clone()
+    }];
+    assert_eq!(
+        verify(&snapshot, &rename(&edit, &[("a", "c")])).unwrap(),
+        VerifyOutcome::Clean
+    );
+}
+
+/// `main` calls `util::secret`, which is private to `util`: an E0043 in
+/// `main`.
+const MAIN_SECRET: &str =
+    "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::secret()\n}\n";
+const UTIL_SECRET: &str = "//! Util.\n\npriv fn secret() -> Int {\n  1\n}\n";
+
+/// D-1668: making `secret` visible, as "Make `pub`" does, removes an
+/// error in another file on purpose, so without `hides` the edit is clean.
+/// With it, the same edit hides the E0043.
+#[test]
+fn verify_does_not_hide_without_the_flag() {
+    let temp = package(
+        "no_hides",
+        &[
+            ("src/main.cheby", MAIN_SECRET),
+            ("src/util.cheby", UTIL_SECRET),
+        ],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    let util = temp.0.join("src/util.cheby");
+    let edit = [replace(&util, UTIL_SECRET, "priv ", 0, "")];
+    assert_eq!(
+        verify(&snapshot, &edits(&edit)).unwrap(),
+        VerifyOutcome::Clean
+    );
+    let asked = VerifyRequest {
+        hides: true,
+        ..edits(&edit)
+    };
+    let found = hidden(&verify(&snapshot, &asked).unwrap());
+    assert_eq!(
+        found,
+        [(
+            "E0043".to_owned(),
+            Some(temp.0.join("src/main.cheby")),
+            "`secret` is private to module `app::util`".to_owned()
+        )]
+    );
+}
+
+/// D-1669: a module file that appeared on disk after the snapshot, which a
+/// watched-file job has not added yet, makes any edit stale, at any depth.
+/// A file that is no module is not listed.
+#[test]
+fn verify_stale_new_module() {
+    let temp = package(
+        "stale_new",
+        &[("src/main.cheby", MAIN_UTIL), ("src/util.cheby", UTIL)],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    for other in [
+        "src/notes.txt",
+        "src/.hidden.cheby",
+        "src/Bad-Name.cheby",
+        "extra.cheby",
+    ] {
+        std::fs::write(temp.0.join(other), UTIL).unwrap();
+    }
+    assert_eq!(
+        verify(&snapshot, &edits(&[])).unwrap(),
+        VerifyOutcome::Clean
+    );
+    let extra = temp.0.join("src/extra.cheby");
+    std::fs::write(&extra, UTIL).unwrap();
+    assert_eq!(
+        verify(&snapshot, &edits(&[])).unwrap(),
+        VerifyOutcome::Stale(extra.clone())
+    );
+    std::fs::remove_file(&extra).unwrap();
+    let inner = temp.0.join("src/deep/inner.cheby");
+    std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
+    std::fs::write(&inner, UTIL).unwrap();
+    assert_eq!(
+        verify(&snapshot, &edits(&[])).unwrap(),
+        VerifyOutcome::Stale(inner)
+    );
+}
+
+/// `main` calls the private `hidden` of `b`: an E0043 that names
+/// `app::b`.
+const MAIN_B: &str = "//! Root.\n\nimport app::b\n\nfn main() {\n  let _ = b::hidden()\n}\n";
+const PRIVATE: &str = "//! A module.\n\npriv fn hidden() -> Int {\n  1\n}\n";
+
+/// D-1674: a move into a folder prints the module's path with one more
+/// segment, so "before" is read with the pair `app::b` to `app::sub::b`
+/// and the move with its importer's edit is clean. Without the pair the
+/// E0043 reads as new.
+#[test]
+fn verify_moves_into_a_folder() {
+    let temp = package(
+        "move_folder",
+        &[("src/main.cheby", MAIN_B), ("src/b.cheby", PRIVATE)],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let moves = [(temp.0.join("src/b.cheby"), temp.0.join("src/sub/b.cheby"))];
+    let fix = [replace(&main, MAIN_B, "app::b", 0, "app::sub::b")];
+    let request = VerifyRequest {
+        moves: &moves,
+        renamed: &[("app::b", "app::sub::b")],
+        ..edits(&fix)
+    };
+    assert_eq!(verify(&snapshot, &request).unwrap(), VerifyOutcome::Clean);
+    let request = VerifyRequest {
+        moves: &moves,
+        ..edits(&fix)
+    };
+    let found = introduced(&verify(&snapshot, &request).unwrap());
+    assert_eq!(
+        found,
+        [(
+            "E0043".to_owned(),
+            "`hidden` is private to module `app::sub::b`".to_owned()
+        )]
+    );
+}
+
+/// `main` calls the private `hidden` of `a` and of `b`.
+const MAIN_AB: &str = "//! Root.\n\nimport app::a\nimport app::b\n\n\
+                       fn main() {\n  let _ = a::hidden()\n  let _ = b::hidden()\n}\n";
+
+/// D-1674: two moves in one request, `b` to `c` and then `a` to `b`,
+/// each with its own pair. Every pair is read at once, so `app::a` reads
+/// as `app::b` and not on as `app::c`, whatever the pairs' order. One pair
+/// alone leaves the other move's error new.
+#[test]
+fn verify_two_moves() {
+    let temp = package(
+        "two_moves",
+        &[
+            ("src/main.cheby", MAIN_AB),
+            ("src/a.cheby", PRIVATE),
+            ("src/b.cheby", PRIVATE),
+        ],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let src = temp.0.join("src");
+    let moves = [
+        (src.join("b.cheby"), src.join("c.cheby")),
+        (src.join("a.cheby"), src.join("b.cheby")),
+    ];
+    let fix = [
+        replace(&main, MAIN_AB, "app::a", 0, "app::b"),
+        replace(&main, MAIN_AB, "app::b", 0, "app::c"),
+        replace(&main, MAIN_AB, "a::hidden", 0, "b::hidden"),
+        replace(&main, MAIN_AB, "b::hidden", 0, "c::hidden"),
+    ];
+    for renamed in [
+        [("app::a", "app::b"), ("app::b", "app::c")],
+        [("app::b", "app::c"), ("app::a", "app::b")],
+    ] {
+        let request = VerifyRequest {
+            moves: &moves,
+            renamed: &renamed,
+            ..edits(&fix)
+        };
+        assert_eq!(
+            verify(&snapshot, &request).unwrap(),
+            VerifyOutcome::Clean,
+            "{renamed:?}"
+        );
+    }
+    let request = VerifyRequest {
+        moves: &moves,
+        renamed: &[("app::b", "app::c")],
+        ..edits(&fix)
+    };
+    let found = introduced(&verify(&snapshot, &request).unwrap());
+    assert_eq!(
+        found,
+        [(
+            "E0043".to_owned(),
+            "`hidden` is private to module `app::b`".to_owned()
+        )]
+    );
+}
+
+/// Two errors that tie on code, file and message, one in each function.
+const TWO_BARS: &str = "//! Root.\n\nfn a() -> Int {\n  bar\n}\n\nfn b() -> Int {\n  let foo = 1\n  bar + foo\n}\n\nfn main() {\n  assert a() + b() == 0\n}\n";
+
+/// D-1698, D-1709: of two errors that tie on code, file and message, the
+/// one a rename makes go away is quoted at its own place, not at the place
+/// of the one that stays: an error of "after" takes the entry on its line.
+#[test]
+fn verify_hides_the_tied_error_that_went() {
+    let temp = package("two_bars", &[("src/main.cheby", TWO_BARS)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let tied = snapshot
+        .baseline()
+        .iter()
+        .filter(|(code, _, message)| *code == codes::UNRESOLVED_NAME && message.contains("`bar`"))
+        .count();
+    assert_eq!(tied, 2, "{:?}", snapshot.baseline());
+    let at = TWO_BARS.find("  let foo").unwrap();
+    let edits: Vec<PlainEdit> = TWO_BARS
+        .match_indices("foo")
+        .filter(|(start, _)| *start > at)
+        .map(|(start, _)| PlainEdit {
+            path: main.clone(),
+            range: TextRange::new(
+                TextSize::try_from(start).unwrap(),
+                TextSize::try_from(start + 3).unwrap(),
+            ),
+            replacement: "bar".to_owned(),
+        })
+        .collect();
+    assert_eq!(edits.len(), 2);
+    let outcome = verify(&snapshot, &rename(&edits, &[("foo", "bar")])).unwrap();
+    assert_eq!(
+        hidden_places(&outcome),
+        [Some("src/main.cheby:9:3".to_owned())]
+    );
+}
+
+const MAIN_SHAPES: &str = "//! Root.\n\nimport app::util\n\ninterface Wrap {\n  fn wrap(Self) -> Int\n}\n\nfn wrapped<T: Wrap>(x: T) -> Int {\n  Wrap::wrap(x)\n}\n\nfn main() {\n  assert wrapped(util::make()) == 1\n}\n";
+const SHAPES: &str = "//! Util.\n\npub type Shape {\n  side: Int,\n}\n\npub fn make() -> Shape {\n  Shape { side: 1 }\n}\n";
+
+/// D-1715: a move that changes a module's last segment reads `util::` as
+/// `shapes::` in the messages of "before", after the whole paths, so an
+/// error that names `util::Shape` before the move and `shapes::Shape`
+/// after it is not new. Without the pair it would be.
+#[test]
+fn verify_reads_a_moved_modules_last_segment() {
+    let temp = package(
+        "last_segment",
+        &[("src/main.cheby", MAIN_SHAPES), ("src/util.cheby", SHAPES)],
+    );
+    let snapshot = snapshot(&temp.0, &[]);
+    assert!(
+        snapshot
+            .baseline()
+            .iter()
+            .any(|(_, _, message)| message.contains("`util::Shape`")),
+        "{:?}",
+        snapshot.baseline()
+    );
+    let main = temp.0.join("src/main.cheby");
+    let edits = [
+        replace(&main, MAIN_SHAPES, "app::util", 0, "app::shapes"),
+        replace(&main, MAIN_SHAPES, "util::make", 0, "shapes::make"),
+    ];
+    let moves = [(
+        temp.0.join("src/util.cheby"),
+        temp.0.join("src/shapes.cheby"),
+    )];
+    let request = |renamed| VerifyRequest {
+        edits: &edits,
+        moves: &moves,
+        renamed,
+        hides: false,
+    };
+    let both = [("app::util", "app::shapes"), ("util::", "shapes::")];
+    assert_eq!(
+        verify(&snapshot, &request(&both)).unwrap(),
+        VerifyOutcome::Clean
+    );
+    let found = introduced(&verify(&snapshot, &request(&both[..1])).unwrap());
+    assert!(
+        found.iter().any(|(_, m)| m.contains("`shapes::Shape`")),
+        "{found:?}"
+    );
+}
+
+/// Two functions: `a` binds `x` twice (E0044 at 5:7), and `b` binds `x`
+/// and `z`.
+const TWO_XS: &str = "//! Root.\n\nfn a() -> Int {\n  let x = 1\n  let x = 2\n  x\n}\n\nfn b() -> Int {\n  let x = 1\n  let z = 5\n  x + z\n}\n\nfn main() {\n  assert a() + b() == 8\n}\n";
+
+/// D-1709: renaming `b`'s `x` to `z` gives a new E0044, "`z` is already
+/// bound" at 11:7, which is also the renamed reading of `a`'s E0044 at 5:7.
+/// That old error still stands on its own line and keeps its entry, so the
+/// new one is quoted at its own place, not the old one at 5:7.
+#[test]
+fn verify_quotes_the_new_error_not_an_old_one_it_reads_like() {
+    let temp = package("two_xs", &[("src/main.cheby", TWO_XS)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    assert_eq!(
+        snapshot
+            .baseline()
+            .iter()
+            .filter(|(code, _, _)| code.severity() == Severity::Error)
+            .count(),
+        1,
+        "{:?}",
+        snapshot.baseline()
+    );
+    let edits = [
+        replace(&main, TWO_XS, "x", 3, "z"),
+        replace(&main, TWO_XS, "x", 4, "z"),
+    ];
+    let outcome = verify(&snapshot, &rename(&edits, &[("x", "z")])).unwrap();
+    match &outcome {
+        VerifyOutcome::Introduces(diags) => {
+            let found: Vec<(String, String)> = diags
+                .iter()
+                .map(|i| (i.diagnostic.message.clone(), i.at.clone()))
+                .collect();
+            assert_eq!(
+                found,
+                [(
+                    "`z` is already bound".to_owned(),
+                    "src/main.cheby:11:7".to_owned()
+                )]
+            );
+        }
+        other => panic!("expected new diagnostics, got {other:?}"),
+    }
+}
+
+/// A closure's parameter `foo` beside two reads of an unbound `bar`, all
+/// on one line.
+const ONE_LINE_BARS: &str = "//! Root.\n\nfn apply(f: fn(Int) -> Int) -> Int {\n  f(1)\n}\n\nfn main() {\n  let r = apply(fn(foo) { foo + bar }) + bar\n  assert r == 1\n}\n";
+
+/// D-1709: renaming `foo` to `bar` binds the `bar` inside the closure.
+/// One of the two tied E0042 on line 8 goes and one stays, and the line
+/// cannot tell which went, so the hidden error is quoted by its file only.
+#[test]
+fn verify_quotes_the_file_of_a_tie_on_one_line() {
+    let temp = package("one_line_bars", &[("src/main.cheby", ONE_LINE_BARS)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let edits = replace_all(&main, ONE_LINE_BARS, "foo", "bar");
+    assert_eq!(edits.len(), 2);
+    let outcome = verify(&snapshot, &rename(&edits, &[("foo", "bar")])).unwrap();
+    assert_eq!(
+        hidden(&outcome),
+        [(
+            "E0042".to_owned(),
+            Some(main),
+            "cannot find value `bar` in this scope".to_owned()
+        )]
+    );
+    assert_eq!(hidden_places(&outcome), [Some("src/main.cheby".to_owned())]);
+}
+
+/// Three reads of an unbound `missing`, two on line 5 and one on line 10.
+const THREE_MISSING: &str = "//! Root.\n\nfn one() -> Int {\n  let a = 1\n  a + missing() + missing()\n}\n\nfn two() -> Int {\n  let b = 2\n  b + missing()\n}\n\nfn main() {\n  assert one() + two() == 3\n}\n";
+
+/// D-1698: errors that tie on code, file and message keep the file's
+/// order in the baseline, so of the errors that go away the first quoted
+/// is the first in the file, line 5 before line 10.
+#[test]
+fn verify_hides_tied_errors_in_file_order() {
+    let temp = package("three_missing", &[("src/main.cheby", THREE_MISSING)]);
+    let snapshot = snapshot(&temp.0, &[]);
+    let main = temp.0.join("src/main.cheby");
+    let edits = replace_all(&main, THREE_MISSING, "one", "missing");
+    let outcome = verify(&snapshot, &rename(&edits, &[("one", "missing")])).unwrap();
+    assert_eq!(
+        hidden_places(&outcome),
+        [
+            Some("src/main.cheby:5:7".to_owned()),
+            Some("src/main.cheby:5:19".to_owned()),
+            Some("src/main.cheby:10:7".to_owned()),
+        ]
+    );
+}
+
+/// D-1715: two moves that give two modules of one last segment two new
+/// ones read `util::` both ways, one reading per choice; with one move
+/// there is one reading.
+#[test]
+fn rename_reads_a_shared_old_each_way() {
+    let message = "`util::Shape` does not satisfy `Area`";
+    assert_eq!(
+        verify::readings(message, &[("util::", "tools::")]),
+        ["`tools::Shape` does not satisfy `Area`"]
+    );
+    assert_eq!(
+        verify::readings(
+            message,
+            &[
+                ("app::a::util", "app::a::tools"),
+                ("app::b::util", "app::b::helpers"),
+                ("util::", "tools::"),
+                ("util::", "helpers::"),
+            ]
+        ),
+        [
+            "`tools::Shape` does not satisfy `Area`",
+            "`helpers::Shape` does not satisfy `Area`",
+        ]
+    );
 }

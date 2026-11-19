@@ -2,13 +2,18 @@
 //! range, and the settings. Each test runs only the front end, so it runs
 //! on Windows too (D-1516).
 
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use cheby_driver::analysis::{ModulePath, Symbol, SymbolNs, normalized_key};
 use serde_json::{Value, json};
 
 use super::inlay_hint;
 use crate::features::CancelToken;
 use crate::features::RequestCx;
 use crate::features::ide::hover::tests::{Temp, analyze};
-use crate::server::{ClientCaps, Settings};
+use crate::server::{ClientCaps, ConstValues, Settings};
 use crate::text::lines::PositionEncoding;
 use crate::text::uri::path_to_uri;
 
@@ -23,9 +28,21 @@ fn answer(settings: &Settings, range: &Value) -> Value {
 /// The answer to `textDocument/inlayHint` over `range` of `text`, with
 /// `settings`.
 fn answer_on(text: &str, settings: &Settings, range: &Value) -> Value {
+    answer_with(text, settings, range, |_| None)
+}
+
+/// [`answer_on`] with the constant values that `values` makes from the
+/// absolute path of `src/main.cheby`.
+fn answer_with(
+    text: &str,
+    settings: &Settings,
+    range: &Value,
+    values: impl FnOnce(&Path) -> Option<ConstValues>,
+) -> Value {
     let temp = Temp::package("inlay", &[("main.cheby", text)]);
     let path = temp.src("main.cheby");
     let analyzed = analyze(&temp.0, &[(path.clone(), text)]);
+    let constants = values(&path).map(Arc::new);
     let uri = path_to_uri(&path).unwrap();
     let caps = ClientCaps::default();
     let cancel = CancelToken::new();
@@ -35,7 +52,8 @@ fn answer_on(text: &str, settings: &Settings, range: &Value) -> Value {
         encoding: PositionEncoding::Utf16,
         cancel: &cancel,
         std: &crate::features::stdlib::StdService::none(),
-        constants: None,
+        uris: &crate::text::uri::UriMap::new(),
+        constants,
     };
     let params = json!({ "textDocument": { "uri": uri.as_str() }, "range": range });
     inlay_hint(&cx, &analyzed, params).unwrap().value
@@ -148,6 +166,7 @@ fn malformed_parameters_and_unknown_documents() {
         encoding: PositionEncoding::Utf16,
         cancel: &cancel,
         std: &crate::features::stdlib::StdService::none(),
+        uris: &crate::text::uri::UriMap::new(),
         constants: None,
     };
     assert!(inlay_hint(&cx, &analyzed, json!(1)).is_err());
@@ -188,5 +207,37 @@ fn parameter_names_are_off_by_default_and_of_kind_parameter() {
                 "kind": 2,
             },
         ])
+    );
+}
+
+/// D-1679, X §7.1: `constants`, off by default, sends a current value as
+/// a hint with no kind, after the initializer, whose label carries its
+/// own space; the value comes from `RequestCx::constants`.
+#[test]
+fn constant_values_are_off_by_default_and_have_no_kind() {
+    let text = "const limit: Int = 20\n\nconst twice: Int = limit * 2\n\nfn main() {\n  assert twice == 40\n}\n";
+    let values = |main: &Path| {
+        let mut values = ConstValues::default();
+        values.insert_value(
+            Symbol::item(ModulePath::root("app"), SymbolNs::Value, "twice"),
+            "40",
+            false,
+            BTreeMap::from([(main.to_path_buf(), normalized_key(text))]),
+        );
+        Some(values)
+    };
+    assert_eq!(
+        answer_with(text, &Settings::default(), &lines(0, 7), values),
+        json!([])
+    );
+    let mut settings = Settings::default();
+    settings.inlay_hints.constants = true;
+    assert_eq!(
+        answer_with(text, &settings, &lines(0, 7), values),
+        json!([{ "position": { "line": 2, "character": 28 }, "label": " = 40" }])
+    );
+    assert_eq!(
+        answer_with(text, &settings, &lines(0, 7), |_| None),
+        json!([])
     );
 }

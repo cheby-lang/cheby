@@ -1,0 +1,29 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0039",
+      "message": "there is no module `moves::alpha`\nno such module\nhelp: a module with a similar name exists: `moves::beta`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 4
+        },
+        "start": {
+          "character": 7,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== willRename src/alpha.cheby src/beta.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: moving would cause: error[E0041]: `beta` is imported twice at src/main.cheby:6:15"
+  ]
+}

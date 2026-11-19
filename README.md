@@ -77,7 +77,7 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 
 ## Language server
 
-`cheby lsp` is the language server. It speaks LSP 3.17 over standard input and output. It publishes the diagnostics `cheby check` reports, as you type, and answers hover, go to definition, references, call hierarchy, workspace symbols, semantic tokens, completion, signature help, inlay hints and formatting. It evaluates a package's constants in a child process, so hover shows their values. Rename, quick fixes, lenses and the memory marks come later (see [`docs/plan/m5-tooling.md`](docs/plan/m5-tooling.md)).
+`cheby lsp` is the language server. It speaks LSP 3.17 over standard input and output. It publishes the diagnostics `cheby check` reports, as you type, and answers hover, go to definition, references, call hierarchy, workspace symbols, semantic tokens, completion, signature help, inlay hints, rename and formatting, and updates imports when you move a module file. It evaluates a package's constants in a child process, so hover and inlay hints show their values. Quick fixes, lenses and the memory marks come later (see [`docs/plan/m5-tooling.md`](docs/plan/m5-tooling.md)).
 
 ### Install
 
@@ -133,11 +133,12 @@ Every setting sits in one `cheby` object, so `analysis.debounceMs` is written `{
 | `inlayHints.pipeStages`         | `true`  | The type after each stage of a multi-line pipeline                     |
 | `inlayHints.dyn`                | `true`  | An implicit `dyn` conversion                                           |
 | `inlayHints.parameterNames`     | `false` | `name: ` before a literal argument                                     |
+| `inlayHints.constants`          | `false` | A constant's current value after its initializer                       |
 | `constants.evaluate`            | `true`  | Evaluate constants, for hover and the back-end diagnostics             |
 | `constants.childTimeoutSeconds` | `60`    | The time limit of one evaluation, 1 to 3600                            |
 | `semanticTokens.enabled`        | `true`  | Colour names by what they are, over the editor's highlighting          |
 
-These keys are accepted but do nothing yet: `diagnostics.explainLinks`, `inlayHints.constants`, `lenses.*`, `ownership.*` and `clientCommands`. Their features come in later waves.
+These keys are accepted but do nothing yet: `diagnostics.explainLinks`, `lenses.*`, `ownership.*` and `clientCommands`. Their features come in later waves.
 
 ### Tips
 

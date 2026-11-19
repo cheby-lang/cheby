@@ -2,16 +2,34 @@
 //! clean text and on a body with a type error. Each test runs only the
 //! front end, so it runs on Windows too (D-1516).
 
-use cheby_driver::analysis::TextRange;
+use std::collections::BTreeMap;
+use std::path::Path;
 
-use super::{Switches, hints};
+use cheby_driver::analysis::{
+    Code, Hash128, ModulePath, Symbol, SymbolNs, TextRange, normalized_key,
+};
+
+use super::{HintKind, Switches, hints};
 use crate::features::CancelToken;
 use crate::features::ide::hover::tests::{Temp, analyze};
+use crate::server::ConstValues;
 
 /// `text` as `src/main.cheby` of a package, with each hint written into it
 /// as `«label»`, and `{edit}` after it when it has one. Only the hints in
 /// `within` when it is given.
 fn render(text: &str, switches: Switches, within: Option<TextRange>) -> String {
+    render_with(text, switches, within, |_| None)
+}
+
+/// [`render`] with the constant values that `values` makes from the
+/// absolute path of `src/main.cheby`, which a value's modules name
+/// (D-1510).
+fn render_with(
+    text: &str,
+    switches: Switches,
+    within: Option<TextRange>,
+    values: impl FnOnce(&Path) -> Option<ConstValues>,
+) -> String {
     let temp = Temp::package("hints", &[("main.cheby", text)]);
     let path = temp.src("main.cheby");
     let analyzed = analyze(&temp.0, &[(path.clone(), text)]);
@@ -19,7 +37,22 @@ fn render(text: &str, switches: Switches, within: Option<TextRange>) -> String {
     let view = snapshot
         .module_at(snapshot.file_of(&path).expect("the file"))
         .expect("the module");
-    let found = hints(snapshot, view, within, switches, &CancelToken::new()).expect("hints");
+    let values = values(&path);
+    let found = hints(
+        snapshot,
+        view,
+        within,
+        switches,
+        values.as_ref(),
+        &CancelToken::new(),
+    )
+    .expect("hints");
+    if let Some(hint) = found
+        .iter()
+        .find(|hint| (hint.kind == HintKind::Value) != hint.label.starts_with(" = "))
+    {
+        panic!("a constant's value has kind `Value`, and nothing else: {hint:?}");
+    }
     let mut out = String::new();
     let mut at = 0;
     for hint in found {
@@ -387,6 +420,7 @@ fn main() {
         pipe_stages: false,
         dyn_: false,
         parameter_names: false,
+        constants: false,
     };
     assert_eq!(render(text, off, None), text);
     let pipes_only = Switches {
@@ -531,6 +565,7 @@ const NAMES_ONLY: Switches = Switches {
     pipe_stages: false,
     dyn_: false,
     parameter_names: true,
+    constants: false,
 };
 
 /// The text of [`names_and_their_skips`].
@@ -682,5 +717,298 @@ fn an_argument_named_as_its_parameter_gets_none() {
     assert_eq!(
         render(text, NAMES_ONLY, None),
         text.replace("add(a, 2)", "add(a, «b: »2)")
+    );
+}
+
+/// What a test of the constant row makes the values from: the path of
+/// `src/main.cheby`.
+type MakeValues<'a> = &'a dyn Fn(&Path) -> ConstValues;
+
+/// Only the constant row: every type row off.
+const CONSTANTS_ONLY: Switches = Switches {
+    let_types: false,
+    pattern_binders: false,
+    use_binders: false,
+    closure_types: false,
+    local_fn_types: false,
+    pipe_stages: false,
+    dyn_: false,
+    parameter_names: false,
+    constants: true,
+};
+
+/// Constants of every kind of initializer: literals, which get no value,
+/// and expressions, which do.
+const CONSTANTS: &str = r#"type Shape {
+  Dot,
+  Square(Int),
+}
+
+const limit: Int = 20
+
+const negative: Int = -3
+
+const ratio: Float = 1.5
+
+const name: String = "cheby"
+
+const raw: String = r"raw"
+
+const flag: Bool = True
+
+const shape: Shape = Dot
+
+const twice: Int = limit * 2
+
+const greeting: String = "hi {name}"
+
+const square: Shape = Square(limit)
+
+const pair: (Int, Int) = (limit,
+  twice)
+
+fn main() {
+  assert twice == 40
+}
+"#;
+
+/// The package's symbol of the root module's value `name`.
+fn app_value(name: &str) -> Symbol {
+    Symbol::item(ModulePath::root("app"), SymbolNs::Value, name)
+}
+
+/// Values for each of `names` with text `text` from a run that read
+/// `main` with the hash `read` (D-1510).
+fn values_of(main: &Path, read: Hash128, values: &[(&str, &str)]) -> ConstValues {
+    let mut out = ConstValues::default();
+    for &(name, text) in values {
+        out.insert_value(
+            app_value(name),
+            text,
+            false,
+            BTreeMap::from([(main.to_path_buf(), read)]),
+        );
+    }
+    out
+}
+
+/// A value for every constant of [`CONSTANTS`], read from its text.
+fn every_value(main: &Path, read: Hash128) -> ConstValues {
+    values_of(
+        main,
+        read,
+        &[
+            ("limit", "20"),
+            ("negative", "-3"),
+            ("ratio", "1.5"),
+            ("name", "\"cheby\""),
+            ("raw", "\"raw\""),
+            ("flag", "True"),
+            ("shape", "Dot"),
+            ("twice", "40"),
+            ("greeting", "\"hi cheby\""),
+            ("square", "Square(20)"),
+            ("pair", "(20, 40)"),
+        ],
+    )
+}
+
+/// [`CONSTANTS`] with the values of its constants that are not literals.
+fn constants_shown() -> String {
+    CONSTANTS
+        .replace("= limit * 2\n", "= limit * 2« = 40»\n")
+        .replace("= \"hi {name}\"\n", "= \"hi {name}\"« = \"hi cheby\"»\n")
+        .replace("= Square(limit)\n", "= Square(limit)« = Square(20)»\n")
+        .replace("  twice)\n", "  twice)« = (20, 40)»\n")
+}
+
+/// D-1679: with the row on, each constant whose value reads current shows
+/// ` = value` after its initializer, at the end of its last line; one
+/// whose initializer is a number, with its `-`, a string with no
+/// interpolation, raw or not, a `Bool` or a unit constructor shows none.
+#[test]
+fn current_values_show_after_initializers_but_literals() {
+    let current = normalized_key(CONSTANTS);
+    let got = render_with(CONSTANTS, CONSTANTS_ONLY, None, |main| {
+        Some(every_value(main, current))
+    });
+    assert_eq!(got, constants_shown());
+}
+
+/// D-1679, D-1376: the row is off by default, and a package that never
+/// evaluates (no values) shows nothing with it on.
+#[test]
+fn the_constant_row_is_off_by_default() {
+    let current = normalized_key(CONSTANTS);
+    let types_off = Switches {
+        constants: false,
+        ..CONSTANTS_ONLY
+    };
+    let got = render_with(CONSTANTS, types_off, None, |main| {
+        Some(every_value(main, current))
+    });
+    assert_eq!(got, CONSTANTS);
+    const { assert!(!Switches::DEFAULTS.constants) };
+    assert_eq!(
+        render_with(CONSTANTS, CONSTANTS_ONLY, None, |_| None),
+        CONSTANTS
+    );
+}
+
+/// D-1679, D-1510, D-1503, D-1511: a value shows only while it reads
+/// current. Stale because a module it reaches has other text than its
+/// run read, because the last run failed, or while errors on disk start
+/// no run, failed itself, or no value at all, whether a run is due, the
+/// last one failed, or none ran: nothing shows. A value that reads
+/// current while a run is due still shows.
+#[test]
+fn only_a_current_value_shows() {
+    let current = normalized_key(CONSTANTS);
+    let twice_only = CONSTANTS.replace("= limit * 2\n", "= limit * 2« = 40»\n");
+    let shows = |make: MakeValues<'_>| {
+        render_with(CONSTANTS, CONSTANTS_ONLY, None, |main| Some(make(main)))
+    };
+    assert_eq!(
+        shows(&|main| values_of(main, current, &[("twice", "40")])),
+        twice_only
+    );
+    assert_eq!(
+        shows(&|main| ConstValues {
+            evaluating: true,
+            ..values_of(main, current, &[("twice", "40")])
+        }),
+        twice_only,
+        "current while a run is due"
+    );
+    let nothing: [(&str, MakeValues<'_>); 7] = [
+        ("an edited module", &|main| {
+            values_of(main, Hash128([9; 16]), &[("twice", "40")])
+        }),
+        ("after a failed run", &|main| ConstValues {
+            stale: true,
+            ..values_of(main, current, &[("twice", "40")])
+        }),
+        ("errors on disk", &|main| ConstValues {
+            disk_errors: true,
+            ..values_of(main, current, &[("twice", "40")])
+        }),
+        ("failed", &|main| ConstValues {
+            failed: BTreeMap::from([(app_value("twice"), Code::parse("E0075").unwrap())]),
+            ..values_of(main, current, &[("twice", "40")])
+        }),
+        ("evaluating", &|_| ConstValues {
+            evaluating: true,
+            ..ConstValues::default()
+        }),
+        ("skipped for errors", &|_| ConstValues {
+            front_errors: true,
+            stale: true,
+            ..ConstValues::default()
+        }),
+        ("not yet", &|_| ConstValues::default()),
+    ];
+    for (state, make) in nothing {
+        assert_eq!(shows(make), CONSTANTS, "{state}");
+    }
+}
+
+/// D-1679: the value is one line, cut at 40 characters with `…`: a longer
+/// text, a text of more than one line, and a text the child cut at 4,096
+/// characters all end in `…`; one of exactly 40 characters does not.
+#[test]
+fn a_value_is_one_line_cut_at_40() {
+    let text = "import std::list\n\nconst xs: List<Int> = list::reverse([1, 2])\n";
+    let current = normalized_key(text);
+    let forty = "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 123]";
+    assert_eq!(forty.chars().count(), 40);
+    let long = format!("{forty}, 5]");
+    let cases = [
+        (long, false, format!("{forty}…")),
+        (forty.to_owned(), false, forty.to_owned()),
+        ("[1,\n2]".to_owned(), false, "[1,…".to_owned()),
+        ("[2, 1".to_owned(), true, "[2, 1…".to_owned()),
+        (
+            format!("[\"é{}\"]", "é".repeat(50)),
+            false,
+            format!("[\"{}…", "é".repeat(38)),
+        ),
+    ];
+    for (value, truncated, shown) in cases {
+        let got = render_with(text, CONSTANTS_ONLY, None, |main| {
+            let mut values = ConstValues::default();
+            values.insert_value(
+                app_value("xs"),
+                &value,
+                truncated,
+                BTreeMap::from([(main.to_path_buf(), current)]),
+            );
+            Some(values)
+        });
+        let expected = text.replace("[1, 2])\n", &format!("[1, 2])« = {shown}»\n"));
+        assert_eq!(got, expected, "{value:?}");
+    }
+}
+
+/// D-1679: the range limits the constant row as it limits the others.
+#[test]
+fn the_range_limits_the_constant_row() {
+    let current = normalized_key(CONSTANTS);
+    let start = CONSTANTS.find("const greeting").unwrap();
+    let end = CONSTANTS.find("const square").unwrap();
+    let within = TextRange::new(u32::try_from(start).unwrap(), u32::try_from(end).unwrap());
+    let got = render_with(CONSTANTS, CONSTANTS_ONLY, Some(within), |main| {
+        Some(every_value(main, current))
+    });
+    assert_eq!(
+        got,
+        CONSTANTS.replace("= \"hi {name}\"\n", "= \"hi {name}\"« = \"hi cheby\"»\n")
+    );
+}
+
+/// D-1678, D-146: in a module whose own type is named `Option`, a `let`
+/// of the prelude's `Option<Int>` still shows its type, but offers no edit,
+/// since `Option` would name the module's own type; a `let` of the
+/// module's `Option` offers one. Hiding the constructor `Some` alone
+/// leaves the type writable.
+#[test]
+fn no_edit_writes_a_prelude_name_the_module_hides() {
+    let text = "type Option {\n  Mine,\n}\n\nfn main() {\n  let found = Some(1)\n  let mine = Mine\n  assert found != None && mine == Mine\n}\n";
+    check(
+        text,
+        &text
+            .replace("let found =", "let found«: Option<Int>» =")
+            .replace("let mine =", "let mine«: Option»{: Option} ="),
+    );
+    let text = "type Maybe {\n  Some(Int),\n  Nothing,\n}\n\nfn main() {\n  let found = option::Some(1)\n  let maybe = Some(2)\n  assert found != None && maybe != Nothing\n}\n";
+    let text = &format!("import std::option\n\n{text}");
+    check(
+        text,
+        &text
+            .replace("let found =", "let found«: Option<Int>»{: Option<Int>} =")
+            .replace("let maybe =", "let maybe«: Maybe»{: Maybe} ="),
+    );
+    // At any depth: in a type argument, a tuple and a function type.
+    let text = "type Option {\n  Mine,\n}\n\nfn main() {\n  let xs = [Some(1)]\n  let pair = (Some(1), 2)\n  let make = fn() { Some(1) }\n  assert xs != [] && pair != (None, 0) && make() != None\n}\n";
+    check(
+        text,
+        &text
+            .replace("let xs =", "let xs«: List<Option<Int>>» =")
+            .replace("let pair =", "let pair«: (Option<Int>, Int)» =")
+            .replace("let make =", "let make«: fn() -> Option<Int>» =")
+            .replace("fn() { Some(1) }", "fn()« -> Option<Int>» { Some(1) }"),
+    );
+}
+
+/// D-1719: a type parameter of the enclosing item hides a prelude type
+/// as a module's own type does, so a `let` of the prelude's `Option<Int>`
+/// inside `fn keep<Option>` offers no edit, and one outside it does.
+#[test]
+fn no_edit_writes_a_prelude_name_a_type_parameter_hides() {
+    let text = "fn keep<Option>(x: Option) -> Option {\n  let found = Some(1)\n  assert found != None\n  x\n}\n\nfn main() {\n  let other = Some(2)\n  assert keep(1) == 1 && other != None\n}\n";
+    check(
+        text,
+        &text
+            .replace("let found =", "let found«: Option<Int>» =")
+            .replace("let other =", "let other«: Option<Int>»{: Option<Int>} ="),
     );
 }

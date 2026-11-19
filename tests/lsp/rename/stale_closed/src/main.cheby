@@ -1,0 +1,15 @@
+// @decisions: D-1389, D-1711
+// @steps: close src/util.cheby, disk later
+//! A closed file that changed on disk since the server read it: the
+//! rename answers `null` with a warning that gives the reason, and the
+//! package is swept (G1 plan §3 E, D-1711), so a later rename reads the file again, which the server's
+//! test `a_stale_rename_sweeps_the_package` shows. Its new text adds a use of
+//! `helper` and no diagnostic, so the published lists do not depend on
+//! when the sweep's run lands.
+
+import app::util
+
+fn main() {
+  assert util::helper() == 1
+  //           ^ rename assist
+}

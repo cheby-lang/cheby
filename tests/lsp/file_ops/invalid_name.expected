@@ -1,0 +1,29 @@
+== diagnostics
+{
+  "cheby.toml": [
+    {
+      "code": "E0037",
+      "message": "`src/My-Util.cheby` is not a valid module name\nnote: the name of a file under `src/` becomes part of a module path, so it must be a snake_case identifier that is not a keyword\nhelp: rename it to `src/my_util.cheby`",
+      "range": {
+        "end": {
+          "character": 0,
+          "line": 0
+        },
+        "start": {
+          "character": 0,
+          "line": 0
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== willRename src/util.cheby src/My-Util.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: `My-Util` is not a valid module name (E0037): try `my_util`"
+  ]
+}

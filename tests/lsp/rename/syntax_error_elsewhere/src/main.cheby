@@ -1,0 +1,15 @@
+// @decisions: D-1390
+//! A grammar error in another module: a local needs only its own file to
+//! parse, so its rename passes; an item needs every module to parse, so
+//! its rename is refused.
+
+fn helper() -> Int {
+// ^ rename assist
+  1
+}
+
+fn main() {
+  let x = helper()
+  //  ^ rename y
+  assert x == 1
+}

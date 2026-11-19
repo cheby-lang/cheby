@@ -1,0 +1,55 @@
+== diagnostics
+{}
+
+== src/main.cheby:9:4 rename plus
+{
+  "answer": {
+    "changeAnnotations": {
+      "cheby.satisfaction": {
+        "label": "`V` will no longer satisfy `Add`",
+        "needsConfirmation": true
+      }
+    },
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "plus",
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 8
+              },
+              "start": {
+                "character": 3,
+                "line": 8
+              }
+            }
+          },
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "plus",
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 16
+              },
+              "start": {
+                "character": 9,
+                "line": 16
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": [
+    "warning: `V` will no longer satisfy `Add`"
+  ]
+}

@@ -1,0 +1,63 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0039",
+      "message": "there is no module `moves::alpha`\nno such module\nhelp: a module with a similar name exists: `moves::beta`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 4
+        },
+        "start": {
+          "character": 7,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "message": "there is no value `two` in module `moves::beta`\nnot found",
+      "range": {
+        "end": {
+          "character": 33,
+          "line": 8
+        },
+        "start": {
+          "character": 30,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 28,
+                "line": 8
+              },
+              "start": {
+                "character": 24,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`moves::beta`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== willRename src/alpha.cheby src/beta.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: `src/beta.cheby` already exists"
+  ]
+}

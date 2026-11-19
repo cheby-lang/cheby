@@ -1,0 +1,43 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "message": "cannot find type `Shap` in this scope\nnot found\nhelp: a type with a similar name exists: `Shape`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 18
+        },
+        "start": {
+          "character": 2,
+          "line": 18
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:3 rename depth
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "cannot tell what `.y` at `src/main.cheby:19` refers to"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:13:3 rename base
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "cannot tell what `.origin` at `src/main.cheby:19` refers to"
+    }
+  },
+  "showMessage": []
+}

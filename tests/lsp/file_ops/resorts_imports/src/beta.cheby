@@ -1,0 +1,6 @@
+//! Another name.
+
+/// Another name.
+pub fn name() -> String {
+  "b"
+}

@@ -67,6 +67,12 @@ pub struct AnalysisStatus {
 /// diagnostic with no span.
 pub type BaselineEntry = (Code, Option<PathBuf>, String);
 
+/// A [`BaselineEntry`] and the place of its primary span, `path:line:col`
+/// as `cheby check` shows it, `None` for one with no span. The place is
+/// kept beside the entry, not in it, so the compared multiset stays code,
+/// file and message (D-1668); a refusal quotes it (D-1698).
+pub(crate) type PlacedEntry = (BaselineEntry, Option<String>);
+
 /// What [`Snapshot::find`] maps a [`Symbol`] to in one snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SymbolTarget {
@@ -124,7 +130,8 @@ pub(crate) struct Parts {
     /// The package's files of the run, by absolute path.
     pub files: BTreeMap<PathBuf, FileId>,
     pub broken: BTreeSet<PathBuf>,
-    pub baseline: Vec<BaselineEntry>,
+    /// Sorted by entry.
+    pub baseline: Vec<PlacedEntry>,
     /// The run's targets, after `--target` narrowed the manifest's.
     pub targets: Targets,
     /// The run's manifest is the last good one, not the live one.
@@ -150,6 +157,8 @@ pub struct Snapshot {
     /// Every module with an interface, sorted.
     all_ids: Vec<ModuleId>,
     baseline: Vec<BaselineEntry>,
+    /// By index into `baseline`: the place of each entry.
+    baseline_places: Vec<Option<String>>,
     targets: Targets,
     status: AnalysisStatus,
     single_file: bool,
@@ -238,6 +247,7 @@ impl Snapshot {
             .map(|(module, _)| module)
             .filter(|&module| front.set.get(module).is_some())
             .collect();
+        let (baseline, baseline_places) = baseline.into_iter().unzip();
         let cut_imports = front
             .cut_imports
             .iter()
@@ -259,6 +269,7 @@ impl Snapshot {
             importers,
             all_ids,
             baseline,
+            baseline_places,
             targets,
             status: AnalysisStatus {
                 broken,
@@ -420,6 +431,14 @@ impl Snapshot {
         &self.baseline
     }
 
+    /// The place of the entry at `index` of [`Snapshot::baseline`],
+    /// `path:line:col` as `cheby check` shows it: `None` for an entry with
+    /// no span, or no such entry.
+    #[must_use]
+    pub fn baseline_place(&self, index: usize) -> Option<&str> {
+        self.baseline_places.get(index)?.as_deref()
+    }
+
     /// The modules the run lost to an internal error, with the error
     /// (D-1362). Each module that imports one and never ran is missing too,
     /// with no entry here.
@@ -568,8 +587,9 @@ impl Snapshot {
     /// The import of `module` that binds `alias` in `ns` (D-1365). A
     /// module's alias is a value (D-062). An item's alias is bound in each
     /// namespace where the imported module has the item, so `Point as P`
-    /// binds a type and a constructor (D-111). `None` on a namespace that
-    /// does not match, or an item import whose target failed.
+    /// binds a type and a constructor (D-111), and of two items of one list
+    /// that share an alias, the one with a name in `ns`. `None` on a
+    /// namespace that does not match, or an item import whose target failed.
     fn find_alias(&self, module: ModuleId, ns: SymbolNs, alias: &str) -> Option<SymbolTarget> {
         let n = at(module)?;
         let alias = self.front.globals.names.lookup(alias)?;
@@ -583,12 +603,6 @@ impl Snapshot {
                     item: None,
                 });
             }
-            let (item, found) = request
-                .items
-                .iter()
-                .flatten()
-                .enumerate()
-                .find(|(_, item)| item.alias.is_some_and(|(name, _)| name == alias))?;
             let target = targets
                 .and_then(|t| t.get(import))
                 .and_then(|t| t.module())?;
@@ -598,13 +612,22 @@ impl Snapshot {
                 SymbolNs::Type => Namespace::Type,
                 SymbolNs::Module | SymbolNs::Test => return None,
             };
-            iface
-                .lookup(space, found.name)
-                .map(|_| SymbolTarget::ImportAlias {
-                    module,
-                    import,
-                    item: Some(item),
-                })
+            // Two items of one list may share an alias, one in each
+            // namespace: `{Circle as X, Shape as X}`.
+            let (item, _) = request
+                .items
+                .iter()
+                .flatten()
+                .enumerate()
+                .find(|(_, item)| {
+                    item.alias.is_some_and(|(name, _)| name == alias)
+                        && iface.lookup(space, item.name).is_some()
+                })?;
+            Some(SymbolTarget::ImportAlias {
+                module,
+                import,
+                item: Some(item),
+            })
         })
     }
 

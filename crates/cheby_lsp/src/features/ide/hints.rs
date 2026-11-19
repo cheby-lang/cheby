@@ -1,8 +1,9 @@
 //! Inlay hints (X §7.1, plan W8): the type of a `let` binding and of each
 //! name a destructuring `let` binds, of a `use` binder, of a closure's or
 //! local function's parameters and result, of each stage of a multi-line
-//! pipeline, and the implicit conversions to `dyn`; and the names of the
-//! parameters that literal arguments fill (D-1515).
+//! pipeline, and the implicit conversions to `dyn`; the names of the
+//! parameters that literal arguments fill (D-1515); and the current value
+//! of a package constant after its initializer (D-1679).
 //!
 //! Types come from the body's facts (D-1380), which exist for an errored
 //! body too, so hints stay while a body has a type error. A type with an
@@ -11,22 +12,32 @@
 //!
 //! Every hint is computed over whole bodies and only then limited to the
 //! request's range, so a range never changes which hints exist, only which
-//! are sent. Constant values (W9) and the memory and tail rows (X §7.3) are
-//! not here.
+//! are sent. The memory and tail rows (X §7.3) are not here.
+//!
+//! A constant's value shows only while it reads current (D-1510), and
+//! nothing shows in any other state: an inlay is read at a glance, and
+//! hover explains the rest (D-1679). A constant whose initializer is a
+//! literal gets none, since its value is on the line. The value is one
+//! line, cut at [`VALUE_CHARS`] characters with `…`.
 
 use cheby_driver::analysis::{
     BodyFacts, BodyRes, CtorFields, DefId, DefIndex, DefKind, FileLocation, Generics, ItemSig,
-    ModuleView, ParamSig, Res, Snapshot, TextRange, TextSize, Ty, TyKind,
+    ModuleView, ParamSig, Res, Snapshot, TextRange, TextSize, Ty, TyKind, cut_text,
 };
 use cheby_syntax::SyntaxKind as K;
 use cheby_syntax::ast::{
-    AstNode, BinExpr, BinOp, CallExpr, Closure, Expr, GuardStmt, LetStmt, Literal, LiteralKind,
-    LocalFn, Param, UseBinder,
+    AstNode, BinExpr, BinOp, CallExpr, Closure, ConstDecl, Expr, GuardStmt, LetStmt, Literal,
+    LiteralKind, LocalFn, Param, UseBinder,
 };
 use cheby_syntax::{SyntaxElement, SyntaxNode};
 
 use crate::features::ide::print::Printer;
 use crate::features::{CancelToken, RequestError};
+use crate::server::{ConstReading, ConstValues};
+
+/// The most characters of a constant's value the inlay row shows, before
+/// its `…` (D-1679).
+const VALUE_CHARS: usize = 40;
 
 /// Which rows are on: the `inlayHints.*` settings of D-1376, read by the
 /// handler. `enable` is the handler's own test.
@@ -56,10 +67,14 @@ pub(crate) struct Switches {
     /// `inlayHints.parameterNames`: the parameter a literal argument fills
     /// (D-1515).
     pub parameter_names: bool,
+    /// `inlayHints.constants`: a package constant's current value
+    /// (D-1679).
+    pub constants: bool,
 }
 
 impl Switches {
-    /// D-1376's defaults: every type row on, parameter names off.
+    /// D-1376's defaults: every type row on, parameter names and constant
+    /// values off.
     #[cfg(test)]
     pub(crate) const DEFAULTS: Self = Self {
         let_types: true,
@@ -70,6 +85,7 @@ impl Switches {
         pipe_stages: true,
         dyn_: true,
         parameter_names: false,
+        constants: false,
     };
 }
 
@@ -80,6 +96,9 @@ pub(crate) enum HintKind {
     Type,
     /// A parameter's name before an argument: `width: ` (D-1515).
     Parameter,
+    /// A constant's value after its initializer: ` = 40` (D-1679). The
+    /// protocol has no kind for it, so the handler sends none (X §7.1).
+    Value,
 }
 
 /// One hint: a label at an offset of the document's text.
@@ -91,7 +110,7 @@ pub(crate) struct Hint {
     /// What the hint shows.
     pub kind: HintKind,
     /// The label, with its separator: `: Int`, ` -> Int`, ` as dyn Shape`,
-    /// `width: `.
+    /// `width: `, ` = 40`.
     pub label: String,
     /// The text that writes the hint into the code at `offset`, when it
     /// would compile as written (X §7.1): `let` bindings only.
@@ -100,6 +119,8 @@ pub(crate) struct Hint {
 
 /// The hints of the module `view` of `snapshot`, in text order. With
 /// `within`, only the hints whose offset lies in it, ends included.
+/// `constants` is what the package's last evaluation said, `None` where
+/// constants are never evaluated (`RequestCx::constants`).
 ///
 /// # Errors
 ///
@@ -109,6 +130,7 @@ pub(crate) fn hints(
     view: ModuleView<'_>,
     within: Option<TextRange>,
     switches: Switches,
+    constants: Option<&ConstValues>,
     cancel: &CancelToken,
 ) -> Result<Vec<Hint>, RequestError> {
     let (Some(tree), Some(resolved), Some(facts)) = (view.tree(), view.resolved(), view.facts())
@@ -148,6 +170,12 @@ pub(crate) fn hints(
             generics: cx.generics(index),
         };
         cx.body(&body, node, &mut out);
+    }
+    if switches.constants
+        && let Some(values) = constants
+    {
+        cancel.check()?;
+        cx.constant_values(values, &mut out);
     }
     cancel.check()?;
     if let Some(within) = within {
@@ -551,6 +579,82 @@ impl Cx<'_> {
         }
     }
 
+    /// ` = value` after the initializer of each constant of the module
+    /// whose value reads current in the snapshot (D-1510, D-1679). Only a
+    /// module of the package: a dependency's and std's constants are not
+    /// evaluated. A constant whose initializer is a literal is skipped.
+    fn constant_values(&self, values: &ConstValues, out: &mut Vec<Hint>) {
+        let (Some(tree), Some(resolved)) = (self.view.tree(), self.view.resolved()) else {
+            return;
+        };
+        if !self.view.is_local() {
+            return;
+        }
+        for (index, item) in resolved.items.iter_enumerated() {
+            if item.kind != DefKind::Const {
+                continue;
+            }
+            let Some(value) = tree
+                .node(item.node)
+                .and_then(ConstDecl::cast)
+                .and_then(ConstDecl::value)
+            else {
+                continue;
+            };
+            let res = resolved.bodies.get(&index);
+            if self.is_constant_literal(res, value) {
+                continue;
+            }
+            let Some(symbol) = self.snapshot.key_of(resolved.def_id(index)) else {
+                continue;
+            };
+            let ConstReading::Value {
+                text,
+                truncated,
+                stale: false,
+                ..
+            } = values.reading(&symbol, self.snapshot)
+            else {
+                continue;
+            };
+            out.push(Hint {
+                offset: node_significant(value.syntax()).end(),
+                kind: HintKind::Value,
+                label: format!(" = {}", one_line(text, truncated)),
+                edit: None,
+            });
+        }
+    }
+
+    /// Whether a constant's initializer `value` is a literal, whose value
+    /// is on the line (D-1679): a number, with its `-`, a string with no
+    /// interpolation, raw or not, or a unit constructor, which covers
+    /// `True` and `False`. `res` is the names of the constant's body.
+    fn is_constant_literal(&self, res: Option<&BodyRes>, value: Expr<'_>) -> bool {
+        match value {
+            Expr::Literal(_) => true,
+            Expr::String(string) => string.interpolations().next().is_none(),
+            Expr::Prefix(prefix) => prefix.negative_literal().is_some(),
+            Expr::Path(path) => path
+                .path()
+                .and_then(|path| res?.paths.get(&path.syntax().id()))
+                .is_some_and(|res| self.is_unit_ctor(res)),
+            Expr::Tuple(_)
+            | Expr::Paren(_)
+            | Expr::List(_)
+            | Expr::Record(_)
+            | Expr::Block(_)
+            | Expr::Closure(_)
+            | Expr::Case(_)
+            | Expr::Panic(_)
+            | Expr::Todo(_)
+            | Expr::Binary(_)
+            | Expr::Call(_)
+            | Expr::Hole(_)
+            | Expr::Field(_) => false,
+        }
+    }
+
     /// Whether `res` is a constructor with no fields.
     fn is_unit_ctor(&self, res: &Res) -> bool {
         let Res::Def(def) = *res else {
@@ -563,6 +667,23 @@ impl Cx<'_> {
             .is_some_and(|item| {
                 matches!(&item.sig, ItemSig::Ctor(ctor) if matches!(ctor.fields, CtorFields::Unit))
             })
+    }
+}
+
+/// A constant's value `text` as the inlay row shows it (D-1679): its
+/// first line, cut at [`VALUE_CHARS`] characters, with `…` when anything
+/// was left out, by the cut, a later line, or the child's own cut
+/// (`truncated`).
+fn one_line(text: String, truncated: bool) -> String {
+    let (first, more_lines) = match text.split_once('\n') {
+        Some((first, _)) => (first.to_owned(), true),
+        None => (text, false),
+    };
+    let (shown, cut) = cut_text(first, VALUE_CHARS);
+    if cut || more_lines || truncated {
+        format!("{shown}…")
+    } else {
+        shown
     }
 }
 

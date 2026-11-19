@@ -1,0 +1,16 @@
+// @decisions: D-1678, D-146
+// @requests: inlayHint
+//! The module's own type `Option` hides the prelude's (D-146). A `let`
+//! of the prelude's `Option<Int>` still shows its type, but offers no
+//! edit, since `Option` would name the module's own type. A `let` of the
+//! module's `Option` offers one (D-1678).
+
+type Option {
+  Mine,
+}
+
+fn main() {
+  let found = Some(1)
+  let mine = Mine
+  assert found != None && mine == Mine
+}

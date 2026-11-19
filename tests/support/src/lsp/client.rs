@@ -21,9 +21,9 @@
 //!   `didSave` or a settings change, and a request waits only for the text
 //!   it names (D-1367, D-1443), not for such a run. A trial that must know
 //!   the run finished sends an edit and waits for that version's publish,
-//!   since a package's jobs run in order. `cheby/idle` (D-1415), the
-//!   barrier D-1443 names for that, is not sent yet. So waits need no
-//!   sleep.
+//!   since a package's jobs run in order, or waits for `cheby/idle`
+//!   (D-1415), the barrier D-1443 names for that, which the server sends
+//!   to a client that takes it. So waits need no sleep.
 //! - Dropping a client kills the process.
 #![expect(
     clippy::wildcard_enum_match_arm,
@@ -110,11 +110,14 @@ pub enum ClientKind {
     /// to plain behaviour (A §12.1).
     Empty,
     /// Every capability of [`ClientKind::Full`] but the position
-    /// encodings, so the session runs on UTF-16 (D-1368). The default.
+    /// encodings and `textDocument.rename.honorsChangeAnnotations`, so the
+    /// session runs on UTF-16 (D-1368), and a rename's note comes as a
+    /// `window/showMessage` (D-1391). The default.
     #[default]
     Standard,
-    /// Every capability the server reads, every position encoding
-    /// included.
+    /// Every capability the server reads, every position encoding and
+    /// `honorsChangeAnnotations` included, so a rename's note comes only as
+    /// a change annotation (D-1391).
     Full,
 }
 
@@ -137,7 +140,17 @@ impl ClientKind {
     pub fn capabilities(self, encoding: Option<Encoding>) -> Value {
         let mut caps = match self {
             Self::Empty => json!({}),
-            Self::Standard | Self::Full => full_capabilities(),
+            Self::Standard => full_capabilities(),
+            Self::Full => {
+                let mut caps = full_capabilities();
+                if let Some(map) = caps
+                    .pointer_mut("/textDocument/rename")
+                    .and_then(Value::as_object_mut)
+                {
+                    map.insert("honorsChangeAnnotations".to_owned(), json!(true));
+                }
+                caps
+            }
         };
         let encodings = match (self, encoding) {
             (_, Some(encoding)) => Some(vec![encoding.name()]),
@@ -154,7 +167,8 @@ impl ClientKind {
     }
 }
 
-/// Every client capability of A §12.1, set.
+/// Every client capability of A §12.1 that [`ClientKind::Standard`]
+/// announces.
 fn full_capabilities() -> Value {
     json!({
         "workspace": workspace_capabilities(),
@@ -833,6 +847,49 @@ impl Client {
         self.pending.drain(..).collect()
     }
 
+    /// Takes the notifications received and not yet taken for which
+    /// `matches` holds, in order, and leaves the others for later waits.
+    pub fn take_where(&mut self, matches: impl Fn(&Value) -> bool) -> Vec<Value> {
+        let (taken, kept): (VecDeque<Value>, VecDeque<Value>) =
+            self.pending.drain(..).partition(|m| matches(m));
+        self.pending = kept;
+        taken.into_iter().collect()
+    }
+
+    /// Waits until a message for which `matches` holds is among the
+    /// messages received from index `from` of [`Client::received`] on, and
+    /// returns its index. It reads more messages as needed and takes none,
+    /// so the other waits still find them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::notification`].
+    pub fn wait_received(
+        &mut self,
+        from: usize,
+        what: &str,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Result<usize, String> {
+        let deadline = self.deadline();
+        let mut at = from;
+        loop {
+            if let Some(found) = self
+                .received
+                .get(at..)
+                .and_then(|rest| rest.iter().position(&matches))
+            {
+                return Ok(at.saturating_add(found));
+            }
+            at = at.max(self.received.len());
+            let message = self.next(deadline, what)?;
+            if message.get("method").is_some() {
+                self.pending.push_back(message);
+            } else if let Some(id) = message.get("id").and_then(Value::as_i64) {
+                self.responses.insert(id, message);
+            }
+        }
+    }
+
     /// The latest `publishDiagnostics` params of each URI so far.
     #[must_use]
     pub const fn published(&self) -> &BTreeMap<String, Value> {
@@ -1250,6 +1307,28 @@ mod tests {
             full["general"]["positionEncodings"],
             json!(["utf-8", "utf-32", "utf-16"])
         );
+        // D-1391: `full` honours change annotations, so a rename's note is
+        // an annotation; `standard` does not, so it is a `showMessage`.
+        assert_eq!(
+            full["textDocument"]["rename"],
+            json!({ "prepareSupport": true, "honorsChangeAnnotations": true })
+        );
+        assert_eq!(
+            standard["textDocument"]["rename"],
+            json!({ "prepareSupport": true })
+        );
+        // Apart from that and the encodings, the two announce the same.
+        let mut trimmed = full;
+        if let Some(map) = trimmed
+            .pointer_mut("/textDocument/rename")
+            .and_then(Value::as_object_mut)
+        {
+            map.remove("honorsChangeAnnotations");
+        }
+        if let Some(map) = trimmed.as_object_mut() {
+            map.remove("general");
+        }
+        assert_eq!(trimmed, standard);
         let one = ClientKind::Empty.capabilities(Some(Encoding::Utf32));
         assert_eq!(one, json!({"general": {"positionEncodings": ["utf-32"]}}));
         assert_eq!(ClientKind::parse("full"), Some(ClientKind::Full));

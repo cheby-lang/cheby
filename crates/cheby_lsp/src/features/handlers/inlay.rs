@@ -1,8 +1,9 @@
 //! `textDocument/inlayHint` handler (X §7.1, plan W8): the hints of
 //! `ide::hints` that lie in the request's range, as `InlayHint`s with
-//! plain-string labels: of kind `Type` for a type, and `Parameter` for a
-//! parameter's name (D-1515). A label carries its own separator and space,
-//! so no hint sets `paddingLeft` or `paddingRight`.
+//! plain-string labels: of kind `Type` for a type, `Parameter` for a
+//! parameter's name (D-1515), and no kind for a constant's value, which
+//! the protocol has none for (X §7.1). A label carries its own separator
+//! and space, so no hint sets `paddingLeft` or `paddingRight`.
 //!
 //! Class `Doc`: the answer reads the snapshot of the document's exact text
 //! and no other document's. There is no `inlayHint/resolve`, so the
@@ -13,7 +14,9 @@
 //! `letTypes`, `patternBinders`, `useBinders`, `closureTypes`,
 //! `localFnTypes`, `pipeStages` and `dyn` turn their rows off.
 //! `parameterNames`, off by default, turns the parameter names on (D-1515).
-//! `constants` joins with W9.
+//! `constants`, off by default, turns on the value of each package
+//! constant that reads current, from `RequestCx::constants` (D-1679); the
+//! main loop asks the client for its hints again when those values change.
 
 use cheby_driver::analysis::{FileId, FileLocation, Snapshot};
 use lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, InlayHintParams, Range, TextEdit};
@@ -70,8 +73,16 @@ pub(crate) fn inlay_hint(
         pipe_stages: settings.pipe_stages,
         dyn_: settings.dyn_,
         parameter_names: settings.parameter_names,
+        constants: settings.constants,
     };
-    let found = hints(snapshot, view, Some(within), switches, cx.cancel)?;
+    let found = hints(
+        snapshot,
+        view,
+        Some(within),
+        switches,
+        cx.constants.as_deref(),
+        cx.cancel,
+    )?;
     let answer: Vec<InlayHint> = found
         .into_iter()
         .map(|hint| {
@@ -79,10 +90,11 @@ pub(crate) fn inlay_hint(
             InlayHint {
                 position,
                 label: InlayHintLabel::String(hint.label),
-                kind: Some(match hint.kind {
-                    HintKind::Type => InlayHintKind::TYPE,
-                    HintKind::Parameter => InlayHintKind::PARAMETER,
-                }),
+                kind: match hint.kind {
+                    HintKind::Type => Some(InlayHintKind::TYPE),
+                    HintKind::Parameter => Some(InlayHintKind::PARAMETER),
+                    HintKind::Value => None,
+                },
                 text_edits: hint.edit.map(|new_text| {
                     vec![TextEdit {
                         range: Range::new(position, position),

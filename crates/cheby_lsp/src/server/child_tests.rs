@@ -796,7 +796,7 @@ fn output_of_a_killed_run_is_dropped() {
         Instant::now(),
         &mut out,
     );
-    assert!(out.effects.is_empty());
+    assert_eq!(out.effects, []);
     assert!(children.packages[&root].values.values.is_empty());
 }
 
@@ -1168,6 +1168,65 @@ fn evaluating_comes_before_the_texts_of_no_value() {
     );
 }
 
+/// D-1679, D-1510: the values the constant inlay row may show are exactly
+/// those that read current: not failed, not from a failed run or one
+/// stopped by errors on disk, and read from the text the editor holds.
+#[test]
+fn current_values_are_those_that_read_current() {
+    let root = package("current_values");
+    let main = main_path(&root);
+    let read = normalized_key(MAIN);
+    let mut values = ConstValues::default();
+    values.insert_value(
+        symbol("limit"),
+        "20",
+        false,
+        BTreeMap::from([(main.clone(), read)]),
+    );
+    values.insert_value(symbol("boom"), "1", true, BTreeMap::from([(main, read)]));
+    let here = editor(&root, read);
+    let both = BTreeMap::from([
+        (symbol("boom"), ("1".to_owned(), true)),
+        (symbol("limit"), ("20".to_owned(), false)),
+    ]);
+    assert_eq!(values.current_values(&here), both);
+    // The same answer as each value's reading.
+    for symbol in values.values.keys() {
+        let current = matches!(
+            values.reading(symbol, &here),
+            ConstReading::Value { stale: false, .. }
+        );
+        assert_eq!(current, both.contains_key(symbol), "{symbol:?}");
+    }
+    let edited = editor(&root, normalized_key("pub const limit: Int = 21\n"));
+    assert!(values.current_values(&edited).is_empty());
+    let failed = ConstValues {
+        failed: BTreeMap::from([(symbol("boom"), Code::parse("E0075").unwrap())]),
+        ..values.clone()
+    };
+    assert_eq!(
+        failed.current_values(&here),
+        BTreeMap::from([(symbol("limit"), ("20".to_owned(), false))])
+    );
+    for marked in [
+        ConstValues {
+            stale: true,
+            ..values.clone()
+        },
+        ConstValues {
+            disk_errors: true,
+            ..values.clone()
+        },
+    ] {
+        assert!(marked.current_values(&here).is_empty(), "{marked:?}");
+    }
+    let evaluating = ConstValues {
+        evaluating: true,
+        ..values.clone()
+    };
+    assert_eq!(evaluating.current_values(&here), both);
+}
+
 /// Real processes: a shell script stands in for `cheby`.
 #[cfg(unix)]
 mod processes {
@@ -1392,7 +1451,7 @@ mod processes {
         let done = next_done(&children);
         let mut out = Outbox::default();
         children.on_done(done, Instant::now(), &mut out);
-        assert!(out.effects.is_empty());
+        assert_eq!(out.effects, []);
         assert!(
             started.elapsed() < Duration::from_secs(60),
             "no wait for the limit"

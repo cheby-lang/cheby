@@ -1,0 +1,134 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 31,
+          "line": 13
+        },
+        "start": {
+          "character": 15,
+          "line": 13
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 13
+              },
+              "start": {
+                "character": 9,
+                "line": 13
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this annotation"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== willRename src/util.cheby src/helpers.cheby
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "moves::helpers",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 4
+              },
+              "start": {
+                "character": 7,
+                "line": 4
+              }
+            }
+          },
+          {
+            "newText": "moves::helpers",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 5
+              },
+              "start": {
+                "character": 7,
+                "line": 5
+              }
+            }
+          },
+          {
+            "newText": "helpers",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 9
+              },
+              "start": {
+                "character": 9,
+                "line": 9
+              }
+            }
+          },
+          {
+            "newText": "helpers",
+            "range": {
+              "end": {
+                "character": 27,
+                "line": 9
+              },
+              "start": {
+                "character": 23,
+                "line": 9
+              }
+            }
+          },
+          {
+            "newText": "helpers",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 11
+              },
+              "start": {
+                "character": 14,
+                "line": 11
+              }
+            }
+          },
+          {
+            "newText": "helpers",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 13
+              },
+              "start": {
+                "character": 15,
+                "line": 13
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

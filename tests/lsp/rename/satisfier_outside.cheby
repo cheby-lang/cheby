@@ -1,0 +1,24 @@
+// @decisions: D-1391, D-1710
+//! An interface function whose name std's types also provide: every
+//! builtin type's `show` satisfies `Pretty`, and those functions are
+//! outside the package. They do not block the rename, which renames the
+//! package's `show` with it, and the note names the types that will no
+//! longer satisfy `Pretty` (D-1710).
+
+interface Pretty {
+  fn show(Self) -> String
+  // ^ rename render
+}
+
+type Point {
+  Point(Int),
+}
+
+fn show(p: Point) -> String {
+  let Point(n) = p
+  "p{n}"
+}
+
+fn main() {
+  assert Pretty::show(Point(1)) == "p1"
+}

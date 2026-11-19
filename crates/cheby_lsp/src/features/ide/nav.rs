@@ -91,21 +91,29 @@ pub(crate) enum HighlightKind {
 }
 
 /// What the cursor names.
-struct Picked<'a> {
+pub(crate) struct Picked<'a> {
     /// The text that names it.
-    origin: TextRange,
+    pub origin: TextRange,
     /// The cursor's module.
-    module: &'a ModuleIndex,
+    pub module: &'a ModuleIndex,
     /// The symbols named, the cursor's meaning first. A record type's
     /// name adds its constructor.
-    entries: Vec<&'a SymbolEntry>,
+    pub entries: Vec<&'a SymbolEntry>,
+    /// How the occurrence at the cursor names them: rename refuses an
+    /// implicit one and a name in an attribute (D-1390). `None` with
+    /// `hidden`.
+    pub role: Option<Role>,
     /// A path the resolver refused though the item exists, such as a
     /// hidden constructor (E0043): its item, for go-to only (X §2.2).
-    hidden: Option<DefId>,
+    pub hidden: Option<DefId>,
 }
 
 /// The name at `offset` in `view`, a module of `index`'s snapshot.
-fn pick<'a>(index: Index<'a>, view: ModuleView<'a>, offset: TextSize) -> Option<Picked<'a>> {
+pub(crate) fn pick<'a>(
+    index: Index<'a>,
+    view: ModuleView<'a>,
+    offset: TextSize,
+) -> Option<Picked<'a>> {
     let module = index.module(view.id())?;
     let tree = view.tree()?;
     let token = pick_ident(token_at(tree.root(), offset));
@@ -116,6 +124,7 @@ fn pick<'a>(index: Index<'a>, view: ModuleView<'a>, offset: TextSize) -> Option<
                 origin: range,
                 module,
                 entries: entries_of(module, occurrence),
+                role: Some(occurrence.role),
                 hidden: None,
             }),
             Classified::Unknown(name) if name.why == Unknown::UnresolvedPath => {
@@ -123,6 +132,7 @@ fn pick<'a>(index: Index<'a>, view: ModuleView<'a>, offset: TextSize) -> Option<
                     origin: range,
                     module,
                     entries: Vec::new(),
+                    role: None,
                     hidden: Some(def),
                 })
             }
@@ -135,6 +145,7 @@ fn pick<'a>(index: Index<'a>, view: ModuleView<'a>, offset: TextSize) -> Option<
         origin: occurrence.range,
         module,
         entries: entries_of(module, occurrence),
+        role: Some(occurrence.role),
         hidden: None,
     })
 }
@@ -142,7 +153,10 @@ fn pick<'a>(index: Index<'a>, view: ModuleView<'a>, offset: TextSize) -> Option<
 /// The symbols `occurrence` names, the cursor's meaning first: the value
 /// or binding of a punned field (D-1392), else the symbol, then a record
 /// type's constructor at its declaration.
-fn entries_of<'a>(module: &'a ModuleIndex, occurrence: &Occurrence) -> Vec<&'a SymbolEntry> {
+pub(crate) fn entries_of<'a>(
+    module: &'a ModuleIndex,
+    occurrence: &Occurrence,
+) -> Vec<&'a SymbolEntry> {
     let first = match occurrence.role {
         Role::FieldInit | Role::FieldPat => occurrence.also.unwrap_or(occurrence.symbol),
         Role::Decl
@@ -224,8 +238,7 @@ pub(crate) fn declaration(
     }) = picked.entries.first().copied()
     {
         let places = Places { index };
-        let targets: Vec<NavTarget> = places
-            .provided(view, def)
+        let targets: Vec<NavTarget> = provided(index.snapshot(), view, def)
             .into_iter()
             .flat_map(|f| places.item(f))
             .collect();
@@ -349,7 +362,7 @@ pub(crate) fn references(
 
 /// Why references of a local named `text` may be incomplete: an unknown
 /// name of that text in its module, or a lost module (F §5.5).
-fn own_partial(module: &ModuleIndex, text: &str) -> Option<Partial> {
+pub(crate) fn own_partial(module: &ModuleIndex, text: &str) -> Option<Partial> {
     if let Some(name) = module.unknown.iter().find(|u| &*u.text == text) {
         return Some(Partial::Unknown {
             module: module.module,
@@ -628,83 +641,6 @@ impl<'a> Places<'a> {
         Some(f(&tree))
     }
 
-    /// The interface functions the function `def` provides (X §2.3): for
-    /// each interface with a function of its name, those whose satisfying
-    /// function, for a type of `def`'s module (D-045), is `def`. Empty for
-    /// anything else, and for an `@external`, whose declaration is its
-    /// definition. `view` is the cursor's module.
-    fn provided(self, view: ModuleView<'_>, def: DefId) -> Vec<DefId> {
-        let snapshot = self.snapshot();
-        let interfaces = snapshot.interfaces();
-        let Some(own) = interfaces.get(def.module) else {
-            return Vec::new();
-        };
-        let Some(func) = own.item(def.index).filter(|f| f.kind == DefKind::Fn) else {
-            return Vec::new();
-        };
-        let external = snapshot
-            .module(def.module)
-            .and_then(ModuleView::resolved)
-            .and_then(|resolved| resolved.item(def.index))
-            .is_some_and(|item| !item.attrs.externals.is_empty());
-        // The solver reads no tree or resolution, so the cursor's module
-        // may lend them for a home without a tree (D-1386).
-        let Some(input) = snapshot.query_input(def.module, view) else {
-            return Vec::new();
-        };
-        if external {
-            return Vec::new();
-        }
-        let types: Vec<DefId> = own
-            .items
-            .iter_enumerated()
-            .filter(|(_, item)| item.kind == DefKind::Type)
-            .map(|(index, _)| DefId::new(def.module, index))
-            .collect();
-        if types.is_empty() {
-            return Vec::new();
-        }
-        let item_of = |d: DefId| interfaces.get(d.module).and_then(|i| i.item(d.index));
-        let mut out = Vec::new();
-        for &module in snapshot.all_ids() {
-            let Some(iface) = interfaces.get(module) else {
-                continue;
-            };
-            for (index, item) in iface.items.iter_enumerated() {
-                if item.kind != DefKind::Interface {
-                    continue;
-                }
-                let interface = DefId::new(module, index);
-                let Ok(fns) = interface_fns(interface, &item_of) else {
-                    continue;
-                };
-                if !fns
-                    .iter()
-                    .any(|&f| item_of(f).is_some_and(|f| f.name == func.name))
-                {
-                    continue;
-                }
-                let Ok(found) = implementors(&input, interface, &types) else {
-                    continue;
-                };
-                for (_, verdict) in found {
-                    let Verdict::Yes {
-                        fns: satisfying, ..
-                    } = verdict
-                    else {
-                        continue;
-                    };
-                    for (satisfying, provided) in satisfying.iter().zip(&fns) {
-                        if *satisfying == def && !out.contains(provided) {
-                            out.push(*provided);
-                        }
-                    }
-                }
-            }
-        }
-        out
-    }
-
     /// The targets of one type head (X §2.4).
     fn head(self, head: Head) -> Vec<NavTarget> {
         match head {
@@ -730,6 +666,111 @@ impl<'a> Places<'a> {
             }
         }
     }
+}
+
+/// One way a function makes a type satisfy an interface by its name
+/// (§8.2): what declaration (X §2.3) and rename's note (X §3.4) read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Provision {
+    /// The type that satisfies the interface.
+    pub ty: DefId,
+    /// The interface.
+    pub interface: DefId,
+    /// The interface function the function provides.
+    pub provided: DefId,
+}
+
+/// The interface functions the function `def` provides (X §2.3), each
+/// once, in the order of [`provisions`]. `view` is the cursor's module.
+pub(crate) fn provided(snapshot: &Snapshot, view: ModuleView<'_>, def: DefId) -> Vec<DefId> {
+    let mut out: Vec<DefId> = Vec::new();
+    for provision in provisions(snapshot, view, def) {
+        if !out.contains(&provision.provided) {
+            out.push(provision.provided);
+        }
+    }
+    out
+}
+
+/// Each type of `def`'s module (D-045) and interface with a function of
+/// `def`'s name whose satisfying function is `def`, the function: the
+/// interfaces in module and item order, then the types in item order.
+/// Empty for anything else, and for an `@external`, whose declaration is
+/// its definition. `view` is the cursor's module.
+pub(crate) fn provisions(snapshot: &Snapshot, view: ModuleView<'_>, def: DefId) -> Vec<Provision> {
+    let interfaces = snapshot.interfaces();
+    let Some(own) = interfaces.get(def.module) else {
+        return Vec::new();
+    };
+    let Some(func) = own.item(def.index).filter(|f| f.kind == DefKind::Fn) else {
+        return Vec::new();
+    };
+    let external = snapshot
+        .module(def.module)
+        .and_then(ModuleView::resolved)
+        .and_then(|resolved| resolved.item(def.index))
+        .is_some_and(|item| !item.attrs.externals.is_empty());
+    // The solver reads no tree or resolution, so the cursor's module may
+    // lend them for a home without a tree (D-1386).
+    let Some(input) = snapshot.query_input(def.module, view) else {
+        return Vec::new();
+    };
+    if external {
+        return Vec::new();
+    }
+    let types: Vec<DefId> = own
+        .items
+        .iter_enumerated()
+        .filter(|(_, item)| item.kind == DefKind::Type)
+        .map(|(index, _)| DefId::new(def.module, index))
+        .collect();
+    if types.is_empty() {
+        return Vec::new();
+    }
+    let item_of = |d: DefId| interfaces.get(d.module).and_then(|i| i.item(d.index));
+    let mut out = Vec::new();
+    for &module in snapshot.all_ids() {
+        let Some(iface) = interfaces.get(module) else {
+            continue;
+        };
+        for (index, item) in iface.items.iter_enumerated() {
+            if item.kind != DefKind::Interface {
+                continue;
+            }
+            let interface = DefId::new(module, index);
+            let Ok(fns) = interface_fns(interface, &item_of) else {
+                continue;
+            };
+            if !fns
+                .iter()
+                .any(|&f| item_of(f).is_some_and(|f| f.name == func.name))
+            {
+                continue;
+            }
+            let Ok(found) = implementors(&input, interface, &types) else {
+                continue;
+            };
+            for (ty, verdict) in found {
+                let Verdict::Yes {
+                    fns: satisfying, ..
+                } = verdict
+                else {
+                    continue;
+                };
+                for (satisfying, &provided) in satisfying.iter().zip(&fns) {
+                    let provision = Provision {
+                        ty,
+                        interface,
+                        provided,
+                    };
+                    if *satisfying == def && !out.contains(&provision) {
+                        out.push(provision);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The innermost expression at `offset` that has a type: its range, the

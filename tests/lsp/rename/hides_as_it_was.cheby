@@ -1,0 +1,11 @@
+// @decisions: D-1668, D-1698, D-1709
+//! A rename that makes an error go away is refused, quoting the error as
+//! the user sees it, with the old name, at its place (D-1698): renaming
+//! the second `total` to `sum` would end its E0044.
+
+fn main() {
+  let total = 1
+  let total = 2
+  //  ^ rename sum
+  assert total == 2
+}

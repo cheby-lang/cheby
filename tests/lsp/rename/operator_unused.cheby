@@ -1,0 +1,18 @@
+// @decisions: D-1391
+//! An operator's function, found by its name and signature: `add` makes
+//! `+` apply to `V`. No `+` uses it, so the rename gets a note.
+
+type V {
+  V(Int),
+}
+
+fn add(a: V, b: V) -> V {
+// ^ rename plus
+  let V(x) = a
+  let V(y) = b
+  V(x + y)
+}
+
+fn main() {
+  assert add(V(1), V(2)) == V(3)
+}

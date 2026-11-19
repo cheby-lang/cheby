@@ -1,0 +1,127 @@
+== diagnostics
+{}
+
+== src/main.cheby:11:10 rename Q
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "Q",
+            "range": {
+              "end": {
+                "character": 42,
+                "line": 7
+              },
+              "start": {
+                "character": 41,
+                "line": 7
+              }
+            }
+          },
+          {
+            "newText": "Q",
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 10
+              },
+              "start": {
+                "character": 9,
+                "line": 10
+              }
+            }
+          },
+          {
+            "newText": "Q",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 10
+              },
+              "start": {
+                "character": 13,
+                "line": 10
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:13:16 rename Name
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "Name",
+            "range": {
+              "end": {
+                "character": 30,
+                "line": 7
+              },
+              "start": {
+                "character": 27,
+                "line": 7
+              }
+            }
+          },
+          {
+            "newText": "Name",
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 12
+              },
+              "start": {
+                "character": 9,
+                "line": 12
+              }
+            }
+          },
+          {
+            "newText": "Name",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 12
+              },
+              "start": {
+                "character": 15,
+                "line": 12
+              }
+            }
+          },
+          {
+            "newText": "Name",
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 14
+              },
+              "start": {
+                "character": 6,
+                "line": 14
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

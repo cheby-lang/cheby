@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== src/main.cheby:13:16 rename assist
+{
+  "answer": null,
+  "showMessage": [
+    "warning: `src/util.cheby` changed on disk, try again"
+  ]
+}

@@ -1,0 +1,8 @@
+//! A closed importer of `util`.
+
+import moves::util
+
+/// The greeting, through `util`.
+pub fn hello() -> String {
+  util::greet()
+}

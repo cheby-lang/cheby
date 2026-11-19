@@ -19,6 +19,11 @@
 //! A document outside every package, or inside one without being one of
 //! its modules, gets a single-file session of its own at its open, which
 //! ends at its close with one empty publish (D-1371, `sessions`).
+//!
+//! An edit or a close may make a constant's value stale or current again
+//! (D-1510), so each looks at the package's constant inlay row again
+//! (D-1679, `child_loop`). A save is looked at by `child_on_save`, whose
+//! outbox ends with the same look.
 
 use std::path::PathBuf;
 
@@ -29,6 +34,7 @@ use lsp_types::{
 use serde_json::Value;
 
 use super::Server;
+use super::child_loop::Recheck;
 use super::schedule::Urgency;
 use super::sessions::DocRoute;
 use super::state::Doc;
@@ -133,6 +139,7 @@ impl Server {
         if let Some(root) = root {
             self.touch(&root, stamp);
             self.mark_dirty(&root, Changed::default(), Urgency::Debounce);
+            self.recheck_constant_hints(Recheck::Text(&root));
         }
     }
 
@@ -155,6 +162,9 @@ impl Server {
                 self.touch(&root, stamp);
                 self.mark_dirty(&root, SWEEP, Urgency::Flush);
                 self.settle(&root);
+                // The file reads as the newest snapshot has it until a run
+                // reads disk, which looks again (`child_on_live`).
+                self.recheck_constant_hints(Recheck::Text(&root));
             }
             Some((None, _)) | None => {}
         }
@@ -181,7 +191,9 @@ impl Server {
             };
             self.mark_dirty(&root, changed, Urgency::Flush);
             // The constants child reads disk: a save that changed it kills
-            // the child and makes a run due (D-1411, D-1494).
+            // the child and makes a run due (D-1411, D-1494). Its outbox
+            // looks at the constant inlay row again, and a save changes no
+            // text and no snapshot, so it needs no look of its own (D-1679).
             self.child_on_save(&root, &[path]);
         }
         // A document outside every package rejoins one whose `cheby.toml`

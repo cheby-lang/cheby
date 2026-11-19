@@ -1,0 +1,74 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "message": "the interface `Area` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 5
+        },
+        "start": {
+          "character": 10,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:14:4 rename size
+{
+  "answer": {
+    "changeAnnotations": {
+      "cheby.satisfaction": {
+        "label": "`Square` will no longer satisfy `Area`",
+        "needsConfirmation": true
+      }
+    },
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "size",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 13
+              },
+              "start": {
+                "character": 3,
+                "line": 13
+              }
+            }
+          },
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "size",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 20
+              },
+              "start": {
+                "character": 9,
+                "line": 20
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": [
+    "warning: `Square` will no longer satisfy `Area`"
+  ]
+}

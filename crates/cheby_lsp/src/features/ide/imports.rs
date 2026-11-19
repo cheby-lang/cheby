@@ -131,7 +131,13 @@ fn imports_module(snapshot: &Snapshot, from: ModuleId, to: ModuleId) -> bool {
 /// when that is free at every point of the module, else an alias
 /// (D-1395): `std_<last>` for std, `<parent>_<last>` for a package
 /// module, then `_value`, `_value_2` and so on until one is free.
-fn binding(snapshot: &Snapshot, view: ModuleView<'_>, target: &ModulePath) -> Option<String> {
+/// A file move asks it whether a moved module's new last segment is
+/// free in an importer (X §3.6).
+pub(crate) fn binding(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    target: &ModulePath,
+) -> Option<String> {
     let segments = target.segments();
     let (last, parents) = segments.split_last()?;
     let free = |name: &str| {

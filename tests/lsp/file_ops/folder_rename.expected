@@ -1,0 +1,45 @@
+== diagnostics
+{}
+
+== willRename src/geo src/plane
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "moves::plane::lines",
+            "range": {
+              "end": {
+                "character": 24,
+                "line": 5
+              },
+              "start": {
+                "character": 7,
+                "line": 5
+              }
+            }
+          },
+          {
+            "newText": "moves::plane::shapes",
+            "range": {
+              "end": {
+                "character": 25,
+                "line": 6
+              },
+              "start": {
+                "character": 7,
+                "line": 6
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

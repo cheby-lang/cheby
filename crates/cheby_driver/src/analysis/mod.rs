@@ -92,7 +92,7 @@ pub use std_base::{
     StdBase, StdField, StdIndex, StdItem, StdModuleEntry, TypeHead, materialize_std,
 };
 pub use symbol::{Member, Symbol, SymbolNs};
-pub use verify::{VerifyOutcome, VerifyRequest, verify};
+pub use verify::{Introduced, VerifyOutcome, VerifyRequest, verify};
 
 /// What crosses threads in the server: a snapshot and its reports are
 /// shared by the request pool, as are the std base and what `verify` takes

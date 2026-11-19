@@ -1,0 +1,6 @@
+//! Lines.
+
+/// One.
+pub fn one() -> Int {
+  1
+}

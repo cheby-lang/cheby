@@ -1,0 +1,26 @@
+// @decisions: D-1390, D-1391, D-1670, D-1672
+//! Items across modules (`features.md` §3.5): a function through
+//! `import a::{foo as bar}`, where only `foo` changes and the alias
+//! stays; `m::foo`, where only the last segment changes; `m::I::f`,
+//! which renames the interface function with the function that satisfies
+//! it; a record type, renamed with its constructor; and a type whose one
+//! variant has its name, which are two symbols.
+
+import app::shapes
+import app::shapes::{area as measure, Point}
+//                   ^ rename surface
+//                           ^ rename gauge
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  //      ^ rename Spot
+  let shapes::Id(n) = shapes::Id(3)
+  //                          ^ rename Ident
+  let key: shapes::Id = shapes::Id(4)
+  //               ^ rename Key
+  let shapes::Id(m) = key
+  assert measure(p) == 2 && shapes::area(p) == 2
+  //                                ^ rename volume
+  assert shapes::Sized::heft(p) == 3 && n + m == 7
+  //                    ^ rename bulk
+}

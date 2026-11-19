@@ -1,0 +1,45 @@
+== diagnostics
+{}
+
+== willRename src/alpha.cheby src/zeta.cheby
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "import moves::beta\nimport moves::zeta\nimport std::io",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 6
+              },
+              "start": {
+                "character": 0,
+                "line": 4
+              }
+            }
+          },
+          {
+            "newText": "zeta",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 9
+              },
+              "start": {
+                "character": 14,
+                "line": 9
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

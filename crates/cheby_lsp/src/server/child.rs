@@ -2073,6 +2073,25 @@ impl ConstValues {
         );
     }
 
+    /// The values that read current ([`ConstValues::reading`]'s
+    /// [`ConstReading::Value`] that is not stale) while `editor` holds the
+    /// package's text, each with its text and whether it was cut: what the
+    /// constant inlay row may show (D-1679). The server asks its client for
+    /// the hints again when this changes.
+    pub(crate) fn current_values(
+        &self,
+        editor: &dyn EditorText,
+    ) -> BTreeMap<Symbol, (String, bool)> {
+        if self.stale || self.disk_errors {
+            return BTreeMap::new();
+        }
+        self.values
+            .iter()
+            .filter(|(symbol, entry)| !self.failed.contains_key(*symbol) && entry.current(editor))
+            .map(|(symbol, entry)| (symbol.clone(), (entry.text.clone(), entry.truncated)))
+            .collect()
+    }
+
     /// Whether any value reads stale ([`ConstValues::reading`]) while
     /// `editor`, if known, holds the package's text: `cheby/status`'s
     /// `stale` (D-1505, D-1510). With no editor text, only the run's own

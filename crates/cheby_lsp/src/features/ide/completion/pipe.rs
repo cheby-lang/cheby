@@ -66,7 +66,8 @@
 //! has no such parameter and is not offered.
 //!
 //! The interfaces start a path after `|>` as the modules do, whatever
-//! the left side's type: those in scope bare, `Show::`, those of
+//! the left side's type, if one of their functions takes `Self` (D-1681):
+//! those in scope bare, `Show::`, those of
 //! imported modules through the module, `ops::Compare::`, from the
 //! second character, and with `completion.autoImport` on those to
 //! import, capped with the functions to import (D-1546). One the file

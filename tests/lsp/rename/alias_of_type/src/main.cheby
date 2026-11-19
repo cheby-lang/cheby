@@ -1,0 +1,17 @@
+// @decisions: D-1390, D-1670
+//! Import aliases of types (D-111): `Point as P` names a record type and
+//! its constructor, and `Id as Key` the type `Id` and its constructor
+//! `Id`, each with one token. The alias is a symbol in each namespace,
+//! and renaming it from a type use or a constructor use writes every use
+//! of both.
+
+import app::shapes::{Id as Key, Point as P}
+
+fn main() {
+  let p: P = P { x: 1 }
+  //     ^ rename Q
+  let k: Key = Key(p.x)
+  //           ^ rename Name
+  let Key(n) = k
+  assert n == 1
+}

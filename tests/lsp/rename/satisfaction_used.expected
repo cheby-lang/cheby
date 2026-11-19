@@ -1,0 +1,13 @@
+== diagnostics
+{}
+
+== src/main.cheby:13:4 rename size
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would cause: error[E0063]: `Square` does not satisfy `Area` at src/main.cheby:24:10"
+    }
+  },
+  "showMessage": []
+}

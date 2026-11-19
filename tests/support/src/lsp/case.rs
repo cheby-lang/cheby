@@ -22,7 +22,9 @@
 //!   such as `documentSymbol` or `formatting`;
 //! - `@package: none`: the file is opened outside every package (D-1371);
 //! - `@clientInfo: name`: the `clientInfo.name` of `initialize`, such as
-//!   `Zed`, whose `filterText` after `xs.` differs (`features.md` §4.2).
+//!   `Zed`, whose `filterText` after `xs.` differs (`features.md` §4.2);
+//! - `@newErrors: E0044, …`: the error codes an applied edit may add, one
+//!   occurrence per listing (D-1676).
 //!
 //! A marker is a comment line that points at the nearest line above it
 //! that is not a marker: `//   ^ hover` puts the position at the caret's
@@ -37,7 +39,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::client::ClientKind;
+use super::client::{ClientKind, codes};
 use super::text::{Encoding, Position};
 use crate::milestone::Milestone;
 
@@ -80,6 +82,9 @@ pub struct Header {
     /// `@rewrite: crlf`: every source file of the copy ends its lines with
     /// `\r\n`, which no file here can hold (`.gitattributes`).
     pub crlf: bool,
+    /// `@newErrors`: the codes of the errors an applied edit may add, each
+    /// listing allowing one occurrence (D-1676).
+    pub new_errors: Vec<String>,
 }
 
 /// One step of `@steps`.
@@ -109,6 +114,19 @@ pub enum Step {
     /// (CP2's R3, D-1494): the file is written, then a watched change of
     /// it, `didSave` a few milliseconds later, and `didSave` again.
     ZedSave(String),
+    /// `disk DIR`: each file under `DIR/` of the test is written to the
+    /// same path below the package, and the server is told nothing, so a
+    /// closed file goes stale or a new module file appears unseen
+    /// (D-1669).
+    Disk(String),
+    /// `close PATH`: the open document at `PATH` below the package is
+    /// closed, and its closed-file publish is waited for.
+    Close(String),
+    /// `willRename OLD NEW …`: `workspace/willRenameFiles` for each pair
+    /// of paths below the package, a file or a folder. Its answer is a
+    /// block, its edit is applied and checked (D-1676), and then the files
+    /// move on disk, as Zed moves them.
+    WillRename(Vec<(String, String)>),
 }
 
 impl Step {
@@ -123,10 +141,26 @@ impl Step {
             (Some("save"), Some(dir)) => Self::Save(dir.to_owned()),
             (Some("zed-save"), Some(dir)) => Self::ZedSave(dir.to_owned()),
             (Some("settings"), Some(name)) => Self::Settings(name.to_owned()),
+            (Some("disk"), Some(dir)) => Self::Disk(dir.to_owned()),
+            (Some("close"), Some(path)) => Self::Close(path.to_owned()),
+            (Some("willRename"), Some(first)) => {
+                let paths: Vec<&str> = std::iter::once(first).chain(words.by_ref()).collect();
+                let pairs: Vec<(String, String)> = paths
+                    .chunks(2)
+                    .filter_map(|pair| match pair {
+                        [old, new] => Some(((*old).to_owned(), (*new).to_owned())),
+                        _ => None,
+                    })
+                    .collect();
+                if pairs.len().saturating_mul(2) != paths.len() {
+                    return Err(format!("@steps: `{text}` needs OLD NEW pairs"));
+                }
+                Self::WillRename(pairs)
+            }
             _ => {
                 return Err(format!(
                     "@steps: `{text}` is not idle, started, quiet, edit DIR, save DIR, \
-                     zed-save DIR or settings NAME"
+                     zed-save DIR, settings NAME, disk DIR, close PATH or willRename OLD NEW …"
                 ));
             }
         };
@@ -151,6 +185,7 @@ impl Default for Header {
             steps: Vec::new(),
             bom: false,
             crlf: false,
+            new_errors: Vec::new(),
         }
     }
 }
@@ -232,17 +267,35 @@ impl Header {
                         }
                     }
                 }
+                "newErrors" => {
+                    for code in value.split(',').map(str::trim) {
+                        if !is_code(code) {
+                            return Err(format!(
+                                "@newErrors: `{code}` is not an error's code such as E0044"
+                            ));
+                        }
+                        header.new_errors.push(code.to_owned());
+                    }
+                }
                 other => {
                     return Err(format!(
                         "unknown directive `@{other}`; the keys are decisions, milestone, \
-                         client, encoding, settings, requests, package, clientInfo, steps and \
-                         rewrite"
+                         client, encoding, settings, requests, package, clientInfo, steps, \
+                         rewrite and newErrors"
                     ));
                 }
             }
         }
         Ok(header)
     }
+}
+
+/// Whether `code` reads as an error's code: `E` and four digits. The
+/// applied-edit check compares errors only (D-1676), so a warning's code
+/// would excuse nothing.
+fn is_code(code: &str) -> bool {
+    let mut chars = code.chars();
+    chars.next() == Some('E') && code.len() == 5 && chars.all(|c| c.is_ascii_digit())
 }
 
 /// How a test is laid out on disk.
@@ -787,9 +840,11 @@ fn touches(d: &Value, start: Position, end: Position) -> bool {
 }
 
 /// Sorts what a request answers where the order means nothing, so goldens
-/// do not depend on it: locations of `references` and the edits of a
-/// `rename`, by path, line and column, and the ranges of `foldingRange`
-/// by start, then end.
+/// do not depend on it: locations of `references` by path, line and
+/// column; the edits of a `rename` or a `willRename` step's
+/// `WorkspaceEdit`, its `changes` and each document of its
+/// `documentChanges` by range, and those documents by URI; and the ranges
+/// of `foldingRange` by start, then end.
 #[must_use]
 pub fn canonical(name: &str, answer: Value) -> Value {
     fn fold_key(v: &Value) -> [u64; 4] {
@@ -809,6 +864,33 @@ pub fn canonical(name: &str, answer: Value) -> Value {
         let n = |f: &str| start.get(f).and_then(Value::as_u64).unwrap_or(0);
         (uri, n("line"), n("character"))
     }
+    /// A text edit's range, start then end.
+    fn range_key(v: &Value) -> [u64; 4] {
+        let range = v.get("range").unwrap_or(&Value::Null);
+        let n = |end: &str, f: &str| {
+            range
+                .get(end)
+                .and_then(|p| p.get(f))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        };
+        [
+            n("start", "line"),
+            n("start", "character"),
+            n("end", "line"),
+            n("end", "character"),
+        ]
+    }
+    /// The URI a document change names: a text document edit's, or a
+    /// resource operation's `uri` or `oldUri`.
+    fn document_key(v: &Value) -> String {
+        v.pointer("/textDocument/uri")
+            .or_else(|| v.get("uri"))
+            .or_else(|| v.get("oldUri"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    }
     match (name, answer) {
         ("references", Value::Array(mut items)) => {
             items.sort_by_key(key);
@@ -818,18 +900,78 @@ pub fn canonical(name: &str, answer: Value) -> Value {
             items.sort_by_key(fold_key);
             Value::Array(items)
         }
-        ("rename", Value::Object(mut edit)) => {
+        ("rename" | "willRename", Value::Object(mut edit)) => {
             if let Some(Value::Object(changes)) = edit.get_mut("changes") {
+                // Each URI's list is sorted on its own; the map's order is the
+                // printer's.
                 for edits in changes.values_mut() {
                     if let Value::Array(items) = edits {
-                        items.sort_by_key(key);
+                        items.sort_by_key(range_key);
                     }
                 }
+            }
+            if let Some(Value::Array(documents)) = edit.get_mut("documentChanges") {
+                for document in documents.iter_mut() {
+                    if let Some(Value::Array(items)) = document.get_mut("edits") {
+                        items.sort_by_key(range_key);
+                    }
+                }
+                documents.sort_by_key(document_key);
             }
             Value::Object(edit)
         }
         (_, answer) => answer,
     }
+}
+
+/// Whether the examples group takes error `code` as an answer to
+/// `method`: `RequestFailed` from `textDocument/prepareRename` and
+/// `textDocument/rename`, which is how they refuse a name (`features.md`
+/// §3.2, D-1671). Any other error fails the trial, `InternalError`
+/// always.
+#[must_use]
+pub fn refusal_allowed(method: &str, code: i64) -> bool {
+    code == codes::REQUEST_FAILED
+        && matches!(method, "textDocument/prepareRename" | "textDocument/rename")
+}
+
+/// Whether a rename sweep (D-1677) takes the refusal `message` of a
+/// rename to a fresh name. Such a name binds nothing, so a refusal says the
+/// writer missed an occurrence, which is what the sweep exists to find,
+/// except for three kinds: a function whose satisfaction the package
+/// uses, which `verify` refuses for its E0063 in D-1671's text (D-1391);
+/// and, only in an example whose `cheby check` fails before any rename
+/// (`checks` false), D-1390's state gates, whose texts never start with
+/// "Renaming would", and D-1698's refusal of an error that would go away,
+/// since a fresh name can remove an error the example already has
+/// (D-1668, D-1716). Any other refusal fails the trial.
+#[must_use]
+pub fn sweep_refusal_allowed(message: &str, checks: bool) -> bool {
+    message.starts_with("Renaming would cause: error[E0063]: ")
+        || (!checks
+            && (message.starts_with("Renaming would hide an error")
+                || (!message.starts_with("Renaming would ")
+                    && !message.starts_with("the edit could not be checked"))))
+}
+
+/// The points of `points`, each a label of its `prepareRename` request
+/// and the point, where `prepared`, the answers by label, holds an
+/// answer that is not `null`: a refused or failed request has none. At
+/// most `budget` of them are kept, by the fixed stride of
+/// [`super::editing::sample`], so the renames are the same on every run.
+/// Returns them and how many accepted points were dropped.
+#[must_use]
+pub fn accepted_renames<T: Clone>(
+    points: &[(String, T)],
+    prepared: &std::collections::BTreeMap<String, Value>,
+    budget: usize,
+) -> (Vec<T>, usize) {
+    let accepted: Vec<T> = points
+        .iter()
+        .filter(|(label, _)| prepared.get(label).is_some_and(|v| !v.is_null()))
+        .map(|(_, point)| point.clone())
+        .collect();
+    super::editing::sample(&accepted, budget)
 }
 
 /// One block of a golden: `== <label>` and pretty JSON.
@@ -881,7 +1023,34 @@ mod tests {
             ]
         );
         assert!(steps.crlf && !steps.bom);
+        let moves = Header::of(
+            "// @steps: disk late, close src/a.cheby, willRename src/a.cheby src/b.cheby src/c src/d\n\
+             // @newErrors: E0044, E0044\n",
+        )
+        .unwrap();
+        assert_eq!(
+            moves.steps,
+            [
+                Step::Disk("late".to_owned()),
+                Step::Close("src/a.cheby".to_owned()),
+                Step::WillRename(vec![
+                    ("src/a.cheby".to_owned(), "src/b.cheby".to_owned()),
+                    ("src/c".to_owned(), "src/d".to_owned()),
+                ]),
+            ]
+        );
+        assert_eq!(moves.new_errors, ["E0044", "E0044"]);
         for bad in [
+            "// @steps: disk\n",
+            "// @steps: close\n",
+            "// @steps: close a b\n",
+            "// @steps: willRename\n",
+            "// @steps: willRename src/a.cheby\n",
+            "// @steps: willRename a b c\n",
+            "// @newErrors: E44\n",
+            "// @newErrors: X0044\n",
+            "// @newErrors: E00440\n",
+            "// @newErrors: W0007\n",
             "// @steps: wait\n",
             "// @steps: save\n",
             "// @steps: idle now\n",
@@ -1095,5 +1264,134 @@ mod tests {
         let sorted = canonical("foldingRange", folds);
         assert_eq!(sorted[0]["kind"], json!("comment"));
         assert_eq!(sorted[2]["startLine"], json!(4));
+    }
+
+    /// A text edit from `(l, c)` to `(l, e)`.
+    fn text_edit(l: u64, c: u64, e: u64) -> Value {
+        json!({
+            "range": {"start": {"line": l, "character": c}, "end": {"line": l, "character": e}},
+            "newText": "x",
+        })
+    }
+
+    #[test]
+    fn rename_edits_are_sorted() {
+        let changes = json!({"changes": {"file:///a": [text_edit(3, 0, 1), text_edit(1, 4, 5), text_edit(1, 0, 2)]}});
+        let sorted = canonical("rename", changes);
+        let starts: Vec<(Value, Value)> = sorted["changes"]["file:///a"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e["range"]["start"]["line"].clone(),
+                    e["range"]["start"]["character"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            [
+                (json!(1), json!(0)),
+                (json!(1), json!(4)),
+                (json!(3), json!(0))
+            ]
+        );
+        // `documentChanges`: the documents by URI, each one's edits by range,
+        // an end breaking a tie of starts.
+        let documents = json!({"documentChanges": [
+            {"textDocument": {"uri": "file:///b", "version": 2}, "edits": [text_edit(2, 0, 3), text_edit(2, 0, 1)]},
+            {"textDocument": {"uri": "file:///a", "version": null}, "edits": [text_edit(5, 0, 1), text_edit(0, 7, 8)]},
+        ]});
+        for name in ["rename", "willRename"] {
+            let sorted = canonical(name, documents.clone());
+            let changes = sorted["documentChanges"].as_array().unwrap();
+            assert_eq!(changes[0]["textDocument"]["uri"], json!("file:///a"));
+            assert_eq!(changes[0]["edits"][0]["range"]["start"]["line"], json!(0));
+            assert_eq!(
+                changes[1]["edits"][0]["range"]["end"]["character"],
+                json!(1)
+            );
+            assert_eq!(
+                changes[1]["edits"][1]["range"]["end"]["character"],
+                json!(3)
+            );
+        }
+        // Another request's answer keeps its order.
+        assert_eq!(canonical("hover", documents.clone()), documents);
+    }
+
+    #[test]
+    fn only_rename_refusals_are_answers() {
+        for method in ["textDocument/prepareRename", "textDocument/rename"] {
+            assert!(refusal_allowed(method, codes::REQUEST_FAILED));
+            assert!(!refusal_allowed(method, codes::INTERNAL_ERROR));
+            assert!(!refusal_allowed(method, codes::INVALID_PARAMS));
+        }
+        assert!(!refusal_allowed(
+            "textDocument/hover",
+            codes::REQUEST_FAILED
+        ));
+        assert!(!refusal_allowed(
+            "workspace/willRenameFiles",
+            codes::REQUEST_FAILED
+        ));
+    }
+
+    /// D-1677: the sweeps fail on a refusal that only a missed occurrence
+    /// explains. An error that would go away is one the example already
+    /// has, so only an example that does not check may refuse for it
+    /// (D-1668, D-1716).
+    #[test]
+    fn a_sweep_takes_only_the_refusals_a_fresh_name_can_get() {
+        let satisfier = "Renaming would cause: error[E0063]: `Point` does not satisfy `Show` \
+                         at src/main.cheby:3:1";
+        let gate = "cannot tell what `.code` at `src/main.cheby:4` refers to";
+        let hides = "Renaming would hide an error: error[E0044]: `stored` is the name of a \
+                     function in this module at src/routes.cheby:217:27";
+        for checks in [true, false] {
+            assert!(sweep_refusal_allowed(satisfier, checks));
+            for missed in [
+                "Renaming would cause: error[E0042]: cannot find value `secret` in this scope \
+                 at src/main.cheby:60:41",
+                "Renaming would cause: warning[W0007]: `Some` hides the prelude's `Some`",
+                "the edit could not be checked: verify: the edits of `src/main.cheby` do not fit it",
+            ] {
+                assert!(!sweep_refusal_allowed(missed, checks), "{missed}");
+            }
+        }
+        for allowed in [gate, hides] {
+            assert!(sweep_refusal_allowed(allowed, false), "{allowed}");
+            assert!(!sweep_refusal_allowed(allowed, true), "{allowed}");
+        }
+    }
+
+    #[test]
+    fn renames_where_prepare_accepted_within_a_budget() {
+        let points: Vec<(String, usize)> = (0..250).map(|i| (format!("p{i}"), i)).collect();
+        let mut prepared = std::collections::BTreeMap::new();
+        for i in 0..250_usize {
+            // Every third point is refused (no answer), every fifth `null`.
+            if i % 3 == 0 {
+                continue;
+            }
+            let answer = if i % 5 == 0 {
+                Value::Null
+            } else {
+                json!({"start": i})
+            };
+            prepared.insert(format!("p{i}"), answer);
+        }
+        let accepted = (0..250_usize).filter(|i| i % 3 != 0 && i % 5 != 0).count();
+        let (kept, dropped) = accepted_renames(&points, &prepared, 100);
+        assert!(kept.len() <= 100, "{}", kept.len());
+        assert_eq!(kept.len() + dropped, accepted);
+        assert!(kept.iter().all(|i| i % 3 != 0 && i % 5 != 0));
+        // The same on every run, and from the first accepted point.
+        assert_eq!(accepted_renames(&points, &prepared, 100).0, kept);
+        assert_eq!(kept.first(), Some(&1));
+        // Under the budget, every accepted point is kept.
+        let (all, none) = accepted_renames(&points, &prepared, 1_000);
+        assert_eq!((all.len(), none), (accepted, 0));
     }
 }
