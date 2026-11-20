@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+      },
+      "message": "`Shape` has no field `origni`\nunknown field\nnote: the fields of `Shape`: `origin` and `size`",
+      "range": {
+        "end": {
+          "character": 21,
+          "line": 14
+        },
+        "start": {
+          "character": 15,
+          "line": 14
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:15:16 action Use the field `origin`
+{
+  "actions": [
+    "Use the field `origin`",
+    "Explain E0058"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        254,
+        254
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0058",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+        },
+        "message": "`Shape` has no field `origni`\nunknown field\nnote: the fields of `Shape`: `origin` and `size`",
+        "range": {
+          "end": {
+            "character": 21,
+            "line": 14
+          },
+          "start": {
+            "character": 15,
+            "line": 14
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "origin",
+              "range": {
+                "end": {
+                  "character": 21,
+                  "line": 14
+                },
+                "start": {
+                  "character": 15,
+                  "line": 14
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Use the field `origin`"
+  },
+  "showMessage": []
+}

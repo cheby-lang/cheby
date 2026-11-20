@@ -1,0 +1,15 @@
+// @decisions: D-148, D-636, D-081, D-1684, D-1745
+//! E0074 for a type named through a qualified alias in a `pub`
+//! signature: the type the alias stands for, in the other module, is made
+//! `pub`, checked by `verify` on resolve.
+
+import app::tok
+
+pub fn issue(text: String) -> tok::Tok {
+  //                          ^ action Make `Token` `pub`
+  tok::Token(text)
+}
+
+fn main() {
+  assert issue("a") == tok::Token("a")
+}

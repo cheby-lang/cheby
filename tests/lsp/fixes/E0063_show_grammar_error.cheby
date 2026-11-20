@@ -1,0 +1,19 @@
+// @decisions: D-1736, D-1347
+//! With a grammar error in another function E0063 is not reported
+//! (D-1347), so neither fix is offered.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let origin = Point { x: 0, y: 0 }
+  assert "{origin}" == ""
+  //       ^ noAction Use debug printing `{origin:?}`
+  //       ^ noAction Add the missing function `show`
+}
+
+fn broken() {
+  let = 1
+}

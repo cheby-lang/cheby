@@ -1,0 +1,237 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `unused`\nnever used",
+      "range": {
+        "end": {
+          "character": 28,
+          "line": 13
+        },
+        "start": {
+          "character": 22,
+          "line": 13
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:15:25 codeAction
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        255,
+        269
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "origin.y: 1",
+              "range": {
+                "end": {
+                  "character": 57,
+                  "line": 14
+                },
+                "start": {
+                  "character": 19,
+                  "line": 14
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "refactor.rewrite",
+    "title": "Use a field path"
+  }
+]
+
+== src/main.cheby:15:25 codeAction quickfix
+[]
+
+== src/main.cheby:15:25 codeAction refactor
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        255,
+        269
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "origin.y: 1",
+              "range": {
+                "end": {
+                  "character": 57,
+                  "line": 14
+                },
+                "start": {
+                  "character": 19,
+                  "line": 14
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "refactor.rewrite",
+    "title": "Use a field path"
+  }
+]
+
+== src/main.cheby:15:25 codeAction source
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        255,
+        269
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  }
+]
+
+== src/main.cheby:14:23 codeAction quickfix
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        207,
+        207
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0002",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+        },
+        "message": "unused parameter `unused`\nnever used",
+        "range": {
+          "end": {
+            "character": 28,
+            "line": 13
+          },
+          "start": {
+            "character": 22,
+            "line": 13
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "_unused",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 13
+                },
+                "start": {
+                  "character": 22,
+                  "line": 13
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "if this is intentional, start the name with an underscore: `_unused`"
+  },
+  {
+    "command": {
+      "arguments": [
+        "W0002"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain W0002"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        207,
+        207
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0002",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+        },
+        "message": "unused parameter `unused`\nnever used",
+        "range": {
+          "end": {
+            "character": 28,
+            "line": 13
+          },
+          "start": {
+            "character": 22,
+            "line": 13
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain W0002"
+  }
+]

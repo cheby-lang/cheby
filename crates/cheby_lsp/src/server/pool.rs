@@ -27,7 +27,8 @@ use super::{ClientCaps, ConstValues, Effect, Server, Settings, codes};
 use crate::features::handlers::file_ops::std_move_refused;
 use crate::features::stdlib::StdService;
 use crate::features::{
-    Analyzed, CancelToken, Class, HandlerOutput, LiveText, RequestCx, RequestError, Route,
+    Analyzed, CancelToken, Class, FileReports, HandlerOutput, LiveText, PublishedReport, RequestCx,
+    RequestError, Route,
 };
 use crate::text::lines::PositionEncoding;
 use crate::text::uri::{UriMap, normalize, uri_to_path};
@@ -53,6 +54,10 @@ pub(crate) struct RequestEnv {
     pub constants: Option<Arc<ConstValues>>,
     /// The client's spelling of each open document (A §6.1).
     pub uris: UriMap,
+    /// The reports last published for the package's files, set when the
+    /// request starts on a snapshot of its package, for code actions
+    /// (G1 plan §1.6, D-1393).
+    pub reports: Option<Arc<FileReports>>,
 }
 
 /// What a handler reads.
@@ -176,6 +181,7 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         std: &env.std,
         constants: env.constants.clone(),
         uris: &env.uris,
+        reports: env.reports.clone(),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| match (route.class, &target) {
         (Class::Text(handler), QueryTarget::Text(live)) => match live.doc_text() {
@@ -190,7 +196,7 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         (Class::Doc(handler) | Class::Package(handler), QueryTarget::Std) => {
             match env.std.ready() {
                 Some(ready) => handler(&cx, &ready.analyzed, params),
-                None => Ok(HandlerOutput::value((route.fallback)())),
+                None => (route.fallback)().map(HandlerOutput::value),
             }
         }
         (Class::Workspace(handler), QueryTarget::Workspace(packages)) => {
@@ -258,7 +264,7 @@ impl Server {
             // A URI that names no file, such as `untitled:`, is neither open
             // here nor in a package: the fallback (A §3.3).
             Ok(None) => {
-                self.answer(id, Ok((route.fallback)()));
+                self.answer(id, (route.fallback)());
                 return;
             }
             Err(()) => {
@@ -279,7 +285,7 @@ impl Server {
                 .get(&path)
                 .is_some_and(|doc| matches!(doc.route, DocRoute::Std))
         {
-            self.answer(id, Ok((route.fallback)()));
+            self.answer(id, (route.fallback)());
             return;
         }
         // A move in a std checkout is refused from routing alone (D-1706): a
@@ -303,7 +309,7 @@ impl Server {
         match route.class {
             Class::Text(_) => match self.live_text(&path) {
                 Some(live) => self.start_query(id, route, params, QueryTarget::Text(live), env),
-                None => self.answer(id, Ok((route.fallback)())),
+                None => self.answer(id, (route.fallback)()),
             },
             Class::Doc(_) | Class::Package(_) | Class::Workspace(_) => {
                 // An opened std document reads the std base's snapshot
@@ -314,14 +320,14 @@ impl Server {
                     && matches!(doc.route, DocRoute::Std)
                 {
                     if doc.diverged {
-                        self.answer(id, Ok((route.fallback)()));
+                        self.answer(id, (route.fallback)());
                     } else {
                         self.start_query(id, route, params, QueryTarget::Std, env);
                     }
                     return;
                 }
                 let Some(root) = self.root_of(&path) else {
-                    self.answer(id, Ok((route.fallback)()));
+                    self.answer(id, (route.fallback)());
                     return;
                 };
                 let want = match route.class {
@@ -402,6 +408,7 @@ impl Server {
             std: Arc::clone(&self.std),
             constants: None,
             uris: self.uris.clone(),
+            reports: None,
         })
     }
 
@@ -409,6 +416,28 @@ impl Server {
     pub(crate) fn with_constants(&self, env: Arc<RequestEnv>, root: &Path) -> Arc<RequestEnv> {
         let mut env = Arc::unwrap_or_clone(env);
         env.constants = self.children.constants(root);
+        Arc::new(env)
+    }
+
+    /// `env` with the reports last published for the files of the package
+    /// at `root`, which code actions read (G1 plan §1.6).
+    pub(crate) fn with_reports(&self, env: Arc<RequestEnv>, root: &Path) -> Arc<RequestEnv> {
+        let Some(package) = self.packages.get(root) else {
+            return env;
+        };
+        let files = package
+            .published
+            .iter()
+            .map(|(path, published)| {
+                let report = PublishedReport {
+                    report: Arc::clone(&published.report),
+                    substituted: published.substituted,
+                };
+                (path.clone(), report)
+            })
+            .collect();
+        let mut env = Arc::unwrap_or_clone(env);
+        env.reports = Some(Arc::new(FileReports { files }));
         Arc::new(env)
     }
 
@@ -500,7 +529,9 @@ impl Server {
 /// hierarchy's calls of the document the item was prepared in,
 /// `params.item.data.origin`, else `params.item.uri`, or for
 /// `workspace/willRenameFiles` the first file's old URI,
-/// `params.files[0].oldUri` (D-1675): `Ok(None)` for a URI that names no
+/// `params.files[0].oldUri` (D-1675), or for `codeAction/resolve` the URI
+/// that the action's `data` carries, `params.data.uri` (D-1683, D-1733):
+/// `Ok(None)` for a URI that names no
 /// file and for an empty list of files, which moves nothing, `Err` for
 /// malformed parameters.
 fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
@@ -521,6 +552,7 @@ fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
         })
         .or_else(|| params.pointer("/item/uri"))
         .or_else(|| params.pointer("/files/0/oldUri"))
+        .or_else(|| params.pointer("/data/uri"))
         .and_then(Value::as_str)
         .ok_or(())?
         .parse()
@@ -551,6 +583,7 @@ fn routed_by(method: &str) -> &'static str {
     match method {
         "workspace/willRenameFiles" => "files[0].oldUri",
         "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls" => "item.uri",
+        "codeAction/resolve" => "data.uri",
         _ => "textDocument.uri",
     }
 }
@@ -583,5 +616,30 @@ mod tests {
         );
         assert_eq!(routed_by("workspace/willRenameFiles"), "files[0].oldUri");
         assert_eq!(routed_by("textDocument/rename"), "textDocument.uri");
+    }
+
+    /// `codeAction/resolve` names its document by the URI in the action's
+    /// `data`, and one with no `data.uri` is malformed, named so in its
+    /// `InvalidParams` (D-1683, D-1733).
+    #[test]
+    fn code_action_resolve_routes_by_its_data_uri() {
+        let dir = std::env::temp_dir();
+        let uri = path_to_uri(&dir.join("a.cheby"))
+            .unwrap()
+            .as_str()
+            .to_owned();
+        let on_a = document_path(&json!({ "textDocument": { "uri": uri } }));
+        assert!(matches!(on_a, Ok(Some(_))), "{on_a:?}");
+        let action = json!({
+            "title": "Explain E0044",
+            "data": { "uri": uri, "hash": "00" },
+        });
+        assert_eq!(document_path(&action), on_a);
+        assert_eq!(document_path(&json!({ "title": "Explain E0044" })), Err(()));
+        assert_eq!(
+            document_path(&json!({ "title": "x", "data": { "uri": 3 } })),
+            Err(())
+        );
+        assert_eq!(routed_by("codeAction/resolve"), "data.uri");
     }
 }

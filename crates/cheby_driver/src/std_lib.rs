@@ -365,8 +365,9 @@ pub fn item_names() -> &'static [cheby_resolve::StdItemName] {
 /// The public items of `modules`, given as `(path under std, tree)` in
 /// module order, each module's in declaration order: the list of
 /// [`item_names`], or of a std checkout's run, which builds it from the
-/// checkout's own texts (D-1700).
-pub(crate) fn items_of<'t>(
+/// checkout's own texts (D-1700). The language server builds a
+/// checkout's list with it too, for E0042's fix (D-1694, D-1726).
+pub fn items_of<'t>(
     modules: impl Iterator<Item = (&'t str, &'t cheby_syntax::SyntaxTree)>,
 ) -> Vec<cheby_resolve::StdItemName> {
     modules

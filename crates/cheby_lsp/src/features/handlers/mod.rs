@@ -4,6 +4,7 @@ pub(crate) mod code_action;
 pub(crate) mod completion;
 pub(crate) mod doc;
 pub(crate) mod edit;
+pub(crate) mod explain;
 pub(crate) mod file_ops;
 pub(crate) mod folding;
 pub(crate) mod format;

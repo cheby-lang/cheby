@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`(Int, Point)` does not satisfy `Show`\ninterpolated here\nnote: element 2 of `(Int, Point)` is `Point`, which does not satisfy `Show` (§8.2, D-167)\nnote: this module declares `Point` but has no function `show(Point) -> String` (§8.2, D-061)\nhelp: write `{pair:?}` to use debug printing instead (D-086)",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 10
+        },
+        "start": {
+          "character": 11,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:12 action Add the missing function `show`
+{
+  "actions": [
+    "Use debug printing `{pair:?}`",
+    "Add the missing function `show`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        247,
+        247
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`(Int, Point)` does not satisfy `Show`\ninterpolated here\nnote: element 2 of `(Int, Point)` is `Point`, which does not satisfy `Show` (§8.2, D-167)\nnote: this module declares `Point` but has no function `show(Point) -> String` (§8.2, D-061)\nhelp: write `{pair:?}` to use debug printing instead (D-086)",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 10
+          },
+          "start": {
+            "character": 11,
+            "line": 10
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn show(point: Point) -> String {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 6
+                },
+                "start": {
+                  "character": 1,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `show`"
+  },
+  "showMessage": []
+}

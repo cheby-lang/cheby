@@ -1,0 +1,214 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0067",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0067.md"
+      },
+      "message": "`js_now` exists only on `js`, but `main` also runs on `native`\nnot available on `native`\nhelp: restrict `main` to `js` with `@target(js)`, or the whole module with `@!target(js)`\nhelp: if the package supports only `js`, declare `targets = [\"js\"]` in `cheby.toml`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 8
+        },
+        "start": {
+          "character": 10,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 5
+              },
+              "start": {
+                "character": 3,
+                "line": 5
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`js_now` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:11 action Add `@target(js)`
+{
+  "actions": [
+    "Add `@target(js)`",
+    "Add `@!target(js)`",
+    "Explain E0067"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        236,
+        236
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0067",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0067.md"
+        },
+        "message": "`js_now` exists only on `js`, but `main` also runs on `native`\nnot available on `native`\nhelp: restrict `main` to `js` with `@target(js)`, or the whole module with `@!target(js)`\nhelp: if the package supports only `js`, declare `targets = [\"js\"]` in `cheby.toml`",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 10,
+            "line": 8
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 5
+                },
+                "start": {
+                  "character": 3,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`js_now` is declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "@target(js)\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add `@target(js)`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:9:11 action Add `@!target(js)`
+{
+  "actions": [
+    "Add `@target(js)`",
+    "Add `@!target(js)`",
+    "Explain E0067"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        236,
+        236
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0067",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0067.md"
+        },
+        "message": "`js_now` exists only on `js`, but `main` also runs on `native`\nnot available on `native`\nhelp: restrict `main` to `js` with `@target(js)`, or the whole module with `@!target(js)`\nhelp: if the package supports only `js`, declare `targets = [\"js\"]` in `cheby.toml`",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 10,
+            "line": 8
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 5
+                },
+                "start": {
+                  "character": 3,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`js_now` is declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "@!target(js)\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 3
+                },
+                "start": {
+                  "character": 0,
+                  "line": 3
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add `@!target(js)`"
+  },
+  "showMessage": []
+}

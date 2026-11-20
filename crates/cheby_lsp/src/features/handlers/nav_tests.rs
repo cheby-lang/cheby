@@ -158,6 +158,7 @@ impl Case {
             std: &crate::features::stdlib::StdService::none(),
             uris: &crate::text::uri::UriMap::new(),
             constants: None,
+            reports: None,
         };
         let env = NavEnv {
             links: LinkCaps {

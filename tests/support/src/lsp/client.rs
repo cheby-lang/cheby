@@ -110,14 +110,17 @@ pub enum ClientKind {
     /// to plain behaviour (A §12.1).
     Empty,
     /// Every capability of [`ClientKind::Full`] but the position
-    /// encodings and `textDocument.rename.honorsChangeAnnotations`, so the
-    /// session runs on UTF-16 (D-1368), and a rename's note comes as a
-    /// `window/showMessage` (D-1391). The default.
+    /// encodings, `textDocument.rename.honorsChangeAnnotations` and
+    /// `textDocument.codeAction.disabledSupport`, as Zed 1.27 announces
+    /// them, so the session runs on UTF-16 (D-1368), a rename's note comes
+    /// as a `window/showMessage` (D-1391), and an action that would be
+    /// disabled is not listed (D-1690). The default.
     #[default]
     Standard,
-    /// Every capability the server reads, every position encoding and
-    /// `honorsChangeAnnotations` included, so a rename's note comes only as
-    /// a change annotation (D-1391).
+    /// Every capability the server reads, every position encoding,
+    /// `honorsChangeAnnotations` and `disabledSupport` included, so a
+    /// rename's note comes only as a change annotation (D-1391), and a
+    /// disabled action is listed with its reason (D-1690).
     Full,
 }
 
@@ -148,6 +151,12 @@ impl ClientKind {
                     .and_then(Value::as_object_mut)
                 {
                     map.insert("honorsChangeAnnotations".to_owned(), json!(true));
+                }
+                if let Some(map) = caps
+                    .pointer_mut("/textDocument/codeAction")
+                    .and_then(Value::as_object_mut)
+                {
+                    map.insert("disabledSupport".to_owned(), json!(true));
                 }
                 caps
             }
@@ -431,6 +440,18 @@ impl Paths {
             {
                 return format!("<std>/{below}");
             }
+            // An explanation the server wrote, below the build's own
+            // directory of the cache, or of the temporary one (D-1693).
+            if let Some((_, rest)) = text.split_once("/lsp/explain/")
+                && let Some((_, below)) = rest.split_once('/')
+            {
+                return format!("<cache>/lsp/explain/{below}");
+            }
+            if let Some((_, rest)) = text.split_once("/cheby-explain-")
+                && let Some((_, below)) = rest.split_once('/')
+            {
+                return format!("<tmp>/cheby-explain/{below}");
+            }
         }
         uri.to_owned()
     }
@@ -487,6 +508,9 @@ pub struct Client {
     configuration: Value,
     versions: BTreeMap<String, i32>,
     encoding: Encoding,
+    /// The params of each `window/showDocument` the server sent and no
+    /// one took yet, in order (D-1693).
+    shown_documents: Vec<Value>,
 }
 
 impl Client {
@@ -585,6 +609,7 @@ impl Client {
             configuration: Value::Null,
             versions: BTreeMap::new(),
             encoding: Encoding::Utf16,
+            shown_documents: Vec::new(),
         })
     }
 
@@ -840,6 +865,12 @@ impl Client {
                 && params(m).get("version").and_then(Value::as_i64) == version.map(i64::from)
         })?;
         Ok(diagnostics_of(&found))
+    }
+
+    /// Takes the params of every `window/showDocument` the server sent
+    /// since the last call, in order. Each was answered `success`.
+    pub fn take_shown_documents(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.shown_documents)
     }
 
     /// Takes every notification received and not yet taken.
@@ -1225,7 +1256,10 @@ impl Client {
             | "workspace/semanticTokens/refresh"
             | "workspace/diagnostic/refresh" => Ok(Value::Null),
             "workspace/applyEdit" => Ok(json!({ "applied": true })),
-            "window/showDocument" => Ok(json!({ "success": true })),
+            "window/showDocument" => {
+                self.shown_documents.push(params(request).clone());
+                Ok(json!({ "success": true }))
+            }
             other => Err(json!({
                 "code": codes::METHOD_NOT_FOUND,
                 "message": format!("the harness's client has no method `{other}`"),
@@ -1289,6 +1323,50 @@ pub fn diagnostics_of(message: &Value) -> Vec<Value> {
 mod tests {
     use super::*;
 
+    /// `full` shows disabled actions and `standard`, like Zed 1.27, does
+    /// not, so goldens pin both forms of D-1690.
+    #[test]
+    fn only_full_announces_disabled_support() {
+        let full = ClientKind::Full.capabilities(None);
+        assert_eq!(
+            full["textDocument"]["codeAction"]["disabledSupport"],
+            json!(true)
+        );
+        let standard = ClientKind::Standard.capabilities(None);
+        assert!(
+            standard["textDocument"]["codeAction"]
+                .get("disabledSupport")
+                .is_none()
+        );
+        assert_eq!(
+            standard["textDocument"]["codeAction"]["resolveSupport"]["properties"],
+            json!(["edit"])
+        );
+    }
+
+    /// An explanation the server wrote shows below `<cache>` or `<tmp>`,
+    /// without the build's own directory (D-1693).
+    #[test]
+    fn explanations_show_below_the_cache() {
+        let base = std::env::temp_dir();
+        let paths = Paths::new(&base.join("work").join("p"));
+        let shown = |below: &[&str]| {
+            let path = below
+                .iter()
+                .fold(base.clone(), |path, part| path.join(part));
+            paths.display(&uri::path_to_uri(&path).unwrap())
+        };
+        assert_eq!(
+            shown(&["cache", "lsp", "explain", "0123abcd", "E0044.md"]),
+            "<cache>/lsp/explain/E0044.md"
+        );
+        assert_eq!(
+            shown(&["x", "cheby-explain-0123abcd", "E0044.md"]),
+            "<tmp>/cheby-explain/E0044.md"
+        );
+        assert_eq!(shown(&["work", "p", "src", "main.cheby"]), "src/main.cheby");
+    }
+
     #[test]
     fn capabilities_by_kind() {
         assert_eq!(ClientKind::Empty.capabilities(None), json!({}));
@@ -1317,13 +1395,20 @@ mod tests {
             standard["textDocument"]["rename"],
             json!({ "prepareSupport": true })
         );
-        // Apart from that and the encodings, the two announce the same.
+        // Apart from that, `disabledSupport` (D-1690) and the encodings, the
+        // two announce the same.
         let mut trimmed = full;
         if let Some(map) = trimmed
             .pointer_mut("/textDocument/rename")
             .and_then(Value::as_object_mut)
         {
             map.remove("honorsChangeAnnotations");
+        }
+        if let Some(map) = trimmed
+            .pointer_mut("/textDocument/codeAction")
+            .and_then(Value::as_object_mut)
+        {
+            map.remove("disabledSupport");
         }
         if let Some(map) = trimmed.as_object_mut() {
             map.remove("general");

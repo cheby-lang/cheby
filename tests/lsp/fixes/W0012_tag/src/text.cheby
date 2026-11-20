@@ -1,0 +1,10 @@
+//! Text.
+
+@deprecated("use new")
+pub fn old() -> Int {
+  1
+}
+
+pub fn new() -> Int {
+  1
+}

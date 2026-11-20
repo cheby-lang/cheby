@@ -1,0 +1,173 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0060",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0060.md"
+      },
+      "message": "refutable pattern in `let`\n`None` not covered\nnote: this pattern must match every value of its type (§6.1)\nhelp: use `case` to handle `None` as well, or `let assert` to panic when the value does not match",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 4
+        },
+        "start": {
+          "character": 6,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:7 action Use `let assert`
+{
+  "actions": [
+    "Use `let assert`",
+    "Use `let guard … else { todo }`",
+    "Explain E0060"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        166,
+        166
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0060",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0060.md"
+        },
+        "message": "refutable pattern in `let`\n`None` not covered\nnote: this pattern must match every value of its type (§6.1)\nhelp: use `case` to handle `None` as well, or `let assert` to panic when the value does not match",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 4
+          },
+          "start": {
+            "character": 6,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "assert ",
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 4
+                },
+                "start": {
+                  "character": 6,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Use `let assert`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:5:7 action Use `let guard … else { todo }`
+{
+  "actions": [
+    "Use `let assert`",
+    "Use `let guard … else { todo }`",
+    "Explain E0060"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        166,
+        166
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0060",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0060.md"
+        },
+        "message": "refutable pattern in `let`\n`None` not covered\nnote: this pattern must match every value of its type (§6.1)\nhelp: use `case` to handle `None` as well, or `let assert` to panic when the value does not match",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 4
+          },
+          "start": {
+            "character": 6,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "guard ",
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 4
+                },
+                "start": {
+                  "character": 6,
+                  "line": 4
+                }
+              }
+            },
+            {
+              "newText": " else {\n    todo\n  }",
+              "range": {
+                "end": {
+                  "character": 17,
+                  "line": 4
+                },
+                "start": {
+                  "character": 17,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Use `let guard … else { todo }`"
+  },
+  "showMessage": []
+}

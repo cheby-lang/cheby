@@ -1,0 +1,26 @@
+// @decisions: D-1682, D-1691
+//! `only` filters by kind: a rewrite on a line whose parameter has a
+//! quick fix.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  origin: Point,
+}
+
+fn move(shape: Shape, unused: Int) -> Shape {
+  Shape { ..shape, origin: Point { ..shape.origin, y: 1 } }
+}
+//> 15:25-15:39 codeAction
+//> 15:25-15:39 codeAction quickfix
+//> 15:25-15:39 codeAction refactor
+//> 15:25-15:39 codeAction source
+//> 14:23 codeAction quickfix
+
+fn main() {
+  let shape = Shape { origin: Point { x: 0, y: 0 } }
+  assert move(shape, 0).origin.y == 1
+}

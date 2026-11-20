@@ -1,0 +1,9 @@
+//! Shapes.
+
+priv fn secret() -> String {
+  "s"
+}
+
+pub fn open() -> String {
+  secret()
+}

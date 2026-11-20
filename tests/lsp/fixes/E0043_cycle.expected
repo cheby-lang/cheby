@@ -1,0 +1,96 @@
+== diagnostics
+{
+  "src/a.cheby": [
+    {
+      "code": "E0040",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0040.md"
+      },
+      "message": "modules import each other in a cycle\n`app::a` imports `app::b`\nnote: the cycle is app::a → app::b → app::a\nhelp: move what the modules share into a module that neither imports",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 2
+        },
+        "start": {
+          "character": 0,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 2
+              },
+              "start": {
+                "character": 0,
+                "line": 2
+              }
+            },
+            "uri": "src/b.cheby"
+          },
+          "message": "`app::b` imports `app::a`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ],
+  "src/main.cheby": [
+    {
+      "code": "E0043",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+      },
+      "message": "`secret` is private to module `app::shape`",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 8
+        },
+        "start": {
+          "character": 16,
+          "line": 8
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 2
+              },
+              "start": {
+                "character": 8,
+                "line": 2
+              }
+            },
+            "uri": "src/shape.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:17 action Make `secret` package-visible
+{
+  "actions": [
+    "Make `secret` package-visible",
+    "Explain E0043"
+  ],
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`src/b.cheby` imports through a cycle"
+    }
+  },
+  "showMessage": []
+}

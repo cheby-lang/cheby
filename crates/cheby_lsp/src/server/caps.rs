@@ -16,11 +16,11 @@
 
 use lsp_types::{
     CallHierarchyServerCapability, CodeActionKind, CodeActionOptions, CodeActionProviderCapability,
-    CompletionOptions, DeclarationCapability, DocumentLinkOptions, FileOperationFilter,
-    FileOperationPattern, FileOperationPatternKind, FileOperationRegistrationOptions,
-    FoldingRangeProviderCapability, HoverProviderCapability, InlayHintOptions,
-    InlayHintServerCapabilities, OneOf, PositionEncodingKind, RenameOptions, SaveOptions,
-    SelectionRangeProviderCapability, ServerCapabilities, SignatureHelpOptions,
+    CompletionOptions, DeclarationCapability, DiagnosticTag, DocumentLinkOptions,
+    ExecuteCommandOptions, FileOperationFilter, FileOperationPattern, FileOperationPatternKind,
+    FileOperationRegistrationOptions, FoldingRangeProviderCapability, HoverProviderCapability,
+    InlayHintOptions, InlayHintServerCapabilities, OneOf, PositionEncodingKind, RenameOptions,
+    SaveOptions, SelectionRangeProviderCapability, ServerCapabilities, SignatureHelpOptions,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
     TextDocumentSyncSaveOptions, TypeDefinitionProviderCapability, WorkDoneProgressOptions,
     WorkspaceFileOperationsServerCapabilities, WorkspaceFoldersServerCapabilities,
@@ -30,6 +30,7 @@ use serde_json::Value;
 
 use crate::features::handlers::completion::CompletionCaps;
 use crate::features::handlers::edit::EditCaps;
+use crate::features::handlers::explain::EXPLAIN_COMMAND;
 use crate::features::handlers::folding::FoldingCaps;
 use crate::features::handlers::hover::HoverCaps;
 use crate::features::handlers::nav::LinkCaps;
@@ -77,6 +78,116 @@ pub(crate) struct ClientCaps {
     /// `workspace.workspaceEdit` and `textDocument.rename`: the shape of a
     /// workspace edit and its annotations.
     pub edit: EditCaps,
+    /// `textDocument.codeAction`: what a code action may carry.
+    pub actions: CodeActionCaps,
+    /// `textDocument.publishDiagnostics`: what a published diagnostic may
+    /// carry.
+    pub diagnostics: DiagnosticCaps,
+    /// `window.showDocument.support`: the client opens a document the
+    /// server names, as Explain's text (D-1693).
+    pub show_document: bool,
+}
+
+/// What the client can do with code actions (X §6.1), read from
+/// `textDocument.codeAction`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one switch per client capability"
+)]
+pub(crate) struct CodeActionCaps {
+    /// `codeActionLiteralSupport` is present: the client takes
+    /// `CodeAction` literals, not only `Command`s (D-1734).
+    pub literals: bool,
+    /// `codeActionLiteralSupport.codeActionKind.valueSet`: the kinds the
+    /// client knows.
+    pub kinds: Vec<String>,
+    /// `resolveSupport.properties`: what the client resolves lazily, such
+    /// as `edit` (D-1684).
+    pub resolve_properties: Vec<String>,
+    /// `dataSupport`: the client keeps an action's `data` until it
+    /// resolves the action (D-1683).
+    pub data: bool,
+    /// `disabledSupport`: the client shows a `disabled` action with its
+    /// reason (D-1690).
+    pub disabled: bool,
+    /// `isPreferredSupport`: the client reads `isPreferred`.
+    pub is_preferred: bool,
+}
+
+impl CodeActionCaps {
+    /// Reads the code-action capabilities of `params`, the `initialize`
+    /// parameters. A capability that is missing or of the wrong shape is
+    /// absent.
+    pub(crate) fn from_params(params: &Value) -> Self {
+        let at = |pointer: &str| {
+            params.pointer(&format!("/capabilities/textDocument/codeAction{pointer}"))
+        };
+        let flag = |pointer: &str| at(pointer).and_then(Value::as_bool).unwrap_or(false);
+        let strings = |pointer: &str| {
+            at(pointer)
+                .and_then(Value::as_array)
+                .map_or_default(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+        };
+        Self {
+            literals: at("/codeActionLiteralSupport").is_some_and(Value::is_object),
+            kinds: strings("/codeActionLiteralSupport/codeActionKind/valueSet"),
+            resolve_properties: strings("/resolveSupport/properties"),
+            data: flag("/dataSupport"),
+            disabled: flag("/disabledSupport"),
+            is_preferred: flag("/isPreferredSupport"),
+        }
+    }
+
+    /// The client resolves an action's `edit`: it keeps `data` and names
+    /// `edit` among the properties it resolves (D-1684). A fix that is
+    /// checked through `verify` on resolve is offered only to such a client
+    /// (D-1753, D-1754).
+    pub(crate) fn resolves_edits(&self) -> bool {
+        self.data && self.resolve_properties.iter().any(|p| p == "edit")
+    }
+}
+
+/// What a published diagnostic may carry for the client, read from
+/// `textDocument.publishDiagnostics` (X §8.1, §8.2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DiagnosticCaps {
+    /// `codeDescriptionSupport`: the client shows `codeDescription.href`
+    /// (D-1400).
+    pub code_description: bool,
+    /// `tagSupport.valueSet`: the tags the client shows, such as
+    /// `UNNECESSARY` and `DEPRECATED`.
+    pub tags: Vec<DiagnosticTag>,
+}
+
+impl DiagnosticCaps {
+    /// Reads the diagnostic capabilities of `params`, the `initialize`
+    /// parameters. A capability that is missing or of the wrong shape is
+    /// absent.
+    pub(crate) fn from_params(params: &Value) -> Self {
+        let base = "/capabilities/textDocument/publishDiagnostics";
+        Self {
+            code_description: params
+                .pointer(&format!("{base}/codeDescriptionSupport"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            tags: params
+                .pointer(&format!("{base}/tagSupport/valueSet"))
+                .and_then(Value::as_array)
+                .map_or_default(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                        .collect()
+                }),
+        }
+    }
 }
 
 impl ClientCaps {
@@ -117,6 +228,9 @@ impl ClientCaps {
             completion: CompletionCaps::from_params(params),
             signature: SignatureCaps::from_params(params),
             edit: EditCaps::from_params(params),
+            actions: CodeActionCaps::from_params(params),
+            diagnostics: DiagnosticCaps::from_params(params),
+            show_document: flag("/capabilities/window/showDocument/support"),
         }
     }
 
@@ -129,8 +243,9 @@ impl ClientCaps {
 /// The server's capabilities: the position encoding, incremental text sync
 /// with open, close and save, which is what diagnostics need, the requests
 /// of `routes` (plan §1.10), and workspace folders with their changes
-/// (A §6.5). Code actions are `refactor.rewrite` only, sent whole
-/// (D-1645). Completion triggers on `.`, `:`, `@` and `>` and resolves
+/// (A §6.5). Code actions are quick fixes, rewrites and source actions,
+/// resolved lazily (D-1683), and `cheby.explain` is the one command
+/// (D-1378, D-1693). Completion triggers on `.`, `:`, `@` and `>` and resolves
 /// its items' docs later, signature help triggers on `(` and `,`
 /// (D-1379, X §9.2), and inlay hints are whole when sent (plan §1.10).
 /// Semantic tokens are `full` and `range` with no `delta` (D-1396).
@@ -157,10 +272,19 @@ pub(crate) fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilit
         document_formatting_provider: Some(OneOf::Left(true)),
         document_range_formatting_provider: Some(OneOf::Left(true)),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![CodeActionKind::REFACTOR_REWRITE]),
+            code_action_kinds: Some(vec![
+                CodeActionKind::QUICKFIX,
+                CodeActionKind::REFACTOR_REWRITE,
+                CodeActionKind::SOURCE_ORGANIZE_IMPORTS,
+                CodeActionKind::SOURCE,
+            ]),
             work_done_progress_options: WorkDoneProgressOptions::default(),
-            resolve_provider: Some(false),
+            resolve_provider: Some(true),
         })),
+        execute_command_provider: Some(ExecuteCommandOptions {
+            commands: vec![EXPLAIN_COMMAND.to_owned()],
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        }),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some([".", ":", "@", ">"].map(str::to_owned).to_vec()),
@@ -244,7 +368,7 @@ mod tests {
             "textDocument/selectionRange" => "selectionRangeProvider",
             "textDocument/formatting" => "documentFormattingProvider",
             "textDocument/rangeFormatting" => "documentRangeFormattingProvider",
-            "textDocument/codeAction" => "codeActionProvider",
+            "textDocument/codeAction" | "codeAction/resolve" => "codeActionProvider",
             "textDocument/hover" => "hoverProvider",
             "textDocument/completion" | "completionItem/resolve" => "completionProvider",
             "textDocument/signatureHelp" => "signatureHelpProvider",
@@ -264,9 +388,13 @@ mod tests {
             }
             "textDocument/prepareRename" | "textDocument/rename" => "renameProvider",
             "workspace/willRenameFiles" => WILL_RENAME,
+            "workspace/executeCommand" => "executeCommandProvider",
             other => panic!("no provider is known for `{other}`"),
         };
+        // A `cheby/` request is the server's own, and has no provider
+        // (D-1378).
         let mut routed: Vec<&str> = super::super::routes::query_methods()
+            .filter(|method| !method.starts_with("cheby/"))
             .map(provider)
             .collect();
         routed.sort_unstable();
@@ -313,6 +441,74 @@ mod tests {
                 .map(|ops| ops.keys().cloned().collect::<Vec<_>>()),
             Some(vec!["willRename".to_owned()])
         );
+    }
+
+    /// Code actions have the four kinds W11 sends and are resolved, and
+    /// `cheby.explain` is the one command, of D-1378's five, that the
+    /// server serves (D-1683, D-1693).
+    #[test]
+    fn code_actions_resolve_and_explain_is_the_one_command() {
+        let caps = serde_json::to_value(server_capabilities(PositionEncoding::Utf16))
+            .expect("capabilities serialize");
+        assert_eq!(
+            caps["codeActionProvider"],
+            serde_json::json!({
+                "codeActionKinds": ["quickfix", "refactor.rewrite", "source.organizeImports", "source"],
+                "resolveProvider": true,
+            })
+        );
+        assert_eq!(
+            caps["executeCommandProvider"],
+            serde_json::json!({ "commands": ["cheby.explain"] })
+        );
+    }
+
+    /// The client's code-action, diagnostic and `showDocument` capabilities
+    /// are read as plain fields, and an empty client has none of them.
+    #[test]
+    fn code_action_and_diagnostic_caps_are_read() {
+        let params = serde_json::json!({ "capabilities": {
+            "textDocument": {
+                "codeAction": {
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": { "valueSet": ["quickfix", "source"] },
+                    },
+                    "resolveSupport": { "properties": ["edit"] },
+                    "dataSupport": true,
+                    "disabledSupport": true,
+                    "isPreferredSupport": true,
+                },
+                "publishDiagnostics": {
+                    "codeDescriptionSupport": true,
+                    "tagSupport": { "valueSet": [1, 2] },
+                },
+            },
+            "window": { "showDocument": { "support": true } },
+        } });
+        let caps = ClientCaps::from_params(&params);
+        assert_eq!(
+            caps.actions,
+            CodeActionCaps {
+                literals: true,
+                kinds: vec!["quickfix".to_owned(), "source".to_owned()],
+                resolve_properties: vec!["edit".to_owned()],
+                data: true,
+                disabled: true,
+                is_preferred: true,
+            }
+        );
+        assert_eq!(
+            caps.diagnostics,
+            DiagnosticCaps {
+                code_description: true,
+                tags: vec![DiagnosticTag::UNNECESSARY, DiagnosticTag::DEPRECATED],
+            }
+        );
+        assert!(caps.show_document);
+        let empty = ClientCaps::from_params(&serde_json::json!({ "capabilities": {} }));
+        assert_eq!(empty.actions, CodeActionCaps::default());
+        assert_eq!(empty.diagnostics, DiagnosticCaps::default());
+        assert!(!empty.show_document);
     }
 
     /// Semantic tokens are `full` and `range` with E's legend, and no

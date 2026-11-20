@@ -1,0 +1,31 @@
+// @decisions: D-1696, D-1736
+//! A type that misses two interfaces by one function each gets one action
+//! per interface, in the interfaces' order.
+
+interface Shape {
+  fn area(Self) -> Float
+  fn perimeter(Self) -> Float
+}
+
+interface Named {
+  fn name(Self) -> String
+  fn tag(Self) -> String
+}
+
+type Cube {
+  //   ^ codeAction source
+  //   ^ action Satisfy interface `Named`: add `tag`
+  side: Float,
+}
+
+fn area(cube: Cube) -> Float {
+  cube.side
+}
+
+fn name(cube: Cube) -> String {
+  "cube"
+}
+
+fn main() {
+  assert area(Cube { side: 1.0 }) == 1.0 && name(Cube { side: 1.0 }) == "cube"
+}

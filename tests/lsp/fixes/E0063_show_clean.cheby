@@ -1,0 +1,15 @@
+// @decisions: D-1736, D-086, D-1696
+//! E0063 on an interpolation of a type without `show`: debug printing,
+//! and the stub of `show` (X §6.6).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let origin = Point { x: 0, y: 0 }
+  assert "{origin}" == ""
+  //       ^ action Use debug printing `{origin:?}`
+  //       ^ action Add the missing function `show`
+}

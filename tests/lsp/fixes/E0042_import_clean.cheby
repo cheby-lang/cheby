@@ -1,0 +1,8 @@
+// @decisions: D-1388, D-1393, D-1736
+//! E0042 on a module that no import names: the fix imports it where
+//! `cheby fmt` keeps imports (X §6.3).
+
+fn main() {
+  assert list::length([1, 2]) == 2
+}
+//> 6:10 action Import `std::list`

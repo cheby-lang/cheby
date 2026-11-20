@@ -1,0 +1,31 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0012",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0012.md"
+      },
+      "message": "unexpected string in string interpolation\nhelp: a `{` in a string starts an interpolation; `\\{` writes a literal `{`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 7
+        },
+        "start": {
+          "character": 15,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:16 noAction Escape the brace as `\{`
+{
+  "actions": [
+    "Explain E0012"
+  ]
+}

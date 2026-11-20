@@ -1,0 +1,124 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0003",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0003.md"
+      },
+      "message": "unexpected character `'`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 5
+        },
+        "start": {
+          "character": 10,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0003",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0003.md"
+      },
+      "message": "unexpected character `'`\nhelp: strings use double quotes, such as \"text\"",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 5
+        },
+        "start": {
+          "character": 14,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:11 action strings use double quotes, such as "text"
+{
+  "actions": [
+    "strings use double quotes, such as \"text\"",
+    "Explain E0003"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        165,
+        165
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0003",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0003.md"
+        },
+        "message": "unexpected character `'`",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 5
+          },
+          "start": {
+            "character": 10,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\"",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 5
+                },
+                "start": {
+                  "character": 10,
+                  "line": 5
+                }
+              }
+            },
+            {
+              "newText": "\"",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 5
+                },
+                "start": {
+                  "character": 14,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "strings use double quotes, such as \"text\""
+  },
+  "showMessage": []
+}

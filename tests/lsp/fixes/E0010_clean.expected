@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0010",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0010.md"
+      },
+      "message": "unterminated string\nthis string is never closed\nhelp: add a closing `\"`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 4
+        },
+        "start": {
+          "character": 10,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:11 action Close the string
+{
+  "actions": [
+    "Close the string",
+    "Explain E0010"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        124,
+        124
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0010",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0010.md"
+        },
+        "message": "unterminated string\nthis string is never closed\nhelp: add a closing `\"`",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 4
+          },
+          "start": {
+            "character": 10,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\"",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 4
+                },
+                "start": {
+                  "character": 16,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Close the string"
+  },
+  "showMessage": []
+}

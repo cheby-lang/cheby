@@ -1,0 +1,93 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected `,` or `]`, found `_`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 6
+        },
+        "start": {
+          "character": 10,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:11 action Write `..`
+{
+  "actions": [
+    "Write `..`",
+    "Add the missing arms",
+    "Explain E0013"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        185,
+        185
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected `,` or `]`, found `_`",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 6
+          },
+          "start": {
+            "character": 10,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 6
+                },
+                "start": {
+                  "character": 10,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Write `..`"
+  },
+  "showMessage": []
+}

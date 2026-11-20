@@ -1,0 +1,20 @@
+// @decisions: D-148, D-1736, D-1347
+//! With a grammar error in another function E0074 is not reported
+//! (D-1347), so nothing is raised.
+
+type Token {
+  Token(String),
+}
+
+pub fn issue(text: String) -> Token {
+  //                          ^ noAction Make `Token` `pub`
+  Token(text)
+}
+
+fn main() {
+  assert issue("a") == Token("a")
+}
+
+fn broken() {
+  let = 1
+}

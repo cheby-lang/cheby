@@ -322,9 +322,10 @@ fn advertised(encoding: &str) -> Value {
         "documentFormattingProvider": true,
         "documentRangeFormattingProvider": true,
         "codeActionProvider": {
-            "codeActionKinds": ["refactor.rewrite"],
-            "resolveProvider": false,
+            "codeActionKinds": ["quickfix", "refactor.rewrite", "source.organizeImports", "source"],
+            "resolveProvider": true,
         },
+        "executeCommandProvider": { "commands": ["cheby.explain"] },
         "foldingRangeProvider": true,
         "hoverProvider": true,
         "completionProvider": {
@@ -891,6 +892,202 @@ fn a_stale_rename_sweeps_the_package() {
         .map(|change| change["edits"].as_array().unwrap().len())
         .sum();
     assert_eq!(in_util, 3, "the declaration and the two new uses: {edit}");
+    client.stop();
+}
+
+/// D-1731, D-1711: a cross-file fix that `verify` finds stale, because a
+/// closed file changed on disk, is answered with no `edit` and a warning,
+/// and its `Effect::Sweep` makes the package read the file again at once,
+/// as a stale rename's does, so the next resolve gets the edit. The fix is
+/// a test resolver's (`code_action::TEST_RESOLVERS`): it documents
+/// `helper` in `util.cheby`.
+#[test]
+fn a_stale_fix_sweeps_the_package() {
+    use cheby_driver::analysis::{PlainEdit, TextRange, TextSize, exact_key};
+
+    use crate::features::handlers::code_action::TEST_RESOLVERS;
+    use crate::features::ide::Refusal;
+    use crate::features::ide::actions::{ActionId, FixCx, Resolve};
+
+    fn resolvers(_: &ActionId) -> Resolve {
+        document_helper
+    }
+    #[expect(clippy::unnecessary_wraps, reason = "a resolver returns a `Result`")]
+    fn document_helper(
+        cx: &FixCx<'_>,
+        _: TextRange,
+        _: &ActionId,
+    ) -> Result<Vec<PlainEdit>, Refusal> {
+        let snapshot = &cx.analyzed.snapshot;
+        let path = snapshot.root().join("src").join("util.cheby");
+        let text = snapshot
+            .source(snapshot.file_of(&path).unwrap())
+            .unwrap()
+            .text();
+        let at = TextSize::try_from(text.find("pub fn helper").unwrap()).unwrap();
+        Ok(vec![PlainEdit {
+            path,
+            range: TextRange::empty(at),
+            replacement: "/// Helps.\n".to_owned(),
+        }])
+    }
+    const MAIN_R: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::helper()\n}\n";
+    const UTIL_R: &str = "//! Util.\n\npub fn helper() -> Int {\n  1\n}\n";
+    const UTIL_NEW: &str = "//! Util.\n\n\npub fn helper() -> Int {\n  1\n}\n";
+    TEST_RESOLVERS.set(resolvers).unwrap();
+    let package = Temp::package(
+        "stale_fix",
+        &[("src/main.cheby", MAIN_R), ("src/util.cheby", UTIL_R)],
+    );
+    let main = package.at("src/main.cheby");
+    let util = package.at("src/util.cheby");
+    let params = package.params(&json!({
+        "capabilities": {
+            "workspace": {
+                "didChangeWatchedFiles": { "dynamicRegistration": true },
+                "workspaceEdit": { "documentChanges": true },
+            },
+            "textDocument": { "codeAction": {
+                "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+                "resolveSupport": { "properties": ["edit"] },
+                "dataSupport": true,
+            } },
+            "experimental": { "chebyIdle": true },
+        },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    open(&client, &main, MAIN_R, 1);
+    client.wait_publish(&main, |p| p["version"] == 1);
+    next_idle(&mut client);
+    let before = generation(&mut client);
+    std::fs::write(&util, UTIL_NEW).unwrap();
+    let action = json!({
+        "title": "Document helper",
+        "kind": "quickfix",
+        "data": {
+            "uri": uri(&main),
+            "hash": exact_key(MAIN_R).to_hex(),
+            "range": [0, 0],
+            "id": { "kind": "habit", "index": 0 },
+        },
+    });
+    let shown = client.notifications.len();
+    let answer = client
+        .request("codeAction/resolve", action.clone())
+        .unwrap();
+    assert_eq!(
+        answer, action,
+        "a stale file is answered with no edit (D-1731)"
+    );
+    let warned = client.notifications[shown..].iter().any(|n| {
+        n.method == "window/showMessage"
+            && n.params["message"]
+                .as_str()
+                .is_some_and(|m| m.ends_with("util.cheby` changed on disk, try again"))
+    });
+    assert!(warned, "{:?}", &client.notifications[shown..]);
+    let deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    while generation(&mut client) <= before {
+        assert!(
+            Instant::now() < deadline,
+            "the refusal's sweep started no run"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let resolved = client.request("codeAction/resolve", action).unwrap();
+    let change = &resolved["edit"]["documentChanges"][0];
+    assert_eq!(change["textDocument"]["uri"], uri(&util), "{resolved}");
+    assert_eq!(
+        change["edits"][0]["range"]["start"]["line"], 3,
+        "the text on disk now: {resolved}"
+    );
+    client.stop();
+}
+
+/// D-1683, G1 plan §1.6: `codeAction/resolve` is a `Package` request, so
+/// a resolve sent right after an edit of another open document of the
+/// package waits for it, and its edit is against that document's new text
+/// and version (T-3). The fix is a test resolver's: it documents `helper`
+/// in `util.cheby`, which the edit moved down a line.
+#[test]
+fn a_resolve_reads_the_newest_other_document() {
+    use cheby_driver::analysis::{PlainEdit, TextRange, TextSize, exact_key};
+
+    use crate::features::handlers::code_action::TEST_RESOLVERS;
+    use crate::features::ide::Refusal;
+    use crate::features::ide::actions::{ActionId, FixCx, Resolve};
+
+    fn resolvers(_: &ActionId) -> Resolve {
+        document_helper
+    }
+    #[expect(clippy::unnecessary_wraps, reason = "a resolver returns a `Result`")]
+    fn document_helper(
+        cx: &FixCx<'_>,
+        _: TextRange,
+        _: &ActionId,
+    ) -> Result<Vec<PlainEdit>, Refusal> {
+        let snapshot = &cx.analyzed.snapshot;
+        let path = snapshot.root().join("src").join("util.cheby");
+        let text = snapshot
+            .source(snapshot.file_of(&path).unwrap())
+            .unwrap()
+            .text();
+        let at = TextSize::try_from(text.find("pub fn helper").unwrap()).unwrap();
+        Ok(vec![PlainEdit {
+            path,
+            range: TextRange::empty(at),
+            replacement: "/// Helps.\n".to_owned(),
+        }])
+    }
+    const MAIN_R: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::helper()\n}\n";
+    const UTIL_R: &str = "//! Util.\n\npub fn helper() -> Int {\n  1\n}\n";
+    const UTIL_NEW: &str = "//! Util.\n\n\npub fn helper() -> Int {\n  1\n}\n";
+    TEST_RESOLVERS.set(resolvers).unwrap();
+    let package = Temp::package(
+        "resolve_waits",
+        &[("src/main.cheby", MAIN_R), ("src/util.cheby", UTIL_R)],
+    );
+    let main = package.at("src/main.cheby");
+    let util = package.at("src/util.cheby");
+    let params = package.params(&json!({
+        "capabilities": {
+            "workspace": { "workspaceEdit": { "documentChanges": true } },
+            "textDocument": { "codeAction": {
+                "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+                "resolveSupport": { "properties": ["edit"] },
+                "dataSupport": true,
+            } },
+            "experimental": { "chebyIdle": true },
+        },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    open(&client, &main, MAIN_R, 1);
+    open(&client, &util, UTIL_R, 1);
+    client.wait_publish(&main, |p| p["version"] == 1);
+    client.wait_publish(&util, |p| p["version"] == 1);
+    next_idle(&mut client);
+    let action = json!({
+        "title": "Document helper",
+        "kind": "quickfix",
+        "data": {
+            "uri": uri(&main),
+            "hash": exact_key(MAIN_R).to_hex(),
+            "range": [0, 0],
+            "id": { "kind": "habit", "index": 0 },
+        },
+    });
+    // The edit and the resolve come together, before any run of the edit.
+    change(&client, &util, UTIL_NEW, 2);
+    let resolved = client.request("codeAction/resolve", action).unwrap();
+    let change = &resolved["edit"]["documentChanges"][0];
+    assert_eq!(change["textDocument"]["uri"], uri(&util), "{resolved}");
+    assert_eq!(change["textDocument"]["version"], 2, "{resolved}");
+    assert_eq!(
+        change["edits"][0]["range"]["start"]["line"], 3,
+        "the edited text: {resolved}"
+    );
     client.stop();
 }
 

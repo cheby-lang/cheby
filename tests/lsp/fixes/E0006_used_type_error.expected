@@ -1,0 +1,147 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0006",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+      },
+      "message": "name `maxValue` is not in snake_case",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 6
+        },
+        "start": {
+          "character": 6,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 11
+        },
+        "start": {
+          "character": 2,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 10
+              },
+              "start": {
+                "character": 15,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:7 action write `max_value`
+{
+  "actions": [
+    "write `max_value`",
+    "Explain E0006"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "at": 255,
+        "kind": "rename",
+        "name": "max_value"
+      },
+      "range": [
+        255,
+        255
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0006",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+        },
+        "message": "name `maxValue` is not in snake_case",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 6
+          },
+          "start": {
+            "character": 6,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "max_value",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 6
+                },
+                "start": {
+                  "character": 6,
+                  "line": 6
+                }
+              }
+            },
+            {
+              "newText": "max_value",
+              "range": {
+                "end": {
+                  "character": 17,
+                  "line": 7
+                },
+                "start": {
+                  "character": 9,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write `max_value`"
+  },
+  "showMessage": []
+}

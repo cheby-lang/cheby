@@ -1,0 +1,141 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0018",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0018.md"
+      },
+      "message": "`import` after an item\nhelp: move all imports before the first item (D-143)",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 11
+        },
+        "start": {
+          "character": 0,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 7
+              },
+              "start": {
+                "character": 0,
+                "line": 7
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "first item here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:1 action Move the import to the import block
+{
+  "actions": [
+    "Move the import to the import block",
+    "Explain E0018"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        246,
+        246
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0018",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0018.md"
+        },
+        "message": "`import` after an item\nhelp: move all imports before the first item (D-143)",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 11
+          },
+          "start": {
+            "character": 0,
+            "line": 11
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "first item here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::io\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            },
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 12
+                },
+                "start": {
+                  "character": 0,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Move the import to the import block"
+  },
+  "showMessage": []
+}

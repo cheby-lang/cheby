@@ -1,0 +1,13 @@
+// @decisions: D-1388, D-1393, D-1686, D-1347
+//! W0002's help writes `_` before an unused binding's name.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+fn main() {
+  let total = 1
+}
+
+fn broken() {
+  let = 1
+}
+//> 7:7 noAction if this is intentional, start the name with an underscore: `_total`

@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0006",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0006.md"
+      },
+      "message": "this `Result` is discarded\nthis `Result<Int, String>` may hold an error\nhelp: handle the error with `case` or `use`, or discard the value explicitly with `let _ = …`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 11
+        },
+        "start": {
+          "character": 2,
+          "line": 11
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:3 action Discard the value with `let _ =`
+{
+  "actions": [
+    "Discard the value with `let _ =`",
+    "Explain W0006"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        238,
+        238
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0006",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0006.md"
+        },
+        "message": "this `Result` is discarded\nthis `Result<Int, String>` may hold an error\nhelp: handle the error with `case` or `use`, or discard the value explicitly with `let _ = …`",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 11
+          },
+          "start": {
+            "character": 2,
+            "line": 11
+          }
+        },
+        "severity": 2,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "let _ = ",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 11
+                },
+                "start": {
+                  "character": 2,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Discard the value with `let _ =`"
+  },
+  "showMessage": []
+}

@@ -1,0 +1,15 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_fix_hidden.cheby, std/probe_fix_user.cheby
+// @decisions: D-1706, D-1684, D-1736
+//! In a std checkout E0043 raises a `priv` helper of another probe to
+//! package-visible, never to `pub` (D-1706), on resolve through `verify`
+//! over the checkout.
+
+priv fn secret() -> Int {
+  1
+}
+
+test "secret" {
+  assert secret() == 1
+}

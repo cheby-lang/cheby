@@ -1,0 +1,15 @@
+// @decisions: D-1388, D-1393, D-1736, D-030, D-466, D-1347
+//! E0046's fix adds the body `{ todo }` to a function without one.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+fn answer() -> Int
+
+fn main() {
+  assert answer() == 42
+}
+
+fn broken() {
+  let = 1
+}
+//> 6:4 noAction Add the body `{ todo }`

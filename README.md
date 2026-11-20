@@ -77,7 +77,7 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 
 ## Language server
 
-`cheby lsp` is the language server. It speaks LSP 3.17 over standard input and output. It publishes the diagnostics `cheby check` reports, as you type, and answers hover, go to definition, references, call hierarchy, workspace symbols, semantic tokens, completion, signature help, inlay hints, rename and formatting, and updates imports when you move a module file. It evaluates a package's constants in a child process, so hover and inlay hints show their values. Quick fixes, lenses and the memory marks come later (see [`docs/plan/m5-tooling.md`](docs/plan/m5-tooling.md)).
+`cheby lsp` is the language server. It speaks LSP 3.17 over standard input and output. It publishes the diagnostics `cheby check` reports, as you type, and answers hover, go to definition, references, call hierarchy, workspace symbols, semantic tokens, completion, signature help, inlay hints, rename and formatting, and updates imports when you move a module file. It offers quick fixes, imports, missing `case` arms, interface stubs and rewrites of habits from other languages as code actions, and opens a diagnostic's explanation. It evaluates a package's constants in a child process, so hover and inlay hints show their values. Lenses and the memory marks come later (see [`docs/plan/m5-tooling.md`](docs/plan/m5-tooling.md)).
 
 ### Install
 

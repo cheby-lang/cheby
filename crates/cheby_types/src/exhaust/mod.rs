@@ -67,8 +67,6 @@ pub struct CaseFact {
     pub more: bool,
     /// The check ran out of budget, so the rows are a `_` fallback.
     pub too_complex: bool,
-    /// Arms that can never match, by index among the checked arms.
-    pub unreachable: Vec<u32>,
 }
 
 /// A value that no arm matches, as a pattern.
@@ -242,17 +240,11 @@ fn case_fact(
     } else {
         (found, report.more)
     };
-    let unreachable = report
-        .unreachable
-        .iter()
-        .map(|&index| u32::try_from(index).map_err(|_| Ice::new("exhaustiveness: too many arms")))
-        .collect::<Result<Vec<_>, Ice>>()?;
     Ok(Some(CaseFact {
         node,
         missing,
         more,
         too_complex: report.too_complex,
-        unreachable,
     }))
 }
 

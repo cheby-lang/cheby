@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
       "message": "the interface `Area` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
       "range": {
         "end": {
@@ -15,7 +18,10 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     }
   ]
 }

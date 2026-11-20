@@ -1,0 +1,40 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_fix_stub.cheby
+// @decisions: D-1706, D-1736
+//! In a std checkout a package-visible type gets its stub as in a package;
+//! a `pub` type's stub would be `pub`, and a raise of a type to `pub`
+//! for E0074 too, so neither is offered (D-1706).
+
+/// Sized things.
+interface Measured {
+  fn size(Self) -> Int
+}
+
+type Crate {
+  n: Int,
+}
+
+pub type Parcel {
+  n: Int,
+}
+
+type Token {
+  Token(Int),
+}
+
+pub fn reveal(t: Token) -> Token {
+  //               ^ codeAction
+  t
+}
+
+fn measure<T: Measured>(x: T) -> Int {
+  Measured::size(x)
+}
+
+test "measured" {
+  assert measure(Crate { n: 1 }) == 1
+  //             ^ action Add the missing function `size`
+  assert measure(Parcel { n: 1 }) == 1
+  //             ^ codeAction
+}

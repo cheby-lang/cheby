@@ -1,0 +1,18 @@
+// @decisions: D-1388, D-1393, D-211
+// @newErrors: E0047
+//! E0017's help turns a doc comment that documents nothing into an ordinary one.
+//! With a type error in another function, which the fix reveals.
+
+fn inc(n: Int) -> Int {
+  /// Not before a declaration.
+  n + 1
+}
+
+fn main() {
+  assert inc(1) == 2
+}
+
+fn answer() -> Int {
+  "forty-two"
+}
+//> 7:3 action use `//` for an ordinary comment

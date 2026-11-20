@@ -1,0 +1,28 @@
+// @decisions: D-1388, D-1393, D-1736, D-1694, D-1639, D-1347
+//! E0058's fix writes the closest field at a step of a field path too.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  origin: Point,
+  size: Int,
+}
+
+fn moved(s: Shape) -> Shape {
+  Shape { ..s, origni.x: 1 }
+}
+
+fn main() {
+  let shape = Shape { origin: Point { x: 0, y: 0 }, size: 1 }
+  assert moved(shape).size == 1
+}
+
+fn broken() {
+  let = 1
+}
+//> 17:16 noAction Use the field `origin`

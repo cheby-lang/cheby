@@ -1,0 +1,160 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Point` does not satisfy `Show`\ninterpolated here\nnote: this module declares `Point` but has no function `show(Point) -> String` (§8.2, D-061)\nhelp: add a function `show(Point) -> String` to this module\nhelp: write `{origin:?}` to use debug printing instead (D-086)",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 11
+        },
+        "start": {
+          "character": 11,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:12 action Use debug printing `{origin:?}`
+{
+  "actions": [
+    "Use debug printing `{origin:?}`",
+    "Add the missing function `show`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        243,
+        243
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Point` does not satisfy `Show`\ninterpolated here\nnote: this module declares `Point` but has no function `show(Point) -> String` (§8.2, D-061)\nhelp: add a function `show(Point) -> String` to this module\nhelp: write `{origin:?}` to use debug printing instead (D-086)",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 11
+          },
+          "start": {
+            "character": 11,
+            "line": 11
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ":?",
+              "range": {
+                "end": {
+                  "character": 17,
+                  "line": 11
+                },
+                "start": {
+                  "character": 17,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Use debug printing `{origin:?}`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:12:12 action Add the missing function `show`
+{
+  "actions": [
+    "Use debug printing `{origin:?}`",
+    "Add the missing function `show`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        243,
+        243
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Point` does not satisfy `Show`\ninterpolated here\nnote: this module declares `Point` but has no function `show(Point) -> String` (§8.2, D-061)\nhelp: add a function `show(Point) -> String` to this module\nhelp: write `{origin:?}` to use debug printing instead (D-086)",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 11
+          },
+          "start": {
+            "character": 11,
+            "line": 11
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn show(point: Point) -> String {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 7
+                },
+                "start": {
+                  "character": 1,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `show`"
+  },
+  "showMessage": []
+}

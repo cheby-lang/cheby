@@ -1,0 +1,13 @@
+// @decisions: D-1684, D-1736
+//! Make visible with a type error in another function of the file.
+
+import app::shape
+
+fn main() {
+  assert shape::secret() == shape::open()
+  //            ^ action Make `secret` package-visible
+}
+
+fn broken() -> Int {
+  "not a number"
+}

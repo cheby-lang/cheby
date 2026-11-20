@@ -354,7 +354,7 @@ impl Server {
                 match failed {
                     Some(Verdict::Ready) => {
                         let fallback = (parked.route.fallback)();
-                        self.answer(parked.id, Ok(fallback));
+                        self.answer(parked.id, fallback);
                     }
                     Some(Verdict::Stale) => {
                         self.answer(parked.id, Err(RequestError::ContentModified));
@@ -430,7 +430,7 @@ impl Server {
             for parked in covered {
                 let answer = match texts.judge(&parked.want) {
                     Verdict::Stale => Err(RequestError::ContentModified),
-                    Verdict::Ready | Verdict::Wait => Ok((parked.route.fallback)()),
+                    Verdict::Ready | Verdict::Wait => (parked.route.fallback)(),
                 };
                 self.answer(parked.id, answer);
             }
@@ -458,7 +458,7 @@ impl Server {
                 Verdict::Stale => self.answer(request.id, Err(RequestError::ContentModified)),
                 Verdict::Wait if idle => {
                     let fallback = (request.route.fallback)();
-                    self.answer(request.id, Ok(fallback));
+                    self.answer(request.id, fallback);
                 }
                 Verdict::Wait => self.parked.push(request),
             }
@@ -469,11 +469,12 @@ impl Server {
     fn run_parked(&mut self, parked: Parked) {
         let Some(served) = self.served.get(&parked.root) else {
             let fallback = (parked.route.fallback)();
-            self.answer(parked.id, Ok(fallback));
+            self.answer(parked.id, fallback);
             return;
         };
         let target = QueryTarget::Snapshot(Arc::clone(&served.analyzed));
         let env = self.with_constants(parked.env, &parked.root);
+        let env = self.with_reports(env, &parked.root);
         self.start_query(parked.id, parked.route, parked.params, target, env);
     }
 

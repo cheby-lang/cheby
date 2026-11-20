@@ -129,6 +129,7 @@ const fn edits(edits: &[PlainEdit]) -> VerifyRequest<'_> {
         moves: &[],
         renamed: &[],
         hides: false,
+        written: &[],
     }
 }
 
@@ -140,6 +141,7 @@ const fn rename<'a>(edits: &'a [PlainEdit], pair: &'a [(&'a str, &'a str)]) -> V
         moves: &[],
         renamed: pair,
         hides: true,
+        written: &[],
     }
 }
 
@@ -1559,6 +1561,7 @@ fn verify_reads_a_moved_modules_last_segment() {
         moves: &moves,
         renamed,
         hides: false,
+        written: &[],
     };
     let both = [("app::util", "app::shapes"), ("util::", "shapes::")];
     assert_eq!(

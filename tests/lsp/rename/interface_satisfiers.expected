@@ -3,7 +3,10 @@
   "src/label.cheby": [
     {
       "code": "W0002",
-      "message": "unused parameter `l`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_l`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `l`\nnever used",
       "range": {
         "end": {
           "character": 14,
@@ -15,11 +18,17 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "W0002",
-      "message": "unused parameter `l`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_l`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `l`\nnever used",
       "range": {
         "end": {
           "character": 15,
@@ -31,7 +40,10 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     }
   ]
 }

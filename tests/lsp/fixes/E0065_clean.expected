@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0065",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0065.md"
+      },
+      "message": "cannot convert `List<T>` to `dyn Any`: the type parameter `T` has no bound\nconverted to `dyn Any` here\nnote: a `dyn` value carries a descriptor of its value's type, and the descriptor of `T` can come only from one of its bounds (§8.6.1, D-236)\nhelp: add a bound such as `T: Any`, with `interface Any`: every type satisfies an empty interface (D-166)",
+      "range": {
+        "end": {
+          "character": 4,
+          "line": 6
+        },
+        "start": {
+          "character": 2,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:3 action Add bound `T: Any`
+{
+  "actions": [
+    "Add bound `T: Any`",
+    "Explain E0065"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        173,
+        173
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0065",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0065.md"
+        },
+        "message": "cannot convert `List<T>` to `dyn Any`: the type parameter `T` has no bound\nconverted to `dyn Any` here\nnote: a `dyn` value carries a descriptor of its value's type, and the descriptor of `T` can come only from one of its bounds (§8.6.1, D-236)\nhelp: add a bound such as `T: Any`, with `interface Any`: every type satisfies an empty interface (D-166)",
+        "range": {
+          "end": {
+            "character": 4,
+            "line": 6
+          },
+          "start": {
+            "character": 2,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ": Any",
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 5
+                },
+                "start": {
+                  "character": 9,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add bound `T: Any`"
+  },
+  "showMessage": []
+}

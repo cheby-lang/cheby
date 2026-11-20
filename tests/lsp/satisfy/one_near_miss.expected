@@ -1,0 +1,94 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the interface `Shape` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 6
+        },
+        "start": {
+          "character": 10,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the interface `Solid` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 11
+        },
+        "start": {
+          "character": 10,
+          "line": 11
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:18:8 action Satisfy interface `Shape`: add `perimeter`
+{
+  "actions": [
+    "Satisfy interface `Shape`: add `perimeter`"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        443,
+        443
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn perimeter(cube: Cube) -> Float {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 28
+                },
+                "start": {
+                  "character": 1,
+                  "line": 28
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source",
+    "title": "Satisfy interface `Shape`: add `perimeter`"
+  },
+  "showMessage": []
+}

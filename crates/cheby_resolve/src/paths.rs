@@ -10,7 +10,7 @@ use cheby_iface::{
 };
 use cheby_syntax::ast::{AstNode, AstToken, InterfaceDecl, PathNode};
 
-use crate::std_names::{StdHelp, std_help};
+use crate::std_names::{ItemHelp, MissingItem, StdSuggestion};
 use crate::{ItemDef, ModuleScope, Res, ResolveInput, closest_name};
 
 /// The interfaces of `std::ops` that operators dispatch to (§8.7).
@@ -336,24 +336,29 @@ impl PathCx<'_> {
             )
             .with_primary(span, "not found")
             .with_secondary(module_span, format!("`{path}`"));
-            let mut candidates: Vec<&str> = iface
-                .items
-                .iter_enumerated()
-                .filter(|(i, item)| {
-                    item.kind.namespace() == Some(ns) && iface.visible_from(*i, self.input.package)
-                })
-                .map(|(_, item)| self.text(item.name))
-                .collect();
-            candidates.sort_unstable();
-            if let Some(close) = closest_name(text, candidates) {
-                diag = diag.with_suggestion(format!("did you mean `{close}`?"), span, close);
-            } else if let Some(help) = self.std_elsewhere(target, ns, name)? {
-                diag = match help {
-                    StdHelp::Rename(to) => {
-                        diag.with_suggestion(format!("did you mean `{to}`?"), span, to)
+            let std_module = self.std_module(target)?;
+            let builtins = match std_module {
+                Some(_) => Some(self.iface(ModuleId::BUILTIN)?),
+                None => None,
+            };
+            let lookup = MissingItem {
+                target: iface,
+                std_module: std_module.as_deref(),
+                builtins,
+                names: &self.input.globals.names,
+                from: self.input.package,
+                items: self.input.std.items,
+            };
+            match lookup.help(ns, name) {
+                Some(ItemHelp::Close(to) | ItemHelp::Std(StdSuggestion::Rename(to))) => {
+                    diag = diag.with_suggestion(format!("did you mean `{to}`?"), span, to);
+                }
+                Some(ItemHelp::Std(elsewhere @ StdSuggestion::Elsewhere { .. })) => {
+                    if let Some(help) = elsewhere.elsewhere_text() {
+                        diag = diag.with_help(help);
                     }
-                    StdHelp::Elsewhere(help) => diag.with_help(help),
-                };
+                }
+                None => {}
             }
             diags.push(diag);
             return Ok(Res::Err);
@@ -376,46 +381,16 @@ impl PathCx<'_> {
         Ok(Res::Def(DefId::new(target, index)))
     }
 
-    /// The help for `name` missing from module `target` when that is a std
-    /// module: where else std has it, or what another language's name
-    /// means (D-1658).
-    fn std_elsewhere(
-        &self,
-        target: ModuleId,
-        ns: Namespace,
-        name: Name,
-    ) -> Result<Option<StdHelp>, Ice> {
+    /// The path under `std` of module `target`, such as `io`, when it is a
+    /// module of package std, for the help of D-1658; `None` for any other.
+    fn std_module(&self, target: ModuleId) -> Result<Option<String>, Ice> {
         let info = self.input.modules.try_get(target)?;
-        let Some(("std", under)) = info
-            .path
-            .segments()
-            .split_first()
-            .map(|(root, rest)| (root.as_str(), rest))
-        else {
-            return Ok(None);
-        };
-        if info.package != PackageId::STD {
-            return Ok(None);
-        }
-        let module = under.join("::");
-        let builtins = self.iface(ModuleId::BUILTIN)?;
-        let homes: Vec<&'static str> = builtin::HOMES
-            .iter()
-            .filter(|(def, _)| {
-                def.module == ModuleId::BUILTIN
-                    && builtins
-                        .item(def.index)
-                        .is_some_and(|item| item.name == name && item.kind.namespace() == Some(ns))
-            })
-            .map(|&(_, home)| home)
-            .collect();
-        Ok(std_help(
-            self.input.std,
-            &homes,
-            &module,
-            self.text(name),
-            ns,
-        ))
+        Ok(match info.path.segments().split_first() {
+            Some((root, under)) if root == "std" && info.package == PackageId::STD => {
+                Some(under.join("::"))
+            }
+            Some(_) | None => None,
+        })
     }
 
     /// A prelude type re-exported by its home module, or one of its

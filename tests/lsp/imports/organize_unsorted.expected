@@ -1,0 +1,94 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0003",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0003.md"
+      },
+      "message": "unused import `std::io`\nnothing in this module uses it\nhelp: remove the import",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 6
+        },
+        "start": {
+          "character": 0,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:11:3 codeAction source.organizeImports
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "organizeImports"
+      },
+      "range": [
+        330,
+        330
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  }
+]
+
+== src/main.cheby:11:3 action Organize imports
+{
+  "actions": [
+    "Organize imports"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "organizeImports"
+      },
+      "range": [
+        330,
+        330
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::int\nimport std::list",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  },
+  "showMessage": []
+}

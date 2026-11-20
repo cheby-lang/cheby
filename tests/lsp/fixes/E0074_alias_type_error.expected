@@ -1,0 +1,164 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0074",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0074.md"
+      },
+      "message": "the `pub` function `issue` mentions the package-visible type `Token`\n`Tok` stands for a type that mentions `Token`\nnote: code that can use `issue` could not name `Token` (D-148)\nhelp: make `Token` `pub`, or make `issue` package-visible",
+      "range": {
+        "end": {
+          "character": 33,
+          "line": 11
+        },
+        "start": {
+          "character": 30,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 5
+              },
+              "start": {
+                "character": 5,
+                "line": 5
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 21
+        },
+        "start": {
+          "character": 2,
+          "line": 21
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 20
+              },
+              "start": {
+                "character": 15,
+                "line": 20
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:31 action Make `Token` `pub`
+{
+  "actions": [
+    "Make `Token` `pub`",
+    "Explain E0074"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        318,
+        318
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0074",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0074.md"
+        },
+        "message": "the `pub` function `issue` mentions the package-visible type `Token`\n`Tok` stands for a type that mentions `Token`\nnote: code that can use `issue` could not name `Token` (D-148)\nhelp: make `Token` `pub`, or make `issue` package-visible",
+        "range": {
+          "end": {
+            "character": 33,
+            "line": 11
+          },
+          "start": {
+            "character": 30,
+            "line": 11
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 5
+                },
+                "start": {
+                  "character": 5,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "pub ",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `Token` `pub`"
+  },
+  "showMessage": []
+}

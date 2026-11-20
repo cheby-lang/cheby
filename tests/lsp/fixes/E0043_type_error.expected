@@ -1,0 +1,169 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0043",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+      },
+      "message": "`secret` is private to module `app::shape`",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 6
+        },
+        "start": {
+          "character": 16,
+          "line": 6
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 2
+              },
+              "start": {
+                "character": 8,
+                "line": 2
+              }
+            },
+            "uri": "src/shape.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 11
+        },
+        "start": {
+          "character": 2,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 10
+              },
+              "start": {
+                "character": 15,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:17 action Make `secret` package-visible
+{
+  "actions": [
+    "Make `secret` package-visible",
+    "Explain E0043"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "item": "secret",
+        "kind": "makeVisible",
+        "module": "app::shape"
+      },
+      "range": [
+        146,
+        146
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0043",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+        },
+        "message": "`secret` is private to module `app::shape`",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 6
+          },
+          "start": {
+            "character": 16,
+            "line": 6
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 2
+                },
+                "start": {
+                  "character": 8,
+                  "line": 2
+                }
+              },
+              "uri": "src/shape.cheby"
+            },
+            "message": "declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 5,
+                  "line": 2
+                },
+                "start": {
+                  "character": 0,
+                  "line": 2
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/shape.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `secret` package-visible"
+  },
+  "showMessage": []
+}

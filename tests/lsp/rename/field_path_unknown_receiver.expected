@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "cannot find type `Shap` in this scope\nnot found\nhelp: a type with a similar name exists: `Shape`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find type `Shap` in this scope\nnot found",
       "range": {
         "end": {
           "character": 6,

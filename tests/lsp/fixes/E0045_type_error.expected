@@ -1,0 +1,128 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0045",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0045.md"
+      },
+      "message": "unknown attribute `@inline`\nhelp: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 4
+        },
+        "start": {
+          "character": 0,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 10
+        },
+        "start": {
+          "character": 2,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 9
+              },
+              "start": {
+                "character": 19,
+                "line": 9
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:1 action Remove the attribute
+{
+  "actions": [
+    "Remove the attribute",
+    "Explain E0045"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        169,
+        169
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0045",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0045.md"
+        },
+        "message": "unknown attribute `@inline`\nhelp: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 4
+          },
+          "start": {
+            "character": 0,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Remove the attribute"
+  },
+  "showMessage": []
+}

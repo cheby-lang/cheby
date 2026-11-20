@@ -1,0 +1,13 @@
+// @decisions: D-1395, D-1736
+//! Importing a module whose name a local takes: the import gets an alias,
+//! and the diagnosed qualifier is written with it (D-1395, X §6.3).
+
+fn other() -> Int {
+  let list = 1
+  list
+}
+
+fn main() {
+  assert list::length([1]) == other()
+}
+//> 11:10 action Import `std::list as std_list`

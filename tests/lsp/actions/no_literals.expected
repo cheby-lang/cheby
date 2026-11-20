@@ -1,0 +1,24 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "message": "unused binding `total`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_total`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 6
+        },
+        "start": {
+          "character": 6,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:7 codeAction
+[]

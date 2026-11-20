@@ -40,7 +40,7 @@ The formatter core, the LSP core and `cheby new` were placed with M2 and did not
 
 In progress. The formatter core and `cheby new` landed with M3. `cheby doc`, `add`, `update` and `fetch` are still stubs, and doc examples are not run as tests.
 
-`cheby lsp` has waves W0 to W9, W9f, which fixed checkpoint 2's findings (D-1506 to D-1515), and W10, the first wave of group G1. That covers the slices LSP core, LSP constant evaluation and LSP type-driven editing, and all of LSP navigation:
+`cheby lsp` has waves W0 to W9, W9f, which fixed checkpoint 2's findings (D-1506 to D-1515), and W10, WS and W11, the waves of group G1. That covers the slices LSP core, LSP constant evaluation, LSP type-driven editing, LSP navigation, and LSP fixes and imports:
 
 - the protocol, the published diagnostics of `cheby check`, back-end codes included, single-file mode, file watching and the settings (W5, W6);
 - outline, folding, selection ranges and formatting (W6);
@@ -48,9 +48,10 @@ In progress. The formatter core and `cheby new` landed with M3. `cheby doc`, `ad
 - completion, signature help and inlay hints, parameter names included (W8, W9f);
 - constants evaluated in a child process and shown in hover (W9);
 - rename and `workspace/willRenameFiles`, each edit checked by `verify`, and the shared edit layer, with the constant inlay hint and the completion fixes of D-1678 to D-1681 (W10, D-1667 to D-1681 and D-1709 to D-1725);
-- this repository's `std/` checked as package `std` from the checkout's own files, in a session of its own, with rename and moves limited to what `verify` sees and a warning when the checkout's std is not the binary's (WS, D-1699 to D-1708).
+- this repository's `std/` checked as package `std` from the checkout's own files, in a session of its own, with rename and moves limited to what `verify` sees and a warning when the checkout's std is not the binary's (WS, D-1699 to D-1708);
+- code actions over a snapshot, with `codeAction/resolve`: the fixes of compiler helps and the server's own, imports, fill arms, interface stubs and visibility raises, "Satisfy interface…", habit rewrites and Explain, each fix checked by applying it, with `codeDescription` and tags on the published diagnostics (W11, D-1682 to D-1696 and D-1731 to D-1736).
 
-`textDocument/codeAction` already serves one `refactor.rewrite` action, "Use a field path", from the live text with its edit sent whole (D-1645). W11 moves the request to a snapshot (D-1682) and builds the fix table and resolve there (D-1683). Still to come: quick fixes and imports (W11), structural insight and type lenses (W12), refactors and run lenses (W13), the JSON code action (W14), the memory marks (W15, W16), the further features (W17), the Zed integration (W18), and the exit run and final documents (W19). The settings `diagnostics.explainLinks`, `lenses.*`, `ownership.*` and `clientCommands` are accepted but not served yet. The top-level [README](../../README.md#language-server) says how to use the server.
+`textDocument/codeAction` is a `Doc` request over a registry of providers (D-1682), and `codeAction/resolve` computes the edits of fixes that touch another file, through `verify` (D-1683, D-1684). Still to come: structural insight and type lenses (W12), refactors and run lenses (W13), the JSON code action (W14), the memory marks (W15, W16), the further features (W17), the Zed integration (W18), and the exit run and final documents (W19). The settings `lenses.*`, `ownership.*` and `clientCommands` are accepted but not served yet; `diagnostics.explainLinks` is served (D-1400). The top-level [README](../../README.md#language-server) says how to use the server.
 
 The language server's design is logged: D-1347 to D-1426 in the [language server](../decisions/LOG.md#2026-11-07-the-language-server) session, ADRs 0076 to 0078, and §13.8, §13.11 and §13.11.1 of the spec. That session is the design step of D-1029, and D-1353 and D-1426 set the scope that the slices above list. The exit criterion on the server's diagnostics is D-1348's, which names `cheby check`, not `cheby build`.
 

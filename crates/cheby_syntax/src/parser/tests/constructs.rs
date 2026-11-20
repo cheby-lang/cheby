@@ -412,6 +412,57 @@ fn local_functions_and_closures() {
     assert_eq!(codes_of(&in_fn("  let f = fn(x)")), ["E0013"]);
 }
 
+/// D-1695: after a line break, `fn name` ends an unfinished expression,
+/// which is reported as missing, and the block parses the local function.
+#[test]
+fn a_local_fn_after_an_unfinished_let_is_a_local_fn() {
+    let text = in_fn("  let y =\n  fn g() { 1 }\n  g()");
+    let (_, _, errors) = parse_text("test.cheby", &text);
+    assert_eq!(codes_of(&text), ["E0013"], "{}", errors_of(&text));
+    assert!(
+        errors_of(&text).contains("expected an expression, found `fn`"),
+        "{}",
+        errors_of(&text)
+    );
+    assert_eq!(count(&text, LOCAL_FN), 1);
+    assert_eq!(count(&text, SyntaxKind::CLOSURE), 0);
+    // The error is on the `fn`, the line after the `let`, not at `g`.
+    let start = errors[0].primary_span().unwrap().range.start();
+    assert_eq!(usize::try_from(start).unwrap(), text.find("fn g").unwrap());
+    // After an operator that continues the line, too.
+    let after_plus = in_fn("  let y = 1 +\n  fn g() { 1 }\n  g()");
+    assert_eq!(
+        codes_of(&after_plus),
+        ["E0013"],
+        "{}",
+        errors_of(&after_plus)
+    );
+    assert_eq!(count(&after_plus, LOCAL_FN), 1);
+    // `pub fn` and `priv fn` were already left to the block.
+    let public = in_fn("  let y =\n  pub fn g() { 1 }\n  g()");
+    assert_eq!(count(&public, LOCAL_FN), 1);
+}
+
+/// D-1695 changes only `fn name` after a line break: a closure `fn(` on
+/// the next line is still the value, and `fn g` on the same line still
+/// starts a closure.
+#[test]
+fn a_closure_on_the_next_line_is_still_the_value() {
+    let text = in_fn("  let y =\n    fn(x) { x }\n  y(1)");
+    assert_ok(&text);
+    assert_eq!(count(&text, SyntaxKind::CLOSURE), 1);
+    assert_eq!(count(&text, LOCAL_FN), 0);
+    let same_line = in_fn("  let y = fn g() { 1 }\n  y");
+    assert_eq!(codes_of(&same_line), ["E0013"]);
+    assert!(
+        errors_of(&same_line).contains("expected `(`"),
+        "{}",
+        errors_of(&same_line)
+    );
+    assert_eq!(count(&same_line, SyntaxKind::CLOSURE), 1);
+    assert_eq!(count(&same_line, LOCAL_FN), 0);
+}
+
 #[test]
 fn paths() {
     for text in [
@@ -513,6 +564,48 @@ fn string_first_in_interpolation_suggests_an_escaped_brace() {
         assert!(helps.iter().any(|h| h.contains(bind)), "{text}: {helps:?}");
         assert!(!helps.iter().any(|h| h == escape), "{text}: {helps:?}");
     }
+}
+
+/// `text` with the edits of its one grammar-error help that has edits.
+fn apply_fix(text: &str) -> String {
+    let (_, _, errors) = parse_text("test.cheby", text);
+    let helps: Vec<_> = errors
+        .iter()
+        .flat_map(|d| &d.helps)
+        .filter(|h| !h.edits.is_empty())
+        .collect();
+    let [help] = helps.as_slice() else {
+        panic!("{text}: {helps:?}");
+    };
+    let mut edits: Vec<_> = help.edits.iter().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.range.start()));
+    let mut out = text.to_owned();
+    for e in edits {
+        let start = usize::try_from(e.span.range.start()).unwrap();
+        let end = usize::try_from(e.span.range.end()).unwrap();
+        out.replace_range(start..end, &e.replacement);
+    }
+    out
+}
+
+/// D-1694: the help of D-1661 carries an edit that writes the brace as
+/// `\{`, and applying it leaves no error. The help to bind a name has no
+/// edit.
+#[test]
+fn the_escaped_brace_help_carries_its_edit() {
+    let text = in_fn(r#"  let line = "price {" + amount + "}""#);
+    let fixed = apply_fix(&text);
+    assert_eq!(fixed, in_fn(r#"  let line = "price \{" + amount + "}""#));
+    assert_ok(&fixed);
+    let (_, tree, _) = parse_text("test.cheby", &fixed);
+    assert_eq!(crate::validate(&tree), []);
+    let (_, _, errors) = parse_text("test.cheby", &in_fn(r#"  "{f("x")}""#));
+    assert!(
+        errors
+            .iter()
+            .flat_map(|d| &d.helps)
+            .all(|h| h.edits.is_empty())
+    );
 }
 
 #[test]
@@ -743,6 +836,31 @@ fn pattern_habits_explain_grammar_errors() {
     assert_eq!(helps_of(&in_fn("  \"a\" < > b")), Vec::<String>::new());
     // `..` and `..name` stay valid.
     assert_ok(&in_fn("  let [a, ..] = xs\n  let [b, ..more] = xs"));
+}
+
+/// D-1694: the help for `.._` carries an edit that deletes the `_`, and
+/// applying it leaves no error. The string prefix help has no edit.
+#[test]
+fn the_wildcard_rest_help_carries_its_edit() {
+    let list = in_fn("  case xs {\n    [x, .._] => x\n    _ => 0\n  }");
+    let fixed = apply_fix(&list);
+    assert_eq!(
+        fixed,
+        in_fn("  case xs {\n    [x, ..] => x\n    _ => 0\n  }")
+    );
+    assert_ok(&fixed);
+    let (_, tree, _) = parse_text("test.cheby", &fixed);
+    assert_eq!(crate::validate(&tree), []);
+    let middle = apply_fix(&in_fn("  let [a, .._, b] = xs"));
+    assert_eq!(middle, in_fn("  let [a, .., b] = xs"));
+    assert_ok(&middle);
+    let (_, _, errors) = parse_text("test.cheby", &in_fn("  let \"L\" <> n = s"));
+    assert!(
+        errors
+            .iter()
+            .flat_map(|d| &d.helps)
+            .all(|h| h.edits.is_empty())
+    );
 }
 
 #[test]

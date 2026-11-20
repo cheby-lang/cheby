@@ -1,0 +1,72 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 20
+        },
+        "start": {
+          "character": 6,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:14:8 action Add the missing arms
+{
+  "actions": [
+    "Add the missing arms"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "fillArms"
+      },
+      "range": [
+        385,
+        385
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    Green => todo\n    Blue => todo",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 15
+                },
+                "start": {
+                  "character": 16,
+                  "line": 15
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "refactor.rewrite",
+    "title": "Add the missing arms"
+  },
+  "showMessage": []
+}

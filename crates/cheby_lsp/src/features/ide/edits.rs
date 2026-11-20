@@ -4,8 +4,9 @@
 //! [`cheby_fmt::format_source`] at [`cheby_fmt::WIDTH`], with no options
 //! (D-079), and reaches the client as a line diff of the text against the
 //! formatter's output, so cursors and marks outside the changed lines stay
-//! put. Range formatting keeps only the hunks that touch the range
-//! (D-1399).
+//! put. Range formatting keeps the hunks that touch the range (D-1399),
+//! widened to their neighbours until what it leaves out only reformats,
+//! for at most eight rounds (D-1738).
 //!
 //! Line endings: the formatter writes LF, and so do the edits of whole-file
 //! formatting. A CRLF text is converted by the diff, as `cheby fmt`
@@ -19,6 +20,8 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use cheby_driver::analysis::{TextRange, TextSize};
+
+use crate::features::{CancelToken, RequestError};
 
 /// Above this many cells, [`line_diff`] gives up on a minimal diff and
 /// replaces the whole changed middle with one hunk (X §1.5).
@@ -58,13 +61,48 @@ pub(crate) fn formatted(text: &str) -> Option<String> {
 /// it has a grammar error.
 #[must_use]
 pub(crate) fn format_edits(text: &str) -> Option<Vec<TextChange>> {
-    touching(text, &[TextRange::new(0, size(text.len()))], false)
+    // Every hunk touches the whole range, so the set is closed at once and
+    // nothing can be cancelled or capped.
+    touching(text, &[TextRange::new(0, size(text.len()))], None)
+        .ok()
+        .flatten()
+}
+
+/// How many times [`format_touching_with`] widens a kept set to its
+/// neighbouring hunks before it stops (D-1738): each round formats the
+/// whole text once, so a file whose hunks depend on each other in a long
+/// chain costs at most this many formats more.
+pub(crate) const MAX_ROUNDS: usize = 8;
+
+/// What [`format_touching_with`] gives when its kept set is still not
+/// closed after [`MAX_ROUNDS`] rounds of widening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AtCap {
+    /// Every hunk, the whole format, which loses nothing: range formatting.
+    KeepEvery,
+    /// `None`, as for a text that does not format: a fix then sends its
+    /// raw edits (`actions::formatted`).
+    GiveUp,
+}
+
+/// [`format_touching_with`] with every hunk at the cap, and no cancel.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn format_touching(text: &str, touched: &[TextRange]) -> Option<Vec<TextChange>> {
+    format_touching_with(text, touched, AtCap::KeepEvery, &CancelToken::new()).ok()?
 }
 
 /// The hunks of [`format_edits`] that touch the lines of a range in
 /// `touched`, as edits (D-1399). A hunk is kept or dropped whole, so a
 /// kept hunk may also change a neighbouring line the formatter joined to
-/// it. `None` when the text has a grammar error.
+/// it. `None` when the text has a grammar error, and with
+/// [`AtCap::GiveUp`] when the kept set is not closed after
+/// [`MAX_ROUNDS`] rounds.
+///
+/// A kept set must be closed: the text with only its hunks applied formats
+/// as the whole text does, so the hunks left out only reformat and lose no
+/// code. A set that is not widens, round by round, to the hunks next to
+/// its own, until it is (D-1738).
 ///
 /// The formatter sorts the imports of a block (D-1148), and a diff shows a
 /// moved import as one hunk that deletes it and another that inserts it.
@@ -76,21 +114,38 @@ pub(crate) fn format_edits(text: &str) -> Option<Vec<TextChange>> {
 /// formatting a CRLF file changes only the hunks it keeps (D-1444). A kept
 /// hunk is taken whole, so it can reach a neighbouring line or item, such
 /// as the blank lines above a reformatted function.
-#[must_use]
-pub(crate) fn format_touching(text: &str, touched: &[TextRange]) -> Option<Vec<TextChange>> {
-    touching(text, touched, true)
+///
+/// # Errors
+///
+/// [`RequestError::Cancelled`] when `cancel` is set, checked before each
+/// round.
+pub(crate) fn format_touching_with(
+    text: &str,
+    touched: &[TextRange],
+    at_cap: AtCap,
+    cancel: &CancelToken,
+) -> Result<Option<Vec<TextChange>>, RequestError> {
+    touching(text, touched, Some((at_cap, cancel)))
 }
 
-/// [`format_touching`], or with `keep_crlf` false the whole-file rule of
-/// [`format_edits`], which brings every line to LF.
-fn touching(text: &str, touched: &[TextRange], keep_crlf: bool) -> Option<Vec<TextChange>> {
-    let new = formatted(text)?;
+/// [`format_touching_with`], or with no `capped` the whole-file rule of
+/// [`format_edits`], which keeps every hunk and brings every line to LF.
+fn touching(
+    text: &str,
+    touched: &[TextRange],
+    capped: Option<(AtCap, &CancelToken)>,
+) -> Result<Option<Vec<TextChange>>, RequestError> {
+    let keep_crlf = capped.is_some();
+    let Some(new) = formatted(text) else {
+        return Ok(None);
+    };
     let starts = line_starts(text);
     let spans: Vec<Range<usize>> = touched.iter().map(|&r| lines_of(&starts, r)).collect();
     // Dropping the CR of each CRLF keeps every line where it was, so the
     // hunks' line numbers hold for `text` too (D-1444).
     let lf;
-    let old = if keep_crlf && text.contains("\r\n") {
+    let normalized = keep_crlf && text.contains("\r\n");
+    let old = if normalized {
         lf = text.replace("\r\n", "\n");
         lf.as_str()
     } else {
@@ -101,21 +156,59 @@ fn touching(text: &str, touched: &[TextRange], keep_crlf: bool) -> Option<Vec<Te
         .iter()
         .map(|hunk| spans.iter().any(|span| touches(&hunk.old_lines, span)))
         .collect();
+    // What `old` itself formats to, which `closed` compares against. It
+    // differs from `new` when dropping the CRs changed the text inside a
+    // string or comment, as in a `"\r\r\n"` there.
+    let old_formatted;
+    let target = if normalized {
+        old_formatted = formatted(old);
+        old_formatted.as_deref()
+    } else {
+        Some(new.as_str())
+    };
+    // A kept set must be closed: the text with only its hunks applied
+    // formats to what the whole text does. Hunks of one diff are not
+    // independent, since the line diff may match a line of one statement
+    // with the same line of another, and then one hunk deletes a statement
+    // that a later one writes back; the first alone would lose it. Each
+    // round keeps the imports' partners (D-1148), then widens to the
+    // neighbouring hunks until the set is closed. An empty set changes
+    // nothing and so loses nothing, and every hunk is the whole format, so
+    // either ends the loop; a round that keeps nothing new ends it too.
+    // After `MAX_ROUNDS` rounds the cap decides (D-1738).
+    let mut rounds = 0_usize;
     loop {
-        let moved: BTreeSet<&str> = hunks
-            .iter()
-            .zip(&keep)
-            .filter(|&(_, &kept)| kept)
-            .flat_map(|(hunk, _)| import_lines(hunk, old, &new))
-            .collect();
-        let mut grew = false;
-        for (hunk, kept) in hunks.iter().zip(keep.iter_mut()) {
-            if !*kept && import_lines(hunk, old, &new).any(|line| moved.contains(line)) {
-                *kept = true;
-                grew = true;
+        close_imports(&hunks, &mut keep, old, &new);
+        if !keep.iter().any(|&kept| kept)
+            || keep.iter().all(|&kept| kept)
+            || closed(&hunks, &keep, old, &new, target)
+        {
+            break;
+        }
+        if let Some((at_cap, cancel)) = capped {
+            cancel.check()?;
+            if rounds == MAX_ROUNDS {
+                match at_cap {
+                    AtCap::KeepEvery => keep.iter_mut().for_each(|kept| *kept = true),
+                    AtCap::GiveUp => return Ok(None),
+                }
+                break;
             }
         }
-        if !grew {
+        rounds = rounds.saturating_add(1);
+        let was = keep.clone();
+        for (index, kept) in keep.iter_mut().enumerate() {
+            let next_to_kept = |other: Option<usize>| {
+                other
+                    .and_then(|other| was.get(other))
+                    .copied()
+                    .unwrap_or(false)
+            };
+            if next_to_kept(index.checked_sub(1)) || next_to_kept(index.checked_add(1)) {
+                *kept = true;
+            }
+        }
+        if keep == was {
             break;
         }
     }
@@ -135,7 +228,61 @@ fn touching(text: &str, touched: &[TextRange], keep_crlf: bool) -> Option<Vec<Te
             }
         })
         .collect();
-    Some(changes)
+    Ok(Some(changes))
+}
+
+/// Keeps, beside the kept hunks of `keep`, every hunk that deletes or
+/// inserts one of their import lines, until no more join (D-1148).
+fn close_imports(hunks: &[Hunk], keep: &mut [bool], old: &str, new: &str) {
+    loop {
+        let moved: BTreeSet<&str> = hunks
+            .iter()
+            .zip(keep.iter())
+            .filter(|&(_, &kept)| kept)
+            .flat_map(|(hunk, _)| import_lines(hunk, old, new))
+            .collect();
+        let mut grew = false;
+        for (hunk, kept) in hunks.iter().zip(keep.iter_mut()) {
+            if !*kept && import_lines(hunk, old, new).any(|line| moved.contains(line)) {
+                *kept = true;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+}
+
+/// Whether `old` with only the kept hunks of `keep` applied, their lines
+/// taken from `new`, formats to `target`, the formatter's output for all
+/// of `old`: then the hunks left out only reformat, and lose no code.
+/// False when `target` is `None`, since `old` then does not format.
+fn closed(hunks: &[Hunk], keep: &[bool], old: &str, new: &str, target: Option<&str>) -> bool {
+    let Some(target) = target else {
+        return false;
+    };
+    let mut out = String::with_capacity(old.len());
+    let mut at = 0_usize;
+    for (hunk, _) in hunks.iter().zip(keep).filter(|&(_, &kept)| kept) {
+        let (Ok(start), Ok(end)) = (
+            usize::try_from(hunk.old.start()),
+            usize::try_from(hunk.old.end()),
+        ) else {
+            return false;
+        };
+        let (Some(kept), Some(inserted)) = (old.get(at..start), hunk.new.slice(new)) else {
+            return false;
+        };
+        out.push_str(kept);
+        out.push_str(inserted);
+        at = end;
+    }
+    let Some(rest) = old.get(at..) else {
+        return false;
+    };
+    out.push_str(rest);
+    formatted(&out).is_some_and(|again| again == target)
 }
 
 /// Whether the first line that `lines` replaces in `text` ends in CRLF; for
@@ -361,7 +508,13 @@ mod tests {
     use cheby_driver::analysis::TextRange;
     use proptest::prelude::*;
 
-    use super::{Hunk, TextChange, apply, format_edits, format_touching, formatted, line_diff};
+    use super::{
+        AtCap, Hunk, MAX_ROUNDS, TextChange, apply, format_edits, format_touching,
+        format_touching_with, formatted, line_diff,
+    };
+    use std::fmt::Write as _;
+
+    use crate::features::{CancelToken, RequestError};
 
     /// `old` with `hunks` applied, taking the new lines from `new`.
     fn patch(old: &str, new: &str, hunks: &[Hunk]) -> String {
@@ -381,6 +534,102 @@ mod tests {
             .iter()
             .map(|h| (h.old_lines.clone(), h.new.slice(new).expect("a range")))
             .collect()
+    }
+
+    /// The kept hunks are closed: the line diff matches the `  )` of one
+    /// statement with the `  )` of the next, so one hunk deletes `let m`
+    /// and a later one writes it back. Range formatting any line keeps both,
+    /// and the text it leaves formats as the whole text does (C-1).
+    #[test]
+    fn kept_hunks_lose_no_statement() {
+        let text = "fn main() {\n  let n = add(1, // one\n    2)\n  let m = add(\n    1,\n    2\n  )\n  assert n == m\n}\n";
+        let whole = formatted(text).expect("the text parses");
+        let mut start = 0_u32;
+        for line in text.split_inclusive('\n') {
+            let end = start
+                .checked_add(u32::try_from(line.len()).expect("a short line"))
+                .expect("a short text");
+            let changes =
+                format_touching(text, &[TextRange::new(start, end)]).expect("the text parses");
+            let after = apply(text, &changes);
+            assert!(after.contains("let m = add("), "{line:?}: {after}");
+            assert_eq!(
+                formatted(&after).as_deref(),
+                Some(whole.as_str()),
+                "{line:?}"
+            );
+            start = end;
+        }
+    }
+
+    /// A CRLF text whose string holds `\r\r\n` formats differently once its
+    /// CRLFs are dropped, so closure is checked against that copy's format.
+    /// Range formatting a line no hunk touches answers at once with no
+    /// edit, and one that touches a hunk keeps it (C-1).
+    #[test]
+    fn crlf_closure_ends_beside_a_carriage_return_in_a_string() {
+        let text = "fn main() {\r\n  let s = \"a\r\r\nb\"\r\n  let t = 1\r\n  let u =   1\r\n  assert s == s && t == u\r\n}\r\n";
+        assert!(formatted(text).is_some(), "the text formats");
+        let line = |needle: &str| {
+            let at = text.find(needle).expect("the line");
+            TextRange::empty(u32::try_from(at).expect("a short text"))
+        };
+        assert_eq!(format_touching(text, &[line("let t")]), Some(vec![]));
+        let edits = format_touching(text, &[line("let u")]).expect("the text parses");
+        let after = apply(text, &edits);
+        assert!(after.contains("  let u = 1\r\n"), "{after:?}");
+        assert!(after.contains("\"a\r\r\nb\""), "{after:?}");
+    }
+
+    /// A text whose hunks depend on each other in a chain: each `let n`
+    /// hunk deletes a line that the next `let m` hunk writes back, so a
+    /// set is closed only once it holds the whole chain.
+    fn chained(links: usize) -> String {
+        let mut body = String::new();
+        for n in 0..links {
+            writeln!(body, "  let n{n} = add(1, // one\n    2)").unwrap();
+            writeln!(body, "  let m{n} = add(\n    1,\n    2\n  )").unwrap();
+        }
+        format!(
+            "fn add(a: Int, b: Int) -> Int {{\n  a + b\n}}\n\nfn main() {{\n{body}  assert True\n}}\n"
+        )
+    }
+
+    /// D-1738: widening stops after `MAX_ROUNDS` rounds. Range formatting
+    /// then keeps every hunk, which loses nothing, a fix's formatting gives
+    /// up, so the fix sends its raw edits, and a set cancel token stops the
+    /// rounds. A short chain still closes within the cap.
+    #[test]
+    fn widening_stops_at_the_cap() {
+        let text = chained(MAX_ROUNDS.checked_mul(3).unwrap());
+        let whole = formatted(&text).expect("the text parses");
+        let at = text.find("let n0").unwrap();
+        let first = [TextRange::empty(u32::try_from(at).unwrap())];
+        let cancel = CancelToken::new();
+        let every = format_touching_with(&text, &first, AtCap::KeepEvery, &cancel)
+            .unwrap()
+            .expect("the text parses");
+        assert_eq!(apply(&text, &every), whole);
+        assert_eq!(
+            format_touching_with(&text, &first, AtCap::GiveUp, &cancel),
+            Ok(None)
+        );
+        let short = chained(2);
+        let at = short.find("let n0").unwrap();
+        let first = [TextRange::empty(u32::try_from(at).unwrap())];
+        let kept = format_touching_with(&short, &first, AtCap::GiveUp, &cancel)
+            .unwrap()
+            .expect("closed within the cap");
+        assert!(
+            apply(&short, &kept).contains("  let m1 = add(1, 2)\n"),
+            "{}",
+            apply(&short, &kept)
+        );
+        cancel.cancel();
+        assert_eq!(
+            format_touching_with(&text, &first, AtCap::GiveUp, &cancel),
+            Err(RequestError::Cancelled)
+        );
     }
 
     #[test]

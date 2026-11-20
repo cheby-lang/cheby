@@ -1,0 +1,35 @@
+// @decisions: D-1736
+//! A second `Self` is named `other`, and a generic type's stub declares
+//! its type parameters (X §6.6).
+
+interface Merge {
+  fn merge(Self, Self) -> Self
+}
+
+interface Size {
+  fn size(Self) -> Int
+}
+
+type Square {
+  side: Float,
+}
+
+type Stack<T> {
+  items: List<T>,
+}
+
+fn combine<T: Merge>(x: T) -> T {
+  Merge::merge(x, x)
+}
+
+fn count<T: Size>(x: T) -> Int {
+  Size::size(x)
+}
+
+fn main() {
+  let square = Square { side: 1.0 }
+  assert combine(square) == square
+  //             ^ action Add the missing function `merge`
+  assert count(Stack { items: [1] }) == 1
+  //           ^ action Add the missing function `size`
+}

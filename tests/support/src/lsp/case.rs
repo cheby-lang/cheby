@@ -142,6 +142,16 @@ pub enum Step {
     /// a non-empty one at this point, as the `diagnostics` block shows them
     /// at the end.
     Published,
+    /// `execute COMMAND ARG …`: `workspace/executeCommand` with the
+    /// arguments as strings. Its block holds the answer, the
+    /// `window/showDocument` requests and the `window/showMessage` lines
+    /// the server sent before it, and an opened explanation is compared
+    /// with the one `cheby explain` prints (D-1693).
+    Execute(String, Vec<String>),
+    /// `explain CODE`: `cheby/explain`. Its block holds the answer's
+    /// `code` and `summary`, and its `markdown` is compared with the
+    /// explanation `cheby explain` prints, not shown (X §8.3).
+    Explain(String),
 }
 
 /// How a std checkout test places its probes (`tests/lsp/README.md`,
@@ -252,6 +262,11 @@ impl Step {
             (Some("settings"), Some(name)) => Self::Settings(name.to_owned()),
             (Some("disk"), Some(dir)) => Self::Disk(dir.to_owned()),
             (Some("close"), Some(path)) => Self::Close(path.to_owned()),
+            (Some("explain"), Some(code)) => Self::Explain(code.to_owned()),
+            (Some("execute"), Some(command)) => Self::Execute(
+                command.to_owned(),
+                words.by_ref().map(str::to_owned).collect(),
+            ),
             (Some("willRename"), Some(first)) => {
                 let paths: Vec<&str> = std::iter::once(first).chain(words.by_ref()).collect();
                 let pairs: Vec<(String, String)> = paths
@@ -269,8 +284,8 @@ impl Step {
             _ => {
                 return Err(format!(
                     "@steps: `{text}` is not idle, started, quiet, status, published, edit DIR, \
-                     save DIR, zed-save DIR, settings NAME, disk DIR, close PATH or willRename \
-                     OLD NEW …"
+                     save DIR, zed-save DIR, settings NAME, disk DIR, close PATH, willRename \
+                     OLD NEW …, execute COMMAND ARG … or explain CODE"
                 ));
             }
         };
@@ -920,7 +935,10 @@ pub fn position_method(name: &str) -> Option<&'static str> {
         "signatureHelp" => "textDocument/signatureHelp",
         "prepareRename" => "textDocument/prepareRename",
         "rename" => "textDocument/rename",
-        "codeAction" => "textDocument/codeAction",
+        // `action TITLE` lists the actions, then resolves and applies the
+        // one titled so (`editing::action_block`); `noAction TITLE` lists
+        // them and fails if one is titled so (`editing::no_action_block`).
+        "codeAction" | "action" | "noAction" => "textDocument/codeAction",
         // The follow-ups start with a `prepareCallHierarchy` at the marker
         // ([`hierarchy_follow_up`]).
         "prepareCallHierarchy" | "incomingCalls" | "outgoingCalls" => {
@@ -983,6 +1001,18 @@ pub fn identifiers(text: &str) -> Vec<(usize, usize)> {
         })
         .collect()
 }
+
+/// The providers [`Advertised::of`] knows that are neither a position nor a
+/// document request: `rename` follows a `prepareRename`, `workspace/symbol`
+/// and semantic tokens have fields of their own, and
+/// `executeCommandProvider` names commands, which no marker sends at a
+/// position (D-1693).
+const OTHER_PROVIDERS: [&str; 4] = [
+    "renameProvider",
+    "workspaceSymbolProvider",
+    "semanticTokensProvider",
+    "executeCommandProvider",
+];
 
 /// The requests a server advertises in its `capabilities`, by short name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1054,10 +1084,8 @@ impl Advertised {
             .map(String::as_str)
             .filter(|key| key.ends_with("Provider") && has(key))
             .filter(|key| {
-                !matches!(
-                    *key,
-                    "renameProvider" | "workspaceSymbolProvider" | "semanticTokensProvider"
-                ) && !position_table.iter().any(|(k, _)| k == key)
+                !OTHER_PROVIDERS.contains(key)
+                    && !position_table.iter().any(|(k, _)| k == key)
                     && !document_table.iter().any(|(k, _)| k == key)
             })
             .collect();
@@ -1150,14 +1178,18 @@ pub fn position_params(
             let new_name = args.first().ok_or("`rename` needs the new name after it")?;
             json!({ "textDocument": document, "position": start.to_json(), "newName": new_name })
         }
-        "codeAction" => {
+        "codeAction" | "action" | "noAction" => {
             let touching: Vec<Value> = diagnostics
                 .iter()
                 .filter(|d| touches(d, start, end.unwrap_or(start)))
                 .cloned()
                 .collect();
             let mut context = json!({ "diagnostics": touching });
-            if let (Some(only), Some(map)) = (args.first(), context.as_object_mut()) {
+            // An `action` or `noAction` marker's words are the title, never
+            // a kind.
+            if name == "codeAction"
+                && let (Some(only), Some(map)) = (args.first(), context.as_object_mut())
+            {
                 map.insert("only".to_owned(), json!([only]));
             }
             json!({ "textDocument": document, "range": range, "context": context })
@@ -1220,8 +1252,9 @@ fn touches(d: &Value, start: Position, end: Position) -> bool {
 /// do not depend on it: locations of `references` by path, line and
 /// column; the edits of a `rename` or a `willRename` step's
 /// `WorkspaceEdit`, its `changes` and each document of its
-/// `documentChanges` by range, and those documents by URI; and the ranges
-/// of `foldingRange` by start, then end.
+/// `documentChanges` by range, and those documents by URI; the ranges of
+/// `foldingRange` by start, then end; and the text hash in a code action's
+/// `data` ([`without_hash`]).
 #[must_use]
 pub fn canonical(name: &str, answer: Value) -> Value {
     fn fold_key(v: &Value) -> [u64; 4] {
@@ -1277,6 +1310,9 @@ pub fn canonical(name: &str, answer: Value) -> Value {
             items.sort_by_key(fold_key);
             Value::Array(items)
         }
+        ("codeAction", Value::Array(items)) => {
+            Value::Array(items.into_iter().map(without_hash).collect())
+        }
         ("rename" | "willRename", Value::Object(mut edit)) => {
             if let Some(Value::Object(changes)) = edit.get_mut("changes") {
                 // Each URI's list is sorted on its own; the map's order is the
@@ -1301,6 +1337,18 @@ pub fn canonical(name: &str, answer: Value) -> Value {
     }
 }
 
+/// A code action as goldens show it: the text hash in its `data`, which
+/// any change of the test's text moves, as `<hash>` (D-1683).
+#[must_use]
+pub fn without_hash(mut action: Value) -> Value {
+    if let Some(hash) = action.pointer_mut("/data/hash")
+        && hash.is_string()
+    {
+        *hash = json!("<hash>");
+    }
+    action
+}
+
 /// Whether the examples group takes error `code` as an answer to
 /// `method`: `RequestFailed` from `textDocument/prepareRename` and
 /// `textDocument/rename`, which is how they refuse a name (`features.md`
@@ -1310,6 +1358,15 @@ pub fn canonical(name: &str, answer: Value) -> Value {
 pub fn refusal_allowed(method: &str, code: i64) -> bool {
     code == codes::REQUEST_FAILED
         && matches!(method, "textDocument/prepareRename" | "textDocument/rename")
+}
+
+/// Whether the examples group takes error `code` as an answer to
+/// `codeAction/resolve`: `RequestFailed`, how a refused fix answers
+/// (D-1731). `ContentModified` is not, since nothing edits the text
+/// between the listing and the resolve.
+#[must_use]
+pub const fn resolve_refusal(code: i64) -> bool {
+    code == codes::REQUEST_FAILED
 }
 
 /// Whether a rename sweep (D-1677) takes the refusal `message` of a
@@ -1524,6 +1581,80 @@ mod tests {
         assert!(Header::of("// @clientInfo:\n").is_err());
     }
 
+    /// The `action TITLE` marker sends `textDocument/codeAction` with the
+    /// touching diagnostics, its words the title and never an `only`, and
+    /// the `execute` and `explain` steps parse with their words (plan §4.3
+    /// B).
+    #[test]
+    fn action_marker_and_command_steps() {
+        let found = markers("fn main() {}\n// ^ action Write `..`\n").unwrap();
+        assert_eq!(found[0].name, "action");
+        assert_eq!(found[0].args, ["Write", "`..`"]);
+        let at = Position {
+            line: 1,
+            character: 2,
+        };
+        let d = json!({"range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 5}}});
+        let (method, params) = position_params(
+            "action",
+            "file:///a",
+            at,
+            None,
+            &["quickfix".to_owned()],
+            &[d],
+        )
+        .unwrap();
+        assert_eq!(method, "textDocument/codeAction");
+        assert_eq!(
+            params["context"]["diagnostics"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert!(params["context"].get("only").is_none(), "{params}");
+        let (_, params) = position_params(
+            "codeAction",
+            "file:///a",
+            at,
+            None,
+            &["quickfix".to_owned()],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(params["context"]["only"], json!(["quickfix"]));
+        assert_eq!(
+            Step::parse("execute cheby.explain E0044").unwrap(),
+            Step::Execute("cheby.explain".to_owned(), vec!["E0044".to_owned()])
+        );
+        assert_eq!(
+            Step::parse("execute cheby.explain").unwrap(),
+            Step::Execute("cheby.explain".to_owned(), Vec::new())
+        );
+        assert_eq!(
+            Step::parse("explain E0044").unwrap(),
+            Step::Explain("E0044".to_owned())
+        );
+        assert!(Step::parse("explain").is_err());
+        assert!(Step::parse("explain E0044 E0045").is_err());
+        assert!(!Step::Explain("E0044".to_owned()).waits_for_child());
+    }
+
+    /// A code action's text hash shows as `<hash>`, and a resolve's
+    /// `RequestFailed` is how a fix is refused, while `ContentModified` is
+    /// no answer the examples group takes (D-1731).
+    #[test]
+    fn code_actions_without_hash_and_resolve_refusals() {
+        let listed = json!([
+            { "title": "a", "data": { "uri": "file:///a", "hash": "00ff", "range": [0, 1] } },
+            { "title": "b" },
+        ]);
+        let shown = canonical("codeAction", listed);
+        assert_eq!(shown[0]["data"]["hash"], "<hash>");
+        assert_eq!(shown[0]["data"]["range"], json!([0, 1]));
+        assert_eq!(shown[1], json!({ "title": "b" }));
+        assert!(resolve_refusal(codes::REQUEST_FAILED));
+        assert!(!resolve_refusal(codes::CONTENT_MODIFIED));
+        assert!(!resolve_refusal(codes::INVALID_PARAMS));
+    }
+
     #[test]
     fn bad_markers() {
         assert!(markers("// ^ hover\n").is_err());
@@ -1569,6 +1700,9 @@ mod tests {
         assert!(completion.completion_resolve);
         let workspace = Advertised::of(&json!({ "workspaceSymbolProvider": true })).unwrap();
         assert!(workspace.workspace_symbol);
+        // Commands are known and add no request.
+        let commands = json!({ "executeCommandProvider": { "commands": ["cheby.explain"] } });
+        assert_eq!(Advertised::of(&commands), Ok(Advertised::default()));
         let tokens =
             |provider: Value| Advertised::of(&json!({ "semanticTokensProvider": provider }));
         let both = tokens(json!({ "legend": {}, "full": true, "range": true })).unwrap();

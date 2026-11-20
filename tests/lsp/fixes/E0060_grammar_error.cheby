@@ -1,0 +1,19 @@
+// @decisions: D-1388, D-1393, D-1736, D-159, D-1341, D-1347
+//! E0060's fixes make a refutable `let` a `let assert` or a `let guard`.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+fn get(o: Option<Int>) -> Int {
+  let Some(x) = o
+  x
+}
+
+fn main() {
+  assert get(Some(1)) == 1
+}
+
+fn broken() {
+  let = 1
+}
+//> 7:7 noAction Use `let assert`
+//> 7:7 noAction Use `let guard … else { todo }`

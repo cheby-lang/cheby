@@ -1,0 +1,207 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the interface `Shape` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 4
+        },
+        "start": {
+          "character": 10,
+          "line": 4
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the interface `Named` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 9
+        },
+        "start": {
+          "character": 10,
+          "line": 9
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `cube`\nnever used",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 24
+        },
+        "start": {
+          "character": 8,
+          "line": 24
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:15:8 codeAction source
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        306,
+        306
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  },
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        306,
+        306
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn perimeter(cube: Cube) -> Float {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 26
+                },
+                "start": {
+                  "character": 1,
+                  "line": 26
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source",
+    "title": "Satisfy interface `Shape`: add `perimeter`"
+  },
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        306,
+        306
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn tag(cube: Cube) -> String {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 26
+                },
+                "start": {
+                  "character": 1,
+                  "line": 26
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source",
+    "title": "Satisfy interface `Named`: add `tag`"
+  }
+]
+
+== src/main.cheby:15:8 action Satisfy interface `Named`: add `tag`
+{
+  "actions": [
+    "Satisfy interface `Shape`: add `perimeter`",
+    "Satisfy interface `Named`: add `tag`"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        306,
+        306
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn tag(cube: Cube) -> String {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 26
+                },
+                "start": {
+                  "character": 1,
+                  "line": 26
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source",
+    "title": "Satisfy interface `Named`: add `tag`"
+  },
+  "showMessage": []
+}

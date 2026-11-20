@@ -1,0 +1,12 @@
+// @decisions: D-1684, D-1445, D-1736
+// @steps: close src/shape.cheby
+//! Make visible in a closed file: its edit has `version: null` (D-1445),
+//! and `verify` passes it, though the E0043 at the use goes away (D-1668
+//! is rename's only).
+
+import app::shape
+
+fn main() {
+  assert shape::secret() == shape::open()
+  //            ^ action Make `secret` package-visible
+}

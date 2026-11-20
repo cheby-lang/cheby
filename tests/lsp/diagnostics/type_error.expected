@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
       "message": "mismatched types\nexpected `Int`, found `String`",
       "range": {
         "end": {

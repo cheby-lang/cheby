@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0012",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0012.md"
+      },
+      "message": "unexpected string in string interpolation",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 8
+        },
+        "start": {
+          "character": 21,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:22 action Escape the brace as `\{`
+{
+  "actions": [
+    "Escape the brace as `\\{`",
+    "Explain E0012"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        293,
+        293
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0012",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0012.md"
+        },
+        "message": "unexpected string in string interpolation",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 8
+          },
+          "start": {
+            "character": 21,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\\",
+              "range": {
+                "end": {
+                  "character": 20,
+                  "line": 8
+                },
+                "start": {
+                  "character": 20,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Escape the brace as `\\{`"
+  },
+  "showMessage": []
+}

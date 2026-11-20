@@ -1,0 +1,141 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `read_text` in module `std::file`\nnot found\nhelp: `std::io` has `read_file`",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 9
+        },
+        "start": {
+          "character": 13,
+          "line": 9
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 9
+              },
+              "start": {
+                "character": 7,
+                "line": 9
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::file`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:14 action Use `io::read_file` and import `std::io`
+{
+  "actions": [
+    "Use `io::read_file` and import `std::io`",
+    "Explain E0042"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        283,
+        283
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0042",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+        },
+        "message": "there is no value `read_text` in module `std::file`\nnot found\nhelp: `std::io` has `read_file`",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 9
+          },
+          "start": {
+            "character": 13,
+            "line": 9
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 9
+                },
+                "start": {
+                  "character": 7,
+                  "line": 9
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`std::file`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::io\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 6
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              }
+            },
+            {
+              "newText": "io::read_file",
+              "range": {
+                "end": {
+                  "character": 22,
+                  "line": 9
+                },
+                "start": {
+                  "character": 7,
+                  "line": 9
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Use `io::read_file` and import `std::io`"
+  },
+  "showMessage": []
+}

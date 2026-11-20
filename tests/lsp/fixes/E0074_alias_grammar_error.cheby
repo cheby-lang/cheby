@@ -1,0 +1,24 @@
+// @decisions: D-148, D-636, D-081, D-1736, D-1745, D-1347
+//! E0074 for a type named through an alias in a `pub` signature: the type
+//! the alias stands for is made `pub`, as the checker reports it.
+//! With a grammar error in another function E0074 is not reported
+//! (D-1347), so nothing is raised.
+
+type Token {
+  Token(String),
+}
+
+type Tok = Token
+
+pub fn issue(text: String) -> Tok {
+  //                          ^ noAction Make `Token` `pub`
+  Token(text)
+}
+
+fn main() {
+  assert issue("a") == Token("a")
+}
+
+fn broken() {
+  let = 1
+}

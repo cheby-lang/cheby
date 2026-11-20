@@ -1,0 +1,16 @@
+// @decisions: D-148, D-636, D-1736
+//! E0074 for a package-visible type in a `pub` signature: the type is
+//! made `pub`, as the item needs.
+
+type Token {
+  Token(String),
+}
+
+pub fn issue(text: String) -> Token {
+  //                          ^ action Make `Token` `pub`
+  Token(text)
+}
+
+fn main() {
+  assert issue("a") == Token("a")
+}

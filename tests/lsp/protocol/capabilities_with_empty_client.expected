@@ -4,9 +4,12 @@
     "callHierarchyProvider": true,
     "codeActionProvider": {
       "codeActionKinds": [
-        "refactor.rewrite"
+        "quickfix",
+        "refactor.rewrite",
+        "source.organizeImports",
+        "source"
       ],
-      "resolveProvider": false
+      "resolveProvider": true
     },
     "completionProvider": {
       "resolveProvider": true,
@@ -26,6 +29,11 @@
     },
     "documentRangeFormattingProvider": true,
     "documentSymbolProvider": true,
+    "executeCommandProvider": {
+      "commands": [
+        "cheby.explain"
+      ]
+    },
     "foldingRangeProvider": true,
     "hoverProvider": true,
     "inlayHintProvider": {

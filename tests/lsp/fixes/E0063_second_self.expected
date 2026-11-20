@@ -1,0 +1,177 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Square` does not satisfy `Merge`\nrequired by a bound of `combine`\nnote: this module declares `Square` but has no function `merge(Square, Square) -> Square` (§8.2, D-061)\nhelp: add a function `merge(Square, Square) -> Square` to this module",
+      "range": {
+        "end": {
+          "character": 24,
+          "line": 30
+        },
+        "start": {
+          "character": 9,
+          "line": 30
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Stack<Int>` does not satisfy `Size`\nrequired by a bound of `count`\nnote: this module declares `Stack<Int>` but has no function `size(Stack<Int>) -> Int` (§8.2, D-061)\nhelp: add a function `size(Stack<Int>) -> Int` to this module",
+      "range": {
+        "end": {
+          "character": 36,
+          "line": 32
+        },
+        "start": {
+          "character": 9,
+          "line": 32
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:31:18 action Add the missing function `merge`
+{
+  "actions": [
+    "Add the missing function `merge`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        470,
+        470
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Square` does not satisfy `Merge`\nrequired by a bound of `combine`\nnote: this module declares `Square` but has no function `merge(Square, Square) -> Square` (§8.2, D-061)\nhelp: add a function `merge(Square, Square) -> Square` to this module",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 30
+          },
+          "start": {
+            "character": 9,
+            "line": 30
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn merge(square: Square, other: Square) -> Square {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 14
+                },
+                "start": {
+                  "character": 1,
+                  "line": 14
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `merge`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:33:16 action Add the missing function `size`
+{
+  "actions": [
+    "Add the missing function `size`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        562,
+        562
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Stack<Int>` does not satisfy `Size`\nrequired by a bound of `count`\nnote: this module declares `Stack<Int>` but has no function `size(Stack<Int>) -> Int` (§8.2, D-061)\nhelp: add a function `size(Stack<Int>) -> Int` to this module",
+        "range": {
+          "end": {
+            "character": 36,
+            "line": 32
+          },
+          "start": {
+            "character": 9,
+            "line": 32
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn size<T>(stack: Stack<T>) -> Int {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 18
+                },
+                "start": {
+                  "character": 1,
+                  "line": 18
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `size`"
+  },
+  "showMessage": []
+}

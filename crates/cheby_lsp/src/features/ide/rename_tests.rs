@@ -934,7 +934,8 @@ fn a_new_error_is_refused_with_its_header() {
 }
 
 /// D-1671: the refusal names the first new error, then counts the rest.
-/// A move's refusal says "Moving" (D-1724).
+/// A move's refusal says "Moving" (D-1724), and a fix's "Applying the fix"
+/// (D-1731).
 #[test]
 fn would_cause_counts_the_rest() {
     let diag = |message: &str| PlainDiagnostic {
@@ -972,6 +973,12 @@ fn would_cause_counts_the_rest() {
     assert_eq!(
         would_cause(&three, Action::Move),
         "Moving would cause: error[E0044]: `a` is already bound at src/main.cheby:2:7 and 2 more"
+    );
+    // A cross-file fix's refusal names its own action (D-1731).
+    assert_eq!(
+        would_cause(&three, Action::Fix),
+        "Applying the fix would cause: error[E0044]: `a` is already bound at src/main.cheby:2:7 \
+         and 2 more"
     );
 }
 

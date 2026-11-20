@@ -1,0 +1,20 @@
+// @decisions: D-1353, D-1388, D-1393, D-1736
+//! A method call of a function of the receiver's home module becomes a
+//! pipe with the hole first (X §6.5).
+//! With a grammar error in another function, only the token checks
+//! run, so E0058 is not reported and no fix is offered (D-425).
+
+import std::list
+
+fn bump(xs: List<Int>) -> List<Int> {
+  xs.map(fn(x) { x + 1 })
+}
+
+fn main() {
+  assert bump([1]) == [2]
+}
+
+fn broken() {
+  let = 1
+}
+//> 10:6 noAction Write `xs |> list::map(_, fn(x) { x + 1 })`

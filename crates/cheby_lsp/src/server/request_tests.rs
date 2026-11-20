@@ -625,3 +625,33 @@ fn malformed_and_unrouted_requests() {
     assert_eq!(answer, Ok(json!("fallback")));
     client.stop();
 }
+
+/// A route whose fallback is an error answers it where it has nothing to
+/// read, as `codeAction/resolve` answers `RequestFailed` (D-1732): for a
+/// URI that names no file, at once, and for a document whose run gave no
+/// snapshot, both while the request waited for that run and after it.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "builds JIT code paths; Windows waits for M6 (D-641)"
+)]
+fn an_error_fallback_is_answered_as_an_error() {
+    let temp = Temp::package("no_analysis", "name = \n", &[("src/main.cheby", MAIN)]);
+    let main = temp.at("src/main.cheby");
+    let mut client = Client::start(&temp.0, &quick());
+    client.open(&main, MAIN, 1);
+    let on = |uri: Value| json!({ "textDocument": { "uri": uri } });
+    let untitled = client.request("cheby/testNoAnalysis", on(json!("untitled:Untitled-1")));
+    assert_eq!(untitled, Err(codes::REQUEST_FAILED));
+    let waited = client.request("cheby/testNoAnalysis", on(uri(&main)));
+    assert_eq!(waited, Err(codes::REQUEST_FAILED));
+    // The run of this text failed, so no run answers the next one.
+    client.hold(true);
+    let again = client.request("cheby/testNoAnalysis", on(uri(&main)));
+    assert_eq!(again, Err(codes::REQUEST_FAILED));
+    client.hold(false);
+    // The other test routes still answer their value fallback.
+    let id = client.send_doc(&main);
+    assert_eq!(client.answer(&id), Ok(json!("fallback")));
+    client.stop();
+}

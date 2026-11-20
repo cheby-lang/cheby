@@ -6,6 +6,9 @@
   "std/probe_open.cheby": [
     {
       "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
       "message": "mismatched types\nexpected `String`, found `Int`",
       "range": {
         "end": {

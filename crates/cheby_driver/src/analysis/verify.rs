@@ -30,7 +30,9 @@
 //!    not new; a message that names another binding of the old name, which
 //!    the rename leaves alone, is matched as it was. A move that changes a
 //!    module's last segment also reads `old_last::` as `new_last::`, as a
-//!    file that imports the module writes its items (D-1715).
+//!    file that imports the module writes its items (D-1715). A diagnostic
+//!    whose primary span lies in text the edits wrote
+//!    ([`VerifyRequest::written`]) matches no error of "before" (D-1753).
 //! 5. [`VerifyOutcome::Hides`], only when the request asks
 //!    ([`VerifyRequest::hides`], rename alone): the same multisets read the
 //!    other way, the errors of "before" that "after" no longer has
@@ -112,6 +114,13 @@ pub struct VerifyRequest<'a> {
     /// edit that makes one go is [`VerifyOutcome::Hides`]. Fixes and moves
     /// leave it off, since they exist to remove errors.
     pub hides: bool,
+    /// The ranges of the edited text that the edits wrote, by the
+    /// snapshot's paths, as for [`VerifyRequest::edits`]. A diagnostic of
+    /// "after" whose primary span lies in one takes no error of "before",
+    /// since text that did not exist cannot hold an old error, so it is
+    /// new however the file's lines moved. Empty when the caller does not
+    /// name them.
+    pub written: &'a [(PathBuf, TextRange)],
 }
 
 /// What [`verify`] finds.
@@ -936,11 +945,16 @@ fn compare(
     // cannot take it off its line (D-1709). Within each, the renamed keys
     // first, so a diagnostic matched by its old message never takes an
     // entry that a renamed one needs.
+    // A diagnostic in text the edits wrote takes no entry (D-1753).
+    let fresh: Vec<bool> = after
+        .iter()
+        .map(|(diag, _, _)| in_written(request, files, diag))
+        .collect();
     let mut matched = vec![false; after.len()];
     for (old, on_line) in [(false, true), (true, true), (false, false), (true, false)] {
         let list = if old { &mut by_old } else { &mut by_new };
-        for ((_, key, line), done) in after.iter().zip(matched.iter_mut()) {
-            if !*done {
+        for (((_, key, line), done), &fresh) in after.iter().zip(matched.iter_mut()).zip(&fresh) {
+            if !*done && !fresh {
                 *done = take(list, key, on_line.then_some(*line)).is_some();
             }
         }
@@ -981,6 +995,23 @@ fn compare(
     }
     let hidden = left_over(snapshot, &entries, &loose);
     Compared { introduced, hidden }
+}
+
+/// Whether the primary span of `diag` lies in a range of text that the
+/// edits of `request` wrote ([`VerifyRequest::written`]). An empty span at
+/// a range's end is the old text's after it.
+fn in_written(request: &VerifyRequest<'_>, files: &[VerifyFile], diag: &Diagnostic) -> bool {
+    let Some(span) = diag.primary_span() else {
+        return false;
+    };
+    let Some(file) = files.iter().find(|f| f.file == span.file) else {
+        return false;
+    };
+    request.written.iter().any(|(path, range)| {
+        moved(request, path) == file.path
+            && range.contains_range(span.range)
+            && span.range.start() < range.end()
+    })
 }
 
 /// The diagnostics of the edited run that count, each with its key, code,

@@ -1,0 +1,14 @@
+// @decisions: D-1388, D-1393, D-1736, D-1687, D-022
+//! W0010's fix removes the arm that can never match, found by its span.
+
+fn sign(n: Int) -> Int {
+  case n {
+    _ => 0
+    1 => 1
+  }
+}
+
+fn main() {
+  assert sign(1) == 0
+}
+//> 7:5 action Remove the arm

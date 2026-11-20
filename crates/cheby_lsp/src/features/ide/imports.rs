@@ -183,10 +183,28 @@ pub(crate) fn parse_path(text: &str) -> Option<ModulePath> {
 
 /// The insertion of `line`, an import of the module `path`, into the file
 /// of `root`, whose text is `text`.
-fn placement(root: SyntaxNode<'_>, text: &str, path: &str, line: &str) -> (TextRange, String) {
+pub(crate) fn placement(
+    root: SyntaxNode<'_>,
+    text: &str,
+    path: &str,
+    line: &str,
+) -> (TextRange, String) {
+    placement_without(root, text, path, line, &[])
+}
+
+/// [`placement`], as if the imports whose nodes cover `moved` were not
+/// in the file: where E0018's fix puts the imports that follow an item
+/// (D-1744). `line` may hold several imports, one per line.
+pub(crate) fn placement_without(
+    root: SyntaxNode<'_>,
+    text: &str,
+    path: &str,
+    line: &str,
+    moved: &[TextRange],
+) -> (TextRange, String) {
     let imports: Vec<SyntaxNode<'_>> = root
         .children()
-        .filter(|c| c.kind() == K::IMPORT_DECL)
+        .filter(|c| c.kind() == K::IMPORT_DECL && !moved.contains(&c.text_range()))
         .collect();
     if let Some((first, rest)) = imports.split_first() {
         let block = first_block(*first, rest, text);
@@ -294,7 +312,7 @@ fn after_line(text: &str, offset: TextSize, insert: String) -> (TextRange, Strin
 }
 
 /// The start of the line that holds `offset`.
-fn line_start(text: &str, offset: TextSize) -> TextSize {
+pub(crate) fn line_start(text: &str, offset: TextSize) -> TextSize {
     let at = usize::try_from(offset).unwrap_or(0);
     let start = text
         .get(..at)
@@ -305,7 +323,7 @@ fn line_start(text: &str, offset: TextSize) -> TextSize {
 
 /// The start of the line after the one that holds `offset`, if the line
 /// ends with a line break.
-fn next_line(text: &str, offset: TextSize) -> Option<TextSize> {
+pub(crate) fn next_line(text: &str, offset: TextSize) -> Option<TextSize> {
     let at = usize::try_from(offset).ok()?;
     let rest = text.get(at..)?;
     let n = rest.find('\n')?;

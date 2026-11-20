@@ -1,0 +1,128 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0052",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0052.md"
+      },
+      "message": "`Describe` is an interface, not a type\nexpected a type\nhelp: write `dyn Describe` for a value of any type that satisfies it, or use a type parameter bounded by it, such as `T: Describe`",
+      "range": {
+        "end": {
+          "character": 27,
+          "line": 8
+        },
+        "start": {
+          "character": 19,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 13
+        },
+        "start": {
+          "character": 2,
+          "line": 13
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 12
+              },
+              "start": {
+                "character": 19,
+                "line": 12
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:20 action Write `dyn Describe`
+{
+  "actions": [
+    "Write `dyn Describe`",
+    "Explain E0052"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        252,
+        252
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0052",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0052.md"
+        },
+        "message": "`Describe` is an interface, not a type\nexpected a type\nhelp: write `dyn Describe` for a value of any type that satisfies it, or use a type parameter bounded by it, such as `T: Describe`",
+        "range": {
+          "end": {
+            "character": 27,
+            "line": 8
+          },
+          "start": {
+            "character": 19,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "dyn ",
+              "range": {
+                "end": {
+                  "character": 19,
+                  "line": 8
+                },
+                "start": {
+                  "character": 19,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Write `dyn Describe`"
+  },
+  "showMessage": []
+}

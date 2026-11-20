@@ -1,0 +1,10 @@
+// @decisions: D-1388, D-1736
+//! W0012, a use of a deprecated item, is tagged `DEPRECATED` (tag 2) for a
+//! client that lists the tag, as X §8.1 gives it, and offers only Explain.
+
+import tagged::text
+
+fn main() {
+  assert text::old() == text::new()
+}
+//> 8:16 codeAction quickfix

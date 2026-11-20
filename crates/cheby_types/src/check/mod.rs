@@ -42,7 +42,7 @@ pub(crate) use constraints::Deferred;
 pub(crate) use key::{is_key_type, key_fn};
 pub(crate) use pat::PatSite;
 
-use cheby_diag::{Diagnostic, Span, codes};
+use cheby_diag::{Diagnostic, Span, TextRange, codes};
 use cheby_iface::{
     DefId, DefIndex, DefKind, Generics, Ice, IfaceItem, IndexVec, ItemSig, ModuleInterface, Name,
     PackageId, Ty, TyKind, builtin, sym,
@@ -849,7 +849,13 @@ impl<'a> BodyCx<'a> {
         )
         .with_primary(span, format!("this has type `{shown}`"));
         if self.infcx.shallow(&ty)? == InferTy::Known(Ty::BOOL) {
-            diag = diag.with_help("to check the condition, write `assert` before it");
+            // The edit writes `assert ` at the start of the value (D-1388).
+            let at = Span::new(span.file, TextRange::empty(span.range.start()));
+            diag = diag.with_suggestion(
+                "to check the condition, write `assert` before it",
+                at,
+                "assert ",
+            );
         }
         self.report(diag);
         Ok(None)

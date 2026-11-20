@@ -1,19 +1,27 @@
 //! Feature logic over the analysis API, free of protocol types.
 
+pub(crate) mod actions;
 pub(crate) mod completion;
 pub(crate) mod cursor;
 pub(crate) mod edits;
+pub(crate) mod explain;
 pub(crate) mod field_path;
 pub(crate) mod file_ops;
+pub(crate) mod fill_arms;
+pub(crate) mod fixes;
+pub(crate) mod habits;
 pub(crate) mod hierarchy;
 pub(crate) mod hints;
 pub(crate) mod hover;
 pub(crate) mod imports;
+pub(crate) mod imports_actions;
 pub(crate) mod nav;
+pub(crate) mod near_miss;
 pub(crate) mod print;
 pub(crate) mod rename;
 pub(crate) mod scope;
 pub(crate) mod signature;
+pub(crate) mod stubs;
 pub(crate) mod symbols;
 pub(crate) mod tokens;
 

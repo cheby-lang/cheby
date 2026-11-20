@@ -3,6 +3,9 @@
   "std/probe_user.cheby": [
     {
       "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
       "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
       "range": {
         "end": {

@@ -1,0 +1,69 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 37
+        },
+        "start": {
+          "character": 6,
+          "line": 37
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:20:8 action Satisfy interface `Shape`: add `perimeter`
+{
+  "actions": [
+    "Satisfy interface `Shape`: add `perimeter`"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        555,
+        555
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn perimeter(cube: Cube) -> Float {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 30
+                },
+                "start": {
+                  "character": 1,
+                  "line": 30
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source",
+    "title": "Satisfy interface `Shape`: add `perimeter`"
+  },
+  "showMessage": []
+}

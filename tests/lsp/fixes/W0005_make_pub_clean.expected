@@ -1,0 +1,98 @@
+== diagnostics
+{
+  "src/helper.cheby": [
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the function `double` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the function\nhelp: remove the function, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 7
+        },
+        "start": {
+          "character": 3,
+          "line": 7
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/helper.cheby:8:5 action Make `double` `pub`
+{
+  "actions": [
+    "Make `double` `pub`",
+    "Remove the unused `double`",
+    "Explain W0005"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        61,
+        61
+      ],
+      "uri": "src/helper.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0005",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+        },
+        "message": "the function `double` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the function\nhelp: remove the function, use it, or make it `pub` if other packages should use it",
+        "range": {
+          "end": {
+            "character": 9,
+            "line": 7
+          },
+          "start": {
+            "character": 3,
+            "line": 7
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "pub ",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/helper.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `double` `pub`"
+  },
+  "showMessage": []
+}

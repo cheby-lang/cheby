@@ -1,0 +1,16 @@
+// @decisions: D-1387, D-1384, D-1692, D-1736
+//! Another module's constructors are written through the binding of its
+//! import, an alias included: `geo::Circle { .. }`.
+
+import app::shape as geo
+
+fn area(s: geo::Shape) -> Int {
+  case s {
+  //   ^ action Add the missing arms
+    geo::Dot => 0
+  }
+}
+
+fn main() {
+  assert area(geo::Dot) == 0
+}

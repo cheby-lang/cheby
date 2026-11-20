@@ -1,0 +1,20 @@
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736
+// @newErrors: E0047
+//! An `else =>` arm of a `case` becomes `_ =>` (X §6.5).
+//! With a type error in another function, which the fix reveals.
+
+fn name(a: Int) -> String {
+  case a {
+    1 => "one"
+    else => "many"
+  }
+}
+
+fn main() {
+  assert name(2) == "many"
+}
+
+fn answer() -> Int {
+  "forty-two"
+}
+//> 9:5 action Write `_`

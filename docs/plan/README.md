@@ -454,6 +454,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1721    | The applied-edit check polls `cheby/status` with the `empty` client and compares errors only        |
 | D-1725    | The sweeps shrink to 30 renames per `rename_sweep` trial and 50 per `examples/*` trial              |
 | D-1726    | E0042's help in a std checkout lists the checkout's items, from a list its run owns                 |
+| D-1735    | A fix within one file is formatted, and the applied-edit check holds it to `cheby fmt`'s form       |
+| D-1738    | A kept set of hunks widens until closed, at most eight rounds, with a cancel check before each      |
 
 ## Open questions
 

@@ -1,0 +1,19 @@
+// @decisions: D-1387, D-1692, D-1736
+//! Nested patterns are written whole, each missing value one arm.
+
+type Color {
+  Red,
+  Green,
+}
+
+fn pick(x: Option<Option<Color>>) -> Int {
+  case x {
+  //   ^ action Add the missing arms
+    Some(Some(Red)) => 1
+    None => 0
+  }
+}
+
+fn main() {
+  assert pick(None) == 0
+}

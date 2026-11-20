@@ -1,0 +1,12 @@
+//! A probe that calls another probe's `priv` helper.
+
+import std::probe_fix_hidden
+
+fn twice() -> Int {
+  probe_fix_hidden::secret() * 2
+  //                ^ action Make `secret` package-visible
+}
+
+test "twice" {
+  assert twice() == 2
+}

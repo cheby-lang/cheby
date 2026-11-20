@@ -1,0 +1,11 @@
+//! Helpers.
+
+pub fn used() -> Int {
+  1
+}
+
+/// Doubles.
+fn double(x: Int) -> Int {
+  //^ action Make `double` `pub`
+  x * 2
+}

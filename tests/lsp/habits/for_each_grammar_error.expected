@@ -1,0 +1,127 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `for`; use recursion, often through a local `fn`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 9
+        },
+        "start": {
+          "character": 6,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 17
+        },
+        "start": {
+          "character": 6,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:7 action Rewrite as `list::each`
+{
+  "actions": [
+    "Rewrite as `list::each`",
+    "Explain E0013"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "index": 0,
+        "kind": "habit"
+      },
+      "range": [
+        298,
+        298
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `for`; use recursion, often through a local `fn`",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 9
+          },
+          "start": {
+            "character": 6,
+            "line": 9
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::list\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              }
+            },
+            {
+              "newText": "list::each(xs, fn(x) { io::println(\"{x}\") })",
+              "range": {
+                "end": {
+                  "character": 36,
+                  "line": 9
+                },
+                "start": {
+                  "character": 2,
+                  "line": 9
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Rewrite as `list::each`"
+  },
+  "showMessage": []
+}

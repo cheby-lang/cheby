@@ -668,9 +668,16 @@ impl Server {
         }
         let target_changed = settings.analysis.target != self.settings.analysis.target;
         let inlays_changed = settings.inlay_hints != self.settings.inlay_hints;
+        let links_changed =
+            settings.diagnostics.explain_links != self.settings.diagnostics.explain_links;
         self.settings = Arc::new(settings);
         if target_changed {
             self.mark_all_dirty();
+        }
+        // The published lists carry the links, so they go out again at
+        // once, from the reports they were made from (D-1750).
+        if links_changed {
+            self.republish_all();
         }
         // The client asks again for the hints it shows (A §12.3).
         if inlays_changed && self.caps.inlay_refresh {

@@ -227,6 +227,13 @@ fn primary(p: &mut Parser<'_>, r: Restrictions) -> Option<CompletedMarker> {
             comma_list(p, &list, expr_or_spread)
         }
         L_BRACE => block_expr(p),
+        // After a line break, `fn name` is a local function, never a
+        // closure, which is `fn(`: the expression is missing, and the block
+        // or module parses the function (D-1695).
+        FN_KW if p.at_item_recovery() => {
+            missing_expr(p);
+            return None;
+        }
         FN_KW => closure(p),
         CASE_KW => case_expr(p),
         PANIC_KW | TODO_KW => {
@@ -345,9 +352,14 @@ fn paren_or_tuple(p: &mut Parser<'_>) -> CompletedMarker {
     };
     if p.at_close(&delim) {
         let range = open.cover(p.current_range());
+        // The help's edit writes `Nil` in place of `()` (D-1689).
         let diag = Diagnostic::new(codes::SHORT_TUPLE, "`()` is not a value")
             .with_primary(p.span(range), "")
-            .with_help("the value that carries no information is `Nil`");
+            .with_suggestion(
+                "the value that carries no information is `Nil`",
+                p.span(range),
+                "Nil",
+            );
         p.report(diag);
         p.close_delim(delim);
         return m.complete(p, TUPLE_EXPR);
@@ -600,7 +612,8 @@ fn interpolation(p: &mut Parser<'_>) {
         let found = p.current().describe();
         // An interpolation that starts with a string almost always meant a
         // literal `{`, as in `"price {" + amount + "}"` (D-1661).
-        let help = if !named && p.at(STRING_START) {
+        let literal_brace = !named && p.at(STRING_START);
+        let help = if literal_brace {
             "a `{` in a string starts an interpolation; `\\{` writes a literal `{`"
         } else {
             "an interpolation holds a name, optionally with fields and `:?`, such as \
@@ -610,8 +623,14 @@ fn interpolation(p: &mut Parser<'_>) {
             codes::INVALID_INTERPOLATION,
             format!("unexpected {found} in string interpolation"),
         )
-        .with_primary(p.current_span(), "")
-        .with_help(help);
+        .with_primary(p.current_span(), "");
+        // D-1694: the literal brace's help carries an edit that escapes the
+        // interpolation's `{` as `\{`.
+        let diag = if literal_brace {
+            diag.with_suggestion(help, p.span(TextRange::empty(open.range.start())), "\\")
+        } else {
+            diag.with_help(help)
+        };
         p.report(diag);
         let error = p.start();
         while !p.at_ts(INTERP_LIMIT) {

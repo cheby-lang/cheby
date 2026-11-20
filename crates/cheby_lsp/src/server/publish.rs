@@ -30,25 +30,38 @@
 //! when it is not empty, the related labels when the client takes no
 //! `relatedInformation`, each note as `note: …` and each help as
 //! `help: …`. The first line is the header alone, which is what parity
-//! with the UI goldens compares.
+//! with the UI goldens compares. A help whose edits are a quick fix leaves
+//! the message for a client that takes code-action literals (D-1686).
+//! A registered code links its explanation in `codeDescription` when the
+//! client shows it and `diagnostics.explainLinks` is on (D-1400), and a
+//! change of that setting publishes every list again at once (D-1750).
+//! W0002 to W0005 and W0010 carry the `UNNECESSARY` tag and W0012 the
+//! `DEPRECATED` one for a client that lists it (X §8.1).
+//!
+//! Each published file keeps the report it was made from and whether its
+//! run read a substitute (D-1360), even when the list it sends is the
+//! last one, and every snapshot request carries them (`with_reports`), so
+//! code actions read the report of the text they answer (D-1393).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use cheby_driver::analysis::codes::{self, Code};
 use cheby_driver::analysis::{
-    FileReport, Hash128, Live, NormMap, PackageKind, PlainDiagnostic, Report, Severity, TextOrigin,
-    exact_key, normalized_key,
+    FileReport, Hash128, Live, ModuleView, NormMap, PackageKind, PlainDiagnostic, Report, Severity,
+    Snapshot, TextOrigin, exact_key, normalized_key,
 };
 use lsp_types::{
-    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, MessageType,
-    NumberOrString, Position, PublishDiagnosticsParams, Range,
+    CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, DiagnosticTag,
+    Location, MessageType, NumberOrString, Position, PublishDiagnosticsParams, Range, Uri,
 };
 
 use super::Server;
 use super::effects::Effect;
 use super::state::Published;
 use crate::analysis_thread::RunFailure;
+use crate::features::ide::actions::offers_fix;
 use crate::text::lines::{Bom, LspLines};
 
 impl Server {
@@ -82,7 +95,8 @@ impl Server {
                     self.run_failed(root, message);
                 }
                 self.child_on_live(root, &live);
-                self.publish_files(root, &live.phase_a);
+                // A phase-A report reads the live text, never a substitute.
+                self.publish_files(root, &live.phase_a, false);
                 if let Some(report) = &live.report {
                     self.publish_report(root, report);
                 }
@@ -136,7 +150,7 @@ impl Server {
             .filter(|(path, _)| !report.held.contains(*path))
             .map(|(path, file)| (path.clone(), Arc::clone(file)))
             .collect();
-        self.publish_files(root, &files);
+        self.publish_files(root, &files, report.substituted);
         self.child_on_report(root, report);
         let Some(package) = self.packages.get_mut(root) else {
             return;
@@ -149,8 +163,15 @@ impl Server {
         }
     }
 
-    /// Publishes each of `files` under the rules of the module doc.
-    fn publish_files(&mut self, root: &Path, files: &BTreeMap<PathBuf, Arc<FileReport>>) {
+    /// Publishes each of `files` under the rules of the module doc, from a
+    /// run that read a substitute for some live text when `substituted`
+    /// (D-1360).
+    fn publish_files(
+        &mut self,
+        root: &Path,
+        files: &BTreeMap<PathBuf, Arc<FileReport>>,
+        substituted: bool,
+    ) {
         for (path, report) in files {
             if !self.owns(root, path) {
                 continue;
@@ -162,7 +183,27 @@ impl Server {
                 Current::Stale => continue,
             };
             let diagnostics = self.convert(root, path, report, files);
-            self.publish(root, path, diagnostics, version);
+            self.publish(root, path, diagnostics, version, report, substituted);
+        }
+    }
+
+    /// Publishes every published file of every package again, from the
+    /// report it was made from, after a settings change that changes how a
+    /// list is written: `diagnostics.explainLinks` (D-1750). The rules of
+    /// [`Self::republish_child`] apply, so an open document whose text
+    /// moved since its report waits for the run that follows.
+    pub(crate) fn republish_all(&mut self) {
+        let roots: Vec<PathBuf> = self.packages.keys().cloned().collect();
+        for root in roots {
+            let files: BTreeMap<PathBuf, Arc<FileReport>> =
+                self.packages.get(&root).map_or_default(|package| {
+                    package
+                        .published
+                        .iter()
+                        .map(|(path, old)| (path.clone(), Arc::clone(&old.report)))
+                        .collect()
+                });
+            self.republish_child(&root, &files);
         }
     }
 
@@ -184,8 +225,15 @@ impl Server {
                 Some(_) => continue,
                 None => None,
             };
+            // The same report keeps its flag; the child joins only a clean
+            // report's lists, which read no substitute.
+            let substituted = self
+                .packages
+                .get(root)
+                .and_then(|package| package.published.get(path))
+                .is_some_and(|old| Arc::ptr_eq(&old.report, report) && old.substituted);
             let diagnostics = self.convert(root, path, report, files);
-            self.publish(root, path, diagnostics, version);
+            self.publish(root, path, diagnostics, version, report, substituted);
         }
     }
 
@@ -212,13 +260,17 @@ impl Server {
 
     /// Sends one file's list, unless it equals the path's last publish in
     /// version and diagnostics and `didOpen` or `didClose` did not forget
-    /// that one (D-1442).
+    /// that one (D-1442). The path keeps `report` and `substituted` either
+    /// way, since code actions read the report of the newest text even when
+    /// its list is unchanged (D-1393).
     fn publish(
         &mut self,
         root: &Path,
         path: &Path,
         diagnostics: Vec<Diagnostic>,
         version: Option<i32>,
+        report: &Arc<FileReport>,
+        substituted: bool,
     ) {
         let sent = Hash128::of(
             serde_json::to_string(&diagnostics)
@@ -228,11 +280,13 @@ impl Server {
         let Some(package) = self.packages.get_mut(root) else {
             return;
         };
-        let same = package
+        if let Some(old) = package
             .published
-            .get(path)
-            .is_some_and(|old| !old.forgotten && old.sent == sent && old.version == version);
-        if same {
+            .get_mut(path)
+            .filter(|old| !old.forgotten && old.sent == sent && old.version == version)
+        {
+            old.report = Arc::clone(report);
+            old.substituted = substituted;
             return;
         }
         let Ok(uri) = self.uris.uri_of(path) else {
@@ -245,6 +299,8 @@ impl Server {
                 sent,
                 diagnostics: diagnostics.clone(),
                 forgotten: false,
+                report: Arc::clone(report),
+                substituted,
             },
         );
         let params = PublishDiagnosticsParams {
@@ -323,12 +379,38 @@ impl Server {
             })
             .collect();
         for (path, version) in due {
-            let diagnostics = self
+            let last = self
                 .packages
                 .get(root)
                 .and_then(|package| package.published.get(&path))
-                .map_or_default(|published| published.diagnostics.clone());
-            self.publish(root, &path, diagnostics, Some(version));
+                .map(|published| {
+                    (
+                        published.diagnostics.clone(),
+                        Arc::clone(&published.report),
+                        published.substituted,
+                    )
+                });
+            // A document the job never published has no report to keep:
+            // an empty one of its text stands in, which offers no fix.
+            let (diagnostics, report, substituted) = match last {
+                Some(last) => last,
+                None => match self.docs.get(&path) {
+                    Some(doc) => (
+                        Vec::new(),
+                        Arc::new(empty_report(&doc.text, version)),
+                        false,
+                    ),
+                    None => continue,
+                },
+            };
+            self.publish(
+                root,
+                &path,
+                diagnostics,
+                Some(version),
+                &report,
+                substituted,
+            );
         }
     }
 
@@ -362,6 +444,20 @@ impl Server {
         files: &'a BTreeMap<PathBuf, Arc<FileReport>>,
     ) -> Vec<Diagnostic> {
         let child = self.child_list(root, path, report, files);
+        // The frame serves fixes for an own module of the package's
+        // snapshot only, so a file it does not serve, such as a std
+        // checkout's file that names no module, keeps every help (D-1686).
+        let snapshot = self
+            .packages
+            .get(root)
+            .and_then(|package| package.snapshot.as_deref());
+        let served = snapshot.and_then(|snapshot| {
+            let view = snapshot
+                .file_of(path)
+                .and_then(|file| snapshot.module_at(file))
+                .filter(|view| view.is_own())?;
+            Some((snapshot, view))
+        });
         let mut texts: Texts<'_> = BTreeMap::new();
         texts.insert(
             path,
@@ -374,7 +470,7 @@ impl Server {
             .diagnostics
             .iter()
             .chain(&child)
-            .map(|d| self.diagnostic(root, path, d, files, &mut texts))
+            .map(|d| self.diagnostic(root, path, d, served, files, &mut texts))
             .collect()
     }
 
@@ -461,6 +557,7 @@ impl Server {
         root: &Path,
         path: &'a Path,
         d: &'a PlainDiagnostic,
+        served: Option<(&Snapshot, ModuleView<'_>)>,
         files: &'a BTreeMap<PathBuf, Arc<FileReport>>,
         texts: &mut Texts<'a>,
     ) -> Diagnostic {
@@ -508,9 +605,34 @@ impl Server {
         for note in &d.notes {
             message.push_str(&child_line("note", note));
         }
+        // A help that is a quick fix leaves the message for a client that
+        // lists code actions as literals, which offers it as one (D-1686).
+        let resolve_edits = self.caps.actions.resolves_edits();
         for help in &d.helps {
+            if self.caps.actions.literals
+                && served.is_some_and(|(snapshot, view)| {
+                    offers_fix(snapshot, view, d.code, help, path, resolve_edits)
+                })
+            {
+                continue;
+            }
             message.push_str(&child_line("help", &help.message));
         }
+        // A link only for a registered code, whose explanation exists
+        // (D-1400, X §8.2).
+        let code_description = (self.settings.diagnostics.explain_links
+            && self.caps.diagnostics.code_description
+            && codes::lookup(d.code).is_some())
+        .then(|| {
+            format!("{DIAGNOSTICS_URL}{}.md", d.code)
+                .parse::<Uri>()
+                .ok()
+                .map(|href| CodeDescription { href })
+        })
+        .flatten();
+        let tags = tag_of(d.code)
+            .filter(|tag| self.caps.diagnostics.tags.contains(tag))
+            .map(|tag| vec![tag]);
         Diagnostic {
             range,
             severity: Some(match d.severity {
@@ -518,11 +640,11 @@ impl Server {
                 Severity::Warning => DiagnosticSeverity::WARNING,
             }),
             code: Some(NumberOrString::String(d.code.to_string())),
-            code_description: None,
+            code_description,
             source: Some("cheby".to_owned()),
             message,
             related_information: (!related.is_empty()).then_some(related),
-            tags: None,
+            tags,
             data: None,
         }
     }
@@ -544,6 +666,38 @@ enum Current {
 /// The texts of one [`Server::convert`] call and their line indexes, by
 /// path; `None` for a path whose text is not known.
 type Texts<'a> = BTreeMap<&'a Path, Option<(&'a str, LspLines)>>;
+
+/// A report of `text` with no diagnostics, for a document published with
+/// an empty list that no report covers (`catch_up`).
+fn empty_report(text: &str, version: i32) -> FileReport {
+    FileReport {
+        text: Arc::from(text),
+        origin: TextOrigin::Editor,
+        version: Some(version),
+        hash: exact_key(text),
+        diagnostics: Vec::new(),
+    }
+}
+
+/// The page that explains a code, `codeDescription.href` (X §8.2,
+/// D-1400): GitHub's `main` until a site exists, since the build id is no
+/// tag and the explanations only gain text.
+pub(crate) const DIAGNOSTICS_URL: &str =
+    "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/";
+
+/// The tag a client shows on a diagnostic of `code` (X §8.1): faded for
+/// what nothing uses or reaches, struck through for a deprecated item.
+fn tag_of(code: Code) -> Option<DiagnosticTag> {
+    match code {
+        codes::UNUSED_BINDING
+        | codes::UNUSED_IMPORT
+        | codes::UNUSED_PRIVATE_ITEM
+        | codes::UNUSED_PACKAGE_ITEM
+        | codes::UNREACHABLE_ARM => Some(DiagnosticTag::UNNECESSARY),
+        codes::DEPRECATED => Some(DiagnosticTag::DEPRECATED),
+        _ => None,
+    }
+}
 
 /// How a report's text counts a BOM: as the client sent it, or as disk
 /// holds it.

@@ -1,0 +1,6 @@
+error[E0013]: expected an expression, found `fn`
+ --> tests/ui/05-expressions/local_fns/let_before_local_fn.cheby:9:3
+  |
+9 |   fn twice(n) { n * 2 }
+  |   ^^
+

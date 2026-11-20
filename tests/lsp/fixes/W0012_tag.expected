@@ -1,0 +1,74 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0012",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0012.md"
+      },
+      "message": "use of deprecated function `text::old`: use new\ndeprecated",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 7
+        },
+        "start": {
+          "character": 9,
+          "line": 7
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        2
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:8:16 codeAction quickfix
+[
+  {
+    "command": {
+      "arguments": [
+        "W0012"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain W0012"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        232,
+        232
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0012",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0012.md"
+        },
+        "message": "use of deprecated function `text::old`: use new\ndeprecated",
+        "range": {
+          "end": {
+            "character": 18,
+            "line": 7
+          },
+          "start": {
+            "character": 9,
+            "line": 7
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          2
+        ]
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain W0012"
+  }
+]

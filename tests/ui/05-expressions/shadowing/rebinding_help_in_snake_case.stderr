@@ -1,0 +1,79 @@
+error[E0006]: name `myVal` is not in snake_case
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:7:7
+  |
+7 |   let myVal = 1
+  |       ^^^^^
+  |
+  = help: write `my_val`
+
+warning[W0002]: unused binding `myVal`
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:7:7
+  |
+7 |   let myVal = 1
+  |       ^^^^^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_myVal`
+
+error[E0006]: name `myVal` is not in snake_case
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:8:7
+  |
+8 |   let myVal = 2
+  |       ^^^^^
+  |
+  = help: write `my_val`
+
+error[E0044]: `myVal` is already bound
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:8:7
+  |
+7 |   let myVal = 1
+  |       ----- first bound here
+8 |   let myVal = 2
+  |       ^^^^^ bound again here
+  |
+  = help: give this binding a new name, such as `my_val_2`; names cannot be shadowed (§5.2.3)
+
+error[E0006]: name `aB` is not in snake_case
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:9:8
+  |
+9 |   let (aB, aB) = (1, 2)
+  |        ^^
+  |
+  = help: write `a_b`
+
+error[E0006]: name `aB` is not in snake_case
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:9:12
+  |
+9 |   let (aB, aB) = (1, 2)
+  |            ^^
+  |
+  = help: write `a_b`
+
+error[E0044]: `aB` is bound twice in this pattern
+ --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:9:12
+  |
+9 |   let (aB, aB) = (1, 2)
+  |        --  ^^ bound again here
+  |        |
+  |        first bound here
+  |
+  = help: give one of them a new name, such as `a_b_2`, or match it with `_`
+
+error[E0006]: name `myVal` is not in snake_case
+  --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:10:14
+   |
+10 |   let f = fn(myVal: Int) -> Int { myVal }
+   |              ^^^^^
+   |
+   = help: write `my_val`
+
+error[E0044]: `myVal` is already bound
+  --> tests/ui/05-expressions/shadowing/rebinding_help_in_snake_case.cheby:10:14
+   |
+8  |   let myVal = 2
+   |       ----- first bound here
+9  |   let (aB, aB) = (1, 2)
+10 |   let f = fn(myVal: Int) -> Int { myVal }
+   |              ^^^^^ bound again here
+   |
+   = help: the parameters of a closure cannot reuse a name from around it (§5.2.3); rename this parameter, or rename the outer `myVal`, for example to `initial_my_val`
+

@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `n`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_n`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `n`\nnever used",
       "range": {
         "end": {
           "character": 7,
@@ -15,10 +18,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0058",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+      },
       "message": "`Option` has no field `ca`\nunknown field\nnote: `Option` has no named fields; positional fields are read with a pattern (D-241)",
       "range": {
         "end": {

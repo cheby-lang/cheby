@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "E0039",
-      "message": "there is no module `moves::alpha`\nno such module\nhelp: a module with a similar name exists: `moves::beta`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `moves::alpha`\nno such module",
       "range": {
         "end": {
           "character": 19,

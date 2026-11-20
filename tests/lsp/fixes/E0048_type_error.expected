@@ -1,0 +1,286 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
+      "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 10
+        },
+        "start": {
+          "character": 15,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 5
+              },
+              "start": {
+                "character": 3,
+                "line": 5
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`add` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
+      "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
+      "range": {
+        "end": {
+          "character": 26,
+          "line": 11
+        },
+        "start": {
+          "character": 17,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 5
+              },
+              "start": {
+                "character": 3,
+                "line": 5
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`add` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 16
+        },
+        "start": {
+          "character": 2,
+          "line": 16
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 15
+              },
+              "start": {
+                "character": 19,
+                "line": 15
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:16 action Add the missing arguments as `todo`
+{
+  "actions": [
+    "Add the missing arguments as `todo`",
+    "Explain E0048"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        284,
+        284
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0048",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+        },
+        "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
+        "range": {
+          "end": {
+            "character": 18,
+            "line": 10
+          },
+          "start": {
+            "character": 15,
+            "line": 10
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 5
+                },
+                "start": {
+                  "character": 3,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`add` is declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ", todo",
+              "range": {
+                "end": {
+                  "character": 17,
+                  "line": 10
+                },
+                "start": {
+                  "character": 17,
+                  "line": 10
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing arguments as `todo`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:12:18 action Remove the extra arguments
+{
+  "actions": [
+    "Remove the extra arguments",
+    "Explain E0048"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        305,
+        305
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0048",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+        },
+        "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
+        "range": {
+          "end": {
+            "character": 26,
+            "line": 11
+          },
+          "start": {
+            "character": 17,
+            "line": 11
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 5
+                },
+                "start": {
+                  "character": 3,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`add` is declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 25,
+                  "line": 11
+                },
+                "start": {
+                  "character": 22,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Remove the extra arguments"
+  },
+  "showMessage": []
+}

@@ -54,7 +54,10 @@ pub use imports::{
 };
 pub use items::runtime_export_reserved;
 pub use scope::{ModuleScope, ScopeEntry, ScopeSource};
-pub use std_names::{StdItemName, StdItems, public_names};
+pub use std_names::{
+    ItemHelp, MissingItem, StdItemName, StdItems, StdSuggestion, builtin_homes, public_names,
+    std_suggestion,
+};
 
 cheby_iface::newtype_index! {
     /// A local binding of a top-level item's body: a parameter, a `let`,

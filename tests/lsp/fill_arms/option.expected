@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0061",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0061.md"
+      },
+      "message": "`case` does not cover every value\n`Some(_)` and `None` not covered\nhelp: add an arm for each missing value, or a `_` arm",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 5
+        },
+        "start": {
+          "character": 7,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:8 action Add the missing arms
+{
+  "actions": [
+    "Add the missing arms",
+    "Explain E0061"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        164,
+        164
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0061",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0061.md"
+        },
+        "message": "`case` does not cover every value\n`Some(_)` and `None` not covered\nhelp: add an arm for each missing value, or a `_` arm",
+        "range": {
+          "end": {
+            "character": 8,
+            "line": 5
+          },
+          "start": {
+            "character": 7,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    Some(_) => todo\n    None => todo",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 7
+                },
+                "start": {
+                  "character": 16,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Add the missing arms"
+  },
+  "showMessage": []
+}

@@ -424,6 +424,7 @@ mod tests {
                 std: &crate::features::stdlib::StdService::none(),
                 uris,
                 constants: None,
+                reports: None,
             };
             to_workspace_edit(&cx, &self.analyzed, edits, note)
         }

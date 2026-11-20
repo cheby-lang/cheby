@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "E0042",
-      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `ke` in module `std::context`\nnot found",
       "range": {
         "end": {
           "character": 40,
@@ -37,7 +40,10 @@
     },
     {
       "code": "E0042",
-      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `ke` in module `std::context`\nnot found",
       "range": {
         "end": {
           "character": 41,
@@ -71,7 +77,10 @@
     },
     {
       "code": "E0042",
-      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `ke` in module `std::context`\nnot found",
       "range": {
         "end": {
           "character": 47,
@@ -105,7 +114,10 @@
     },
     {
       "code": "E0042",
-      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `ke` in module `std::context`\nnot found",
       "range": {
         "end": {
           "character": 13,
@@ -139,7 +151,10 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `e`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_e`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `e`\nnever used",
       "range": {
         "end": {
           "character": 7,
@@ -151,11 +166,17 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
-      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `ke` in module `std::context`\nnot found",
       "range": {
         "end": {
           "character": 21,
@@ -189,7 +210,10 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `f`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_f`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `f`\nnever used",
       "range": {
         "end": {
           "character": 7,
@@ -201,11 +225,17 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
-      "message": "there is no value `ke` in module `std::context`\nnot found\nhelp: did you mean `key`?",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `ke` in module `std::context`\nnot found",
       "range": {
         "end": {
           "character": 21,

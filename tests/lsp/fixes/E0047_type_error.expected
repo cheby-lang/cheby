@@ -1,0 +1,447 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Option<Int>`, found `Int`",
+      "range": {
+        "end": {
+          "character": 3,
+          "line": 6
+        },
+        "start": {
+          "character": 2,
+          "line": 6
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 31,
+                "line": 5
+              },
+              "start": {
+                "character": 20,
+                "line": 5
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Result<Int, String>`, found `String`",
+      "range": {
+        "end": {
+          "character": 3,
+          "line": 10
+        },
+        "start": {
+          "character": 2,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 42,
+                "line": 9
+              },
+              "start": {
+                "character": 23,
+                "line": 9
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 19
+        },
+        "start": {
+          "character": 2,
+          "line": 19
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 18
+              },
+              "start": {
+                "character": 19,
+                "line": 18
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Result<Int, String>`, found `Int`",
+      "range": {
+        "end": {
+          "character": 3,
+          "line": 23
+        },
+        "start": {
+          "character": 2,
+          "line": 23
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 42,
+                "line": 22
+              },
+              "start": {
+                "character": 23,
+                "line": 22
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:3 action Wrap in `Some(…)`
+{
+  "actions": [
+    "Wrap in `Some(…)`",
+    "Explain E0047"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        230,
+        230
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0047",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+        },
+        "message": "mismatched types\nexpected `Option<Int>`, found `Int`",
+        "range": {
+          "end": {
+            "character": 3,
+            "line": 6
+          },
+          "start": {
+            "character": 2,
+            "line": 6
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 31,
+                  "line": 5
+                },
+                "start": {
+                  "character": 20,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "expected because of this return type"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "Some(",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 6
+                },
+                "start": {
+                  "character": 2,
+                  "line": 6
+                }
+              }
+            },
+            {
+              "newText": ")",
+              "range": {
+                "end": {
+                  "character": 3,
+                  "line": 6
+                },
+                "start": {
+                  "character": 3,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Wrap in `Some(…)`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:11:3 action Wrap in `Err(…)`
+{
+  "actions": [
+    "Wrap in `Err(…)`",
+    "Explain E0047"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        282,
+        282
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0047",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+        },
+        "message": "mismatched types\nexpected `Result<Int, String>`, found `String`",
+        "range": {
+          "end": {
+            "character": 3,
+            "line": 10
+          },
+          "start": {
+            "character": 2,
+            "line": 10
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 42,
+                  "line": 9
+                },
+                "start": {
+                  "character": 23,
+                  "line": 9
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "expected because of this return type"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "Err(",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 10
+                },
+                "start": {
+                  "character": 2,
+                  "line": 10
+                }
+              }
+            },
+            {
+              "newText": ")",
+              "range": {
+                "end": {
+                  "character": 3,
+                  "line": 10
+                },
+                "start": {
+                  "character": 3,
+                  "line": 10
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Wrap in `Err(…)`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:24:3 action Wrap in `Ok(…)`
+{
+  "actions": [
+    "Wrap in `Ok(…)`",
+    "Explain E0047"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        452,
+        452
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0047",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+        },
+        "message": "mismatched types\nexpected `Result<Int, String>`, found `Int`",
+        "range": {
+          "end": {
+            "character": 3,
+            "line": 23
+          },
+          "start": {
+            "character": 2,
+            "line": 23
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 42,
+                  "line": 22
+                },
+                "start": {
+                  "character": 23,
+                  "line": 22
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "expected because of this return type"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "Ok(",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 23
+                },
+                "start": {
+                  "character": 2,
+                  "line": 23
+                }
+              }
+            },
+            {
+              "newText": ")",
+              "range": {
+                "end": {
+                  "character": 3,
+                  "line": 23
+                },
+                "start": {
+                  "character": 3,
+                  "line": 23
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 5
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Wrap in `Ok(…)`"
+  },
+  "showMessage": []
+}

@@ -723,6 +723,116 @@ fn unexpected_characters() {
     );
 }
 
+/// `text` with the edits of the first help of each diagnostic of the lexer
+/// that has edits applied, the way a client applies one fix.
+fn apply_help(text: &str, which: usize) -> String {
+    let lexed = lex_checked(text);
+    let help = lexed
+        .errors()
+        .iter()
+        .flat_map(|d| d.helps.iter())
+        .filter(|h| !h.edits.is_empty())
+        .nth(which)
+        .expect("a help with edits");
+    let mut edits: Vec<_> = help.edits.iter().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.range.start()));
+    let mut out = text.to_owned();
+    for e in edits {
+        let start = usize::try_from(e.span.range.start()).unwrap();
+        let end = usize::try_from(e.span.range.end()).unwrap();
+        out.replace_range(start..end, &e.replacement);
+    }
+    out
+}
+
+/// The grammar and validation errors of `text`, as codes.
+fn all_codes(text: &str) -> Vec<String> {
+    let (tree, mut errors) = crate::parse(FileId::new(0), std::sync::Arc::from(text)).into_parts();
+    errors.extend(crate::validate(&tree));
+    errors.iter().map(|d| d.code.to_string()).collect()
+}
+
+/// How many helps of the lexer's errors on `text` carry edits.
+fn helps_with_edits(text: &str) -> usize {
+    lex_checked(text)
+        .errors()
+        .iter()
+        .flat_map(|d| d.helps.iter())
+        .filter(|h| !h.edits.is_empty())
+        .count()
+}
+
+#[test]
+fn single_quotes_get_a_fix_to_double_quotes() {
+    // D-1688: the opening quote's help turns both quotes into `"`, and the
+    // closing quote's help has no edit of its own.
+    let text = "fn f() {\n  let s = 'it is'\n  s\n}\n";
+    assert_eq!(all_codes(text), ["E0003", "E0003", "E0013"]);
+    assert_eq!(helps_with_edits(text), 1);
+    let fixed = apply_help(text, 0);
+    assert_eq!(fixed, "fn f() {\n  let s = \"it is\"\n  s\n}\n");
+    assert_eq!(all_codes(&fixed), Vec::<String>::new());
+    // Two literals on a line pair up in order.
+    let two = "fn f() {\n  ['a', 'b']\n}\n";
+    assert_eq!(helps_with_edits(two), 2);
+    assert_eq!(apply_help(two, 1), "fn f() {\n  ['a', \"b\"]\n}\n");
+    // The help text is the same with or without an edit.
+    let messages: Vec<_> = lex_checked("'a")
+        .errors()
+        .iter()
+        .flat_map(|d| d.helps.iter().map(|h| h.message.clone()))
+        .collect();
+    assert_eq!(messages, ["strings use double quotes, such as \"text\""]);
+}
+
+#[test]
+fn single_quotes_get_no_fix_when_a_string_would_change() {
+    // A `"`, `\\` or `{` between the quotes, or no closing quote on the
+    // line, gives no edit (D-1688), nor do quotes inside an interpolation,
+    // where a `"` would start a string of its own (D-1656).
+    for text in [
+        "'a\"b'",
+        "'a\\nb'",
+        "'a{b}'",
+        "'a\nb'",
+        "'a",
+        "x'",
+        "\"{'a'}\"",
+        // The next `'` lies in a comment, which the edit must not reach.
+        "fn f() {\n  let b = user's // the user's name\n}\n",
+        "'a // b'",
+        // D-1740: a `//` between the quotes refuses the edit, so a
+        // single-quoted URL gets no fix either.
+        "fn f() {\n  let u = 'https://example.com'\n}\n",
+    ] {
+        assert_eq!(helps_with_edits(text), 0, "{text:?}");
+    }
+    // A lone `/` between the quotes is no comment.
+    assert_eq!(helps_with_edits("'a/b'"), 1);
+}
+
+#[test]
+fn a_trailing_semicolon_gets_a_fix_that_deletes_it() {
+    // D-1688: only spaces, tabs or a comment may follow on the line.
+    for (text, fixed) in [
+        ("fn f() {\n  1;\n}\n", "fn f() {\n  1\n}\n"),
+        ("fn f() {\n  1; \t\n}\n", "fn f() {\n  1 \t\n}\n"),
+        ("fn f() {\n  1; // one\n}\n", "fn f() {\n  1 // one\n}\n"),
+        ("fn f() {\r\n  1;\r\n}\r\n", "fn f() {\r\n  1\r\n}\r\n"),
+        ("fn f() {\n  1\n};", "fn f() {\n  1\n}"),
+    ] {
+        assert_eq!(all_codes(text), ["E0003"], "{text:?}");
+        assert_eq!(helps_with_edits(text), 1, "{text:?}");
+        let got = apply_help(text, 0);
+        assert_eq!(got, fixed);
+        assert_eq!(all_codes(&got), Vec::<String>::new(), "{got:?}");
+    }
+    // `a; b` would need a line break, and `;;` keeps its first `;`.
+    assert_eq!(helps_with_edits("fn f() {\n  a; b\n}\n"), 0);
+    assert_eq!(helps_with_edits("fn f() {\n  1 /; x\n}\n"), 0);
+    assert_eq!(helps_with_edits("fn f() {\n  1;;\n}\n"), 1);
+}
+
 #[test]
 fn errors_are_in_source_order() {
     let lexed = lex_checked("$ 1u8 /* x */ \"open");

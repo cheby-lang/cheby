@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0035",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0035.md"
+      },
+      "message": "a subjectless `case` must end with a `_` arm",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 6
+        },
+        "start": {
+          "character": 4,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:5 action add a final arm `_ => …` for the remaining cases (D-109)
+{
+  "actions": [
+    "add a final arm `_ => …` for the remaining cases (D-109)",
+    "Explain E0035"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        154,
+        154
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0035",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0035.md"
+        },
+        "message": "a subjectless `case` must end with a `_` arm",
+        "range": {
+          "end": {
+            "character": 9,
+            "line": 6
+          },
+          "start": {
+            "character": 4,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    _ => todo",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 6
+                },
+                "start": {
+                  "character": 15,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "add a final arm `_ => …` for the remaining cases (D-109)"
+  },
+  "showMessage": []
+}

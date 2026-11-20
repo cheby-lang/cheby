@@ -1,0 +1,19 @@
+// @decisions: D-1684, D-1696, D-1735, D-1736
+//! A type of another module gets its stubs on resolve, in that module, with
+//! the type's visibility, after the last function that takes the type, and
+//! formatted by the resolver (D-1735).
+
+import app::geo
+
+interface Area {
+  fn area(Self) -> Float
+}
+
+fn measure<T: Area>(x: T) -> Float {
+  Area::area(x)
+}
+
+fn main() {
+  assert measure(geo::Circle { radius: 1.0 }) == 1.0
+  //             ^ action Add the missing function `area`
+}

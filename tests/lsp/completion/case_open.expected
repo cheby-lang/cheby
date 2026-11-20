@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
       "message": "unclosed `{`\nexpected `}`\nnote: the `}` that closes it is indented differently from the line of the `{`",
       "range": {
         "end": {

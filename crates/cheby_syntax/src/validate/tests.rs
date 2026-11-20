@@ -403,6 +403,135 @@ fn short_tuples() {
     );
 }
 
+/// The edits of every help of `diags` that has edits, as (help, edits).
+fn edit_helps(diags: &[Diagnostic]) -> Vec<&cheby_diag::Help> {
+    diags
+        .iter()
+        .flat_map(|d| &d.helps)
+        .filter(|h| !h.edits.is_empty())
+        .collect()
+}
+
+/// `text` with the edits of `help` applied.
+fn apply(text: &str, help: &cheby_diag::Help) -> String {
+    let mut edits: Vec<_> = help.edits.iter().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.range.start()));
+    let mut out = text.to_owned();
+    for e in edits {
+        let start = usize::try_from(e.span.range.start()).unwrap();
+        let end = usize::try_from(e.span.range.end()).unwrap();
+        out.replace_range(start..end, &e.replacement);
+    }
+    out
+}
+
+/// Applies the one help with edits of `text`'s validation, asserts that
+/// the result is `fixed` and validates cleanly.
+#[track_caller]
+fn fixes_to(text: &str, fixed: &str) {
+    let (_, diags) = check(text);
+    let helps = edit_helps(&diags);
+    let [help] = helps.as_slice() else {
+        panic!("{text}: {helps:?}");
+    };
+    let got = apply(text, help);
+    assert_eq!(got, fixed);
+    ok(&got);
+}
+
+#[test]
+fn short_tuples_get_their_edit() {
+    // D-1689: every help that names one fix carries its edit.
+    fixes_to(
+        &in_fn(
+            "  let t = (1,)
+  t",
+        ),
+        &in_fn(
+            "  let t = 1
+  t",
+        ),
+    );
+    fixes_to(
+        "type O = (Int,)
+",
+        "type O = Int
+",
+    );
+    fixes_to(
+        "type O = (Int)
+",
+        "type O = Int
+",
+    );
+    fixes_to(
+        "type U = ()
+",
+        "type U = Nil
+",
+    );
+    fixes_to(
+        "fn f(x: List<(Int)>) -> Nil {}
+",
+        "fn f(x: List<Int>) -> Nil {}
+",
+    );
+    fixes_to(
+        &in_fn(
+            "  case x {
+    () => 1
+  }",
+        ),
+        &in_fn(
+            "  case x {
+    Nil => 1
+  }",
+        ),
+    );
+    // The element keeps its parentheses where it would bind differently.
+    fixes_to(&in_fn("  (a + b,) * 2"), &in_fn("  (a + b) * 2"));
+    fixes_to(&in_fn("  (-a,).x"), &in_fn("  (-a).x"));
+    fixes_to(&in_fn("  -(a,)"), &in_fn("  -a"));
+    fixes_to(&in_fn("  f((a + b,))"), &in_fn("  f(a + b)"));
+    // The pattern `(p,)` names two fixes and gets no edit.
+    let (_, diags) = check(&in_fn(
+        "  case x {
+    (p,) => 2
+  }",
+    ));
+    assert_eq!(diags.len(), 1);
+    assert_eq!(edit_helps(&diags), Vec::<&cheby_diag::Help>::new());
+}
+
+#[test]
+fn the_unit_value_gets_an_edit_to_nil() {
+    // `()` as a value is a grammar error, reported by the parser (D-1689).
+    let text = in_fn(
+        "  let x = ()
+  x",
+    );
+    let errors = crate::parse(cheby_diag::FileId::new(0), Arc::from(text.as_str()))
+        .errors()
+        .to_vec();
+    let helps = edit_helps(&errors);
+    let [help] = helps.as_slice() else {
+        panic!("{errors:?}");
+    };
+    assert_eq!(
+        help.message,
+        "the value that carries no information is `Nil`"
+    );
+    let fixed = apply(&text, help);
+    assert_eq!(
+        fixed,
+        in_fn(
+            "  let x = Nil
+  x"
+        )
+    );
+    ok(&fixed);
+}
+
 // ---- E0031 record updates ----
 
 #[test]
@@ -494,6 +623,30 @@ fn subjectless_case_ends_with_default() {
         &in_fn("  case {\n    a => 1\n    _ => 2\n    b => 3\n  }"),
         &[("E0035", "_")],
     );
+}
+
+#[test]
+fn a_missing_final_default_gets_an_edit() {
+    // `features.md` §6.2: "Add `_ => todo`", on a line of its own.
+    fixes_to(
+        &in_fn("  case {\n    a => 1\n    b => 2\n  }"),
+        &in_fn("  case {\n    a => 1\n    b => 2\n    _ => todo\n  }"),
+    );
+    fixes_to(
+        &in_fn("  case {\n    a => 1\n    b => {\n      2\n    } // two\n  }"),
+        &in_fn("  case {\n    a => 1\n    b => {\n      2\n    } // two\n    _ => todo\n  }"),
+    );
+    fixes_to(
+        "fn f() {\r\n  case {\r\n    a => 1\r\n  }\r\n}\r\n",
+        "fn f() {\r\n  case {\r\n    a => 1\r\n    _ => todo\r\n  }\r\n}\r\n",
+    );
+    fixes_to(
+        &in_fn("  let x = case { a => 1 }"),
+        &in_fn("  let x = case { a => 1\n  _ => todo }"),
+    );
+    // The help on a misplaced `_` names two fixes and gets no edit.
+    let (_, diags) = check(&in_fn("  case {\n    _ => 1\n    b => 2\n  }"));
+    assert_eq!(edit_helps(&diags), Vec::<&cheby_diag::Help>::new());
 }
 
 // ---- W0001 tuple shapes ----

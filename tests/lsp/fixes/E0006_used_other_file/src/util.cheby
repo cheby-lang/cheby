@@ -1,0 +1,6 @@
+//! Util.
+
+pub fn getValue() -> Int {
+  //   ^ action write `get_value`
+  1
+}

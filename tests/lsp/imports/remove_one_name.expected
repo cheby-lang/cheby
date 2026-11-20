@@ -1,0 +1,99 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0003",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0003.md"
+      },
+      "message": "unused import `reverse` from `std::list`\nnothing in this module uses it\nhelp: remove it from the list",
+      "range": {
+        "end": {
+          "character": 34,
+          "line": 4
+        },
+        "start": {
+          "character": 27,
+          "line": 4
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:5:28 action Remove the unused import
+{
+  "actions": [
+    "Remove the unused import",
+    "Organize imports",
+    "Explain W0003"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        173,
+        173
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0003",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0003.md"
+        },
+        "message": "unused import `reverse` from `std::list`\nnothing in this module uses it\nhelp: remove it from the list",
+        "range": {
+          "end": {
+            "character": 34,
+            "line": 4
+          },
+          "start": {
+            "character": 27,
+            "line": 4
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 34,
+                  "line": 4
+                },
+                "start": {
+                  "character": 25,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Remove the unused import"
+  },
+  "showMessage": []
+}

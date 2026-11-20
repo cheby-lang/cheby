@@ -1,0 +1,29 @@
+// @decisions: D-045, D-1690, D-1736
+// @client: full
+//! A name the module uses for a function of another type gets the stub
+//! disabled, with E0063's help (D-045).
+
+interface Area {
+  fn area(Self) -> Float
+}
+
+type Round {
+  r: Float,
+}
+
+type Flat {
+  w: Float,
+}
+
+fn area(round: Round) -> Float {
+  round.r
+}
+
+fn measure<T: Area>(x: T) -> Float {
+  Area::area(x)
+}
+
+fn main() {
+  assert measure(Round { r: 1.0 }) == measure(Flat { w: 1.0 })
+  //                                          ^ codeAction
+}

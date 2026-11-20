@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0012",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0012.md"
+      },
       "message": "unexpected `.` in string interpolation\nhelp: an interpolation holds a name, optionally with fields and `:?`, such as `{user.name}`; bind other values to a name first",
       "range": {
         "end": {

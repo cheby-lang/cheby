@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0030",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0030.md"
+      },
+      "message": "a tuple has at least two elements",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 11
+        },
+        "start": {
+          "character": 14,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:15 action write the value alone; `(e)` is just `e` in parentheses
+{
+  "actions": [
+    "write the value alone; `(e)` is just `e` in parentheses",
+    "Explain E0030"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        358,
+        358
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0030",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0030.md"
+        },
+        "message": "a tuple has at least two elements",
+        "range": {
+          "end": {
+            "character": 18,
+            "line": 11
+          },
+          "start": {
+            "character": 14,
+            "line": 11
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    1, // one\n    2,\n  )\n  let m = add(1, 2",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 16
+                },
+                "start": {
+                  "character": 14,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write the value alone; `(e)` is just `e` in parentheses"
+  },
+  "showMessage": []
+}

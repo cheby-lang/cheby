@@ -3,6 +3,7 @@
 
 use cheby_diag::{Diagnostic, codes};
 
+use super::source;
 use crate::SyntaxKind;
 use crate::ast::{AstNode, TupleType, Type};
 
@@ -14,22 +15,27 @@ pub(super) fn tuple_type(tuple: TupleType<'_>, out: &mut Vec<Diagnostic>) {
         .syntax()
         .first_token_of_kind(SyntaxKind::COMMA)
         .is_some();
+    // Each help carries its edit (D-1689): `()` becomes `Nil`, and `(T)`
+    // and `(T,)` the element type alone.
     let short = match count {
         0 if !has_comma => Some((
             "`()` is not a type",
             "the type with no information is `Nil`",
+            "Nil",
         )),
         1 => Some((
             "a tuple type has at least two elements",
             "write the element type alone; there are no one-element tuples",
+            tuple.elements().next().map_or("", source),
         )),
         _ => None,
     };
-    if let Some((message, help)) = short {
+    if let Some((message, help, replacement)) = short {
+        let span = tuple.significant_span();
         out.push(
             Diagnostic::new(codes::SHORT_TUPLE, message)
-                .with_primary(tuple.significant_span(), "")
-                .with_help(help),
+                .with_primary(span, "")
+                .with_suggestion(help, span, replacement),
         );
         return;
     }

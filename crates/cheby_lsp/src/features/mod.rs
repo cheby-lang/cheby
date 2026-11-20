@@ -27,11 +27,14 @@ pub(crate) mod stdlib;
 #[cfg(test)]
 mod testing;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use cheby_driver::analysis::{Placed, PlainDiagnostic, Severity, Snapshot, SourceMap, plain};
+use cheby_driver::analysis::{
+    FileReport, Placed, PlainDiagnostic, Severity, Snapshot, SourceMap, plain,
+};
 use cheby_syntax::SyntaxTree;
 use lsp_server::ResponseError;
 use serde::de::DeserializeOwned;
@@ -193,6 +196,31 @@ pub(crate) struct RequestCx<'a> {
     /// The client's spelling of each open document, which an answer that
     /// names one echoes (A §6.1).
     pub uris: &'a UriMap,
+    /// The reports last published for the files of the request's package,
+    /// which code actions read (G1 plan §1.6, D-1393). `None` where a
+    /// request reads none: a workspace request, a request on a std
+    /// document, and tests.
+    pub reports: Option<Arc<FileReports>>,
+}
+
+/// The diagnostics the server last published for each file of one package,
+/// as code actions read them (G1 plan §1.6). A fix rides on its report only
+/// while the report's hash is that of the snapshot's text (D-1393, D-1685).
+#[derive(Debug, Default)]
+pub(crate) struct FileReports {
+    /// Each file's published report, by normalized path.
+    pub files: BTreeMap<PathBuf, PublishedReport>,
+}
+
+/// One file's published report.
+#[derive(Debug)]
+pub(crate) struct PublishedReport {
+    /// The report, with the text its ranges refer to.
+    pub report: Arc<FileReport>,
+    /// The run that made it read a last good text or a stub in place of a
+    /// live text, so no fix removes code (D-1360). `false` for a phase-A
+    /// report.
+    pub substituted: bool,
 }
 
 /// A document's live text and its own parse, never a snapshot (A §3.3).
@@ -330,8 +358,10 @@ pub(crate) struct Route {
     /// What it reads.
     pub class: Class,
     /// The answer when nothing can be read: no open document, no package,
-    /// or a failed run (A §3.7). Usually `null` or `[]`.
-    pub fallback: fn() -> Value,
+    /// or a failed run (A §3.7). Usually `Ok(null)`; an error for a method
+    /// whose result may not be `null`, as `codeAction/resolve`'s
+    /// (D-1732).
+    pub fallback: fn() -> Result<Value, RequestError>,
     /// The answer edits the document, so a document the user may not edit,
     /// such as a std source, gets the fallback without running the handler
     /// (A §6.3, X §5.4).

@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0027",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0027.md"
+      },
+      "message": "`_` is the only argument of the call\nnote: `double(_)` means exactly `double` (D-245)",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 8
+        },
+        "start": {
+          "character": 10,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:11 action write `double` instead
+{
+  "actions": [
+    "write `double` instead",
+    "Explain E0027"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        171,
+        171
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0027",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0027.md"
+        },
+        "message": "`_` is the only argument of the call\nnote: `double(_)` means exactly `double` (D-245)",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 8
+          },
+          "start": {
+            "character": 10,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "double",
+              "range": {
+                "end": {
+                  "character": 19,
+                  "line": 8
+                },
+                "start": {
+                  "character": 10,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write `double` instead"
+  },
+  "showMessage": []
+}

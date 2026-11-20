@@ -1,0 +1,340 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 8
+        },
+        "start": {
+          "character": 13,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a statement, found `else`\nhelp: `else` follows the condition of a `guard`; branching is `case`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 12
+        },
+        "start": {
+          "character": 2,
+          "line": 12
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 17
+        },
+        "start": {
+          "character": 5,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 25
+        },
+        "start": {
+          "character": 13,
+          "line": 25
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a line break or `}`, found `else`\nhelp: `else` follows the condition of a `guard`; branching is `case`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 26
+        },
+        "start": {
+          "character": 8,
+          "line": 26
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:14 codeAction quickfix
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        385,
+        385
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 8
+          },
+          "start": {
+            "character": 13,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "disabled": {
+      "reason": "this would drop a comment"
+    },
+    "kind": "quickfix",
+    "title": "Rewrite as `case`"
+  },
+  {
+    "command": {
+      "arguments": [
+        "E0013"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0013"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        385,
+        385
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 8
+          },
+          "start": {
+            "character": 13,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0013"
+  }
+]
+
+== src/main.cheby:18:6 codeAction quickfix
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        476,
+        476
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 17
+          },
+          "start": {
+            "character": 5,
+            "line": 17
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "disabled": {
+      "reason": "this would drop a comment"
+    },
+    "kind": "quickfix",
+    "title": "Rewrite as `guard`"
+  },
+  {
+    "command": {
+      "arguments": [
+        "E0013"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0013"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        476,
+        476
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 17
+          },
+          "start": {
+            "character": 5,
+            "line": 17
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0013"
+  }
+]
+
+== src/main.cheby:26:14 codeAction quickfix
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        566,
+        566
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 25
+          },
+          "start": {
+            "character": 13,
+            "line": 25
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "disabled": {
+      "reason": "this would drop a comment"
+    },
+    "kind": "quickfix",
+    "title": "Rewrite as `case`"
+  },
+  {
+    "command": {
+      "arguments": [
+        "E0013"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0013"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        566,
+        566
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 25
+          },
+          "start": {
+            "character": 13,
+            "line": 25
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0013"
+  }
+]

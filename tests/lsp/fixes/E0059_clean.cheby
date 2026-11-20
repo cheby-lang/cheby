@@ -1,0 +1,22 @@
+// @decisions: D-1388, D-1393, D-1736, D-138
+//! E0059's fixes add the missing fields as `todo`, or remove a field
+//! written twice.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn origin() -> Point {
+  Point { x: 0 }
+}
+
+fn other() -> Point {
+  Point { x: 0, y: 1, x: 2 }
+}
+
+fn main() {
+  assert origin().x == other().x
+}
+//> 11:3 action Add the missing fields as `todo`
+//> 15:23 action Remove the field `x`

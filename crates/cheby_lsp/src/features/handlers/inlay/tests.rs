@@ -54,6 +54,7 @@ fn answer_with(
         std: &crate::features::stdlib::StdService::none(),
         uris: &crate::text::uri::UriMap::new(),
         constants,
+        reports: None,
     };
     let params = json!({ "textDocument": { "uri": uri.as_str() }, "range": range });
     inlay_hint(&cx, &analyzed, params).unwrap().value
@@ -168,6 +169,7 @@ fn malformed_parameters_and_unknown_documents() {
         std: &crate::features::stdlib::StdService::none(),
         uris: &crate::text::uri::UriMap::new(),
         constants: None,
+        reports: None,
     };
     assert!(inlay_hint(&cx, &analyzed, json!(1)).is_err());
     let elsewhere = json!({

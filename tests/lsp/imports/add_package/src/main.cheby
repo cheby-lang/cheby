@@ -1,0 +1,8 @@
+// @decisions: D-1736
+//! E0042 on a module of the package that no import names: the fix imports
+//! it, the session's own modules first (X §6.3).
+
+fn main() {
+  assert geo::area(2) == 4
+}
+//> 6:10 action Import `shapes::geo`

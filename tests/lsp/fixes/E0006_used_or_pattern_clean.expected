@@ -1,0 +1,155 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0006",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+      },
+      "message": "name `sideLen` is not in snake_case",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 11
+        },
+        "start": {
+          "character": 11,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0006",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+      },
+      "message": "name `sideLen` is not in snake_case",
+      "range": {
+        "end": {
+          "character": 36,
+          "line": 11
+        },
+        "start": {
+          "character": 29,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:30 action write `side_len`
+{
+  "actions": [
+    "write `side_len`",
+    "Explain E0006"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "at": 306,
+        "kind": "rename",
+        "name": "side_len"
+      },
+      "range": [
+        306,
+        306
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0006",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+        },
+        "message": "name `sideLen` is not in snake_case",
+        "range": {
+          "end": {
+            "character": 36,
+            "line": 11
+          },
+          "start": {
+            "character": 29,
+            "line": 11
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "side_len",
+              "range": {
+                "end": {
+                  "character": 18,
+                  "line": 11
+                },
+                "start": {
+                  "character": 11,
+                  "line": 11
+                }
+              }
+            },
+            {
+              "newText": "side_len",
+              "range": {
+                "end": {
+                  "character": 36,
+                  "line": 11
+                },
+                "start": {
+                  "character": 29,
+                  "line": 11
+                }
+              }
+            },
+            {
+              "newText": "side_len",
+              "range": {
+                "end": {
+                  "character": 48,
+                  "line": 11
+                },
+                "start": {
+                  "character": 41,
+                  "line": 11
+                }
+              }
+            },
+            {
+              "newText": "side_len",
+              "range": {
+                "end": {
+                  "character": 58,
+                  "line": 11
+                },
+                "start": {
+                  "character": 51,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write `side_len`"
+  },
+  "showMessage": []
+}

@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0030",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0030.md"
+      },
+      "message": "a tuple has at least two elements",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 6
+        },
+        "start": {
+          "character": 15,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:16 action write the value alone; `(e)` is just `e` in parentheses
+{
+  "actions": [
+    "write the value alone; `(e)` is just `e` in parentheses",
+    "Explain E0030"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        220,
+        220
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0030",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0030.md"
+        },
+        "message": "a tuple has at least two elements",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 6
+          },
+          "start": {
+            "character": 15,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "1",
+              "range": {
+                "end": {
+                  "character": 19,
+                  "line": 6
+                },
+                "start": {
+                  "character": 15,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write the value alone; `(e)` is just `e` in parentheses"
+  },
+  "showMessage": []
+}

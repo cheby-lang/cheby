@@ -158,6 +158,19 @@ impl Diagnostic {
         self
     }
 
+    /// Adds a suggested fix made of several edits, such as both quotes of a
+    /// character literal: a `= help: …` line plus the edits that apply it
+    /// together. The edits must not overlap. As with [`Self::with_suggestion`],
+    /// only the message is rendered (D-418, D-1388).
+    #[must_use]
+    pub fn with_suggestion_edits(mut self, help: impl Into<String>, edits: Vec<Edit>) -> Self {
+        self.helps.push(Help {
+            message: help.into(),
+            edits,
+        });
+        self
+    }
+
     /// The span of the first primary label.
     #[must_use]
     pub fn primary_span(&self) -> Option<Span> {
@@ -188,5 +201,30 @@ mod tests {
         assert_eq!(d.primary_span(), Some(span));
         assert_eq!(d.helps.first().map(|h| h.edits.len()), Some(1));
         assert_eq!(d.notes, vec!["n".to_owned()]);
+    }
+
+    #[test]
+    fn a_suggestion_keeps_every_edit_in_order() {
+        let first = Span::new(FileId::new(0), TextRange::new(1, 2));
+        let second = Span::new(FileId::new(0), TextRange::new(4, 5));
+        let d = Diagnostic::new(codes::SYNTAX_ERROR, "m").with_suggestion_edits(
+            "h",
+            vec![
+                Edit {
+                    span: first,
+                    replacement: "\"".to_owned(),
+                },
+                Edit {
+                    span: second,
+                    replacement: "\"".to_owned(),
+                },
+            ],
+        );
+        let help = d.helps.first();
+        assert_eq!(help.map(|h| h.message.as_str()), Some("h"));
+        assert_eq!(
+            help.map(|h| h.edits.iter().map(|e| e.span).collect::<Vec<_>>()),
+            Some(vec![first, second])
+        );
     }
 }

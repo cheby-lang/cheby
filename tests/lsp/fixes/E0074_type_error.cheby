@@ -1,0 +1,19 @@
+// @decisions: D-148, D-636, D-1736
+//! E0074's raise with a type error in another function.
+
+type Token {
+  Token(String),
+}
+
+pub fn issue(text: String) -> Token {
+  //                          ^ action Make `Token` `pub`
+  Token(text)
+}
+
+fn main() {
+  assert issue("a") == Token("a")
+}
+
+fn broken() -> Int {
+  "not a number"
+}

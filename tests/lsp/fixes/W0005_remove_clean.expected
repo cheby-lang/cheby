@@ -1,0 +1,98 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the function `helper` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the function\nhelp: remove the function, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 3
+        },
+        "start": {
+          "character": 3,
+          "line": 3
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:4:4 action Remove the unused `helper`
+{
+  "actions": [
+    "Make `helper` `pub`",
+    "Remove the unused `helper`",
+    "Explain W0005"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        129,
+        129
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0005",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+        },
+        "message": "the function `helper` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the function\nhelp: remove the function, use it, or make it `pub` if other packages should use it",
+        "range": {
+          "end": {
+            "character": 9,
+            "line": 3
+          },
+          "start": {
+            "character": 3,
+            "line": 3
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 3
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Remove the unused `helper`"
+  },
+  "showMessage": []
+}

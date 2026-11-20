@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0011",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0011.md"
+      },
+      "message": "`\\` at the end of a line is not an escape\nnote: strings may span lines (D-114)\nhelp: write `\\\\` for a backslash",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 4
+        },
+        "start": {
+          "character": 15,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:16 action remove the `\`
+{
+  "actions": [
+    "remove the `\\`",
+    "Explain E0011"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        130,
+        130
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0011",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0011.md"
+        },
+        "message": "`\\` at the end of a line is not an escape\nnote: strings may span lines (D-114)\nhelp: write `\\\\` for a backslash",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 4
+          },
+          "start": {
+            "character": 15,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 4
+                },
+                "start": {
+                  "character": 15,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "remove the `\\`"
+  },
+  "showMessage": []
+}

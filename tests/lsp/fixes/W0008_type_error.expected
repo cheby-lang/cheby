@@ -1,0 +1,229 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0008",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0008.md"
+      },
+      "message": "`let assert` with a pattern that always matches\nthis pattern matches every value of its type\nhelp: use `let` instead, since the assertion can never fail",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 6
+        },
+        "start": {
+          "character": 13,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "W0008",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0008.md"
+      },
+      "message": "`let guard` with a pattern that always matches\nthis pattern matches every value of its type\nhelp: use `let` instead, since the `else` block can never run",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 7
+        },
+        "start": {
+          "character": 12,
+          "line": 7
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 18
+        },
+        "start": {
+          "character": 2,
+          "line": 18
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 17
+              },
+              "start": {
+                "character": 19,
+                "line": 17
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:14 action Write `let (a, b)`
+{
+  "actions": [
+    "Write `let (a, b)`",
+    "Explain W0008"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        265,
+        265
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0008",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0008.md"
+        },
+        "message": "`let assert` with a pattern that always matches\nthis pattern matches every value of its type\nhelp: use `let` instead, since the assertion can never fail",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 6
+          },
+          "start": {
+            "character": 13,
+            "line": 6
+          }
+        },
+        "severity": 2,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 6
+                },
+                "start": {
+                  "character": 6,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Write `let (a, b)`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:8:13 action Drop the `else`
+{
+  "actions": [
+    "Drop the `else`",
+    "Explain W0008"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        291,
+        291
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0008",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0008.md"
+        },
+        "message": "`let guard` with a pattern that always matches\nthis pattern matches every value of its type\nhelp: use `let` instead, since the `else` block can never run",
+        "range": {
+          "end": {
+            "character": 18,
+            "line": 7
+          },
+          "start": {
+            "character": 12,
+            "line": 7
+          }
+        },
+        "severity": 2,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 12,
+                  "line": 7
+                },
+                "start": {
+                  "character": 6,
+                  "line": 7
+                }
+              }
+            },
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 3,
+                  "line": 9
+                },
+                "start": {
+                  "character": 25,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Drop the `else`"
+  },
+  "showMessage": []
+}

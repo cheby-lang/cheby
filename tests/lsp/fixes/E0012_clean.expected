@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0012",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0012.md"
+      },
+      "message": "whitespace inside an interpolation",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 5
+        },
+        "start": {
+          "character": 12,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:13 action remove the whitespace (D-115)
+{
+  "actions": [
+    "remove the whitespace (D-115)",
+    "Explain E0012"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        144,
+        144
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0012",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0012.md"
+        },
+        "message": "whitespace inside an interpolation",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 5
+          },
+          "start": {
+            "character": 12,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 5
+                },
+                "start": {
+                  "character": 12,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "remove the whitespace (D-115)"
+  },
+  "showMessage": []
+}

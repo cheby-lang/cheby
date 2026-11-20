@@ -1,0 +1,15 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_import_elsewhere.cheby, std/probe_only.cheby
+// @decisions: D-1694, D-1700, D-1706, D-1726, D-1736
+//! In a std checkout E0042's std row reads the checkout's items: an item
+//! that only the checkout has, in another probe, is found and imported
+//! (D-1726), as in a package (D-1706).
+
+import std::list
+
+/// One.
+pub fn one() -> Int {
+  list::only_in_the_checkout()
+}
+//> 13:9 action Use `probe_only::only_in_the_checkout` and import `std::probe_only`

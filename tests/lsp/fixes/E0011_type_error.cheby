@@ -1,0 +1,15 @@
+// @decisions: D-1388, D-1393, D-114
+// @newErrors: E0047
+//! E0011's help removes a `\` at the end of a line in a string.
+//! With a type error in another function, which the fix reveals.
+
+fn main() {
+  let s = "one \
+two"
+  assert s != ""
+}
+
+fn answer() -> Int {
+  "forty-two"
+}
+//> 7:16 action remove the `\`

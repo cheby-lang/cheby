@@ -15,12 +15,12 @@ use super::Server;
 use crate::features::handlers::nav::NavEnv;
 use crate::features::handlers::workspace_symbol::StdSymbols;
 use crate::features::handlers::{
-    code_action, completion, file_ops, folding, format, hierarchy, hover, inlay, links, nav,
-    rename, selection, signature, symbols, tokens, workspace_symbol,
+    code_action, completion, explain, file_ops, folding, format, hierarchy, hover, inlay, links,
+    nav, rename, selection, signature, symbols, tokens, workspace_symbol,
 };
 use crate::features::ide::completion::StdAccess;
 use crate::features::ide::hover::StdDocs;
-use crate::features::{Class, RequestCx, Route};
+use crate::features::{Class, RequestCx, RequestError, Route};
 
 /// A notification's handler.
 pub(super) type NotificationHandler = fn(&mut Server, Value);
@@ -60,8 +60,12 @@ const REQUESTS: &[(&str, RequestHandler)] = &[
 
 /// The answer when a query has nothing to read, such as a document that is
 /// not open.
-const fn null() -> Value {
-    Value::Null
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a route's fallback may be an error (D-1732)"
+)]
+const fn null() -> Result<Value, RequestError> {
+    Ok(Value::Null)
 }
 
 /// What navigation reads besides its snapshot.
@@ -81,7 +85,12 @@ fn nav_env<'a>(cx: &RequestCx<'a>) -> NavEnv<'a> {
 /// `prepareRename` reads only its document and edits nothing, so a
 /// read-only document runs it and hears why (D-1673); `rename` and
 /// `willRenameFiles` edit the package's files, so they are `Package`, the
-/// latter routed by its first file's old URI (D-1675).
+/// latter routed by its first file's old URI (D-1675). `codeAction` reads
+/// a snapshot of its document (D-1682). `codeAction/resolve` may edit
+/// another open document, so it is `Package`, routed by the URI in the
+/// action's `data`, and its fallback is an error, since its result must be
+/// a `CodeAction` (D-1683, D-1732, D-1733). `workspace/executeCommand` and
+/// `cheby/explain` name no document, so they are `Workspace` (D-1683).
 const QUERIES: &[Route] = &[
     Route {
         method: "textDocument/documentSymbol",
@@ -119,9 +128,27 @@ const QUERIES: &[Route] = &[
     },
     Route {
         method: "textDocument/codeAction",
-        class: Class::Text(code_action::code_action),
+        class: Class::Doc(code_action::code_action),
         fallback: null,
         edits: true,
+    },
+    Route {
+        method: "codeAction/resolve",
+        class: Class::Package(code_action::resolve),
+        fallback: code_action::no_analysis,
+        edits: true,
+    },
+    Route {
+        method: "workspace/executeCommand",
+        class: Class::Workspace(explain::execute_command),
+        fallback: null,
+        edits: false,
+    },
+    Route {
+        method: "cheby/explain",
+        class: Class::Workspace(explain::explain),
+        fallback: null,
+        edits: false,
     },
     Route {
         method: "textDocument/hover",

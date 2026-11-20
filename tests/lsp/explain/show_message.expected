@@ -1,0 +1,11 @@
+== diagnostics
+{}
+
+== execute cheby.explain E0044
+{
+  "answer": null,
+  "showDocument": [],
+  "showMessage": [
+    "info: E0044: binding that reuses a name already in scope. See https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0044.md"
+  ]
+}

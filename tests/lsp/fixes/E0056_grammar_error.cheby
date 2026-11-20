@@ -1,0 +1,14 @@
+// @decisions: D-1388, D-1393, D-470, D-425
+//! E0056's help removes the space of a negative literal.
+//! With a grammar error in another function, only the token checks
+//! run, so the code is not reported and no fix is offered (D-425).
+
+fn main() {
+  let low = - 128
+  assert low == -128
+}
+
+fn broken() {
+  let = 1
+}
+//> 7:14 noAction remove the space

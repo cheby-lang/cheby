@@ -1,0 +1,16 @@
+== diagnostics
+{}
+
+== explain E0044
+{
+  "code": "E0044",
+  "summary": "binding that reuses a name already in scope"
+}
+
+== explain E9999
+{
+  "error": {
+    "code": -32602,
+    "message": "no diagnostic has the code `E9999`"
+  }
+}

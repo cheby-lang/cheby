@@ -1,0 +1,13 @@
+// @decisions: D-1401, D-1736
+//! A `return` that is not the last expression of a body is left to its
+//! help (X §6.5), so only Explain is offered.
+
+fn middle(a: Int) -> Int {
+  return a
+  a
+}
+
+fn main() {
+  assert middle(1) == 1
+}
+//> 6:10 codeAction quickfix

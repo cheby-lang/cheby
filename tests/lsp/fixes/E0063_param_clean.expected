@@ -1,0 +1,160 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`T` does not satisfy `Show`\ninterpolated here\nnote: a type parameter satisfies only the interfaces of its bounds and the ones they embed (§8.4)\nhelp: add the bound `T: Show`\nhelp: write `{x:?}` to use debug printing instead (D-086)",
+      "range": {
+        "end": {
+          "character": 5,
+          "line": 5
+        },
+        "start": {
+          "character": 4,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:5 action Add bound `T: Show`
+{
+  "actions": [
+    "Use debug printing `{x:?}`",
+    "Add bound `T: Show`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        193,
+        193
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`T` does not satisfy `Show`\ninterpolated here\nnote: a type parameter satisfies only the interfaces of its bounds and the ones they embed (§8.4)\nhelp: add the bound `T: Show`\nhelp: write `{x:?}` to use debug printing instead (D-086)",
+        "range": {
+          "end": {
+            "character": 5,
+            "line": 5
+          },
+          "start": {
+            "character": 4,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ": Show",
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 4
+                },
+                "start": {
+                  "character": 10,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add bound `T: Show`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:6:5 action Use debug printing `{x:?}`
+{
+  "actions": [
+    "Use debug printing `{x:?}`",
+    "Add bound `T: Show`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        193,
+        193
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`T` does not satisfy `Show`\ninterpolated here\nnote: a type parameter satisfies only the interfaces of its bounds and the ones they embed (§8.4)\nhelp: add the bound `T: Show`\nhelp: write `{x:?}` to use debug printing instead (D-086)",
+        "range": {
+          "end": {
+            "character": 5,
+            "line": 5
+          },
+          "start": {
+            "character": 4,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ":?",
+              "range": {
+                "end": {
+                  "character": 5,
+                  "line": 5
+                },
+                "start": {
+                  "character": 5,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Use debug printing `{x:?}`"
+  },
+  "showMessage": []
+}

@@ -1111,7 +1111,58 @@ const fn rules(fixed_point: editing::FixedPoint) -> editing::EditRules<'static> 
 fn edit_check_with(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
     check_form(env, dir, kind)?;
     check_moves(env, dir, kind)?;
-    check_callers(env, dir, kind)
+    check_callers(env, dir, kind)?;
+    check_gone(env, dir, kind)
+}
+
+/// The root module of [`check_gone`]'s package, with an E0047 at the `n`
+/// of line 4 (line 3 from 0).
+const GONE_MAIN: &str = "//! A package for the check that a fix's code is gone.\n\nfn first(n: Int) -> Option<Int> {\n  n\n}\n\nfn main() {\n  assert first(1) == Some(1)\n}\n";
+
+/// F §9.4, T-2: a fix of the E0047 at `n` written by hand. Wrapped in
+/// `Some(…)`, the E0047 is gone and the check passes; wrapped in `Err(…)`,
+/// an E0047 starts where the wrap wrote, and "the fixed code is gone at its
+/// span" fails, though the edit adds no new error and the start of the old
+/// one moved past the insertion.
+fn check_gone(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
+    let dir = dir.join("gone");
+    write_package(&dir, &[("cheby.toml", MANIFEST), (ROOT_MODULE, GONE_MAIN)])?;
+    let (mut client, _) = session(env, &dir, kind, None, None)?;
+    open_all(&mut client, &[ROOT_MODULE.to_owned()])?;
+    let mut texts = BTreeMap::from([(ROOT_MODULE.to_owned(), GONE_MAIN.to_owned())]);
+    let mut settle = editing::Settle::new("", kind != ClientKind::Empty, &client);
+    settle.wait(&mut client)?;
+    let uri = client.uri(Path::new(ROOT_MODULE))?;
+    let fixed = editing::published_by_path(&client)
+        .get(ROOT_MODULE)
+        .and_then(|list| {
+            list.iter()
+                .find(|d| d.get("code") == Some(&json!("E0047")))
+                .cloned()
+        })
+        .ok_or("the package publishes no E0047")?;
+    let strict = rules(editing::FixedPoint::Strict);
+    let wraps = |client: &Client, name: &str| {
+        hand_edit(client, &[(ROOT_MODULE, &[(3, 2, 2, name), (3, 3, 3, ")")])])
+    };
+    for (name, passes) in [("Err(", false), ("Some(", true)] {
+        let edit = wraps(&client, name)?;
+        let applied =
+            editing::check_applied(&mut client, &mut texts, &mut settle, &edit, &[], strict)?;
+        let gone = editing::gone_at_span(&client, &texts, &applied, &edit, &uri, &fixed);
+        match (gone, passes) {
+            (Ok(()), true) => {}
+            (Err(e), false) if e.contains("leaves its diagnostic") => {}
+            (Ok(()), false) => {
+                return Err(format!(
+                    "a wrap in {name}…) left its E0047, and the check passed"
+                ));
+            }
+            (Err(e), _) => return Err(format!("a wrap in {name}…): {e}")),
+        }
+        editing::revert(&mut client, &mut texts, &mut settle, applied)?;
+    }
+    client.shutdown()?.expect(0)
 }
 
 /// A local renamed by hand passes and is undone; with rename's narrowing,
@@ -1464,6 +1515,10 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
     // answers of those.
     let mut renames = Vec::new();
     let mut prepared_renames = BTreeMap::new();
+    // Every listed code action that carries `data`, by the label of its
+    // listing, to resolve, and how many actions were listed in all.
+    let mut listed = Vec::new();
+    let mut actions_listed = 0_usize;
     for (index, ((file, uri), text)) in files.iter().zip(&uris).zip(&texts).enumerate() {
         let text = text.as_str();
         let lines = Lines::new(text, Bom::Counted);
@@ -1516,6 +1571,9 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
             &completions,
             advertised.completion_resolve,
         )?;
+        let (all, with_data) = editing::listed_actions(&prepared);
+        actions_listed = actions_listed.saturating_add(all);
+        listed.extend(with_data);
         // Only `prepareRename`'s answers decide which renames are sent.
         prepared_renames.extend(
             prepared
@@ -1534,6 +1592,7 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
     if advertised.rename {
         send_renames(&mut client, trial_name, &renames, &prepared_renames)?;
     }
+    send_resolves(&mut client, trial_name, actions_listed, &listed)?;
     if advertised.workspace_symbol {
         let requests = queries
             .into_iter()
@@ -1545,6 +1604,53 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
         send_all(&mut client, requests)?;
     }
     client.shutdown()?.expect(0)
+}
+
+/// A `codeAction/resolve` of each of `listed`, the code actions that
+/// carry `data` with the label of their listing, at most
+/// [`RESOLVE_BUDGET`] of them by a fixed stride (G1 plan §4.7). Each must
+/// be answered with no error, `ContentModified` included, except the
+/// `RequestFailed` of a refused fix (D-1731), which is counted. It says on
+/// standard error how many actions the listings held (`all`), how many
+/// carried `data`, and how many were resolved, refused and dropped, so a
+/// run shows what the sweep exercised (T-4).
+fn send_resolves(
+    client: &mut Client,
+    trial_name: &str,
+    all: usize,
+    listed: &[(String, Value)],
+) -> Result<(), String> {
+    let (kept, dropped) = editing::sample(listed, RESOLVE_BUDGET);
+    let mut refused = 0_usize;
+    for chunk in kept.chunks(BATCH) {
+        let calls: Vec<(&str, Value)> = chunk
+            .iter()
+            .map(|(_, action)| ("codeAction/resolve", action.clone()))
+            .collect();
+        let results = client.batch(calls)?;
+        for ((label, action), result) in chunk.iter().zip(results) {
+            match result {
+                Ok(_) => {}
+                Err(e) if case::resolve_refusal(e.code) => {
+                    refused = refused.saturating_add(1);
+                }
+                Err(e) => {
+                    let title = action
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    return Err(client.fail(&format!("{label} resolve {title:?} answered {e}")));
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{trial_name}: code actions: {all} listed, {} with data, {} resolved, {refused} refused \
+         (D-1731), {dropped} dropped by a fixed stride",
+        listed.len(),
+        kept.len()
+    );
+    Ok(())
 }
 
 /// One point of the examples group where a rename may go: its file, URI,
@@ -1631,6 +1737,10 @@ fn send_all(
     Ok(answers)
 }
 
+/// The `codeAction/resolve` requests the examples group sends per
+/// example, at most, for the listed actions that carry `data` (G1 plan
+/// §1.9, §4.7).
+const RESOLVE_BUDGET: usize = 200;
 /// Renames the examples group sends per example, at most, each a `verify`
 /// run in the server (plan §1.9, D-1677, D-1725).
 const RENAME_BUDGET: usize = 50;
@@ -3400,6 +3510,143 @@ fn marker_range(
     (start, end)
 }
 
+/// The blocks of the `@requests` of `file`, open at `text`, whose last
+/// position is `last`.
+fn document_blocks(
+    env: &Env,
+    dir: &Path,
+    header: &case::Header,
+    client: &mut Client,
+    file: &str,
+    text: &str,
+    last: Position,
+) -> Result<Vec<String>, String> {
+    let uri = client.uri(Path::new(file))?;
+    let encoding = client.encoding();
+    let paths = client.paths().clone();
+    let display = |uri: &str| paths.display(uri);
+    let mut blocks = Vec::new();
+    for name in &header.requests {
+        let (method, params) = case::document_params(name, &uri, last)?;
+        let mut answer = answer_value(client, method, params, name)?;
+        if name == "inlayHint" && !is_error(&answer) {
+            answer = editing::inlay_hints(&answer, text, encoding, &display);
+        }
+        if name == "formatting" {
+            check_formatting(env, dir, text, &answer, encoding)
+                .map_err(|e| format!("{file} formatting: {e}"))?;
+        }
+        blocks.push(case::block(
+            &format!("{file} {name}"),
+            &paths.normalize(&answer),
+        ));
+    }
+    Ok(blocks)
+}
+
+/// `params` of a completion at `offset` of `text` with the context a
+/// typed trigger character of `advertised` sends.
+fn completion_context(params: &mut Value, text: &str, offset: usize, advertised: &Advertised) {
+    if let Some(map) = params.as_object_mut() {
+        map.insert(
+            "context".to_owned(),
+            editing::completion_context(text, offset, &advertised.completion_triggers),
+        );
+    }
+}
+
+/// The answer of `marker`'s request of `method` with `params` in `file`, as
+/// goldens show it: a `codeAction` listing's ([`listing_answer`]), and a
+/// call hierarchy's follow-up's.
+fn marker_answer(
+    client: &mut Client,
+    method: &str,
+    params: Value,
+    marker: &case::Marker,
+    file: &str,
+) -> Result<Value, String> {
+    let answer = if marker.name == "codeAction" {
+        listing_answer(client, method, params, &marker.label(file))?
+    } else {
+        answer_value(client, method, params, &marker.name)?
+    };
+    match case::hierarchy_follow_up(&marker.name) {
+        Some(follow_up) => follow_hierarchy(client, follow_up, &answer, &marker.name),
+        None => Ok(answer),
+    }
+}
+
+/// The answer of a `codeAction` marker's request, as goldens show it, after
+/// [`resolve_listing`] resolved its actions from the listing as sent, whose
+/// `data` the resolves need whole.
+fn listing_answer(
+    client: &mut Client,
+    method: &str,
+    params: Value,
+    label: &str,
+) -> Result<Value, String> {
+    Ok(match client.call(method, params)? {
+        Ok(listing) => {
+            resolve_listing(client, label, &listing)?;
+            case::canonical("codeAction", listing)
+        }
+        Err(e) => json!({ "error": { "code": e.code, "message": e.message } }),
+    })
+}
+
+/// Resolves each action of `listing`, a `codeAction` marker's answer, that
+/// carries `data` (D-1683): each must be answered with no error but a
+/// refused fix's `RequestFailed` (D-1731). The answers are not shown, so
+/// the marker's block stays the listing; they give the resolvers the
+/// goldens' fixes to run, where the examples' clean texts list few (T-4).
+fn resolve_listing(client: &mut Client, label: &str, listing: &Value) -> Result<(), String> {
+    let actions = listing
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|action| action.get("data").is_some_and(|data| !data.is_null()));
+    for action in actions {
+        match client.call("codeAction/resolve", action.clone())? {
+            Ok(_) => {}
+            Err(e) if case::resolve_refusal(e.code) => {}
+            Err(e) => {
+                let title = action
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                return Err(format!(
+                    "{label}: the resolve of {title:?} answered {} {}",
+                    e.code, e.message
+                ));
+            }
+        }
+    }
+    // A resolve's messages belong to no block.
+    drop(client.take_where(editing::is_show_message));
+    Ok(())
+}
+
+/// The diagnostics a marker's request sends: `published`, the file's list
+/// when its markers were read, or for an `action` or `noAction` marker, which asks once
+/// the server is idle since a fix rides on the report of the text it is
+/// asked for (D-1685), the list published then.
+fn marker_diagnostics(
+    client: &mut Client,
+    settle: &mut editing::Settle,
+    marker: &case::Marker,
+    uri: &str,
+    published: &[Value],
+) -> Result<Vec<Value>, String> {
+    if !matches!(marker.name.as_str(), "action" | "noAction") {
+        return Ok(published.to_vec());
+    }
+    settle.wait(client)?;
+    Ok(client
+        .published()
+        .get(uri)
+        .map_or_default(client::diagnostics_of))
+}
+
 /// The blocks of [`golden_answers`], from a `client` that has not opened
 /// `files` yet, of a server that advertised `capabilities`. `unsaved`
 /// holds the texts of a std checkout's open-only probes.
@@ -3452,25 +3699,19 @@ fn golden_blocks(
         };
         for marker in markers {
             let (start, end) = marker_range(&lines, encoding, &marker);
+            let diagnostics =
+                marker_diagnostics(&mut client, &mut settle, &marker, uri, &diagnostics)?;
             let (method, mut params) =
                 case::position_params(&marker.name, uri, start, end, &marker.args, &diagnostics)?;
-            if matches!(marker.name.as_str(), "completion" | "apply")
-                && let Some(map) = params.as_object_mut()
-            {
+            if matches!(marker.name.as_str(), "completion" | "apply") {
                 let offset = lines.offset(start, encoding);
-                map.insert(
-                    "context".to_owned(),
-                    editing::completion_context(&text, offset, &advertised.completion_triggers),
-                );
+                completion_context(&mut params, &text, offset, &advertised);
             }
-            if marker.name == "rename" {
+            if matches!(marker.name.as_str(), "rename" | "action") {
                 // Only the messages this request brings belong to its block.
                 drop(client.take_where(editing::is_show_message));
             }
-            let mut answer = answer_value(&mut client, method, params, &marker.name)?;
-            if let Some(follow_up) = case::hierarchy_follow_up(&marker.name) {
-                answer = follow_hierarchy(&mut client, follow_up, &answer, &marker.name)?;
-            }
+            let mut answer = marker_answer(&mut client, method, params, &marker, file)?;
             let label = marker.label(file);
             answer = match marker.name.as_str() {
                 "completion" => {
@@ -3488,6 +3729,15 @@ fn golden_blocks(
                     Ok(editing::inlay_hints(&answer, &text, encoding, &display))
                 }
                 "rename" => rename_block(&mut client, &mut texts, &mut settle, header, &answer),
+                "action" => editing::action_block(
+                    &mut client,
+                    &mut texts,
+                    &mut settle,
+                    &header.new_errors,
+                    &answer,
+                    &marker.args.join(" "),
+                ),
+                "noAction" => editing::no_action_block(&answer, &marker.args.join(" ")),
                 _ => Ok(answer),
             }
             .map_err(|e| format!("{label}: {e}"))?;
@@ -3501,21 +3751,15 @@ fn golden_blocks(
             blocks.push(case::block(&label, &paths.normalize(&answer)));
         }
         let last = lines.position(text.len(), encoding);
-        for name in &header.requests {
-            let (method, params) = case::document_params(name, uri, last)?;
-            let mut answer = answer_value(&mut client, method, params, name)?;
-            if name == "inlayHint" && !is_error(&answer) {
-                answer = editing::inlay_hints(&answer, &text, encoding, &display);
-            }
-            if name == "formatting" {
-                check_formatting(env, dir, &text, &answer, encoding)
-                    .map_err(|e| format!("{file} formatting: {e}"))?;
-            }
-            blocks.push(case::block(
-                &format!("{file} {name}"),
-                &paths.normalize(&answer),
-            ));
-        }
+        blocks.extend(document_blocks(
+            env,
+            dir,
+            header,
+            &mut client,
+            file,
+            &text,
+            last,
+        )?);
     }
     let ended = client.shutdown()?;
     ended.expect(0)?;
@@ -3782,6 +4026,54 @@ fn will_rename_step(
     Ok(case::block(&label, &client.normalize(&block)))
 }
 
+/// A `settings NAME` step: the settings object in `NAME.json` at `dir`
+/// becomes the client's answer to `workspace/configuration` and is pushed
+/// with `workspace/didChangeConfiguration`.
+fn settings_step(client: &mut Client, dir: &Path, name: &str) -> Result<(), String> {
+    let path = dir.join(format!("{name}.json"));
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let settings: Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    client.set_configuration(settings.clone());
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": settings } }),
+    )
+}
+
+/// The block of an `execute` or an `explain` step (plan §4.3 B); `None`
+/// for any other step.
+fn command_step(client: &mut Client, step: &Step) -> Result<Option<String>, String> {
+    match step {
+        Step::Execute(command, arguments) => {
+            let arguments: Vec<Value> = arguments.iter().map(|a| json!(a)).collect();
+            let block = editing::execute_block(client, command, &arguments)?;
+            let mut label = format!("execute {command}");
+            for argument in &arguments {
+                label.push(' ');
+                label.push_str(argument.as_str().unwrap_or_default());
+            }
+            Ok(Some(case::block(&label, &block)))
+        }
+        Step::Explain(code) => {
+            let block = editing::explain_block(client, code)?;
+            Ok(Some(case::block(&format!("explain {code}"), &block)))
+        }
+        Step::Idle
+        | Step::Started
+        | Step::Quiet
+        | Step::Settings(_)
+        | Step::Edit(_)
+        | Step::Save(_)
+        | Step::ZedSave(_)
+        | Step::Disk(_)
+        | Step::Close(_)
+        | Step::WillRename(_)
+        | Step::Status
+        | Step::Published => Ok(None),
+    }
+}
+
 /// Runs one of a golden test's `@steps` in the package at `dir`, whose
 /// open documents' texts `texts` holds, by path below the package, and
 /// returns the step's block, if it has one. `settle` follows the inputs
@@ -3818,16 +4110,7 @@ fn run_step(
             };
         }
         Step::Settings(name) => {
-            let path = dir.join(format!("{name}.json"));
-            let text =
-                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let settings: Value =
-                serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-            client.set_configuration(settings.clone());
-            client.notify(
-                "workspace/didChangeConfiguration",
-                json!({ "settings": { "cheby": settings } }),
-            )?;
+            settings_step(client, dir, name)?;
             settle.sent(client);
             return Ok(None);
         }
@@ -3849,6 +4132,7 @@ fn run_step(
             return will_rename_step(client, texts, settle, header, moves).map(Some);
         }
         Step::Status => return status_step(client).map(Some),
+        Step::Execute(..) | Step::Explain(_) => return command_step(client, step),
         Step::Published => {
             let lists = non_empty_lists(client.published(), client.paths());
             return Ok(Some(case::block("published", &lists)));

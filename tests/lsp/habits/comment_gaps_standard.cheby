@@ -1,0 +1,27 @@
+// @decisions: D-1401, D-1690, D-1736
+//! A rewrite that would drop a comment is `disabled` (plan §1.11), so the
+//! `standard` client, which cannot show it, gets no such action
+//! (D-1690).
+
+fn pick(flag: Bool) -> Int {
+  let n = if flag {
+    // kept
+    1
+  } // dropped
+  else { 2 }
+  n
+}
+
+fn early(a: Int) -> Int {
+  if a > 0 {
+    // dropped
+    return 1
+  }
+  a
+}
+
+fn main() {
+  assert pick(True) + early(0) == 1
+}
+//> 7:14 codeAction quickfix
+//> 16:6 codeAction quickfix

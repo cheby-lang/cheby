@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "E0023",
-      "message": "an interface function takes no type arguments\nnote: interface functions are not generic (D-165)\nhelp: remove the type arguments",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0023.md"
+      },
+      "message": "an interface function takes no type arguments\nnote: interface functions are not generic (D-165)",
       "range": {
         "end": {
           "character": 30,

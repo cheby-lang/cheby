@@ -1,0 +1,10 @@
+// @decisions: D-1388, D-1393, D-1694, D-1661
+//! D-1661's help writes a `{` that opens no interpolation as `\{`,
+//! titled "Escape the brace as `\{`".
+
+fn main() {
+  let amount = "3"
+  let line = "price {" + amount + "}"
+  assert line == line
+}
+//> 7:22 action Escape the brace as `\{`

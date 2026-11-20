@@ -1,0 +1,12 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_fix_exposed.cheby
+// @decisions: D-1686, D-1706
+//! In a std checkout no fix writes `pub`, so E0022's help, whose edit
+//! would, is no quick fix, and its line stays in the message (D-1706,
+//! D-1686).
+
+exposed type Point {
+  x: Int,
+}
+//> 9:1 noAction make the type `pub` as well

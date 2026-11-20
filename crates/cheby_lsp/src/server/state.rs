@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use cheby_driver::analysis::{Hash128, PackageKind, Snapshot};
+use cheby_driver::analysis::{FileReport, Hash128, PackageKind, Snapshot};
 
 use super::schedule::{JobTexts, RunState};
 use super::sessions::DocRoute;
@@ -65,6 +65,12 @@ pub(crate) struct Published {
     /// `didOpen` or `didClose` forgot this publish, so the path's next
     /// publish is sent even when it equals this one (D-1442).
     pub forgotten: bool,
+    /// The report the diagnostics were made from, with the text their
+    /// ranges refer to, which code actions read (G1 plan §1.6, D-1393).
+    pub report: Arc<FileReport>,
+    /// The run that made `report` read a last good text or a stub, so no
+    /// fix removes code (D-1360). `false` for a phase-A report.
+    pub substituted: bool,
 }
 
 /// One package, served by one session on the analysis thread (D-1375),

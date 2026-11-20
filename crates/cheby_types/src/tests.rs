@@ -1748,6 +1748,36 @@ fn tests_return_nil_or_a_result() {
     assert!(b.rendered().contains("write `assert` before it"));
 }
 
+#[test]
+fn a_bool_test_body_gets_an_edit_that_asserts_it() {
+    // D-1388: the help's edit writes `assert ` before the body's value, and
+    // applying it removes the E0073 with no new diagnostic.
+    let items = "fn double(n: Int) -> Int {\n  n * 2\n}\n\ntest \"double doubles\" {\n  let x = 2\n  double(x) == 4\n}\n";
+    let b = check(items);
+    assert_eq!(b.codes(), ["E0073"], "{}", b.rendered());
+    let edits: Vec<_> = b
+        .diags
+        .iter()
+        .flat_map(|d| &d.helps)
+        .flat_map(|h| &h.edits)
+        .collect();
+    let [edit] = edits.as_slice() else {
+        panic!("{edits:?}");
+    };
+    let mut text = format!("//! Test.\n\n{items}");
+    let start = usize::try_from(edit.span.range.start()).unwrap();
+    let end = usize::try_from(edit.span.range.end()).unwrap();
+    text.replace_range(start..end, &edit.replacement);
+    let fixed = text.strip_prefix("//! Test.\n\n").unwrap();
+    assert!(fixed.contains("  assert double(x) == 4\n"), "{fixed}");
+    let after = check(fixed);
+    assert!(after.diags.is_empty(), "{}", after.rendered());
+    // A body of another type gets the help-less E0073.
+    let b = check("test \"t\" {\n  1\n}\n");
+    assert_eq!(b.codes(), ["E0073"], "{}", b.rendered());
+    assert!(b.diags.iter().all(|d| d.helps.is_empty()));
+}
+
 // ---- 13. the end of a body ------------------------------------------------
 
 #[test]

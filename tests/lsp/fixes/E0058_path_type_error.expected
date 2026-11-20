@@ -1,0 +1,129 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+      },
+      "message": "`Shape` has no field `origni`\nunknown field\nnote: the fields of `Shape`: `origin` and `size`",
+      "range": {
+        "end": {
+          "character": 21,
+          "line": 15
+        },
+        "start": {
+          "character": 15,
+          "line": 15
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 24
+        },
+        "start": {
+          "character": 2,
+          "line": 24
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 23
+              },
+              "start": {
+                "character": 19,
+                "line": 23
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:16:16 action Use the field `origin`
+{
+  "actions": [
+    "Use the field `origin`",
+    "Explain E0058"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        310,
+        310
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0058",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+        },
+        "message": "`Shape` has no field `origni`\nunknown field\nnote: the fields of `Shape`: `origin` and `size`",
+        "range": {
+          "end": {
+            "character": 21,
+            "line": 15
+          },
+          "start": {
+            "character": 15,
+            "line": 15
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "origin",
+              "range": {
+                "end": {
+                  "character": 21,
+                  "line": 15
+                },
+                "start": {
+                  "character": 15,
+                  "line": 15
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Use the field `origin`"
+  },
+  "showMessage": []
+}

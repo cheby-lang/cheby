@@ -1,0 +1,129 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "`list` is not imported\nhelp: add `import std::list` at the top of the file",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 8
+        },
+        "start": {
+          "character": 9,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 12
+        },
+        "start": {
+          "character": 2,
+          "line": 12
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 11
+              },
+              "start": {
+                "character": 15,
+                "line": 11
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:10 action Use `l::length`
+{
+  "actions": [
+    "Use `l::length`",
+    "Explain E0042"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        250,
+        250
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0042",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+        },
+        "message": "`list` is not imported\nhelp: add `import std::list` at the top of the file",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 8
+          },
+          "start": {
+            "character": 9,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "l",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 8
+                },
+                "start": {
+                  "character": 9,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Use `l::length`"
+  },
+  "showMessage": []
+}

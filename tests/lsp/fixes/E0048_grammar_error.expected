@@ -1,0 +1,34 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 17
+        },
+        "start": {
+          "character": 6,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:16 noAction Add the missing arguments as `todo`
+{
+  "actions": []
+}
+
+== src/main.cheby:13:18 noAction Remove the extra arguments
+{
+  "actions": []
+}

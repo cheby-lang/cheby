@@ -892,11 +892,14 @@ fn scope_helpers() {
     );
     assert!(!scope::is_free_in_module(snapshot, main, "d"));
     assert!(scope::is_free_in_module(snapshot, main, "list"));
-    assert_eq!(scope::fresh(snapshot, main, end, "count", &[]), "count");
-    assert_eq!(scope::fresh(snapshot, main, end, "x", &[]), "x_value");
+    let fresh = |wanted: &str, taken: &[String]| scope::fresh(snapshot, main, end, wanted, taken);
+    assert_eq!(fresh("count", &[]).as_deref(), Some("count"));
+    assert_eq!(fresh("x", &[]).as_deref(), Some("x_value"));
     let taken = ["x_value".to_owned()];
-    assert_eq!(scope::fresh(snapshot, main, end, "x", &taken), "x_value_2");
-    assert_eq!(scope::fresh(snapshot, main, end, "type", &[]), "type_value");
+    assert_eq!(fresh("x", &taken).as_deref(), Some("x_value_2"));
+    assert_eq!(fresh("type", &[]).as_deref(), Some("type_value"));
+    // A name E0006 refuses has no candidate it accepts.
+    assert_eq!(fresh("myVal", &[]), None);
 }
 
 /// The item `first` of [`MAIN`].

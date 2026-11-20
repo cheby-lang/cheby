@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-051, D-506, D-1756
+//! E0044's help suggests a new name in snake case, as E0006 wants it,
+//! when the reused name is not: `myVal` gets `my_val_2` (§5.2.3).
+
+fn main() {
+  let myVal = 1
+  let myVal = 2
+  let (aB, aB) = (1, 2)
+  let f = fn(myVal: Int) -> Int { myVal }
+  assert f(myVal) + aB == 4
+}

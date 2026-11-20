@@ -169,7 +169,7 @@ fn field_pat(p: &mut Parser<'_>) {
 
 /// `[p, ..rest, q]`. More than one rest is rejected by validation (E0032).
 /// A `_` after `..` is not a name, so the list reports it, with a help
-/// (D-1657).
+/// (D-1657) whose edit deletes the `_` (D-1694).
 fn list(p: &mut Parser<'_>) -> CompletedMarker {
     let list = List {
         open: L_BRACK,
@@ -183,7 +183,8 @@ fn list(p: &mut Parser<'_>) -> CompletedMarker {
             let m = p.start();
             p.bump(DOT2);
             if p.at(UNDERSCORE) {
-                p.help_at_current(WILDCARD_REST_HELP);
+                // The edit deletes the `_`, so `.._` reads `..` (D-1694).
+                p.suggest_at_current(WILDCARD_REST_HELP, "");
             } else {
                 p.eat(LOWER_IDENT);
             }

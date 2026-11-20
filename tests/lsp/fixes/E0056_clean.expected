@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0056",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0056.md"
+      },
+      "message": "space between `-` and the number of a negative literal\nnote: a negative literal is written with the `-` directly before the digits",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 4
+        },
+        "start": {
+          "character": 13,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:14 action remove the space
+{
+  "actions": [
+    "remove the space",
+    "Explain E0056"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        121,
+        121
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0056",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0056.md"
+        },
+        "message": "space between `-` and the number of a negative literal\nnote: a negative literal is written with the `-` directly before the digits",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 4
+          },
+          "start": {
+            "character": 13,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 4
+                },
+                "start": {
+                  "character": 13,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "remove the space"
+  },
+  "showMessage": []
+}

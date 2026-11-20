@@ -1116,7 +1116,6 @@ fn a_fact_names_each_missing_value() {
     );
     assert!(!fact.more);
     assert!(!fact.too_complex);
-    assert_eq!(fact.unreachable.len(), 0);
 }
 
 #[test]
@@ -1214,7 +1213,6 @@ fn an_exhaustive_case_has_a_fact_with_no_rows() {
     let nodes = node_ids();
     let facts = world.facts(&bld.body(case), &[(nodes[0], case)]);
     assert_eq!(facts[0].missing.len(), 0);
-    assert_eq!(facts[0].unreachable, [2]);
 }
 
 #[test]
@@ -1350,8 +1348,6 @@ fn an_arm_with_the_wrong_count_is_left_out() {
     let nodes = node_ids();
     let facts = world.facts(&bld.body(case), &[(nodes[0], case)]);
     assert_eq!(facts[0].missing.len(), 0);
-    // By index among the three checked arms.
-    assert_eq!(facts[0].unreachable, [2]);
 }
 
 #[test]
@@ -1848,7 +1844,6 @@ fn a_failed_pattern_leaves_its_arm_out() {
                 panic!("{found:?}");
             };
             assert_eq!(rows(&run.cx, fact), missing, "{arms}");
-            assert_eq!(fact.unreachable.len(), 0, "{arms}");
         });
     }
 }
@@ -1870,7 +1865,6 @@ fn a_clean_case_has_a_fact_without_rows() {
             panic!("{found:?}");
         };
         assert_eq!(fact.missing.len(), 0);
-        assert_eq!(fact.unreachable, [1]);
     });
 }
 

@@ -21,6 +21,12 @@
 //!   which `rangeFormatting` answers (D-1399), with D-1670's narrowing for
 //!   rename. [`revert`] undoes it, and [`shown_messages`] prints the
 //!   `window/showMessage`s of a rename or a `willRename` block.
+//! - [`action_block`]: an `action TITLE` marker resolves the titled code
+//!   action and applies its fix through [`check_applied`], whose fixed code
+//!   must be gone ([`gone_at_span`]); a `noAction TITLE` marker lists the
+//!   actions and fails if one has that title ([`no_action_block`]);
+//!   [`execute_block`] and
+//!   [`explain_block`] are the `execute` and `explain` steps.
 #![expect(
     clippy::wildcard_enum_match_arm,
     reason = "a test matches only the variants it checks"
@@ -895,6 +901,29 @@ pub fn signature_points(text: &str) -> Vec<usize> {
     points
 }
 
+/// The code actions of the `codeAction` answers of `prepared`, by the
+/// labels of their requests: how many they list in all, and each that
+/// carries `data`, with the label of its listing, for a resolve.
+#[must_use]
+pub fn listed_actions(prepared: &BTreeMap<String, Value>) -> (usize, Vec<(String, Value)>) {
+    let listings = prepared
+        .iter()
+        .filter(|(label, _)| label.ends_with(" codeAction"))
+        .map(|(label, answer)| (label, answer.as_array().map_or(&[][..], Vec::as_slice)));
+    let mut all = 0_usize;
+    let mut with_data = Vec::new();
+    for (label, actions) in listings {
+        all = all.saturating_add(actions.len());
+        with_data.extend(
+            actions
+                .iter()
+                .filter(|action| action.get("data").is_some_and(|d| !d.is_null()))
+                .map(|action| (label.clone(), action.clone())),
+        );
+    }
+    (all, with_data)
+}
+
 /// Picks every `step`-th of `points`, from the first, keeping at most
 /// `budget`, so a sample is the same on every run. Returns the sample and
 /// how many points were dropped.
@@ -1530,6 +1559,9 @@ pub struct Applied {
     pub opened: BTreeSet<String>,
     /// Each moved file's path before and after the move.
     pub moved: BTreeMap<String, String>,
+    /// Every file's last published list before the edit, by path below the
+    /// client's root, which [`gone_at_span`] compares with the list after.
+    pub published_before: BTreeMap<String, Vec<Value>>,
     /// The publishes that answer the edit's changes, by URI and version.
     reactions: Vec<(String, Option<i32>)>,
 }
@@ -1851,6 +1883,7 @@ pub fn check_applied(
         });
     }
     let mut applied = apply_edit_opened(client, texts, edit, &opened)?;
+    applied.published_before.clone_from(&before);
     let mut reactions = std::mem::take(&mut applied.reactions);
     applied.moved = move_files(client, texts, moves, &mut reactions)?;
     settle.after(client, &reactions)?;
@@ -1945,6 +1978,415 @@ pub fn revert(
     settle.after(client, &reactions)
 }
 
+/// The command of the Explain action (X §8.3, D-1693).
+pub const EXPLAIN_COMMAND: &str = "cheby.explain";
+
+/// The block of an `action TITLE` marker (plan §4.3 B), from `list`, the
+/// `textDocument/codeAction` answer the marker's request got after the
+/// server was waited for (D-1685):
+///
+/// - `actions`: the titles listed, in order.
+/// - No action with `title` is an error, as a listing that is no list is:
+///   a negative is a `noAction` marker ([`no_action_block`]), so a title
+///   that changes cannot turn a fix's golden into a negative one (T-10).
+/// - An action that runs a command is not resolved: the command is sent
+///   with `workspace/executeCommand` ([`execute_block`]), and its block
+///   joins this one.
+/// - Any other is resolved with `codeAction/resolve`, whose answer, or
+///   error, is `answer`, and `showMessage` the messages the server sent
+///   before it. An answer with an `edit` is applied and checked as
+///   [`check_applied`] says, held to [`FixedPoint::Strict`], or E0044's
+///   rename to [`FixedPoint::Rename`] (D-1735), and the diagnostic the
+///   action names must be gone ([`gone_at_span`]). Then it is undone, so
+///   the next marker reads the text it was written for. An answer with no
+///   `edit`, such as a stale refusal (D-1731), applies nothing.
+///
+/// # Errors
+///
+/// Returns a message naming what the applied fix broke, or why it could
+/// not be applied.
+pub fn action_block(
+    client: &mut Client,
+    texts: &mut BTreeMap<String, String>,
+    settle: &mut Settle,
+    new_errors: &[String],
+    list: &Value,
+    title: &str,
+) -> Result<Value, String> {
+    let Some(items) = list.as_array() else {
+        // An error, or `null` where the request found no snapshot.
+        return Err(format!(
+            "`action {title}`: the listing is {list}, not a list (a negative is `noAction`)"
+        ));
+    };
+    let titles: Vec<Value> = items
+        .iter()
+        .map(|a| a.get("title").cloned().unwrap_or(Value::Null))
+        .collect();
+    let Some(action) = items
+        .iter()
+        .find(|a| a.get("title").and_then(Value::as_str) == Some(title))
+        .cloned()
+    else {
+        // A renamed or mistyped title must not turn a fix's golden into a
+        // negative one under bless (T-10).
+        return Err(format!(
+            "`action {title}`: no action has that title; listed: {} (a negative is `noAction`)",
+            Value::Array(titles)
+        ));
+    };
+    drop(client.take_where(is_show_message));
+    drop(client.take_shown_documents());
+    if let Some(command) = action.get("command") {
+        let name = command
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("a command with no name: {command}"))?;
+        let arguments = command
+            .get("arguments")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut block = execute_block(client, name, &arguments)?;
+        if let Some(map) = block.as_object_mut() {
+            map.insert("actions".to_owned(), Value::Array(titles));
+        }
+        return Ok(block);
+    }
+    let answer = client.call("codeAction/resolve", action)?;
+    let messages = shown_messages(&client.take_where(is_show_message));
+    let resolved = match answer {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            let error = json!({ "error": { "code": e.code, "message": e.message } });
+            return Ok(json!({ "actions": titles, "answer": error, "showMessage": messages }));
+        }
+    };
+    if let Some(edit) = resolved.get("edit").filter(|edit| !edit.is_null()) {
+        let renames = resolved
+            .pointer("/diagnostics/0/code")
+            .and_then(Value::as_str)
+            == Some("E0044");
+        let rules = EditRules {
+            new_errors,
+            fixed_point: if renames {
+                FixedPoint::Rename
+            } else {
+                FixedPoint::Strict
+            },
+        };
+        let applied = check_applied(client, texts, settle, edit, &[], rules)?;
+        if let (Some(fixed), Some(uri)) = (
+            resolved.pointer("/diagnostics/0"),
+            resolved.pointer("/data/uri").and_then(Value::as_str),
+        ) {
+            gone_at_span(client, texts, &applied, edit, uri, fixed)?;
+        }
+        revert(client, texts, settle, applied)?;
+    }
+    let answer = client.normalize(&super::case::without_hash(resolved));
+    Ok(json!({ "actions": titles, "answer": answer, "showMessage": messages }))
+}
+
+/// The block of a `noAction TITLE` marker, a negative: `actions`, the titles
+/// `list` holds, or `list` itself when it is no list, such as `null` where
+/// the request found no snapshot.
+///
+/// # Errors
+///
+/// Returns a message when an action has the title.
+pub fn no_action_block(list: &Value, title: &str) -> Result<Value, String> {
+    let Some(items) = list.as_array() else {
+        return Ok(json!({ "actions": list }));
+    };
+    let titles: Vec<Value> = items
+        .iter()
+        .map(|a| a.get("title").cloned().unwrap_or(Value::Null))
+        .collect();
+    if titles.iter().any(|t| t.as_str() == Some(title)) {
+        return Err(format!(
+            "`noAction {title}`: an action has that title; listed: {}",
+            Value::Array(titles)
+        ));
+    }
+    Ok(json!({ "actions": titles }))
+}
+
+/// "The fixed code is gone at its span" (F §9.4): after `edit` was applied
+/// ([`check_applied`]), the last published list of the file at `uri` holds
+/// fewer diagnostics of `fixed`'s code, of any severity, than the list
+/// before the edit, or none of them starts where `fixed` started, its start
+/// moved by the edits before it, or anywhere in what the edits wrote
+/// ([`fixed_is_gone`]). A position alone cannot see a wrap that leaves its
+/// diagnostic: an insertion at the diagnostic's start moves the looked-up
+/// start past what it wrote, where the survivor does not start.
+///
+/// # Errors
+///
+/// Returns a message naming the diagnostic that is still there.
+pub fn gone_at_span(
+    client: &Client,
+    texts: &BTreeMap<String, String>,
+    applied: &Applied,
+    edit: &Value,
+    uri: &str,
+    fixed: &Value,
+) -> Result<(), String> {
+    let path = client
+        .paths()
+        .relative(uri)
+        .ok_or_else(|| format!("a fix of {uri}, outside the package"))?;
+    let code = fixed.get("code").cloned().unwrap_or(Value::Null);
+    let start = Position::from_json(fixed.pointer("/range/start").unwrap_or(&Value::Null))?;
+    let encoding = client.encoding();
+    let after = texts.get(&path).map_or("", String::as_str);
+    let (start, written) = match applied.changed.iter().find(|(p, _, _)| *p == path) {
+        Some((_, _, before)) => {
+            let edits = file_edits(edit)?
+                .into_iter()
+                .find(|file| file.uri == uri)
+                .map_or_default(|file| file.edits);
+            let offset = Lines::new(before, Bom::Counted).offset(start, encoding);
+            (
+                moved_offset(before, &edits, offset, encoding)?,
+                written_ranges(before, &edits, encoding)?,
+            )
+        }
+        None => (
+            Lines::new(after, Bom::Counted).offset(start, encoding),
+            Vec::new(),
+        ),
+    };
+    let published = published_by_path(client);
+    let list = |lists: &BTreeMap<String, Vec<Value>>| lists.get(&path).cloned().unwrap_or_default();
+    fixed_is_gone(
+        &code,
+        &list(&applied.published_before),
+        &list(&published),
+        after,
+        start,
+        &written,
+        encoding,
+    )
+    .map_err(|e| format!("{path}: {e}"))
+}
+
+/// The rule of [`gone_at_span`] on the lists `before` and `after` an edit
+/// of a file whose text is now `after_text`: `Ok` when `after` holds fewer
+/// diagnostics of `code` than `before`, or none that starts at `start` or
+/// in one of `written`, byte ranges of `after_text`, ends included.
+///
+/// # Errors
+///
+/// Returns a message naming the diagnostic that is still there.
+pub fn fixed_is_gone(
+    code: &Value,
+    before: &[Value],
+    after: &[Value],
+    after_text: &str,
+    start: usize,
+    written: &[(usize, usize)],
+    encoding: Encoding,
+) -> Result<(), String> {
+    let of_code = |list: &[Value]| list.iter().filter(|d| d.get("code") == Some(code)).count();
+    if of_code(after) < of_code(before) {
+        return Ok(());
+    }
+    let lines = Lines::new(after_text, Bom::Counted);
+    let still = after
+        .iter()
+        .filter(|d| d.get("code") == Some(code))
+        .find(|d| {
+            d.pointer("/range/start")
+                .and_then(|p| Position::from_json(p).ok())
+                .map(|p| lines.offset(p, encoding))
+                .is_some_and(|at| at == start || written.iter().any(|&(s, e)| s <= at && at <= e))
+        });
+    match still {
+        None => Ok(()),
+        Some(d) => {
+            let at = lines.position(start, encoding);
+            Err(format!(
+                "the fix leaves its diagnostic {code} at {}:{} (F §9.4): {d}",
+                at.line.saturating_add(1),
+                at.character.saturating_add(1)
+            ))
+        }
+    }
+}
+
+/// The byte ranges of the text after `edits`, the protocol's text edits
+/// of `text`, that the edits wrote, ascending.
+///
+/// # Errors
+///
+/// Returns a message for a malformed edit.
+pub fn written_ranges(
+    text: &str,
+    edits: &[Value],
+    encoding: Encoding,
+) -> Result<Vec<(usize, usize)>, String> {
+    let lines = Lines::new(text, Bom::Counted);
+    let mut spans = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let range = edit
+            .get("range")
+            .ok_or_else(|| format!("an edit without a range: {edit}"))?;
+        let written = edit
+            .get("newText")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("an edit without newText: {edit}"))?
+            .len();
+        spans.push((text::offsets(&lines, range, encoding)?, written));
+    }
+    spans.sort_by_key(|&((start, end), _)| (start, end));
+    let mut out = Vec::with_capacity(spans.len());
+    // What the edits so far added, less what they removed.
+    let (mut added, mut removed) = (0_usize, 0_usize);
+    for ((start, end), written) in spans {
+        let at = start.saturating_add(added).saturating_sub(removed);
+        out.push((at, at.saturating_add(written)));
+        added = added.saturating_add(written);
+        removed = removed.saturating_add(end.saturating_sub(start));
+    }
+    Ok(out)
+}
+
+/// Where `offset` of `text` lies after `edits`, the protocol's text edits
+/// of that text: moved by the edits wholly before it, and at the start of
+/// what an edit around it wrote.
+///
+/// # Errors
+///
+/// Returns a message for a malformed edit.
+pub fn moved_offset(
+    text: &str,
+    edits: &[Value],
+    offset: usize,
+    encoding: Encoding,
+) -> Result<usize, String> {
+    let lines = Lines::new(text, Bom::Counted);
+    let mut spans = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let range = edit
+            .get("range")
+            .ok_or_else(|| format!("an edit without a range: {edit}"))?;
+        let written = edit
+            .get("newText")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("an edit without newText: {edit}"))?
+            .len();
+        spans.push((text::offsets(&lines, range, encoding)?, written));
+    }
+    spans.sort_by_key(|&((start, end), _)| (start, end));
+    let mut moved = offset;
+    for ((start, end), written) in spans {
+        if end <= offset && start < offset {
+            moved = moved
+                .saturating_sub(end.saturating_sub(start))
+                .saturating_add(written);
+        } else if start < offset {
+            // Inside what the edit replaced: where it wrote.
+            let shift = moved.saturating_sub(offset);
+            return Ok(start.saturating_add(shift));
+        } else if start == offset && end == offset {
+            // An insertion at the offset itself goes before it.
+            moved = moved.saturating_add(written);
+        }
+    }
+    Ok(moved)
+}
+
+/// The block of a `workspace/executeCommand` of `command` with
+/// `arguments`, an `execute` step's or a command action's (D-1693): the
+/// `answer`, each `window/showDocument`'s params with its path as goldens
+/// show it, and the `window/showMessage` lines the server sent before it.
+/// A document `cheby.explain` opened must hold the explanation that
+/// `cheby explain` prints for the code it was given.
+///
+/// # Errors
+///
+/// Returns a message for an opened explanation that differs, or that
+/// cannot be read.
+pub fn execute_block(
+    client: &mut Client,
+    command: &str,
+    arguments: &[Value],
+) -> Result<Value, String> {
+    drop(client.take_where(is_show_message));
+    drop(client.take_shown_documents());
+    let params = json!({ "command": command, "arguments": arguments });
+    let answer = match client.call("workspace/executeCommand", params)? {
+        Ok(value) => value,
+        Err(e) => json!({ "error": { "code": e.code, "message": e.message } }),
+    };
+    let documents = client.take_shown_documents();
+    let messages = shown_messages(&client.take_where(is_show_message));
+    if command == EXPLAIN_COMMAND {
+        let code = arguments
+            .first()
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for document in &documents {
+            let uri = document
+                .get("uri")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("a `window/showDocument` with no URI: {document}"))?;
+            let path = super::uri::uri_to_path(uri)
+                .ok_or_else(|| format!("`window/showDocument` of {uri}, which is no file"))?;
+            let written = std::fs::read_to_string(&path)
+                .map_err(|e| format!("the explanation at {}: {e}", path.display()))?;
+            same_explanation(code, &written)?;
+        }
+    }
+    Ok(json!({
+        "answer": client.normalize(&answer),
+        "showDocument": client.normalize(&Value::Array(documents)),
+        "showMessage": messages,
+    }))
+}
+
+/// The block of an `explain CODE` step: `cheby/explain`'s answer's `code`
+/// and `summary`, its `markdown` compared with the explanation `cheby
+/// explain` prints, so no golden holds a `docs/diagnostics` text (X §8.3).
+/// Any other answer, an error or `null`, is the block as it is.
+///
+/// # Errors
+///
+/// Returns a message for a `markdown` that differs.
+pub fn explain_block(client: &mut Client, code: &str) -> Result<Value, String> {
+    let answer = match client.call("cheby/explain", json!({ "code": code }))? {
+        Ok(value) => value,
+        Err(e) => return Ok(json!({ "error": { "code": e.code, "message": e.message } })),
+    };
+    let Some(markdown) = answer.get("markdown").and_then(Value::as_str) else {
+        return Ok(answer);
+    };
+    same_explanation(code, markdown)?;
+    Ok(json!({
+        "code": answer.get("code").cloned().unwrap_or(Value::Null),
+        "summary": answer.get("summary").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Whether `text` is the explanation `cheby explain CODE` prints.
+///
+/// # Errors
+///
+/// Returns a message for an unknown code or a text that differs.
+pub fn same_explanation(code: &str, text: &str) -> Result<(), String> {
+    let expected = cheby_diag::Code::parse(code)
+        .and_then(cheby_diag::codes::explanation)
+        .ok_or_else(|| format!("`{code}` has no explanation"))?;
+    if text == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "the explanation of {code} differs from `cheby explain {code}`'s:\n{text}"
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1964,6 +2406,90 @@ mod tests {
             "code": code,
             "message": format!("{code} here\nmore"),
         })
+    }
+
+    /// An offset moves by the edits before it, stays before an edit after
+    /// it, and lands where an edit around it wrote (F §9.4).
+    #[test]
+    fn offsets_move_through_edits() {
+        let text = "ab\ncd\nef\n";
+        let edit = |l: u32, c: u32, e: u32, new: &str| json!({ "range": range((l, c), (l, e)), "newText": new });
+        let edits = [edit(0, 0, 2, "xyz"), edit(2, 0, 0, "q\n")];
+        let enc = Encoding::Utf16;
+        // `c`, after the first edit: one byte later.
+        assert_eq!(moved_offset(text, &edits, 3, enc), Ok(4));
+        // `b`, inside the first edit: where it wrote.
+        assert_eq!(moved_offset(text, &edits, 1, enc), Ok(0));
+        // `e`, at the insertion: after what it wrote.
+        assert_eq!(moved_offset(text, &edits, 6, enc), Ok(9));
+        assert_eq!(moved_offset(text, &[], 6, enc), Ok(6));
+    }
+
+    /// A fix's code is gone when its count drops, or when none of it starts
+    /// at the fixed start or in what the edits wrote: a wrap that writes
+    /// `Err(` before the diagnostic's start and leaves it is caught, though
+    /// the start moved past the insertion (T-2).
+    #[test]
+    fn a_fix_that_leaves_its_code_is_caught() {
+        let before_text = "fn f() -> Option<Int> {\n  n\n}\n";
+        let edits = [
+            json!({ "range": range((1, 2), (1, 2)), "newText": "Err(" }),
+            json!({ "range": range((1, 3), (1, 3)), "newText": ")" }),
+        ];
+        let enc = Encoding::Utf16;
+        let after_text = "fn f() -> Option<Int> {\n  Err(n)\n}\n";
+        let written = written_ranges(before_text, &edits, enc).unwrap();
+        assert_eq!(written, [(26, 30), (31, 32)]);
+        let start = moved_offset(before_text, &edits, 26, enc).unwrap();
+        let e0047 = |line: u32, character: u32| json!({ "code": "E0047", "range": range((line, character), (line, character.saturating_add(1))) });
+        let code = json!("E0047");
+        let before = [e0047(1, 2)];
+        // The survivor starts where the wrap wrote.
+        let left = fixed_is_gone(
+            &code,
+            &before,
+            &[e0047(1, 2)],
+            after_text,
+            start,
+            &written,
+            enc,
+        );
+        assert!(left.is_err_and(|e| e.contains("leaves its diagnostic")));
+        // Gone, or only elsewhere, passes; so does a count that dropped.
+        assert_eq!(
+            fixed_is_gone(&code, &before, &[], after_text, start, &written, enc),
+            Ok(())
+        );
+        let elsewhere = [e0047(2, 0)];
+        assert_eq!(
+            fixed_is_gone(&code, &before, &elsewhere, after_text, start, &written, enc),
+            Ok(())
+        );
+        let two = [e0047(1, 2), e0047(2, 0)];
+        assert_eq!(
+            fixed_is_gone(
+                &code,
+                &two,
+                &[e0047(1, 2)],
+                after_text,
+                start,
+                &written,
+                enc
+            ),
+            Ok(())
+        );
+    }
+
+    /// An explanation must be the text `cheby explain` prints, and an
+    /// unknown code has none.
+    #[test]
+    fn explanations_are_compared_with_cheby_explain() {
+        let code = cheby_diag::codes::SHADOWED_NAME;
+        let text = cheby_diag::codes::explanation(code).unwrap();
+        assert_eq!(same_explanation("E0044", text), Ok(()));
+        assert!(same_explanation("E0044", "something else").is_err());
+        assert!(same_explanation("E9999", text).is_err());
+        assert!(same_explanation("nonsense", text).is_err());
     }
 
     #[test]
@@ -2476,6 +3002,43 @@ mod tests {
         assert_eq!(kept, [1, 4]);
         assert_eq!(dropped, 3);
         assert_eq!(sample(&[1, 2], 5), (vec![1, 2], 0));
+    }
+
+    /// The examples group's resolves take the actions with `data` of the
+    /// `codeAction` answers only, each with its listing's label, and count
+    /// every action listed (T-4).
+    #[test]
+    fn listed_actions_of_the_examples() {
+        let prepared = BTreeMap::from([
+            (
+                "src/main.cheby:1:2 codeAction".to_owned(),
+                json!([
+                    { "title": "A", "data": { "id": 1 } },
+                    { "title": "B" },
+                    { "title": "C", "data": null },
+                ]),
+            ),
+            (
+                "src/main.cheby:1:2 hover".to_owned(),
+                json!([{ "data": 1 }]),
+            ),
+            ("src/main.cheby:3:0 codeAction".to_owned(), json!(null)),
+        ]);
+        let (all, with_data) = listed_actions(&prepared);
+        assert_eq!(all, 3);
+        assert_eq!(
+            with_data,
+            [(
+                "src/main.cheby:1:2 codeAction".to_owned(),
+                json!({ "title": "A", "data": { "id": 1 } })
+            )]
+        );
+        // The budget's stride keeps the first and every `step`-th after it.
+        let (kept, dropped) = sample(&(0..450).collect::<Vec<u32>>(), 200);
+        assert_eq!(kept.len(), 150);
+        assert_eq!(kept.first().copied(), Some(0));
+        assert_eq!(kept.get(1).copied(), Some(3));
+        assert_eq!(dropped, 300);
     }
 
     /// D-1716: the stride order spreads the first `budget` items over the

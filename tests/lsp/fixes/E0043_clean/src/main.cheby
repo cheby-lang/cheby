@@ -1,0 +1,11 @@
+// @decisions: D-1684, D-1736, D-162
+//! E0043 for a `priv` item of another module of the package: the item is
+//! made package-visible in its own file, on resolve, where `verify`
+//! checks the edit (D-1684).
+
+import app::shape
+
+fn main() {
+  assert shape::secret() == shape::open()
+  //            ^ action Make `secret` package-visible
+}

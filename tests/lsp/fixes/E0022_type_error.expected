@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0022",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0022.md"
+      },
+      "message": "`exposed` requires `pub`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 5
+        },
+        "start": {
+          "character": 0,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:1 action make the type `pub` as well
+{
+  "actions": [
+    "make the type `pub` as well",
+    "Explain E0022"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        181,
+        181
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0022",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0022.md"
+        },
+        "message": "`exposed` requires `pub`",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "pub ",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "make the type `pub` as well"
+  },
+  "showMessage": []
+}

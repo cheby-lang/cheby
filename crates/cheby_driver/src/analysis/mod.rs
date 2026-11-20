@@ -63,8 +63,9 @@ pub use cheby_iface::{
 };
 pub use cheby_package::{ModulePath, Target, Targets};
 pub use cheby_resolve::{
-    BodyRes, ImportItemRequest, ImportRequest, ImportTarget, ItemDef, LocalDecl, LocalKind,
-    ModuleScope, Res, ResolvedModule, ScopeEntry, ScopeSource, field_docs, item_docs,
+    BodyRes, ImportItemRequest, ImportRequest, ImportTarget, ItemDef, ItemHelp, LocalDecl,
+    LocalKind, MissingItem, ModuleScope, Res, ResolvedModule, ScopeEntry, ScopeSource, StdItemName,
+    StdItems, StdSuggestion, field_docs, item_docs,
 };
 pub use cheby_types::facts::{
     BodyFacts, CallFact, CaseFact, DynFact, ExprFact, FieldFact, FieldSite, MismatchFact,
@@ -77,6 +78,7 @@ pub use cheby_types::satisfaction::{
 pub use cheby_types::{ModuleRefs, TypesInput, infer, thir};
 
 pub use crate::cache::Hash128;
+pub use crate::std_lib::{item_names as std_item_names, items_of as std_items_of};
 pub use backend_query::{
     BackendError, BackendFile, BackendJob, BackendRequest, BackendResult, ConstDiagnostic,
     ConstValue, ConstantsOut, FrontOutcome, Section, backend_query, cut_text,

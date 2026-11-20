@@ -1,0 +1,18 @@
+// @decisions: D-1387, D-1678, D-1692, D-1736
+//! A module whose own constructor hides the prelude's `Some` cannot name
+//! it, so that row is a `_` arm (D-1678); `None` is still the prelude's.
+
+type Mine {
+  Some(Int),
+}
+
+fn pick(x: Option<Int>) -> Int {
+  case x {
+  //   ^ action Add the missing arms
+    None => 0
+  }
+}
+
+fn main() {
+  assert pick(None) == 0 && Some(1) == Some(1)
+}

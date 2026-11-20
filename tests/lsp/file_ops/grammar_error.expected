@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
       "message": "there is no module `moves::util`\nno such module",
       "range": {
         "end": {
@@ -19,6 +22,9 @@
     },
     {
       "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
       "message": "there is no module `moves::util`\nno such module",
       "range": {
         "end": {
@@ -37,6 +43,9 @@
   "src/other.cheby": [
     {
       "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
       "message": "unclosed `(`\nexpected `)`",
       "range": {
         "end": {
@@ -71,6 +80,9 @@
     },
     {
       "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
       "message": "unclosed `{`\nexpected `}`",
       "range": {
         "end": {

@@ -1,0 +1,9 @@
+// @decisions: D-1686, D-1734
+// @client: empty
+//! A client without code-action literals gets no action, and keeps the
+//! help line of a fix in the published message.
+
+fn main() {
+  let total = 1
+  //  ^ codeAction
+}

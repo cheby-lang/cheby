@@ -11,6 +11,7 @@ use cheby_syntax::ast::{
     InterfaceRef, Item, ListItem, ListPatItem, Param, Pat, PathNode, RecordEntry, RetType, Stmt,
     StringPart, Type, TypeBody, TypeParamList, VariantFields,
 };
+use cheby_syntax::names::to_snake_case;
 use cheby_syntax::{NodeId, SyntaxKind, SyntaxNode, SyntaxToken};
 use rustc_hash::FxHashMap;
 
@@ -567,14 +568,18 @@ impl Cx<'_, '_> {
             }
         };
         if let Some((first, message, label)) = earlier {
+            // The name suggested is in snake case, as E0006 wants it and as
+            // the language server's fix writes it: `myVal` gets `my_val_2`
+            // (D-1756).
+            let snake = to_snake_case(text);
             let help = match param_owner {
                 Some(owner) => format!(
                     "the parameters of a {owner} cannot reuse a name from around it (§5.2.3); \
                      rename this parameter, or rename the outer `{text}`, for example to \
-                     `initial_{text}`"
+                     `initial_{snake}`"
                 ),
                 None => format!(
-                    "give this binding a new name, such as `{text}_2`; names cannot be \
+                    "give this binding a new name, such as `{snake}_2`; names cannot be \
                      shadowed (§5.2.3)"
                 ),
             };
@@ -1201,7 +1206,8 @@ impl Cx<'_, '_> {
                 .with_primary(span, "bound again here")
                 .with_secondary(first, "first bound here")
                 .with_help(format!(
-                    "give one of them a new name, such as `{text}_2`, or match it with `_`"
+                    "give one of them a new name, such as `{}_2`, or match it with `_`",
+                    to_snake_case(text)
                 )),
             );
             if let Some(&local) = state.shared.get(&interned) {

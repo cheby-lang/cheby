@@ -3,6 +3,9 @@
   "cheby.toml": [
     {
       "code": "E0037",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0037.md"
+      },
       "message": "`src/My-Util.cheby` is not a valid module name\nnote: the name of a file under `src/` becomes part of a module path, so it must be a snake_case identifier that is not a keyword\nhelp: rename it to `src/my_util.cheby`",
       "range": {
         "end": {

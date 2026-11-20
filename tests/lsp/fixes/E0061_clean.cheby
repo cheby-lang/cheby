@@ -1,0 +1,20 @@
+// @decisions: D-1387, D-1692, D-1735, D-1736
+//! E0061's quick fix adds an arm for each missing value after the last
+//! arm, written from the `case`'s fact, and formatted.
+
+type Color {
+  Red,
+  Green,
+  Blue,
+}
+
+fn name(color: Color) -> String {
+  case color {
+  //   ^ action Add the missing arms
+    Red => "red"
+  }
+}
+
+fn main() {
+  assert name(Red) == "red"
+}

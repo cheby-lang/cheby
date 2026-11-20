@@ -1,0 +1,10 @@
+// @decisions: D-1388, D-1393, D-1360, D-1736
+//! W0003: the fix removes the unused import with its line (X §6.3).
+
+import std::io
+import std::list
+
+fn main() {
+  assert list::length([1]) == 1
+}
+//> 4:1 action Remove the unused import

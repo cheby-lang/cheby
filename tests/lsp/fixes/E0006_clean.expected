@@ -1,0 +1,116 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0006",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+      },
+      "message": "name `maxValue` is not in snake_case",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 4
+        },
+        "start": {
+          "character": 6,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `maxValue`\nnever used",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 4
+        },
+        "start": {
+          "character": 6,
+          "line": 4
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:5:7 action write `max_value`
+{
+  "actions": [
+    "write `max_value`",
+    "if this is intentional, start the name with an underscore: `_maxValue`",
+    "Explain E0006",
+    "Explain W0002"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        102,
+        102
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0006",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+        },
+        "message": "name `maxValue` is not in snake_case",
+        "range": {
+          "end": {
+            "character": 14,
+            "line": 4
+          },
+          "start": {
+            "character": 6,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "max_value",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 4
+                },
+                "start": {
+                  "character": 6,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write `max_value`"
+  },
+  "showMessage": []
+}

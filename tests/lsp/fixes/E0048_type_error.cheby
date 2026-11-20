@@ -1,0 +1,20 @@
+// @decisions: D-1388, D-1393, D-1736, D-050
+//! E0048's fixes add the missing arguments as `todo` or remove the extra
+//! ones, by the callee's parameters.
+//! With a type error in another function, which stays.
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  let one = add(1)
+  let three = add(1, 2, 3)
+  assert one == three
+}
+
+pub fn answer() -> Int {
+  "forty-two"
+}
+//> 11:16 action Add the missing arguments as `todo`
+//> 12:18 action Remove the extra arguments

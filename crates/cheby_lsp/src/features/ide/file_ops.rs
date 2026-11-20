@@ -141,6 +141,7 @@ pub(crate) fn will_rename(
             moves: &files,
             renamed: &renamed,
             hides: false,
+            written: &[],
         },
         Action::Move,
     )
@@ -1235,6 +1236,7 @@ mod tests {
                 moves: &moves,
                 renamed: &[("app::util", "app::helpers"), ("util::", "helpers::")],
                 hides: false,
+                written: &[],
             },
             super::Action::Move,
         );

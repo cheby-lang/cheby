@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0023",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0023.md"
+      },
+      "message": "an interface function takes no type arguments\nnote: interface functions are not generic (D-165)",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 4
+        },
+        "start": {
+          "character": 12,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:13 action remove the type arguments
+{
+  "actions": [
+    "remove the type arguments",
+    "Explain E0023"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        149,
+        149
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0023",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0023.md"
+        },
+        "message": "an interface function takes no type arguments\nnote: interface functions are not generic (D-165)",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 4
+          },
+          "start": {
+            "character": 12,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 19,
+                  "line": 4
+                },
+                "start": {
+                  "character": 12,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "remove the type arguments"
+  },
+  "showMessage": []
+}

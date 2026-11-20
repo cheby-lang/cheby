@@ -1,0 +1,6 @@
+//! A probe with an item that no other module has.
+
+/// One.
+pub fn only_in_the_checkout() -> Int {
+  1
+}

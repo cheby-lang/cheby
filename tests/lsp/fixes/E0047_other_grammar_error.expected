@@ -1,0 +1,344 @@
+== diagnostics
+{
+  "src/broken.cheby": [
+    {
+      "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 2
+        },
+        "start": {
+          "character": 13,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 2
+              },
+              "start": {
+                "character": 11,
+                "line": 2
+              }
+            },
+            "uri": "src/broken.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
+      "message": "unclosed `{`\nexpected `}`",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 2
+        },
+        "start": {
+          "character": 13,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 2
+              },
+              "start": {
+                "character": 13,
+                "line": 2
+              }
+            },
+            "uri": "src/broken.cheby"
+          },
+          "message": "this `{` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ],
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Option<Int>`, found `Int`",
+      "range": {
+        "end": {
+          "character": 3,
+          "line": 11
+        },
+        "start": {
+          "character": 2,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 31,
+                "line": 10
+              },
+              "start": {
+                "character": 20,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0059",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0059.md"
+      },
+      "message": "missing field `y` in `Point`\nmissing `y`\nnote: a named-field constructor must initialize every field (§5.11.1)",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 15
+        },
+        "start": {
+          "character": 2,
+          "line": 15
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 5
+              },
+              "start": {
+                "character": 5,
+                "line": 5
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`Point` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:3 action Wrap in `Some(…)`
+{
+  "actions": [
+    "Wrap in `Some(…)`",
+    "Explain E0047"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        323,
+        323
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0047",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+        },
+        "message": "mismatched types\nexpected `Option<Int>`, found `Int`",
+        "range": {
+          "end": {
+            "character": 3,
+            "line": 11
+          },
+          "start": {
+            "character": 2,
+            "line": 11
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 31,
+                  "line": 10
+                },
+                "start": {
+                  "character": 20,
+                  "line": 10
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "expected because of this return type"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "Some(",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 11
+                },
+                "start": {
+                  "character": 2,
+                  "line": 11
+                }
+              }
+            },
+            {
+              "newText": ")",
+              "range": {
+                "end": {
+                  "character": 3,
+                  "line": 11
+                },
+                "start": {
+                  "character": 3,
+                  "line": 11
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Wrap in `Some(…)`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:16:3 action Add the missing fields as `todo`
+{
+  "actions": [
+    "Add the missing fields as `todo`",
+    "Explain E0059"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        353,
+        353
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0059",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0059.md"
+        },
+        "message": "missing field `y` in `Point`\nmissing `y`\nnote: a named-field constructor must initialize every field (§5.11.1)",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 15
+          },
+          "start": {
+            "character": 2,
+            "line": 15
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 5
+                },
+                "start": {
+                  "character": 5,
+                  "line": 5
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`Point` is declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ", y: todo",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 15
+                },
+                "start": {
+                  "character": 14,
+                  "line": 15
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Add the missing fields as `todo`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:20:9 noAction Remove the unused `twice`
+{
+  "actions": []
+}

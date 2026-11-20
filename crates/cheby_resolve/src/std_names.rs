@@ -1,22 +1,26 @@
-//! The help of E0042 for `m::x` where `m` is a std module without `x`
-//! (D-1658): the std item that another language's name means, or else
-//! the std items called `x` in other std modules, imported or not
-//! (D-1662).
+//! The help of E0042 for `m::x` where `m` has no visible `x`: a close
+//! name in `m`, or, when `m` is a std module, the std item that another
+//! language's name means, or else the std items called `x` in other std
+//! modules, imported or not (D-1658, D-1662).
 //!
-//! The names come from the toolchain's catalog of std ([`StdCatalog::items`]),
-//! as the help of "`list` is not imported" does from
-//! [`StdCatalog::known`]: names only, never a body, so resolution stays
+//! The names come from the toolchain's catalog of std
+//! ([`crate::StdCatalog::items`]), as the help of "`list` is not imported"
+//! does from [`crate::StdCatalog::known`]: names only, never a body, so resolution stays
 //! local (D-246). The catalog is called only when this help is needed.
+//!
+//! [`MissingItem::help`] is the one lookup: the resolver writes the help
+//! from it, and the language server's fix for the same diagnostic reads it
+//! again, so the fix offers exactly what the help names (D-1694).
 
-use cheby_iface::Namespace;
+use cheby_iface::{
+    DefIndex, Interner, ModuleId, ModuleInterface, Name, Namespace, PackageId, builtin,
+};
 use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{
     AstNode, AstToken, Item, SourceFile, TypeBody, Variant, Visibility, VisibilityKind,
 };
 
-use crate::StdCatalog;
-
-/// A public item of a shipped std module, for [`StdCatalog::items`].
+/// A public item of a shipped std module, for [`crate::StdCatalog::items`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StdItemName {
     /// The module's path under `std`, such as `io` or `json::decode`.
@@ -27,7 +31,7 @@ pub struct StdItemName {
     pub namespace: Namespace,
 }
 
-/// The list of [`StdCatalog::items`]: std's public items, in module
+/// The list of [`crate::StdCatalog::items`]: std's public items, in module
 /// order.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum StdItems<'a> {
@@ -124,40 +128,140 @@ pub fn public_names(tree: &SyntaxTree) -> Vec<(String, Namespace)> {
     out
 }
 
-/// The help [`std_help`] gives.
-pub(crate) enum StdHelp {
-    /// The item is in the same module under this name.
-    Rename(&'static str),
-    /// A help line naming the modules that have the item.
-    Elsewhere(String),
+/// A lookup of E0042's help for `m::x`, where module `m` has no item `x`
+/// that the naming package may see.
+#[derive(Clone, Copy, Debug)]
+pub struct MissingItem<'a> {
+    /// The interface of `m`.
+    pub target: &'a ModuleInterface,
+    /// `m`'s path under `std`, such as `io` or `json::decode`, when it is a
+    /// module of package std; `None` for any other module.
+    pub std_module: Option<&'a str>,
+    /// The builtin module's interface, which [`builtin_homes`] reads. Only
+    /// read when `std_module` is set.
+    pub builtins: Option<&'a ModuleInterface>,
+    /// The run's names.
+    pub names: &'a Interner,
+    /// The package of the module that names `m::x`, for visibility.
+    pub from: PackageId,
+    /// Std's public items, for the help of D-1658.
+    pub items: StdItems<'a>,
 }
 
-/// The help for `module::name` in namespace `ns`, where `module` is the
-/// path under `std` of a std module that has no such item: the target of
-/// an alias, which is a deliberate mapping, or else the other std modules
-/// with an item of that name, up to three in module order (D-1662).
-/// `homes` are the std modules where a builtin item of that name is
-/// homed, as `Map` is in `std::map` (D-447). `None` when there is
-/// neither.
-pub(crate) fn std_help(
-    std: StdCatalog<'_>,
-    homes: &[&'static str],
+/// What E0042's help for `m::x` names ([`MissingItem::help`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ItemHelp {
+    /// A visible item of `m` whose name is close: "did you mean".
+    Close(&'static str),
+    /// What std has instead, when `m` is a std module (D-1658).
+    Std(StdSuggestion),
+}
+
+/// What std has for `m::x` when std module `m` has no `x` (D-1658,
+/// D-1662).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StdSuggestion {
+    /// An alias whose target is in `m` itself, under this name.
+    Rename(&'static str),
+    /// The std modules that have the item, by their paths under `std`, at
+    /// most three in module order, and the item's name in them: an alias's
+    /// target, or else the items called `x` in other modules and the homes
+    /// of a builtin item of that name.
+    Elsewhere {
+        /// The modules, such as `io`.
+        modules: Vec<String>,
+        /// The item's name in each of them.
+        name: String,
+    },
+}
+
+impl StdSuggestion {
+    /// The help line of [`Self::Elsewhere`]: "`std::io` has `read_file`".
+    /// `None` for [`Self::Rename`], which is a "did you mean".
+    #[must_use]
+    pub fn elsewhere_text(&self) -> Option<String> {
+        match self {
+            Self::Rename(_) => None,
+            Self::Elsewhere { modules, name } => Some(have(modules, name)),
+        }
+    }
+}
+
+impl MissingItem<'_> {
+    /// The help for `name` in namespace `ns`: a close name among the
+    /// visible items of `m` in that namespace, or else, for a std module,
+    /// what [`std_suggestion`] finds, with the homes of [`builtin_homes`].
+    /// `None` when there is neither.
+    #[must_use]
+    pub fn help(&self, ns: Namespace, name: Name) -> Option<ItemHelp> {
+        let text = self.names.get(name);
+        let mut candidates: Vec<&'static str> = self
+            .target
+            .items
+            .iter_enumerated()
+            .filter(|(i, item)| {
+                item.kind.namespace() == Some(ns) && self.target.visible_from(*i, self.from)
+            })
+            .map(|(_, item)| self.names.get(item.name))
+            .collect();
+        candidates.sort_unstable();
+        if let Some(close) = crate::closest_name(text, candidates) {
+            return Some(ItemHelp::Close(close));
+        }
+        let module = self.std_module?;
+        let homes = self
+            .builtins
+            .map_or_else(Vec::new, |builtins| builtin_homes(builtins, ns, name));
+        std_suggestion(self.items.list(), &homes, module, text, ns).map(ItemHelp::Std)
+    }
+}
+
+/// The std modules, by their paths under `std`, where a builtin item
+/// called `name` in namespace `ns` is homed, as `Map` is in `std::map`
+/// (D-447), in [`builtin::HOMES`] order. `builtins` is the builtin
+/// module's interface.
+#[must_use]
+pub fn builtin_homes(builtins: &ModuleInterface, ns: Namespace, name: Name) -> Vec<&'static str> {
+    let is_it = |index: DefIndex| {
+        builtins
+            .item(index)
+            .is_some_and(|item| item.name == name && item.kind.namespace() == Some(ns))
+    };
+    builtin::HOMES
+        .iter()
+        .filter(|(def, _)| def.module == ModuleId::BUILTIN && is_it(def.index))
+        .map(|&(_, home)| home)
+        .collect()
+}
+
+/// What std has for `module::name` in namespace `ns`, where `module` is
+/// the path under `std` of a std module that has no such item: the target
+/// of an alias, which is a deliberate mapping, or else the other std
+/// modules with an item of that name among `items`, std's public items,
+/// up to three in module order (D-1662). `homes` are the std modules
+/// where a builtin item of that name is homed ([`builtin_homes`]).
+/// `None` when there is neither.
+#[must_use]
+pub fn std_suggestion(
+    items: &[StdItemName],
+    homes: &[&str],
     module: &str,
     name: &str,
     ns: Namespace,
-) -> Option<StdHelp> {
+) -> Option<StdSuggestion> {
     let alias = ALIASES
         .iter()
         .find(|((m, n), _)| *m == module && *n == name && ns == Namespace::Value);
     if let Some(&(_, (to_module, to_name))) = alias {
         if to_module == module {
-            return Some(StdHelp::Rename(to_name));
+            return Some(StdSuggestion::Rename(to_name));
         }
-        return Some(StdHelp::Elsewhere(have(&[to_module], to_name)));
+        return Some(StdSuggestion::Elsewhere {
+            modules: vec![to_module.to_owned()],
+            name: to_name.to_owned(),
+        });
     }
-    let mut modules: Vec<&str> = std
-        .items
-        .list()
+    let mut modules: Vec<&str> = items
         .iter()
         .filter(|item| item.namespace == ns && &*item.name == name)
         .map(|item| &*item.module)
@@ -170,12 +274,15 @@ pub(crate) fn std_help(
         return None;
     }
     modules.truncate(MAX_MODULES);
-    Some(StdHelp::Elsewhere(have(&modules, name)))
+    Some(StdSuggestion::Elsewhere {
+        modules: modules.into_iter().map(str::to_owned).collect(),
+        name: name.to_owned(),
+    })
 }
 
 /// "`std::a` has `x`", "`std::a` and `std::b` have `x`", or with three
 /// modules "`std::a`, `std::b` and `std::c` have `x`".
-fn have(modules: &[&str], name: &str) -> String {
+fn have(modules: &[String], name: &str) -> String {
     let named: Vec<String> = modules.iter().map(|m| format!("`std::{m}`")).collect();
     match named.as_slice() {
         [one] => format!("{one} has `{name}`"),
@@ -192,6 +299,7 @@ mod tests {
     use cheby_diag::FileId;
 
     use super::*;
+    use crate::StdCatalog;
 
     fn names_of(text: &str) -> Vec<(String, Namespace)> {
         let parse = cheby_syntax::parse(FileId::new(0), Arc::from(text));
@@ -300,9 +408,9 @@ mod tests {
             known: &[],
             items: StdItems::Shared(fake_items),
         };
-        std_help(std, homes, module, name, ns).map(|help| match help {
-            StdHelp::Rename(to) => format!("rename to {to}"),
-            StdHelp::Elsewhere(text) => text,
+        std_suggestion(std.items.list(), homes, module, name, ns).map(|help| match help {
+            StdSuggestion::Rename(to) => format!("rename to {to}"),
+            elsewhere @ StdSuggestion::Elsewhere { .. } => elsewhere.elsewhere_text().unwrap(),
         })
     }
 
@@ -353,13 +461,126 @@ mod tests {
         assert_eq!(help("list", "nothing_like_it", value, &[]), None);
         // Without the catalog only the aliases are left.
         let bare = StdCatalog::default();
-        assert!(std_help(bare, &[], "string", "read_file", value).is_none());
+        assert!(std_suggestion(bare.items.list(), &[], "string", "read_file", value).is_none());
         assert_eq!(
-            std_help(bare, &[], "int", "from_string", value).map(|help| match help {
-                StdHelp::Rename(to) => to,
-                StdHelp::Elsewhere(_) => "elsewhere",
-            }),
-            Some("parse")
+            std_suggestion(bare.items.list(), &[], "int", "from_string", value),
+            Some(StdSuggestion::Rename("parse"))
         );
+    }
+
+    /// A case of the test below: the module and the name asked, the
+    /// namespace, the homes, then the modules and the name found, and the
+    /// help's text.
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        Namespace,
+        &'a [&'static str],
+        &'a [&'a str],
+        &'a str,
+        &'a str,
+    );
+
+    /// The structured form names what the help's text names: the same
+    /// modules, in the same order, and the item's name in them, so a fix
+    /// read from it offers what the help says (D-1694, W11-Q3).
+    #[test]
+    fn the_structured_form_names_what_the_help_names() {
+        let items = fake_items();
+        let value = Namespace::Value;
+        let cases: [Case<'_>; 5] = [
+            (
+                "string",
+                "read_file",
+                value,
+                &[],
+                &["io"],
+                "read_file",
+                "`std::io` has `read_file`",
+            ),
+            (
+                "io",
+                "length",
+                value,
+                &[],
+                &["bytes", "list", "map"],
+                "length",
+                "`std::bytes`, `std::list` and `std::map` have `length`",
+            ),
+            (
+                "file",
+                "read_text",
+                value,
+                &[],
+                &["io"],
+                "read_file",
+                "`std::io` has `read_file`",
+            ),
+            (
+                "list",
+                "Map",
+                Namespace::Type,
+                &["map"],
+                &["map"],
+                "Map",
+                "`std::map` has `Map`",
+            ),
+            (
+                "io",
+                "size",
+                value,
+                &[],
+                &["file", "heap", "map"],
+                "size",
+                "`std::file`, `std::heap` and `std::map` have `size`",
+            ),
+        ];
+        for (module, name, ns, homes, modules, to, text) in cases {
+            let found = std_suggestion(items, homes, module, name, ns).unwrap();
+            assert_eq!(
+                found,
+                StdSuggestion::Elsewhere {
+                    modules: modules.iter().map(|m| (*m).to_owned()).collect(),
+                    name: to.to_owned(),
+                },
+                "{module}::{name}"
+            );
+            assert_eq!(
+                found.elsewhere_text().as_deref(),
+                Some(text),
+                "{module}::{name}"
+            );
+        }
+        assert_eq!(StdSuggestion::Rename("length").elsewhere_text(), None);
+    }
+
+    /// A close name in the module comes before what std has elsewhere, as
+    /// in the help, and only visible items of the namespace count.
+    #[test]
+    fn a_close_name_comes_first() {
+        let names = Interner::new();
+        let target = ModuleInterface::empty(ModuleId::BUILTIN, PackageId::STD);
+        let lookup = MissingItem {
+            target: &target,
+            std_module: Some("string"),
+            builtins: None,
+            names: &names,
+            from: PackageId::LOCAL,
+            items: StdItems::Shared(fake_items),
+        };
+        let read_file = names.intern("read_file");
+        assert_eq!(
+            lookup.help(Namespace::Value, read_file),
+            Some(ItemHelp::Std(StdSuggestion::Elsewhere {
+                modules: vec!["io".to_owned()],
+                name: "read_file".to_owned(),
+            }))
+        );
+        // Not a std module: nothing but a close name.
+        let local = MissingItem {
+            std_module: None,
+            ..lookup
+        };
+        assert_eq!(local.help(Namespace::Value, read_file), None);
     }
 }

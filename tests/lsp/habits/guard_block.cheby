@@ -1,0 +1,19 @@
+// @decisions: D-1401, D-1736
+//! `guard_block`: `if … return` in a block that is not a function's or a
+//! closure's body block is not rewritten (plan §1.11), so only Explain is
+//! offered.
+
+fn nested(a: Int) -> Int {
+  case a {
+    0 => {
+      if a > 0 { return 1 }
+      a
+    }
+    _ => a
+  }
+}
+
+fn main() {
+  assert nested(0) == 0
+}
+//> 9:10 codeAction quickfix

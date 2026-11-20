@@ -3,6 +3,9 @@
   "src/a.cheby": [
     {
       "code": "E0040",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0040.md"
+      },
       "message": "modules import each other in a cycle\n`app::a` imports `app::b`\nnote: the cycle is app::a → app::b → app::a\nhelp: move what the modules share into a module that neither imports",
       "range": {
         "end": {

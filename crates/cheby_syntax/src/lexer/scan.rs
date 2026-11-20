@@ -12,7 +12,7 @@
               the rest of the text, so no addition overflows"
 )]
 
-use cheby_diag::{Diagnostic, FileId, Span, TextRange, TextSize, codes};
+use cheby_diag::{Diagnostic, Edit, FileId, Span, TextRange, TextSize, codes};
 
 use super::number::{NumberError, scan_number};
 use super::{Lexed, RawToken};
@@ -40,6 +40,9 @@ pub(super) struct Scanner<'a> {
     mode: Mode,
     tokens: Vec<RawToken>,
     errors: Vec<Diagnostic>,
+    /// The closing `'` of the last `'…'` whose opening quote got the
+    /// edit of D-1688, so that the closing one gets no edit of its own.
+    quote_close: Option<usize>,
 }
 
 /// A byte offset as a [`TextSize`]. Texts from a `SourceMap` fit.
@@ -62,6 +65,7 @@ impl<'a> Scanner<'a> {
             // Source averages a little over three bytes per token.
             tokens: Vec::with_capacity(text.len() / 3 + 1),
             errors: Vec::new(),
+            quote_close: None,
         }
     }
 
@@ -447,12 +451,78 @@ impl<'a> Scanner<'a> {
         )
         .with_primary(self.span(pos, end), "");
         diag = match c {
-            ';' => diag.with_help("statements are separated by line breaks, not `;`"),
-            '\'' => diag.with_help("strings use double quotes, such as \"text\""),
+            ';' => {
+                let help = "statements are separated by line breaks, not `;`";
+                if self.only_trivia_follows(end) {
+                    diag.with_suggestion(help, self.span(pos, end), "")
+                } else {
+                    diag.with_help(help)
+                }
+            }
+            '\'' => {
+                let help = "strings use double quotes, such as \"text\"";
+                match self.closing_quote(pos, end) {
+                    Some(close) => {
+                        self.quote_close = Some(close);
+                        diag.with_suggestion_edits(
+                            help,
+                            vec![
+                                Edit {
+                                    span: self.span(pos, end),
+                                    replacement: "\"".to_owned(),
+                                },
+                                Edit {
+                                    span: self.span(close, close + 1),
+                                    replacement: "\"".to_owned(),
+                                },
+                            ],
+                        )
+                    }
+                    None => diag.with_help(help),
+                }
+            }
             _ => diag,
         };
         self.error(diag);
         self.push(SyntaxKind::ERROR_TOKEN, end);
+    }
+
+    /// Whether nothing but spaces, tabs or a `//` comment follows `end`
+    /// on its line, so that deleting a `;` there leaves the line as it
+    /// reads (D-1688).
+    fn only_trivia_follows(&self, end: usize) -> bool {
+        let rest = self.run_while(end, |b| matches!(b, b' ' | b'\t'));
+        matches!(
+            (self.at(rest), self.at(rest + 1)),
+            (None | Some(b'\n'), _) | (Some(b'\r'), Some(b'\n')) | (Some(b'/'), Some(b'/'))
+        )
+    }
+
+    /// The closing quote of a `'…'` that opens at `pos`: the next `'` on
+    /// the same line, when no `"`, `\\`, `{` or `//` lies between, so that
+    /// both quotes written as `"` make a plain string (D-1688). A `'` after
+    /// a `//` lies in a comment, which the edit must not reach, so a
+    /// single-quoted URL gets no edit either (D-1740). `None` for
+    /// the closing quote of a pair already found, and inside an
+    /// interpolation.
+    fn closing_quote(&self, pos: usize, end: usize) -> Option<usize> {
+        // Inside an interpolation a `"` would start a string of its own
+        // (D-1656), so the quotes there get no edit.
+        if self.quote_close == Some(pos) || matches!(self.mode, Mode::Interp { .. }) {
+            return None;
+        }
+        let mut close = end;
+        loop {
+            close = self.run_while(close, |b| {
+                !matches!(b, b'\'' | b'"' | b'\\' | b'{' | b'\n' | b'\r' | b'/')
+            });
+            match (self.at(close), self.at(close + 1)) {
+                (Some(b'/'), Some(b'/')) => return None,
+                (Some(b'/'), _) => close += 1,
+                _ => break,
+            }
+        }
+        (self.at(close) == Some(b'\'')).then_some(close)
     }
 
     // ---- string mode ----------------------------------------------------

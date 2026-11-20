@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0014",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0014.md"
+      },
       "message": "unexpected line break\nexpected a field name\nnote: a line continues only inside `(`, `[` or type `<…>`, after an operator, `,`, `=`, `=>`, `->` or `<-`, or before a line starting with `|>`, `&&` or `||`",
       "range": {
         "end": {
@@ -19,6 +22,9 @@
     },
     {
       "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
       "message": "expected an expression, found `)`",
       "range": {
         "end": {

@@ -1,0 +1,166 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0046",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0046.md"
+      },
+      "message": "the function `answer` has no body\nhelp: add a body, or an `@external` attribute that names its foreign implementation",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 4
+        },
+        "start": {
+          "character": 3,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0041",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0041.md"
+      },
+      "message": "`answer` is declared twice in this module\ndeclared again here",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 10
+        },
+        "start": {
+          "character": 7,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 4
+              },
+              "start": {
+                "character": 3,
+                "line": 4
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "first declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 11
+        },
+        "start": {
+          "character": 2,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 10
+              },
+              "start": {
+                "character": 19,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:4 action Add the body `{ todo }`
+{
+  "actions": [
+    "Add the body `{ todo }`",
+    "Explain E0046"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        180,
+        180
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0046",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0046.md"
+        },
+        "message": "the function `answer` has no body\nhelp: add a body, or an `@external` attribute that names its foreign implementation",
+        "range": {
+          "end": {
+            "character": 9,
+            "line": 4
+          },
+          "start": {
+            "character": 3,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": " {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 18,
+                  "line": 4
+                },
+                "start": {
+                  "character": 18,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Add the body `{ todo }`"
+  },
+  "showMessage": []
+}

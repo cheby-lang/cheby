@@ -1,0 +1,129 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `true` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 5
+        },
+        "start": {
+          "character": 2,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 13
+        },
+        "start": {
+          "character": 2,
+          "line": 13
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 12
+              },
+              "start": {
+                "character": 15,
+                "line": 12
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:3 action Write `True`
+{
+  "actions": [
+    "Write `True`",
+    "Explain E0042"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        189,
+        189
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0042",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+        },
+        "message": "cannot find value `true` in this scope\nnot found",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 5
+          },
+          "start": {
+            "character": 2,
+            "line": 5
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "True",
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 5
+                },
+                "start": {
+                  "character": 2,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Write `True`"
+  },
+  "showMessage": []
+}

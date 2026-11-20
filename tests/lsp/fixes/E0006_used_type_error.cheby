@@ -1,0 +1,14 @@
+// @decisions: D-1388, D-1393, D-059, D-1668, D-1741
+//! E0006's help on a name that is used renames every use, through rename
+//! and its checks, where only the declaration's E0006 goes away.
+//! With a type error in another function.
+
+fn main() {
+  let maxValue = 3
+  assert maxValue == 3
+}
+
+fn answer() -> Int {
+  "forty-two"
+}
+//> 7:7 action write `max_value`

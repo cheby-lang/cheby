@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `xs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_xs`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `xs`\nnever used",
       "range": {
         "end": {
           "character": 8,
@@ -15,11 +18,17 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "W0002",
-      "message": "unused binding `pairs`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_pairs`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `pairs`\nnever used",
       "range": {
         "end": {
           "character": 11,
@@ -31,10 +40,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `enumer` in this scope\nnot found",
       "range": {
         "end": {

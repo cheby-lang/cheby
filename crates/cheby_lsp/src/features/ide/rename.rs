@@ -40,6 +40,7 @@
 
 use std::path::PathBuf;
 
+use cheby_driver::analysis::codes::{self, Code};
 use cheby_driver::analysis::{
     BaselineEntry, DefId, DefKind, FileId, FileLocation, Globals, IfaceItem, Introduced, ItemSig,
     Member, ModuleId, ModuleView, ParamIdx, PlainEdit, Snapshot, Symbol, SymbolNs, SymbolTarget,
@@ -145,6 +146,44 @@ pub(crate) fn rename(
     new_name: &str,
     cancel: &CancelToken,
 ) -> Result<Option<RenamePlan>, RenameError> {
+    rename_with(analyzed, file, offset, new_name, cancel, None)
+}
+
+/// [`rename`] as E0006's fix renames a used name (D-1741): with every
+/// check of a rename, but the E0006 of the name's declaration, which the
+/// fix exists to remove, may go away; any other error that would go away
+/// still refuses it (D-1668).
+///
+/// # Errors
+///
+/// As [`rename`].
+pub(crate) fn rename_fixing_case(
+    analyzed: &Analyzed,
+    file: FileId,
+    offset: TextSize,
+    new_name: &str,
+    cancel: &CancelToken,
+) -> Result<Option<RenamePlan>, RenameError> {
+    rename_with(
+        analyzed,
+        file,
+        offset,
+        new_name,
+        cancel,
+        Some(codes::NAMING_CONVENTION),
+    )
+}
+
+/// [`rename`], where the errors of the code `fixed` that name the old name
+/// may go away (D-1741).
+fn rename_with(
+    analyzed: &Analyzed,
+    file: FileId,
+    offset: TextSize,
+    new_name: &str,
+    cancel: &CancelToken,
+    fixed: Option<Code>,
+) -> Result<Option<RenamePlan>, RenameError> {
     if let Some(param) = bodiless_param(&analyzed.snapshot, file, offset)? {
         return rename_bodiless(analyzed, file, &param, new_name, cancel);
     }
@@ -163,29 +202,49 @@ pub(crate) fn rename(
     let edits = write(index, &coupled.symbols, new_name, cancel)?;
     cancel.check()?;
     let renamed = [(target.old.as_str(), new_name)];
-    check(
+    let gone = fixed.map(|code| Gone {
+        code,
+        name: format!("`{}`", target.old),
+    });
+    check_except(
         analyzed,
         &VerifyRequest {
             edits: &edits,
             moves: &[],
             renamed: &renamed,
             hides: true,
+            written: &[],
         },
         Action::Rename,
+        gone.as_ref(),
     )?;
     let note = (!coupled.notes.is_empty()).then(|| coupled.notes.join("; "));
     Ok(Some(RenamePlan { edits, note }))
 }
 
+/// The errors that a fix that renames exists to remove, so they may go
+/// away (D-1741): every one of `code`, in any file, whose message names the
+/// old name, `name` with its backticks. For E0006 these are the errors of
+/// the declarations the rename writes, one per alternative of an
+/// or-pattern and one per function that satisfies a renamed interface
+/// function, since only a new name for its declaration removes one.
+struct Gone {
+    code: Code,
+    name: String,
+}
+
 /// What an edit that `check` reads does, which its refusal names: a
-/// rename's "Renaming would cause" or a move's "Moving would cause"
-/// (D-1671, D-1724).
+/// rename's "Renaming would cause", a move's "Moving would cause", or a
+/// fix's "Applying the fix would cause" (D-1671, D-1724, D-1731).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     /// A rename, and a fix that renames.
     Rename,
     /// A move of module files (`willRenameFiles`).
     Move,
+    /// A fix that edits another file, checked on `codeAction/resolve`
+    /// (D-1684, D-1731).
+    Fix,
 }
 
 impl Action {
@@ -194,6 +253,7 @@ impl Action {
         match self {
             Self::Rename => "Renaming",
             Self::Move => "Moving",
+            Self::Fix => "Applying the fix",
         }
     }
 }
@@ -211,13 +271,58 @@ pub(crate) fn check(
     request: &VerifyRequest<'_>,
     action: Action,
 ) -> Result<(), RenameError> {
+    check_except(analyzed, request, action, None)
+}
+
+/// [`check`] for a fix whose own text must check (D-1753): of the errors
+/// that `verify` finds new, only those that `counts` accepts refuse it.
+///
+/// # Errors
+///
+/// As [`check`].
+pub(crate) fn check_counting(
+    analyzed: &Analyzed,
+    request: &VerifyRequest<'_>,
+    action: Action,
+    counts: &dyn Fn(&Introduced) -> bool,
+) -> Result<(), RenameError> {
+    check_with(analyzed, request, action, None, Some(counts))
+}
+
+/// [`check`], where the errors that `gone` names may go away (D-1741).
+fn check_except(
+    analyzed: &Analyzed,
+    request: &VerifyRequest<'_>,
+    action: Action,
+    gone: Option<&Gone>,
+) -> Result<(), RenameError> {
+    check_with(analyzed, request, action, gone, None)
+}
+
+/// [`check_except`], where only the new errors that `counts` accepts, when
+/// given, refuse the edit.
+fn check_with(
+    analyzed: &Analyzed,
+    request: &VerifyRequest<'_>,
+    action: Action,
+    gone: Option<&Gone>,
+    counts: Option<&dyn Fn(&Introduced) -> bool>,
+) -> Result<(), RenameError> {
     let snapshot = &*analyzed.snapshot;
     let outcome = verify(snapshot, request).map_err(|error| {
         RenameError::Refused(Refusal(format!("the edit could not be checked: {error}")))
     })?;
     match outcome {
         VerifyOutcome::Clean => Ok(()),
-        VerifyOutcome::Introduces(diags) => Err(Refusal(would_cause(&diags, action)).into()),
+        VerifyOutcome::Introduces(mut diags) => {
+            if let Some(counts) = counts {
+                diags.retain(|diag| counts(diag));
+            }
+            if diags.is_empty() {
+                return Ok(());
+            }
+            Err(Refusal(would_cause(&diags, action)).into())
+        }
         VerifyOutcome::Stale(path) => Err(RenameError::Stale {
             refusal: Refusal(format!(
                 "`{}` changed on disk, try again",
@@ -226,7 +331,17 @@ pub(crate) fn check(
             path,
         }),
         VerifyOutcome::Blocked(reason) => Err(Refusal(reason).into()),
-        VerifyOutcome::Hides(entries) => Err(Refusal(would_hide(snapshot, &entries)).into()),
+        VerifyOutcome::Hides(mut entries) => {
+            if let Some(gone) = gone {
+                entries.retain(|(_, (code, _, message))| {
+                    !(*code == gone.code && message.contains(&gone.name))
+                });
+            }
+            if entries.is_empty() {
+                return Ok(());
+            }
+            Err(Refusal(would_hide(snapshot, &entries)).into())
+        }
     }
 }
 
@@ -834,7 +949,8 @@ fn shown_path(snapshot: &Snapshot, path: &std::path::Path) -> String {
 
 /// D-1671's refusal for new errors: the first one's header and
 /// `path:line:col`, or its file's path for one with no span (D-1709),
-/// then how many more there are. A move's starts with "Moving" (D-1724).
+/// then how many more there are. A move's starts with "Moving" (D-1724),
+/// and a fix's with "Applying the fix" (D-1731).
 fn would_cause(diags: &[Introduced], action: Action) -> String {
     let verb = action.verb();
     let Some(first) = diags.first() else {
@@ -942,6 +1058,18 @@ fn coupling(
         | None => {}
     }
     Ok(out)
+}
+
+/// The symbols that renaming `entry`, named in `view`, writes (X §3.4):
+/// its own, then those [`coupling`] adds, such as a record type's
+/// constructor; its own alone when the coupling is refused. E0006's fix
+/// reads them to tell a used name from an unused one (D-1741).
+pub(crate) fn coupled_symbols(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    entry: &SymbolEntry,
+) -> Vec<Symbol> {
+    coupling(snapshot, view, entry).map_or_else(|_| vec![entry.symbol.clone()], |c| c.symbols)
 }
 
 /// The other symbol of the import alias `alias`, when its import binds
@@ -1393,6 +1521,7 @@ fn rename_bodiless(
             moves: &[],
             renamed: &renamed,
             hides: true,
+            written: &[],
         },
         Action::Rename,
     )?;

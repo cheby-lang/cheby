@@ -171,7 +171,18 @@ pub(crate) struct Parser<'a> {
     /// A help line for the error reported at the token with this raw
     /// index, if one is, set by the grammar before the caller reports it
     /// (D-1657).
-    pending_help: Option<(usize, &'static str)>,
+    pending_help: Option<PendingHelp>,
+}
+
+/// A help the grammar sets for the error its caller reports at a token
+/// (D-1657), with the edit that applies it, if it has one (D-1694).
+#[derive(Clone, Copy)]
+struct PendingHelp {
+    /// The raw index of the token.
+    raw: usize,
+    help: &'static str,
+    /// The token's range and its replacement.
+    edit: Option<(TextRange, &'static str)>,
 }
 
 /// The `{` and `}` tokens of the file matched like brackets, ignoring the
@@ -617,9 +628,14 @@ impl<'a> Parser<'a> {
         }
         self.last_error_raw = Some(current.raw);
         let diag = match self.pending_help {
-            Some((raw, help)) if raw == current.raw => {
+            Some(pending) if pending.raw == current.raw => {
                 self.pending_help = None;
-                diag.with_help(help)
+                match pending.edit {
+                    Some((range, replacement)) => {
+                        diag.with_suggestion(pending.help, self.span(range), replacement)
+                    }
+                    None => diag.with_help(pending.help),
+                }
             }
             _ => diag,
         };
@@ -631,7 +647,21 @@ impl<'a> Parser<'a> {
     /// only its caller rejects, such as `<>` after a string pattern
     /// (D-1657).
     pub(crate) fn help_at_current(&mut self, help: &'static str) {
-        self.pending_help = Some((self.input.current().raw, help));
+        self.pending_help = Some(PendingHelp {
+            raw: self.input.current().raw,
+            help,
+            edit: None,
+        });
+    }
+
+    /// As [`Self::help_at_current`], with an edit that replaces the current
+    /// token with `replacement` (D-1694).
+    pub(crate) fn suggest_at_current(&mut self, help: &'static str, replacement: &'static str) {
+        self.pending_help = Some(PendingHelp {
+            raw: self.input.current().raw,
+            help,
+            edit: Some((self.input.current_range(), replacement)),
+        });
     }
 
     /// Whether an error was already reported at the current token.
