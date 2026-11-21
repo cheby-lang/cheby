@@ -9,9 +9,9 @@
 //! leaf outside the tree ([`Pieces`]). A push writes the tail leaf and a
 //! step from the front reads the head leaf; the tree is touched once per
 //! leaf, when a full tail leaf goes into it or the next head leaf comes
-//! out of it. Every other operation sees a big root through
-//! [`Root::view`], which folds both leaves back into the tree first
-//! ([`settle`]).
+//! out of it, where it leaves a hole (module `node`). Every other
+//! operation sees a big root through [`Root::view`], which folds both
+//! leaves back into the tree and removes its holes first ([`settle`]).
 //!
 //! A big root has a head or tail leaf only while its count is positive,
 //! so only one fiber reads it: a value is settled before it is shared
@@ -93,10 +93,26 @@ impl Pieces {
         });
     }
 
-    /// Folds both leaves into the tree, which then holds the whole list.
+    /// Folds both leaves into the tree, which then holds the whole list,
+    /// with no holes.
     fn settle(&mut self) {
+        self.close_holes();
         self.fold_head();
         self.fold_tail();
+    }
+
+    /// Removes the tree's holes ([`Self::refill_head`]), and moves the
+    /// offset back by the elements they counted. In place, with no
+    /// allocation.
+    fn close_holes(&mut self) {
+        let Some(tree) = self.tree.filter(|_| self.offset > 0) else {
+            return;
+        };
+        let gone = tree::close_holes(tree);
+        if gone > 0 {
+            self.offset = self.offset.saturating_sub(gone);
+            self.tree = Some(tree::collapse(tree));
+        }
     }
 
     /// Starts a tail leaf of capacity `cap` with the owned `elem`.
@@ -200,8 +216,10 @@ impl Pieces {
     ///
     /// When the tree's first leaf is unique along its whole path, the leaf
     /// moves out of the tree, so the elements a step then takes from it
-    /// are released from the list (D-893). When another list holds a node
-    /// on that path, the leaf is shared instead and the tree stays whole.
+    /// are released from the list (D-893): with no slot moved where
+    /// [`Self::take_head_leaf`] applies, and otherwise after the tree is cut
+    /// to the list's part. When another list holds a node on that path,
+    /// the leaf is shared instead and the tree stays whole.
     fn refill_head(&mut self) {
         let tree_len = self.tree_len();
         let Some(tree) = self.tree else {
@@ -210,6 +228,9 @@ impl Pieces {
             self.pos = 0;
             return;
         };
+        if self.take_head_leaf() {
+            return;
+        }
         // The leaf holding the first element, and whether its path is
         // unique.
         let (mut node, mut i) = (tree, self.offset);
@@ -253,6 +274,69 @@ impl Pieces {
         self.head = Some(leaf);
         self.pos = 0;
         self.drop_dead_tree();
+    }
+
+    /// Gives a list without a head leaf the tree's first leaf as its head
+    /// leaf, when the tree holds only the list's part after any holes, the
+    /// list's part starts at that leaf's first element, and the path to
+    /// the leaf is unique: the leaf moves out and leaves a hole in its slot
+    /// (module `node`), with no slot moved and no size changed. Returns
+    /// whether it did; nothing changes otherwise. Allocates nothing and
+    /// raises nothing, so the fast path of a step runs it too
+    /// ([`refill_head_in_place`]).
+    fn take_head_leaf(&mut self) -> bool {
+        let Some(tree) = self.tree else {
+            return false;
+        };
+        if self.offset.saturating_add(self.tree_len()) != tree.len() {
+            // The tree holds elements past the list's end.
+            return false;
+        }
+        // The path to the leaf holding the first element: each branch with
+        // the slot of the child taken.
+        let mut path = [(tree, 0_usize); tree::MAX_DEPTH];
+        let (mut node, mut i) = (tree, self.offset);
+        let mut depth = 0;
+        let mut height = tree.height();
+        while height > 0 {
+            if !node.is_unique() {
+                return false;
+            }
+            let (j, before) = node.locate_at(i, height);
+            // Holes come first in a branch, so the child before is enough
+            // to tell that every child before the path is one.
+            if j.checked_sub(1).is_some_and(|prev| !node.is_hole(prev)) {
+                return false;
+            }
+            let Some(step) = path.get_mut(depth) else {
+                return false;
+            };
+            *step = (node, j);
+            depth = depth.saturating_add(1);
+            node = node.child(j);
+            i = i.saturating_sub(before);
+            height = height.saturating_sub(1);
+        }
+        if i != 0 || !node.is_unique() {
+            return false;
+        }
+        match path.get(..depth) {
+            Some(path) if !path.is_empty() => {
+                // A top that lost its last child holds only holes, and is
+                // released below, with the tree's part of the list gone.
+                tree::leave_hole(path);
+                self.offset = self.offset.saturating_add(node.slots());
+            }
+            _ => {
+                // The tree is the leaf.
+                self.tree = None;
+                self.offset = 0;
+            }
+        }
+        self.head = Some(node);
+        self.pos = 0;
+        self.drop_dead_tree();
+        true
     }
 
     /// Gives a list without a tail leaf one, holding its last elements:
@@ -341,12 +425,12 @@ impl Pieces {
     }
 }
 
-/// Folds a big root's head and tail leaves into its tree, in place, so
-/// the tree holds the whole list again. The list's value does not change,
-/// so this is done on a root that other references hold too, as long as
-/// they are all on this fiber (a positive count).
+/// Folds a big root's head and tail leaves into its tree and removes its
+/// holes, in place, so the tree holds the whole list again. The list's
+/// value does not change, so this is done on a root that other references
+/// hold too, as long as they are all on this fiber (a positive count).
 pub(super) fn settle(list: Big) {
-    if !list.has_buffers() {
+    if !list.has_buffers() && !has_holes(list) {
         return;
     }
     if !list.root().is_local() {
@@ -360,6 +444,13 @@ pub(super) fn settle(list: Big) {
     let mut pieces = list.detach();
     pieces.settle();
     list.attach(pieces);
+}
+
+/// Whether a big root's tree holds holes ([`Pieces::refill_head`]): they
+/// count elements before the offset.
+fn has_holes(list: Big) -> bool {
+    let view = list.root().raw();
+    view.offset > 0 && view.tree.is_some_and(tree::has_holes)
 }
 
 /// [`settle`] for a value about to be shared with another fiber or made
@@ -600,18 +691,32 @@ fn front_fast(list: Fast) -> Option<Word> {
                 dup_word(elem);
             }
             let next = pos.saturating_add(1);
+            list.set_len(len.saturating_sub(1));
             if next >= head.slots() {
                 big.set_head(None, 0);
                 head.release();
+                refill_head_in_place(big);
             } else {
                 big.set_head_pos(next);
             }
-            list.set_len(len.saturating_sub(1));
             elem
         }
     };
     stats::record(Event::ListUpdateInPlace);
     Some(elem)
+}
+
+/// Gives a unique big root whose head leaf a step used up the tree's next
+/// leaf as its head leaf, when [`Pieces::take_head_leaf`] applies, so the
+/// next step finds it in place. Changes nothing otherwise. The pieces
+/// stay in the root while they change: nothing in between allocates or
+/// raises. Out of line, since a step runs it once per leaf.
+#[inline(never)]
+fn refill_head_in_place(big: Big) {
+    let mut pieces = big.pieces();
+    if pieces.take_head_leaf() {
+        big.attach(pieces);
+    }
 }
 
 /// The last element of the list `word`, owned, when the list's count is

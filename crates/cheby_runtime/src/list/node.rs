@@ -38,6 +38,17 @@
 //! from the radix position and searches the table, so balanced and
 //! relaxed nodes share one kind.
 //!
+//! A big root's tree may hold holes: child slots holding the word 0,
+//! where a walk from the front took a leaf, or a branch whose leaves it
+//! took, out of a unique tree (`buffers`). The sizes still count the
+//! elements that were there, and the root's offset lies past them, so a
+//! lookup from the offset never reaches a hole, and freeing a node skips
+//! the word 0. Holes are only ever the first children of the branches on
+//! the path to the offset's leaf, and only in unique branches. A big
+//! root's tree loses its holes when its leaves are folded
+//! (`buffers::settle`): before any operation but `get` and those at the
+//! list's ends reads it, and before it is shared or made static.
+//!
 //! Ids 30-31 stay unused. The [`CustomKind`]s below give the allocator
 //! each object's size and owned children, so freeing a list of any length
 //! goes through the allocator's worklist without recursion (plan §0).
@@ -939,6 +950,50 @@ impl Node {
     pub(super) fn put_child(self, i: usize, child: Self) {
         // SAFETY: the caller owns this branch uniquely and `i < M`.
         unsafe { write_field(self.ptr(), slot(i), child.0) };
+    }
+
+    /// Whether child slot `i` (below the count) holds a hole: the word 0
+    /// that a walk from the front leaves where it took a child out
+    /// (`buffers`).
+    pub(super) fn is_hole(self, i: usize) -> bool {
+        // SAFETY: child slot `i` of a live branch is initialized below its
+        // count.
+        unsafe { read_field(self.ptr(), slot(i)) == 0 }
+    }
+
+    /// Writes a hole into child slot `i` (below the count) of a unique
+    /// branch, without releasing what was there.
+    pub(super) fn put_hole(self, i: usize) {
+        // SAFETY: the caller owns this branch uniquely and `i < M`.
+        unsafe { write_field(self.ptr(), slot(i), 0) };
+    }
+
+    /// Removes the first `k` children of a unique branch, which has more,
+    /// without releasing them: the rest move down `k` slots, and their
+    /// sizes lose `gone`, the elements the removed children held.
+    pub(super) fn remove_first(self, k: usize, gone: usize) {
+        let left = self.slots().saturating_sub(k);
+        let ptr = self.ptr();
+        // SAFETY: the source and target ranges lie within the child slots
+        // and within the size table, below `M`; `ptr::copy` allows
+        // overlap.
+        unsafe {
+            std::ptr::copy(ptr.add(slot(k)), ptr.add(slot(0)), left.wrapping_mul(8));
+            std::ptr::copy(
+                ptr.add(size_slot(k)),
+                ptr.add(size_slot(0)),
+                left.wrapping_mul(8),
+            );
+        }
+        self.set_count(left);
+        self.shrink_sizes(gone);
+    }
+
+    /// Subtracts `gone` from every size of a unique branch.
+    pub(super) fn shrink_sizes(self, gone: usize) {
+        for i in 0..self.slots() {
+            self.put_size(i, self.size_at(i).saturating_sub(gone));
+        }
     }
 
     /// The cumulative size of children `0..=i`.

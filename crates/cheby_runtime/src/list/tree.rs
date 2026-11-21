@@ -35,10 +35,18 @@ pub(super) fn get(tree: Node, i: usize) -> Word {
 /// A unique version of `node`: itself at count one, otherwise a copy that
 /// shares its children (each dup'd), with the reference to the original
 /// given up. A copied leaf gets room for `need` elements.
+#[inline]
 fn make_unique(node: Node, need: usize) -> Node {
     if node.is_unique() {
         return node;
     }
+    copy_shared(node, need)
+}
+
+/// [`make_unique`] of a node another reference holds: out of line, since
+/// a change in place, the common case, needs only the test.
+#[inline(never)]
+fn copy_shared(node: Node, need: usize) -> Node {
     let copy = if node.is_leaf() {
         let len = node.slots();
         let copy = Node::new_leaf(need.max(len));
@@ -325,20 +333,76 @@ fn pop_front_rec(node: Node) -> Node {
         (leaf, emptied)
     };
     let gone = leaf.slots();
-    let count = node.slots();
     if removed {
-        for i in 1..count {
-            let to = i.saturating_sub(1);
-            node.put_child(to, node.child(i));
-            node.put_size(to, node.size_at(i).saturating_sub(gone));
-        }
-        node.set_count(count.saturating_sub(1));
+        node.remove_first(1, gone);
     } else {
-        for i in 0..count {
-            node.put_size(i, node.size_at(i).saturating_sub(gone));
-        }
+        node.shrink_sizes(gone);
     }
     leaf
+}
+
+/// The most levels of branches above a leaf, with room to spare: a tree
+/// of height 12 could hold 2^65 elements, more than a length counts.
+pub(super) const MAX_DEPTH: usize = 13;
+
+/// Takes a leaf out of a unique tree and leaves a hole in its slot
+/// (module `node`). `path` is the descent to it: each branch from the top
+/// down, with the slot of the child the descent took, and the children
+/// before each such slot are holes. The sizes stay as they were, so the
+/// caller moves its offset past the leaf's elements. A branch whose last
+/// child this takes holds only holes then: it is released and leaves a
+/// hole in its parent in turn, but the top is left to the caller, which
+/// releases it once it holds no element of the list. In place, with no
+/// allocation and no slot moved, where [`pop_front_leaf`] moves a
+/// branch's other children.
+pub(super) fn leave_hole(path: &[(Node, usize)]) {
+    for (depth, &(branch, j)) in path.iter().enumerate().rev() {
+        branch.put_hole(j);
+        if depth == 0 || j.saturating_add(1) < branch.slots() {
+            return;
+        }
+        branch.release();
+    }
+}
+
+/// Whether the tree holds holes: they are the first children of unique
+/// branches on its left edge.
+pub(super) fn has_holes(tree: Node) -> bool {
+    let mut node = tree;
+    while !node.is_leaf() && node.is_unique() {
+        if node.is_hole(0) {
+            return true;
+        }
+        node = node.child(0);
+    }
+    false
+}
+
+/// Removes the holes from the owned tree `node`, in place: the first
+/// children of unique branches on its left edge that are holes, with the
+/// elements their sizes count. Returns that number of elements. The tree
+/// holds an element outside its holes.
+pub(super) fn close_holes(node: Node) -> usize {
+    if node.is_leaf() || !node.is_unique() {
+        return 0;
+    }
+    let count = node.slots();
+    let holes = (0..count).take_while(|&k| node.is_hole(k)).count();
+    if holes >= count {
+        crate::panic::fatal(format_args!("a list tree holds only holes"));
+    }
+    let here = match holes.checked_sub(1) {
+        Some(last) => node.size_at(last),
+        None => 0,
+    };
+    if holes > 0 {
+        node.remove_first(holes, here);
+    }
+    let below = close_holes(node.child(0));
+    if below > 0 {
+        node.shrink_sizes(below);
+    }
+    here.saturating_add(below)
 }
 
 /// Puts the owned leaf `leaf` (not empty) before the first element: the

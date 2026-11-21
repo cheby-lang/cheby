@@ -114,3 +114,40 @@ Tried and not kept:
 - A hand-written SipHash for the 9-byte integer key. It might save part of the 4% that
   `hash_with_seed` still takes, for code that must match the library bit for bit for ever.
 
+### A walk takes each leaf out of the tree without moving its neighbours
+
+When a walk from the front had used up its head leaf, the tree's first leaf came out through
+`pop_front_leaf`, which moved the other 31 children and 31 sizes of the branch down a slot and
+subtracted the leaf's length from every size on the path. Now the leaf's slot gets a hole, the word
+0, the sizes stay, and the root's offset moves past the leaf, in one descent that records its path.
+A branch whose last child was taken is released and leaves a hole in its parent. The step that
+uses up the head leaf does this on its fast path, so a walk calls the runtime once per 32 elements
+and never enters the slow path. Holes are always the first children of unique branches on the path
+to the offset, and `settle` closes them before any other operation, a share or a freeze reads the
+tree. The path with the hole runs only when the tree holds exactly the list's part and the whole
+path is unique; any other tree is cut and popped as before, so what is released, and when, does not
+change (D-893).
+
+Medians of nine runs against `a0caaa70`: `rc/list_pipeline` 0.169 s to 0.155 s (−8.2%),
+`rc/record_updates` 0.241 s to 0.232 s (−3.8%), the RC group −2.6%. Allocation counts and peak
+bytes are unchanged. Miri on the list group reports nothing, and `ends_match_a_deque` passes
+40,000 cases.
+
+One cost: `view()` of a big root now walks the tree's left edge to look for holes, O(height), and
+stops at the first node another reference holds.
+
+Tried and not kept:
+
+- Holes written by a second descent: −3.9% only. The cost was the descent, twice, not the moves.
+- Prefetching the next leaf: at most 1% at eight times the size, nothing at the default size.
+- Moving the slow paths of `cheby_rt_list_push`, `cheby_rt_list_prepend` and
+  `cheby_rt_list_uncons_owned` out of line to spare the fast path its frame: LLVM kept the frame,
+  the gain was about 1%, and `unwind::tests::guards_cover_entry_points` requires `guarded(` in
+  each entry point's body (D-697).
+- Freeing a used-up head leaf with its length set to 0, to skip the scan of 32 cleared slots: not
+  safe, since a head leaf that was shared and then became unique can hold elements before its
+  position.
+
+This settles the first Open item of the decision log's 2026-11-21 session ("Leaving a hole in the
+branch would avoid it"). The log itself is not edited here.
+

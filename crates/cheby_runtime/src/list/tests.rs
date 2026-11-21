@@ -128,6 +128,7 @@ fn check_tree(node: Node) -> usize {
         assert!((1..=M).contains(&count), "branch with {count} children");
         let mut size = 0;
         for i in 0..count {
+            assert!(!node.is_hole(i), "a hole in a tree that is read");
             let child = node.child(i);
             assert_eq!(child.height() + 1, node.height(), "uneven heights");
             size += child.len();
@@ -1957,6 +1958,194 @@ fn a_walk_past_the_last_leaf_of_a_shared_tree_lets_the_tree_go() {
     });
 }
 
+/// Whether a big root's tree holds holes, read without folding.
+fn holey(list: Root) -> bool {
+    list.big().is_some_and(|big| {
+        let pieces = big.pieces();
+        pieces.offset > 0 && pieces.tree.is_some_and(tree::has_holes)
+    })
+}
+
+#[test]
+fn a_walk_from_the_front_leaves_holes_and_frees_each_branch_it_empties() {
+    balanced(|| {
+        // Three levels of branches, so the walk empties a level-2 branch
+        // too; two levels under Miri.
+        let n = sized(40_000, 2_200) as usize;
+        let mut xs = pushed(n as i64);
+        assert_eq!(height(xs), if cfg!(miri) { 2 } else { 3 });
+        let mut left: std::collections::VecDeque<i64> = (0..n as i64).collect();
+        let before = live();
+        let mut taken = 0_usize;
+        while left.len() > 1 {
+            let (head, rest) = step_owned(xs, true);
+            assert_eq!(Some(value(head)), left.pop_front());
+            drop_word(head);
+            xs = rest;
+            taken += 1;
+            if taken.is_multiple_of(M) && left.len() > M * M {
+                // The used-up leaves are freed, and so is every branch
+                // whose leaves are all gone, but the walk allocates
+                // nothing. (Near its end the tree's last branches are
+                // not full.)
+                let leaves = taken / M;
+                let level_1 = (leaves + 1) / M;
+                let level_2 = (leaves + 1) / (M * M);
+                assert_eq!(
+                    before - live(),
+                    (leaves + level_1 + level_2) as i64,
+                    "objects after {taken} steps"
+                );
+                assert!(xs.big().is_some_and(|big| big.head().is_some()));
+            }
+            if taken > M && left.len() > 2 * M {
+                assert!(holey(xs), "a walk leaves holes, at {taken}");
+            }
+            if taken.is_multiple_of(997) || left.len() < 3 * M {
+                let model: Vec<i64> = left.iter().copied().collect();
+                peek(xs, &model);
+            }
+        }
+        check(xs, &[n as i64 - 1]);
+        release(xs);
+    });
+}
+
+#[test]
+fn a_walk_takes_a_tree_of_one_leaf_whole() {
+    balanced(|| {
+        // A full leaf and a tail leaf after it, from pushes at count one.
+        let mut xs = ops::push(list(&[]), elem(0));
+        for v in 1..40 {
+            xs = ops::push(xs, elem(v));
+        }
+        assert!(
+            xs.big()
+                .is_some_and(|big| big.pieces().tree.is_some_and(Node::is_leaf))
+        );
+        let (head, rest) = step_owned(xs, true);
+        assert_eq!((value(head), count(head)), (0, 1));
+        drop_word(head);
+        xs = rest;
+        // The leaf is the head leaf now, and the list holds no tree.
+        assert!(xs.big().is_some_and(|big| big.pieces().tree.is_none()));
+        check(xs, &(1..40).collect::<Vec<_>>());
+        release(xs);
+    });
+}
+
+#[test]
+fn a_walk_interleaved_with_pushes_and_folds_keeps_its_elements() {
+    balanced(|| {
+        let n = sized(3_000, 1_200);
+        let mut xs = pushed(n);
+        let mut model: std::collections::VecDeque<i64> = (0..n).collect();
+        let mut next = n;
+        for round in 0_usize..40 {
+            // A run of steps from the front, across leaves and branches.
+            for _ in 0..=(round * 37) % 1_100 {
+                if model.len() < 2 {
+                    break;
+                }
+                let (head, rest) = step_owned(xs, true);
+                assert_eq!(Some(value(head)), model.pop_front());
+                drop_word(head);
+                xs = rest;
+            }
+            // Pushes through the tail leaf, past the holes.
+            for _ in 0..round % 3 * 20 {
+                next += 1;
+                model.push_back(next);
+                // SAFETY: a live list and element, given up.
+                xs = root(unsafe {
+                    cheby_rt_list_push(std::ptr::null_mut(), xs.word(), elem(next))
+                });
+            }
+            let flat: Vec<i64> = model.iter().copied().collect();
+            peek(xs, &flat);
+            match round % 4 {
+                // A fold closes the holes, and the next walk leaves new
+                // ones.
+                0 => {
+                    check(xs, &flat);
+                    assert!(!holey(xs) && !buffered(xs));
+                }
+                // A prepend and a step from the back fold the head leaf
+                // or cut the tree, holes and all.
+                1 => {
+                    next += 1;
+                    model.push_front(next);
+                    xs = ops::prepend(xs, elem(next));
+                }
+                2 => {
+                    if model.len() > 1 {
+                        let (last, rest) = step_owned(xs, false);
+                        assert_eq!(Some(value(last)), model.pop_back());
+                        drop_word(last);
+                        xs = rest;
+                    }
+                }
+                // Another reference: the next step copies, after a fold.
+                _ => {
+                    dup_word(xs.word());
+                    let kept = xs;
+                    if model.len() > 1 {
+                        let (head, rest) = step_owned(xs, true);
+                        assert_eq!(Some(value(head)), model.pop_front());
+                        drop_word(head);
+                        xs = rest;
+                    }
+                    check(kept, &flat);
+                    release(kept);
+                }
+            }
+        }
+        let flat: Vec<i64> = model.iter().copied().collect();
+        check(xs, &flat);
+        release(xs);
+    });
+}
+
+#[test]
+fn a_walk_over_a_tree_that_was_shared_cuts_it_before_it_leaves_holes() {
+    balanced(|| {
+        let n = 400_i64;
+        let model: Vec<i64> = (0..n).map(|v| v * 3).collect();
+        let original = list(&model);
+        // A unique root over the tree `original` holds: steps share its
+        // leaves and move the offset past them, three leaves' worth.
+        let mut xs = ops::slice(original, 1, n as usize);
+        let mut left = model[1..].to_vec();
+        for _ in 0..3 * M - 1 {
+            let (head, rest) = step_owned(xs, true);
+            assert_eq!(value(head), left.remove(0));
+            assert!(count(head) >= 2, "the other list still holds it");
+            drop_word(head);
+            xs = rest;
+        }
+        assert!(!holey(xs));
+        // Now only this list holds the tree, with elements before its
+        // offset that are not holes: the next leaf's step cuts them off,
+        // and each element then leaves the list with its last reference.
+        release(original);
+        while left.len() > 1 {
+            let (head, rest) = step_owned(xs, true);
+            assert_eq!(value(head), left.remove(0));
+            assert_eq!(count(head), 1, "at {}", left.len());
+            drop_word(head);
+            xs = rest;
+            if left.len().is_multiple_of(50) {
+                peek(xs, &left);
+            }
+            if left.len() == 200 {
+                assert!(holey(xs), "the cut tree is walked with holes");
+            }
+        }
+        check(xs, &left);
+        release(xs);
+    });
+}
+
 /// One step of the state machine over the ends of a list.
 #[derive(Debug, Clone)]
 enum End {
@@ -1980,7 +2169,14 @@ enum End {
 }
 
 fn end() -> impl Strategy<Value = (End, usize)> {
-    let run = prop_oneof![1..4_usize, 1..40_usize, 1..120_usize];
+    // The long runs walk past whole branches of leaves. Under Miri, where
+    // they cost minutes, the walks of the unit tests above stand in.
+    let run = prop_oneof![
+        3 => 1..4_usize,
+        3 => 1..40_usize,
+        3 => 1..120_usize,
+        1 => 1..sized(1_500, 120) as usize,
+    ];
     let step = prop_oneof![
         5 => any::<bool>().prop_map(End::Push),
         3 => any::<bool>().prop_map(End::Prepend),
@@ -2015,7 +2211,7 @@ proptest! {
             let mut kept: Vec<(Root, Vec<i64>)> = Vec::new();
             let mut next = 1_000_000_i64;
             for (step, run) in &steps {
-                for _ in 0..*run {
+                for i in 0..*run {
                     match *step {
                         End::Push(helper) => {
                             next += 1;
@@ -2080,17 +2276,20 @@ proptest! {
                         }
                         End::Fold => {
                             check(xs, &model);
-                            assert!(!buffered(xs));
+                            assert!(!buffered(xs) && !holey(xs));
                             break;
                         }
                         End::Share => {
                             // SAFETY: a live value only this thread uses.
                             unsafe { crate::rc::mark_shared(xs.word()) };
-                            assert!(!buffered(xs));
+                            assert!(!buffered(xs) && !holey(xs));
                             break;
                         }
                     }
-                    peek(xs, &model);
+                    // Every step of a short run, and a sample of a long one.
+                    if i < 120 || i % 61 == 0 {
+                        peek(xs, &model);
+                    }
                 }
                 peek(xs, &model);
                 for (old, old_model) in &kept {
