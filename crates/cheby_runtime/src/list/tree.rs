@@ -66,7 +66,7 @@ fn make_unique(node: Node, need: usize) -> Node {
 /// A unique leaf with room for `need` elements: `leaf` itself when it is
 /// unique and has room; when it is unique and full, a leaf of doubled
 /// capacity (at most [`M`]) that its elements move to; a copy otherwise.
-fn leaf_with_room(leaf: Node, need: usize) -> Node {
+pub(super) fn leaf_with_room(leaf: Node, need: usize) -> Node {
     if !leaf.is_unique() {
         return make_unique(leaf, need);
     }
@@ -227,6 +227,271 @@ fn push_rec(node: Node, elem: Word) -> (Node, Option<Node>) {
             (node, Some(wrap(sibling, height)))
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Whole leaves moved in and out, for the head and tail leaves of big roots
+
+/// Whether the rightmost leaf holds [`M`] elements, so a push would start
+/// a new leaf.
+pub(super) fn last_leaf_full(tree: Node) -> bool {
+    let mut node = tree;
+    while !node.is_leaf() {
+        node = node.child(node.slots().saturating_sub(1));
+    }
+    node.slots() >= M
+}
+
+/// Appends the owned leaf `leaf` (not empty) after the last element. In
+/// place along the right edge where it is unique, like [`push`], but one
+/// descent adds up to [`M`] elements.
+pub(super) fn push_leaf(tree: Node, leaf: Node) -> Node {
+    let height = tree.height();
+    if height == 0 {
+        let top = Node::new_branch(1);
+        top.push_child(tree);
+        top.push_child(leaf);
+        return top;
+    }
+    match push_leaf_rec(tree, leaf) {
+        (node, None) => node,
+        (node, Some(sibling)) => {
+            let top = Node::new_branch(height.saturating_add(1));
+            top.push_child(node);
+            top.push_child(sibling);
+            top
+        }
+    }
+}
+
+/// [`push_leaf`] in a branch: returns the node and, when its right edge
+/// was full, a new sibling of the same height holding the leaf.
+fn push_leaf_rec(node: Node, leaf: Node) -> (Node, Option<Node>) {
+    let node = make_unique(node, 0);
+    let count = node.slots();
+    let height = node.height();
+    if height == 1 {
+        if count < M {
+            node.push_child(leaf);
+            return (node, None);
+        }
+        return (node, Some(wrap(leaf, 1)));
+    }
+    let last = count.saturating_sub(1);
+    let added = leaf.slots();
+    let (child, sibling) = push_leaf_rec(node.child(last), leaf);
+    node.put_child(last, child);
+    match sibling {
+        None => {
+            node.put_size(last, node.size_at(last).saturating_add(added));
+            (node, None)
+        }
+        Some(sibling) if count < M => {
+            node.push_child(sibling);
+            (node, None)
+        }
+        Some(sibling) => (node, Some(wrap(sibling, height))),
+    }
+}
+
+/// Takes the first leaf out of an owned tree whose left edge is unique,
+/// every node from the top down to the first leaf: the leaf, owned, and
+/// the tree without it, or `None` when the leaf was all of it. In place,
+/// with no allocation.
+pub(super) fn pop_front_leaf(tree: Node) -> (Node, Option<Node>) {
+    if tree.is_leaf() {
+        return (tree, None);
+    }
+    let leaf = pop_front_rec(tree);
+    if tree.slots() == 0 {
+        tree.release();
+        return (leaf, None);
+    }
+    (leaf, Some(collapse(tree)))
+}
+
+/// [`pop_front_leaf`] in a unique branch, which may be left with no
+/// children: the caller then releases it.
+fn pop_front_rec(node: Node) -> Node {
+    let child = node.child(0);
+    let (leaf, removed) = if child.is_leaf() {
+        (child, true)
+    } else {
+        let leaf = pop_front_rec(child);
+        let emptied = child.slots() == 0;
+        if emptied {
+            child.release();
+        }
+        (leaf, emptied)
+    };
+    let gone = leaf.slots();
+    let count = node.slots();
+    if removed {
+        for i in 1..count {
+            let to = i.saturating_sub(1);
+            node.put_child(to, node.child(i));
+            node.put_size(to, node.size_at(i).saturating_sub(gone));
+        }
+        node.set_count(count.saturating_sub(1));
+    } else {
+        for i in 0..count {
+            node.put_size(i, node.size_at(i).saturating_sub(gone));
+        }
+    }
+    leaf
+}
+
+/// Puts the owned leaf `leaf` (not empty) before the first element: the
+/// mirror of [`push_leaf`]. In place along the left edge where it is
+/// unique, with the children of one branch per level moved up a slot.
+pub(super) fn prepend_leaf(tree: Node, leaf: Node) -> Node {
+    let height = tree.height();
+    if height == 0 {
+        let top = Node::new_branch(1);
+        top.push_child(leaf);
+        top.push_child(tree);
+        return top;
+    }
+    match prepend_leaf_rec(tree, leaf) {
+        (node, None) => node,
+        (node, Some(sibling)) => {
+            let top = Node::new_branch(height.saturating_add(1));
+            top.push_child(sibling);
+            top.push_child(node);
+            top
+        }
+    }
+}
+
+/// [`prepend_leaf`] in a branch: returns the node and, when its left edge
+/// was full, a new sibling of the same height that holds the leaf and
+/// goes before it.
+fn prepend_leaf_rec(node: Node, leaf: Node) -> (Node, Option<Node>) {
+    let node = make_unique(node, 0);
+    let height = node.height();
+    let added = leaf.slots();
+    let before = if height == 1 {
+        Some(leaf)
+    } else {
+        let (child, sibling) = prepend_leaf_rec(node.child(0), leaf);
+        node.put_child(0, child);
+        sibling
+    };
+    let count = node.slots();
+    match before {
+        // The leaf went in below: every size counts it.
+        None => {
+            for i in 0..count {
+                node.put_size(i, node.size_at(i).saturating_add(added));
+            }
+            (node, None)
+        }
+        Some(first) if count < M => {
+            for i in (0..count).rev() {
+                let to = i.saturating_add(1);
+                node.put_child(to, node.child(i));
+                node.put_size(to, node.size_at(i).saturating_add(added));
+            }
+            node.put_child(0, first);
+            node.put_size(0, added);
+            node.set_count(count.saturating_add(1));
+            (node, None)
+        }
+        Some(first) => (node, Some(wrap(first, height))),
+    }
+}
+
+/// Whether the leftmost leaf holds [`M`] elements, so a prepend would
+/// start a new leaf.
+pub(super) fn first_leaf_full(tree: Node) -> bool {
+    let mut node = tree;
+    while !node.is_leaf() {
+        node = node.child(0);
+    }
+    node.slots() >= M
+}
+
+/// Takes the last leaf out of an owned tree whose right edge is unique,
+/// every node from the top down to the last leaf: the tree without it, or
+/// `None` when the leaf was all of it, and the leaf, owned. In place, with
+/// no allocation.
+pub(super) fn pop_back_leaf(tree: Node) -> (Option<Node>, Node) {
+    if tree.is_leaf() {
+        return (None, tree);
+    }
+    let leaf = pop_back_rec(tree);
+    if tree.slots() == 0 {
+        tree.release();
+        return (None, leaf);
+    }
+    (Some(collapse(tree)), leaf)
+}
+
+/// [`pop_back_leaf`] in a unique branch, which may be left with no
+/// children: the caller then releases it.
+fn pop_back_rec(node: Node) -> Node {
+    let last = node.slots().saturating_sub(1);
+    let child = node.child(last);
+    let (leaf, removed) = if child.is_leaf() {
+        (child, true)
+    } else {
+        let leaf = pop_back_rec(child);
+        let emptied = child.slots() == 0;
+        if emptied {
+            child.release();
+        }
+        (leaf, emptied)
+    };
+    if removed {
+        node.set_count(last);
+    } else {
+        node.put_size(last, node.size_at(last).saturating_sub(leaf.slots()));
+    }
+    leaf
+}
+
+/// A unique leaf holding the elements of the unique leaf `leaf` at the
+/// end of its slots, with at least one slot free before them, and the
+/// index of the first: the slots before it hold the immediate `word`. The
+/// new leaf has twice the capacity, at most [`M`], and `leaf`, whose
+/// capacity is below [`M`], is freed. So prepending to a unique leaf
+/// moves each element O(1) times while the leaf grows.
+pub(super) fn gap_front(leaf: Node, word: Word) -> (Node, usize) {
+    let len = leaf.slots();
+    let room = len
+        .saturating_add(1)
+        .max(leaf.cap().saturating_mul(2))
+        .min(M);
+    let first = room.saturating_sub(len);
+    let wide = Node::new_leaf(room);
+    for i in 0..first {
+        wide.put_elem(i, word);
+    }
+    for i in 0..len {
+        wide.put_elem(first.saturating_add(i), leaf.elem(i));
+    }
+    wide.set_len(room);
+    // The elements moved: free the old leaf without releasing them.
+    leaf.set_len(0);
+    leaf.release();
+    (wide, first)
+}
+
+/// Moves the elements `offset..` of the unique leaf `leaf`, which are its
+/// last, to start at slot `to`, so the free slots of a full-size leaf
+/// lie where the next elements go. What the slots before `offset` held is
+/// released, and the slots before `to` then hold the immediate `word`.
+/// `to` plus the number of elements is at most the capacity.
+pub(super) fn slide(leaf: Node, offset: usize, to: usize, word: Word) {
+    let len = leaf.slots().saturating_sub(offset);
+    for i in 0..offset {
+        drop_word(leaf.elem(i));
+    }
+    leaf.move_elems(offset, to, len);
+    for i in 0..to {
+        leaf.put_elem(i, word);
+    }
+    leaf.set_len(to.saturating_add(len));
 }
 
 /// Adds the owned `elem` at the front. In place when the left edge is

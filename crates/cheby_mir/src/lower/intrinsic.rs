@@ -16,6 +16,14 @@
 //! The body is generated with its reference counts and its unwind edges in
 //! place (`Function::precounted`, D-744): the RC pass
 //! leaves it alone and the unwind pass keeps its edges and its entry pad.
+//!
+//! `std::list`'s `push` and `prepend` are intrinsics too (D-1758). The body of
+//! each is one runtime helper, `list_push` or `list_prepend`, which takes
+//! the function's two parameters over, so nothing is counted on the way:
+//! a wrapper would pass them borrowed to a kernel and drop them after the
+//! call (D-525). Code generation writes a unique list's leaf in place of
+//! the call where it can. These two bodies are counted like any other
+//! function's.
 
 use cheby_iface::{FnSig, Ice, builtin};
 use cheby_types::thir;
@@ -34,17 +42,23 @@ pub enum Intrinsic {
     /// `std::fiber`'s `scope_run`: open, call the body with an unwind
     /// edge, close (D-693).
     ScopeRun,
+    /// `std::list`'s `push`: `list_push` of its two parameters (D-1758).
+    ListPush,
+    /// `std::list`'s `prepend`: `list_prepend` of its two parameters.
+    ListPrepend,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in table order.
-    pub const ALL: [Self; 1] = [Self::ScopeRun];
+    pub const ALL: [Self; 3] = [Self::ScopeRun, Self::ListPush, Self::ListPrepend];
 
     /// The native symbol that names the intrinsic.
     #[must_use]
     pub const fn symbol(self) -> &'static str {
         match self {
             Self::ScopeRun => "cheby_rt_scope_run",
+            Self::ListPush => "cheby_rt_std_list_push",
+            Self::ListPrepend => "cheby_rt_std_list_prepend",
         }
     }
 
@@ -56,7 +70,11 @@ impl Intrinsic {
 }
 
 /// The native symbols of [`Intrinsic::ALL`], in table order.
-static SYMBOLS: [&str; Intrinsic::ALL.len()] = [Intrinsic::ScopeRun.symbol()];
+static SYMBOLS: [&str; Intrinsic::ALL.len()] = [
+    Intrinsic::ScopeRun.symbol(),
+    Intrinsic::ListPush.symbol(),
+    Intrinsic::ListPrepend.symbol(),
+];
 
 /// The native symbols of the std intrinsics (D-693). The runtime never
 /// registers them (`cheby_runtime::abi::sym::INTRINSICS` lists the same
@@ -81,7 +99,46 @@ pub(super) fn lower_intrinsic(
 ) -> Result<Function, Ice> {
     match intrinsic {
         Intrinsic::ScopeRun => scope_run(f, sig, cx),
+        Intrinsic::ListPush => list_end(intrinsic, RuntimeFn::ListPush, f, sig, cx),
+        Intrinsic::ListPrepend => list_end(intrinsic, RuntimeFn::ListPrepend, f, sig, cx),
     }
+}
+
+/// The body of `std::list`'s `push` or `prepend`, `(xs: List<T>, item: T)
+/// -> List<T>`:
+///
+/// ```text
+/// entry: result = helper(xs, item)
+///        return result
+/// ```
+///
+/// `helper` is `list_push` or `list_prepend`, which consumes both
+/// parameters, even when it raises (D-698), so the body counts nothing
+/// and has nothing to release on an unwinding.
+fn list_end(
+    intrinsic: Intrinsic,
+    helper: RuntimeFn,
+    f: &thir::FnDef,
+    sig: &FnSig,
+    cx: &LowerCx<'_>,
+) -> Result<Function, Ice> {
+    let globals = cx.defs.globals;
+    let reprs: Vec<Repr> = sig.params.iter().map(|p| repr_of(p.ty, globals)).collect();
+    let ([xs, item], [Repr::Value, Repr::Value]) = (&*sig.params, reprs.as_slice()) else {
+        return Err(signature_ice(intrinsic, &reprs));
+    };
+    if repr_of(sig.ret, globals) != Repr::Value {
+        return Err(signature_ice(intrinsic, &reprs));
+    }
+    let mut b = FunctionBuilder::new(FnKey::Item(f.def), Abi::Cheby, Repr::Value, f.span)?;
+    b.set_entry_loc(&cx.location(f.span)?)?;
+    let xs = b.add_param(Repr::Value, Some(xs.name), Some(xs.ty))?;
+    let item = b.add_param(Repr::Value, Some(item.name), Some(item.ty))?;
+    let result = b
+        .call_runtime(helper, vec![Operand::Local(xs), Operand::Local(item)])?
+        .ok_or_else(|| Ice::new(format!("`{}` has no result", helper.name())))?;
+    b.terminate(Terminator::Return(Operand::Local(result)))?;
+    b.finish()
 }
 
 /// `scope_run`'s body (plan §2.4, D-693):

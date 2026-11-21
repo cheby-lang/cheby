@@ -646,6 +646,11 @@ pub unsafe fn freeze(word: Word) {
         if unsafe { load_rc(obj) } == abi::RC_STATIC {
             continue;
         }
+        // A big list root gives up its head and tail leaves before it
+        // becomes static: a root is written only while its count is
+        // positive.
+        // SAFETY: a live object that only this thread uses.
+        unsafe { crate::list::settle_value(word) };
         // SAFETY: a live heap object.
         let shape = unsafe { shape_of(obj) };
         match shape.children {

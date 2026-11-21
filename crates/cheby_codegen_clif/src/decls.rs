@@ -1160,6 +1160,12 @@ impl Decls {
         ] {
             self.declare_runtime_func(module, f)?;
         }
+        self.declare_on_demand_data(module)
+    }
+
+    /// Declares the counting flag ([`crate::runtime::ON_DEMAND_DATA`]),
+    /// once: reuse's code and the inline pattern steps test it (D-768).
+    fn declare_on_demand_data<M: Module>(&mut self, module: &mut M) -> Result<(), CodegenError> {
         for symbol in crate::runtime::ON_DEMAND_DATA {
             if !self.static_data.contains_key(symbol) {
                 self.declare_runtime_static(module, symbol)?;
@@ -1193,6 +1199,10 @@ impl Decls {
                         let (f, _) = RuntimeFunc::of(*func);
                         if f.on_demand() {
                             self.declare_runtime_func(module, f)?;
+                        }
+                        // The pattern steps written inline (`list_ends`).
+                        if *func == cheby_mir::RuntimeFn::ListUnconsOwned {
+                            self.declare_on_demand_data(module)?;
                         }
                     }
                     if let Stmt::Assign {

@@ -239,7 +239,7 @@ impl Static {
             ids::GREATER => Some(Self::Greater),
             ids::NONE => Some(Self::None),
             // SAFETY: a live list root.
-            ids::LIST_FIRST if unsafe { list::iter(word) }.next().is_none() => {
+            id if list::is_root(id) && unsafe { list::iter(word) }.next().is_none() => {
                 Some(Self::EmptyList)
             }
             ids::SOME => {
@@ -577,7 +577,7 @@ unsafe fn shape_of(path: &str, word: Word) -> Result<(Shape, Vec<Word>), ConstIm
             (Shape::Builtin(k), vec![unsafe { read_field(obj, FIELD0) }])
         }
         // SAFETY: a live list root; the elements stay alive with it.
-        ids::LIST_FIRST => (Shape::List, unsafe { list::iter(word) }.collect()),
+        id if list::is_root(id) => (Shape::List, unsafe { list::iter(word) }.collect()),
         _ => {
             // SAFETY: a live object.
             match unsafe { hamt::collection_of(word) } {

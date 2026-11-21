@@ -129,7 +129,7 @@ test "last reads the back" {
 // Adding and updating
 
 /// Returns `xs` with `item` added at the end, the same as `[..xs, item]`.
-@external(native, "cheby_list_push")
+@external(native, "cheby_rt_std_list_push")
 @external(js, "./list.mjs", "push")
 pub fn push<T>(xs: List<T>, item: T) -> List<T>
 
@@ -139,7 +139,7 @@ test "push adds at the end" {
 }
 
 /// Returns `xs` with `item` added at the front, the same as `[item, ..xs]`.
-@external(native, "cheby_list_prepend")
+@external(native, "cheby_rt_std_list_prepend")
 @external(js, "./list.mjs", "prepend")
 pub fn prepend<T>(xs: List<T>, item: T) -> List<T>
 

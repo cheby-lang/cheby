@@ -605,7 +605,15 @@ fn the_builder_refuses_misplaced_edges() {
 
 #[test]
 fn the_scope_helpers() {
-    assert_eq!(RuntimeFn::ALL.len(), 17);
+    assert_eq!(RuntimeFn::ALL.len(), 18);
+    // `list_prepend` takes both arguments over, as `list_push` does.
+    assert_eq!(
+        RuntimeFn::ListPrepend.params(),
+        RuntimeFn::ListPush.params()
+    );
+    assert_eq!(RuntimeFn::ListPrepend.ret(), Some(Repr::Value));
+    assert_eq!(RuntimeFn::ListPrepend.name(), "list_prepend");
+    assert!(RuntimeFn::ListPrepend.may_unwind());
     assert_eq!(
         RuntimeFn::ScopeOpen.params(),
         [

@@ -1382,11 +1382,16 @@ pub enum RuntimeFn {
     /// [`Self::ListUnconsOwned`] right before it kept. Result owned. Runs
     /// no code and cannot raise.
     ListUnconsHead,
+    /// `(list owned, elem owned) -> List`: adds `elem` at the front, in
+    /// place when the list is unique, as [`Self::ListPush`] does at the
+    /// end. Result owned. Only the body of `std::list`'s `prepend` has it
+    /// (`lower::intrinsic`, D-1758).
+    ListPrepend,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1404,6 +1409,7 @@ impl RuntimeFn {
         Self::ListUncons,
         Self::ListUnconsOwned,
         Self::ListUnconsHead,
+        Self::ListPrepend,
     ];
 
     /// Whether a call of the helper may start or pass on an unwinding
@@ -1428,7 +1434,7 @@ impl RuntimeFn {
             Self::StrAppend | Self::ListAppend => &[(Value, Owned), (Value, Borrowed)],
             Self::StrEq => &[(Value, Borrowed), (Value, Borrowed)],
             Self::Equal => &[(Value, Borrowed), (Value, Borrowed), (Value, Borrowed)],
-            Self::ListPush => &[(Value, Owned), (Value, Owned)],
+            Self::ListPush | Self::ListPrepend => &[(Value, Owned), (Value, Owned)],
             Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
             Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
@@ -1466,6 +1472,7 @@ impl RuntimeFn {
             | Self::ListUncons
             | Self::ListUnconsOwned
             | Self::ListUnconsHead
+            | Self::ListPrepend
             | Self::Debug
             | Self::ScopeOpen => Some(Repr::Value),
             Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
@@ -1495,6 +1502,7 @@ impl RuntimeFn {
             Self::ListUncons => "list_uncons",
             Self::ListUnconsOwned => "list_uncons_owned",
             Self::ListUnconsHead => "list_uncons_head",
+            Self::ListPrepend => "list_prepend",
         }
     }
 }

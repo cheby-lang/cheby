@@ -103,7 +103,9 @@ pub enum LayoutKind {
 /// so walking a million-deep value never deepens the Rust stack (plan §0,
 /// deep data).
 pub struct CustomKind {
-    /// The kind's name, for diagnostics.
+    /// The kind's name, for diagnostics. Two kinds with one name are two
+    /// layouts of one type of value ([`CustomKind::same_values`]), as a
+    /// list's root and big root are (D-1757).
     pub name: &'static str,
     /// The object's size in bytes, header included, exactly as it was
     /// allocated (the size passed to `alloc_object`).
@@ -203,6 +205,17 @@ impl fmt::Debug for CustomKind {
 impl PartialEq for CustomKind {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self, other)
+    }
+}
+
+impl CustomKind {
+    /// Whether objects of this kind and of `other` are values of one
+    /// type, so that `==` compares one of each: the same kind, or two
+    /// kinds with one name, whose `equal`, `hash` and `debug` then take
+    /// objects of either.
+    #[must_use]
+    pub fn same_values(&self, other: &Self) -> bool {
+        self == other || self.name == other.name
     }
 }
 

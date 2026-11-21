@@ -1385,7 +1385,7 @@ unsafe extern "C" fn tramp1(_: *mut ExecCtx, closure: u64, arg: u64) -> u64 {
                 if abi::is_tagged_int(inner) {
                     values::int_word(abi::untag_int(inner) + abi::untag_int(step))
                 } else {
-                    as_wrapper(inner, |xs| crate::list::cheby_list_push(xs, step))
+                    crate::list::cheby_rt_list_push(std::ptr::null_mut(), inner, step)
                 }
             }
         }

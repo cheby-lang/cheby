@@ -322,12 +322,54 @@ pub const CTX_WAIT_FRAME: i32 = 16;
 
 /// List roots (D-563): the header (layout [`layout::LIST_FIRST`]), then
 /// the tree, the view's offset into it and the view's length, the last two
-/// raw. Generated code reads a list's length from its root (D-910), so the
-/// offset is part of the ABI between generated code and the runtime.
+/// raw. Generated code reads a list's length from its root (D-910), and
+/// works on the leaf at either end of a unique list in place (D-1759), so
+/// these offsets and headers are part of the ABI between generated code and
+/// the runtime.
+///
+/// A list of more than one leaf that grows or shrinks at an end has a big
+/// root (D-1757, layout [`list::BIG_ROOT_LAYOUT`]): a root's fields, then a head leaf,
+/// the index in it of the list's first element, and a tail leaf, each
+/// leaf 0 for none. A leaf is its header, a raw word holding its length
+/// in the low 32 bits and its capacity in the high ones, then its slots.
 pub mod list {
+    use super::{LayoutId, RC_UNIQUE, header, layout, tag_int};
+
+    /// Byte offset of a root's tree: a leaf, a branch or 0.
+    pub const ROOT_TREE_OFFSET: i32 = 8;
+    /// Byte offset of the index in the tree of a root's first element, a
+    /// raw `u64`.
+    pub const ROOT_OFFSET_OFFSET: i32 = 16;
     /// Byte offset of a root's length, a raw `u64`. The static empty list
     /// holds 0 there.
     pub const ROOT_LEN_OFFSET: i32 = 24;
+    /// Byte offset of a big root's head leaf, or 0.
+    pub const BIG_HEAD_OFFSET: i32 = 32;
+    /// Byte offset of the index in the head leaf of a big root's first
+    /// element, a raw `u64`.
+    pub const BIG_HEAD_POS_OFFSET: i32 = 40;
+    /// Byte offset of a big root's tail leaf, or 0.
+    pub const BIG_TAIL_OFFSET: i32 = 48;
+    /// Byte offset of a leaf's length and capacity.
+    pub const LEAF_META_OFFSET: i32 = 8;
+    /// Byte offset of a leaf's first slot.
+    pub const LEAF_SLOTS_OFFSET: i32 = 16;
+    /// The layout of leaves.
+    pub const LEAF_LAYOUT: LayoutId = layout::LIST_FIRST + 1;
+    /// The layout of big roots.
+    pub const BIG_ROOT_LAYOUT: LayoutId = layout::LIST_FIRST + 3;
+    /// The header of a root with count one.
+    pub const UNIQUE_ROOT: u64 = header(RC_UNIQUE, 0, layout::LIST_FIRST);
+    /// The header of a big root with count one.
+    pub const UNIQUE_BIG_ROOT: u64 = header(RC_UNIQUE, 0, BIG_ROOT_LAYOUT);
+    /// The header of a leaf with count one.
+    pub const UNIQUE_LEAF: u64 = header(RC_UNIQUE, 0, LEAF_LAYOUT);
+    /// What a leaf's slot holds once its element moved out: the tagged
+    /// `Int` 0, which owns nothing (D-893).
+    pub const CLEARED: u64 = match tag_int(0) {
+        Some(word) => word,
+        None => panic!("0 is a tagged Int"),
+    };
 }
 
 /// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
@@ -656,6 +698,10 @@ pub mod sym {
     /// consumes, which moves the head out of a unique list in the descent that
     /// cuts it.
     pub const LIST_UNCONS_OWNED: &str = "cheby_rt_list_uncons_owned";
+    /// `uint64_t cheby_rt_list_prepend(ExecCtx *ctx, uint64_t list, uint64_t elem)`:
+    /// consumes both, in place when the list is unique, as `LIST_PUSH`
+    /// does at the other end (D-1758).
+    pub const LIST_PREPEND: &str = "cheby_rt_list_prepend";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -663,9 +709,13 @@ pub mod sym {
     /// The value of the byte at [`STATS_COUNTING`] when events are not
     /// counted (D-768).
     pub const COUNTING_OFF: u8 = crate::stats::COUNTING_OFF;
-    /// Std externals whose bodies the compiler generates (D-693). Never
-    /// registered.
-    pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
+    /// Std externals whose bodies the compiler generates (D-693, D-1758).
+    /// Never registered.
+    pub const INTRINSICS: [&str; 3] = [
+        "cheby_rt_scope_run",
+        "cheby_rt_std_list_push",
+        "cheby_rt_std_list_prepend",
+    ];
     /// `void cheby_io_print(uint64_t text)`, `text` borrowed.
     pub const IO_PRINT: &str = "cheby_io_print";
     /// `void cheby_io_println(uint64_t text)`, `text` borrowed.
@@ -751,7 +801,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 74] = [
+    pub const ALL: [&str; 75] = [
         ALLOC,
         DUP,
         DROP,
@@ -800,6 +850,7 @@ pub mod sym {
         FREE_UNIQUE,
         LIST_UNCONS,
         LIST_UNCONS_OWNED,
+        LIST_PREPEND,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -990,9 +1041,9 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(49..72), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(50..73), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
-            sym::ALL.get(72..),
+            sym::ALL.get(73..),
             Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
         );
         assert_eq!(

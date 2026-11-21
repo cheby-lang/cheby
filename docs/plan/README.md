@@ -456,6 +456,10 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1726    | E0042's help in a std checkout lists the checkout's items, from a list its run owns                 |
 | D-1735    | A fix within one file is formatted, and the applied-edit check holds it to `cheby fmt`'s form       |
 | D-1738    | A kept set of hunks widens until closed, at most eight rounds, with a cancel check before each      |
+| D-1757    | A list of several leaves keeps the leaf at each end under a big root (id 29); ends cost O(1)        |
+| D-1758    | `list::push` and `list::prepend` are std intrinsics over helpers that own their arguments           |
+| D-1759    | Owned pattern steps at an end of a list are written inline; `abi::list` joins the ABI               |
+| D-1760    | Budget bounds and failure rules for the fold of a big root's leaves into its tree                   |
 
 ## Open questions
 

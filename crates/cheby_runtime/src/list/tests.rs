@@ -273,15 +273,18 @@ fn push_and_set_are_in_place_at_count_one_and_copy_when_shared() {
     balanced(|| {
         let mut xs = list(&[]);
         let mut model = Vec::new();
-        let mut first_heap_root = None;
+        // The root changes once, when the list outgrows one leaf and
+        // moves to a big root.
+        let mut roots = Vec::new();
         for v in 0..5_000 {
             xs = ops::push(xs, elem(v));
             model.push(v);
-            match first_heap_root {
-                None => first_heap_root = Some(xs),
-                Some(first) => assert_eq!(xs, first, "push at count one keeps the root"),
+            if roots.last() != Some(&xs) {
+                roots.push(xs);
             }
+            assert_eq!(xs.big().is_some(), model.len() > M, "{}", model.len());
         }
+        assert_eq!(roots.len(), 2, "push at count one keeps the root");
         check(xs, &model);
         // A unique leaf is updated where it is.
         let before = Node::word(xs.view().tree.unwrap());
@@ -318,14 +321,20 @@ fn prepend_is_in_place_at_count_one_and_copies_when_shared() {
     balanced(|| {
         let n = sized(20_000, 2_000);
         let mut xs = ops::prepend(list(&[]), elem(n));
-        let first_root = xs;
+        // The root changes once, when the list outgrows one leaf and
+        // moves to a big root.
+        let mut roots = vec![xs];
         let mut model = vec![n];
         let before = live();
         for v in (0..n).rev() {
             xs = ops::prepend(xs, elem(v));
             model.insert(0, v);
-            assert_eq!(xs, first_root, "prepend at count one keeps the root");
+            if roots.last() != Some(&xs) {
+                roots.push(xs);
+            }
+            assert_eq!(xs.big().is_some(), model.len() > M, "{}", model.len());
         }
+        assert_eq!(roots.len(), 2, "prepend at count one keeps the root");
         check(xs, &model);
         // Elements that are strings are a third of the objects; the tree
         // adds about one leaf per 32 elements and few branches.
@@ -681,8 +690,11 @@ fn kernels_borrow_and_update_in_place_at_count_one() {
         let xs = list(&[1, 2, 3]);
         // Unique: the wrapper's reference is the only one.
         // SAFETY (every kernel call): live borrowed arguments.
-        // SAFETY: as above.
-        let pushed = as_wrapper(xs, |w| unsafe { cheby_list_push(w, elem(4)) });
+        // `list::push` and `list::prepend` are the helpers themselves,
+        // which own their arguments.
+        let null = std::ptr::null_mut();
+        // SAFETY: a live list and element, given up.
+        let pushed = root(unsafe { cheby_rt_list_push(null, xs.word(), elem(4)) });
         assert_eq!(pushed, xs, "pushed in place");
         check(pushed, &[1, 2, 3, 4]);
         // SAFETY: as above.
@@ -691,18 +703,16 @@ fn kernels_borrow_and_update_in_place_at_count_one() {
         });
         assert_eq!(set, xs);
         check(set, &[10, 2, 3, 4]);
-        // SAFETY: as above.
-        let prepended = as_wrapper(set, |w| unsafe {
-            cheby_list_prepend(w, abi::tag_int(0).unwrap())
-        });
+        // SAFETY: a live list and element, given up.
+        let prepended =
+            root(unsafe { cheby_rt_list_prepend(null, set.word(), abi::tag_int(0).unwrap()) });
         assert_eq!(prepended, xs);
         check(prepended, &[0, 10, 2, 3, 4]);
-        // Shared: the kernel leaves the argument alone.
+        // Shared: the argument is left alone.
         dup_word(prepended.word());
-        // SAFETY: as above.
-        let other = as_wrapper(prepended, |w| unsafe {
-            cheby_list_push(w, abi::tag_int(5).unwrap())
-        });
+        // SAFETY: a live list and element, given up.
+        let other =
+            root(unsafe { cheby_rt_list_push(null, prepended.word(), abi::tag_int(5).unwrap()) });
         assert_ne!(other, prepended);
         check(other, &[0, 10, 2, 3, 4, 5]);
         check(prepended, &[0, 10, 2, 3, 4]);
@@ -792,7 +802,7 @@ fn kernels_are_registered_with_their_std_symbols() {
     super::kernels(&mut table);
     // Registering the kernels registers the layouts too, so the static
     // empty list's layout is known before any list function runs.
-    for id in [26, 27, 28] {
+    for id in [26, 27, 28, 29] {
         assert!(crate::layout::get(id).is_some(), "layout {id}");
     }
     let names: Vec<_> = table.iter().map(|(name, _)| *name).collect();
@@ -801,8 +811,6 @@ fn kernels_are_registered_with_their_std_symbols() {
         [
             "cheby_list_length",
             "cheby_list_get",
-            "cheby_list_push",
-            "cheby_list_prepend",
             "cheby_list_append",
             "cheby_list_set",
             "cheby_list_slice",
@@ -1006,11 +1014,8 @@ fn apply(xs: Root, model: &mut Vec<i64>, op: &Op, shared: bool) -> Root {
         }
         Op::Prepend(v) => {
             model.insert(0, v);
-            let item = elem(v);
-            // SAFETY: a live borrowed list and element.
-            let r = as_wrapper(xs, |w| unsafe { cheby_list_prepend(w, item) });
-            drop_word(item);
-            r
+            // SAFETY: a live list and element, given up.
+            root(unsafe { cheby_rt_list_prepend(std::ptr::null_mut(), xs.word(), elem(v)) })
         }
         Op::Set(i, v) => {
             let i = if len == 0 { i } else { i % (len + 1) };
@@ -1367,7 +1372,27 @@ fn lists_compare_hash_and_print_through_their_root_kind() {
             );
             assert_eq!(crate::generic::debug_string(empty()), "[]");
         }
-        for list in [pushed, prepended, shorter] {
+        // A root and a big root are two layouts of one type of value.
+        let longer: Vec<i64> = (0..1_001).collect();
+        let whole = list(&longer);
+        let view = ops::slice(whole, 0, 1_000);
+        assert!(pushed.big().is_some() && view.big().is_none());
+        // SAFETY: as above.
+        unsafe {
+            for (a, b) in [(pushed, view), (view, pushed)] {
+                assert_eq!(crate::generic::equal(a.word(), b.word()), Ok(true));
+            }
+            assert_eq!(crate::generic::equal(whole.word(), view.word()), Ok(false));
+            assert_eq!(
+                crate::generic::hash_with_seed(pushed.word(), 7),
+                crate::generic::hash_with_seed(view.word(), 7)
+            );
+            assert_eq!(
+                crate::generic::debug_string(pushed.word()),
+                crate::generic::debug_string(view.word())
+            );
+        }
+        for list in [pushed, prepended, shorter, whole, view] {
             release(list);
         }
     });
@@ -1576,4 +1601,508 @@ fn uncons_matches_get_and_owned_slice() {
             }
         }
     });
+}
+
+// ---------------------------------------------------------------------
+// The ends of a list: big roots and their head and tail leaves
+
+/// Checks a borrowed list against its model without folding a big root's
+/// leaves into its tree: the length and `get`, on every index of a short
+/// list and a sample of a long one.
+fn peek(list: Root, model: &[i64]) {
+    assert_eq!(ops::len(list), model.len());
+    let step = (model.len() / 97).max(1);
+    for i in (0..model.len()).step_by(step) {
+        assert_eq!(ops::get(list, i).map(value), Some(model[i]), "get({i})");
+    }
+    if let Some(&last) = model.last() {
+        assert_eq!(ops::get(list, model.len() - 1).map(value), Some(last));
+    }
+    assert_eq!(ops::get(list, model.len()), None);
+}
+
+/// Whether a list has a head or a tail leaf outside its tree.
+fn buffered(list: Root) -> bool {
+    list.big().is_some_and(super::node::Big::has_buffers)
+}
+
+/// A pattern step on an owned list: its first (`front`) or last element
+/// and the rest.
+fn step_owned(xs: Root, front: bool) -> (Word, Root) {
+    let len = ops::len(xs) as i64;
+    let (at, start, end) = if front {
+        (0, 1, len)
+    } else {
+        (len - 1, 0, len - 1)
+    };
+    let mut head: Word = 0;
+    // SAFETY: a live list, given up; `head` is writable.
+    let rest = unsafe {
+        cheby_rt_list_uncons_owned(
+            std::ptr::null_mut(),
+            xs.word(),
+            at,
+            start,
+            end,
+            &raw mut head,
+        )
+    };
+    (head, root(rest))
+}
+
+#[test]
+fn a_list_of_one_leaf_needs_no_big_root() {
+    balanced(|| {
+        // Pushes, prepends and steps from both ends, in any mix, keep the
+        // first root of a list that stays at three quarters of a leaf or
+        // less: its elements move within the leaf when the free slots
+        // are at the wrong end.
+        let mut xs = ops::push(list(&[]), elem(0));
+        let first = xs;
+        let mut model = vec![0];
+        for round in 0..200_i64 {
+            while model.len() < M * 3 / 4 {
+                let v = round * 100 + model.len() as i64;
+                if v % 2 == 0 {
+                    xs = ops::push(xs, elem(v));
+                    model.push(v);
+                } else {
+                    xs = ops::prepend(xs, elem(v));
+                    model.insert(0, v);
+                }
+            }
+            while model.len() > 1 {
+                let front = model.len() % 3 != 0;
+                let (head, rest) = step_owned(xs, front);
+                let want = if front {
+                    model.remove(0)
+                } else {
+                    model.pop().unwrap()
+                };
+                assert_eq!(value(head), want);
+                drop_word(head);
+                xs = rest;
+            }
+            assert_eq!(xs, first, "round {round}");
+            assert!(xs.big().is_none());
+            check(xs, &model);
+        }
+        release(xs);
+    });
+}
+
+#[test]
+fn a_list_that_outgrows_its_leaf_moves_to_a_big_root() {
+    balanced(|| {
+        for prepend in [false, true] {
+            let model: Vec<i64> = (0..M as i64).collect();
+            let xs = list(&model);
+            assert!(xs.big().is_none() && xs.is_unique());
+            let null = std::ptr::null_mut();
+            // SAFETY: a live list and element, given up.
+            let grown = root(unsafe {
+                if prepend {
+                    cheby_rt_list_prepend(null, xs.word(), elem(-3))
+                } else {
+                    cheby_rt_list_push(null, xs.word(), elem(-3))
+                }
+            });
+            // The root was freed, which `balanced` checks, and the list
+            // is under another one.
+            assert_ne!(grown, xs);
+            assert!(grown.big().is_some() && grown.is_unique());
+            let mut expected = model;
+            if prepend {
+                expected.insert(0, -3);
+            } else {
+                expected.push(-3);
+            }
+            peek(grown, &expected);
+            check(grown, &expected);
+            release(grown);
+        }
+    });
+}
+
+#[test]
+fn a_big_root_reads_its_leaves_where_they_are_and_folds_them_for_a_view() {
+    balanced(|| {
+        let mut model: Vec<i64> = (0..40).collect();
+        let mut xs = list(&model);
+        for v in 40..100 {
+            xs = ops::push(xs, elem(v));
+            model.push(v);
+        }
+        for _ in 0..5 {
+            let (head, rest) = step_owned(xs, true);
+            assert_eq!(value(head), model.remove(0));
+            drop_word(head);
+            xs = rest;
+        }
+        let big = xs.big().expect("a list of more than a leaf");
+        assert!(big.head().is_some() && big.tail().is_some());
+        // `get` leaves the leaves alone.
+        peek(xs, &model);
+        assert!(buffered(xs));
+        // A second reference on the same fiber sees the same list, and a
+        // view folds the leaves into the tree for both.
+        dup_word(xs.word());
+        let sliced = ops::slice(xs, 10, 20);
+        assert!(!buffered(xs));
+        check(sliced, &model[10..20]);
+        check(xs, &model);
+        release(sliced);
+        release(xs);
+        release(xs);
+    });
+}
+
+#[test]
+fn sharing_a_list_with_another_fiber_folds_its_leaves() {
+    balanced(|| {
+        let mut model: Vec<i64> = (0..40).collect();
+        let mut xs = list(&model);
+        for v in 40..70 {
+            xs = ops::push(xs, elem(v));
+            model.push(v);
+        }
+        assert!(buffered(xs));
+        // Inside another value, as a spawn or a send finds it.
+        let pair = crate::values::tuple(&[xs.word(), abi::tag_int(1).unwrap()]);
+        // SAFETY: a live value only this thread uses.
+        unsafe { crate::rc::mark_shared(pair) };
+        assert!(!buffered(xs));
+        assert!(count(xs.word()) < 0, "the root is shared");
+        check(xs, &model);
+        // A shared list is never written: a push copies.
+        dup_word(xs.word());
+        let pushed = ops::push(xs, elem(70));
+        assert_ne!(pushed, xs);
+        check(xs, &model);
+        model.push(70);
+        check(pushed, &model);
+        release(pushed);
+        drop_word(pair);
+    });
+}
+
+#[test]
+fn steps_from_either_end_move_the_element_out_of_a_list_only_they_hold() {
+    balanced(|| {
+        for n in [5_i64, 40, 100, 1_100] {
+            for front in [true, false] {
+                // Every element a string, so each has a count.
+                let mut left: Vec<i64> = (0..n).map(|v| v * 3).collect();
+                let mut xs = list(&left);
+                while left.len() > 1 {
+                    let (head, rest) = step_owned(xs, front);
+                    let want = if front {
+                        left.remove(0)
+                    } else {
+                        left.pop().unwrap()
+                    };
+                    assert_eq!(value(head), want);
+                    // The list no longer holds it (D-893, D-909).
+                    assert_eq!(count(head), 1, "n {n} front {front} at {}", left.len());
+                    drop_word(head);
+                    xs = rest;
+                }
+                check(xs, &left);
+                release(xs);
+            }
+        }
+    });
+}
+
+#[test]
+fn steps_from_either_end_of_a_tree_another_list_holds_leave_it_whole() {
+    balanced(|| {
+        for n in [5_i64, 40, 100, 1_100] {
+            for front in [true, false] {
+                let model: Vec<i64> = (0..n).map(|v| v * 3).collect();
+                let original = list(&model);
+                // A unique root over the tree that `original` holds too.
+                let mut xs = ops::slice(original, 1, n as usize - 1);
+                let mut left = model[1..n as usize - 1].to_vec();
+                while left.len() > 1 {
+                    let (head, rest) = step_owned(xs, front);
+                    let want = if front {
+                        left.remove(0)
+                    } else {
+                        left.pop().unwrap()
+                    };
+                    assert_eq!(value(head), want);
+                    assert!(count(head) >= 2, "the other list still holds it");
+                    drop_word(head);
+                    xs = rest;
+                    if thorough(left.len()) {
+                        peek(xs, &left);
+                    }
+                }
+                check(xs, &left);
+                release(xs);
+                check(original, &model);
+                release(original);
+            }
+        }
+    });
+}
+
+#[test]
+fn cost_steps_and_pushes_at_the_ends_of_a_long_list_allocate_per_leaf() {
+    balanced(|| {
+        let n = sized(100_000, 2_000) as usize;
+        let mut xs = pushed(n as i64);
+        // A walk from the front: one big root at most, and nothing else.
+        let before = live();
+        let mut most = before;
+        for _ in 0..n - 1 {
+            let (head, rest) = step_owned(xs, true);
+            drop_word(head);
+            xs = rest;
+            most = most.max(live());
+        }
+        assert!(most <= before + 1, "a step allocated: {}", most - before);
+        release(xs);
+        // A queue: pushes at the back, steps from the front. The list
+        // stays near 100 elements, and so do its objects.
+        let mut xs = pushed(100);
+        let before = live();
+        for v in 0..n as i64 {
+            xs = ops::push(xs, abi::tag_int(v).unwrap());
+            let (head, rest) = step_owned(xs, true);
+            drop_word(head);
+            xs = rest;
+            assert!(live() <= before + 8, "{} objects at {v}", live() - before);
+        }
+        assert_eq!(ops::len(xs), 100);
+        release(xs);
+    });
+}
+
+#[test]
+fn a_step_from_the_back_of_a_view_that_ends_early_clears_its_slot() {
+    balanced(|| {
+        // A unique root over a unique leaf that holds elements past the
+        // view's end.
+        let original = list(&[0, 3, 6, 9, 12]);
+        let xs = ops::slice(original, 0, 4);
+        release(original);
+        let leaf = xs.view().tree.unwrap();
+        assert!(leaf.is_unique() && leaf.slots() == 5);
+        let (head, rest) = step_owned(xs, false);
+        assert_eq!((value(head), count(head)), (9, 1));
+        drop_word(head);
+        assert_eq!(rest, xs);
+        assert_eq!(leaf.elem(3), CLEARED);
+        assert_eq!(leaf.slots(), 5, "the element past the view stays");
+        check(rest, &[0, 3, 6]);
+        release(rest);
+    });
+}
+
+#[test]
+fn a_step_that_is_not_at_an_end_takes_the_checked_path() {
+    balanced(|| {
+        for n in [5_i64, 70] {
+            let model: Vec<i64> = (0..n).collect();
+            let xs = list(&model);
+            let mut head: Word = 0;
+            // `[_, x, ..rest]`: element 1 and the elements from 2.
+            // SAFETY: a live list, given up; `head` is writable.
+            let rest = root(unsafe {
+                cheby_rt_list_uncons_owned(std::ptr::null_mut(), xs.word(), 1, 2, n, &raw mut head)
+            });
+            assert_eq!(value(head), 1);
+            drop_word(head);
+            check(rest, &model[2..]);
+            release(rest);
+        }
+    });
+}
+
+#[test]
+fn a_walk_past_the_last_leaf_of_a_shared_tree_lets_the_tree_go() {
+    balanced(|| {
+        // A unique root over a tree that `original` holds too, with a
+        // tail leaf: pushes after the tree's full last leaf.
+        let model: Vec<i64> = (0..96).collect();
+        let original = list(&model);
+        let mut xs = ops::slice(original, 1, 96);
+        let mut left = model[1..].to_vec();
+        for v in 96..110 {
+            xs = ops::push(xs, elem(v));
+            left.push(v);
+        }
+        assert!(xs.big().is_some_and(|big| big.tail().is_some()));
+        // Steps from the front share each leaf of the tree in turn; past
+        // the last one the list holds the tree no more.
+        while left.len() > 10 {
+            let (head, rest) = step_owned(xs, true);
+            assert_eq!(value(head), left.remove(0));
+            drop_word(head);
+            xs = rest;
+            peek(xs, &left);
+        }
+        assert!(xs.big().is_some_and(|big| big.pieces().tree.is_none()));
+        // The tail leaf fills up and goes into a tree of its own.
+        for v in 110..160 {
+            xs = ops::push(xs, elem(v));
+            left.push(v);
+        }
+        check(xs, &left);
+        release(xs);
+        check(original, &model);
+        release(original);
+    });
+}
+
+/// One step of the state machine over the ends of a list.
+#[derive(Debug, Clone)]
+enum End {
+    /// Pushes through the helper (`true`) or the operation under it.
+    Push(bool),
+    /// Prepends through the helper (`true`) or the operation under it.
+    Prepend(bool),
+    /// A pattern step that takes the first (`true`) or last element.
+    Take(bool),
+    /// Another reference to the list is kept, and must not change.
+    Keep,
+    /// A kept reference is checked and released.
+    Unkeep(usize),
+    /// The list becomes a slice of itself; with `true` the list it was
+    /// cut from is kept, so the slice's tree is shared.
+    Slice(usize, usize, bool),
+    /// A view of the list: folds its leaves.
+    Fold,
+    /// The list is marked shared, as when it is sent to another fiber.
+    Share,
+}
+
+fn end() -> impl Strategy<Value = (End, usize)> {
+    let run = prop_oneof![1..4_usize, 1..40_usize, 1..120_usize];
+    let step = prop_oneof![
+        5 => any::<bool>().prop_map(End::Push),
+        3 => any::<bool>().prop_map(End::Prepend),
+        6 => any::<bool>().prop_map(End::Take),
+        1 => Just(End::Keep),
+        1 => any::<usize>().prop_map(End::Unkeep),
+        1 => (any::<usize>(), any::<usize>(), any::<bool>())
+            .prop_map(|(a, b, keep)| End::Slice(a, b, keep)),
+        1 => Just(End::Fold),
+        1 => Just(End::Share),
+    ];
+    (step, run)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: miri_cases(160), ..ProptestConfig::default() })]
+
+    /// Runs of pushes, prepends and pattern steps at both ends against a
+    /// model, on unique lists, on lists whose root or tree another
+    /// reference holds, and after marking shared. The list is read
+    /// without folding its leaves after every operation, and every kept
+    /// reference still reads as it did.
+    #[test]
+    fn ends_match_a_deque(
+        start in prop_oneof![0..4_usize, 0..70_usize, 0..sized(3_000, 1_200) as usize],
+        steps in prop::collection::vec(end(), 1..30),
+    ) {
+        balanced(|| {
+            let null = std::ptr::null_mut();
+            let mut model: Vec<i64> = (0..start as i64).collect();
+            let mut xs = list(&model);
+            let mut kept: Vec<(Root, Vec<i64>)> = Vec::new();
+            let mut next = 1_000_000_i64;
+            for (step, run) in &steps {
+                for _ in 0..*run {
+                    match *step {
+                        End::Push(helper) => {
+                            next += 1;
+                            model.push(next);
+                            let item = elem(next);
+                            xs = if helper {
+                                // SAFETY: a live list and element, given up.
+                                root(unsafe { cheby_rt_list_push(null, xs.word(), item) })
+                            } else {
+                                ops::push(xs, item)
+                            };
+                        }
+                        End::Prepend(helper) => {
+                            next += 1;
+                            model.insert(0, next);
+                            let item = elem(next);
+                            xs = if helper {
+                                // SAFETY: a live list and element, given up.
+                                root(unsafe { cheby_rt_list_prepend(null, xs.word(), item) })
+                            } else {
+                                ops::prepend(xs, item)
+                            };
+                        }
+                        End::Take(front) => {
+                            if model.is_empty() {
+                                break;
+                            }
+                            let (head, rest) = step_owned(xs, front);
+                            let want = if front { model.remove(0) } else { model.pop().unwrap() };
+                            assert_eq!(value(head), want);
+                            drop_word(head);
+                            xs = rest;
+                        }
+                        End::Keep => {
+                            if kept.len() < 3 {
+                                dup_word(xs.word());
+                                kept.push((xs, model.clone()));
+                            }
+                            break;
+                        }
+                        End::Unkeep(i) => {
+                            if !kept.is_empty() {
+                                let (old, old_model) = kept.swap_remove(i % kept.len());
+                                check(old, &old_model);
+                                release(old);
+                            }
+                            break;
+                        }
+                        End::Slice(a, b, keep) => {
+                            let len = model.len();
+                            let (a, b) = (a % (len + 1), b % (len + 1));
+                            let (from, to) = (a.min(b), a.max(b));
+                            let sliced = ops::slice(xs, from, to);
+                            if keep && kept.len() < 3 {
+                                kept.push((xs, model.clone()));
+                            } else {
+                                release(xs);
+                            }
+                            model = model[from..to].to_vec();
+                            xs = sliced;
+                            break;
+                        }
+                        End::Fold => {
+                            check(xs, &model);
+                            assert!(!buffered(xs));
+                            break;
+                        }
+                        End::Share => {
+                            // SAFETY: a live value only this thread uses.
+                            unsafe { crate::rc::mark_shared(xs.word()) };
+                            assert!(!buffered(xs));
+                            break;
+                        }
+                    }
+                    peek(xs, &model);
+                }
+                peek(xs, &model);
+                for (old, old_model) in &kept {
+                    peek(*old, old_model);
+                }
+            }
+            check(xs, &model);
+            release(xs);
+            for (old, old_model) in kept {
+                check(old, &old_model);
+                release(old);
+            }
+        });
+    }
 }

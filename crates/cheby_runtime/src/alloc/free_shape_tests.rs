@@ -185,9 +185,16 @@ fn list_nodes_are_freed_from_their_declared_shapes() {
     with_domain(Arc::clone(&domain), || {
         for len in (1..=40).chain([1_000, 40_000]) {
             let list = crate::list::from_iter((0..len).map(int));
-            let root = shape(list).unwrap();
-            assert_eq!((root.first, root.count, root.size), (8, 1, 32));
-            assert!(!root.reusable);
+            // A list of more than one leaf is under a big root, which
+            // has no declared shape.
+            match shape(list) {
+                Some(root) => {
+                    assert!(len <= 32, "{len}");
+                    assert_eq!((root.first, root.count, root.size), (8, 1, 32));
+                    assert!(!root.reusable);
+                }
+                None => assert!(len > 32, "{len}"),
+            }
             // SAFETY: a live root holds its tree at offset 8.
             let tree = unsafe { read_field(word_to_ptr(list), 8) };
             let node = shape(tree).unwrap();

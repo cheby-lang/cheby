@@ -290,11 +290,28 @@ fn intrinsic_scope_run_passes_validation() {
     assert!(after.precounted);
 }
 
-/// The table holds `scope_run` under its runtime name, and nothing else in
-/// M2 (D-693).
+/// The table holds `scope_run` under its runtime name (D-693), then
+/// `std::list`'s `push` and `prepend`.
 #[test]
 fn intrinsic_table() {
-    assert_eq!(intrinsic_symbols(), ["cheby_rt_scope_run"]);
+    assert_eq!(
+        intrinsic_symbols(),
+        [
+            "cheby_rt_scope_run",
+            "cheby_rt_std_list_push",
+            "cheby_rt_std_list_prepend"
+        ]
+    );
+    assert_eq!(
+        Intrinsic::from_symbol("cheby_rt_std_list_push"),
+        Some(Intrinsic::ListPush)
+    );
+    assert_eq!(
+        Intrinsic::from_symbol("cheby_rt_std_list_prepend"),
+        Some(Intrinsic::ListPrepend)
+    );
+    // The helpers the two bodies call are not intrinsics.
+    assert_eq!(Intrinsic::from_symbol("cheby_rt_list_push"), None);
     assert_eq!(
         Intrinsic::ALL.map(Intrinsic::symbol).as_slice(),
         intrinsic_symbols()

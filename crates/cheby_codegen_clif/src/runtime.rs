@@ -105,11 +105,13 @@ pub enum RuntimeFunc {
     /// `uint64_t cheby_rt_list_uncons_owned(ExecCtx *ctx, uint64_t list, int64_t at,
     /// int64_t start, int64_t end, uint64_t *head)`.
     ListUnconsOwned,
+    /// `uint64_t cheby_rt_list_prepend(ExecCtx *ctx, uint64_t list, uint64_t elem)`.
+    ListPrepend,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -148,6 +150,7 @@ impl RuntimeFunc {
         Self::FreeUnique,
         Self::ListUncons,
         Self::ListUnconsOwned,
+        Self::ListPrepend,
     ];
 
     /// The symbol.
@@ -192,6 +195,7 @@ impl RuntimeFunc {
             Self::FreeUnique => sym::FREE_UNIQUE,
             Self::ListUncons => sym::LIST_UNCONS,
             Self::ListUnconsOwned => sym::LIST_UNCONS_OWNED,
+            Self::ListPrepend => sym::LIST_PREPEND,
         }
     }
 
@@ -204,6 +208,7 @@ impl RuntimeFunc {
             Self::Alloc
             | Self::StrAppend
             | Self::ListPush
+            | Self::ListPrepend
             | Self::ListAppend
             | Self::AllocMiss
             | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
@@ -255,6 +260,7 @@ impl RuntimeFunc {
                 | Self::FreeUnique
                 | Self::ListUncons
                 | Self::ListUnconsOwned
+                | Self::ListPrepend
         )
     }
 
@@ -300,6 +306,7 @@ impl RuntimeFunc {
             Self::FreeUnique => 35,
             Self::ListUncons => 36,
             Self::ListUnconsOwned => 37,
+            Self::ListPrepend => 38,
         }
     }
 
@@ -328,6 +335,7 @@ impl RuntimeFunc {
             // call's declaration only.
             RuntimeFn::ListUncons | RuntimeFn::ListUnconsHead => (Self::ListUncons, true),
             RuntimeFn::ListUnconsOwned => (Self::ListUnconsOwned, true),
+            RuntimeFn::ListPrepend => (Self::ListPrepend, true),
         }
     }
 }

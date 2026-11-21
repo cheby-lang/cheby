@@ -753,10 +753,24 @@ mod tests {
         ])
     }
 
+    /// A list of four elements in a leaf with no room: a push must
+    /// allocate.
+    fn full() -> Word {
+        list::from_iter((1..=4).map(values::int_word))
+    }
+
+    /// A list of more than one leaf, one of its elements an object: its
+    /// first pattern step must allocate.
+    fn long() -> Word {
+        list::from_iter(
+            std::iter::once(values::string("first")).chain((1..40).map(values::int_word)),
+        )
+    }
+
     #[test]
     fn list_push_consumes_its_list_and_element_when_it_raises() {
         let ran = consumes_when_raising(
-            three,
+            full,
             (|_| values::string("four"), Second::Owned),
             |ctx, list, elem| {
                 // SAFETY: both are given up.
@@ -790,11 +804,11 @@ mod tests {
 
     #[test]
     fn list_uncons_owned_consumes_its_list_when_it_raises() {
-        let ran = consumes_when_raising(three, (|_| 0, Second::Owned), |ctx, list, _| {
+        let ran = consumes_when_raising(long, (|_| 0, Second::Owned), |ctx, list, _| {
             let mut head: Word = 7;
             // SAFETY: `list` is given up; `head` is writable.
             let rest =
-                unsafe { list::cheby_rt_list_uncons_owned(ctx, list, 0, 1, 3, &raw mut head) };
+                unsafe { list::cheby_rt_list_uncons_owned(ctx, list, 0, 1, 40, &raw mut head) };
             // The element is written only when the call returns normally
             // (D-909).
             assert_eq!(head, 7);
@@ -1438,6 +1452,11 @@ mod tests {
             "restores the context of the open, then returns to Cheby or re-raises",
         ),
         ("pool/mod.rs", "run_job", "a Rust pool thread, no fiber"),
+        (
+            "rc.rs",
+            "mark_with",
+            "a count overflow's walk, which has no edge: the process ends (D-765, D-1760)",
+        ),
         (
             "sched/mod.rs",
             "spawn_root_in",

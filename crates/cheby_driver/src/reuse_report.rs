@@ -882,7 +882,7 @@ impl<'f> Flow<'f> {
                     _ => None,
                 };
                 match func {
-                    RuntimeFn::ListPush | RuntimeFn::ListAppend => {
+                    RuntimeFn::ListPush | RuntimeFn::ListAppend | RuntimeFn::ListPrepend => {
                         args.iter().any(|op| held(holds, op)) && join_into(holds, dst, Hold::Any)
                     }
                     RuntimeFn::ListGet | RuntimeFn::ListSlice | RuntimeFn::ListSliceOwned => {

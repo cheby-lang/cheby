@@ -113,6 +113,7 @@ mod func;
 pub mod isa;
 pub mod jit_unit;
 mod layout;
+mod list_ends;
 #[cfg(test)]
 mod locs_tests;
 pub mod mangle;

@@ -971,6 +971,112 @@ fn record_field_pushes_write_in_place() {
     }
 }
 
+/// Lists built by `push` and by `prepend` and walked from the front and
+/// from the back, each a list of more than one leaf that only the loop
+/// holds: every push, prepend and pattern step writes in place, and the
+/// whole run allocates a leaf per 32 elements and little else (D-1757,
+/// D-1758). Before lists kept a leaf at each end, every one of these
+/// 40,000 operations descended the tree. Run with poisoning off, so the inline pattern
+/// steps are compiled, and with the counters on, which sends each step
+/// to the helper that counts it.
+#[test]
+fn list_ends_write_in_place() {
+    let dir = package(
+        "list_ends",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Builds lists at both ends and walks them from both ends.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 fn pushed(acc: List<Int>, n: Int) -> List<Int> {\n  \
+                   case n {\n    \
+                     0 => acc\n    \
+                     _ => pushed(list::push(acc, n), n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn prepended(acc: List<Int>, n: Int) -> List<Int> {\n  \
+                   case n {\n    \
+                     0 => acc\n    \
+                     _ => prepended(list::prepend(acc, n), n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn from_front(xs: List<Int>, sum: Int) -> Int {\n  \
+                   case xs {\n    \
+                     [] => sum\n    \
+                     [x, ..rest] => from_front(rest, sum * 3 % 1_000_003 + x)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn from_back(xs: List<Int>, sum: Int) -> Int {\n  \
+                   case xs {\n    \
+                     [] => sum\n    \
+                     [..rest, x] => from_back(rest, sum * 3 % 1_000_003 + x)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let a = from_front(pushed([], 5000), 0)\n  \
+                   let b = from_back(prepended([], 5000), 0)\n  \
+                   let c = from_back(pushed([], 5000), 0)\n  \
+                   let d = from_front(prepended([], 5000), 0)\n  \
+                   io::println(\"{a} {b} {c} {d}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for stats in [true, false] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        if stats {
+            cmd.env("CHEBY_RT_STATS", "1");
+        } else {
+            cmd.env_remove("CHEBY_RT_STATS");
+        }
+        cache.apply(&mut cmd);
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{stats}: {}", out.stderr);
+        // `pushed` is 5000 down to 1 and `prepended` 1 up to 5000, so
+        // the first and the last walk agree, and so do the two between.
+        assert_eq!(out.stdout, "990564 990564 440042 440042\n", "{stats}");
+        if !stats {
+            continue;
+        }
+        let count = |name: &str| {
+            stat(&out.stderr, name).unwrap_or_else(|| panic!("no `{name}` line:\n{}", out.stderr))
+        };
+        assert_eq!(count("list push copied"), 0, "{}", out.stderr);
+        assert_eq!(count("list update copied"), 0, "{}", out.stderr);
+        // Every push but the first of each list, which makes its root.
+        assert_eq!(count("list push in place"), 2 * 4999, "{}", out.stderr);
+        // Every prepend but the first of each list, and every step.
+        assert!(
+            count("list update in place") >= 2 * 4999 + 4 * 4999,
+            "{}",
+            out.stderr
+        );
+        // About 157 leaves and 6 branches for each of four lists, with
+        // the leaves a list grows through at first.
+        let allocations = count("allocations");
+        assert!(
+            allocations < 1_500,
+            "{allocations} allocations:\n{}",
+            out.stderr
+        );
+    }
+}
+
 /// A field every variant holds at the same place (D-071) is read without a
 /// test of the variant, so the read proves no layout to reuse (the fix
 /// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,

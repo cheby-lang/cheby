@@ -105,7 +105,7 @@ unsafe fn dup_slow(obj: *mut u8, rc: i32) {
         // object it reaches with a positive count are confined to this
         // fiber (I-1); marking stores `-rc` into it, which the next store
         // replaces.
-        unsafe { mark_with(ptr_to_word(obj), list) };
+        unsafe { mark_with(ptr_to_word(obj), list, Some(OVERFLOW_WALK_REFUSED)) };
         // SAFETY: a live object, now shared, that only this fiber has
         // touched since it was local; no other fiber can reach it before
         // this dup returns.
@@ -232,7 +232,7 @@ pub unsafe fn count_of(value: Word) -> Option<i32> {
 /// other thread reads or writes its count meanwhile).
 pub unsafe fn mark_shared(word: Word) {
     // SAFETY: forwarded from the caller.
-    unsafe { mark_with(word, alloc::scratch::ScratchVec::new()) };
+    unsafe { mark_with(word, alloc::scratch::ScratchVec::new(), None) };
 }
 
 /// What ends the process when the system refuses the worklist of a count
@@ -250,12 +250,19 @@ enum Step {
 
 /// [`mark_shared`] with `list`, an empty worklist, whose growth is
 /// accounted for as the caller chose: charged to the budget, or not
-/// (`dup_slow`, D-765).
+/// (`dup_slow`, D-765). With `refused`, the walk must not raise: a big
+/// list root's leaves are folded into its tree on the way
+/// ([`crate::list::settle_value`]), which allocates, and a failure there
+/// ends the process with that message instead (D-1760).
 ///
 /// # Safety
 ///
 /// As for [`mark_shared`].
-unsafe fn mark_with(word: Word, mut list: alloc::scratch::ScratchVec<Step>) {
+unsafe fn mark_with(
+    word: Word,
+    mut list: alloc::scratch::ScratchVec<Step>,
+    refused: Option<&'static str>,
+) {
     list.push(Step::Enter(word));
     while let Some(step) = list.pop() {
         match step {
@@ -272,6 +279,20 @@ unsafe fn mark_with(word: Word, mut list: alloc::scratch::ScratchVec<Step>) {
                     // Static, or shared together with everything it
                     // reaches.
                     continue;
+                }
+                // A big list root gives up its head and tail leaves
+                // before another fiber can read it: a root is written
+                // only while its count is positive.
+                // SAFETY: a live object with a positive count, which only
+                // this fiber holds.
+                let settle = || unsafe { crate::list::settle_value(word) };
+                match refused {
+                    None => settle(),
+                    Some(message) => {
+                        if std::panic::catch_unwind(settle).is_err() {
+                            crate::panic::fatal(format_args!("{message}"));
+                        }
+                    }
                 }
                 list.push(Step::Mark(word));
                 // SAFETY: a live object.

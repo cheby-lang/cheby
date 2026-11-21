@@ -199,7 +199,8 @@ unsafe fn step(
             unsafe { ctor_fields(a, b, x, y, later) }
         }
         (View::Custom(kind), View::Custom(other)) => {
-            if kind != other {
+            // A list's two root layouts are one type of value.
+            if !kind.same_values(other) {
                 return Ok(false);
             }
             let Some(equal) = kind.equal else {

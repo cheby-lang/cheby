@@ -28,8 +28,8 @@ use crate::helpers::{
     cheby_rt_str_with_capacity,
 };
 use crate::list::{
-    cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_push,
-    cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
+    cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_prepend,
+    cheby_rt_list_push, cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
     cheby_rt_list_uncons_owned, cheby_rt_static_empty_list,
 };
 use crate::object::{
@@ -60,7 +60,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 49] {
+fn runtime_symbols() -> [(&'static str, *const u8); 50] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -134,6 +134,7 @@ fn runtime_symbols() -> [(&'static str, *const u8); 49] {
             sym::LIST_UNCONS_OWNED,
             cheby_rt_list_uncons_owned as *const u8,
         ),
+        (sym::LIST_PREPEND, cheby_rt_list_prepend as *const u8),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }

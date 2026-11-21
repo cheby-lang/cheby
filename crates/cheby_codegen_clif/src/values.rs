@@ -834,6 +834,10 @@ impl Translator<'_, '_> {
                 0,
             )));
         }
+        if let Some(value) = self.list_end_inline(helper, args)? {
+            // An end of a unique list, written in place.
+            return Ok(Some(value));
+        }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
         let mut vals = Vec::with_capacity(args.len().saturating_add(2));
         if takes_ctx {
@@ -864,7 +868,7 @@ impl Translator<'_, '_> {
 
     /// The stack slot where a `list_uncons` writes its element (D-909),
     /// made at the function's first one.
-    fn make_uncons_slot(&mut self) -> StackSlot {
+    pub(crate) fn make_uncons_slot(&mut self) -> StackSlot {
         if let Some(slot) = self.uncons_slot {
             return slot;
         }

@@ -775,11 +775,22 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 38);
+    assert_eq!(RuntimeFunc::ALL.len(), 39);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        14,
-        "only the M2 functions are declared on demand"
+        15,
+        "only the functions added since M2 are declared on demand"
+    );
+    // `cheby_rt_list_prepend(ctx, list, elem)`, as `cheby_rt_list_push`.
+    assert_eq!(RuntimeFunc::ListPrepend.index(), 38);
+    assert_eq!(
+        RuntimeFunc::ListPrepend.ctypes(),
+        RuntimeFunc::ListPush.ctypes()
+    );
+    assert!(RuntimeFunc::ListPrepend.on_demand() && !RuntimeFunc::ListPush.on_demand());
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::ListPrepend),
+        (RuntimeFunc::ListPrepend, true)
     );
     assert_eq!(
         RuntimeFunc::of(RuntimeFn::ScopeOpen),
@@ -1893,6 +1904,103 @@ fn uncons_unit() -> MirModule {
     }])
     .unwrap();
     u
+}
+
+/// `f(xs) { n = list_length(xs); m = n - 1 (as a constant here: the
+/// length itself); rest = list_uncons_owned(xs, at, start, end); x =
+/// list_uncons_head(); ... }` for the step that takes the first
+/// (`front`) or the last element, as pattern lowering and the RC pass
+/// leave it.
+fn owned_step_unit(front: bool) -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let mut u = uncons_unit();
+    let l = Local::from_u32;
+    let (at, start) = if front {
+        (Operand::Const(Const::Int(0)), 1)
+    } else {
+        (Operand::Local(l(1)), 0)
+    };
+    let step = Stmt::Assign {
+        dst: l(2),
+        value: Rvalue::CallRuntime {
+            func: RuntimeFn::ListUnconsOwned,
+            args: vec![
+                Operand::Local(l(0)),
+                at,
+                Operand::Const(Const::Int(start)),
+                Operand::Local(l(1)),
+            ],
+        },
+    };
+    u.functions[0].blocks.iter_mut().next().unwrap().stmts[1] = step;
+    u
+}
+
+/// An owned pattern step at either end of a list is written inline for a
+/// unique list whose leaf at that end is at hand, with the helper's call
+/// in a cold block for every other list: it tests the root's header
+/// against the two unique roots', the leaf's against a unique leaf's,
+/// and the counting flag, then moves the element into the step's stack
+/// slot and writes the position and the length. With `checked_rc` only
+/// the call is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn owned_list_steps_are_written_inline() {
+    use cheby_runtime::abi::{list, sym};
+    for front in [true, false] {
+        let text = clif_of(&[owned_step_unit(front)], &CodegenOptions::default());
+        for header in [list::UNIQUE_ROOT, list::UNIQUE_BIG_ROOT, list::UNIQUE_LEAF] {
+            // As CLIF prints a constant: hexadecimal, in groups of four.
+            let digits = format!("{header:x}");
+            let grouped: Vec<&str> = digits
+                .as_bytes()
+                .rchunks(4)
+                .rev()
+                .map(|group| std::str::from_utf8(group).unwrap())
+                .collect();
+            let constant = format!("iconst.i64 0x{}", grouped.join("_"));
+            assert!(text.contains(&constant), "{front}: no {constant}\n{text}");
+        }
+        assert!(text.contains(sym::STATS_COUNTING), "{front}\n{text}");
+        // One slot: the inline code stores the element there, the
+        // helper gets its address in a cold block, and the head is read
+        // back from it.
+        assert_eq!(
+            text.matches("explicit_slot 8").count(),
+            1,
+            "{front}\n{text}"
+        );
+        assert_eq!(
+            text.matches("stack_addr.i64 ss0").count(),
+            3,
+            "{front}\n{text}"
+        );
+        assert!(text.contains(sym::LIST_UNCONS_OWNED), "{front}\n{text}");
+        assert!(text.contains(" cold:"), "{front}\n{text}");
+        // The front step stores the cleared word, a constant, in the
+        // slot it empties; the back step shortens the leaf instead.
+        assert_eq!(list::CLEARED, 1);
+        let slots = list::LEAF_SLOTS_OFFSET;
+        let clears = text
+            .lines()
+            .any(|line| line.contains(&format!("+{slots}  ; ")) && line.ends_with(" = 1"));
+        assert_eq!(clears, front, "{front}\n{text}");
+        let checked = CodegenOptions {
+            checked_rc: true,
+            ..CodegenOptions::default()
+        };
+        let text = clif_of(&[owned_step_unit(front)], &checked);
+        assert_eq!(
+            text.matches("stack_addr.i64 ss0").count(),
+            2,
+            "{front}\n{text}"
+        );
+        assert!(!text.contains(sym::STATS_COUNTING), "{front}\n{text}");
+        assert!(text.contains(sym::LIST_UNCONS_OWNED), "{front}\n{text}");
+    }
 }
 
 /// A list's length is a load of its root's length word, with no call
