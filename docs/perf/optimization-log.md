@@ -70,3 +70,47 @@ rebuilt record. It added 1.17 M allocations on `ordered_multimap`, because the n
 The audit of the other Cheby collections found no second case: `multimap`, `sorted_multimap`,
 `sorted_map`, `sorted_set` and `heap` show no copies from this pattern.
 
+### Map and set keys hash and compare without the generic walk
+
+A key was hashed by `generic::hash_with_seed`, which built a full `Hasher` (a SipHash state and
+three scratch buffers) and ran the generic walk's first step, even for a tagged `Int` or a
+`String`. `hash_with_seed` now hashes a tagged integer, a `String` or a `Bytes` with a bare
+SipHash-1-3 state, writing the same bytes under the same key, and `equal` compares two tagged
+integers, or two texts of one kind, directly. Every other value takes the walk as before. The
+hashes are the same bit for bit, so iteration order, `==` on maps and `list::unique` do not change.
+A property test, `leaf_paths_agree_with_the_walk`, compares the two paths on integers across the
+tagged range, boxed numbers, floats with NaN and ±0, strings, bytes, tuples, constructors and
+closures.
+
+The HAMT's update path lost its per-call overhead too:
+
+- `Path` made two `Vec` allocations per update. It now holds two fixed stacks of 14 entries, the
+  most a path needs, and is built in the caller's frame, since returning it copied 280 bytes.
+- `make_writable` remembers the room it made, so its second call in `upsert`'s new-key branch
+  returns at once.
+- The common case of `Bitmap::writable`, a unique node with room, is inline.
+- `cheby_map_upsert` looks the running fiber up once for the `Some` it allocates and the closure
+  it calls.
+
+Medians of nine runs against `5dc18965`:
+
+| Benchmark                      | Before  | After   | Change |
+| ------------------------------ | ------- | ------- | ------ |
+| `rc/map_updates`               | 0.442 s | 0.334 s | −24.4% |
+| `collections/ordered_set`      | 0.543 s | 0.474 s | −12.8% |
+| `collections/multimap`         | 0.684 s | 0.608 s | −11.1% |
+| `collections/ordered_map`      | 0.577 s | 0.526 s | −8.9%  |
+| `collections/ordered_multimap` | 0.683 s | 0.629 s | −7.8%  |
+
+The collections group's geometric mean is −6.1% and the RC group's −6.1%. Checksums and allocation
+counts are unchanged. Miri on the `hamt` and `generic` groups reports nothing.
+
+Tried and not kept:
+
+- Leaving `Path`'s construction to the inliner. The 280-byte copy stayed even under
+  `#[inline(always)]`; only building it in the caller's frame removed it.
+- More work on `find_hashed` and the path walk. What is left there is memory latency in an
+  already tight loop.
+- A hand-written SipHash for the 9-byte integer key. It might save part of the 4% that
+  `hash_with_seed` still takes, for code that must match the library bit for bit for ever.
+

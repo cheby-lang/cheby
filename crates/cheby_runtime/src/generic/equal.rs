@@ -1,6 +1,6 @@
 //! Structural equality (`==`, §3.13).
 
-use super::raw::{Raw, TupleFields, View, f32_eq, float_eq, view};
+use super::raw::{Raw, TupleFields, View, f32_eq, float_eq, text_leaf, view};
 use super::{Reached, hooks};
 use crate::abi::{self, Word};
 use crate::alloc::scratch::ScratchVec;
@@ -53,6 +53,33 @@ impl Cx {
 /// `a` and `b` are tagged integers or live objects, not changed during the
 /// call. On an entry's thread when the values may hold a type with hooks.
 pub unsafe fn equal(a: Word, b: Word) -> Result<bool, Reached> {
+    // Two tagged integers, or two texts of one kind, the common keys of
+    // maps and sets, compare here without a walk, as `step` would compare
+    // them.
+    if abi::is_tagged_int(a) && abi::is_tagged_int(b) {
+        return Ok(a == b);
+    }
+    // SAFETY: forwarded from the caller.
+    if let (Some((x, xs)), Some((y, ys))) = unsafe { (text_leaf(a, "`==`"), text_leaf(b, "`==`")) }
+        && x == y
+    {
+        return Ok(xs == ys);
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { walk_equal(a, b) }
+}
+
+/// [`equal`] by the generic walk alone, which every pair takes apart
+/// from the leaves [`equal`] compares itself.
+///
+/// # Errors
+///
+/// As for [`equal`].
+///
+/// # Safety
+///
+/// As for [`equal`].
+pub(super) unsafe fn walk_equal(a: Word, b: Word) -> Result<bool, Reached> {
     let mut later = ScratchVec::new();
     let mut cx = Cx::default();
     // The first step runs before the walk's stack exists: leaves leave no

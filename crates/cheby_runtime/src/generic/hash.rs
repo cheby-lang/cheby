@@ -13,7 +13,7 @@ use std::hash::Hasher as _;
 
 use siphasher::sip::SipHasher13;
 
-use super::raw::{Raw, View, f32_hash_bits, float_hash_bits, view};
+use super::raw::{Raw, View, f32_hash_bits, float_hash_bits, text_leaf, view};
 use super::{Reached, hooks};
 use crate::abi::{self, Word};
 use crate::alloc::scratch::ScratchVec;
@@ -208,8 +208,7 @@ impl Hasher {
 
     /// Writes a length-prefixed byte string.
     pub fn write_bytes(&mut self, bytes: &[u8]) {
-        self.sip.write_u64(to_u64(bytes.len()));
-        self.sip.write(bytes);
+        sip_bytes(&mut self.sip, bytes);
     }
 
     /// Schedules a borrowed child value, hashed after the current one, in
@@ -262,6 +261,60 @@ pub unsafe fn hash(word: Word) -> Result<u64, Reached> {
 ///
 /// As for [`hash`].
 pub unsafe fn hash_with_seed(word: Word, seed: u64) -> Result<u64, Reached> {
+    // SAFETY: forwarded from the caller.
+    if let Some(hash) = unsafe { leaf_hash(word, seed) } {
+        return Ok(hash);
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { walk_hash(word, seed) }
+}
+
+/// Writes a length-prefixed byte string into a `SipHash` state, for
+/// [`Hasher::write_bytes`] and [`leaf_hash`] alike.
+fn sip_bytes(sip: &mut SipHasher13, bytes: &[u8]) {
+    sip.write_u64(to_u64(bytes.len()));
+    sip.write(bytes);
+}
+
+/// The hash of a tagged integer, a `String` or a `Bytes`, or `None` for
+/// any other word. Most keys of maps and sets are such leaves, and their
+/// hash needs no [`Hasher`] and no walk. It writes the same bytes into the
+/// same state as [`step`] does in [`walk_hash`], so the hash is the same:
+/// iteration order, `==` on maps and `list::unique` depend on it.
+///
+/// # Safety
+///
+/// As for [`hash`].
+#[inline]
+unsafe fn leaf_hash(word: Word, seed: u64) -> Option<u64> {
+    let mut sip = SipHasher13::new_with_keys(seed, 0);
+    if abi::is_tagged_int(word) {
+        sip.write_u8(mark::INT);
+        sip.write_u64(abi::untag_int(word).cast_unsigned());
+        return Some(sip.finish());
+    }
+    // SAFETY: forwarded from the caller.
+    let (id, bytes) = unsafe { text_leaf(word, "hashing") }?;
+    sip.write_u8(if id == abi::layout::STRING {
+        mark::TEXT
+    } else {
+        mark::BYTES
+    });
+    sip_bytes(&mut sip, bytes);
+    Some(sip.finish())
+}
+
+/// [`hash_with_seed`] by the generic walk alone, which every value takes
+/// apart from the leaves of [`leaf_hash`].
+///
+/// # Errors
+///
+/// As for [`hash`].
+///
+/// # Safety
+///
+/// As for [`hash`].
+pub(super) unsafe fn walk_hash(word: Word, seed: u64) -> Result<u64, Reached> {
     let mut hasher = Hasher::new(seed);
     // The first step runs before the walk's stack exists: a leaf leaves no
     // work, so no scratch buffer grows (GATE1-1).

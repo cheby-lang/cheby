@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 
 use crate::abi::{self, LayoutId, Word, layout};
 use crate::alloc;
+use crate::ctx::ExecCtx;
 use crate::object::{self, read_field, scan_and_layout, to_u64, word_to_ptr, write_field};
 use crate::panic::fatal;
 use crate::string;
@@ -144,6 +145,22 @@ fn one_field(layout: LayoutId, value: Word) -> Word {
 #[must_use]
 pub fn some(value: Word) -> Word {
     one_field(layout::SOME, value)
+}
+
+/// [`some`] allocated for `ctx`, the fiber running on this thread (or
+/// null for whatever runs here), so a kernel that has looked its fiber up
+/// already allocates without a lookup of its own.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+#[must_use]
+pub(crate) unsafe fn some_for(ctx: *mut ExecCtx, value: Word) -> Word {
+    // SAFETY: forwarded from the caller.
+    let obj = unsafe { alloc::alloc_for(ctx, 16, abi::header(abi::RC_UNIQUE, 1, layout::SOME)) };
+    // SAFETY: a fresh 16-byte object with one value field.
+    unsafe { write_field(obj, FIELD0, value) };
+    object::ptr_to_word(obj)
 }
 
 /// `Some(byte)` of a `U8`: a static object, so nothing is allocated

@@ -1,7 +1,7 @@
 //! What a word is, for the generic routines: [`View`] classifies a uniform
 //! word by its layout, and [`Raw`] decodes a raw constructor field.
 
-use crate::abi::{self, Word};
+use crate::abi::{self, LayoutId, Word};
 use crate::alloc;
 use crate::desc;
 use crate::layout::{self, CustomKind, FieldKind, LayoutInfo, LayoutKind};
@@ -185,6 +185,31 @@ pub(super) unsafe fn view<'a>(word: Word, what: &str) -> View<'a> {
             None => View::Internal(info),
         },
         LayoutKind::Dict => View::Internal(info),
+    }
+}
+
+/// A `String` or a `Bytes` read in place, with its layout id, or `None`
+/// for a tagged integer, 0 or any other object. It reads the header once
+/// and skips the layout table, so the common keys of maps and sets hash
+/// and compare without a full [`view`]. It checks liveness as [`view`]
+/// does, with the same `what`.
+///
+/// # Safety
+///
+/// As for [`view`].
+#[inline]
+pub(super) unsafe fn text_leaf<'a>(word: Word, what: &str) -> Option<(LayoutId, &'a [u8])> {
+    if abi::is_tagged_int(word) || word == 0 {
+        return None;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { alloc::check_live(word, what) };
+    // SAFETY: a live object.
+    let (_, id) = unsafe { scan_and_layout(word_to_ptr(word)) };
+    match id {
+        // SAFETY: a live text object, not changed while the bytes are used.
+        abi::layout::STRING | abi::layout::BYTES => Some((id, unsafe { string::contents(word) })),
+        _ => None,
     }
 }
 

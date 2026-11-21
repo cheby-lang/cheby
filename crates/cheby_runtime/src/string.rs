@@ -104,7 +104,7 @@ unsafe fn text_layout(word: Word) -> Option<LayoutId> {
 ///
 /// `word` points to a live text object that outlives `'a` and is not
 /// changed during `'a`.
-unsafe fn contents<'a>(word: Word) -> &'a [u8] {
+pub(crate) unsafe fn contents<'a>(word: Word) -> &'a [u8] {
     let obj = word_to_ptr(word);
     // SAFETY: a text object has `len` at this offset, and `len` bytes after
     // `BYTES`, live for `'a`.

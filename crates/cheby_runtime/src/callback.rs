@@ -19,6 +19,7 @@
 //! the closure suspends, the fiber resumes on the same thread.
 
 use crate::abi::Word;
+use crate::ctx::ExecCtx;
 use crate::entry;
 use crate::panic::fatal;
 use crate::unwind::raise::rethrow_if_unwinding;
@@ -43,7 +44,20 @@ pub const MAX_ARITY: usize = 4;
 pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
     // One current-fiber lookup: the trampolines come from its control
     // block (D-686, GATE1-1).
-    let Some(ctx) = entry::current_ctx() else {
+    // SAFETY: forwarded from the caller.
+    unsafe { call_in(entry::current_ctx(), closure, args) }
+}
+
+/// [`call`] with the running fiber's control block, which a kernel that
+/// has looked it up already passes, so the call needs no lookup of its own.
+///
+/// # Safety
+///
+/// As for [`call`], and `ctx` is what [`entry::current_ctx`] returns on
+/// this thread at the call.
+#[must_use]
+pub(crate) unsafe fn call_in(ctx: Option<*mut ExecCtx>, closure: Word, args: &[Word]) -> Word {
+    let Some(ctx) = ctx else {
         fatal(format_args!(
             "a kernel called a closure outside of any entry"
         ));
@@ -89,7 +103,6 @@ pub unsafe fn call(closure: Word, args: &[Word]) -> Word {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ctx::ExecCtx;
     use crate::entry::{Callbacks, EntryConfig, EntryMode, EntryOutcome, run_entry};
     use crate::generic::tests::closure;
     use crate::rc;

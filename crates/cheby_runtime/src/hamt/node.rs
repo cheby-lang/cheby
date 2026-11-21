@@ -519,12 +519,19 @@ impl Bitmap {
     }
 
     /// Moves slots `from..from + n` to `to..to + n`, within the capacity
-    /// of a node this code owns uniquely.
+    /// of a node this code owns uniquely. Word by word, in the order that
+    /// lets the ranges overlap: a node holds at most 64 slots, too few for
+    /// a call to `memmove` to pay off.
     pub(super) fn shift(self, from: usize, to: usize, n: usize) {
-        let ptr = self.ptr();
-        // SAFETY: both ranges lie within the capacity; `ptr::copy` allows
-        // overlap.
-        unsafe { std::ptr::copy(ptr.add(slot(from)), ptr.add(slot(to)), n.wrapping_mul(8)) };
+        if to > from {
+            for i in (0..n).rev() {
+                self.put(to.wrapping_add(i), self.get(from.wrapping_add(i)));
+            }
+        } else {
+            for i in 0..n {
+                self.put(to.wrapping_add(i), self.get(from.wrapping_add(i)));
+            }
+        }
     }
 
     /// Child `ni`, borrowed.
@@ -578,7 +585,20 @@ impl Bitmap {
     /// This node, unique and with room for `extra` more slots: itself when
     /// it already is, grown when it is unique but full, else a copy. The
     /// caller owns the reference and gets the result's.
+    ///
+    /// The common case, a unique node with room, is inline: an update makes
+    /// every node of its path writable, and most already are.
+    #[inline]
     pub(super) fn writable(self, coll: Collection, extra: usize) -> Self {
+        if self.is_unique() && self.used(coll).saturating_add(extra) <= self.cap() {
+            return self;
+        }
+        self.copied_or_grown(coll, extra)
+    }
+
+    /// [`Bitmap::writable`] of a node that is shared, or unique but full.
+    #[inline(never)]
+    fn copied_or_grown(self, coll: Collection, extra: usize) -> Self {
         let need = self.used(coll).saturating_add(extra);
         if !self.is_unique() {
             return self.copy(coll, extra);

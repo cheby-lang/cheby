@@ -1419,7 +1419,7 @@ mod tests {
         ),
         (
             "callback.rs",
-            "call",
+            "call_in",
             "rethrows at once, through the kernel to its guard",
         ),
         ("consteval.rs", "cheby_rt_const_missing", "rethrows at once"),

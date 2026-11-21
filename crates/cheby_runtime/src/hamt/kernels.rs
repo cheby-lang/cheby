@@ -197,15 +197,24 @@ pub unsafe extern "C" fn cheby_map_upsert(m: u64, key: u64, update: u64) -> u64 
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let root = unsafe { map(m) };
+        // One lookup of the running fiber serves the `Some` and the call:
+        // the kernel runs on one fiber from its start to its end.
+        let ctx = entry::current_ctx();
         ops::upsert(root, key, |previous| {
             // The moved-out value is released if its `Some` cannot be
             // allocated.
             let held = DropOnUnwind::new([previous.unwrap_or(0)]);
-            let argument = values::option(previous);
+            let argument = match previous {
+                // SAFETY: `ctx` is the fiber running on this thread, or none.
+                Some(value) => unsafe {
+                    values::some_for(ctx.unwrap_or(std::ptr::null_mut()), value)
+                },
+                None => values::none(),
+            };
             held.disarm();
-            // SAFETY: on the caller's entry thread; the closure is borrowed
-            // and its argument given away.
-            unsafe { callback::call(update, &[argument]) }
+            // SAFETY: on the caller's entry thread, whose control block is
+            // `ctx`; the closure is borrowed and its argument given away.
+            unsafe { callback::call_in(ctx, update, &[argument]) }
         })
         .word()
     })

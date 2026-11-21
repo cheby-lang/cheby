@@ -25,7 +25,7 @@
 
 use super::node::{Collection, Root};
 use super::ops::{Candidate, Entries, candidate, find_hashed};
-use crate::abi::{PanicKind, Word};
+use crate::abi::{self, PanicKind, Word};
 use crate::generic::{self, Cx, Hasher};
 use crate::unwind::raise::raise_panic;
 
@@ -62,7 +62,13 @@ const fn masked(hash: u64) -> u64 {
 
 /// Whether two borrowed keys are equal. Keys in a collection were hashed
 /// when they went in, so neither holds a function.
+#[inline]
 pub(super) fn keys_equal(a: Word, b: Word) -> bool {
+    // Two tagged integers, the most common keys, compare here, without a
+    // call: `generic::equal` compares them the same way.
+    if abi::is_tagged_int(a) && abi::is_tagged_int(b) {
+        return a == b;
+    }
     // SAFETY: keys are live words borrowed for the call.
     match unsafe { generic::equal(a, b) } {
         Ok(same) => same,

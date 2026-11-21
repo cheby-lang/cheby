@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use proptest::prelude::{Just, Strategy, any, prop_oneof};
+
 use super::*;
 use crate::abi::{self, Word, layout as ids};
 use crate::alloc::{self, Domain, alloc_object, live_objects};
@@ -580,4 +582,145 @@ fn a_function_before_a_differing_scalar_still_panics() {
     let d = tuple(&[int_word(2), closure(&[])]);
     assert_eq!(eq(c, d), Ok(false));
     release([a, b, c, d]);
+}
+
+/// A value to build for the leaf-path property: the leaves `leaf_hash`
+/// and `equal` handle themselves, and values around them that take the
+/// walk.
+#[derive(Debug, Clone)]
+enum Key {
+    Int(i64),
+    U64(u64),
+    Float(f64),
+    F32(f32),
+    Text(String),
+    Bytes(Vec<u8>),
+    Tuple(Vec<Key>),
+    Some(Box<Key>),
+    Point(i64, Box<Key>),
+    Circle(f64),
+    Closure,
+}
+
+impl Key {
+    /// A new word for this key, owned.
+    fn build(&self, shape: &Shape) -> Word {
+        match self {
+            Self::Int(n) => int_word(*n),
+            Self::U64(n) => u64_word(*n),
+            Self::Float(x) => f64_word(*x),
+            Self::F32(x) => f32_word(*x),
+            Self::Text(text) => string(text),
+            Self::Bytes(data) => bytes(data),
+            Self::Tuple(keys) => {
+                let words: Vec<Word> = keys.iter().map(|key| key.build(shape)).collect();
+                tuple(&words)
+            }
+            Self::Some(key) => some(key.build(shape)),
+            Self::Point(x, key) => shape.point(*x, key.build(shape)),
+            Self::Circle(radius) => shape.circle(*radius),
+            Self::Closure => closure(&[]),
+        }
+    }
+}
+
+/// Integers across the tagged range, at its ends and beyond them (boxed).
+fn any_int() -> impl Strategy<Value = i64> {
+    prop_oneof![
+        -3_i64..3,
+        any::<i64>(),
+        (abi::INT63_MIN - 2)..(abi::INT63_MIN + 2),
+        (abi::INT63_MAX - 2)..(abi::INT63_MAX + 2),
+        Just(i64::MIN),
+        Just(i64::MAX),
+    ]
+}
+
+/// Floats with every NaN and both zeros likely.
+fn any_float() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        Just(0.0),
+        Just(-0.0),
+        Just(f64::NAN),
+        Just(-f64::NAN),
+        Just(f64::from_bits(0x7ff8_0000_0000_0001)),
+        Just(f64::INFINITY),
+        Just(1.5),
+        any::<f64>(),
+    ]
+}
+
+/// Keys from a small domain, so equal pairs are common.
+fn any_key() -> impl Strategy<Value = Key> {
+    let leaf = prop_oneof![
+        any_int().prop_map(Key::Int),
+        prop_oneof![Just(u64::MAX), Just(1_u64 << 63), any::<u64>(), 0_u64..3].prop_map(Key::U64),
+        any_float().prop_map(Key::Float),
+        prop_oneof![
+            Just(0.0_f32),
+            Just(-0.0_f32),
+            Just(f32::NAN),
+            Just(-f32::NAN),
+            any::<f32>()
+        ]
+        .prop_map(Key::F32),
+        prop_oneof![Just(String::new()), "[ab]{0,3}", ".{0,40}", "x{100,300}"].prop_map(Key::Text),
+        prop_oneof![
+            Just(Vec::new()),
+            proptest::collection::vec(0_u8..3, 0..4),
+            proptest::collection::vec(any::<u8>(), 0..64),
+        ]
+        .prop_map(Key::Bytes),
+        any_float().prop_map(Key::Circle),
+        Just(Key::Closure),
+    ];
+    leaf.prop_recursive(3, 12, 3, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 0..4).prop_map(Key::Tuple),
+            inner.clone().prop_map(|key| Key::Some(Box::new(key))),
+            (-2_i64..2, inner).prop_map(|(x, key)| Key::Point(x, Box::new(key))),
+        ]
+    })
+}
+
+/// The test shape's layouts, registered once for every case.
+fn shared_shape() -> Shape {
+    static FIRST: OnceLock<abi::LayoutId> = OnceLock::new();
+    Shape {
+        first: *FIRST.get_or_init(|| Shape::register().first),
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: if cfg!(miri) { 4 } else { 512 },
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// `hash_with_seed` and `equal`, with their leaf paths, give exactly
+    /// what the generic walk gives, for any key: the leaf paths are a
+    /// shortcut, never a change of hash or of equality.
+    #[test]
+    fn leaf_paths_agree_with_the_walk(
+        keys in proptest::collection::vec(any_key(), 1..6),
+        seed in any::<u64>(),
+    ) {
+        let shape = shared_shape();
+        let left: Vec<Word> = keys.iter().map(|key| key.build(&shape)).collect();
+        let right: Vec<Word> = keys.iter().map(|key| key.build(&shape)).collect();
+        for &word in left.iter().chain(&right) {
+            // SAFETY: live words built above.
+            let (fast, walked) = unsafe { (hash_with_seed(word, seed), hash::walk_hash(word, seed)) };
+            proptest::prop_assert_eq!(fast, walked);
+        }
+        for &a in &left {
+            for &b in left.iter().chain(&right) {
+                // SAFETY: live words built above.
+                let (fast, walked) = unsafe { (equal(a, b), equal::walk_equal(a, b)) };
+                proptest::prop_assert_eq!(fast, walked);
+            }
+        }
+        release(left);
+        release(right);
+    }
 }

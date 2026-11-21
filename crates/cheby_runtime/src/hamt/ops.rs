@@ -15,6 +15,7 @@ use super::node::{
     BITS, Bitmap, Collection, Collision, HOLE, MAX_SHIFT, Root, drop_word, dup_word,
 };
 use crate::abi::Word;
+use crate::panic::fatal;
 use crate::stats::{self, Event};
 use crate::unwind::guard::DropOnUnwind;
 
@@ -155,41 +156,99 @@ enum Spot {
     Appended,
 }
 
+/// The most nodes a path holds: the 13 bitmap levels and a collision node.
+const PATH_LEN: usize = 14;
+
+const _: () = assert!(MAX_SHIFT.div_ceil(BITS) + 1 == 14);
+
+/// A stack of at most [`PATH_LEN`] items, in place. A path is bounded by
+/// the hash width, so it needs no heap buffer, and every update walks one.
+#[derive(Debug, Clone, Copy)]
+struct Bounded<T> {
+    items: [T; PATH_LEN],
+    len: usize,
+}
+
+impl<T: Copy + Default> Bounded<T> {
+    fn new() -> Self {
+        Self {
+            items: [T::default(); PATH_LEN],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, item: T) {
+        let Some(slot) = self.items.get_mut(self.len) else {
+            fatal(format_args!("a map path deeper than its hash"));
+        };
+        *slot = item;
+        self.len = self.len.wrapping_add(1);
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        self.len = self.len.checked_sub(1)?;
+        self.items.get(self.len).copied()
+    }
+}
+
+impl<T> std::ops::Deref for Bounded<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        self.items.get(..self.len).unwrap_or_default()
+    }
+}
+
+impl<T> std::ops::DerefMut for Bounded<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.items.get_mut(..self.len).unwrap_or_default()
+    }
+}
+
 /// The nodes from the top down to where a key is or would go, with the
 /// child index taken at each step, and what was found there.
 #[derive(Debug)]
 pub(super) struct Path {
     hash: u64,
-    nodes: Vec<Word>,
-    steps: Vec<usize>,
+    nodes: Bounded<Word>,
+    steps: Bounded<usize>,
     spot: Spot,
+    /// The room [`Path::make_writable`] last made at the end of the path,
+    /// so a second call that asks for no more does nothing.
+    room: Option<usize>,
 }
 
 impl Path {
-    /// Walks down from `top` (read-only) towards `key`.
-    fn walk(top: Bitmap, coll: Collection, key: Word, hash: u64) -> Self {
-        Self::walk_by(top, coll, key, hash, &keys_equal)
+    /// A path at `top` for a key whose hash is `hash`, not walked yet.
+    /// Callers make it in their own frame and walk it in place
+    /// ([`Path::walk`]): a path is a few hundred bytes, and returning a
+    /// walked one from a call would copy it.
+    fn at(top: Bitmap, hash: u64) -> Self {
+        let mut path = Self {
+            hash,
+            nodes: Bounded::new(),
+            steps: Bounded::new(),
+            spot: Spot::Appended,
+            room: None,
+        };
+        path.nodes.push(top.0);
+        path
+    }
+
+    /// Walks down from the top (read-only) towards `key`.
+    fn walk(&mut self, coll: Collection, key: Word) {
+        self.walk_by(coll, key, &keys_equal);
     }
 
     /// [`Path::walk`] with `same` comparing a stored key (first) with
     /// `key`: a context's bindings compare identities by address first
     /// ([`insert_hashed`]).
-    fn walk_by(
-        top: Bitmap,
-        coll: Collection,
-        key: Word,
-        hash: u64,
-        same: &impl Fn(Word, Word) -> bool,
-    ) -> Self {
+    fn walk_by(&mut self, coll: Collection, key: Word, same: &impl Fn(Word, Word) -> bool) {
+        let path = self;
         let stride = coll.stride();
-        let mut path = Self {
-            hash,
-            nodes: vec![top.0],
-            steps: Vec::new(),
-            spot: Spot::Appended,
-        };
+        let hash = path.hash;
         let mut shift = 0;
-        let mut node = top.0;
+        let mut node = path.last();
         loop {
             if shift >= MAX_SHIFT {
                 let leaf = Collision(node);
@@ -221,7 +280,6 @@ impl Path {
             path.nodes.push(node);
             shift = shift.wrapping_add(BITS);
         }
-        path
     }
 
     /// The shift of the last node.
@@ -238,7 +296,14 @@ impl Path {
     /// Makes every node on the path writable, from the top, under `root`
     /// (owned by this code, unique or fresh): the last node gets room for
     /// `extra` more slots. Replaced nodes are written into their parents.
+    ///
+    /// The path stays writable until it is written to, so `upsert`, which
+    /// makes it writable before it calls `update`, does not check every
+    /// node again when it then puts the new entry in.
     fn make_writable(&mut self, root: Root, coll: Collection, extra: usize) {
+        if self.room.is_some_and(|room| room >= extra) {
+            return;
+        }
         let last = self.nodes.len().saturating_sub(1);
         let collision = self.ends_in_collision();
         for i in 0..self.nodes.len() {
@@ -259,6 +324,7 @@ impl Path {
             }
             self.relink(root, coll, i, new);
         }
+        self.room = Some(extra);
     }
 
     /// Writes `new` where node `i` of the path hangs: in the root for the
@@ -491,7 +557,8 @@ pub(super) fn insert(root: Root, coll: Collection, key: Word, value: Option<Word
         }
         return single(coll, seed, hash, key, value);
     };
-    let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
+    let mut path = Path::at(top, key_hash(key, root.seed()));
+    path.walk(coll, key);
     if let (Spot::Found(_), None) = (path.spot, value) {
         dup_word(root.word());
         return root;
@@ -555,7 +622,8 @@ pub(super) fn insert_hashed(
         node.set_maps(bit_at(hash, 0), 0);
         return fresh;
     };
-    let mut path = Path::walk_by(top, coll, key, hash, same);
+    let mut path = Path::at(top, hash);
+    path.walk_by(coll, key, same);
     let target = fresh_root(root, coll, top);
     // Every node on the path is shared with `root` here, so each is copied
     // and none is written in place.
@@ -612,7 +680,8 @@ fn insert_owned(root: Root, coll: Collection, hash: u64, key: Word, value: Optio
     let Some(top) = root.node() else {
         return;
     };
-    let mut path = Path::walk(top, coll, key, hash);
+    let mut path = Path::at(top, hash);
+    path.walk(coll, key);
     put_owned(root, coll, &mut path, key, value, &|stored| {
         key_hash(stored, root.seed())
     });
@@ -661,7 +730,8 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
         dup_word(key);
         return single(coll, seed, hash, key, Some(value));
     };
-    let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
+    let mut path = Path::at(top, key_hash(key, root.seed()));
+    path.walk(coll, key);
     let target = writable_root(root, coll);
     let Spot::Found(at) = path.spot else {
         path.make_writable(target, coll, coll.stride());
@@ -687,7 +757,7 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
     node.put(slot, HOLE);
     let guard = UpsertGuard {
         target,
-        entry: Some((path, at)),
+        entry: Some((&path, at)),
     };
     let value = update(Some(old));
     guard.disarm();
@@ -702,23 +772,21 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
 /// then whole again: unchanged when it was shared, since the path was
 /// copied, or, when it was unique, without the entry, released by the
 /// caller's cleanup.
-struct UpsertGuard {
+struct UpsertGuard<'a> {
     target: Root,
     /// The path, writable in `target`, and the slot of the key whose value
-    /// was moved out.
-    entry: Option<(Path, usize)>,
+    /// was moved out. Borrowed, so arming the guard copies no path.
+    entry: Option<(&'a Path, usize)>,
 }
 
-impl UpsertGuard {
+impl UpsertGuard<'_> {
     /// `update` returned: nothing to undo.
     fn disarm(self) {
-        let mut this = std::mem::ManuallyDrop::new(self);
-        // The path's buffers are still freed.
-        drop(this.entry.take());
+        let _disarmed = std::mem::ManuallyDrop::new(self);
     }
 }
 
-impl Drop for UpsertGuard {
+impl Drop for UpsertGuard<'_> {
     fn drop(&mut self) {
         if let Some((path, at)) = &self.entry {
             remove_entry(self.target, Collection::Map, path, *at);
@@ -738,7 +806,8 @@ pub(super) fn remove(root: Root, coll: Collection, key: Word) -> Root {
     let Some(top) = root.node() else {
         return root;
     };
-    let mut path = Path::walk(top, coll, key, hash);
+    let mut path = Path::at(top, hash);
+    path.walk(coll, key);
     let Spot::Found(at) = path.spot else {
         dup_word(root.word());
         return root;
@@ -819,15 +888,14 @@ fn compact(root: Root, coll: Collection, path: &mut Path) {
             return;
         }
         // Take the entry's words out of the node and free it.
-        let words: Vec<Word> = (0..stride)
-            .map(|i| {
-                if collision {
-                    Collision(last).get(i)
-                } else {
-                    Bitmap(last).get(i)
-                }
-            })
-            .collect();
+        let get = |i: usize| {
+            if collision {
+                Collision(last).get(i)
+            } else {
+                Bitmap(last).get(i)
+            }
+        };
+        let words = [get(0), if stride == 2 { get(1) } else { 0 }];
         if collision {
             Collision(last).free_shell();
         } else {
@@ -860,7 +928,7 @@ fn compact(root: Root, coll: Collection, path: &mut Path) {
         let at = index(data, bit).wrapping_mul(stride);
         let moved = used.wrapping_sub(1).wrapping_sub(at);
         parent.shift(at, at.wrapping_add(stride), moved);
-        for (i, word) in words.into_iter().enumerate() {
+        for (i, word) in words.into_iter().take(stride).enumerate() {
             parent.put(at.wrapping_add(i), word);
         }
         parent.set_maps(data | bit, nodes & !bit);
