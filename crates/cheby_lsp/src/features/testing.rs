@@ -18,9 +18,18 @@ use super::{Analyzed, Class, DocText, HandlerOutput, RequestCx, RequestError, Ro
 use crate::server::Effect;
 use crate::text::uri::{normalize, uri_to_path};
 
-/// The fallback of every test route, so a test can tell it from a value.
-fn fallback() -> Value {
-    json!("fallback")
+/// The fallback of every test route but `cheby/testNoAnalysis`, so a test
+/// can tell it from a value.
+fn fallback() -> Result<Value, RequestError> {
+    Ok(json!("fallback"))
+}
+
+/// The fallback of `cheby/testNoAnalysis`: an error, as
+/// `codeAction/resolve`'s is (D-1732).
+fn no_analysis() -> Result<Value, RequestError> {
+    Err(RequestError::Failed(
+        "`cheby/testNoAnalysis`: the document has no analysis".to_owned(),
+    ))
 }
 
 /// The test routes.
@@ -53,6 +62,12 @@ pub(super) const ROUTES: &[Route] = &[
         method: "cheby/testWaitCancel",
         class: Class::Text(wait_cancel),
         fallback,
+        edits: false,
+    },
+    Route {
+        method: "cheby/testNoAnalysis",
+        class: Class::Doc(doc),
+        fallback: no_analysis,
         edits: false,
     },
 ];

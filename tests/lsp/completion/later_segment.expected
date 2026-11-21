@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused binding `a`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_a`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `a`\nnever used",
       "range": {
         "end": {
           "character": 7,
@@ -15,10 +18,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "there is no value `So` in module `std::io`\nnot found",
       "range": {
         "end": {
@@ -53,6 +62,9 @@
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "there is no type `So` in module `std::io`\nnot found",
       "range": {
         "end": {
@@ -87,7 +99,10 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `c`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_c`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `c`\nnever used",
       "range": {
         "end": {
           "character": 7,
@@ -99,10 +114,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "`i` is not imported\nnote: every module must be imported before use (§7.5)",
       "range": {
         "end": {

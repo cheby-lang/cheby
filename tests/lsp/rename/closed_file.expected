@@ -1,0 +1,53 @@
+== diagnostics
+{}
+
+== src/main.cheby:10:16 rename assist
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "assist",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 9
+              },
+              "start": {
+                "character": 15,
+                "line": 9
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      },
+      {
+        "edits": [
+          {
+            "newText": "assist",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 2
+              },
+              "start": {
+                "character": 7,
+                "line": 2
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/util.cheby",
+          "version": null
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

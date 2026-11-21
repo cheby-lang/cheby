@@ -21,9 +21,9 @@
 //!   `didSave` or a settings change, and a request waits only for the text
 //!   it names (D-1367, D-1443), not for such a run. A trial that must know
 //!   the run finished sends an edit and waits for that version's publish,
-//!   since a package's jobs run in order. `cheby/idle` (D-1415), the
-//!   barrier D-1443 names for that, is not sent yet. So waits need no
-//!   sleep.
+//!   since a package's jobs run in order, or waits for `cheby/idle`
+//!   (D-1415), the barrier D-1443 names for that, which the server sends
+//!   to a client that takes it. So waits need no sleep.
 //! - Dropping a client kills the process.
 #![expect(
     clippy::wildcard_enum_match_arm,
@@ -110,11 +110,17 @@ pub enum ClientKind {
     /// to plain behaviour (A §12.1).
     Empty,
     /// Every capability of [`ClientKind::Full`] but the position
-    /// encodings, so the session runs on UTF-16 (D-1368). The default.
+    /// encodings, `textDocument.rename.honorsChangeAnnotations` and
+    /// `textDocument.codeAction.disabledSupport`, as Zed 1.27 announces
+    /// them, so the session runs on UTF-16 (D-1368), a rename's note comes
+    /// as a `window/showMessage` (D-1391), and an action that would be
+    /// disabled is not listed (D-1690). The default.
     #[default]
     Standard,
-    /// Every capability the server reads, every position encoding
-    /// included.
+    /// Every capability the server reads, every position encoding,
+    /// `honorsChangeAnnotations` and `disabledSupport` included, so a
+    /// rename's note comes only as a change annotation (D-1391), and a
+    /// disabled action is listed with its reason (D-1690).
     Full,
 }
 
@@ -137,7 +143,23 @@ impl ClientKind {
     pub fn capabilities(self, encoding: Option<Encoding>) -> Value {
         let mut caps = match self {
             Self::Empty => json!({}),
-            Self::Standard | Self::Full => full_capabilities(),
+            Self::Standard => full_capabilities(),
+            Self::Full => {
+                let mut caps = full_capabilities();
+                if let Some(map) = caps
+                    .pointer_mut("/textDocument/rename")
+                    .and_then(Value::as_object_mut)
+                {
+                    map.insert("honorsChangeAnnotations".to_owned(), json!(true));
+                }
+                if let Some(map) = caps
+                    .pointer_mut("/textDocument/codeAction")
+                    .and_then(Value::as_object_mut)
+                {
+                    map.insert("disabledSupport".to_owned(), json!(true));
+                }
+                caps
+            }
         };
         let encodings = match (self, encoding) {
             (_, Some(encoding)) => Some(vec![encoding.name()]),
@@ -154,7 +176,8 @@ impl ClientKind {
     }
 }
 
-/// Every client capability of A §12.1, set.
+/// Every client capability of A §12.1 that [`ClientKind::Standard`]
+/// announces.
 fn full_capabilities() -> Value {
     json!({
         "workspace": workspace_capabilities(),
@@ -417,6 +440,18 @@ impl Paths {
             {
                 return format!("<std>/{below}");
             }
+            // An explanation the server wrote, below the build's own
+            // directory of the cache, or of the temporary one (D-1693).
+            if let Some((_, rest)) = text.split_once("/lsp/explain/")
+                && let Some((_, below)) = rest.split_once('/')
+            {
+                return format!("<cache>/lsp/explain/{below}");
+            }
+            if let Some((_, rest)) = text.split_once("/cheby-explain-")
+                && let Some((_, below)) = rest.split_once('/')
+            {
+                return format!("<tmp>/cheby-explain/{below}");
+            }
         }
         uri.to_owned()
     }
@@ -473,6 +508,9 @@ pub struct Client {
     configuration: Value,
     versions: BTreeMap<String, i32>,
     encoding: Encoding,
+    /// The params of each `window/showDocument` the server sent and no
+    /// one took yet, in order (D-1693).
+    shown_documents: Vec<Value>,
 }
 
 impl Client {
@@ -571,6 +609,7 @@ impl Client {
             configuration: Value::Null,
             versions: BTreeMap::new(),
             encoding: Encoding::Utf16,
+            shown_documents: Vec::new(),
         })
     }
 
@@ -828,9 +867,58 @@ impl Client {
         Ok(diagnostics_of(&found))
     }
 
+    /// Takes the params of every `window/showDocument` the server sent
+    /// since the last call, in order. Each was answered `success`.
+    pub fn take_shown_documents(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.shown_documents)
+    }
+
     /// Takes every notification received and not yet taken.
     pub fn take_notifications(&mut self) -> Vec<Value> {
         self.pending.drain(..).collect()
+    }
+
+    /// Takes the notifications received and not yet taken for which
+    /// `matches` holds, in order, and leaves the others for later waits.
+    pub fn take_where(&mut self, matches: impl Fn(&Value) -> bool) -> Vec<Value> {
+        let (taken, kept): (VecDeque<Value>, VecDeque<Value>) =
+            self.pending.drain(..).partition(|m| matches(m));
+        self.pending = kept;
+        taken.into_iter().collect()
+    }
+
+    /// Waits until a message for which `matches` holds is among the
+    /// messages received from index `from` of [`Client::received`] on, and
+    /// returns its index. It reads more messages as needed and takes none,
+    /// so the other waits still find them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::notification`].
+    pub fn wait_received(
+        &mut self,
+        from: usize,
+        what: &str,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Result<usize, String> {
+        let deadline = self.deadline();
+        let mut at = from;
+        loop {
+            if let Some(found) = self
+                .received
+                .get(at..)
+                .and_then(|rest| rest.iter().position(&matches))
+            {
+                return Ok(at.saturating_add(found));
+            }
+            at = at.max(self.received.len());
+            let message = self.next(deadline, what)?;
+            if message.get("method").is_some() {
+                self.pending.push_back(message);
+            } else if let Some(id) = message.get("id").and_then(Value::as_i64) {
+                self.responses.insert(id, message);
+            }
+        }
     }
 
     /// The latest `publishDiagnostics` params of each URI so far.
@@ -1168,7 +1256,10 @@ impl Client {
             | "workspace/semanticTokens/refresh"
             | "workspace/diagnostic/refresh" => Ok(Value::Null),
             "workspace/applyEdit" => Ok(json!({ "applied": true })),
-            "window/showDocument" => Ok(json!({ "success": true })),
+            "window/showDocument" => {
+                self.shown_documents.push(params(request).clone());
+                Ok(json!({ "success": true }))
+            }
             other => Err(json!({
                 "code": codes::METHOD_NOT_FOUND,
                 "message": format!("the harness's client has no method `{other}`"),
@@ -1232,6 +1323,50 @@ pub fn diagnostics_of(message: &Value) -> Vec<Value> {
 mod tests {
     use super::*;
 
+    /// `full` shows disabled actions and `standard`, like Zed 1.27, does
+    /// not, so goldens pin both forms of D-1690.
+    #[test]
+    fn only_full_announces_disabled_support() {
+        let full = ClientKind::Full.capabilities(None);
+        assert_eq!(
+            full["textDocument"]["codeAction"]["disabledSupport"],
+            json!(true)
+        );
+        let standard = ClientKind::Standard.capabilities(None);
+        assert!(
+            standard["textDocument"]["codeAction"]
+                .get("disabledSupport")
+                .is_none()
+        );
+        assert_eq!(
+            standard["textDocument"]["codeAction"]["resolveSupport"]["properties"],
+            json!(["edit"])
+        );
+    }
+
+    /// An explanation the server wrote shows below `<cache>` or `<tmp>`,
+    /// without the build's own directory (D-1693).
+    #[test]
+    fn explanations_show_below_the_cache() {
+        let base = std::env::temp_dir();
+        let paths = Paths::new(&base.join("work").join("p"));
+        let shown = |below: &[&str]| {
+            let path = below
+                .iter()
+                .fold(base.clone(), |path, part| path.join(part));
+            paths.display(&uri::path_to_uri(&path).unwrap())
+        };
+        assert_eq!(
+            shown(&["cache", "lsp", "explain", "0123abcd", "E0044.md"]),
+            "<cache>/lsp/explain/E0044.md"
+        );
+        assert_eq!(
+            shown(&["x", "cheby-explain-0123abcd", "E0044.md"]),
+            "<tmp>/cheby-explain/E0044.md"
+        );
+        assert_eq!(shown(&["work", "p", "src", "main.cheby"]), "src/main.cheby");
+    }
+
     #[test]
     fn capabilities_by_kind() {
         assert_eq!(ClientKind::Empty.capabilities(None), json!({}));
@@ -1250,6 +1385,35 @@ mod tests {
             full["general"]["positionEncodings"],
             json!(["utf-8", "utf-32", "utf-16"])
         );
+        // D-1391: `full` honours change annotations, so a rename's note is
+        // an annotation; `standard` does not, so it is a `showMessage`.
+        assert_eq!(
+            full["textDocument"]["rename"],
+            json!({ "prepareSupport": true, "honorsChangeAnnotations": true })
+        );
+        assert_eq!(
+            standard["textDocument"]["rename"],
+            json!({ "prepareSupport": true })
+        );
+        // Apart from that, `disabledSupport` (D-1690) and the encodings, the
+        // two announce the same.
+        let mut trimmed = full;
+        if let Some(map) = trimmed
+            .pointer_mut("/textDocument/rename")
+            .and_then(Value::as_object_mut)
+        {
+            map.remove("honorsChangeAnnotations");
+        }
+        if let Some(map) = trimmed
+            .pointer_mut("/textDocument/codeAction")
+            .and_then(Value::as_object_mut)
+        {
+            map.remove("disabledSupport");
+        }
+        if let Some(map) = trimmed.as_object_mut() {
+            map.remove("general");
+        }
+        assert_eq!(trimmed, standard);
         let one = ClientKind::Empty.capabilities(Some(Encoding::Utf32));
         assert_eq!(one, json!({"general": {"positionEncodings": ["utf-32"]}}));
         assert_eq!(ClientKind::parse("full"), Some(ClientKind::Full));

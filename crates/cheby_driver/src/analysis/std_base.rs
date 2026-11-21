@@ -36,7 +36,7 @@ use cheby_resolve::{ItemDef, field_docs, item_docs};
 use cheby_syntax::SyntaxTree;
 use cheby_syntax::ast::{AstNode, AstToken as _, ConstDecl, SourceFile, module_doc_text};
 
-use super::snapshot::{BaselineEntry, ModuleView, Parts, Snapshot, SnapshotId};
+use super::snapshot::{ModuleView, Parts, PlacedEntry, Snapshot, SnapshotId};
 use super::symbol::Symbol;
 use crate::cache::{BuildId, CacheEnv, Hash128, cache_root};
 use crate::frontend::{Retain, RunExtras, run_analysis};
@@ -116,6 +116,7 @@ impl StdBase {
             targets,
             manifest_is_last_good: false,
             single_file: false,
+            checkout: None,
         });
         let index = StdIndex::of(&snapshot)?;
         Ok(Arc::new(Self {
@@ -731,19 +732,27 @@ fn base_package(
     })
 }
 
-/// The run's diagnostics as a sorted multiset of code, file and message.
-fn baseline(sources: &SourceMap, diagnostics: &[Diagnostic]) -> Vec<BaselineEntry> {
-    let mut entries: Vec<BaselineEntry> = diagnostics
+/// The run's diagnostics as a sorted multiset of code, file and message,
+/// each with its place (D-1698).
+fn baseline(sources: &SourceMap, diagnostics: &[Diagnostic]) -> Vec<PlacedEntry> {
+    let mut entries: Vec<PlacedEntry> = diagnostics
         .iter()
         .map(|d| {
             let path = d
                 .primary_span()
                 .and_then(|span| sources.file(span.file))
                 .map(|source| PathBuf::from(source.path()));
-            (d.code, path, d.message.clone())
+            let place = d
+                .primary_span()
+                .and_then(|span| sources.location(span))
+                .map(|at| at.to_string());
+            ((d.code, path, d.message.clone()), place)
         })
         .collect();
-    entries.sort();
+    // By entry alone, and stably, so entries that tie keep the order of
+    // `diagnostics`, which `SourceMap::sort` put in file order: a place's text
+    // would put `:10:` before `:5:` (D-1698).
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
 }
 

@@ -87,8 +87,8 @@ use cheby_mir::{
 use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, Target, Targets};
 use cheby_resolve::repl::{Entered, SessionScope};
 use cheby_resolve::{
-    Lookup, ModuleLookup, ResolveInput, ResolvedModule, StdCatalog, closest_name, collect_imports,
-    cycle_diagnostic, resolve_import_targets,
+    Lookup, ModuleLookup, ResolveInput, ResolvedModule, StdCatalog, StdItems, closest_name,
+    collect_imports, cycle_diagnostic, resolve_import_targets,
 };
 use cheby_runtime::{
     DetachedGroup, EntryConfig, EntryMode, EntryOutcome, Runtime, RuntimeConfig, RuntimeError,
@@ -900,7 +900,7 @@ impl Session {
             globals: &self.front.globals,
             std: StdCatalog {
                 known: &self.known,
-                items: Some(std_lib::item_names),
+                items: StdItems::Shared(std_lib::item_names),
             },
             // The session runs natively (§13.5, the JIT): an entry is
             // checked for `native` only, so a native-only item of the

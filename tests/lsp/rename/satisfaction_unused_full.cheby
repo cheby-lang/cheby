@@ -1,0 +1,22 @@
+// @decisions: D-1391
+// @client: full
+//! The same rename for a client that honors change annotations in rename:
+//! the note is only the annotation, which asks before the edit applies.
+
+interface Area {
+  fn area(Self) -> Int
+}
+
+type Square {
+  Square(Int),
+}
+
+fn area(s: Square) -> Int {
+// ^ rename size
+  let Square(side) = s
+  side * side
+}
+
+fn main() {
+  assert area(Square(2)) == 4
+}

@@ -1,0 +1,11 @@
+// @decisions: D-1388, D-1393, D-165
+//! E0023's help removes the type arguments of an interface function.
+
+fn label(n: Int) -> String {
+  Show::show::<Int>(n)
+}
+
+fn main() {
+  assert label(1) == "1"
+}
+//> 5:13 action remove the type arguments

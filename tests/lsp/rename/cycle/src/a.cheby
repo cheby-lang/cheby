@@ -1,0 +1,8 @@
+//! On the cycle, with an import alias.
+
+import app::b::{g as h}
+//                   ^ rename h2
+
+pub fn f() -> Int {
+  h()
+}

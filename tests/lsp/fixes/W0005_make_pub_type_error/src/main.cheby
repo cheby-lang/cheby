@@ -1,0 +1,13 @@
+// @decisions: D-516, D-1736
+//! W0005 needs every body of the package to check (D-516), so with a type
+//! error in another module it is not reported and nothing is raised.
+
+import app::helper
+
+fn main() {
+  assert helper::used() == 1
+}
+
+fn broken() -> Int {
+  "not a number"
+}

@@ -1,0 +1,150 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `badge`\nnever used",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 8
+        },
+        "start": {
+          "character": 8,
+          "line": 8
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Badge` does not satisfy `Show`\ninterpolated here\nnote: a function counts toward an interface only if it is at least as visible as the type (§8.2, D-164)\nhelp: make `show` `pub`, or make `Badge` less visible\nhelp: write `{badge:?}` to use debug printing instead (D-086)",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 13
+        },
+        "start": {
+          "character": 4,
+          "line": 13
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 8
+              },
+              "start": {
+                "character": 3,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`show` is package-visible, less visible than `Badge`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:14:5 action Make `show` `pub`
+{
+  "actions": [
+    "Use debug printing `{badge:?}`",
+    "Make `show` `pub`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        266,
+        266
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Badge` does not satisfy `Show`\ninterpolated here\nnote: a function counts toward an interface only if it is at least as visible as the type (§8.2, D-164)\nhelp: make `show` `pub`, or make `Badge` less visible\nhelp: write `{badge:?}` to use debug printing instead (D-086)",
+        "range": {
+          "end": {
+            "character": 9,
+            "line": 13
+          },
+          "start": {
+            "character": 4,
+            "line": 13
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 8
+                },
+                "start": {
+                  "character": 3,
+                  "line": 8
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`show` is package-visible, less visible than `Badge`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "pub ",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `show` `pub`"
+  },
+  "showMessage": []
+}

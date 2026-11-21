@@ -97,7 +97,9 @@ fn ask(
         encoding,
         cancel: &cancel,
         std: &crate::features::stdlib::StdService::none(),
+        uris: &crate::text::uri::UriMap::new(),
         constants: None,
+        reports: None,
     };
     handler(&cx, analyzed, params).expect("an answer").value
 }

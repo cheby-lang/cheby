@@ -41,7 +41,8 @@ pub struct SnapshotId {
 /// Where a file of a snapshot lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileLocation {
-    /// A file of the package, by its absolute path.
+    /// A file of the session's package, by its absolute path: in a std
+    /// checkout's session, a file of the checkout's `std/` (D-1703).
     Package(PathBuf),
     /// A std file by its display path, such as `std/list.cheby`.
     Std(String),
@@ -66,6 +67,12 @@ pub struct AnalysisStatus {
 /// verify compares it, by code, file and message. `path` is `None` for a
 /// diagnostic with no span.
 pub type BaselineEntry = (Code, Option<PathBuf>, String);
+
+/// A [`BaselineEntry`] and the place of its primary span, `path:line:col`
+/// as `cheby check` shows it, `None` for one with no span. The place is
+/// kept beside the entry, not in it, so the compared multiset stays code,
+/// file and message (D-1668); a refusal quotes it (D-1698).
+pub(crate) type PlacedEntry = (BaselineEntry, Option<String>);
 
 /// What [`Snapshot::find`] maps a [`Symbol`] to in one snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,13 +131,17 @@ pub(crate) struct Parts {
     /// The package's files of the run, by absolute path.
     pub files: BTreeMap<PathBuf, FileId>,
     pub broken: BTreeSet<PathBuf>,
-    pub baseline: Vec<BaselineEntry>,
+    /// Sorted by entry.
+    pub baseline: Vec<PlacedEntry>,
     /// The run's targets, after `--target` narrowed the manifest's.
     pub targets: Targets,
     /// The run's manifest is the last good one, not the live one.
     pub manifest_is_last_good: bool,
     /// The run is of one file in single-file mode (D-1371).
     pub single_file: bool,
+    /// `Some` for the run of a std checkout (D-1700): the modules whose
+    /// test bodies it checked (D-1701).
+    pub checkout: Option<BTreeSet<ModulePath>>,
 }
 
 /// One immutable generation: everything keyed by run-local ids lives here.
@@ -150,9 +161,14 @@ pub struct Snapshot {
     /// Every module with an interface, sorted.
     all_ids: Vec<ModuleId>,
     baseline: Vec<BaselineEntry>,
+    /// By index into `baseline`: the place of each entry.
+    baseline_places: Vec<Option<String>>,
     targets: Targets,
     status: AnalysisStatus,
     single_file: bool,
+    /// `Some` in a std checkout's snapshot: the modules whose test bodies
+    /// the run checked (D-1700, D-1701).
+    checkout: Option<BTreeSet<ModulePath>>,
 }
 
 impl std::fmt::Debug for Snapshot {
@@ -191,6 +207,7 @@ impl Snapshot {
             targets,
             manifest_is_last_good,
             single_file,
+            checkout,
         } = parts;
         let count = sources.files().count();
         let mut locations = vec![FileLocation::Synthetic; count];
@@ -211,8 +228,11 @@ impl Snapshot {
             if let Some(slot) = modules_by_file.get_mut(n) {
                 *slot = Some(module);
             }
+            // A std module's file is std's, unless it is a file of the
+            // session: a checkout's std files are (D-1703).
             if info.package != PackageId::LOCAL
                 && let (Some(slot), Some(source)) = (locations.get_mut(n), sources.file(file))
+                && !matches!(slot, FileLocation::Package(_))
             {
                 *slot = FileLocation::Std(source.path().to_owned());
             }
@@ -238,6 +258,7 @@ impl Snapshot {
             .map(|(module, _)| module)
             .filter(|&module| front.set.get(module).is_some())
             .collect();
+        let (baseline, baseline_places) = baseline.into_iter().unzip();
         let cut_imports = front
             .cut_imports
             .iter()
@@ -259,6 +280,7 @@ impl Snapshot {
             importers,
             all_ids,
             baseline,
+            baseline_places,
             targets,
             status: AnalysisStatus {
                 broken,
@@ -266,6 +288,7 @@ impl Snapshot {
                 manifest_is_last_good,
             },
             single_file,
+            checkout,
         }
     }
 
@@ -287,6 +310,21 @@ impl Snapshot {
     #[must_use]
     pub const fn is_single_file(&self) -> bool {
         self.single_file
+    }
+
+    /// The run is of a std checkout (D-1700): its own modules are the
+    /// checkout's std modules, under a synthetic root that is none of them.
+    #[must_use]
+    pub const fn is_std_checkout(&self) -> bool {
+        self.checkout.is_some()
+    }
+
+    /// In a std checkout's snapshot, the modules whose test bodies the run
+    /// checked, those with an open document (D-1701), which a run beside
+    /// it checks too. `None` in any other snapshot.
+    #[must_use]
+    pub const fn tested_std(&self) -> Option<&BTreeSet<ModulePath>> {
+        self.checkout.as_ref()
     }
 
     /// The run's targets, after `--target` narrowed the manifest's: an item
@@ -365,6 +403,13 @@ impl Snapshot {
         self.all_modules().filter(|m| m.is_local())
     }
 
+    /// The session's own modules, in id order (display order): those of
+    /// [`ModuleView::is_own`] (D-1700). For a package or a single file,
+    /// its modules, as [`Self::local_modules`].
+    pub fn own_modules(&self) -> impl Iterator<Item = ModuleView<'_>> {
+        self.all_modules().filter(|m| m.is_own())
+    }
+
     /// Every module of the run, the builtin module and std included, in id
     /// order.
     pub fn all_modules(&self) -> impl Iterator<Item = ModuleView<'_>> {
@@ -418,6 +463,14 @@ impl Snapshot {
     #[must_use]
     pub fn baseline(&self) -> &[BaselineEntry] {
         &self.baseline
+    }
+
+    /// The place of the entry at `index` of [`Snapshot::baseline`],
+    /// `path:line:col` as `cheby check` shows it: `None` for an entry with
+    /// no span, or no such entry.
+    #[must_use]
+    pub fn baseline_place(&self, index: usize) -> Option<&str> {
+        self.baseline_places.get(index)?.as_deref()
     }
 
     /// The modules the run lost to an internal error, with the error
@@ -568,8 +621,9 @@ impl Snapshot {
     /// The import of `module` that binds `alias` in `ns` (D-1365). A
     /// module's alias is a value (D-062). An item's alias is bound in each
     /// namespace where the imported module has the item, so `Point as P`
-    /// binds a type and a constructor (D-111). `None` on a namespace that
-    /// does not match, or an item import whose target failed.
+    /// binds a type and a constructor (D-111), and of two items of one list
+    /// that share an alias, the one with a name in `ns`. `None` on a
+    /// namespace that does not match, or an item import whose target failed.
     fn find_alias(&self, module: ModuleId, ns: SymbolNs, alias: &str) -> Option<SymbolTarget> {
         let n = at(module)?;
         let alias = self.front.globals.names.lookup(alias)?;
@@ -583,12 +637,6 @@ impl Snapshot {
                     item: None,
                 });
             }
-            let (item, found) = request
-                .items
-                .iter()
-                .flatten()
-                .enumerate()
-                .find(|(_, item)| item.alias.is_some_and(|(name, _)| name == alias))?;
             let target = targets
                 .and_then(|t| t.get(import))
                 .and_then(|t| t.module())?;
@@ -598,13 +646,22 @@ impl Snapshot {
                 SymbolNs::Type => Namespace::Type,
                 SymbolNs::Module | SymbolNs::Test => return None,
             };
-            iface
-                .lookup(space, found.name)
-                .map(|_| SymbolTarget::ImportAlias {
-                    module,
-                    import,
-                    item: Some(item),
-                })
+            // Two items of one list may share an alias, one in each
+            // namespace: `{Circle as X, Shape as X}`.
+            let (item, _) = request
+                .items
+                .iter()
+                .flatten()
+                .enumerate()
+                .find(|(_, item)| {
+                    item.alias.is_some_and(|(name, _)| name == alias)
+                        && iface.lookup(space, item.name).is_some()
+                })?;
+            Some(SymbolTarget::ImportAlias {
+                module,
+                import,
+                item: Some(item),
+            })
         })
     }
 
@@ -719,6 +776,27 @@ impl<'s> ModuleView<'s> {
             .modules
             .get(self.id)
             .is_some_and(|info| info.package == PackageId::LOCAL)
+    }
+
+    /// Whether the module is one of the session's own modules (D-1700):
+    /// in a package or single-file session, a module of the package
+    /// (`PackageId::LOCAL`); in a std checkout's session, a module of the
+    /// checkout's `std/`. Every reader of "the session's modules" asks
+    /// this, not [`Self::is_local`].
+    #[must_use]
+    pub fn is_own(self) -> bool {
+        let Some(info) = self.snapshot.front.modules.get(self.id) else {
+            return false;
+        };
+        if self.snapshot.checkout.is_none() {
+            return info.package == PackageId::LOCAL;
+        }
+        // A checkout's std module is a file of the session; the synthetic
+        // root and the builtin module are not (D-1700, D-1703).
+        info.package == PackageId::STD
+            && info.file.is_some_and(|file| {
+                matches!(self.snapshot.location(file), Some(FileLocation::Package(_)))
+            })
     }
 
     /// Whether the module's file has phase-A errors in this run.

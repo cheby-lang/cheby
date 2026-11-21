@@ -1,0 +1,96 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `m`\nnever used",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 11
+        },
+        "start": {
+          "character": 12,
+          "line": 11
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:19:11 prepareRename
+{
+  "placeholder": "Foo",
+  "range": {
+    "end": {
+      "character": 13,
+      "line": 18
+    },
+    "start": {
+      "character": 10,
+      "line": 18
+    }
+  }
+}
+
+== src/main.cheby:19:11 rename Some
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would cause: warning[W0007]: `Some` hides the prelude constructor `Some` at src/main.cheby:9:3"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:19:11 rename Bar
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "Bar",
+            "range": {
+              "end": {
+                "character": 5,
+                "line": 8
+              },
+              "start": {
+                "character": 2,
+                "line": 8
+              }
+            }
+          },
+          {
+            "newText": "Bar",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 18
+              },
+              "start": {
+                "character": 10,
+                "line": 18
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

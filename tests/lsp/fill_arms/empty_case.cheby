@@ -1,0 +1,19 @@
+// @decisions: D-1387, D-1692, D-1736
+//! An empty `case`, E0013, gets "Add arms": one arm per constructor, from
+//! the fact of the tolerant run (F §8). The file has a grammar error, so
+//! the edit is not formatted (D-1735). Fixing it lets the checker see the
+//! body, whose `todo`s type-check.
+
+type Color {
+  Red,
+  Green,
+}
+
+fn name(color: Color) -> Int {
+  case color { }
+  //   ^ action Add arms
+}
+
+fn main() {
+  assert name(Red) == 1
+}

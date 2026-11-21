@@ -9,8 +9,10 @@
 //!
 //! Items read through [`Printer`], so imported names are written as the
 //! module writes them (D-1384). Docs come from the declaring module's tree,
-//! or for std in a package run from [`StdIndex`] (D-1385). Satisfaction
-//! joins with W12.
+//! or for std in a package run from [`StdIndex`] (D-1385). In a std
+//! checkout, std's modules are the session's own, so their docs and their
+//! constants' initializers come from the checkout's text alone (D-1700).
+//! Satisfaction joins with W12.
 //!
 //! A constant's value follows X §2.1's constant value rule as plan §1.8
 //! amends it (D-1349, D-1413, D-1490, D-1491): a package constant reads
@@ -605,12 +607,20 @@ impl<'s> Cx<'s> {
         let Some(view) = self.snapshot.module(def.module) else {
             return;
         };
-        if !view.is_local() {
-            let initializer = self
-                .snapshot
-                .key_of(def)
-                .and_then(|key| self.std.get()?.get(&key)?.initializer.clone())
-                .or_else(|| self.snapshot.const_initializer(def));
+        // A std constant, and a dependency's, shows its initializer as
+        // written (D-1496). In a std checkout, std's modules are the
+        // session's own, none of their constants is evaluated, and the
+        // initializer is the checkout's text, not the std index's (D-1700).
+        if !view.is_own() || self.snapshot.is_std_checkout() {
+            let written = || self.snapshot.const_initializer(def);
+            let initializer = if view.is_own() {
+                written()
+            } else {
+                self.snapshot
+                    .key_of(def)
+                    .and_then(|key| self.std.get()?.get(&key)?.initializer.clone())
+                    .or_else(written)
+            };
             if let Some(initializer) = initializer {
                 show_initializer(hover, initializer);
             }
@@ -695,13 +705,18 @@ impl<'s> Cx<'s> {
     }
 
     /// The doc comment of `def`, from its module's tree, else from the std
-    /// index (D-1385).
+    /// index (D-1385). A module of the session, a std checkout's included,
+    /// reads only its own tree, never the binary's text (D-1700).
     fn item_docs(&self, def: DefId) -> Option<String> {
-        let local = self.snapshot.module(def.module).and_then(|view| {
+        let view = self.snapshot.module(def.module);
+        let local = view.and_then(|view| {
             let resolved = view.resolved()?;
             item_docs(view.tree()?, resolved.item(def.index)?)
         });
         let docs = local.or_else(|| {
+            if view.is_some_and(ModuleView::is_own) {
+                return None;
+            }
             let key = self.snapshot.key_of(def)?;
             self.std.get()?.get(&key)?.doc.clone()
         })?;
@@ -753,13 +768,16 @@ impl<'s> Cx<'s> {
         })
     }
 
-    /// The doc comment of field `name` of `ty`.
+    /// The doc comment of field `name` of `ty`, from its module's tree,
+    /// else, outside the session's own modules, from the std index.
     fn field_docs(&self, ty: DefId, name: &str) -> Option<String> {
-        let local = self
-            .snapshot
-            .module(ty.module)
-            .and_then(|view| field_docs(view.tree()?, view.resolved()?.item(ty.index)?, name));
+        let view = self.snapshot.module(ty.module);
+        let local =
+            view.and_then(|view| field_docs(view.tree()?, view.resolved()?.item(ty.index)?, name));
         local.or_else(|| {
+            if view.is_some_and(ModuleView::is_own) {
+                return None;
+            }
             let key = self.snapshot.key_of(ty)?;
             let item = self.std.get()?.get(&key)?;
             item.fields.iter().find(|f| f.name == name)?.doc.clone()
@@ -799,9 +817,15 @@ impl<'s> Cx<'s> {
             .and_then(ModuleView::tree)
             .and_then(|tree| SourceFile::cast(tree.root()))
             .map(|file| module_doc_text(file.module_docs()));
-        let docs = local
-            .filter(|d| !d.trim().is_empty())
-            .or_else(|| self.std.get()?.module(&path.to_string())?.doc.clone());
+        // The session's own module, a std checkout's included, has only
+        // its own docs (D-1700).
+        let own = self.snapshot.module(module).is_some_and(ModuleView::is_own);
+        let docs = local.filter(|d| !d.trim().is_empty()).or_else(|| {
+            if own {
+                return None;
+            }
+            self.std.get()?.module(&path.to_string())?.doc.clone()
+        });
         hover.docs = docs
             .as_deref()
             .and_then(|d| d.split("\n\n").map(str::trim).find(|p| !p.is_empty()))

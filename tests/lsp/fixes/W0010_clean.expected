@@ -1,0 +1,98 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0010",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0010.md"
+      },
+      "message": "this arm can never match\nthe arms before it match every value it matches\nhelp: remove the arm, or move it before the arms that cover it",
+      "range": {
+        "end": {
+          "character": 5,
+          "line": 6
+        },
+        "start": {
+          "character": 4,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:7:5 action Remove the arm
+{
+  "actions": [
+    "Remove the arm",
+    "Explain W0010"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        178,
+        178
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0010",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0010.md"
+        },
+        "message": "this arm can never match\nthe arms before it match every value it matches\nhelp: remove the arm, or move it before the arms that cover it",
+        "range": {
+          "end": {
+            "character": 5,
+            "line": 6
+          },
+          "start": {
+            "character": 4,
+            "line": 6
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Remove the arm"
+  },
+  "showMessage": []
+}

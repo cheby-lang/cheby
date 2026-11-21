@@ -1,0 +1,151 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `total`\nnever used",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 5
+        },
+        "start": {
+          "character": 6,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `totl` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 6
+        },
+        "start": {
+          "character": 9,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 10
+        },
+        "start": {
+          "character": 2,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 9
+              },
+              "start": {
+                "character": 15,
+                "line": 9
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:10 action a binding with a similar name exists: `total`
+{
+  "actions": [
+    "a binding with a similar name exists: `total`",
+    "Explain E0042"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        168,
+        168
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0042",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+        },
+        "message": "cannot find value `totl` in this scope\nnot found",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 6
+          },
+          "start": {
+            "character": 9,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "total",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 6
+                },
+                "start": {
+                  "character": 9,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "a binding with a similar name exists: `total`"
+  },
+  "showMessage": []
+}

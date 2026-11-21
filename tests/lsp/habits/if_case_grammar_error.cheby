@@ -1,0 +1,19 @@
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736
+//! An `if` with `else if` and `else` becomes a subjectless `case`, one
+//! arm per branch (X §6.5).
+//! With a grammar error in another function, so the fix keeps its raw
+//! edits (D-1735).
+
+fn pick(flag: Bool, a: Int) -> Int {
+  let n = if flag { 1 } else if a > 2 { a + 1 } else { 3 }
+  n
+}
+
+fn main() {
+  assert pick(True, 0) == 1
+}
+
+fn broken() {
+  let = 1
+}
+//> 8:14 action Rewrite as `case`

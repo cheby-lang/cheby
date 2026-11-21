@@ -1,0 +1,20 @@
+// @decisions: D-1388, D-1393, D-109
+// @newErrors: E0047
+//! E0035's help adds a final `_` arm to a subjectless `case`.
+//! With a type error in another function, which the fix reveals.
+
+fn sign(n: Int) -> Int {
+  case {
+    n > 0 => 1
+    n < 0 => -1
+  }
+}
+
+fn main() {
+  assert sign(2) == 1
+}
+
+pub fn answer() -> Int {
+  "forty-two"
+}
+//> 9:5 action add a final arm `_ => …` for the remaining cases (D-109)

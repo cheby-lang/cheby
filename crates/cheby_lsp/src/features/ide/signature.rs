@@ -397,13 +397,18 @@ impl<'s> Cx<'s> {
     }
 
     /// The doc comment of `def`, from its module's tree, else from the std
-    /// index (D-1385).
+    /// index (D-1385). A module of the session, a std checkout's included,
+    /// reads only its own tree, never the binary's text (D-1700).
     fn item_docs(&self, def: DefId) -> Option<String> {
-        let local = self.snapshot.module(def.module).and_then(|view| {
+        let view = self.snapshot.module(def.module);
+        let local = view.and_then(|view| {
             let resolved = view.resolved()?;
             item_docs(view.tree()?, resolved.item(def.index)?)
         });
         let docs = local.or_else(|| {
+            if view.is_some_and(ModuleView::is_own) {
+                return None;
+            }
             let key = self.snapshot.key_of(def)?;
             std_index(self.std)?.get(&key)?.doc.clone()
         })?;

@@ -1,0 +1,18 @@
+// @decisions: D-1387, D-1692, D-1736
+//! A `case` on an enum, with its `}` on the last arm's line, gets one arm
+//! per missing variant on lines of their own.
+
+type Color {
+  Red,
+  Green,
+  Blue,
+}
+
+fn name(color: Color) -> String {
+  case color { Red => "red" }
+  //   ^ action Add the missing arms
+}
+
+fn main() {
+  assert name(Red) == "red"
+}

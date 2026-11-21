@@ -1,0 +1,11 @@
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736, D-425
+//! `null` written as a value becomes `None` (X §6.5, P-4).
+
+fn missing() -> Option<Int> {
+  null
+}
+
+fn main() {
+  assert missing() == None
+}
+//> 5:3 action Write `None`

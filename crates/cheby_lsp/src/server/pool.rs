@@ -24,12 +24,14 @@ use super::schedule::{Parked, Want};
 use super::sessions::DocRoute;
 use super::state::package_root;
 use super::{ClientCaps, ConstValues, Effect, Server, Settings, codes};
+use crate::features::handlers::file_ops::std_move_refused;
 use crate::features::stdlib::StdService;
 use crate::features::{
-    Analyzed, CancelToken, Class, HandlerOutput, LiveText, RequestCx, RequestError, Route,
+    Analyzed, CancelToken, Class, FileReports, HandlerOutput, LiveText, PublishedReport, RequestCx,
+    RequestError, Route,
 };
 use crate::text::lines::PositionEncoding;
-use crate::text::uri::{normalize, uri_to_path};
+use crate::text::uri::{UriMap, normalize, uri_to_path};
 
 /// A query thread's stack: handlers recurse over trees and THIR, as the
 /// compiler does (D-601). It reserves address space only.
@@ -50,6 +52,12 @@ pub(crate) struct RequestEnv {
     /// The package's constant values, set when the request starts on a
     /// snapshot of its package, so it reads the newest ones (D-1413).
     pub constants: Option<Arc<ConstValues>>,
+    /// The client's spelling of each open document (A §6.1).
+    pub uris: UriMap,
+    /// The reports last published for the package's files, set when the
+    /// request starts on a snapshot of its package, for code actions
+    /// (G1 plan §1.6, D-1393).
+    pub reports: Option<Arc<FileReports>>,
 }
 
 /// What a handler reads.
@@ -172,6 +180,8 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         cancel: &cancel,
         std: &env.std,
         constants: env.constants.clone(),
+        uris: &env.uris,
+        reports: env.reports.clone(),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| match (route.class, &target) {
         (Class::Text(handler), QueryTarget::Text(live)) => match live.doc_text() {
@@ -186,7 +196,7 @@ fn run(job: QueryJob) -> Result<HandlerOutput, QueryFailure> {
         (Class::Doc(handler) | Class::Package(handler), QueryTarget::Std) => {
             match env.std.ready() {
                 Some(ready) => handler(&cx, &ready.analyzed, params),
-                None => Ok(HandlerOutput::value((route.fallback)())),
+                None => (route.fallback)().map(HandlerOutput::value),
             }
         }
         (Class::Workspace(handler), QueryTarget::Workspace(packages)) => {
@@ -254,13 +264,14 @@ impl Server {
             // A URI that names no file, such as `untitled:`, is neither open
             // here nor in a package: the fallback (A §3.3).
             Ok(None) => {
-                self.answer(id, Ok((route.fallback)()));
+                self.answer(id, (route.fallback)());
                 return;
             }
             Err(()) => {
                 let error = RequestError::InvalidParams(format!(
-                    "`{}`: no `textDocument.uri` that is a URI",
-                    route.method
+                    "`{}`: no `{}` that is a URI",
+                    route.method,
+                    routed_by(route.method)
                 ));
                 self.answer(id, Err(error));
                 return;
@@ -274,14 +285,31 @@ impl Server {
                 .get(&path)
                 .is_some_and(|doc| matches!(doc.route, DocRoute::Std))
         {
-            self.answer(id, Ok((route.fallback)()));
+            self.answer(id, (route.fallback)());
+            return;
+        }
+        // A move in a std checkout is refused from routing alone (D-1706): a
+        // folder routes to no session, and the checkout's session starts
+        // only at an open document (D-1704), so neither may decide it. Any
+        // old path of the request refuses it whole, the first or a later
+        // one, as files in several packages are (D-1675, D-1730).
+        if route.method == WILL_RENAME_FILES
+            && old_paths(&params)
+                .iter()
+                .any(|old| self.is_std_checkout_move(old))
+        {
+            let output = std_move_refused();
+            for effect in output.effects {
+                self.apply(effect);
+            }
+            self.answer(id, Ok(output.value));
             return;
         }
         let env = self.env();
         match route.class {
             Class::Text(_) => match self.live_text(&path) {
                 Some(live) => self.start_query(id, route, params, QueryTarget::Text(live), env),
-                None => self.answer(id, Ok((route.fallback)())),
+                None => self.answer(id, (route.fallback)()),
             },
             Class::Doc(_) | Class::Package(_) | Class::Workspace(_) => {
                 // An opened std document reads the std base's snapshot
@@ -292,14 +320,14 @@ impl Server {
                     && matches!(doc.route, DocRoute::Std)
                 {
                     if doc.diverged {
-                        self.answer(id, Ok((route.fallback)()));
+                        self.answer(id, (route.fallback)());
                     } else {
                         self.start_query(id, route, params, QueryTarget::Std, env);
                     }
                     return;
                 }
                 let Some(root) = self.root_of(&path) else {
-                    self.answer(id, Ok((route.fallback)()));
+                    self.answer(id, (route.fallback)());
                     return;
                 };
                 let want = match route.class {
@@ -335,11 +363,18 @@ impl Server {
     }
 
     /// The package whose snapshots answer for `path`: an open document's
-    /// own, else the nearest package root that has a session.
+    /// own, else the std checkout whose `std/` holds it (D-1699), else the
+    /// nearest package root, when it has a session.
     fn root_of(&self, path: &Path) -> Option<PathBuf> {
         match self.docs.get(path) {
             Some(doc) => doc.root.clone(),
-            None => package_root(path),
+            None => match self.route_of(path) {
+                DocRoute::StdCheckout { checkout, .. } => Some(checkout),
+                DocRoute::Std
+                | DocRoute::Package(_)
+                | DocRoute::SingleFile { .. }
+                | DocRoute::Unowned => package_root(path),
+            },
         }
         .filter(|root| self.packages.contains_key(root))
     }
@@ -372,6 +407,8 @@ impl Server {
             encoding: self.encoding,
             std: Arc::clone(&self.std),
             constants: None,
+            uris: self.uris.clone(),
+            reports: None,
         })
     }
 
@@ -379,6 +416,28 @@ impl Server {
     pub(crate) fn with_constants(&self, env: Arc<RequestEnv>, root: &Path) -> Arc<RequestEnv> {
         let mut env = Arc::unwrap_or_clone(env);
         env.constants = self.children.constants(root);
+        Arc::new(env)
+    }
+
+    /// `env` with the reports last published for the files of the package
+    /// at `root`, which code actions read (G1 plan §1.6).
+    pub(crate) fn with_reports(&self, env: Arc<RequestEnv>, root: &Path) -> Arc<RequestEnv> {
+        let Some(package) = self.packages.get(root) else {
+            return env;
+        };
+        let files = package
+            .published
+            .iter()
+            .map(|(path, published)| {
+                let report = PublishedReport {
+                    report: Arc::clone(&published.report),
+                    substituted: published.substituted,
+                };
+                (path.clone(), report)
+            })
+            .collect();
+        let mut env = Arc::unwrap_or_clone(env);
+        env.reports = Some(Arc::new(FileReports { files }));
         Arc::new(env)
     }
 
@@ -468,9 +527,22 @@ impl Server {
 
 /// The normalized path of `params.textDocument.uri`, or for a call
 /// hierarchy's calls of the document the item was prepared in,
-/// `params.item.data.origin`, else `params.item.uri`: `Ok(None)` for a URI
-/// that names no file, `Err` for malformed parameters.
+/// `params.item.data.origin`, else `params.item.uri`, or for
+/// `workspace/willRenameFiles` the first file's old URI,
+/// `params.files[0].oldUri` (D-1675), or for `codeAction/resolve` the URI
+/// that the action's `data` carries, `params.data.uri` (D-1683, D-1733):
+/// `Ok(None)` for a URI that names no
+/// file and for an empty list of files, which moves nothing, `Err` for
+/// malformed parameters.
 fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
+    if params.get("textDocument").is_none()
+        && params
+            .get("files")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    {
+        return Ok(None);
+    }
     let uri: Uri = params
         .pointer("/textDocument/uri")
         .or_else(|| {
@@ -479,9 +551,95 @@ fn document_path(params: &Value) -> Result<Option<PathBuf>, ()> {
                 .filter(|v| v.is_string())
         })
         .or_else(|| params.pointer("/item/uri"))
+        .or_else(|| params.pointer("/files/0/oldUri"))
+        .or_else(|| params.pointer("/data/uri"))
         .and_then(Value::as_str)
         .ok_or(())?
         .parse()
         .map_err(|_| ())?;
     Ok(uri_to_path(&uri).map(|path| normalize(&path)))
+}
+
+/// The request that D-1706 may refuse from routing alone, by any of its
+/// old paths (D-1730).
+const WILL_RENAME_FILES: &str = "workspace/willRenameFiles";
+
+/// Every `files[].oldUri` of a `workspace/willRenameFiles` request that
+/// names a file, normalized as [`document_path`] does.
+fn old_paths(params: &Value) -> Vec<PathBuf> {
+    params
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("oldUri")?.as_str()?.parse::<Uri>().ok())
+        .filter_map(|uri| uri_to_path(&uri).map(|path| normalize(&path)))
+        .collect()
+}
+
+/// The parameter that names the document a request of `method` is routed
+/// by, as [`document_path`] reads it, for the text of `InvalidParams`.
+fn routed_by(method: &str) -> &'static str {
+    match method {
+        "workspace/willRenameFiles" => "files[0].oldUri",
+        "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls" => "item.uri",
+        "codeAction/resolve" => "data.uri",
+        _ => "textDocument.uri",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{document_path, routed_by};
+    use crate::text::uri::path_to_uri;
+
+    /// `workspace/willRenameFiles` names its document by the first file's
+    /// old URI, so it routes as a request on that document (D-1675).
+    #[test]
+    fn will_rename_files_routes_by_the_first_old_uri() {
+        let dir = std::env::temp_dir();
+        let uri = |name: &str| path_to_uri(&dir.join(name)).unwrap().as_str().to_owned();
+        let on_a = document_path(&json!({ "textDocument": { "uri": uri("a.cheby") } }));
+        assert!(matches!(on_a, Ok(Some(_))), "{on_a:?}");
+        let files = json!({ "files": [
+            { "oldUri": uri("a.cheby"), "newUri": uri("b.cheby") },
+            { "oldUri": uri("c.cheby"), "newUri": uri("d.cheby") },
+        ] });
+        assert_eq!(document_path(&files), on_a);
+        // Nothing to move: the route's fallback, `null`.
+        assert_eq!(document_path(&json!({ "files": [] })), Ok(None));
+        assert_eq!(
+            document_path(&json!({ "files": [{ "oldUri": 3 }] })),
+            Err(())
+        );
+        assert_eq!(routed_by("workspace/willRenameFiles"), "files[0].oldUri");
+        assert_eq!(routed_by("textDocument/rename"), "textDocument.uri");
+    }
+
+    /// `codeAction/resolve` names its document by the URI in the action's
+    /// `data`, and one with no `data.uri` is malformed, named so in its
+    /// `InvalidParams` (D-1683, D-1733).
+    #[test]
+    fn code_action_resolve_routes_by_its_data_uri() {
+        let dir = std::env::temp_dir();
+        let uri = path_to_uri(&dir.join("a.cheby"))
+            .unwrap()
+            .as_str()
+            .to_owned();
+        let on_a = document_path(&json!({ "textDocument": { "uri": uri } }));
+        assert!(matches!(on_a, Ok(Some(_))), "{on_a:?}");
+        let action = json!({
+            "title": "Explain E0044",
+            "data": { "uri": uri, "hash": "00" },
+        });
+        assert_eq!(document_path(&action), on_a);
+        assert_eq!(document_path(&json!({ "title": "Explain E0044" })), Err(()));
+        assert_eq!(
+            document_path(&json!({ "title": "x", "data": { "uri": 3 } })),
+            Err(())
+        );
+        assert_eq!(routed_by("codeAction/resolve"), "data.uri");
+    }
 }

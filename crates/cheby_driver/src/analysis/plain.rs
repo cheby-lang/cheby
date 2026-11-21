@@ -101,9 +101,10 @@ impl Placed<'_> {
 /// its live text, `None` otherwise (last good text, a stub, std, or a
 /// synthetic file). The primary range is kept when its file is `owner` and
 /// `place` places it. A label elsewhere is dropped when its file is not
-/// placed, and a help is dropped whole when any of its edits is not
-/// placed, since half a fix is wrong (A §2.3). A range that falls outside
-/// its text is dropped the same way.
+/// placed. A help keeps its text always, as `cheby check` prints it, and
+/// loses all its edits when any of them is not placed, since half a fix is
+/// wrong (A §2.3, D-1686). A range that falls outside its text counts as
+/// not placed.
 #[must_use]
 pub fn plain<'a>(
     diag: &Diagnostic,
@@ -139,7 +140,7 @@ pub fn plain<'a>(
     let helps = diag
         .helps
         .iter()
-        .filter_map(|help| {
+        .map(|help| {
             let edits = help
                 .edits
                 .iter()
@@ -151,11 +152,12 @@ pub fn plain<'a>(
                         replacement: edit.replacement.clone(),
                     })
                 })
-                .collect::<Option<Vec<_>>>()?;
-            Some(PlainHelp {
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default();
+            PlainHelp {
                 message: help.message.clone(),
                 edits,
-            })
+            }
         })
         .collect();
     PlainDiagnostic {
@@ -494,10 +496,15 @@ mod tests {
         let d = plain(&diag, OWNER, place);
         assert_eq!(d.range, Some(TextRange::new(14, 15)));
         assert!(d.related.is_empty(), "both labels lie in unplaced text");
-        assert!(
-            d.helps.is_empty(),
-            "a help with any foreign edit goes whole"
-        );
+        // A help with any foreign edit keeps its text, as `cheby check`
+        // prints it, and loses every edit, since half a fix is wrong
+        // (D-1686).
+        let helps: Vec<(&str, usize)> = d
+            .helps
+            .iter()
+            .map(|h| (h.message.as_str(), h.edits.len()))
+            .collect();
+        assert_eq!(helps, vec![("half a fix", 0), ("stale", 0)]);
         assert_no_foreign_range(&d);
     }
 

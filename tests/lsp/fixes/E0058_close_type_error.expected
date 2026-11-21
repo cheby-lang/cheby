@@ -1,0 +1,129 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+      },
+      "message": "`Point` has no field `yy`\nunknown field\nnote: the fields of `Point`: `x` and `y`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 10
+        },
+        "start": {
+          "character": 4,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 18
+        },
+        "start": {
+          "character": 2,
+          "line": 18
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 17
+              },
+              "start": {
+                "character": 19,
+                "line": 17
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:5 action Use the field `y`
+{
+  "actions": [
+    "Use the field `y`",
+    "Explain E0058"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        243,
+        243
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0058",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+        },
+        "message": "`Point` has no field `yy`\nunknown field\nnote: the fields of `Point`: `x` and `y`",
+        "range": {
+          "end": {
+            "character": 6,
+            "line": 10
+          },
+          "start": {
+            "character": 4,
+            "line": 10
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "y",
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 10
+                },
+                "start": {
+                  "character": 4,
+                  "line": 10
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Use the field `y`"
+  },
+  "showMessage": []
+}

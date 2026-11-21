@@ -1,0 +1,45 @@
+== diagnostics
+{}
+
+== willRename src/util.cheby src/lib/util.cheby
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "moves::lib::util",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 4
+              },
+              "start": {
+                "character": 7,
+                "line": 4
+              }
+            }
+          },
+          {
+            "newText": "moves::lib::util",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 5
+              },
+              "start": {
+                "character": 7,
+                "line": 5
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

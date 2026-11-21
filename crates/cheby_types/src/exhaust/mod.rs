@@ -67,8 +67,6 @@ pub struct CaseFact {
     pub more: bool,
     /// The check ran out of budget, so the rows are a `_` fallback.
     pub too_complex: bool,
-    /// Arms that can never match, by index among the checked arms.
-    pub unreachable: Vec<u32>,
 }
 
 /// A value that no arm matches, as a pattern.
@@ -99,7 +97,10 @@ pub enum MissingPat {
 }
 
 /// Checks every `case`, `let`, `let assert` and parameter pattern of
-/// `body`, which has no other errors and closed types.
+/// `body`, which has no other errors and closed types. `std_test` says
+/// that `body` is a test body of a std module (`PackageId::STD`), where
+/// W0008 and W0010 are not reported, as D-479's other warnings are not
+/// (D-1702). Its errors, E0060 and E0061, are.
 ///
 /// # Errors
 ///
@@ -109,8 +110,15 @@ pub(crate) fn check_body(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
     body: &thir::Body,
+    std_test: bool,
 ) -> Result<Vec<Diagnostic>, Ice> {
-    check(&TyCx::new(input, own), body)
+    let mut diags = check(&TyCx::new(input, own), body)?;
+    if std_test {
+        diags.retain(|diag| {
+            diag.code != codes::IRREFUTABLE_LET_ASSERT && diag.code != codes::UNREACHABLE_ARM
+        });
+    }
+    Ok(diags)
 }
 
 /// A [`CaseFact`] for each `case` with subjects among `nodes`, sorted by
@@ -232,17 +240,11 @@ fn case_fact(
     } else {
         (found, report.more)
     };
-    let unreachable = report
-        .unreachable
-        .iter()
-        .map(|&index| u32::try_from(index).map_err(|_| Ice::new("exhaustiveness: too many arms")))
-        .collect::<Result<Vec<_>, Ice>>()?;
     Ok(Some(CaseFact {
         node,
         missing,
         more,
         too_complex: report.too_complex,
-        unreachable,
     }))
 }
 

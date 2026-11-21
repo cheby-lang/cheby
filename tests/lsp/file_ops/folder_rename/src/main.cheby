@@ -1,0 +1,11 @@
+// @decisions: D-1674, D-1675, D-1676
+// @steps: willRename src/geo src/plane
+//! The root module, which imports the modules of `geo/` and `geo` itself.
+
+import moves::geo
+import moves::geo::lines
+import moves::geo::shapes
+
+fn main() {
+  assert geo::origin() + lines::one() + shapes::two() == 3
+}

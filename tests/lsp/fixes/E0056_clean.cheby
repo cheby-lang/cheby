@@ -1,0 +1,8 @@
+// @decisions: D-1388, D-1393, D-470
+//! E0056's help removes the space of a negative literal.
+
+fn main() {
+  let low = - 128
+  assert low == -128
+}
+//> 5:14 action remove the space

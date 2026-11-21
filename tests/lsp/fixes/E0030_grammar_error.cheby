@@ -1,0 +1,14 @@
+// @decisions: D-1388, D-1393, D-1689, D-076, D-425
+//! E0030's help writes a one-element tuple as its element.
+//! With a grammar error in another function, only the token checks
+//! run, so the code is not reported and no fix is offered (D-425).
+
+fn main() {
+  let single = (1,)
+  assert single == single
+}
+
+fn broken() {
+  let = 1
+}
+//> 7:16 noAction write the value alone; `(e)` is just `e` in parentheses

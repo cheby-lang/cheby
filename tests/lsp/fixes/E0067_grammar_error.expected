@@ -1,0 +1,34 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 14
+        },
+        "start": {
+          "character": 6,
+          "line": 14
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:11 noAction Add `@target(js)`
+{
+  "actions": []
+}
+
+== src/main.cheby:11:11 noAction Add `@!target(js)`
+{
+  "actions": []
+}

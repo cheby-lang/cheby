@@ -1,0 +1,27 @@
+// @decisions: D-1547, D-1680
+//! A type or a pattern names no interface function, so after `Show::`
+//! and `ops::Compare::` nothing is offered there, since each call wrote
+//! E0013. In an expression, `Show::sh` with `::x` after it offers
+//! nothing, since `Show::show::x` is no path, as after `|>`, and
+//! `Show::sh` alone offers `show` (grammar error state).
+
+import std::ops
+
+fn order(a: Int, b: Int) -> Int {
+  let x: Show:: = a
+  //           ^ completion
+  let y: ops::Compare::co = b
+  //                     ^ completion
+  let n = Show::sh::x
+  //              ^ completion
+  let o = ops::Compare::comp::x
+  //                        ^ completion
+  let t = Show::sh
+  //              ^ completion show
+  case a {
+    Show:: => 0
+    //    ^ completion
+    ops::Compare::c => 1
+    //             ^ completion
+  }
+}

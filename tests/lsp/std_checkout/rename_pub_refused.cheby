@@ -1,0 +1,31 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_rename_pub_refused.cheby
+// @decisions: D-1706
+//! std's API is refused in a checkout, since the examples, the tests and
+//! `docs/stdlib/` use it: a `pub` item of a real module, from a use, and a
+//! function that makes a type satisfy an interface, naming the interface.
+
+import std::list
+
+/// A text for a value.
+interface Shown {
+  fn shown(Self) -> String
+}
+
+/// A length.
+type Meter {
+  Meter(Int),
+}
+
+pub fn doubled(xs: List<Int>) -> List<Int> {
+  list::map(xs, fn(x) { x * 2 })
+  //    ^ prepareRename
+  //    ^ rename transform
+}
+
+fn shown(m: Meter) -> String {
+  //^ rename text
+  let Meter(n) = m
+  "{n} m"
+}

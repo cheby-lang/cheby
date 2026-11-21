@@ -1,0 +1,7 @@
+//! A module the server has not seen.
+
+import app::util
+
+pub fn more() -> Int {
+  util::helper()
+}

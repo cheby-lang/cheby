@@ -1,0 +1,132 @@
+== diagnostics
+{
+  "std/probe_fix_user.cheby": [
+    {
+      "code": "E0043",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+      },
+      "message": "`secret` is private to module `std::probe_fix_hidden`",
+      "range": {
+        "end": {
+          "character": 26,
+          "line": 5
+        },
+        "start": {
+          "character": 20,
+          "line": 5
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 8
+              },
+              "start": {
+                "character": 8,
+                "line": 8
+              }
+            },
+            "uri": "std/probe_fix_hidden.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== std/probe_fix_user.cheby:6:21 action Make `secret` package-visible
+{
+  "actions": [
+    "Make `secret` package-visible",
+    "Explain E0043"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "item": "secret",
+        "kind": "makeVisible",
+        "module": "std::probe_fix_hidden"
+      },
+      "range": [
+        125,
+        125
+      ],
+      "uri": "std/probe_fix_user.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0043",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+        },
+        "message": "`secret` is private to module `std::probe_fix_hidden`",
+        "range": {
+          "end": {
+            "character": 26,
+            "line": 5
+          },
+          "start": {
+            "character": 20,
+            "line": 5
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 8
+                },
+                "start": {
+                  "character": 8,
+                  "line": 8
+                }
+              },
+              "uri": "std/probe_fix_hidden.cheby"
+            },
+            "message": "declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 5,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "std/probe_fix_hidden.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `secret` package-visible"
+  },
+  "showMessage": []
+}

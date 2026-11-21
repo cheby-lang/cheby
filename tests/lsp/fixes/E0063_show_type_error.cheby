@@ -1,0 +1,18 @@
+// @decisions: D-1736, D-086
+//! Debug printing and the stub with a type error in another function.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn main() {
+  let origin = Point { x: 0, y: 0 }
+  assert "{origin}" == ""
+  //       ^ action Use debug printing `{origin:?}`
+  //       ^ action Add the missing function `show`
+}
+
+fn broken() -> Int {
+  "not a number"
+}

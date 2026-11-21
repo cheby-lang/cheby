@@ -92,20 +92,33 @@ pub(crate) fn local_fact(view: ModuleView<'_>, item: DefIndex, slot: u32) -> Opt
 
 /// Whether a new local `name` at `offset` would reuse no name (E0044,
 /// D-051): no local of the body at `offset` has it, wherever its scope
-/// is, so a binding after the new one cannot clash either; and it is no
-/// function or constant of the module and no imported module or value.
-/// The prelude does not count, since a local may hide it. `view` is a
-/// module of `snapshot`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "W10's rename and W11's fixes check names")
-)]
+/// is, so a binding after the new one cannot clash either; no token of
+/// that body is the name, so a use of it that resolves to nothing (E0042)
+/// is not captured by the new binding (C-5); and it is no function or
+/// constant of the module and no imported module or value. The prelude
+/// does not count, since a local may hide it. `view` is a module of
+/// `snapshot`.
 pub(crate) fn is_free(
     snapshot: &Snapshot,
     view: ModuleView<'_>,
     offset: TextSize,
     name: &str,
 ) -> bool {
+    let written = body_at(view, offset).is_some_and(|item| {
+        let (Some(tree), Some(resolved)) = (view.tree(), view.resolved()) else {
+            return false;
+        };
+        resolved
+            .item(item)
+            .and_then(|item| tree.node(item.node))
+            .is_some_and(|node| {
+                node.tokens()
+                    .any(|t| t.kind() == SyntaxKind::LOWER_IDENT && t.text() == name)
+            })
+    });
+    if written {
+        return false;
+    }
     // A text no name has interned is no name of the run.
     let Some(name) = snapshot.globals().names.lookup(name) else {
         return true;
@@ -136,18 +149,15 @@ pub(crate) fn is_free_in_module(snapshot: &Snapshot, view: ModuleView<'_>, name:
 /// A name for a new local at `offset`: `wanted`, else `wanted_value`, else
 /// `wanted_value_2`, `_3` and so on, the first that [`is_free`] accepts,
 /// that is a lower-case name E0006 accepts (X §3.3), and that is not in
-/// `taken`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "W10's rename and W11's fixes check names")
-)]
+/// `taken`. `None` when none of the first thousand fits, as for a
+/// `wanted` that E0006 refuses, whose every candidate it refuses too.
 pub(crate) fn fresh(
     snapshot: &Snapshot,
     view: ModuleView<'_>,
     offset: TextSize,
     wanted: &str,
     taken: &[String],
-) -> String {
+) -> Option<String> {
     let fits = |name: &str| {
         check_candidate(name, NameCase::Lower).is_ok()
             && !taken.iter().any(|t| t == name)
@@ -157,8 +167,8 @@ pub(crate) fn fresh(
     std::iter::once(wanted.to_owned())
         .chain(std::iter::once(value.clone()))
         .chain((2..=u32::MAX).map(|n| format!("{value}_{n}")))
+        .take(1000)
         .find(|name| fits(name))
-        .unwrap_or(value)
 }
 
 /// Whether the module scope binds `name` as a value from one of the

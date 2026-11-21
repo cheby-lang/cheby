@@ -1,0 +1,11 @@
+//! Helpers that other modules import.
+
+/// A shape with one size.
+pub type Shape {
+  Shape(Int),
+}
+
+/// A greeting.
+pub fn greet() -> String {
+  "hi"
+}

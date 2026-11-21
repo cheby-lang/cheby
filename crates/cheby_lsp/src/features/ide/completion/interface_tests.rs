@@ -4,8 +4,10 @@
 //! `::` of the path (D-1546), nothing at a later segment before `::` in a
 //! type or a pattern (D-1547), an interface at a later segment
 //! written `Shape::` (D-1548), and an interface's function as a value
-//! (X §4.1, D-500). Each test runs only the front end, so it
-//! runs on Windows too (D-1516).
+//! (X §4.1, D-500). Nothing after an interface in a type or a pattern
+//! (D-1680), and no interface with no function where it is written with
+//! `::` (D-1681). Each test runs only the front end, so it runs on
+//! Windows too (D-1516).
 
 use std::sync::{Arc, OnceLock};
 
@@ -510,4 +512,134 @@ fn the_forms_of_d173_complete_one_character_at_a_time() {
             assert!(parses(&done), "{done}");
         }
     }
+}
+
+#[test]
+fn a_type_or_a_pattern_offers_nothing_after_an_interface() {
+    // D-1680: a type or a pattern names no interface function, so each
+    // call snippet after `I::` or `m::I::` wrote E0013. A module's items
+    // still come there.
+    for (imports, line) in [
+        ("", "let x: Show::‸ = a"),
+        ("import std::ops\n", "let x: ops::Compare::‸ = a"),
+        ("import app::shape\n", "let x: shape::Shape::‸ = a"),
+        ("import app::shape\n", "let x: shape::Shape::ar‸ = a"),
+    ] {
+        let (found, _) = at(&body(imports, line), ON);
+        assert_eq!(labels(&found), Vec::<&str>::new(), "{line}");
+    }
+    for (imports, arm) in [
+        ("", "Show::‸ => 0"),
+        ("import std::ops\n", "ops::Compare::‸ => 0"),
+        ("import app::shape\n", "shape::Shape::‸ => 0"),
+        ("import app::shape\n", "shape::Shape::ar‸(n) => n"),
+    ] {
+        let main = format!("{imports}\nfn f(a: Int) -> Int {{\n  case a {{\n    {arm}\n  }}\n}}\n");
+        let (found, _) = at(&main, ON);
+        assert_eq!(labels(&found), Vec::<&str>::new(), "{arm}");
+    }
+    let (found, _) = at(&body("import app::shape\n", "let x: shape::‸ = a"), ON);
+    assert!(labels(&found).contains(&"Square"), "{:?}", labels(&found));
+    let main = "import app::shape\n\nfn f(s: shape::Square) -> Int {\n  case s {\n    shape::‸(n) => n\n  }\n}\n";
+    let (found, _) = at(main, ON);
+    assert_eq!(labels(&found), ["Square"]);
+}
+
+/// A module with an interface with no function, one whose function takes
+/// `Self` only inside a list, and one that only embeds another.
+const BLANK: (&str, &str) = (
+    "blank.cheby",
+    "//! Interfaces that name few functions.\n\n/// Every type satisfies it.\npub interface Anything\n\n/// Whether every value holds.\npub interface Maker {\n  fn all(List<Self>) -> Bool\n}\n\n/// Shown, through `Show`.\npub interface Shown: Show\n",
+);
+
+/// The completions at the `‸` of `main`, with `shape.cheby`,
+/// `blank.cheby` and std's index.
+fn at_blank(main: &str, options: Options) -> (Completions, String) {
+    run(
+        main,
+        &[SHAPE, BLANK],
+        options,
+        StdAccess::Index(base().index()),
+    )
+}
+
+/// The file's own interfaces like `BLANK`'s, `blank` imported, and `line`
+/// in a function of `a`, a number.
+fn blank_body(line: &str) -> String {
+    format!(
+        "import app::blank\n\ninterface Empty\n\ninterface Builds {{\n  fn each(List<Self>) -> Int\n}}\n\ninterface Labeled: Show\n\nfn f(a: Int) -> Nil {{\n  {line}\n  assert a == 1\n}}\n"
+    )
+}
+
+#[test]
+fn an_interface_with_no_function_is_offered_only_as_a_type() {
+    // D-1681: written with `::`, an interface with no function opens an
+    // empty list, so it is left out; embedded functions count. After
+    // `|>`, so is one with no function that takes `Self` as a parameter.
+    // A type offers every one.
+    let expression = [
+        "let n = ‸",
+        "let n = An‸",
+        "let n = Em‸::x",
+        "let n = blank::‸",
+        "let n = blank::An‸::x",
+    ];
+    for line in expression {
+        let (found, _) = at_blank(&blank_body(line), IMPORTING);
+        let offered = of_kind(&found, EntryKind::Interface);
+        for absent in ["Empty", "blank::Anything", "Anything"] {
+            assert!(!offered.contains(&absent), "{line}: {offered:?}");
+        }
+    }
+    let (found, _) = at_blank(&blank_body("let n = ‸"), ON);
+    let mut offered = of_kind(&found, EntryKind::Interface);
+    offered.sort_unstable();
+    assert_eq!(offered, ["Builds", "Labeled", "Show"]);
+    let (found, _) = at_blank(&blank_body("let n = Ma‸"), ON);
+    assert!(of_kind(&found, EntryKind::Interface).contains(&"blank::Maker"));
+    let (found, _) = at_blank(&blank_body("let n = blank::‸"), ON);
+    assert_eq!(of_kind(&found, EntryKind::Interface), ["Maker", "Shown"]);
+    // After `|>`, `Builds` and `Maker` have no parameter of type `Self`,
+    // so they go too.
+    for line in ["let n = a |> ‸", "let n = a |> Bu‸", "let n = a |> Ma‸"] {
+        let (found, _) = at_blank(&blank_body(line), IMPORTING);
+        let offered = of_kind(&found, EntryKind::Interface);
+        for absent in ["Empty", "Builds", "blank::Anything", "blank::Maker"] {
+            assert!(!offered.contains(&absent), "{line}: {offered:?}");
+        }
+    }
+    let (found, _) = at_blank(&blank_body("let n = a |> ‸"), ON);
+    let mut offered = of_kind(&found, EntryKind::Interface);
+    offered.sort_unstable();
+    assert_eq!(offered, ["Labeled", "Show"]);
+    let (found, _) = at_blank(&blank_body("let n = a |> Sh‸"), ON);
+    assert!(of_kind(&found, EntryKind::Interface).contains(&"blank::Shown"));
+    let (found, _) = at_blank(&blank_body("let n = a |> blank::‸"), ON);
+    assert_eq!(of_kind(&found, EntryKind::Interface), ["Shown"]);
+    // Through auto-import, an interface of a module the file does not
+    // import follows the same rule.
+    let main = "fn f(a: Int) -> Nil {\n  let n = An‸\n  assert a == 1\n}\n";
+    let (found, _) = at_blank(main, IMPORTING);
+    assert!(
+        !labels(&found).contains(&"blank::Anything"),
+        "{:?}",
+        labels(&found)
+    );
+    let (found, _) = at_blank(&main.replace("An‸", "Mak‸"), IMPORTING);
+    assert!(
+        labels(&found).contains(&"blank::Maker"),
+        "{:?}",
+        labels(&found)
+    );
+    // A type offers every interface, written bare.
+    let (found, _) = at_blank(&blank_body("let x: dyn ‸ = a"), ON);
+    let offered = of_kind(&found, EntryKind::Interface);
+    for name in ["Empty", "Builds", "Labeled"] {
+        assert!(offered.contains(&name), "{name}: {offered:?}");
+    }
+    let (found, _) = at_blank(&blank_body("let x: dyn blank::‸ = a"), ON);
+    let mut offered = of_kind(&found, EntryKind::Interface);
+    offered.sort_unstable();
+    assert_eq!(offered, ["Anything", "Maker", "Shown"]);
+    assert_eq!(entry(&found, "Anything").insert.text, "Anything");
 }

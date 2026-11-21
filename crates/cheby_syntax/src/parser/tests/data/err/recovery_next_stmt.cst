@@ -65,28 +65,30 @@ SOURCE_FILE@0..465
       L_BRACE@83..84 "{"
       NEWLINE@84..85 "\n"
       WHITESPACE@85..87 "  "
-      LET_STMT@87..99
+      LET_STMT@87..94
         LET_KW@87..90 "let"
         WHITESPACE@90..91 " "
         IDENT_PAT@91..92
           LOWER_IDENT@91..92 "y"
         WHITESPACE@92..93 " "
         EQ@93..94 "="
-        NEWLINE@94..95 "\n"
-        WHITESPACE@95..97 "  "
-        CLOSURE@97..99
-          FN_KW@97..99 "fn"
-      WHITESPACE@99..100 " "
-      ERROR@100..109
+      NEWLINE@94..95 "\n"
+      WHITESPACE@95..97 "  "
+      LOCAL_FN@97..109
+        FN_KW@97..99 "fn"
+        WHITESPACE@99..100 " "
         LOWER_IDENT@100..101 "g"
-        L_PAREN@101..102 "("
-        R_PAREN@102..103 ")"
+        PARAM_LIST@101..103
+          L_PAREN@101..102 "("
+          R_PAREN@102..103 ")"
         WHITESPACE@103..104 " "
-        L_BRACE@104..105 "{"
-        WHITESPACE@105..106 " "
-        INT_NUMBER@106..107 "1"
-        WHITESPACE@107..108 " "
-        R_BRACE@108..109 "}"
+        BLOCK@104..109
+          L_BRACE@104..105 "{"
+          WHITESPACE@105..106 " "
+          LITERAL@106..107
+            INT_NUMBER@106..107 "1"
+          WHITESPACE@107..108 " "
+          R_BRACE@108..109 "}"
       NEWLINE@109..110 "\n"
       WHITESPACE@110..112 "  "
       CALL_EXPR@112..115
@@ -392,11 +394,11 @@ error[E0013]: expected an expression, found `let`
 3 |   let z = 1
   |   ^^^
 
-error[E0013]: expected `(`, found identifier
- --> err/recovery_next_stmt.cheby:9:6
+error[E0013]: expected an expression, found `fn`
+ --> err/recovery_next_stmt.cheby:9:3
   |
 9 |   fn g() { 1 }
-  |      ^
+  |   ^^
 
 error[E0013]: expected an expression, found `pub`
   --> err/recovery_next_stmt.cheby:15:3

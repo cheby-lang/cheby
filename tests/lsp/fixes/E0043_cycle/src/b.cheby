@@ -1,0 +1,7 @@
+//! On the cycle.
+
+import app::a
+
+pub fn g() -> Int {
+  a::f()
+}

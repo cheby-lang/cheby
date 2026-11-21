@@ -1,0 +1,17 @@
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736
+// @newErrors: E0047
+//! The `return` of a function's last expression is removed (X §6.5).
+//! With a type error in another function, which the fix reveals.
+
+fn last(a: Int) -> Int {
+  return a + 1
+}
+
+fn main() {
+  assert last(1) == 2
+}
+
+fn answer() -> Int {
+  "forty-two"
+}
+//> 7:10 action Remove the `return`

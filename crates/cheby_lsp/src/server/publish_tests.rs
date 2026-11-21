@@ -22,7 +22,14 @@ fn related_client() -> Value {
 /// `main`, as the first publish with an error gives it, for a client with
 /// `extra` in its `initialize` parameters.
 fn published(name: &str, main: &str, extra: &Value) -> Value {
-    let package = Temp::package(name, &[("src/main.cheby", main)]);
+    published_with(name, main, &[], extra)
+}
+
+/// [`published`] in a package that also holds `others`.
+fn published_with(name: &str, main: &str, others: &[(&str, &str)], extra: &Value) -> Value {
+    let mut files = vec![("src/main.cheby", main)];
+    files.extend_from_slice(others);
+    let package = Temp::package(name, &files);
     let path = package.at("src/main.cheby");
     let (mut client, _) = Client::start(package.params(extra), Vec::new());
     let publish = client.wait_publish(&path, has_diagnostics);
@@ -124,6 +131,200 @@ fn related_lines_come_before_notes_without_related_information() {
     assert!(
         d.get("relatedInformation").is_none_or(Value::is_null),
         "{d}"
+    );
+}
+
+const UNUSED: &str = "//! Root.\n\nfn main() {\n  let total = 1\n}\n";
+
+const DEPRECATED_USE: &str =
+    "//! Root.\n\nimport app::text\n\nfn main() {\n  let _ = text::old()\n}\n";
+
+const DEPRECATED: &str = "//! Text.\n\n@deprecated(\"use new\")\npub fn old() -> Int {\n  1\n}\n";
+
+/// A client whose `textDocument.publishDiagnostics` is `publish` and whose
+/// `textDocument.codeAction` is `actions`, with `settings` as its
+/// `initializationOptions`.
+fn client_with(publish: &Value, actions: &Value, settings: &Value) -> Value {
+    let mut options = json!({ "analysis": { "debounceMs": 0 } });
+    if let (Some(options), Some(settings)) = (options.as_object_mut(), settings.as_object()) {
+        for (key, value) in settings {
+            options.insert(key.clone(), value.clone());
+        }
+    }
+    json!({
+        "capabilities": {
+            "textDocument": { "publishDiagnostics": publish, "codeAction": actions },
+        },
+        "initializationOptions": options,
+    })
+}
+
+// D-1400, X §8.2: `codeDescription` links a registered code's explanation
+// when the client shows it and `diagnostics.explainLinks` is on, its
+// default.
+#[test]
+fn code_description_follows_the_setting_and_the_capability() {
+    let shows = json!({ "codeDescriptionSupport": true });
+    let d = published(
+        "cd_on",
+        UNUSED,
+        &client_with(&shows, &json!({}), &json!({})),
+    );
+    assert_eq!(d["code"], "W0002", "{d}");
+    assert_eq!(
+        d["codeDescription"]["href"],
+        "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+    );
+    let off = json!({ "diagnostics": { "explainLinks": false } });
+    let d = published("cd_setting", UNUSED, &client_with(&shows, &json!({}), &off));
+    assert!(d.get("codeDescription").is_none_or(Value::is_null), "{d}");
+    let d = published(
+        "cd_client",
+        UNUSED,
+        &client_with(&json!({}), &json!({}), &json!({})),
+    );
+    assert!(d.get("codeDescription").is_none_or(Value::is_null), "{d}");
+}
+
+// D-1750: a change of `diagnostics.explainLinks` publishes the lists again
+// at once, with no run and no edit between, and they follow the setting.
+#[test]
+fn a_change_of_explain_links_republishes() {
+    let shows = json!({ "codeDescriptionSupport": true });
+    let package = Temp::package("cd_change", &[("src/main.cheby", UNUSED)]);
+    let path = package.at("src/main.cheby");
+    let (mut client, _) = Client::start(
+        package.params(&client_with(&shows, &json!({}), &json!({}))),
+        Vec::new(),
+    );
+    let linked = |publish: &Value| {
+        publish["diagnostics"]
+            .as_array()
+            .is_some_and(|list| list.iter().any(|d| !d["codeDescription"].is_null()))
+    };
+    let first = client.wait_publish(&path, has_diagnostics);
+    assert!(linked(&first), "{first}");
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": { "diagnostics": { "explainLinks": false } } } }),
+    );
+    let off = client.wait_publish(&path, |p| has_diagnostics(p) && !linked(p));
+    assert_eq!(off["version"], first["version"], "{off}");
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": { "diagnostics": { "explainLinks": true } } } }),
+    );
+    let on = client.wait_publish(&path, |p| has_diagnostics(p) && linked(p));
+    assert_eq!(on["diagnostics"], first["diagnostics"]);
+    client.stop();
+}
+
+// X §8.1: W0002 to W0005 and W0010 are tagged `UNNECESSARY` and W0012
+// `DEPRECATED`, each only for a client that lists the tag.
+#[test]
+fn tags_follow_the_code_and_the_client() {
+    let both = json!({ "tagSupport": { "valueSet": [1, 2] } });
+    let d = published(
+        "tag_unused",
+        UNUSED,
+        &client_with(&both, &json!({}), &json!({})),
+    );
+    assert_eq!(d["tags"], json!([1]), "{d}");
+    let deprecated_only = json!({ "tagSupport": { "valueSet": [2] } });
+    let d = published(
+        "tag_unlisted",
+        UNUSED,
+        &client_with(&deprecated_only, &json!({}), &json!({})),
+    );
+    assert!(d.get("tags").is_none_or(Value::is_null), "{d}");
+    let text = [("src/text.cheby", DEPRECATED)];
+    let d = published_with(
+        "tag_deprecated",
+        DEPRECATED_USE,
+        &text,
+        &client_with(&deprecated_only, &json!({}), &json!({})),
+    );
+    assert_eq!(d["code"], "W0012", "{d}");
+    assert_eq!(d["tags"], json!([2]), "{d}");
+    let none = client_with(&json!({}), &json!({}), &json!({}));
+    let d = published_with("tag_none", DEPRECATED_USE, &text, &none);
+    assert!(d.get("tags").is_none_or(Value::is_null), "{d}");
+}
+
+// D-1686: a help whose edits are a quick fix leaves the message for a
+// client that takes code-action literals, and stays as `help: …` for any
+// other; a help with no edit stays for every client.
+#[test]
+fn a_fix_help_leaves_the_message_for_a_literal_client() {
+    let literals = json!({
+        "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+    });
+    let d = published(
+        "help_literal",
+        UNUSED,
+        &client_with(&json!({}), &literals, &json!({})),
+    );
+    assert_eq!(d["message"], "unused binding `total`\nnever used", "{d}");
+    let d = published(
+        "help_plain",
+        UNUSED,
+        &client_with(&json!({}), &json!({}), &json!({})),
+    );
+    assert_eq!(
+        d["message"],
+        "unused binding `total`\nnever used\n\
+         help: if this is intentional, start the name with an underscore: `_total`"
+    );
+    let d = published(
+        "help_text",
+        REFUTABLE_LET,
+        &client_with(&json!({}), &literals, &json!({})),
+    );
+    assert_eq!(d["code"], "E0060", "{d}");
+    assert!(
+        d["message"]
+            .as_str()
+            .unwrap()
+            .contains("\nhelp: use `case`"),
+        "a help with no edit stays: {d}"
+    );
+}
+
+// D-1754: E0006's help, whose fix on a used name is a rename checked on
+// resolve, leaves the message only for a client that resolves `edit`; a
+// client with literals that cannot keeps the line, and gets no fix.
+#[test]
+fn e0006_keeps_its_help_for_a_client_that_cannot_resolve() {
+    const CAMEL: &str = "//! Root.\n\nfn main() {\n  let maxValue = 3\n  assert maxValue == 3\n}\n";
+    let literals = json!({
+        "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+    });
+    let d = published(
+        "e6_no_resolve",
+        CAMEL,
+        &client_with(&json!({}), &literals, &json!({})),
+    );
+    assert_eq!(d["code"], "E0006", "{d}");
+    assert!(
+        d["message"]
+            .as_str()
+            .unwrap()
+            .contains("\nhelp: write `max_value`"),
+        "the help stays: {d}"
+    );
+    let resolving = json!({
+        "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+        "dataSupport": true,
+        "resolveSupport": { "properties": ["edit"] },
+    });
+    let d = published(
+        "e6_resolve",
+        CAMEL,
+        &client_with(&json!({}), &resolving, &json!({})),
+    );
+    assert!(
+        !d["message"].as_str().unwrap().contains("help:"),
+        "the help leaves: {d}"
     );
 }
 

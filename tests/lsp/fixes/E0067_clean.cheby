@@ -1,0 +1,12 @@
+// @decisions: D-1388, D-1393, D-1736, D-056, D-141
+//! E0067's fixes restrict the using item, or the module, to the one
+//! target the used item exists on.
+
+@external(js, "./clock.mjs", "now")
+fn js_now() -> Int
+
+fn main() {
+  let _ = js_now()
+}
+//> 9:11 action Add `@target(js)`
+//> 9:11 action Add `@!target(js)`

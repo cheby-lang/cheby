@@ -2,15 +2,16 @@
 //! stdio, one process per trial (D-1352, docs/plan/testing.md,
 //! `tests/lsp/README.md`). The client is `cheby_test_support::lsp`.
 //!
-//! Eight groups of trials:
+//! Eleven groups of trials:
 //!
 //! - `protocol/<name>`: the handshake, `shutdown` and `exit` and their exit
 //!   codes, the end of input, a frame that is not JSON-RPC (D-1430), error
 //!   answers (`MethodNotFound`, `ServerNotInitialized`, `InvalidRequest`
 //!   after `shutdown`), `$/cancelRequest`, malformed params, the negotiated
-//!   position encoding (D-1368), the publishing rules (D-1373, D-1442), and
-//!   that standard output holds frames only (A §3.7). Two of them compare
-//!   the `initialize` answer with a golden:
+//!   position encoding (D-1368), the publishing rules (D-1373, D-1442),
+//!   that standard output holds frames only (A §3.7), and the applied-edit
+//!   check on edits written by hand (D-1676). Two of them compare the
+//!   `initialize` answer with a golden:
 //!   `tests/lsp/protocol/<name>.expected`.
 //! - `format/<name>`: formatting cases a file cannot hold, such as CRLF
 //!   line ends, which `.gitattributes` turns into LF.
@@ -23,13 +24,23 @@
 //!   of every identifier and after every `.` and `|>`, and every item's
 //!   edit must sit on one line and hold the position (D-1394); signature
 //!   help goes inside every argument list. Both are sampled within a
-//!   budget per example. Formatting must return no edit, since every
+//!   budget per example, and so is rename, which goes where
+//!   `prepareRename` accepted (D-1677). A `RequestFailed` of those two is a
+//!   refusal and passes. Formatting must return no edit, since every
 //!   example is a `cheby fmt` fixed point. The group tightens as the server
 //!   advertises more (D-1379).
+//! - `rename_sweep/<name>` and `rename_run/<name>`: the rename sweep
+//!   (D-1677). The first renames each symbol of the example once and puts
+//!   each edit through the applied-edit check; the second renames 8
+//!   symbols whose name cannot reach the output in a copy of the example,
+//!   which must pass `cheby check` and print its `expected.stdout`.
 //! - `navigation/<name>`: an answer followed into another file. In
 //!   `std_round_trip`, definition on `io::println` leads into std's
 //!   materialized sources, that file is opened, and hover in it answers
 //!   (R-17).
+//! - `std_checkout_sweep`: every module of a copy of this repository's
+//!   `std/`, opened in turn in a std checkout session, leaves every
+//!   published list empty, warnings included (D-1700, D-1704).
 //! - `quality/hover_on_mutants`: the quality gate of plan W7 (`facts.md`
 //!   §0.1, §10). Seeded body mutants of the examples go to a warm server,
 //!   and hover at each identifier of the edited item is graded against
@@ -52,11 +63,17 @@
 //!   `formatting` answer must give `cheby fmt`'s text when applied, a
 //!   `rangeFormatting` edit must touch the lines of its range, every
 //!   completion item's edit must sit on one line and hold the position
-//!   (D-1394), and the text after an `apply` marker's item must parse.
+//!   (D-1394), the text after an `apply` marker's item must parse, and
+//!   the edit of a `rename` marker or a `willRename` step must pass the
+//!   applied-edit check (`editing::check_applied`, D-1676).
 //!   Completion, signature help and inlay hints are printed in a readable
 //!   form (`editing`). A test's `@steps` run after the opens: waits for
-//!   `cheby/idle` and for a child run to start, and edits and saves of
-//!   files the test holds (`tests/lsp/constants/`).
+//!   `cheby/idle` and for a child run to start, edits and saves of files
+//!   the test holds (`tests/lsp/constants/`), files written with no
+//!   notification, closes, `willRenameFiles` with its moves, and blocks of
+//!   `cheby/status` and of the published lists. A `@package: std-checkout`
+//!   test runs in a copy of `std/` with probes of its own
+//!   (`case::place_checkout`, D-1699, D-1700).
 //!
 //! Waits (D-1442): a publish comes for each new version of an open
 //! document and after each `didOpen` and `didClose`, but not for a run
@@ -90,7 +107,8 @@
 //! front-end error are ignored too, as their check tests are
 //! (`UiTest::builds_a_jit`). The server never evaluates constants there
 //! (D-1414), so a golden test whose `@steps` wait for the child is ignored
-//! too. The server process never runs generated code (D-1349), so every
+//! too, except in a std checkout, whose session never starts it (D-1700),
+//! and so is `rename_run/*`, which runs `cheby check` and `cheby run`. The server process never runs generated code (D-1349), so every
 //! other trial runs there.
 #![expect(
     clippy::wildcard_enum_match_arm,
@@ -199,6 +217,20 @@ fn main() -> ExitCode {
         trials.push(symbols_trial(ex.clone(), &env, current, &verdicts, bless));
     }
     for ex in &examples {
+        trials.push(rename_sweep_trial(
+            ex.clone(),
+            &env,
+            current,
+            &verdicts,
+            bless,
+        ));
+    }
+    for ex in &examples {
+        if let Some(trial) = rename_run_trial(ex.clone(), &env, current, &verdicts, bless) {
+            trials.push(trial);
+        }
+    }
+    for ex in &examples {
         trials.push(example_parity_trial(
             ex.clone(),
             &env,
@@ -223,6 +255,7 @@ fn main() -> ExitCode {
         ));
     }
     trials.push(quality_trial(&examples, &env, current, &verdicts, bless));
+    trials.push(std_checkout_sweep_trial(&env, current, &verdicts, bless));
     for test in golden_tests {
         trials.push(golden_trial(test, &env, current, &verdicts, bless));
     }
@@ -536,6 +569,16 @@ const PROTOCOL: &[Protocol] = &[
     Protocol {
         name: "close_and_reopen_publish_again",
         run: close_and_reopen_publish_again,
+        golden: false,
+    },
+    Protocol {
+        name: "applied_edit_check",
+        run: applied_edit_check,
+        golden: false,
+    },
+    Protocol {
+        name: "applied_edit_check_without_idle",
+        run: applied_edit_check_without_idle,
         golden: false,
     },
 ];
@@ -905,6 +948,332 @@ fn closed_file_published_at_start(env: &Env, dir: &Path) -> Result<(), String> {
     client.shutdown()?.expect(0)
 }
 
+/// The root module of the applied-edit check's package.
+const CHECKED_MAIN: &str = "//! A package for the applied-edit check.\n\nimport protocol::aaaa\n\nfn main() {\n  let total = aaaa::helper()\n  assert total == 1\n}\n";
+/// Its other module.
+const CHECKED_UTIL: &str = "//! Its helper.\n\npub fn helper() -> Int {\n  1\n}\n";
+/// The other module's path. Its name sorts before `main`, so the server
+/// publishes it before the root module, whose new error [`check_callers`]
+/// then sees only after the wait for `cheby/idle` (D-1676).
+const CHECKED_UTIL_PATH: &str = "src/aaaa.cheby";
+
+/// The package of the applied-edit check's trials, written to `dir`, with
+/// both modules open in a session of `kind`, once the server has caught up
+/// with no error.
+fn checked_package(env: &Env, dir: &Path, kind: ClientKind) -> Result<Checked, String> {
+    write_package(
+        dir,
+        &[
+            ("cheby.toml", MANIFEST),
+            (ROOT_MODULE, CHECKED_MAIN),
+            (CHECKED_UTIL_PATH, CHECKED_UTIL),
+        ],
+    )?;
+    let (mut client, _) = session(env, dir, kind, None, None)?;
+    open_all(
+        &mut client,
+        &[ROOT_MODULE.to_owned(), CHECKED_UTIL_PATH.to_owned()],
+    )?;
+    let texts = BTreeMap::from([
+        (ROOT_MODULE.to_owned(), CHECKED_MAIN.to_owned()),
+        (CHECKED_UTIL_PATH.to_owned(), CHECKED_UTIL.to_owned()),
+    ]);
+    let mut settle = editing::Settle::new("", kind != ClientKind::Empty, &client);
+    // A package that starts broken would hide the errors the cases add.
+    settle.wait(&mut client)?;
+    editing::new_errors(&BTreeMap::new(), &editing::published_by_path(&client), &[])
+        .map_err(|e| format!("the package does not start clean: {e}"))?;
+    Ok(Checked {
+        client,
+        texts,
+        settle,
+    })
+}
+
+/// One text edit written by hand: a line, a start and an end column on it,
+/// and the new text.
+type HandEdit<'a> = (u32, u32, u32, &'a str);
+
+/// A `WorkspaceEdit` written by hand: for each open file of `files`, its
+/// edits, with the file's version.
+fn hand_edit(client: &Client, files: &[(&str, &[HandEdit<'_>])]) -> Result<Value, String> {
+    let mut changes = Vec::new();
+    for (path, edits) in files {
+        let uri = client.uri(Path::new(path))?;
+        let edits: Vec<Value> = edits
+            .iter()
+            .map(|&(line, start, end, text)| {
+                json!({
+                    "range": {
+                        "start": { "line": line, "character": start },
+                        "end": { "line": line, "character": end },
+                    },
+                    "newText": text,
+                })
+            })
+            .collect();
+        changes.push(json!({
+            "textDocument": { "uri": uri, "version": client.version(&uri) },
+            "edits": edits,
+        }));
+    }
+    Ok(json!({ "documentChanges": changes }))
+}
+
+/// `result`, an applied-edit check's, failed with a message that holds
+/// `wanted`.
+fn fails_naming(
+    result: Result<editing::Applied, String>,
+    wanted: &str,
+    what: &str,
+) -> Result<(), String> {
+    match result {
+        Ok(_) => Err(format!("{what}: the applied-edit check passed")),
+        Err(e) if e.contains(wanted) => Ok(()),
+        Err(e) => Err(format!(
+            "{what}: the check failed without naming {wanted}: {e}"
+        )),
+    }
+}
+
+/// D-1676: the applied-edit check through a real server, with a client
+/// that takes `cheby/idle`.
+fn applied_edit_check(env: &Env, dir: &Path) -> Result<(), String> {
+    edit_check_with(env, dir, ClientKind::Standard)
+}
+
+/// [`applied_edit_check`] with the `empty` client, which takes no
+/// `cheby/idle`, so the check asks `cheby/status` instead.
+fn applied_edit_check_without_idle(env: &Env, dir: &Path) -> Result<(), String> {
+    edit_check_with(env, dir, ClientKind::Empty)
+}
+
+/// The cases of [`applied_edit_check`], each failing one in a session of
+/// its own: a local renamed by hand passes and is undone; with rename's
+/// narrowing, a line pushed past 100 columns passes (D-1670); a module
+/// moved with the edit of its importer passes, and moved back with no edit
+/// fails, naming the importer; a line put out of `cheby fmt`'s form fails;
+/// an edit of `src/util.cheby` alone that breaks its caller in
+/// `src/main.cheby`, a file the edit did not touch, fails naming that file,
+/// and passes when the header's codes excuse the error.
+/// A session of the applied-edit check's package.
+struct Checked {
+    client: Client,
+    texts: BTreeMap<String, String>,
+    settle: editing::Settle,
+}
+
+impl Checked {
+    /// [`editing::check_applied`] of `edit`, `moves` and `rules`.
+    fn check(
+        &mut self,
+        edit: &Value,
+        moves: &[(String, String)],
+        rules: editing::EditRules<'_>,
+    ) -> Result<editing::Applied, String> {
+        editing::check_applied(
+            &mut self.client,
+            &mut self.texts,
+            &mut self.settle,
+            edit,
+            moves,
+            rules,
+        )
+    }
+
+    /// [`editing::revert`] of `applied`.
+    fn revert(&mut self, applied: editing::Applied) -> Result<(), String> {
+        editing::revert(&mut self.client, &mut self.texts, &mut self.settle, applied)
+    }
+
+    /// A [`hand_edit`] of this session's open files.
+    fn edit(&self, files: &[(&str, &[HandEdit<'_>])]) -> Result<Value, String> {
+        hand_edit(&self.client, files)
+    }
+
+    /// Ends the session.
+    fn end(self) -> Result<(), String> {
+        self.client.shutdown()?.expect(0)
+    }
+}
+
+/// The rules of the check with no excused error and `fixed_point`.
+const fn rules(fixed_point: editing::FixedPoint) -> editing::EditRules<'static> {
+    editing::EditRules {
+        new_errors: &[],
+        fixed_point,
+    }
+}
+
+/// The cases of [`applied_edit_check`], each failing one in a session of
+/// its own, as [`check_form`], [`check_moves`] and [`check_callers`] list
+/// them.
+fn edit_check_with(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
+    check_form(env, dir, kind)?;
+    check_moves(env, dir, kind)?;
+    check_callers(env, dir, kind)?;
+    check_gone(env, dir, kind)
+}
+
+/// The root module of [`check_gone`]'s package, with an E0047 at the `n`
+/// of line 4 (line 3 from 0).
+const GONE_MAIN: &str = "//! A package for the check that a fix's code is gone.\n\nfn first(n: Int) -> Option<Int> {\n  n\n}\n\nfn main() {\n  assert first(1) == Some(1)\n}\n";
+
+/// F §9.4, T-2: a fix of the E0047 at `n` written by hand. Wrapped in
+/// `Some(…)`, the E0047 is gone and the check passes; wrapped in `Err(…)`,
+/// an E0047 starts where the wrap wrote, and "the fixed code is gone at its
+/// span" fails, though the edit adds no new error and the start of the old
+/// one moved past the insertion.
+fn check_gone(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
+    let dir = dir.join("gone");
+    write_package(&dir, &[("cheby.toml", MANIFEST), (ROOT_MODULE, GONE_MAIN)])?;
+    let (mut client, _) = session(env, &dir, kind, None, None)?;
+    open_all(&mut client, &[ROOT_MODULE.to_owned()])?;
+    let mut texts = BTreeMap::from([(ROOT_MODULE.to_owned(), GONE_MAIN.to_owned())]);
+    let mut settle = editing::Settle::new("", kind != ClientKind::Empty, &client);
+    settle.wait(&mut client)?;
+    let uri = client.uri(Path::new(ROOT_MODULE))?;
+    let fixed = editing::published_by_path(&client)
+        .get(ROOT_MODULE)
+        .and_then(|list| {
+            list.iter()
+                .find(|d| d.get("code") == Some(&json!("E0047")))
+                .cloned()
+        })
+        .ok_or("the package publishes no E0047")?;
+    let strict = rules(editing::FixedPoint::Strict);
+    let wraps = |client: &Client, name: &str| {
+        hand_edit(client, &[(ROOT_MODULE, &[(3, 2, 2, name), (3, 3, 3, ")")])])
+    };
+    for (name, passes) in [("Err(", false), ("Some(", true)] {
+        let edit = wraps(&client, name)?;
+        let applied =
+            editing::check_applied(&mut client, &mut texts, &mut settle, &edit, &[], strict)?;
+        let gone = editing::gone_at_span(&client, &texts, &applied, &edit, &uri, &fixed);
+        match (gone, passes) {
+            (Ok(()), true) => {}
+            (Err(e), false) if e.contains("leaves its diagnostic") => {}
+            (Ok(()), false) => {
+                return Err(format!(
+                    "a wrap in {name}…) left its E0047, and the check passed"
+                ));
+            }
+            (Err(e), _) => return Err(format!("a wrap in {name}…): {e}")),
+        }
+        editing::revert(&mut client, &mut texts, &mut settle, applied)?;
+    }
+    client.shutdown()?.expect(0)
+}
+
+/// A local renamed by hand passes and is undone; with rename's narrowing,
+/// a line pushed past 100 columns passes (D-1670), and strictly it fails;
+/// a line put out of `cheby fmt`'s form fails, in a file that was not
+/// open too, which the check opens to ask its form before (D-1712).
+fn check_form(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
+    use editing::FixedPoint::{Rename, Strict};
+    let mut session = checked_package(env, &dir.join("form"), kind)?;
+    let local = session.edit(&[(ROOT_MODULE, &[(5, 6, 11, "sum"), (6, 9, 14, "sum")])])?;
+    let applied = session.check(&local, &[], rules(Strict))?;
+    session.revert(applied)?;
+    if session.texts.get(ROOT_MODULE).map(String::as_str) != Some(CHECKED_MAIN) {
+        return Err(format!("the revert left {:?}", session.texts));
+    }
+    let long = "a_name_long_enough_to_push_its_line_past_the_hundred_columns_that_cheby_fmt_keeps";
+    let renames: &[HandEdit<'_>] = &[(5, 6, 11, long), (6, 9, 14, long)];
+    let applied = session.check(
+        &session.edit(&[(ROOT_MODULE, renames)])?,
+        &[],
+        rules(Rename),
+    )?;
+    session.revert(applied)?;
+    // The versions moved on with the revert, so the edit is written again.
+    let result = session.check(
+        &session.edit(&[(ROOT_MODULE, renames)])?,
+        &[],
+        rules(Strict),
+    );
+    fails_naming(result, "cheby fmt", "a line past 100 columns, strictly")?;
+    session.end()?;
+    let mut session = checked_package(env, &dir.join("spaced"), kind)?;
+    let spaced = session.edit(&[(ROOT_MODULE, &[(6, 15, 15, "  ")])])?;
+    fails_naming(
+        session.check(&spaced, &[], rules(Rename)),
+        "cheby fmt",
+        "an extra space",
+    )?;
+    session.end()?;
+    let mut session = checked_package(env, &dir.join("closed"), kind)?;
+    let util = session.client.uri(Path::new(CHECKED_UTIL_PATH))?;
+    session.client.close(&util)?;
+    session.texts.remove(CHECKED_UTIL_PATH);
+    session.settle.after(&mut session.client, &[(util, None)])?;
+    let spaced = session.edit(&[(CHECKED_UTIL_PATH, &[(2, 6, 6, " ")])])?;
+    fails_naming(
+        session.check(&spaced, &[], rules(Rename)),
+        "cheby fmt",
+        "an extra space in a file that was not open",
+    )?;
+    session.end()
+}
+
+/// A module moved with the edit of its importer passes, and the open
+/// documents follow it; moved back with no edit, it fails, naming the
+/// importer.
+fn check_moves(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
+    let strict = rules(editing::FixedPoint::Strict);
+    let mut session = checked_package(env, &dir.join("moves"), kind)?;
+    let moves = [(CHECKED_UTIL_PATH.to_owned(), "src/tools.cheby".to_owned())];
+    let importer = session.edit(&[(ROOT_MODULE, &[(2, 17, 21, "tools"), (5, 14, 18, "tools")])])?;
+    session.check(&importer, &moves, strict)?;
+    if !session.texts.contains_key("src/tools.cheby")
+        || session.texts.contains_key(CHECKED_UTIL_PATH)
+    {
+        return Err(format!(
+            "after the move, the open documents are {:?}",
+            session.texts.keys()
+        ));
+    }
+    let back = [("src/tools.cheby".to_owned(), CHECKED_UTIL_PATH.to_owned())];
+    let result = session.check(&json!({}), &back, strict);
+    fails_naming(result, "src/main.cheby: E", "the module moved back alone")?;
+    session.end()
+}
+
+/// An edit of `src/aaaa.cheby` alone that breaks its caller in
+/// `src/main.cheby`, a file the edit did not touch, fails naming that file,
+/// and passes when the header's codes excuse the error. The edited file's
+/// publish comes first, so the check fails here only because it waits for
+/// `cheby/idle`, not for the edited version alone (D-1676).
+fn check_callers(env: &Env, dir: &Path, kind: ClientKind) -> Result<(), String> {
+    let strict = rules(editing::FixedPoint::Strict);
+    let renamed: &[HandEdit<'_>] = &[(2, 7, 13, "helpme")];
+    let mut session = checked_package(env, &dir.join("caller"), kind)?;
+    let result = session.check(&session.edit(&[(CHECKED_UTIL_PATH, renamed)])?, &[], strict);
+    fails_naming(result, "src/main.cheby: E", "the helper renamed alone")?;
+    // The check waited for the server, so the caller's list is its last.
+    let main = session.client.uri(Path::new(ROOT_MODULE))?;
+    let codes: Vec<String> = session
+        .client
+        .published()
+        .get(&main)
+        .map_or_default(client::diagnostics_of)
+        .iter()
+        .filter_map(|d| d.get("code").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    session.end()?;
+    let mut session = checked_package(env, &dir.join("excused"), kind)?;
+    let excused = editing::EditRules {
+        new_errors: &codes,
+        fixed_point: editing::FixedPoint::Strict,
+    };
+    session.check(
+        &session.edit(&[(CHECKED_UTIL_PATH, renamed)])?,
+        &[],
+        excused,
+    )?;
+    session.end()
+}
+
 /// D-1373: each version of an open document gets its own publish, an
 /// empty one included.
 fn typing_republishes_with_new_version(env: &Env, dir: &Path) -> Result<(), String> {
@@ -1142,6 +1511,14 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
     let points = EditingPoints::new(trial_name, &texts, &advertised, encoding);
     // The queries of `workspace/symbol`: none, then every name once.
     let mut queries = BTreeSet::from([String::new()]);
+    // Where a rename may go, by the label of its `prepareRename`, and the
+    // answers of those.
+    let mut renames = Vec::new();
+    let mut prepared_renames = BTreeMap::new();
+    // Every listed code action that carries `data`, by the label of its
+    // listing, to resolve, and how many actions were listed in all.
+    let mut listed = Vec::new();
+    let mut actions_listed = 0_usize;
     for (index, ((file, uri), text)) in files.iter().zip(&uris).zip(&texts).enumerate() {
         let text = text.as_str();
         let lines = Lines::new(text, Bom::Counted);
@@ -1150,7 +1527,6 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
             .get(uri)
             .map_or_default(client::diagnostics_of);
         let mut requests = Vec::new();
-        let mut renames = Vec::new();
         for (start, end) in case::identifiers(text) {
             if let Some(word) = text.get(start..end) {
                 queries.insert(word.to_owned());
@@ -1178,7 +1554,8 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
             } else {
                 "renamed"
             };
-            renames.push((a, new_name));
+            let label = format!("{file}:{}:{} prepareRename", a.line, a.character);
+            renames.push((label, (file.clone(), uri.clone(), a, new_name)));
         }
         let last = lines.position(text.len(), encoding);
         for name in &advertised.document {
@@ -1194,9 +1571,16 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
             &completions,
             advertised.completion_resolve,
         )?;
-        if advertised.rename {
-            send_renames(&mut client, file, uri, renames, &prepared)?;
-        }
+        let (all, with_data) = editing::listed_actions(&prepared);
+        actions_listed = actions_listed.saturating_add(all);
+        listed.extend(with_data);
+        // Only `prepareRename`'s answers decide which renames are sent.
+        prepared_renames.extend(
+            prepared
+                .iter()
+                .filter(|(label, _)| label.ends_with(" prepareRename"))
+                .map(|(label, answer)| (label.clone(), answer.clone())),
+        );
         if let Some(edits) = prepared.get(&format!("{file} formatting"))
             && edits.as_array().is_some_and(|e| !e.is_empty())
         {
@@ -1205,6 +1589,10 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
             ));
         }
     }
+    if advertised.rename {
+        send_renames(&mut client, trial_name, &renames, &prepared_renames)?;
+    }
+    send_resolves(&mut client, trial_name, actions_listed, &listed)?;
     if advertised.workspace_symbol {
         let requests = queries
             .into_iter()
@@ -1218,28 +1606,84 @@ fn sweep_example(env: &Env, dir: &Path, trial_name: &str) -> Result<(), String> 
     client.shutdown()?.expect(0)
 }
 
-/// A rename at each of `renames` where `prepareRename` accepted the
-/// position, as `prepared` holds its answers.
+/// A `codeAction/resolve` of each of `listed`, the code actions that
+/// carry `data` with the label of their listing, at most
+/// [`RESOLVE_BUDGET`] of them by a fixed stride (G1 plan §4.7). Each must
+/// be answered with no error, `ContentModified` included, except the
+/// `RequestFailed` of a refused fix (D-1731), which is counted. It says on
+/// standard error how many actions the listings held (`all`), how many
+/// carried `data`, and how many were resolved, refused and dropped, so a
+/// run shows what the sweep exercised (T-4).
+fn send_resolves(
+    client: &mut Client,
+    trial_name: &str,
+    all: usize,
+    listed: &[(String, Value)],
+) -> Result<(), String> {
+    let (kept, dropped) = editing::sample(listed, RESOLVE_BUDGET);
+    let mut refused = 0_usize;
+    for chunk in kept.chunks(BATCH) {
+        let calls: Vec<(&str, Value)> = chunk
+            .iter()
+            .map(|(_, action)| ("codeAction/resolve", action.clone()))
+            .collect();
+        let results = client.batch(calls)?;
+        for ((label, action), result) in chunk.iter().zip(results) {
+            match result {
+                Ok(_) => {}
+                Err(e) if case::resolve_refusal(e.code) => {
+                    refused = refused.saturating_add(1);
+                }
+                Err(e) => {
+                    let title = action
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    return Err(client.fail(&format!("{label} resolve {title:?} answered {e}")));
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{trial_name}: code actions: {all} listed, {} with data, {} resolved, {refused} refused \
+         (D-1731), {dropped} dropped by a fixed stride",
+        listed.len(),
+        kept.len()
+    );
+    Ok(())
+}
+
+/// One point of the examples group where a rename may go: its file, URI,
+/// position and new name.
+type RenamePoint = (String, String, Position, &'static str);
+
+/// A rename at each of `renames`, each with the label of its
+/// `prepareRename`, where `prepared` holds an accepted answer, at most
+/// [`RENAME_BUDGET`] of them by a fixed stride (D-1677, D-1725). It says on
+/// standard error how many it dropped.
 fn send_renames(
     client: &mut Client,
-    file: &str,
-    uri: &str,
-    renames: Vec<(Position, &str)>,
+    trial_name: &str,
+    renames: &[(String, RenamePoint)],
     prepared: &BTreeMap<String, Value>,
 ) -> Result<(), String> {
+    let (kept, dropped) = case::accepted_renames(renames, prepared, RENAME_BUDGET);
+    if dropped > 0 {
+        eprintln!(
+            "{trial_name}: rename at {} of {} accepted points, {dropped} dropped by a fixed stride",
+            kept.len(),
+            kept.len().saturating_add(dropped)
+        );
+    }
     let mut requests = Vec::new();
-    for (at, new_name) in renames {
-        let label = format!("{file}:{}:{} prepareRename", at.line, at.character);
-        let accepted = prepared.get(&label).is_some_and(|v| !v.is_null());
-        if accepted {
-            let (method, params) =
-                case::position_params("rename", uri, at, None, &[new_name.to_owned()], &[])?;
-            requests.push((
-                format!("{file}:{}:{} rename", at.line, at.character),
-                method,
-                params,
-            ));
-        }
+    for (file, uri, at, new_name) in kept {
+        let (method, params) =
+            case::position_params("rename", &uri, at, None, &[new_name.to_owned()], &[])?;
+        requests.push((
+            format!("{file}:{}:{} rename", at.line, at.character),
+            method,
+            params,
+        ));
     }
     send_all(client, requests)?;
     Ok(())
@@ -1262,8 +1706,10 @@ fn hierarchy_calls(prepared: &BTreeMap<String, Value>) -> Vec<(String, &'static 
     calls
 }
 
-/// Sends `requests` in batches; each must be answered without an error.
-/// Returns the answers by label.
+/// Sends `requests` in batches; each must be answered without an error,
+/// except a `RequestFailed` of `prepareRename` and `rename`, their
+/// refusal (`case::refusal_allowed`), which gets no answer here. Returns
+/// the answers by label.
 fn send_all(
     client: &mut Client,
     requests: Vec<(String, &'static str, Value)>,
@@ -1272,22 +1718,45 @@ fn send_all(
     let mut rest = requests.into_iter().peekable();
     while rest.peek().is_some() {
         let chunk: Vec<_> = rest.by_ref().take(BATCH).collect();
+        let methods: Vec<&'static str> = chunk.iter().map(|(_, method, _)| *method).collect();
         let (labels, calls): (Vec<String>, Vec<(&str, Value)>) = chunk
             .into_iter()
             .map(|(label, method, params)| (label, (method, params)))
             .unzip();
         let results = client.batch(calls)?;
-        for (label, result) in labels.into_iter().zip(results) {
+        for ((label, method), result) in labels.into_iter().zip(methods).zip(results) {
             match result {
                 Ok(value) => {
                     answers.insert(label, value);
                 }
+                Err(e) if case::refusal_allowed(method, e.code) => {}
                 Err(e) => return Err(client.fail(&format!("{label} answered {e}"))),
             }
         }
     }
     Ok(answers)
 }
+
+/// The `codeAction/resolve` requests the examples group sends per
+/// example, at most, for the listed actions that carry `data` (G1 plan
+/// §1.9, §4.7).
+const RESOLVE_BUDGET: usize = 200;
+/// Renames the examples group sends per example, at most, each a `verify`
+/// run in the server (plan §1.9, D-1677, D-1725).
+const RENAME_BUDGET: usize = 50;
+/// Symbols `rename_sweep/*` renames per example, at most, taken by a
+/// fixed stride over the accepted points (D-1677, D-1716, D-1725).
+const RENAME_SWEEP_BUDGET: usize = 30;
+/// Symbols `rename_run/*` renames and runs per example (D-1677).
+const RENAME_RUN_SYMBOLS: usize = 8;
+/// Examples `rename_run/*` leaves out: 034 prints the source positions of
+/// its log calls, which a longer name moves (D-1677).
+const RENAME_RUN_SKIP: &[&str] = &["034_logging"];
+/// Examples with no declaration of a safe kind, so `rename_run/*` finds no
+/// candidate there and passes with nothing renamed. Anywhere else no
+/// candidate fails the trial, since it means the `declaration` modifier or
+/// the legend regressed: 001 declares only `fn main`.
+const RENAME_RUN_NO_CANDIDATES: &[&str] = &["001_hello_world"];
 
 /// Completion points the examples group sends per example, at most. An
 /// answer can hold every name in scope, so each costs far more than a
@@ -1419,6 +1888,596 @@ fn sweep_completions(
 }
 
 // ---------------------------------------------------------------------
+// rename_sweep/* and rename_run/*
+
+fn rename_sweep_trial(
+    ex: Example,
+    env: &Arc<Env>,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+) -> Trial {
+    let name = format!("rename_sweep/{}", ex.name);
+    let expectation = ex.check_only_expectation(current);
+    let milestone = ex.config.milestone;
+    let env = Arc::clone(env);
+    let trial_name = name.clone();
+    // Only 030 is not run, since its `cheby check` fails before any
+    // rename (see [`rename_run_trial`]).
+    let checks = !ex.config.skip_run;
+    trial(name, milestone, expectation, verdicts, bless, move || {
+        let scratch = Scratch::new(&trial_name)?;
+        copy_dir(&ex.dir, scratch.path())?;
+        sweep_renames(&env, scratch.path(), &trial_name, checks)
+    })
+}
+
+/// Every identifier word of `texts`, so a new name can be fresh.
+fn words_of<'a>(texts: impl Iterator<Item = &'a String>) -> BTreeSet<String> {
+    let mut words = BTreeSet::new();
+    for text in texts {
+        for (start, end) in case::identifiers(text) {
+            if let Some(word) = text.get(start..end) {
+                words.insert(word.to_owned());
+            }
+        }
+    }
+    words
+}
+
+/// A name no identifier of the package uses, from `n` on, of the case of
+/// `word`, so a type stays a type and a value a value.
+fn fresh_name(word: &str, taken: &BTreeSet<String>, n: usize) -> String {
+    let upper = word.starts_with(char::is_uppercase);
+    let mut n = n;
+    loop {
+        let name = if upper {
+            format!("Renamed{n}")
+        } else {
+            format!("renamed_{n}")
+        };
+        if !taken.contains(&name) {
+            return name;
+        }
+        n = n.saturating_add(1);
+    }
+}
+
+/// The places `references` gives for the symbol at `at` of `uri`, by URI and
+/// start, with the declaration; none when it fails.
+fn references_of(
+    client: &mut Client,
+    uri: &str,
+    at: Position,
+) -> Result<Vec<(String, Position)>, String> {
+    let (method, params) = case::position_params("references", uri, at, None, &[], &[])?;
+    let Ok(answer) = client.call(method, params)? else {
+        return Ok(Vec::new());
+    };
+    Ok(answer
+        .as_array()
+        .map_or_default(Vec::as_slice)
+        .iter()
+        .filter_map(|location| {
+            let uri = location.get("uri").and_then(Value::as_str)?;
+            let start = Position::from_json(location.pointer("/range/start")?).ok()?;
+            Some((uri.to_owned(), start))
+        })
+        .collect())
+}
+
+/// A session of the example copied to `dir`, with every source open, when
+/// the server advertises rename and `prepareRename`: the client, its
+/// capabilities, and each source's path, URI and text, in order. Else the
+/// session is ended, and there is none.
+type RenameSession = (Client, Value, Vec<(String, String, String)>);
+
+fn rename_session(env: &Env, dir: &Path) -> Result<Option<RenameSession>, String> {
+    let files = sources(dir)?;
+    let (mut client, init) = session(env, dir, ClientKind::Standard, None, None)?;
+    let capabilities = init.get("capabilities").cloned().unwrap_or(Value::Null);
+    let advertised = Advertised::of(&capabilities)?;
+    if !(advertised.rename && advertised.position.contains(&"prepareRename")) {
+        client.shutdown()?.expect(0)?;
+        return Ok(None);
+    }
+    let uris = open_all(&mut client, &files)?;
+    let mut opened = Vec::with_capacity(files.len());
+    for (file, uri) in files.into_iter().zip(uris) {
+        let path = dir.join(&file);
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        opened.push((file, uri, text));
+    }
+    Ok(Some((client, capabilities, opened)))
+}
+
+/// `prepareRename` at every identifier of `opened`, the sources of a
+/// [`rename_session`]: each point, by the label of its request, with its
+/// URI, position and word, and the answers by label.
+type Prepared = (
+    Vec<(String, (String, Position, String))>,
+    BTreeMap<String, Value>,
+);
+
+fn prepare_everywhere(
+    client: &mut Client,
+    opened: &[(String, String, String)],
+) -> Result<Prepared, String> {
+    let encoding = client.encoding();
+    let mut points = Vec::new();
+    let mut requests = Vec::new();
+    for (file, uri, text) in opened {
+        let lines = Lines::new(text, Bom::Counted);
+        for (start, end) in case::identifiers(text) {
+            let at = lines.position(start, encoding);
+            let label = format!("{file}:{}:{} prepareRename", at.line, at.character);
+            let (method, params) = case::position_params("prepareRename", uri, at, None, &[], &[])?;
+            requests.push((label.clone(), method, params));
+            let word = text.get(start..end).unwrap_or_default().to_owned();
+            points.push((label, (uri.clone(), at, word)));
+        }
+    }
+    let prepared = send_all(client, requests)?;
+    Ok((points, prepared))
+}
+
+/// The points of `opened` where `prepareRename` accepts a rename, each
+/// with its URI, position and word, in file order.
+///
+/// # Errors
+///
+/// Returns a message when it accepts none, as when every request failed:
+/// every example declares `main`, so none is never right.
+fn accepted_points(
+    client: &mut Client,
+    opened: &[(String, String, String)],
+) -> Result<Vec<(String, Position, String)>, String> {
+    let (points, prepared) = prepare_everywhere(client, opened)?;
+    let (accepted, _) = case::accepted_renames(&points, &prepared, 0);
+    if accepted.is_empty() {
+        return Err(client.fail(&format!(
+            "`prepareRename` accepted none of {} points",
+            points.len()
+        )));
+    }
+    Ok(accepted)
+}
+
+/// D-1677's server half: the symbols of the example at `dir` are renamed
+/// once each to a fresh name, from the points where `prepareRename`
+/// accepts them taken in [`editing::by_stride`]'s order, up to
+/// [`RENAME_SWEEP_BUDGET`] renames spread over the example (D-1716), and
+/// each edit goes through the applied-edit check (D-1676, D-1670), then is
+/// undone. A point that an earlier edit, or the references of an earlier
+/// refused rename, covered is the same symbol and is skipped, and so is an
+/// edit whose ranges an earlier one had. It says on standard error how
+/// many it checked. A refusal fails the trial unless
+/// [`case::sweep_refusal_allowed`] takes it, with `checks` false for an
+/// example whose `cheby check` fails before any rename; so do a `null`
+/// answer, which `prepareRename` accepted, a `prepareRename` that
+/// accepted no point, as when every request failed, since every example
+/// declares `main`, and a sweep that checked no edit.
+fn sweep_renames(env: &Env, dir: &Path, trial_name: &str, checks: bool) -> Result<(), String> {
+    let (mut client, _, opened) = rename_session(env, dir)?
+        .ok_or("the server does not advertise `rename` and `prepareRename`")?;
+    let mut texts: BTreeMap<String, String> = opened
+        .iter()
+        .map(|(file, _, text)| (file.clone(), text.clone()))
+        .collect();
+    let words = words_of(texts.values());
+    let mut settle = editing::Settle::new("", true, &client);
+    let accepted = accepted_points(&mut client, &opened)?;
+    let order = editing::by_stride(&accepted, RENAME_SWEEP_BUDGET);
+    let rules = editing::EditRules {
+        new_errors: &[],
+        fixed_point: editing::FixedPoint::Rename,
+    };
+    let mut covered: BTreeSet<(String, Position)> = BTreeSet::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let (mut sent, mut checked, mut refused) = (0_usize, 0_usize, 0_usize);
+    for (uri, at, word) in &order {
+        if sent == RENAME_SWEEP_BUDGET {
+            break;
+        }
+        if covered.contains(&(uri.clone(), *at)) {
+            continue;
+        }
+        sent = sent.saturating_add(1);
+        let new_name = fresh_name(word, &words, sent);
+        let what = format!(
+            "{}:{}:{} `{word}` to `{new_name}`",
+            client.display(uri),
+            at.line.saturating_add(1),
+            at.character.saturating_add(1)
+        );
+        let (method, params) = case::position_params(
+            "rename",
+            uri,
+            *at,
+            None,
+            std::slice::from_ref(&new_name),
+            &[],
+        )?;
+        let answer = match client.call(method, params)? {
+            Ok(Value::Null) => {
+                return Err(client.fail(&format!(
+                    "renaming {what} answered `null`, where `prepareRename` accepted it"
+                )));
+            }
+            Ok(answer) => case::canonical("rename", answer),
+            Err(e)
+                if case::refusal_allowed(method, e.code)
+                    && case::sweep_refusal_allowed(&e.message, checks) =>
+            {
+                refused = refused.saturating_add(1);
+                covered.insert((uri.clone(), *at));
+                covered.extend(references_of(&mut client, uri, *at)?);
+                continue;
+            }
+            Err(e) => {
+                return Err(client.fail(&format!(
+                    "renaming {what} answered {e}, which a fresh name cannot get \
+                     unless the edit missed an occurrence"
+                )));
+            }
+        };
+        covered.insert((uri.clone(), *at));
+        let files = editing::file_edits(&answer).map_err(|e| format!("renaming {what}: {e}"))?;
+        let mut ranges = Vec::new();
+        for file in &files {
+            for edit in &file.edits {
+                if let Some(start) = edit.pointer("/range/start")
+                    && let Ok(start) = Position::from_json(start)
+                {
+                    covered.insert((file.uri.clone(), start));
+                }
+                ranges.push(json!([file.uri, edit.get("range")]));
+            }
+        }
+        if ranges.is_empty() || !seen.insert(Value::Array(ranges).to_string()) {
+            continue;
+        }
+        let applied =
+            editing::check_applied(&mut client, &mut texts, &mut settle, &answer, &[], rules)
+                .map_err(|e| format!("renaming {what}: {e}"))?;
+        editing::revert(&mut client, &mut texts, &mut settle, applied)?;
+        checked = checked.saturating_add(1);
+    }
+    eprintln!(
+        "{trial_name}: {checked} renames applied and checked, {refused} refused, {sent} sent, \
+         from {} accepted points (at most {RENAME_SWEEP_BUDGET} sent)",
+        accepted.len()
+    );
+    if checked == 0 {
+        return Err(client.fail(&format!(
+            "no rename was applied and checked, of {} accepted points",
+            accepted.len()
+        )));
+    }
+    client.shutdown()?.expect(0)
+}
+
+/// The trial of D-1677's process half for `ex`, or none for an example it
+/// leaves out: one that is only checked (030, whose `cheby check` fails
+/// before any rename), one that waits for real time (`timing`), and those
+/// of [`RENAME_RUN_SKIP`]. Ignored on Windows, where `cheby check` and
+/// `cheby run` build a JIT (D-545, D-641).
+fn rename_run_trial(
+    ex: Example,
+    env: &Arc<Env>,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+) -> Option<Trial> {
+    if ex.config.skip_run || ex.config.timing || RENAME_RUN_SKIP.contains(&ex.name.as_str()) {
+        return None;
+    }
+    let name = format!("rename_run/{}", ex.name);
+    let milestone = ex.config.milestone;
+    let expectation = current.expectation(milestone);
+    let ignored = platform::runs_skipped() || bless;
+    let env = Arc::clone(env);
+    let trial_name = name.clone();
+    Some(trial(
+        name,
+        milestone,
+        expectation,
+        verdicts,
+        ignored,
+        move || run_renamed(&env, &ex, &trial_name),
+    ))
+}
+
+/// One semantic token: its position, length, type and modifiers, read
+/// with the server's legend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticToken {
+    at: Position,
+    length: u32,
+    kind: String,
+    modifiers: BTreeSet<String>,
+}
+
+/// The tokens of a `semanticTokens/full` answer, decoded from their
+/// relative form with `legend`, the provider's.
+fn semantic_tokens(answer: &Value, legend: &Value) -> Vec<SemanticToken> {
+    let names = |key: &str| -> Vec<String> {
+        legend
+            .get(key)
+            .and_then(Value::as_array)
+            .map_or_default(Vec::as_slice)
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    };
+    let (types, modifiers) = (names("tokenTypes"), names("tokenModifiers"));
+    let data: Vec<u32> = answer
+        .get("data")
+        .and_then(Value::as_array)
+        .map_or_default(Vec::as_slice)
+        .iter()
+        .filter_map(|n| n.as_u64().and_then(|n| u32::try_from(n).ok()))
+        .collect();
+    let mut out = Vec::new();
+    let (mut line, mut character) = (0_u32, 0_u32);
+    for [delta_line, delta_start, length, kind, bits] in data.as_chunks::<5>().0 {
+        line = line.saturating_add(*delta_line);
+        character = if *delta_line == 0 {
+            character.saturating_add(*delta_start)
+        } else {
+            *delta_start
+        };
+        let kind = usize::try_from(*kind)
+            .ok()
+            .and_then(|k| types.get(k))
+            .cloned()
+            .unwrap_or_default();
+        let modifiers = modifiers
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| {
+                u32::try_from(*bit).is_ok_and(|bit| bit < 32 && bits & (1 << bit) != 0)
+            })
+            .map(|(_, name)| name.clone())
+            .collect();
+        out.push(SemanticToken {
+            at: Position { line, character },
+            length: *length,
+            kind,
+            modifiers,
+        });
+    }
+    out
+}
+
+/// Whether renaming the declaration `word` of semantic type `kind`, on
+/// `line`, cannot change what the program prints (D-1677): a parameter, a
+/// type parameter, a local binding but not a module's constant, and a
+/// private function but not `main` and not a function an operator or an
+/// interface of the prelude is satisfied by name (`features.md` §3.4).
+fn safe_to_run(kind: &str, line: &str, word: &str) -> bool {
+    let head = line.trim_start();
+    match kind {
+        "parameter" | "typeParameter" => true,
+        "variable" => !(head.starts_with("const ") || head.starts_with("pub")),
+        "function" => {
+            head.starts_with("fn ")
+                && !matches!(
+                    word,
+                    "main" | "show" | "add" | "sub" | "mul" | "div" | "neg" | "compare"
+                )
+        }
+        _ => false,
+    }
+}
+
+/// The declarations of `opened`, the sources of a [`rename_session`],
+/// whose renaming cannot change what the program prints ([`safe_to_run`]),
+/// each with its URI, position and name, in order: told apart by
+/// `semanticTokens/full` and the `declaration` modifier, read with the
+/// legend of `capabilities`.
+fn safe_candidates(
+    client: &mut Client,
+    capabilities: &Value,
+    opened: &[(String, String, String)],
+) -> Result<Vec<(String, Position, String)>, String> {
+    let legend = capabilities
+        .pointer("/semanticTokensProvider/legend")
+        .ok_or("the safe kinds are told apart by semantic tokens, which the server lacks")?;
+    let encoding = client.encoding();
+    let mut candidates = Vec::new();
+    for (_, uri, text) in opened {
+        let answer = client.request(
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": uri } }),
+        )?;
+        let lines = Lines::new(text, Bom::Counted);
+        for token in semantic_tokens(&answer, legend) {
+            if !token.modifiers.contains("declaration") {
+                continue;
+            }
+            let end = Position {
+                line: token.at.line,
+                character: token.at.character.saturating_add(token.length),
+            };
+            let word = lines.slice(token.at, end, encoding).unwrap_or_default();
+            let line = usize::try_from(token.at.line)
+                .ok()
+                .and_then(|n| lines.line(n))
+                .unwrap_or_default();
+            if safe_to_run(&token.kind, line, word) {
+                candidates.push((uri.clone(), token.at, word.to_owned()));
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+/// D-1677's process half: [`RENAME_RUN_SYMBOLS`] declarations of the safe
+/// kinds ([`safe_to_run`]), told apart by their semantic tokens and taken
+/// by a fixed stride, are each renamed to a fresh name in a copy of the
+/// example, and the copy must pass `cheby check` and `cheby run` with the
+/// example's `stdin`, `args` and `env`, printing its `expected.stdout`
+/// and exiting with its `expected.exit`. `prepareRename` must accept
+/// each, a parameter of a function with no body included (D-1717). Its
+/// rename must give an edit, or a refusal that
+/// [`case::sweep_refusal_allowed`] takes, and at least one picked symbol
+/// must run. It says on standard error how many ran.
+fn run_renamed(env: &Env, ex: &Example, trial_name: &str) -> Result<(), String> {
+    let goldens = ex.goldens()?;
+    let expected = goldens
+        .stdout
+        .clone()
+        .ok_or_else(|| format!("{}: missing expected.stdout", ex.name))?;
+    let run_args = ex.run_args(&goldens)?;
+    let scratch = Scratch::new(trial_name)?;
+    copy_dir(&ex.dir, scratch.path())?;
+    let (mut client, capabilities, opened) = rename_session(env, scratch.path())?
+        .ok_or("the server does not advertise `rename` and `prepareRename`")?;
+    let candidates = safe_candidates(&mut client, &capabilities, &opened)?;
+    if candidates.is_empty() && !RENAME_RUN_NO_CANDIDATES.contains(&ex.name.as_str()) {
+        return Err(client.fail(
+            "no declaration of a safe kind: the semantic tokens marked none with `declaration`",
+        ));
+    }
+    let texts: BTreeMap<String, String> = opened
+        .into_iter()
+        .map(|(_, uri, text)| (uri, text))
+        .collect();
+    let words = words_of(texts.values());
+    let (picked, _) = editing::sample(&candidates, RENAME_RUN_SYMBOLS);
+    let mut ran = 0_usize;
+    for (n, (uri, at, word)) in picked.iter().enumerate() {
+        let new_name = fresh_name(word, &words, n.saturating_add(1));
+        let what = format!(
+            "{}:{}:{} `{word}` renamed to `{new_name}`",
+            client.display(uri),
+            at.line.saturating_add(1),
+            at.character.saturating_add(1)
+        );
+        let (method, params) = case::position_params("prepareRename", uri, *at, None, &[], &[])?;
+        match client.call(method, params)? {
+            Ok(Value::Null) => {
+                return Err(client.fail(&format!(
+                    "{what}: `prepareRename` answered `null` at a declaration"
+                )));
+            }
+            Ok(_) => {}
+            Err(e) => return Err(client.fail(&format!("{what}: prepareRename answered {e}"))),
+        }
+        let (method, params) = case::position_params(
+            "rename",
+            uri,
+            *at,
+            None,
+            std::slice::from_ref(&new_name),
+            &[],
+        )?;
+        let edit = match client.call(method, params)? {
+            Ok(Value::Null) => {
+                return Err(client.fail(&format!(
+                    "{what}: rename answered `null`, where `prepareRename` accepted it"
+                )));
+            }
+            Ok(edit) => edit,
+            Err(e)
+                if case::refusal_allowed(method, e.code)
+                    && case::sweep_refusal_allowed(&e.message, true) =>
+            {
+                eprintln!("{trial_name}: {what}: refused, skipped: {}", e.message);
+                continue;
+            }
+            Err(e) => return Err(client.fail(&format!("{what}: rename answered {e}"))),
+        };
+        let mut edited = texts.clone();
+        text::apply_workspace_edit(&mut edited, &edit, client.encoding())
+            .map_err(|e| format!("{what}: {e}"))?;
+        let package = Scratch::new(&format!("{trial_name}/{n}"))?;
+        copy_dir(&ex.dir, package.path())?;
+        for (uri, text) in &edited {
+            let file = client
+                .paths()
+                .relative(uri)
+                .ok_or_else(|| format!("{what}: an edit of {uri}, outside the package"))?;
+            let path = package.path().join(file);
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        check_and_run(env, package.path(), &goldens, &run_args, &expected)
+            .map_err(|e| format!("{what}: {e}"))?;
+        ran = ran.saturating_add(1);
+    }
+    eprintln!(
+        "{trial_name}: {ran} of {} picked symbols renamed, checked and run, of {} candidates",
+        picked.len(),
+        candidates.len()
+    );
+    if ran == 0 && !picked.is_empty() {
+        return Err(client.fail(&format!(
+            "none of {} picked symbols was renamed and run",
+            picked.len()
+        )));
+    }
+    client.shutdown()?.expect(0)
+}
+
+/// `cheby` with `args` in the package at `dir`, with the example's `env`
+/// and `stdin` and the harness's own environment.
+fn run_cheby(
+    env: &Env,
+    dir: &Path,
+    args: &[&str],
+    run_args: &example::RunArgs,
+    stdin: Option<&str>,
+) -> Result<process::RunOutput, String> {
+    let mut cmd = Command::new(CHEBY);
+    cmd.arg("--color=never")
+        .args(args)
+        .current_dir(dir)
+        .envs(run_args.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .env("NO_COLOR", "1")
+        .env(POISON_ENV, "1");
+    env.cache.apply(&mut cmd);
+    process::run(cmd, stdin.map(str::as_bytes), env.timeout)
+}
+
+/// `cheby check` passes in the package at `dir`, and `cheby run` prints
+/// `expected` and exits as `goldens` say.
+fn check_and_run(
+    env: &Env,
+    dir: &Path,
+    goldens: &example::Goldens,
+    run_args: &example::RunArgs,
+    expected: &str,
+) -> Result<(), String> {
+    let check = run_cheby(env, dir, &["check"], run_args, None)?;
+    if check.status != Some(0) {
+        return Err(format!(
+            "`cheby check` {}:\n{}",
+            check.describe_status(),
+            check.stderr
+        ));
+    }
+    let mut args = vec!["run"];
+    if !run_args.args.is_empty() {
+        args.push("--");
+        args.extend(run_args.args.iter().map(String::as_str));
+    }
+    let run = run_cheby(env, dir, &args, run_args, goldens.stdin.as_deref())?;
+    golden::compare("the standard output of `cheby run`", expected, &run.stdout)?;
+    let exit = goldens.exit.unwrap_or(0);
+    if run.status != Some(exit) {
+        return Err(format!(
+            "`cheby run` {}, expected {exit}:\n{}",
+            run.describe_status(),
+            run.stderr
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // symbols/examples/*
 
 fn symbols_trial(
@@ -1476,9 +2535,9 @@ const STD_CALLER: &str = "//! A package for the std round trip.\n\nimport std::i
 /// it answers. On the function's own name it shows the function, and the
 /// call hierarchy and links answer there. From the package, the callers
 /// of `io::println` include `main`, and its references with the
-/// declaration hold std's. Every other identifier of the file must be
-/// answered without an error, `null` included, since a std body has no
-/// facts (R-17).
+/// declaration hold std's. A local there cannot be renamed (D-1673).
+/// Every other identifier of the file must be answered without an error,
+/// `null` included, since a std body has no facts (R-17).
 fn std_round_trip(env: &Env, dir: &Path) -> Result<(), String> {
     write_package(dir, &[("cheby.toml", MANIFEST), (ROOT_MODULE, STD_CALLER)])?;
     let (mut client, init) = session(env, dir, ClientKind::Standard, None, None)?;
@@ -1537,6 +2596,7 @@ fn std_round_trip(env: &Env, dir: &Path) -> Result<(), String> {
         )));
     }
     std_calls_and_links(&mut client, &uri, position, &target, name_at)?;
+    std_rename_refused(&mut client, &target, &text)?;
     let requests = case::identifiers(&text)
         .into_iter()
         .map(|(start, _)| {
@@ -1551,6 +2611,45 @@ fn std_round_trip(env: &Env, dir: &Path) -> Result<(), String> {
         .collect();
     send_all(&mut client, requests)?;
     client.shutdown()?.expect(0)
+}
+
+/// D-1673: in the opened std document `target`, whose text is `text`,
+/// `prepareRename` refuses a local, here the parameter `outcome` of
+/// `io`'s `lift`, with D-1390's message, and `rename` there answers
+/// `null` by the route rule for requests that edit, with no reason.
+fn std_rename_refused(client: &mut Client, target: &str, text: &str) -> Result<(), String> {
+    let at = text
+        .find("(outcome:")
+        .ok_or("no parameter `outcome` in std's `io.cheby`")?
+        .saturating_add(1);
+    let position = Lines::new(text, Bom::Counted)
+        .position(at, client.encoding())
+        .to_json();
+    let document = json!({ "uri": target });
+    let method = "textDocument/prepareRename";
+    let params = json!({ "textDocument": document, "position": position });
+    let refusal = "`outcome` is in `std`, which cannot be edited here";
+    match client.call(method, params)? {
+        Err(e) if case::refusal_allowed(method, e.code) && e.message == refusal => {}
+        Err(e) => {
+            return Err(client.fail(&format!(
+                "prepareRename on `outcome` in std's `io.cheby` answered {e}, not {refusal:?}"
+            )));
+        }
+        Ok(answer) => {
+            return Err(client.fail(&format!(
+                "prepareRename on `outcome` in std's `io.cheby` answered {answer}, not a refusal"
+            )));
+        }
+    }
+    let params = json!({ "textDocument": document, "position": position, "newName": "result" });
+    let answer = client.request("textDocument/rename", params)?;
+    if !answer.is_null() {
+        return Err(client.fail(&format!(
+            "rename in std's `io.cheby` answered {answer}, not `null`"
+        )));
+    }
+    Ok(())
 }
 
 /// The std round trip's call hierarchy and links: `println`'s own name
@@ -2160,6 +3259,114 @@ fn compare_parity(
 }
 
 // ---------------------------------------------------------------------
+// std_checkout_sweep
+
+/// The trial `std_checkout_sweep`: every module of a copy of this
+/// repository's `std/` is opened in turn and must leave every published
+/// list empty, warnings included (D-1700, D-1701, D-1702, D-1704).
+fn std_checkout_sweep_trial(
+    env: &Arc<Env>,
+    current: Setting,
+    verdicts: &Verdicts,
+    bless: bool,
+) -> Trial {
+    let name = "std_checkout_sweep".to_owned();
+    let expectation = current.expectation(Milestone::M1);
+    let env = Arc::clone(env);
+    let trial_name = name.clone();
+    // It has no golden. It is front end only, since a checkout session
+    // never starts the constants child (D-1700), so it runs on Windows.
+    trial(
+        name,
+        Milestone::M1,
+        expectation,
+        verdicts,
+        bless,
+        move || {
+            let scratch = Scratch::new(&trial_name)?;
+            std_checkout_sweep(&env, scratch.path())
+        },
+    )
+}
+
+/// [`std_checkout_sweep_trial`]'s body in the empty directory `dir`. Each
+/// module is opened, the server is waited for until `cheby/idle`, every
+/// file's last published list must be empty, since the session publishes
+/// every module (D-1704), and the module is closed again. It is stricter
+/// than `cargo xtask test-std`, which prints errors only, on purpose: the
+/// editor shows warnings. The open module's test bodies are checked
+/// (D-1701), with no body warning (D-1702). The copy's disk is the binary's
+/// std, so no `window/showMessage` may come, D-1705's included. It says on
+/// standard error how long it took.
+fn std_checkout_sweep(env: &Env, dir: &Path) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    case::copy_std(&env.root, dir)?;
+    let modules: Vec<String> = files_with_extension(&dir.join("std"), "cheby")
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .iter()
+        .map(|path| cheby_test_support::display_relative(path, dir))
+        .collect();
+    if modules.is_empty() {
+        return Err("the copy of `std/` holds no module".to_owned());
+    }
+    let (mut client, _) = session(env, dir, ClientKind::Standard, None, None)?;
+    // The checkout's own session, rooted at the copy (D-1704).
+    let mut settle = editing::Settle::new("", true, &client);
+    let mut failures = Vec::new();
+    for module in &modules {
+        let uri = client.open(Path::new(module))?;
+        settle.after(&mut client, &[(uri.clone(), Some(1))])?;
+        settle.wait(&mut client)?;
+        let mut problems = Vec::new();
+        // The session publishes every module, open or closed (D-1704), so a
+        // module never published was never checked.
+        let unpublished: Vec<&String> = modules
+            .iter()
+            .filter(|other| {
+                client
+                    .uri(Path::new(other))
+                    .is_ok_and(|uri| !client.published().contains_key(&uri))
+            })
+            .collect();
+        if !unpublished.is_empty() {
+            problems.push(format!("never published: {unpublished:?}"));
+        }
+        let lists = non_empty_lists(client.published(), client.paths());
+        if lists.as_object().is_some_and(|lists| !lists.is_empty()) {
+            problems.push(serde_json::to_string_pretty(&lists).unwrap_or_default());
+        }
+        let messages = client.take_where(editing::is_show_message);
+        if !messages.is_empty() {
+            problems.push(format!("shown: {}", editing::shown_messages(&messages)));
+        }
+        if !problems.is_empty() {
+            failures.push(format!("with {module} open:\n{}", problems.join("\n")));
+        }
+        drop(client.take_notifications());
+        client.close(&uri)?;
+        settle.after(&mut client, &[(uri, None)])?;
+        settle.wait(&mut client)?;
+        drop(client.take_notifications());
+    }
+    client.shutdown()?.expect(0)?;
+    eprintln!(
+        "std_checkout_sweep: {} modules in {:.1} s",
+        modules.len(),
+        started.elapsed().as_secs_f64()
+    );
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} of {} std modules, each open in turn, left a diagnostic or a message:\n{}",
+            failures.len(),
+            modules.len(),
+            failures.join("\n")
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------
 // golden/*
 
 fn golden_trial(
@@ -2175,26 +3382,36 @@ fn golden_trial(
         Ok(header) => (header.milestone, current.expectation(header.milestone)),
         Err(_) => (Milestone::M1, Expectation::Pass),
     };
-    // D-545, D-1414: the server evaluates no constant on Windows until M6.
-    let ignored = platform::runs_skipped()
-        && test
-            .header
-            .as_ref()
-            .is_ok_and(|header| header.steps.iter().any(waits_for_child));
+    // D-545, D-1414: the server evaluates no constant on Windows until M6,
+    // and a std checkout never starts the child (D-1700).
+    let ignored = test
+        .header
+        .as_ref()
+        .is_ok_and(|header| header.ignored_on(platform::runs_skipped()));
     let env = Arc::clone(env);
     let trial_name = name.clone();
     trial(name, milestone, expectation, verdicts, ignored, move || {
         let bless = bless && expectation != Expectation::Fail;
         let header = test.header.clone()?;
         let scratch = Scratch::new(&trial_name)?;
-        match (test.layout, header.loose) {
-            (Layout::File, false) => {
+        // The texts of a std checkout's open-only probes, never on disk.
+        let mut unsaved = BTreeMap::new();
+        match (test.layout, header.loose, header.checkout.is_some()) {
+            (_, _, true) => {
+                unsaved = case::place_checkout(&env.root, &test, &header, scratch.path())?;
+            }
+            (Layout::File, false, false) => {
                 single_file_package(scratch.path(), case::PACKAGE_NAME, &test.path)?;
             }
-            (Layout::File, true) => loose_file(scratch.path(), &test.path)?,
-            (Layout::Package, false) => copy_dir(&test.path, scratch.path())?,
-            (Layout::Package, true) => {
+            (Layout::File, true, false) => loose_file(scratch.path(), &test.path)?,
+            (Layout::Package, false, false) => copy_dir(&test.path, scratch.path())?,
+            (Layout::Package, true, false) => {
                 return Err("`@package: none` needs a test that is one file".to_owned());
+            }
+            (Layout::Checkout, _, false) => {
+                return Err("a test with a `std/` and no `cheby.toml` needs \
+                            `@package: std-checkout`"
+                    .to_owned());
             }
         }
         if header.bom || header.crlf {
@@ -2209,7 +3426,7 @@ fn golden_trial(
                 std::fs::write(&path, rewritten).map_err(|e| format!("{}: {e}", path.display()))?;
             }
         }
-        let answers = golden_answers(&env, scratch.path(), &header)?;
+        let answers = golden_answers(&env, scratch.path(), &header, &unsaved)?;
         if bless {
             return golden::write(&test.golden(), &answers, false);
         }
@@ -2219,9 +3436,15 @@ fn golden_trial(
 
 /// The golden text of a test: its diagnostics, then one block per marker
 /// and per document request, in file and line order.
-fn golden_answers(env: &Env, dir: &Path, header: &case::Header) -> Result<String, String> {
+/// `unsaved` holds the texts of a std checkout's open-only probes by path.
+fn golden_answers(
+    env: &Env,
+    dir: &Path,
+    header: &case::Header,
+    unsaved: &BTreeMap<String, String>,
+) -> Result<String, String> {
     let (client, files, capabilities) = golden_session(env, dir, header)?;
-    golden_blocks(env, dir, header, client, &files, &capabilities)
+    golden_blocks(env, dir, header, client, &files, unsaved, &capabilities)
 }
 
 /// A golden test's initialized server, its source files, and the
@@ -2231,10 +3454,12 @@ fn golden_session(
     dir: &Path,
     header: &case::Header,
 ) -> Result<(Client, Vec<String>, Value), String> {
-    let files = if header.loose {
-        loose_sources(dir)?
-    } else {
-        sources(dir)?
+    // A std checkout opens what `@open` names, and starts the server
+    // rooted at the checkout as Zed does for a workspace folder.
+    let files = match (&header.checkout, header.loose) {
+        (Some(checkout), _) => checkout.open.clone(),
+        (None, true) => loose_sources(dir)?,
+        (None, false) => sources(dir)?,
     };
     let mut client = start(env, dir)?;
     if let Some(settings) = &header.settings {
@@ -2285,51 +3510,208 @@ fn marker_range(
     (start, end)
 }
 
+/// The blocks of the `@requests` of `file`, open at `text`, whose last
+/// position is `last`.
+fn document_blocks(
+    env: &Env,
+    dir: &Path,
+    header: &case::Header,
+    client: &mut Client,
+    file: &str,
+    text: &str,
+    last: Position,
+) -> Result<Vec<String>, String> {
+    let uri = client.uri(Path::new(file))?;
+    let encoding = client.encoding();
+    let paths = client.paths().clone();
+    let display = |uri: &str| paths.display(uri);
+    let mut blocks = Vec::new();
+    for name in &header.requests {
+        let (method, params) = case::document_params(name, &uri, last)?;
+        let mut answer = answer_value(client, method, params, name)?;
+        if name == "inlayHint" && !is_error(&answer) {
+            answer = editing::inlay_hints(&answer, text, encoding, &display);
+        }
+        if name == "formatting" {
+            check_formatting(env, dir, text, &answer, encoding)
+                .map_err(|e| format!("{file} formatting: {e}"))?;
+        }
+        blocks.push(case::block(
+            &format!("{file} {name}"),
+            &paths.normalize(&answer),
+        ));
+    }
+    Ok(blocks)
+}
+
+/// `params` of a completion at `offset` of `text` with the context a
+/// typed trigger character of `advertised` sends.
+fn completion_context(params: &mut Value, text: &str, offset: usize, advertised: &Advertised) {
+    if let Some(map) = params.as_object_mut() {
+        map.insert(
+            "context".to_owned(),
+            editing::completion_context(text, offset, &advertised.completion_triggers),
+        );
+    }
+}
+
+/// The answer of `marker`'s request of `method` with `params` in `file`, as
+/// goldens show it: a `codeAction` listing's ([`listing_answer`]), and a
+/// call hierarchy's follow-up's.
+fn marker_answer(
+    client: &mut Client,
+    method: &str,
+    params: Value,
+    marker: &case::Marker,
+    file: &str,
+) -> Result<Value, String> {
+    let answer = if marker.name == "codeAction" {
+        listing_answer(client, method, params, &marker.label(file))?
+    } else {
+        answer_value(client, method, params, &marker.name)?
+    };
+    match case::hierarchy_follow_up(&marker.name) {
+        Some(follow_up) => follow_hierarchy(client, follow_up, &answer, &marker.name),
+        None => Ok(answer),
+    }
+}
+
+/// The answer of a `codeAction` marker's request, as goldens show it, after
+/// [`resolve_listing`] resolved its actions from the listing as sent, whose
+/// `data` the resolves need whole.
+fn listing_answer(
+    client: &mut Client,
+    method: &str,
+    params: Value,
+    label: &str,
+) -> Result<Value, String> {
+    Ok(match client.call(method, params)? {
+        Ok(listing) => {
+            resolve_listing(client, label, &listing)?;
+            case::canonical("codeAction", listing)
+        }
+        Err(e) => json!({ "error": { "code": e.code, "message": e.message } }),
+    })
+}
+
+/// Resolves each action of `listing`, a `codeAction` marker's answer, that
+/// carries `data` (D-1683): each must be answered with no error but a
+/// refused fix's `RequestFailed` (D-1731). The answers are not shown, so
+/// the marker's block stays the listing; they give the resolvers the
+/// goldens' fixes to run, where the examples' clean texts list few (T-4).
+fn resolve_listing(client: &mut Client, label: &str, listing: &Value) -> Result<(), String> {
+    let actions = listing
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|action| action.get("data").is_some_and(|data| !data.is_null()));
+    for action in actions {
+        match client.call("codeAction/resolve", action.clone())? {
+            Ok(_) => {}
+            Err(e) if case::resolve_refusal(e.code) => {}
+            Err(e) => {
+                let title = action
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                return Err(format!(
+                    "{label}: the resolve of {title:?} answered {} {}",
+                    e.code, e.message
+                ));
+            }
+        }
+    }
+    // A resolve's messages belong to no block.
+    drop(client.take_where(editing::is_show_message));
+    Ok(())
+}
+
+/// The diagnostics a marker's request sends: `published`, the file's list
+/// when its markers were read, or for an `action` or `noAction` marker, which asks once
+/// the server is idle since a fix rides on the report of the text it is
+/// asked for (D-1685), the list published then.
+fn marker_diagnostics(
+    client: &mut Client,
+    settle: &mut editing::Settle,
+    marker: &case::Marker,
+    uri: &str,
+    published: &[Value],
+) -> Result<Vec<Value>, String> {
+    if !matches!(marker.name.as_str(), "action" | "noAction") {
+        return Ok(published.to_vec());
+    }
+    settle.wait(client)?;
+    Ok(client
+        .published()
+        .get(uri)
+        .map_or_default(client::diagnostics_of))
+}
+
 /// The blocks of [`golden_answers`], from a `client` that has not opened
-/// `files` yet, of a server that advertised `capabilities`.
+/// `files` yet, of a server that advertised `capabilities`. `unsaved`
+/// holds the texts of a std checkout's open-only probes.
 fn golden_blocks(
     env: &Env,
     dir: &Path,
     header: &case::Header,
     mut client: Client,
     files: &[String],
+    unsaved: &BTreeMap<String, String>,
     capabilities: &Value,
 ) -> Result<String, String> {
     let paths = client.paths().clone();
-    let (uris, mut texts) = open_as_editor(&mut client, dir, header, files)?;
+    let mut texts = open_as_editor(&mut client, dir, header, files, unsaved)?;
+    // The `empty` client does not ask for `cheby/idle`.
+    let mut settle = editing::Settle::new(
+        &idle_root(header, &texts),
+        header.client != ClientKind::Empty,
+        &client,
+    );
+    let mut blocks = Vec::new();
     for step in &header.steps {
-        run_step(&mut client, dir, header, step, &mut texts)?;
+        if let Some(block) = run_step(&mut client, dir, header, step, &mut texts, &mut settle)? {
+            blocks.push(block);
+        }
     }
     let encoding = client.encoding();
     // An unknown provider fails the examples group; here only completion's
     // trigger characters and resolve matter.
     let advertised = Advertised::of(capabilities).unwrap_or_default();
     let display = |uri: &str| paths.display(uri);
-    let mut blocks = Vec::new();
-    for (file, uri) in files.iter().zip(&uris) {
+    // The documents open after the steps, which may have closed or moved
+    // some.
+    let open: Vec<String> = texts.keys().cloned().collect();
+    for file in &open {
+        let uri = client.uri(Path::new(file))?;
+        let uri = &uri;
         let text = texts.get(file).cloned().unwrap_or_default();
         let lines = Lines::new(&text, Bom::Counted);
         let diagnostics = client
             .published()
             .get(uri)
             .map_or_default(client::diagnostics_of);
-        for marker in case::markers(&text).map_err(|e| format!("{file}: {e}"))? {
+        // A std checkout's real modules hold no markers, only its probes
+        // do, so a comment of std is never read as one.
+        let markers = if header.checkout.is_none() || case::is_probe(file) {
+            case::markers(&text).map_err(|e| format!("{file}: {e}"))?
+        } else {
+            Vec::new()
+        };
+        for marker in markers {
             let (start, end) = marker_range(&lines, encoding, &marker);
+            let diagnostics =
+                marker_diagnostics(&mut client, &mut settle, &marker, uri, &diagnostics)?;
             let (method, mut params) =
                 case::position_params(&marker.name, uri, start, end, &marker.args, &diagnostics)?;
-            if matches!(marker.name.as_str(), "completion" | "apply")
-                && let Some(map) = params.as_object_mut()
-            {
+            if matches!(marker.name.as_str(), "completion" | "apply") {
                 let offset = lines.offset(start, encoding);
-                map.insert(
-                    "context".to_owned(),
-                    editing::completion_context(&text, offset, &advertised.completion_triggers),
-                );
+                completion_context(&mut params, &text, offset, &advertised);
             }
-            let mut answer = answer_value(&mut client, method, params, &marker.name)?;
-            if let Some(follow_up) = case::hierarchy_follow_up(&marker.name) {
-                answer = follow_hierarchy(&mut client, follow_up, &answer, &marker.name)?;
+            if matches!(marker.name.as_str(), "rename" | "action") {
+                // Only the messages this request brings belong to its block.
+                drop(client.take_where(editing::is_show_message));
             }
+            let mut answer = marker_answer(&mut client, method, params, &marker, file)?;
             let label = marker.label(file);
             answer = match marker.name.as_str() {
                 "completion" => {
@@ -2346,6 +3728,16 @@ fn golden_blocks(
                 "inlayHint" if !is_error(&answer) => {
                     Ok(editing::inlay_hints(&answer, &text, encoding, &display))
                 }
+                "rename" => rename_block(&mut client, &mut texts, &mut settle, header, &answer),
+                "action" => editing::action_block(
+                    &mut client,
+                    &mut texts,
+                    &mut settle,
+                    &header.new_errors,
+                    &answer,
+                    &marker.args.join(" "),
+                ),
+                "noAction" => editing::no_action_block(&answer, &marker.args.join(" ")),
                 _ => Ok(answer),
             }
             .map_err(|e| format!("{label}: {e}"))?;
@@ -2353,66 +3745,90 @@ fn golden_blocks(
                 check_range_formatting(&answer, &text, marker.line)
                     .map_err(|e| format!("{}: {e}", marker.label(file)))?;
             }
+            if header.checkout.is_some() {
+                answer = std_ranges_as_text(&answer, &paths, dir, encoding);
+            }
             blocks.push(case::block(&label, &paths.normalize(&answer)));
         }
         let last = lines.position(text.len(), encoding);
-        for name in &header.requests {
-            let (method, params) = case::document_params(name, uri, last)?;
-            let mut answer = answer_value(&mut client, method, params, name)?;
-            if name == "inlayHint" && !is_error(&answer) {
-                answer = editing::inlay_hints(&answer, &text, encoding, &display);
-            }
-            if name == "formatting" {
-                check_formatting(env, dir, &text, &answer, encoding)
-                    .map_err(|e| format!("{file} formatting: {e}"))?;
-            }
-            blocks.push(case::block(
-                &format!("{file} {name}"),
-                &paths.normalize(&answer),
-            ));
-        }
+        blocks.extend(document_blocks(
+            env,
+            dir,
+            header,
+            &mut client,
+            file,
+            &text,
+            last,
+        )?);
     }
     let ended = client.shutdown()?;
     ended.expect(0)?;
-    let mut published = serde_json::Map::new();
-    for (uri, params) in &ended.published {
-        let list = client::diagnostics_of(params);
-        if !list.is_empty() {
-            published.insert(paths.display(uri), paths.normalize(&Value::Array(list)));
-        }
-    }
-    let mut text = case::block("diagnostics", &Value::Object(published));
+    Ok(golden_text(&ended, &paths, blocks))
+}
+
+/// A golden's text: the `diagnostics` block, the last published list of
+/// every file with a non-empty one when the session `ended`, then
+/// `blocks`.
+fn golden_text(ended: &Ended, paths: &Paths, blocks: Vec<String>) -> String {
+    let mut text = case::block("diagnostics", &non_empty_lists(&ended.published, paths));
     for block in blocks {
         text.push('\n');
         text.push_str(&block);
     }
-    Ok(text)
+    text
 }
 
-/// Whether `step` waits for the constants child, which never runs on
-/// Windows until M6 (D-1414).
-const fn waits_for_child(step: &Step) -> bool {
-    matches!(step, Step::Idle | Step::Started | Step::Quiet)
+/// The last published list of every file with a non-empty one, by its
+/// path as goldens show it, from `published`, the latest
+/// `publishDiagnostics` params by URI.
+fn non_empty_lists(published: &BTreeMap<String, Value>, paths: &Paths) -> Value {
+    let mut lists = serde_json::Map::new();
+    for (uri, params) in published {
+        let list = client::diagnostics_of(params);
+        if !list.is_empty() {
+            lists.insert(paths.display(uri), paths.normalize(&Value::Array(list)));
+        }
+    }
+    Value::Object(lists)
 }
 
 /// Opens each of `files` below `dir` as an editor holds it
-/// ([`editor_text`]) and waits for its first publish: their URIs, and
-/// their open texts by path.
+/// ([`editor_text`]) and waits for its first publish: their open texts by
+/// path. A file of `unsaved`, a std checkout's open-only probe, is opened
+/// with its text there, since it is not on disk.
 fn open_as_editor(
     client: &mut Client,
     dir: &Path,
     header: &case::Header,
     files: &[String],
-) -> Result<(Vec<String>, BTreeMap<String, String>), String> {
+    unsaved: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
     let mut texts: BTreeMap<String, String> = BTreeMap::new();
     for file in files {
-        let path = dir.join(file);
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = if let Some(text) = unsaved.get(file) {
+            text.clone()
+        } else {
+            let path = dir.join(file);
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?
+        };
         texts.insert(file.clone(), editor_text(&text, header));
     }
+    if !unsaved.is_empty() {
+        // In `@open`'s order, as the opens of a package are in path order.
+        let mut uris = Vec::with_capacity(files.len());
+        for file in files {
+            let uri = client.uri(Path::new(file))?;
+            client.open_text(&uri, texts.get(file).map_or("", String::as_str))?;
+            uris.push(uri);
+        }
+        for uri in &uris {
+            client.diagnostics(uri, Some(1))?;
+        }
+        return Ok(texts);
+    }
     if !(header.bom || header.crlf) {
-        return Ok((open_all(client, files)?, texts));
+        open_all(client, files)?;
+        return Ok(texts);
     }
     // As Zed opens such a file: no BOM and `\n` line ends, while disk
     // keeps the rewritten form, so the child's hash of disk must be
@@ -2427,7 +3843,7 @@ fn open_as_editor(
     for uri in &uris {
         client.diagnostics(uri, Some(1))?;
     }
-    Ok((uris, texts))
+    Ok(texts)
 }
 
 /// `text` as an editor holds a file of a test with `@rewrite`: no leading
@@ -2526,48 +3942,200 @@ fn child_began(message: &Value) -> bool {
         && params.pointer("/value/kind").and_then(Value::as_str) == Some("begin")
 }
 
+/// The session whose `cheby/idle` a golden test waits for, below the
+/// package: the package itself, or the file in single-file mode (D-1492),
+/// the one key of `texts`.
+fn idle_root(header: &case::Header, texts: &BTreeMap<String, String>) -> String {
+    if header.loose {
+        texts.keys().next().cloned().unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+/// The block of a `rename` marker: its `answer` and the
+/// `window/showMessage`s the server sent before it, such as a note
+/// (D-1391). An edit is applied and checked as D-1676 says, with D-1670's
+/// narrowing of the fixed point, then undone, so the next marker reads the
+/// text it was written for.
+fn rename_block(
+    client: &mut Client,
+    texts: &mut BTreeMap<String, String>,
+    settle: &mut editing::Settle,
+    header: &case::Header,
+    answer: &Value,
+) -> Result<Value, String> {
+    let messages = editing::shown_messages(&client.take_where(editing::is_show_message));
+    if !answer.is_null() && !is_error(answer) {
+        let rules = editing::EditRules {
+            new_errors: &header.new_errors,
+            fixed_point: editing::FixedPoint::Rename,
+        };
+        let applied = editing::check_applied(client, texts, settle, answer, &[], rules)?;
+        editing::revert(client, texts, settle, applied)?;
+    }
+    Ok(json!({ "answer": answer, "showMessage": messages }))
+}
+
+/// A `willRename` step: `workspace/willRenameFiles` for `moves`, paths
+/// below the package, and its block, the answer and the
+/// `window/showMessage`s the server sent before it (D-1675). An edit is
+/// applied and checked with the moves, as D-1676 says. The files move on
+/// disk whatever the answer, as a client moves them.
+fn will_rename_step(
+    client: &mut Client,
+    texts: &mut BTreeMap<String, String>,
+    settle: &mut editing::Settle,
+    header: &case::Header,
+    moves: &[(String, String)],
+) -> Result<String, String> {
+    let mut files = Vec::with_capacity(moves.len());
+    for (old, new) in moves {
+        files.push(json!({
+            "oldUri": client.uri(Path::new(old))?,
+            "newUri": client.uri(Path::new(new))?,
+        }));
+    }
+    drop(client.take_where(editing::is_show_message));
+    let answer = answer_value(
+        client,
+        "workspace/willRenameFiles",
+        json!({ "files": files }),
+        "willRename",
+    )?;
+    let messages = editing::shown_messages(&client.take_where(editing::is_show_message));
+    if answer.is_null() || is_error(&answer) {
+        let mut reactions = Vec::new();
+        editing::move_files(client, texts, moves, &mut reactions)?;
+        settle.after(client, &reactions)?;
+    } else {
+        let rules = editing::EditRules {
+            new_errors: &header.new_errors,
+            fixed_point: editing::FixedPoint::Move,
+        };
+        editing::check_applied(client, texts, settle, &answer, moves, rules)?;
+    }
+    let mut label = "willRename".to_owned();
+    for (old, new) in moves {
+        label.push(' ');
+        label.push_str(old);
+        label.push(' ');
+        label.push_str(new);
+    }
+    let block = json!({ "answer": answer, "showMessage": messages });
+    Ok(case::block(&label, &client.normalize(&block)))
+}
+
+/// A `settings NAME` step: the settings object in `NAME.json` at `dir`
+/// becomes the client's answer to `workspace/configuration` and is pushed
+/// with `workspace/didChangeConfiguration`.
+fn settings_step(client: &mut Client, dir: &Path, name: &str) -> Result<(), String> {
+    let path = dir.join(format!("{name}.json"));
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let settings: Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    client.set_configuration(settings.clone());
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "cheby": settings } }),
+    )
+}
+
+/// The block of an `execute` or an `explain` step (plan §4.3 B); `None`
+/// for any other step.
+fn command_step(client: &mut Client, step: &Step) -> Result<Option<String>, String> {
+    match step {
+        Step::Execute(command, arguments) => {
+            let arguments: Vec<Value> = arguments.iter().map(|a| json!(a)).collect();
+            let block = editing::execute_block(client, command, &arguments)?;
+            let mut label = format!("execute {command}");
+            for argument in &arguments {
+                label.push(' ');
+                label.push_str(argument.as_str().unwrap_or_default());
+            }
+            Ok(Some(case::block(&label, &block)))
+        }
+        Step::Explain(code) => {
+            let block = editing::explain_block(client, code)?;
+            Ok(Some(case::block(&format!("explain {code}"), &block)))
+        }
+        Step::Idle
+        | Step::Started
+        | Step::Quiet
+        | Step::Settings(_)
+        | Step::Edit(_)
+        | Step::Save(_)
+        | Step::ZedSave(_)
+        | Step::Disk(_)
+        | Step::Close(_)
+        | Step::WillRename(_)
+        | Step::Status
+        | Step::Published => Ok(None),
+    }
+}
+
 /// Runs one of a golden test's `@steps` in the package at `dir`, whose
-/// open documents' texts `texts` holds, by path below the package.
+/// open documents' texts `texts` holds, by path below the package, and
+/// returns the step's block, if it has one. `settle` follows the inputs
+/// the step sends, for the applied-edit check.
 fn run_step(
     client: &mut Client,
     dir: &Path,
     header: &case::Header,
     step: &Step,
     texts: &mut BTreeMap<String, String>,
-) -> Result<(), String> {
-    // A single-file session's root is its file (D-1492).
-    let root = if header.loose {
-        texts.keys().next().cloned().unwrap_or_default()
-    } else {
-        String::new()
-    };
+    settle: &mut editing::Settle,
+) -> Result<Option<String>, String> {
+    let root = idle_root(header, texts);
     let (from, save) = match step {
-        Step::Idle => return wait_idle(client, &root),
+        Step::Idle => {
+            wait_idle(client, &root)?;
+            // The `cheby/idle` just read tells of a server that has caught up.
+            settle.since = client.received().len().saturating_sub(1);
+            return Ok(None);
+        }
         Step::Started => {
             client.notification("the `$/progress` begin of a child run", child_began)?;
-            return Ok(());
+            return Ok(None);
         }
         Step::Quiet => {
             let mut seen = client.take_notifications();
             seen.extend(next_idle(client, &root)?);
+            settle.since = client.received().len().saturating_sub(1);
             return match seen.iter().find(|m| child_began(m)) {
                 Some(began) => Err(format!(
                     "`quiet`: a child run began since the last `cheby/idle`: {began}"
                 )),
-                None => Ok(()),
+                None => Ok(None),
             };
         }
         Step::Settings(name) => {
-            let path = dir.join(format!("{name}.json"));
-            let text =
-                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let settings: Value =
-                serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-            client.set_configuration(settings.clone());
-            return client.notify(
-                "workspace/didChangeConfiguration",
-                json!({ "settings": { "cheby": settings } }),
-            );
+            settings_step(client, dir, name)?;
+            settle.sent(client);
+            return Ok(None);
+        }
+        Step::Disk(from) => {
+            write_unseen(dir, header, from)?;
+            return Ok(None);
+        }
+        Step::Close(path) => {
+            if texts.remove(path).is_none() {
+                return Err(format!("`@steps`: `close {path}`: no such open document"));
+            }
+            let uri = client.uri(Path::new(path))?;
+            drop(client.take_where(|m| client::is_publish_of(m, &uri)));
+            client.close(&uri)?;
+            settle.after(client, &[(uri, None)])?;
+            return Ok(None);
+        }
+        Step::WillRename(moves) => {
+            return will_rename_step(client, texts, settle, header, moves).map(Some);
+        }
+        Step::Status => return status_step(client).map(Some),
+        Step::Execute(..) | Step::Explain(_) => return command_step(client, step),
+        Step::Published => {
+            let lists = non_empty_lists(client.published(), client.paths());
+            return Ok(Some(case::block("published", &lists)));
         }
         Step::Edit(from) => (from, false),
         Step::Save(from) | Step::ZedSave(from) => (from, true),
@@ -2581,6 +4149,7 @@ fn run_step(
     let mut sent = Vec::new();
     for path in found {
         let file = cheby_test_support::display_relative(&path, &base);
+        only_probes(header, from, &file)?;
         if !texts.contains_key(&file) {
             return Err(format!(
                 "`@steps`: `{from}/{file}` is not a source file of the test"
@@ -2608,12 +4177,140 @@ fn run_step(
             client.save(&uri)?;
         }
         texts.insert(file, text);
-        sent.push((uri, version));
+        sent.push((uri, Some(version)));
     }
-    for (uri, version) in sent {
-        client.diagnostics(&uri, Some(version))?;
+    settle.after(client, &sent)?;
+    Ok(None)
+}
+
+/// A `disk DIR` step: each `.cheby` file under the test's `DIR/` is
+/// written to the same path below the package at `dir`, in the form the
+/// test's `@rewrite` asks for, and the server is told nothing, so a closed
+/// file goes stale or a module file appears unseen (D-1669).
+fn write_unseen(dir: &Path, header: &case::Header, from: &str) -> Result<(), String> {
+    let base = dir.join(from);
+    let found = files_with_extension(&base, "cheby").map_err(|e| format!("{from}: {e}"))?;
+    if found.is_empty() {
+        return Err(format!("`@steps`: `{from}/` holds no `.cheby` file"));
+    }
+    for path in found {
+        let file = cheby_test_support::display_relative(&path, &base);
+        only_probes(header, from, &file)?;
+        let target = dir.join(&file);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let text = read_rewritten(&path, header)?;
+        std::fs::write(&target, text).map_err(|e| format!("{}: {e}", target.display()))?;
     }
     Ok(())
+}
+
+/// `answer` of a std checkout test with each range in a real module of
+/// std, beside the `uri` or `targetUri` that names it, shown as the text
+/// it covers, cut at its first line end with ` …` after it, so a golden
+/// does not pin std's line numbers, which any edit above them moves. The
+/// probes keep their ranges. The text is the copy's on disk, which no test
+/// edits.
+fn std_ranges_as_text(answer: &Value, paths: &Paths, dir: &Path, encoding: Encoding) -> Value {
+    match answer {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| std_ranges_as_text(item, paths, dir, encoding))
+                .collect(),
+        ),
+        Value::Object(map) => {
+            let module = ["targetUri", "uri"]
+                .iter()
+                .find_map(|key| map.get(*key))
+                .and_then(Value::as_str)
+                .and_then(|uri| paths.relative(uri))
+                .filter(|path| case::is_std_path(path) && !case::is_probe(path));
+            let text = module.and_then(|path| std::fs::read_to_string(dir.join(path)).ok());
+            let covered = |range: &Value| -> Option<Value> {
+                let text = text.as_deref()?;
+                let start = Position::from_json(range.get("start")?).ok()?;
+                let end = Position::from_json(range.get("end")?).ok()?;
+                let lines = Lines::new(text, Bom::Counted);
+                let (from, to) = (lines.offset(start, encoding), lines.offset(end, encoding));
+                let slice = text.get(from..to)?;
+                Some(Value::String(match slice.split_once('\n') {
+                    Some((first, _)) => format!("{first} …"),
+                    None => slice.to_owned(),
+                }))
+            };
+            Value::Object(
+                map.iter()
+                    .map(|(key, value)| {
+                        let shown = match key.as_str() {
+                            "range" | "targetRange" | "targetSelectionRange" => covered(value),
+                            _ => None,
+                        };
+                        (
+                            key.clone(),
+                            shown
+                                .unwrap_or_else(|| std_ranges_as_text(value, paths, dir, encoding)),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        other => other.clone(),
+    }
+}
+
+/// In a std checkout, a step's `DIR/` may hold probes only: the real
+/// modules are opened and expected clean, never edited, so no committed
+/// copy of one rots as std changes.
+fn only_probes(header: &case::Header, from: &str, file: &str) -> Result<(), String> {
+    if header.checkout.is_some() && !case::is_probe(file) {
+        return Err(format!(
+            "`@steps`: `{from}/{file}` is not a probe, and a std checkout test edits only its \
+             probes"
+        ));
+    }
+    Ok(())
+}
+
+/// A `status` step's block: each package that `cheby/status` lists, by
+/// its root as goldens show paths, its `kind`, and `stdDiffers` where the
+/// server sets it (D-1705), sorted by root, and every `window/showMessage`
+/// the server has sent since it started, such as D-1705's warning. The
+/// other fields of `cheby/status` depend on the platform and on timing.
+fn status_step(client: &mut Client) -> Result<String, String> {
+    let status = client.request("cheby/status", Value::Null)?;
+    let mut packages: Vec<Value> = status
+        .get("packages")
+        .and_then(Value::as_array)
+        .map_or_default(|packages| {
+            packages
+                .iter()
+                .map(|package| {
+                    let mut entry = serde_json::Map::new();
+                    for key in ["root", "kind", "stdDiffers"] {
+                        if let Some(value) = package.get(key) {
+                            entry.insert(key.to_owned(), value.clone());
+                        }
+                    }
+                    client.normalize(&Value::Object(entry))
+                })
+                .collect()
+        });
+    packages.sort_by_key(|package| package.get("root").map(Value::to_string));
+    // From every message read, since a wait for `cheby/idle` drops the
+    // notifications it passes.
+    let shown: Vec<Value> = client
+        .received()
+        .iter()
+        .filter(|m| editing::is_show_message(m))
+        .cloned()
+        .collect();
+    let messages = editing::shown_messages(&shown);
+    Ok(case::block(
+        "status",
+        &json!({ "packages": packages, "showMessage": messages }),
+    ))
 }
 
 /// A call hierarchy marker's answer: `follow_up` sent with each item that

@@ -1,0 +1,13 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_typed.cheby
+// @steps: edit v2, idle, status
+// @decisions: D-1700, D-1705, D-1707
+//! An open-only probe that calls `list::map`. The edit types a type error
+//! into it. It is never on disk, so no message says the checkout differs.
+
+import std::list
+
+pub fn doubled(xs: List<Int>) -> List<Int> {
+  list::map(xs, fn(x) { x * 2 })
+}

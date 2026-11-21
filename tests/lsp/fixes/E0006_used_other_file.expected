@@ -1,0 +1,118 @@
+== diagnostics
+{
+  "src/util.cheby": [
+    {
+      "code": "E0006",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+      },
+      "message": "name `getValue` is not in snake_case",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 2
+        },
+        "start": {
+          "character": 7,
+          "line": 2
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/util.cheby:3:8 action write `get_value`
+{
+  "actions": [
+    "write `get_value`",
+    "Explain E0006"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "at": 18,
+        "kind": "rename",
+        "name": "get_value"
+      },
+      "range": [
+        18,
+        18
+      ],
+      "uri": "src/util.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0006",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0006.md"
+        },
+        "message": "name `getValue` is not in snake_case",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 2
+          },
+          "start": {
+            "character": 7,
+            "line": 2
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "get_value",
+              "range": {
+                "end": {
+                  "character": 23,
+                  "line": 7
+                },
+                "start": {
+                  "character": 15,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        },
+        {
+          "edits": [
+            {
+              "newText": "get_value",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 2
+                },
+                "start": {
+                  "character": 7,
+                  "line": 2
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/util.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write `get_value`"
+  },
+  "showMessage": []
+}

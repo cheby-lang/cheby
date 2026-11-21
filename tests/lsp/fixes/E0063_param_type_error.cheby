@@ -1,0 +1,16 @@
+// @decisions: D-1736, D-086
+//! The bound and debug printing with a type error in another function.
+
+fn label<T>(x: T) -> String {
+  "{x}"
+  //^ action Add bound `T: Show`
+  //^ action Use debug printing `{x:?}`
+}
+
+fn main() {
+  assert label(1) == "1"
+}
+
+fn broken() -> Int {
+  "not a number"
+}

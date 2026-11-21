@@ -1,0 +1,128 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0028",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0028.md"
+      },
+      "message": "pipe into a call without `_`\nthis call has no `_` argument",
+      "range": {
+        "end": {
+          "character": 38,
+          "line": 10
+        },
+        "start": {
+          "character": 21,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 20,
+                "line": 10
+              },
+              "start": {
+                "character": 18,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "the value piped in"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:22 action add `_` where the piped value goes
+{
+  "actions": [
+    "add `_` where the piped value goes",
+    "Explain E0028"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        185,
+        185
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0028",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0028.md"
+        },
+        "message": "pipe into a call without `_`\nthis call has no `_` argument",
+        "range": {
+          "end": {
+            "character": 38,
+            "line": 10
+          },
+          "start": {
+            "character": 21,
+            "line": 10
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 20,
+                  "line": 10
+                },
+                "start": {
+                  "character": 18,
+                  "line": 10
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "the value piped in"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    |> list::map(_, ",
+              "range": {
+                "end": {
+                  "character": 31,
+                  "line": 10
+                },
+                "start": {
+                  "character": 17,
+                  "line": 10
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "add `_` where the piped value goes"
+  },
+  "showMessage": []
+}

@@ -1,0 +1,12 @@
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736
+//! `let mut` loses its `mut` (X §6.5).
+
+fn count(a: Int) -> Int {
+  let mut y = a + 1
+  y
+}
+
+fn main() {
+  assert count(1) == 2
+}
+//> 5:11 action Remove `mut`

@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a case arm, found `else`\nhelp: `else` follows the condition of a `guard`; branching is `case`",
+      "range": {
+        "end": {
+          "character": 8,
+          "line": 8
+        },
+        "start": {
+          "character": 4,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:5 action Write `_`
+{
+  "actions": [
+    "Write `_`",
+    "Add the missing arms",
+    "Explain E0013"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        259,
+        259
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a case arm, found `else`\nhelp: `else` follows the condition of a `guard`; branching is `case`",
+        "range": {
+          "end": {
+            "character": 8,
+            "line": 8
+          },
+          "start": {
+            "character": 4,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "_",
+              "range": {
+                "end": {
+                  "character": 8,
+                  "line": 8
+                },
+                "start": {
+                  "character": 4,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Write `_`"
+  },
+  "showMessage": []
+}

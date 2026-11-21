@@ -1,0 +1,13 @@
+== diagnostics
+{}
+
+== status
+{
+  "packages": [
+    {
+      "kind": "stdCheckout",
+      "root": ""
+    }
+  ],
+  "showMessage": []
+}

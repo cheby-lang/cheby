@@ -1,0 +1,23 @@
+// @decisions: D-1388, D-1393, D-1736, D-011
+//! E0047's fix wraps a value in the constructor whose payload is its type
+//! (X §6.2.1).
+
+fn first(n: Int) -> Option<Int> {
+  n
+}
+
+fn parse(s: String) -> Result<Int, String> {
+  s
+}
+
+fn main() {
+  assert first(1) == Some(1)
+  assert parse("x") == Err("x")
+}
+
+pub fn wrap(n: Int) -> Result<Int, String> {
+  n
+}
+//> 6:3 action Wrap in `Some(…)`
+//> 10:3 action Wrap in `Err(…)`
+//> 19:3 action Wrap in `Ok(…)`

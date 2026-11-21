@@ -1,0 +1,13 @@
+// @decisions: D-1388, D-1393, D-084
+//! E0008's help drops the leading zero of a decimal literal.
+//! With a grammar error in another function, which stays.
+
+fn main() {
+  let n = 007
+  assert n == 7
+}
+
+fn broken() {
+  let = 1
+}
+//> 6:11 action write `7`

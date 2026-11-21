@@ -1,0 +1,11 @@
+// @decisions: D-1684, D-1731, D-1389
+//! In a package with an import cycle elsewhere, which the run cuts,
+//! `verify` refuses every cross-file fix (D-1684), and the refusal answers
+//! as a refused rename does (D-1731).
+
+import app::shape
+
+fn main() {
+  assert shape::secret() == "s"
+  //            ^ action Make `secret` package-visible
+}

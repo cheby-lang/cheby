@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused parameter `b`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_b`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `b`\nnever used",
       "range": {
         "end": {
           "character": 18,
@@ -15,10 +18,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `Comp` in this scope\nnot found",
       "range": {
         "end": {
@@ -35,6 +44,9 @@
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `Comp` in this scope\nnot found",
       "range": {
         "end": {

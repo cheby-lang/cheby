@@ -1,0 +1,18 @@
+//! A label, which satisfies `Boxed` and so `Display`.
+
+pub type Label {
+  Label(String),
+}
+
+pub fn show(l: Label) -> String {
+  let Label(text) = l
+  text
+}
+
+pub fn width(l: Label) -> Int {
+  1
+}
+
+pub fn border(l: Label) -> String {
+  "|"
+}

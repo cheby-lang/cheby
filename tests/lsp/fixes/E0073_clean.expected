@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0073",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0073.md"
+      },
+      "message": "a test body must have type `Nil` or `Result<Nil, E>`, found `Bool`\nthis has type `Bool`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 8
+        },
+        "start": {
+          "character": 2,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:3 action Add `assert`
+{
+  "actions": [
+    "Add `assert`",
+    "Explain E0073"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        147,
+        147
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0073",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0073.md"
+        },
+        "message": "a test body must have type `Nil` or `Result<Nil, E>`, found `Bool`\nthis has type `Bool`",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 8
+          },
+          "start": {
+            "character": 2,
+            "line": 8
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "assert ",
+              "range": {
+                "end": {
+                  "character": 2,
+                  "line": 8
+                },
+                "start": {
+                  "character": 2,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add `assert`"
+  },
+  "showMessage": []
+}

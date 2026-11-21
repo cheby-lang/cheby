@@ -108,8 +108,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cheby_driver::analysis::{
-    Code, FileLocation, FileReport, Hash128, InputsKey, ModuleView, PlainDiagnostic, PlainEdit,
-    PlainHelp, PlainLabel, Report, Severity, Snapshot, Symbol, Target, TextRange, normalized_key,
+    Code, FileLocation, FileReport, Hash128, InputsKey, ModuleView, PackageKind, PlainDiagnostic,
+    PlainEdit, PlainHelp, PlainLabel, Report, Severity, Snapshot, Symbol, Target, TextRange,
+    normalized_key,
 };
 use crossbeam_channel::{Receiver, Sender};
 use lsp_types::MessageType;
@@ -1158,14 +1159,16 @@ impl Children {
         self.idle_owed.remove(root);
     }
 
-    /// The `child` part of `cheby/status` for `root`, a package or, when
-    /// `is_package` is false, a single-file session (D-1415, A §11.7).
+    /// The `child` part of `cheby/status` for `root`, a session of `kind`:
+    /// a package, a single-file session or a std checkout (D-1415,
+    /// A §11.7). Only a package evaluates constants (D-1371, D-1491,
+    /// D-1700).
     /// `editor` is the package's newest snapshot, which `stale` compares
     /// the values' modules against (D-1510).
     pub(crate) fn status(
         &self,
         root: &Path,
-        is_package: bool,
+        kind: &PackageKind,
         editor: Option<&dyn EditorText>,
         env: &ChildEnv<'_>,
         now: Instant,
@@ -1183,8 +1186,17 @@ impl Children {
                 "killedInMs": millis(running.deadline.saturating_duration_since(now)),
             }),
         };
-        let why_not = if !is_package {
-            Some("single-file mode evaluates no constants (D-1371)")
+        let session = match kind {
+            PackageKind::Package => None,
+            PackageKind::SingleFile { .. } => {
+                Some("single-file mode evaluates no constants (D-1371)")
+            }
+            PackageKind::StdCheckout { .. } => {
+                Some("a std checkout evaluates no constants (D-1491, D-1700)")
+            }
+        };
+        let why_not = if session.is_some() {
+            session
         } else if !env.evaluate {
             Some("`constants.evaluate` is off")
         } else if self
@@ -1938,12 +1950,12 @@ pub(crate) trait EditorText {
 impl EditorText for Snapshot {
     fn hash(&self, path: &Path) -> Option<Hash128> {
         let file = self.file_of(path)?;
-        self.module_at(file).filter(|module| module.is_local())?;
+        self.module_at(file).filter(|module| module.is_own())?;
         Some(normalized_key(self.source(file)?.text()))
     }
 
     fn modules(&self) -> BTreeSet<PathBuf> {
-        self.local_modules()
+        self.own_modules()
             .filter_map(ModuleView::file)
             .filter_map(|file| match self.location(file)? {
                 FileLocation::Package(path) => Some(path.clone()),
@@ -2073,6 +2085,25 @@ impl ConstValues {
         );
     }
 
+    /// The values that read current ([`ConstValues::reading`]'s
+    /// [`ConstReading::Value`] that is not stale) while `editor` holds the
+    /// package's text, each with its text and whether it was cut: what the
+    /// constant inlay row may show (D-1679). The server asks its client for
+    /// the hints again when this changes.
+    pub(crate) fn current_values(
+        &self,
+        editor: &dyn EditorText,
+    ) -> BTreeMap<Symbol, (String, bool)> {
+        if self.stale || self.disk_errors {
+            return BTreeMap::new();
+        }
+        self.values
+            .iter()
+            .filter(|(symbol, entry)| !self.failed.contains_key(*symbol) && entry.current(editor))
+            .map(|(symbol, entry)| (symbol.clone(), (entry.text.clone(), entry.truncated)))
+            .collect()
+    }
+
     /// Whether any value reads stale ([`ConstValues::reading`]) while
     /// `editor`, if known, holds the package's text: `cheby/status`'s
     /// `stale` (D-1505, D-1510). With no editor text, only the run's own
@@ -2085,6 +2116,33 @@ impl ConstValues {
                     !self.failed.contains_key(symbol) && !entry.current(editor)
                 })
             })
+    }
+}
+
+/// The editor's text of a std checkout's session is its std modules'
+/// (D-1700): the files of the checkout, not the synthetic root's.
+#[cfg(test)]
+mod checkout_tests {
+    use cheby_driver::analysis::normalized_key;
+
+    use super::EditorText;
+    use crate::features::ide::checkout_tests::Checkout;
+
+    #[test]
+    fn checkout_editor_text_is_the_checkouts() {
+        let checkout = Checkout::new("editor_text");
+        let analyzed = checkout.analyze(&[]);
+        let snapshot = &*analyzed.snapshot;
+        let modules = EditorText::modules(snapshot);
+        let list = checkout.at("std/list.cheby");
+        assert!(modules.contains(&list), "{modules:?}");
+        assert!(modules.contains(&checkout.at("std/json/tree.cheby")));
+        let std = checkout.at("std");
+        assert!(modules.iter().all(|path| path.starts_with(&std)));
+        assert_eq!(
+            EditorText::hash(snapshot, &list),
+            Some(normalized_key(&checkout.read("std/list.cheby")))
+        );
     }
 }
 

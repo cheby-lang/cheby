@@ -1,0 +1,165 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0005.md"
+      },
+      "message": "the interface `Area` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 9
+        },
+        "start": {
+          "character": 10,
+          "line": 9
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:11:11 prepareRename
+{
+  "error": {
+    "code": -32803,
+    "message": "`Self` is not a name you declare"
+  }
+}
+
+== src/main.cheby:11:11 rename Me
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`Self` is not a name you declare"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:17:7 prepareRename
+{
+  "placeholder": "total",
+  "range": {
+    "end": {
+      "character": 11,
+      "line": 16
+    },
+    "start": {
+      "character": 6,
+      "line": 16
+    }
+  }
+}
+
+== src/main.cheby:17:7 rename x-y
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`x-y` is not a valid name"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:17:7 rename let
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`let` is a keyword"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:17:7 rename Total
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`Total` must start with a lower-case letter"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:17:7 rename allOf
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`allOf` is not in snake_case"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:17:21 prepareRename
+{
+  "error": {
+    "code": -32803,
+    "message": "`list::map` is in `std`, which cannot be edited here"
+  }
+}
+
+== src/main.cheby:17:21 rename each
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`list::map` is in `std`, which cannot be edited here"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:25:10 prepareRename
+{
+  "error": {
+    "code": -32803,
+    "message": "`Int` is part of the language"
+  }
+}
+
+== src/main.cheby:25:10 rename Num
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`Int` is part of the language"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:28:10 prepareRename
+{
+  "error": {
+    "code": -32803,
+    "message": "a module's name is its file's name: rename the file"
+  }
+}
+
+== src/main.cheby:28:10 rename lists
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "a module's name is its file's name: rename the file"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:33:7 prepareRename
+null

@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== src/main.cheby inlayHint
+[
+  "14:31 - ` = 40`"
+]
+
+== src/util.cheby inlayHint
+[]

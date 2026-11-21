@@ -1,0 +1,41 @@
+== diagnostics
+{}
+
+== src/main.cheby:4:4 rename start
+{
+  "answer": {
+    "changeAnnotations": {
+      "cheby.satisfaction": {
+        "label": "the package's entry point is `main`",
+        "needsConfirmation": true
+      }
+    },
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "start",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 3
+              },
+              "start": {
+                "character": 3,
+                "line": 3
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": [
+    "warning: the package's entry point is `main`"
+  ]
+}

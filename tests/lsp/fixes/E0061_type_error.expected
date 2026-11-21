@@ -1,0 +1,129 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0061",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0061.md"
+      },
+      "message": "`case` does not cover every value\n`Green` and `Blue` not covered\nhelp: add an arm for each missing value, or a `_` arm",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 11
+        },
+        "start": {
+          "character": 7,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 18
+        },
+        "start": {
+          "character": 2,
+          "line": 18
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 17
+              },
+              "start": {
+                "character": 15,
+                "line": 17
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:8 action Add the missing arms
+{
+  "actions": [
+    "Add the missing arms",
+    "Explain E0061"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        251,
+        251
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0061",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0061.md"
+        },
+        "message": "`case` does not cover every value\n`Green` and `Blue` not covered\nhelp: add an arm for each missing value, or a `_` arm",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 11
+          },
+          "start": {
+            "character": 7,
+            "line": 11
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    Green => todo\n    Blue => todo",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 13
+                },
+                "start": {
+                  "character": 16,
+                  "line": 13
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Add the missing arms"
+  },
+  "showMessage": []
+}

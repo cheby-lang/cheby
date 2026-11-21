@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0008",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0008.md"
+      },
+      "message": "decimal literal `007` has a leading zero\nnote: octal literals start with `0o` (D-129)",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 6
+        },
+        "start": {
+          "character": 10,
+          "line": 6
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:11 action write `7`
+{
+  "actions": [
+    "write `7`",
+    "Explain E0008"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        209,
+        209
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0008",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0008.md"
+        },
+        "message": "decimal literal `007` has a leading zero\nnote: octal literals start with `0o` (D-129)",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 6
+          },
+          "start": {
+            "character": 10,
+            "line": 6
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "7",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 6
+                },
+                "start": {
+                  "character": 10,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write `7`"
+  },
+  "showMessage": []
+}

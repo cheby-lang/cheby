@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== willRename std/probe_dir std/probe_moved
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: std's modules are listed in `crates/cheby_driver/src/std_lib.rs` and specified in `docs/stdlib/`"
+  ]
+}

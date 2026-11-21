@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use cheby_driver::analysis::{Globals, StdBase, StdIndex, materialize_std};
-use cheby_driver::cache::BuildId;
+use cheby_driver::cache::{BuildId, CacheEnv, cache_root};
 
 use super::Analyzed;
 use crate::text::uri::normalize;
@@ -60,6 +60,18 @@ pub(crate) fn warm() {
         .spawn(|| {
             let _ = base();
         });
+}
+
+/// [`StdService::explain_dir`] under the cache root `root`: under
+/// `cheby-explain-<build id>` in the temporary directory when no cache
+/// root can be named, because none is set or `CHEBY_CACHE` is relative,
+/// as std's sources fall back (D-1693).
+fn explain_dir_in(root: Option<PathBuf>, build: BuildId) -> PathBuf {
+    let hex = build.to_hex();
+    match root {
+        Some(root) => root.join("lsp").join("explain").join(hex),
+        None => std::env::temp_dir().join(format!("cheby-explain-{hex}")),
+    }
 }
 
 /// One server's view of std: the shared base, and std's sources for this
@@ -123,6 +135,18 @@ impl StdService {
             .map(PathBuf::as_path)
     }
 
+    /// The directory where Explain writes the explanations of codes,
+    /// `<cache root>/lsp/explain/<build id>`, beside std's sources, or its
+    /// fallback in the temporary directory (D-1693). It is not created here.
+    /// `None` with no std at all.
+    pub(crate) fn explain_dir(&self) -> Option<PathBuf> {
+        let build = self.build?;
+        Some(explain_dir_in(
+            cache_root(&CacheEnv::from_process()).ok().flatten(),
+            build,
+        ))
+    }
+
     /// The first failure of std that this server has not logged yet.
     pub(crate) fn unreported_failure(&self) -> Option<String> {
         let failure = BASE
@@ -130,5 +154,33 @@ impl StdService {
             .and_then(|base| base.as_ref().err())
             .or_else(|| self.dir.get().and_then(|dir| dir.as_ref().err()))?;
         (!self.reported.swap(true, Ordering::Relaxed)).then(|| failure.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use cheby_driver::cache::BuildId;
+
+    use super::{StdService, explain_dir_in};
+
+    /// Explain's directory is under the cache root, beside std's sources,
+    /// and under the temporary directory when there is no cache root
+    /// (D-1693). A server with no std has none.
+    #[test]
+    fn explain_dir_falls_back_to_the_temporary_directory() {
+        let build = BuildId([0xab; 16]);
+        let hex = build.to_hex();
+        let root = std::env::temp_dir().join("cache-root");
+        assert_eq!(
+            explain_dir_in(Some(root.clone()), build),
+            root.join("lsp").join("explain").join(&hex)
+        );
+        assert_eq!(
+            explain_dir_in(None, build),
+            std::env::temp_dir().join(format!("cheby-explain-{hex}"))
+        );
+        assert_eq!(StdService::none().explain_dir(), None::<PathBuf>);
     }
 }

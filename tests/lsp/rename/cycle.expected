@@ -1,0 +1,64 @@
+== diagnostics
+{
+  "src/a.cheby": [
+    {
+      "code": "E0040",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0040.md"
+      },
+      "message": "modules import each other in a cycle\n`app::a` imports `app::b`\nnote: the cycle is app::a → app::b → app::a\nhelp: move what the modules share into a module that neither imports",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 2
+        },
+        "start": {
+          "character": 0,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 2
+              },
+              "start": {
+                "character": 0,
+                "line": 2
+              }
+            },
+            "uri": "src/b.cheby"
+          },
+          "message": "`app::b` imports `app::a`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/a.cheby:3:22 rename h2
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`src/b.cheby` imports through a cycle"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:10:7 rename y
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`src/b.cheby` imports through a cycle"
+    }
+  },
+  "showMessage": []
+}

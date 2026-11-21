@@ -63,7 +63,7 @@ fn with_module<R>(text: &str, check: impl FnOnce(&TypesInput<'_>, &ModuleInterfa
         globals: &globals,
         std: StdCatalog {
             known: &[],
-            items: None,
+            items: cheby_resolve::StdItems::None,
         },
         package_targets: cheby_package::Targets::ALL,
     })

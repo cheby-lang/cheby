@@ -1,0 +1,9 @@
+// @decisions: D-1388, D-1690, D-1735
+// @client: full
+//! The `full` client, which shows disabled actions, lists and applies a
+//! help's fix as the `standard` one does.
+
+fn main() {
+  let total = 1
+  //  ^ action if this is intentional, start the name with an underscore: `_total`
+}

@@ -11,6 +11,7 @@
 use cheby_diag::{Diagnostic, Span, TextRange, codes};
 
 use super::{empty_at, source, spaced_negative_literal};
+use crate::SyntaxKind;
 use crate::ast::{
     Arg, ArgList, AstNode, BinExpr, CallExpr, Expr, PathExpr, PrefixExpr, RecordEntry, RecordExpr,
     TupleExpr,
@@ -218,15 +219,51 @@ fn chained_comparison(expr: BinExpr<'_>, out: &mut Vec<Diagnostic>) {
 
 /// E0030: `(e,)` is not a tuple (D-076). `()` is a grammar error, which
 /// the parser reports.
+/// The help's edit writes the element alone (D-1689), and keeps it in
+/// parentheses only where the element alone would bind differently, so
+/// the fix never changes how the code around it reads.
 pub(super) fn tuple_expr(tuple: TupleExpr<'_>, out: &mut Vec<Diagnostic>) {
-    if tuple.elements().count() != 1 {
+    let mut elements = tuple.elements();
+    let (Some(element), None) = (elements.next(), elements.next()) else {
         return;
-    }
+    };
+    let span = tuple.significant_span();
+    let element_text = source(element);
+    let replacement = if needs_parentheses(tuple, element) {
+        format!("({element_text})")
+    } else {
+        element_text.to_owned()
+    };
     out.push(
         Diagnostic::new(codes::SHORT_TUPLE, "a tuple has at least two elements")
-            .with_primary(tuple.significant_span(), "")
-            .with_help("write the value alone; `(e)` is just `e` in parentheses"),
+            .with_primary(span, "")
+            .with_suggestion(
+                "write the value alone; `(e)` is just `e` in parentheses",
+                span,
+                replacement,
+            ),
     );
+}
+
+/// Whether `element`, written in place of `tuple`, would bind to the
+/// expression around it differently: an operator expression as an operand
+/// of another operator, or an operator expression or a closure as the
+/// receiver of a field or a call.
+fn needs_parentheses(tuple: TupleExpr<'_>, element: Expr<'_>) -> bool {
+    let Some(parent) = tuple.syntax().parent() else {
+        return false;
+    };
+    let operator = matches!(element, Expr::Binary(_));
+    let loose = operator || matches!(element, Expr::Prefix(_) | Expr::Closure(_));
+    let operand = matches!(
+        parent.kind(),
+        SyntaxKind::BIN_EXPR | SyntaxKind::PREFIX_EXPR
+    );
+    let receiver = matches!(
+        parent.kind(),
+        SyntaxKind::FIELD_EXPR | SyntaxKind::CALL_EXPR
+    );
+    (operand && operator) || (receiver && loose)
 }
 
 /// E0031: a record update has one spread, first, and at least one field

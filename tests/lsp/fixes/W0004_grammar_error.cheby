@@ -1,0 +1,18 @@
+// @decisions: D-1388, D-1393, D-1736, D-080, D-152, D-1360, D-1347
+//! W0004's fix removes an unused `priv` item with its doc comment.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+fn main() {
+  assert 1 == 1
+}
+
+/// Doubles.
+priv fn twice(n: Int) -> Int {
+  n * 2
+}
+
+fn broken() {
+  let = 1
+}
+//> 11:9 noAction Remove the unused `twice`

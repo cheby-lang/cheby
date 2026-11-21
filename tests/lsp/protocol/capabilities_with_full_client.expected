@@ -4,9 +4,12 @@
     "callHierarchyProvider": true,
     "codeActionProvider": {
       "codeActionKinds": [
-        "refactor.rewrite"
+        "quickfix",
+        "refactor.rewrite",
+        "source.organizeImports",
+        "source"
       ],
-      "resolveProvider": false
+      "resolveProvider": true
     },
     "completionProvider": {
       "resolveProvider": true,
@@ -26,6 +29,11 @@
     },
     "documentRangeFormattingProvider": true,
     "documentSymbolProvider": true,
+    "executeCommandProvider": {
+      "commands": [
+        "cheby.explain"
+      ]
+    },
     "foldingRangeProvider": true,
     "hoverProvider": true,
     "inlayHintProvider": {
@@ -33,6 +41,9 @@
     },
     "positionEncoding": "utf-8",
     "referencesProvider": true,
+    "renameProvider": {
+      "prepareProvider": true
+    },
     "selectionRangeProvider": true,
     "semanticTokensProvider": {
       "full": true,
@@ -76,6 +87,26 @@
     },
     "typeDefinitionProvider": true,
     "workspace": {
+      "fileOperations": {
+        "willRename": {
+          "filters": [
+            {
+              "pattern": {
+                "glob": "**/*.cheby",
+                "matches": "file"
+              },
+              "scheme": "file"
+            },
+            {
+              "pattern": {
+                "glob": "**",
+                "matches": "folder"
+              },
+              "scheme": "file"
+            }
+          ]
+        }
+      },
       "workspaceFolders": {
         "changeNotifications": true,
         "supported": true

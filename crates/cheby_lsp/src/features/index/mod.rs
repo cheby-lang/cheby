@@ -210,9 +210,23 @@ impl<'a> Index<'a> {
     /// name of that text, else the first module the run lost. `None` when
     /// the index placed every name that could be it.
     pub(crate) fn partial(self, text: &str) -> Option<Partial> {
+        self.partial_where(text, |_| true)
+    }
+
+    /// [`Index::partial`], counting only the unknown names that `counts`
+    /// keeps.
+    pub(crate) fn partial_where(
+        self,
+        text: &str,
+        counts: impl Fn(&UnknownName) -> bool,
+    ) -> Option<Partial> {
         let mut lost = self.snapshot.lost().first().map(|&(id, _)| id);
         for module in self.modules() {
-            if let Some(name) = module.unknown.iter().find(|u| &*u.text == text) {
+            if let Some(name) = module
+                .unknown
+                .iter()
+                .find(|u| &*u.text == text && counts(u))
+            {
                 return Some(Partial::Unknown {
                     module: module.module,
                     name: name.clone(),
@@ -530,6 +544,11 @@ pub(crate) struct UnknownName {
     pub text: Box<str>,
     /// Why.
     pub why: Unknown,
+    /// Whether only the token's meaning as a field is unknown: a field
+    /// read, a field of a record or a pattern, or a punned one whose
+    /// value or binding is known. A field position never names an item
+    /// (D-061), so a rename of an item does not count it (D-1727).
+    pub field: bool,
 }
 
 /// Why the index cannot place a name (F §5.5).

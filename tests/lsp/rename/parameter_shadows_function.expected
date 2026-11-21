@@ -1,0 +1,13 @@
+== diagnostics
+{}
+
+== src/main.cheby:9:8 rename key
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would cause: error[E0044]: `key` is the name of a function in this module at src/main.cheby:9:8 and 1 more"
+    }
+  },
+  "showMessage": []
+}

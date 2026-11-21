@@ -38,7 +38,7 @@
 //! (segments joined with `.`), for `cargo xtask check-determinism`
 //! (D-551, plan §4.5).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -55,8 +55,8 @@ use cheby_package::graph::{Graph, reachable, topological_order};
 use cheby_package::{ModulePath, Targets};
 use cheby_resolve::ResolvedModule;
 use cheby_resolve::{
-    ImportRequest, ImportTarget, Lookup, ModuleLookup, ResolveInput, StdCatalog, closest_name,
-    collect_imports, cycle_diagnostic, resolve_import_targets, resolve_module,
+    ImportRequest, ImportTarget, Lookup, ModuleLookup, ResolveInput, StdCatalog, StdItems,
+    closest_name, collect_imports, cycle_diagnostic, resolve_import_targets, resolve_module,
 };
 use cheby_syntax::SyntaxTree;
 use cheby_types::{
@@ -416,6 +416,10 @@ struct DriverLookup<'a> {
     std_hits_ok: bool,
     /// K6: the std modules whose front record hit, which are not parsed.
     std_hits: &'a mut BTreeMap<ModuleId, FrontRecord>,
+    /// A checkout run (D-1700): the checkout's std modules not loaded yet,
+    /// by path under `std`, and every one's path. A std import resolves
+    /// among them only, and never reads the binary's std.
+    checkout: Option<(&'a mut BTreeMap<String, crate::Module>, &'a [String])>,
 }
 
 impl DriverLookup<'_> {
@@ -429,6 +433,24 @@ impl DriverLookup<'_> {
 
     fn load_std(&mut self, path: &str, module_path: ModulePath) -> Result<ModuleId, Ice> {
         let _std = crate::phases::span(crate::phases::Phase::Std);
+        // A checkout's module is preloaded with its tree, a broken one
+        // included: its grammar errors are its own, as a package module's
+        // are, never a bug in std (D-1700).
+        if let Some((preloaded, _)) = self.checkout.as_mut() {
+            let module = preloaded
+                .remove(path)
+                .ok_or_else(|| Ice::new("loading a std module the checkout does not have"))?;
+            let id = self.modules.add(ModuleInfo {
+                path: module_path,
+                package: PackageId::STD,
+                file: Some(module.source.file),
+            })?;
+            if self.trees.len() != index(id)? {
+                return Err(Ice::new("module ids and trees are out of step"));
+            }
+            self.trees.push(module.source.syntax);
+            return Ok(id);
+        }
         let source =
             std_lib::find(path).ok_or_else(|| Ice::new("loading an unknown std module"))?;
         let display = std_lib::display_path(path);
@@ -512,6 +534,22 @@ impl ModuleLookup for DriverLookup<'_> {
             return Ok(Lookup::Found(id));
         }
         let under_std = rest.join("::");
+        if let Some((_, names)) = &self.checkout {
+            // A checkout run: its own modules, then the binary's planned
+            // ones, which stay E0038 (D-1700, D-451).
+            if names.contains(&under_std) {
+                return self.load_std(&under_std, module_path).map(Lookup::Found);
+            }
+            if std_lib::is_planned(&under_std) {
+                return Ok(Lookup::Planned);
+            }
+            let closest = closest_name(&under_std, names.iter().map(String::as_str))
+                .map(|p| format!("std::{p}"));
+            return Ok(Lookup::NoModule {
+                package: PackageId::STD,
+                closest,
+            });
+        }
         if std_lib::find(&under_std).is_some() {
             return self.load_std(&under_std, module_path).map(Lookup::Found);
         }
@@ -567,13 +605,15 @@ fn externals(natives: &[(Box<str>, NativeBinding)], file: FileId) -> Option<Vec<
 
 /// The build-time source hashes of the std module at `path` (D-963).
 fn std_source_hashes(path: &ModulePath) -> Option<crate::SourceHashes> {
+    std_lib::source_hashes(&under_std(path)?)
+}
+
+/// The path under `std` of the std module at `path`, such as `json::tree`
+/// for `std::json::tree`; `None` for a module of another package.
+fn under_std(path: &ModulePath) -> Option<String> {
     let segments = path.segments();
     let (first, rest) = segments.split_first()?;
-    if first.as_str() != "std" {
-        return None;
-    }
-    let under: Vec<&str> = rest.iter().map(String::as_str).collect();
-    std_lib::source_hashes(&under.join("::"))
+    (first.as_str() == "std").then(|| rest.join("::"))
 }
 
 fn index(module: ModuleId) -> Result<usize, Ice> {
@@ -659,6 +699,28 @@ impl Retain {
         facts: Scope::None,
         tolerant: true,
     };
+    /// A Q run of a std checkout (D-1700): the checkout's std modules are
+    /// the session's own, so every module keeps its tree and its facts,
+    /// and an `Ice` loses one body, pass or module, as in [`Self::LIVE`].
+    pub(crate) const CHECKOUT: Self = Self {
+        trees: Scope::All,
+        facts: Scope::All,
+        tolerant: true,
+    };
+}
+
+/// The std of a run that checks a checkout of std from its own texts
+/// (D-1700): every std module the run may load, preloaded as package
+/// modules are, so none is read from the binary's std.
+#[derive(Debug)]
+pub(crate) struct CheckoutStd {
+    /// Each module by its path under `std`, such as `json::tree`, parsed
+    /// into the run's source map, a tree with grammar errors included.
+    pub modules: BTreeMap<String, crate::Module>,
+    /// The modules whose test bodies are checked, by path under `std`:
+    /// those with an open document (D-1701). The others skip them, as a
+    /// user build does.
+    pub tested: BTreeSet<String>,
 }
 
 /// How a run treats import cycles (A §2.5, D-1358).
@@ -792,7 +854,7 @@ pub(crate) fn check_extra_module(
         globals: &front.globals,
         std: StdCatalog {
             known: &known,
-            items: Some(std_lib::item_names),
+            items: StdItems::Shared(std_lib::item_names),
         },
         package_targets: front.package_targets,
     };
@@ -899,7 +961,7 @@ pub(crate) fn check_reloaded(
         globals: &front.globals,
         std: StdCatalog {
             known: &known,
-            items: Some(std_lib::item_names),
+            items: StdItems::Shared(std_lib::item_names),
         },
         package_targets: front.package_targets,
     };
@@ -1153,6 +1215,9 @@ struct BuildInputs<'a> {
     graph: &'a Graph,
     set: &'a InterfaceSet,
     known: &'a [&'a str],
+    /// Std's public items for E0042's help (D-1658): the binary's, or a
+    /// checkout's from its own texts (D-1700).
+    std_items: StdItems<'a>,
     local_targets: Targets,
     /// Per module id: whether it is checked from source even when its
     /// lookup hits: in `Build` mode every module, in `Check` mode those
@@ -1172,6 +1237,10 @@ struct BuildInputs<'a> {
     cache: Option<FrontCx<'a>>,
     /// What the run keeps, and whether it survives an internal error.
     retain: Retain,
+    /// Per module id: whether its test bodies are checked although it is
+    /// a std module and the mode skips them: an open module of a checkout
+    /// (D-1701).
+    tested: &'a [bool],
 }
 
 /// What the tasks of a front end fill as they run, by module id.
@@ -1756,7 +1825,7 @@ impl BuildInputs<'_> {
             globals: self.globals,
             std: StdCatalog {
                 known: self.known,
-                items: Some(std_lib::item_names),
+                items: self.std_items,
             },
             package_targets: if info.package == PackageId::LOCAL {
                 self.local_targets
@@ -1793,7 +1862,9 @@ impl BuildInputs<'_> {
             let _ = slot.set(iface.hash);
         }
         published();
-        let tests = if self.mode == Mode::StdTests {
+        let tests = if self.mode == Mode::StdTests
+            || self.tested.get(index(id)?).copied().unwrap_or(false)
+        {
             Tests::All
         } else {
             Tests::SkipStd
@@ -2611,6 +2682,7 @@ pub(crate) fn run_cached(
         diagnostics,
         cache,
         RunExtras::batch(),
+        None,
     ) {
         Ok(front) => front,
         Err(Stop::Restart) => return Ok(None),
@@ -2658,7 +2730,46 @@ pub(crate) fn run_analysis(
     diagnostics: &mut Vec<Diagnostic>,
     extras: RunExtras,
 ) -> Result<Frontend, Error> {
-    match run_inner(package, Mode::Check, sources, diagnostics, None, extras) {
+    run_analysis_inner(package, sources, diagnostics, extras, None)
+}
+
+/// [`run_analysis`] over a checkout of std (D-1700): `package` is the
+/// synthetic root that imports the checkout's modules, and every std
+/// import resolves among `std`'s modules, never the binary's. Their
+/// module set, source hashes and test bodies are the checkout's; a std
+/// module with a grammar error is checked on its tree, as a package
+/// module is, and is no internal error.
+///
+/// # Errors
+///
+/// As [`run_analysis`].
+pub(crate) fn run_analysis_checkout(
+    package: Package,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    extras: RunExtras,
+    std: CheckoutStd,
+) -> Result<Frontend, Error> {
+    run_analysis_inner(package, sources, diagnostics, extras, Some(std))
+}
+
+/// [`run_analysis`] with the std of a checkout, or the binary's.
+fn run_analysis_inner(
+    package: Package,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    extras: RunExtras,
+    checkout: Option<CheckoutStd>,
+) -> Result<Frontend, Error> {
+    match run_inner(
+        package,
+        Mode::Check,
+        sources,
+        diagnostics,
+        None,
+        extras,
+        checkout,
+    ) {
         Ok(front) => Ok(front),
         Err(Stop::Restart) => {
             Err(Ice::new("a front end without the cache asked to start again").into())
@@ -2717,6 +2828,12 @@ pub(crate) fn run_analysis(
 /// [`Frontend::silent_drop`] instead) and, without a cache, skips the
 /// second check on fresh interfaces. [`RunExtras::cut_cycles`] cuts every
 /// import of one edge per import cycle, so no module is blocked by E0040.
+///
+/// `checkout`, from [`run_analysis_checkout`], replaces the binary's std
+/// with a checkout's (D-1700): its modules are the only std modules a
+/// lookup finds, the binary's planned ones aside, and their source hashes,
+/// the shipped home modules and the help's module list are the
+/// checkout's. Its open modules' test bodies are checked (D-1701).
 #[expect(
     clippy::too_many_lines,
     reason = "the front-end phases in order, each a few lines"
@@ -2728,12 +2845,48 @@ fn run_inner(
     diagnostics: &mut Vec<Diagnostic>,
     cache: Option<CacheUse<'_>>,
     extras: RunExtras,
+    checkout: Option<CheckoutStd>,
 ) -> Result<Frontend, Stop> {
     let RunExtras {
         globals,
         retain,
         cut_cycles,
     } = extras;
+    // A checkout's std (D-1700): its modules, taken as they load, their
+    // paths under `std`, their hashes and the ones whose tests are checked.
+    let (mut preloaded, checkout_names, checkout_hashes, tested_paths) = match checkout {
+        Some(CheckoutStd { modules, tested }) => {
+            let names: Vec<String> = modules.keys().cloned().collect();
+            let hashes: BTreeMap<String, crate::SourceHashes> = modules
+                .iter()
+                .map(|(path, module)| (path.clone(), module.hashes))
+                .collect();
+            (Some(modules), Some(names), hashes, tested)
+        }
+        None => (None, None, BTreeMap::new(), BTreeSet::new()),
+    };
+    // E0042's help lists the checkout's items, from its trees, which are
+    // all at hand; every other run shares the binary's list (D-1700).
+    let checkout_items: Option<Vec<cheby_resolve::StdItemName>> =
+        preloaded.as_ref().map(|modules| {
+            std_lib::items_of(modules.iter().filter_map(|(path, module)| {
+                module
+                    .source
+                    .syntax
+                    .as_ref()
+                    .map(|tree| (path.as_str(), tree))
+            }))
+        });
+    let std_items = checkout_items
+        .as_deref()
+        .map_or(StdItems::Shared(std_lib::item_names), StdItems::Owned);
+    // Whether the std module at `path` (under `std`) ships in this run.
+    let shipped = |path: &str| {
+        checkout_names.as_ref().map_or_else(
+            || std_lib::find(path).is_some(),
+            |names| names.iter().any(|name| name == path),
+        )
+    };
     let mut modules = ModuleTable::new();
     let mut trees: Vec<Option<SyntaxTree>> = vec![None];
     let mut syntax: Vec<Option<Vec<Diagnostic>>> = vec![None];
@@ -2799,6 +2952,7 @@ fn run_inner(
             std_cache,
             std_hits_ok,
             std_hits: &mut std_hits,
+            checkout: preloaded.as_mut().zip(checkout_names.as_deref()),
         };
         let (found, diags) = if let Some(paths) = std_imports {
             let mut found = Vec::new();
@@ -2838,7 +2992,7 @@ fn run_inner(
         let mut homes = Vec::new();
         if info.package == PackageId::LOCAL {
             for (_, segment) in builtin::HOMES {
-                if std_lib::find(segment).is_some()
+                if shipped(segment)
                     && let Lookup::Found(home) =
                         lookup.lookup(PackageId::LOCAL, &["std", segment])?
                     && !homes.contains(&home)
@@ -2867,8 +3021,21 @@ fn run_inner(
         if index(id)? != source_hashes.len() {
             return Err(Ice::new("module ids and source hashes are out of step").into());
         }
-        source_hashes.push(std_source_hashes(&info.path));
+        source_hashes.push(if checkout_names.is_some() {
+            under_std(&info.path).and_then(|path| checkout_hashes.get(&path).copied())
+        } else {
+            std_source_hashes(&info.path)
+        });
     }
+    // Per module: whether its test bodies are checked, as an open module
+    // of a checkout's are (D-1701).
+    let tested: Vec<bool> = modules
+        .iter()
+        .map(|(_, info)| {
+            info.package == PackageId::STD
+                && under_std(&info.path).is_some_and(|path| tested_paths.contains(&path))
+        })
+        .collect();
 
     // The graph and the order (G1).
     let mut graph = import_graph(modules.len(), &targets, &implicit)?;
@@ -2949,7 +3116,23 @@ fn run_inner(
     };
 
     // Resolution, interfaces and bodies, in order (B4-B7, C).
-    let known = std_lib::known();
+    let known: Vec<&str> = match &checkout_names {
+        Some(names) => {
+            let mut all: Vec<&str> = names
+                .iter()
+                .map(String::as_str)
+                .chain(
+                    std_lib::known()
+                        .into_iter()
+                        .filter(|p| std_lib::is_planned(p)),
+                )
+                .collect();
+            all.sort_unstable();
+            all.dedup();
+            all
+        }
+        None => std_lib::known(),
+    };
     let mut set = InterfaceSet::new(builtin::interface(&globals));
     set.reserve_modules(modules.len())?;
     let len = modules.len();
@@ -3029,12 +3212,14 @@ fn run_inner(
             graph: &graph,
             set: &set,
             known: &known,
+            std_items,
             local_targets,
             must_check: &must_check,
             shared: &shared,
             counted: &counted,
             cache: front_cx(Pass::Warm),
             retain,
+            tested: &tested,
         },
         &order,
     );
@@ -3232,12 +3417,14 @@ fn run_inner(
                 graph: &graph,
                 set: &fresh_set,
                 known: &known,
+                std_items,
                 local_targets,
                 must_check: &must_check,
                 shared: &recheck_shared,
                 counted: &counted,
                 cache: front_cx(Pass::Recheck),
                 retain,
+                tested: &tested,
             },
             &again_order,
         );
@@ -3774,7 +3961,7 @@ fn unused_package_items(
             _ => return Ok(Vec::new()),
         }
     }
-    let used_anywhere: std::collections::BTreeSet<&front::ItemRef> =
+    let used_anywhere: BTreeSet<&front::ItemRef> =
         summaries.iter().flat_map(|(_, s)| &s.uses).collect();
     let mut out = Vec::new();
     for (id, summary) in summaries {

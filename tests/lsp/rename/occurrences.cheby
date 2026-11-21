@@ -1,0 +1,55 @@
+// @decisions: D-1392, D-1390, D-1713
+//! Every row of `features.md` §3.5. A punned field in an expression and
+//! in a pattern renames its value from the pun (D-1392) and its field from
+//! elsewhere, writing the other side out; a field with a value of its own
+//! name renames one token; interpolations rename their root and their
+//! field; an update's pun is the first row again; and an or-pattern
+//! renames every alternative.
+
+type Book {
+  title: String,
+  //> 10:3 rename heading
+  pages: Int,
+}
+
+fn make(title: String, pages: Int) -> Book {
+  Book { title, pages }
+  //     ^ prepareRename
+  //     ^ rename name
+}
+
+fn describe(book: Book) -> String {
+  let Book { title, pages: n } = book
+  //         ^ rename label
+  //                ^ rename count
+  //                       ^ rename total
+  "{title}: {n} pages, {book.title}"
+  //^ rename text
+  //                    ^ rename volume
+  //                         ^ rename heading
+}
+
+fn longer(b: Book, more: Int) -> Book {
+  let title = "{b.title}+"
+  Book { ..b, title, pages: b.pages + more }
+  //          ^ rename name
+  //                          ^ rename count
+}
+
+type Shape {
+  Circle(Int),
+  Square(Int),
+}
+
+fn size(shape: Shape) -> Int {
+  case shape {
+    Circle(n) | Square(n) => n
+    //     ^ rename side
+  }
+}
+
+fn main() {
+  let book = make("Dune", 412)
+  assert describe(longer(book, 1)) == "Dune+: 413 pages, Dune+"
+  assert size(Circle(2)) + size(Square(3)) == 5
+}

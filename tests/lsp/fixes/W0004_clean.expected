@@ -1,0 +1,97 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0004",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0004.md"
+      },
+      "message": "the `priv` function `twice` is never used\nnever used in this module\nnote: a `priv` item is visible only in its own module\nhelp: remove the function, or use it",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 8
+        },
+        "start": {
+          "character": 8,
+          "line": 8
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:9:9 action Remove the unused `twice`
+{
+  "actions": [
+    "Remove the unused `twice`",
+    "Explain W0004"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        181,
+        181
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0004",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0004.md"
+        },
+        "message": "the `priv` function `twice` is never used\nnever used in this module\nnote: a `priv` item is visible only in its own module\nhelp: remove the function, or use it",
+        "range": {
+          "end": {
+            "character": 13,
+            "line": 8
+          },
+          "start": {
+            "character": 8,
+            "line": 8
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 11
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Remove the unused `twice`"
+  },
+  "showMessage": []
+}

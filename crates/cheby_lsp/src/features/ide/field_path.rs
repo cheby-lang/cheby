@@ -20,9 +20,10 @@
 //! The cursor may be anywhere inside such a field. The outermost one around
 //! it is rewritten.
 
-use cheby_driver::analysis::TextRange;
+use cheby_driver::analysis::{PlainDiagnostic, PlainEdit, TextRange};
 use cheby_syntax::{SyntaxElement, SyntaxKind as K, SyntaxNode, SyntaxToken};
 
+use super::actions::{Action, ActionKind, FixCx};
 use super::cursor::token_at;
 
 /// The title of the action.
@@ -33,6 +34,38 @@ pub(crate) const TITLE: &str = "Use a field path";
 pub(crate) struct Rewrite {
     pub range: TextRange,
     pub text: String,
+}
+
+/// The action for `range` of the request's module (D-1682): a
+/// `refactor.rewrite` with its edit in the listing, read from the
+/// snapshot's tree and text, so it waits for the analysis and is never
+/// offered in a file that is not a module, where the frame has no module.
+pub(crate) fn provide(
+    cx: &FixCx<'_>,
+    range: TextRange,
+    _diagnostics: &[(usize, &PlainDiagnostic)],
+) -> Vec<Action> {
+    let (Some(tree), Some(path)) = (cx.view.tree(), cx.path()) else {
+        return Vec::new();
+    };
+    rewrite(tree.root(), cx.text, range)
+        .map(|found| Action {
+            title: TITLE.to_owned(),
+            kind: ActionKind::RefactorRewrite,
+            diagnostic: None,
+            preferred: false,
+            removes: false,
+            edit: Some(vec![PlainEdit {
+                path: path.to_path_buf(),
+                range: found.range,
+                replacement: found.text,
+            }]),
+            data: None,
+            disabled: None,
+            command: None,
+        })
+        .into_iter()
+        .collect()
 }
 
 /// The rewrite of the outermost field around `range`'s start that has the

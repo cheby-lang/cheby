@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "W0009",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0009.md"
+      },
       "message": "`todo` left in the code\nthis panics when it is reached\nhelp: write the missing code in place of the `todo`",
       "range": {
         "end": {
@@ -19,7 +22,10 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `wrong`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_wrong`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `wrong`\nnever used",
       "range": {
         "end": {
           "character": 11,
@@ -31,10 +37,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
       "message": "mismatched types\nexpected `Int`, found `Point`",
       "range": {
         "end": {

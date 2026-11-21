@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== src/main.cheby:5:7 rename x
+{
+  "answer": {
+    "documentChanges": []
+  },
+  "showMessage": []
+}

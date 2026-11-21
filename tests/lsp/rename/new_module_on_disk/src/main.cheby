@@ -1,0 +1,13 @@
+// @decisions: D-1669, D-1389, D-1711
+// @steps: disk later
+//! A module file that appeared on disk, which the snapshot lacks and no
+//! watcher has reported (D-1443): it may use the name, so the rename
+//! answers `null` with a warning that gives the reason, and the package
+//! is swept (G1 plan §3 E, D-1711).
+
+import app::util
+
+fn main() {
+  assert util::helper() == 1
+  //           ^ rename assist
+}

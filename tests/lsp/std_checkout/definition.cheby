@@ -1,0 +1,19 @@
+// @package: std-checkout
+// @probes: open
+// @open: std/probe_definition.cheby
+// @steps: idle
+// @decisions: D-450, D-1703
+//! A jump from a probe into `std/json/tree.cheby` stays in the checkout,
+//! and its display path is `std/json/tree.cheby` on every platform.
+
+import std::json::tree
+
+pub fn kind_of(text: String) -> String {
+  let parsed = tree::parse(text)
+  //                 ^ definition
+  case parsed {
+    Ok(value) => tree::kind(value)
+    //                 ^ definition
+    Err(_) => "none"
+  }
+}

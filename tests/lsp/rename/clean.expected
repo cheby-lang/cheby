@@ -1,0 +1,144 @@
+== diagnostics
+{}
+
+== src/main.cheby:5:3 rename first
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 4
+              },
+              "start": {
+                "character": 2,
+                "line": 4
+              }
+            }
+          },
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 8,
+                "line": 11
+              },
+              "start": {
+                "character": 4,
+                "line": 11
+              }
+            }
+          },
+          {
+            "newText": "first",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 15
+              },
+              "start": {
+                "character": 17,
+                "line": 15
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:10:4 rename add_up
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "add_up",
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 9
+              },
+              "start": {
+                "character": 3,
+                "line": 9
+              }
+            }
+          },
+          {
+            "newText": "add_up",
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 17
+              },
+              "start": {
+                "character": 9,
+                "line": 17
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:16:7 rename q
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "q",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 15
+              },
+              "start": {
+                "character": 6,
+                "line": 15
+              }
+            }
+          },
+          {
+            "newText": "q",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 17
+              },
+              "start": {
+                "character": 13,
+                "line": 17
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 5
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

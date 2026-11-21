@@ -62,6 +62,7 @@ pub(crate) use self::caps::ClientCaps;
 use self::caps::server_capabilities;
 use self::child::Children;
 pub(crate) use self::child::{ConstReading, ConstValues};
+use self::child_loop::{Recheck, ShownConstants};
 pub(crate) use self::effects::Effect;
 use self::pool::{QueryDone, QueryPool};
 use self::schedule::{JobTexts, Parked, Served};
@@ -144,6 +145,11 @@ pub(crate) struct Server {
     options: ServerOptions,
     /// The package whose job is on the analysis thread.
     running: Option<PathBuf>,
+    /// The session of the job on the analysis thread ended while the job
+    /// ran (`end_session`), so its events belong to no session, even when
+    /// a session of the other kind was made at the same root since, as
+    /// when a `cheby.toml` comes or goes at a std checkout (D-1699).
+    orphan_job: bool,
     /// `shutdown` was answered.
     shutting_down: bool,
     /// The client stopped reading.
@@ -196,6 +202,10 @@ pub(crate) struct Server {
     /// (D-1495). It lasts for the server's life, so 0 means only that the
     /// root has had no snapshot since the server started (D-1499).
     generations: BTreeMap<PathBuf, u64>,
+    /// By package root, what its constant inlay row was last computed
+    /// from, while the row is on and the client takes
+    /// `workspace/inlayHint/refresh` (D-1679, `child_loop`).
+    shown_constants: BTreeMap<PathBuf, ShownConstants>,
     /// What tests switch on through `cheby/testHold`, `cheby/testPanicRun`
     /// and `cheby/testNoDebounce`.
     #[cfg(test)]
@@ -265,6 +275,7 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         events,
         options,
         running: None,
+        orphan_job: false,
         shutting_down: false,
         closed: false,
         caps,
@@ -289,6 +300,7 @@ pub(crate) fn serve(connection: Connection, options: ServerOptions) -> Result<En
         texts: BTreeMap::new(),
         children: Children::new(),
         generations: BTreeMap::new(),
+        shown_constants: BTreeMap::new(),
         #[cfg(test)]
         test: TestSwitches::default(),
     };
@@ -538,6 +550,15 @@ impl Server {
         match event {
             Event::Live {
                 root,
+                strict_follows,
+                ..
+            } if self.orphan_job => {
+                self.in_flight = None;
+                self.on_orphan(&root, !strict_follows);
+            }
+            Event::Strict { root, .. } if self.orphan_job => self.on_orphan(&root, true),
+            Event::Live {
+                root,
                 result,
                 strict_follows,
             } => {
@@ -647,13 +668,23 @@ impl Server {
         }
         let target_changed = settings.analysis.target != self.settings.analysis.target;
         let inlays_changed = settings.inlay_hints != self.settings.inlay_hints;
+        let links_changed =
+            settings.diagnostics.explain_links != self.settings.diagnostics.explain_links;
         self.settings = Arc::new(settings);
         if target_changed {
             self.mark_all_dirty();
         }
+        // The published lists carry the links, so they go out again at
+        // once, from the reports they were made from (D-1750).
+        if links_changed {
+            self.republish_all();
+        }
         // The client asks again for the hints it shows (A §12.3).
         if inlays_changed && self.caps.inlay_refresh {
             self.request("workspace/inlayHint/refresh", Value::Null, Outgoing::Ignore);
+            // That refresh covers the constant row's values too, so they
+            // are only taken in, with no second refresh (D-1679).
+            self.recompute_constant_hints(Recheck::Values);
         }
         self.child_on_settings(target_changed);
     }

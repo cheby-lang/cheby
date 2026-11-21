@@ -1,0 +1,158 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Flat` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: `Area` needs `area(Flat) -> Float` (§8.2)\nnote: the module's `area` is for `Round`: a module satisfies an interface for one type only (§8.2.1, D-045)\nhelp: move `Flat` and its functions to a module of their own",
+      "range": {
+        "end": {
+          "character": 62,
+          "line": 26
+        },
+        "start": {
+          "character": 38,
+          "line": 26
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 17
+              },
+              "start": {
+                "character": 3,
+                "line": 17
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`area` has the signature `area(Round) -> Float`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:27:47 codeAction
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        428,
+        428
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Flat` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: `Area` needs `area(Flat) -> Float` (§8.2)\nnote: the module's `area` is for `Round`: a module satisfies an interface for one type only (§8.2.1, D-045)\nhelp: move `Flat` and its functions to a module of their own",
+        "range": {
+          "end": {
+            "character": 62,
+            "line": 26
+          },
+          "start": {
+            "character": 38,
+            "line": 26
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 17
+                },
+                "start": {
+                  "character": 3,
+                  "line": 17
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`area` has the signature `area(Round) -> Float`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "disabled": {
+      "reason": "move `Flat` and its functions to a module of their own"
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `area`"
+  },
+  {
+    "command": {
+      "arguments": [
+        "E0063"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0063"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        428,
+        428
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Flat` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: `Area` needs `area(Flat) -> Float` (§8.2)\nnote: the module's `area` is for `Round`: a module satisfies an interface for one type only (§8.2.1, D-045)\nhelp: move `Flat` and its functions to a module of their own",
+        "range": {
+          "end": {
+            "character": 62,
+            "line": 26
+          },
+          "start": {
+            "character": 38,
+            "line": 26
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 17
+                },
+                "start": {
+                  "character": 3,
+                  "line": 17
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`area` has the signature `area(Round) -> Float`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0063"
+  }
+]

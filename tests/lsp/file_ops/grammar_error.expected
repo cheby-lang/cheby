@@ -1,0 +1,127 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `moves::util`\nno such module",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 4
+        },
+        "start": {
+          "character": 7,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `moves::util`\nno such module",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 5
+        },
+        "start": {
+          "character": 7,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ],
+  "src/other.cheby": [
+    {
+      "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 2
+        },
+        "start": {
+          "character": 11,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 2
+              },
+              "start": {
+                "character": 9,
+                "line": 2
+              }
+            },
+            "uri": "src/other.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
+      "message": "unclosed `{`\nexpected `}`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 2
+        },
+        "start": {
+          "character": 11,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 2
+              },
+              "start": {
+                "character": 11,
+                "line": 2
+              }
+            },
+            "uri": "src/other.cheby"
+          },
+          "message": "this `{` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== willRename src/util.cheby src/helpers.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: `src/other.cheby` has syntax errors"
+  ]
+}

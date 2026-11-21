@@ -1,0 +1,6 @@
+//! Two.
+
+/// Two.
+pub fn two() -> Int {
+  2
+}

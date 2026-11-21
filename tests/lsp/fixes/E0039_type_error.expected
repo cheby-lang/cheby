@@ -1,0 +1,148 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `std::lst`\nno such module",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 4
+        },
+        "start": {
+          "character": 7,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "`list` is not imported\nhelp: add `import std::list` at the top of the file",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 7
+        },
+        "start": {
+          "character": 9,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 11
+        },
+        "start": {
+          "character": 2,
+          "line": 11
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 10
+              },
+              "start": {
+                "character": 15,
+                "line": 10
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:8 action a module with a similar name exists: `std::list`
+{
+  "actions": [
+    "a module with a similar name exists: `std::list`",
+    "Explain E0039"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        138,
+        138
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0039",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+        },
+        "message": "there is no module `std::lst`\nno such module",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 4
+          },
+          "start": {
+            "character": 7,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "std::list",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 4
+                },
+                "start": {
+                  "character": 7,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "a module with a similar name exists: `std::list`"
+  },
+  "showMessage": []
+}

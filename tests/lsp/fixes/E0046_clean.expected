@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0046",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0046.md"
+      },
+      "message": "the function `answer` has no body\nhelp: add a body, or an `@external` attribute that names its foreign implementation",
+      "range": {
+        "end": {
+          "character": 9,
+          "line": 3
+        },
+        "start": {
+          "character": 3,
+          "line": 3
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:4:4 action Add the body `{ todo }`
+{
+  "actions": [
+    "Add the body `{ todo }`",
+    "Explain E0046"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        124,
+        124
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0046",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0046.md"
+        },
+        "message": "the function `answer` has no body\nhelp: add a body, or an `@external` attribute that names its foreign implementation",
+        "range": {
+          "end": {
+            "character": 9,
+            "line": 3
+          },
+          "start": {
+            "character": 3,
+            "line": 3
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": " {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 18,
+                  "line": 3
+                },
+                "start": {
+                  "character": 18,
+                  "line": 3
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Add the body `{ todo }`"
+  },
+  "showMessage": []
+}

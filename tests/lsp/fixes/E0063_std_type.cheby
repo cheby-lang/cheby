@@ -1,0 +1,17 @@
+// @decisions: D-1690, D-1736
+// @client: full
+//! A type of the binary's std gets its stub disabled, which only a client
+//! with `disabledSupport` sees (X §6.6, ADR-0023, D-1690).
+
+interface Area {
+  fn area(Self) -> Float
+}
+
+fn measure<T: Area>(x: T) -> Float {
+  Area::area(x)
+}
+
+fn main() {
+  assert measure(1) == 1.0
+  //             ^ codeAction
+}

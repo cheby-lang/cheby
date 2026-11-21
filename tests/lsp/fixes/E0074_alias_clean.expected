@@ -1,0 +1,127 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0074",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0074.md"
+      },
+      "message": "the `pub` function `issue` mentions the package-visible type `Token`\n`Tok` stands for a type that mentions `Token`\nnote: code that can use `issue` could not name `Token` (D-148)\nhelp: make `Token` `pub`, or make `issue` package-visible",
+      "range": {
+        "end": {
+          "character": 33,
+          "line": 10
+        },
+        "start": {
+          "character": 30,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 4
+              },
+              "start": {
+                "character": 5,
+                "line": 4
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:31 action Make `Token` `pub`
+{
+  "actions": [
+    "Make `Token` `pub`",
+    "Explain E0074"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        275,
+        275
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0074",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0074.md"
+        },
+        "message": "the `pub` function `issue` mentions the package-visible type `Token`\n`Tok` stands for a type that mentions `Token`\nnote: code that can use `issue` could not name `Token` (D-148)\nhelp: make `Token` `pub`, or make `issue` package-visible",
+        "range": {
+          "end": {
+            "character": 33,
+            "line": 10
+          },
+          "start": {
+            "character": 30,
+            "line": 10
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 4
+                },
+                "start": {
+                  "character": 5,
+                  "line": 4
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "pub ",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 4
+                },
+                "start": {
+                  "character": 0,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `Token` `pub`"
+  },
+  "showMessage": []
+}

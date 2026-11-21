@@ -1,0 +1,122 @@
+== diagnostics
+{}
+
+== std/probe_base.cheby:9:5 rename increment
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "increment",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 8
+              },
+              "start": {
+                "character": 3,
+                "line": 8
+              }
+            }
+          },
+          {
+            "newText": "increment",
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 16
+              },
+              "start": {
+                "character": 2,
+                "line": 16
+              }
+            }
+          },
+          {
+            "newText": "increment",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 20
+              },
+              "start": {
+                "character": 9,
+                "line": 20
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "std/probe_base.cheby",
+          "version": 1
+        }
+      },
+      {
+        "edits": [
+          {
+            "newText": "increment",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 5
+              },
+              "start": {
+                "character": 14,
+                "line": 5
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "std/probe_user.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== std/probe_base.cheby:15:9 rename doubled
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "doubled",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 14
+              },
+              "start": {
+                "character": 8,
+                "line": 14
+              }
+            }
+          },
+          {
+            "newText": "doubled",
+            "range": {
+              "end": {
+                "character": 30,
+                "line": 20
+              },
+              "start": {
+                "character": 25,
+                "line": 20
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "std/probe_base.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

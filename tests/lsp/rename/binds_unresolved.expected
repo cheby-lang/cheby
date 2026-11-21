@@ -1,0 +1,117 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `total`\nnever used",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 18
+        },
+        "start": {
+          "character": 6,
+          "line": 18
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `bar` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 20
+        },
+        "start": {
+          "character": 9,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0058",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+      },
+      "message": "`Box` has no field `wide`\nunknown field\nnote: the field of `Box`: `width`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 20
+        },
+        "start": {
+          "character": 19,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `count` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 31,
+          "line": 20
+        },
+        "start": {
+          "character": 26,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:3 rename wide
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would hide an error: error[E0058]: `Box` has no field `wide` at src/main.cheby:21:20"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:12:4 rename bar
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would hide an error: error[E0042]: cannot find value `bar` in this scope at src/main.cheby:21:10"
+    }
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:19:7 rename count
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would hide an error: error[E0042]: cannot find value `count` in this scope at src/main.cheby:21:27"
+    }
+  },
+  "showMessage": []
+}

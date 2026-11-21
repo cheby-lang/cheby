@@ -1,0 +1,87 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 36
+        },
+        "start": {
+          "character": 2,
+          "line": 36
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 35
+              },
+              "start": {
+                "character": 19,
+                "line": 35
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:19:8 action Satisfy interface `Shape`: add `perimeter`
+{
+  "actions": [
+    "Satisfy interface `Shape`: add `perimeter`"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        499,
+        499
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn perimeter(cube: Cube) -> Float {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 29
+                },
+                "start": {
+                  "character": 1,
+                  "line": 29
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source",
+    "title": "Satisfy interface `Shape`: add `perimeter`"
+  },
+  "showMessage": []
+}

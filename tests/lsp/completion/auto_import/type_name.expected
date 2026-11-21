@@ -3,7 +3,10 @@
   "src/main.cheby": [
     {
       "code": "W0002",
-      "message": "unused parameter `d`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_d`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `d`\nnever used",
       "range": {
         "end": {
           "character": 9,
@@ -15,10 +18,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find type `Durat` in this scope\nnot found",
       "range": {
         "end": {

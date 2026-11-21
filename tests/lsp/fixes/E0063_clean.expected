@@ -1,0 +1,311 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Square` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: this module declares `Square` but has no function `area(Square) -> Float` (§8.2, D-061)\nhelp: add a function `area(Square) -> Float` to this module",
+      "range": {
+        "end": {
+          "character": 24,
+          "line": 20
+        },
+        "start": {
+          "character": 9,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:21:18 codeAction
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        495,
+        495
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Square` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: this module declares `Square` but has no function `area(Square) -> Float` (§8.2, D-061)\nhelp: add a function `area(Square) -> Float` to this module",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 20
+          },
+          "start": {
+            "character": 9,
+            "line": 20
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn area(square: Square) -> Float {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 12
+                },
+                "start": {
+                  "character": 1,
+                  "line": 12
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `area`"
+  },
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        495,
+        495
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Square` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: this module declares `Square` but has no function `area(Square) -> Float` (§8.2, D-061)\nhelp: add a function `area(Square) -> Float` to this module",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 20
+          },
+          "start": {
+            "character": 9,
+            "line": 20
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn scale(square: Square, float_value: Float) -> Square {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 12
+                },
+                "start": {
+                  "character": 1,
+                  "line": 12
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `scale`"
+  },
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        495,
+        495
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Square` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: this module declares `Square` but has no function `area(Square) -> Float` (§8.2, D-061)\nhelp: add a function `area(Square) -> Float` to this module",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 20
+          },
+          "start": {
+            "character": 9,
+            "line": 20
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn area(square: Square) -> Float {\n  todo\n}\n\nfn scale(square: Square, float_value: Float) -> Square {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 12
+                },
+                "start": {
+                  "character": 1,
+                  "line": 12
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add all missing functions"
+  },
+  {
+    "command": {
+      "arguments": [
+        "E0063"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0063"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        495,
+        495
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Square` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: this module declares `Square` but has no function `area(Square) -> Float` (§8.2, D-061)\nhelp: add a function `area(Square) -> Float` to this module",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 20
+          },
+          "start": {
+            "character": 9,
+            "line": 20
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0063"
+  }
+]
+
+== src/main.cheby:21:18 action Add all missing functions
+{
+  "actions": [
+    "Add the missing function `area`",
+    "Add the missing function `scale`",
+    "Add all missing functions",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        495,
+        495
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Square` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: this module declares `Square` but has no function `area(Square) -> Float` (§8.2, D-061)\nhelp: add a function `area(Square) -> Float` to this module",
+        "range": {
+          "end": {
+            "character": 24,
+            "line": 20
+          },
+          "start": {
+            "character": 9,
+            "line": 20
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn area(square: Square) -> Float {\n  todo\n}\n\nfn scale(square: Square, float_value: Float) -> Square {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 12
+                },
+                "start": {
+                  "character": 1,
+                  "line": 12
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add all missing functions"
+  },
+  "showMessage": []
+}

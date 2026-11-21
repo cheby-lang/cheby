@@ -1,0 +1,21 @@
+// @decisions: D-1388, D-1393, D-1736, D-153, D-1347
+//! W0006's fix discards a `Result` with `let _ =`, under its own title.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+fn parse(text: String) -> Result<Int, String> {
+  case text {
+    "1" => Ok(1)
+    _ => Err(text)
+  }
+}
+
+fn main() {
+  parse("1")
+  assert 1 == 1
+}
+
+fn broken() {
+  let = 1
+}
+//> 14:3 noAction Discard the value with `let _ =`

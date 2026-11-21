@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `re` in this scope\nnot found",
       "range": {
         "end": {
@@ -19,6 +22,9 @@
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `re` in this scope\nnot found",
       "range": {
         "end": {
@@ -35,6 +41,9 @@
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `re` in this scope\nnot found",
       "range": {
         "end": {

@@ -1,0 +1,20 @@
+// @decisions: D-164, D-1736
+//! A `pub` type whose `show` is package-visible does not satisfy `Show`
+//! (D-164): its `show` is made `pub`.
+
+pub type Badge {
+  Badge(Int),
+}
+
+fn show(badge: Badge) -> String {
+  "badge"
+}
+
+pub fn label(badge: Badge) -> String {
+  "{badge}"
+  //^ action Make `show` `pub`
+}
+
+fn main() {
+  assert label(Badge(1)) == "badge"
+}

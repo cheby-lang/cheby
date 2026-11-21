@@ -1,0 +1,3 @@
+//! A module that never parsed.
+
+pub fn half( {

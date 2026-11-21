@@ -1,0 +1,11 @@
+// @decisions: D-1674, D-1676, D-1714
+// @steps: willRename src/alpha.cheby src/zeta.cheby
+//! The root module: a move that changes the order of its imports.
+
+import moves::alpha
+import moves::beta
+import std::io
+
+fn main() {
+  io::println(alpha::name() + beta::name())
+}

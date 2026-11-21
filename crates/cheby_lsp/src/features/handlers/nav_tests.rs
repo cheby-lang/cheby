@@ -9,7 +9,7 @@
 )]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cheby_driver::analysis::{Globals, Overlay, OverlayFile, PackageKind, Session, SessionConfig};
 use serde_json::{Value, json};
@@ -22,8 +22,12 @@ use crate::server::{ClientCaps, Settings};
 use crate::text::lines::PositionEncoding;
 use crate::text::uri::{normalize, path_to_uri};
 
-/// The std directory the tests name. Nothing is read from it.
-const STD_DIR: &str = "/nav-tests-std";
+/// The std directory the tests name, absolute on every platform, so a
+/// std file under it has a URI on Windows too. Nothing is read from it.
+fn std_dir() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| std::env::temp_dir().join("nav-tests-std"))
+}
 
 /// A package in a fresh temporary directory, removed on drop.
 struct Temp(PathBuf);
@@ -97,7 +101,12 @@ struct Case {
 
 impl Case {
     fn new(name: &str, main: &str) -> Self {
-        let temp = Temp::package(name, &[("shapes.cheby", SHAPES), ("main.cheby", main)]);
+        Self::of(name, SHAPES, main)
+    }
+
+    /// The package of `shapes` and `main`, with `main` open.
+    fn of(name: &str, shapes: &str, main: &str) -> Self {
+        let temp = Temp::package(name, &[("shapes.cheby", shapes), ("main.cheby", main)]);
         let mut session = Session::new(SessionConfig {
             root: temp.0.clone(),
             kind: PackageKind::Package,
@@ -147,7 +156,9 @@ impl Case {
             encoding: PositionEncoding::Utf16,
             cancel: &cancel,
             std: &crate::features::stdlib::StdService::none(),
+            uris: &crate::text::uri::UriMap::new(),
             constants: None,
+            reports: None,
         };
         let env = NavEnv {
             links: LinkCaps {
@@ -155,7 +166,7 @@ impl Case {
                 declaration: links,
                 type_definition: links,
             },
-            std_dir: Some(Path::new(STD_DIR)),
+            std_dir: Some(std_dir()),
         };
         handler(&cx, &self.analyzed, params, &env).expect("an answer")
     }
@@ -194,7 +205,7 @@ impl Case {
         let src = self.temp.0.join("src");
         let shown = path
             .strip_prefix(&src)
-            .or_else(|_| path.strip_prefix(STD_DIR))
+            .or_else(|_| path.strip_prefix(std_dir()))
             .unwrap_or(&path);
         shown.to_string_lossy().replace('\\', "/")
     }
@@ -241,10 +252,6 @@ fn link_caps_follow_each_method() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs the front end, which needs JIT code; Windows is M6 (D-545, D-641)"
-)]
 fn definition_on_clean_text() {
     let case = Case::new("clean", MAIN);
     let def = |line, col| case.run(definition, false, case.at("main.cheby", line, col));
@@ -279,10 +286,6 @@ fn definition_on_clean_text() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs the front end, which needs JIT code; Windows is M6 (D-545, D-641)"
-)]
 fn links_carry_the_origin_and_the_declaration() {
     let case = Case::new("links", MAIN);
     let params = case.at("main.cheby", 8, 19);
@@ -298,10 +301,6 @@ fn links_carry_the_origin_and_the_declaration() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs the front end, which needs JIT code; Windows is M6 (D-545, D-641)"
-)]
 fn declaration_and_type_definition() {
     let case = Case::new("decl", MAIN);
     // `add` satisfies `Add`, so its declaration is `Add`'s function.
@@ -328,10 +327,6 @@ fn declaration_and_type_definition() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs the front end, which needs JIT code; Windows is M6 (D-545, D-641)"
-)]
 fn references_and_highlights() {
     let case = Case::new("refs", MAIN);
     let mut at = case.at("main.cheby", 7, 6);
@@ -355,7 +350,7 @@ fn references_and_highlights() {
     );
     // A clean package: nothing logged.
     let output = case.output(references, false, case.at("main.cheby", 7, 6));
-    assert!(output.effects.is_empty());
+    assert_eq!(output.effects, []);
     // A local: written at its binding, read in a path and in `{q}`.
     assert_eq!(
         case.run(document_highlight, false, case.at("main.cheby", 8, 6)),
@@ -369,10 +364,6 @@ fn references_and_highlights() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs the front end, which needs JIT code; Windows is M6 (D-545, D-641)"
-)]
 fn navigation_on_a_type_error() {
     let main = "//! Root.
 
@@ -407,10 +398,6 @@ fn main() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "runs the front end, which needs JIT code; Windows is M6 (D-545, D-641)"
-)]
 fn navigation_on_a_grammar_error() {
     let main = "//! Root.
 
@@ -444,4 +431,39 @@ fn main() {
         ["main.cheby 6:6-6:7", "main.cheby 7:10-7:11"]
     );
     assert_eq!(output.effects.len(), 1, "{:?}", output.effects);
+}
+
+/// The shared conversions of `doc` (G1 plan §1.3) through `references`:
+/// the open document counts its BOM and the closed one hides it (D-1368),
+/// CRLF ends one line, and columns count UTF-16 units after `é` and `😀`,
+/// both for the request's position and for every location.
+#[test]
+fn locations_keep_the_bom_line_and_column_rules() {
+    let shapes = "\u{feff}pub fn add(a: Int, b: Int) -> Int {\r\n  a + b\r\n}\r\n\r\npub fn twice(a: Int) -> Int {\r\n  add(a, a)\r\n}\r\n";
+    let main = "\u{feff}import app::shapes::{add}\r\n\r\nfn main() {\r\n  let _ = (\"é😀\", add(1, 2))\r\n}\r\n";
+    let case = Case::of("bom_crlf", shapes, main);
+    let expected = [
+        "main.cheby 0:22-0:25",
+        "main.cheby 3:18-3:21",
+        "shapes.cheby 0:7-0:10",
+        "shapes.cheby 5:2-5:5",
+    ];
+    // From the closed file's declaration, after its hidden BOM.
+    assert_eq!(
+        case.run(references, false, case.at("shapes.cheby", 0, 7)),
+        expected
+    );
+    // From the open file, after its counted BOM and after `😀`.
+    assert_eq!(
+        case.run(references, false, case.at("main.cheby", 0, 22)),
+        expected
+    );
+    assert_eq!(
+        case.run(references, false, case.at("main.cheby", 3, 18)),
+        expected
+    );
+    assert_eq!(
+        case.run(definition, false, case.at("main.cheby", 3, 19)),
+        ["shapes.cheby 0:7-0:10"]
+    );
 }

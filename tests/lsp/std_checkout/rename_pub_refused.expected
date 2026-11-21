@@ -1,0 +1,32 @@
+== diagnostics
+{}
+
+== std/probe_rename_pub_refused.cheby:22:9 prepareRename
+{
+  "error": {
+    "code": -32803,
+    "message": "`list::map` is `pub`: std's API also lives in `docs/stdlib/`, the examples and the tests"
+  }
+}
+
+== std/probe_rename_pub_refused.cheby:22:9 rename transform
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`list::map` is `pub`: std's API also lives in `docs/stdlib/`, the examples and the tests"
+    }
+  },
+  "showMessage": []
+}
+
+== std/probe_rename_pub_refused.cheby:27:5 rename text
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "`shown` makes `Meter` satisfy `Shown`, which packages outside the checkout may use"
+    }
+  },
+  "showMessage": []
+}

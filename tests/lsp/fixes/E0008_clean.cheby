@@ -1,0 +1,8 @@
+// @decisions: D-1388, D-1393, D-084
+//! E0008's help drops the leading zero of a decimal literal.
+
+fn main() {
+  let n = 007
+  assert n == 7
+}
+//> 5:11 action write `7`

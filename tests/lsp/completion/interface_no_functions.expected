@@ -1,0 +1,248 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `Ev` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 16
+        },
+        "start": {
+          "character": 10,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `La` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 18
+        },
+        "start": {
+          "character": 15,
+          "line": 18
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `d`\nnever used",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 20
+        },
+        "start": {
+          "character": 6,
+          "line": 20
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find type `An` in this scope\nnot found",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 20
+        },
+        "start": {
+          "character": 13,
+          "line": 20
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:17:13 completion Every Labeled Any
+{
+  "absent": [
+    "Any"
+  ],
+  "count": 58,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "interface Every {\n  fn all(List<Self>) -> Bool\n}",
+      "kind": 8,
+      "label": "Every",
+      "sortText": "20Every",
+      "textEdit": {
+        "newText": "Every::",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 16
+          },
+          "start": {
+            "character": 10,
+            "line": 16
+          }
+        }
+      }
+    },
+    {
+      "detail": "interface Labeled: Show",
+      "kind": 8,
+      "label": "Labeled",
+      "sortText": "20Labeled",
+      "textEdit": {
+        "newText": "Labeled::",
+        "range": {
+          "end": {
+            "character": 12,
+            "line": 16
+          },
+          "start": {
+            "character": 10,
+            "line": 16
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:19:18 completion Labeled Show Every Any
+{
+  "absent": [
+    "Every",
+    "Any"
+  ],
+  "count": 9,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "interface Labeled: Show",
+      "kind": 8,
+      "label": "Labeled",
+      "sortText": "20Labeled",
+      "textEdit": {
+        "newText": "Labeled::",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 18
+          },
+          "start": {
+            "character": 15,
+            "line": 18
+          }
+        }
+      }
+    },
+    {
+      "detail": "pub interface Show {\n  fn show(Self) -> String\n}",
+      "kind": 8,
+      "label": "Show",
+      "sortText": "40Show",
+      "textEdit": {
+        "newText": "Show::",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 18
+          },
+          "start": {
+            "character": 15,
+            "line": 18
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:21:16 completion Any Every Labeled
+{
+  "count": 28,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "interface Any",
+      "kind": 8,
+      "label": "Any",
+      "sortText": "20Any",
+      "textEdit": {
+        "newText": "Any",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 20
+          },
+          "start": {
+            "character": 13,
+            "line": 20
+          }
+        }
+      }
+    },
+    {
+      "detail": "interface Every {\n  fn all(List<Self>) -> Bool\n}",
+      "kind": 8,
+      "label": "Every",
+      "sortText": "20Every",
+      "textEdit": {
+        "newText": "Every",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 20
+          },
+          "start": {
+            "character": 13,
+            "line": 20
+          }
+        }
+      }
+    },
+    {
+      "detail": "interface Labeled: Show",
+      "kind": 8,
+      "label": "Labeled",
+      "sortText": "20Labeled",
+      "textEdit": {
+        "newText": "Labeled",
+        "range": {
+          "end": {
+            "character": 15,
+            "line": 20
+          },
+          "start": {
+            "character": 13,
+            "line": 20
+          }
+        }
+      }
+    }
+  ]
+}

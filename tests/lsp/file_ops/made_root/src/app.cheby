@@ -1,0 +1,8 @@
+//! A module that would become the root.
+
+import moves::util
+
+/// A greeting through `util`.
+pub fn hello() -> String {
+  util::greet()
+}

@@ -1,0 +1,7 @@
+// @decisions: D-1391
+//! Renaming `main` gets the note of the entry point.
+
+fn main() {
+// ^ rename start
+  assert 1 == 1
+}

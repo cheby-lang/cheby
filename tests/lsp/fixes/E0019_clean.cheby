@@ -1,0 +1,12 @@
+// @decisions: D-1388, D-1393, D-200
+//! E0019's help removes the space between `@` and an attribute's name.
+
+@ deprecated("use g")
+pub fn f() -> Int {
+  1
+}
+
+fn main() {
+  assert f() == 1
+}
+//> 4:2 action remove the space

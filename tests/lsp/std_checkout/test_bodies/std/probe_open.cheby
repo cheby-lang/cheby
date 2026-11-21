@@ -1,0 +1,11 @@
+//! An open probe whose test body has a type error, published while it is
+//! open and cleared after it closes.
+
+pub fn three() -> Int {
+  3
+}
+
+test "three reads as a string" {
+  let text: String = three()
+  assert text == "3"
+}

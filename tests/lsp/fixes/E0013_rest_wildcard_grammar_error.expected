@@ -1,0 +1,112 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected `,` or `]`, found `_`",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 7
+        },
+        "start": {
+          "character": 10,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 17
+        },
+        "start": {
+          "character": 6,
+          "line": 17
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:11 action Write `..`
+{
+  "actions": [
+    "Write `..`",
+    "Add the missing arms",
+    "Explain E0013"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        244,
+        244
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected `,` or `]`, found `_`",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 7
+          },
+          "start": {
+            "character": 10,
+            "line": 7
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 7
+                },
+                "start": {
+                  "character": 10,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Write `..`"
+  },
+  "showMessage": []
+}

@@ -20,22 +20,26 @@ pub(super) fn tuple_pat(tuple: TuplePat<'_>, out: &mut Vec<Diagnostic>) {
         .syntax()
         .first_token_of_kind(SyntaxKind::COMMA)
         .is_some();
-    let (message, help) = match count {
-        0 if !has_comma => (
-            "`()` is not a pattern",
-            "the value with no information is `Nil`; match it with `Nil`",
-        ),
-        1 => (
+    let span = tuple.significant_span();
+    let diag = match count {
+        // The help that names one fix carries its edit (D-1689).
+        0 if !has_comma => Diagnostic::new(codes::SHORT_TUPLE, "`()` is not a pattern")
+            .with_primary(span, "")
+            .with_suggestion(
+                "the value with no information is `Nil`; match it with `Nil`",
+                span,
+                "Nil",
+            ),
+        // This help names two fixes, so it carries no edit (D-1689).
+        1 => Diagnostic::new(
+            codes::SHORT_TUPLE,
             "a tuple pattern has at least two elements",
-            "write the pattern alone, or `(p)` without the comma",
-        ),
+        )
+        .with_primary(span, "")
+        .with_help("write the pattern alone, or `(p)` without the comma"),
         _ => return,
     };
-    out.push(
-        Diagnostic::new(codes::SHORT_TUPLE, message)
-            .with_primary(tuple.significant_span(), "")
-            .with_help(help),
-    );
+    out.push(diag);
 }
 
 /// E0032: at most one rest in a list pattern (D-158).

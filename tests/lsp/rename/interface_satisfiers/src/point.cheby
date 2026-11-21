@@ -1,0 +1,14 @@
+//! A point, which satisfies `Display`.
+
+pub type Point {
+  x: Int,
+  y: Int,
+}
+
+pub fn show(p: Point) -> String {
+  "({p.x}, {p.y})"
+}
+
+pub fn width(p: Point) -> Int {
+  p.x + p.y
+}

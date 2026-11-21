@@ -1,0 +1,141 @@
+== diagnostics
+{
+  "std/probe_import_elsewhere.cheby": [
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `only_in_the_checkout` in module `std::list`\nnot found\nhelp: `std::probe_only` has `only_in_the_checkout`",
+      "range": {
+        "end": {
+          "character": 28,
+          "line": 12
+        },
+        "start": {
+          "character": 8,
+          "line": 12
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 6,
+                "line": 12
+              },
+              "start": {
+                "character": 2,
+                "line": 12
+              }
+            },
+            "uri": "std/probe_import_elsewhere.cheby"
+          },
+          "message": "`std::list`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== std/probe_import_elsewhere.cheby:13:9 action Use `probe_only::only_in_the_checkout` and import `std::probe_only`
+{
+  "actions": [
+    "Use `probe_only::only_in_the_checkout` and import `std::probe_only`",
+    "Explain E0042"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        406,
+        406
+      ],
+      "uri": "std/probe_import_elsewhere.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0042",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+        },
+        "message": "there is no value `only_in_the_checkout` in module `std::list`\nnot found\nhelp: `std::probe_only` has `only_in_the_checkout`",
+        "range": {
+          "end": {
+            "character": 28,
+            "line": 12
+          },
+          "start": {
+            "character": 8,
+            "line": 12
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 6,
+                  "line": 12
+                },
+                "start": {
+                  "character": 2,
+                  "line": 12
+                }
+              },
+              "uri": "std/probe_import_elsewhere.cheby"
+            },
+            "message": "`std::list`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::probe_only\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 9
+                },
+                "start": {
+                  "character": 0,
+                  "line": 9
+                }
+              }
+            },
+            {
+              "newText": "probe_only::only_in_the_checkout",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 12
+                },
+                "start": {
+                  "character": 2,
+                  "line": 12
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "std/probe_import_elsewhere.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Use `probe_only::only_in_the_checkout` and import `std::probe_only`"
+  },
+  "showMessage": []
+}

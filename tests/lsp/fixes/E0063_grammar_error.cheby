@@ -1,0 +1,27 @@
+// @decisions: D-1696, D-1736, D-1347
+//! With a grammar error in another function E0063 is not reported
+//! (D-1347), so no stub is offered.
+
+interface Area {
+  fn area(Self) -> Float
+  fn scale(Self, Float) -> Self
+}
+
+type Square {
+  side: Float,
+}
+
+fn measure<T: Area>(x: T) -> Float {
+  Area::area(x)
+}
+
+fn main() {
+  let square = Square { side: 1.0 }
+  assert measure(square) == 1.0
+  //             ^ codeAction
+  //             ^ noAction Add all missing functions
+}
+
+fn broken() {
+  let = 1
+}

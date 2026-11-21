@@ -1,0 +1,9 @@
+// @decisions: D-080, D-152, D-1736
+//! W0005 for a package-visible function nothing uses: "make `pub`" writes
+//! `pub` after its doc comment.
+
+import app::helper
+
+fn main() {
+  assert helper::used() == 1
+}

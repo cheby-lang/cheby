@@ -1,0 +1,96 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`geo::Circle` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: only functions of the module that declares `geo::Circle` count, and `app::geo` has no function `area(geo::Circle) -> Float` (§8.2, D-061)",
+      "range": {
+        "end": {
+          "character": 45,
+          "line": 16
+        },
+        "start": {
+          "character": 9,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:17:18 action Add the missing function `area`
+{
+  "actions": [
+    "Add the missing function `area`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "function": "area",
+        "interface": "app::Area",
+        "kind": "stub"
+      },
+      "range": [
+        387,
+        387
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`geo::Circle` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: only functions of the module that declares `geo::Circle` count, and `app::geo` has no function `area(geo::Circle) -> Float` (§8.2, D-061)",
+        "range": {
+          "end": {
+            "character": 45,
+            "line": 16
+          },
+          "start": {
+            "character": 9,
+            "line": 16
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\npub fn area(circle: Circle) -> Float {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 8
+                },
+                "start": {
+                  "character": 1,
+                  "line": 8
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/geo.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `area`"
+  },
+  "showMessage": []
+}

@@ -1,0 +1,160 @@
+== diagnostics
+{
+  "src/label.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `l`\nnever used",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 11
+        },
+        "start": {
+          "character": 13,
+          "line": 11
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused parameter `l`\nnever used",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 15
+        },
+        "start": {
+          "character": 14,
+          "line": 15
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:11:6 rename render
+{
+  "answer": {
+    "changeAnnotations": {
+      "cheby.satisfaction": {
+        "label": "`Label` will no longer satisfy `Show`; `Point` will no longer satisfy `Show`",
+        "needsConfirmation": true
+      }
+    },
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 6
+              },
+              "start": {
+                "character": 7,
+                "line": 6
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/label.cheby",
+          "version": 1
+        }
+      },
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 10
+              },
+              "start": {
+                "character": 5,
+                "line": 10
+              }
+            }
+          },
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 15,
+                "line": 20
+              },
+              "start": {
+                "character": 11,
+                "line": 20
+              }
+            }
+          },
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 25
+              },
+              "start": {
+                "character": 17,
+                "line": 25
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      },
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 7
+              },
+              "start": {
+                "character": 7,
+                "line": 7
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/point.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": [
+    "warning: `Label` will no longer satisfy `Show`; `Point` will no longer satisfy `Show`"
+  ]
+}

@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0025",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0025.md"
+      },
       "message": "`_` is allowed only as a whole call argument\nhelp: write a closure instead, such as `fn(x) { x + 1 }`",
       "range": {
         "end": {
@@ -19,6 +22,9 @@
     },
     {
       "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
       "message": "expected a line break or `}`, found `=>`",
       "range": {
         "end": {

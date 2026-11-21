@@ -348,23 +348,39 @@ pub fn known() -> Vec<&'static str> {
 pub fn item_names() -> &'static [cheby_resolve::StdItemName] {
     static NAMES: std::sync::OnceLock<Vec<cheby_resolve::StdItemName>> = std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
-        STD_MODULES
+        let parsed: Vec<(&str, cheby_syntax::Parse)> = STD_MODULES
             .iter()
-            .flat_map(|module| {
+            .map(|module| {
                 let parse = cheby_syntax::parse(
                     cheby_diag::FileId::new(0),
                     std::sync::Arc::from(module.source),
                 );
-                cheby_resolve::public_names(parse.tree())
-                    .into_iter()
-                    .map(|(name, namespace)| cheby_resolve::StdItemName {
-                        module: module.path,
-                        name: name.into_boxed_str(),
-                        namespace,
-                    })
+                (module.path, parse)
             })
-            .collect()
+            .collect();
+        items_of(parsed.iter().map(|(path, parse)| (*path, parse.tree())))
     })
+}
+
+/// The public items of `modules`, given as `(path under std, tree)` in
+/// module order, each module's in declaration order: the list of
+/// [`item_names`], or of a std checkout's run, which builds it from the
+/// checkout's own texts (D-1700). The language server builds a
+/// checkout's list with it too, for E0042's fix (D-1694, D-1726).
+pub fn items_of<'t>(
+    modules: impl Iterator<Item = (&'t str, &'t cheby_syntax::SyntaxTree)>,
+) -> Vec<cheby_resolve::StdItemName> {
+    modules
+        .flat_map(|(path, tree)| {
+            cheby_resolve::public_names(tree)
+                .into_iter()
+                .map(move |(name, namespace)| cheby_resolve::StdItemName {
+                    module: path.into(),
+                    name: name.into_boxed_str(),
+                    namespace,
+                })
+        })
+        .collect()
 }
 
 /// The path a std file is shown with in diagnostics and panic locations:
@@ -407,7 +423,7 @@ mod tests {
         let names = item_names();
         let has = |module: &str, name: &str| {
             names.iter().any(|item| {
-                item.module == module
+                &*item.module == module
                     && &*item.name == name
                     && item.namespace == cheby_iface::Namespace::Value
             })

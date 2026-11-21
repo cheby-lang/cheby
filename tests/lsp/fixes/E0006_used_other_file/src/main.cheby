@@ -1,0 +1,9 @@
+// @decisions: D-1684, D-1741
+//! E0006's fix on a function that another module calls renames the call
+//! too, checked by `verify` on resolve.
+
+import app::util
+
+fn main() {
+  assert util::getValue() == 1
+}

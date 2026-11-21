@@ -20,7 +20,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use cheby_driver::analysis::{Snapshot, Symbol, SymbolTarget, Targets, item_docs};
+use cheby_driver::analysis::{ModuleView, Snapshot, Symbol, SymbolTarget, Targets, item_docs};
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionItemTag,
     CompletionList, CompletionParams, CompletionTextEdit, Documentation, InsertTextFormat,
@@ -322,7 +322,8 @@ fn holding<'a>(packages: &[&'a Analyzed], path: &Path) -> Option<&'a Snapshot> {
 }
 
 /// The docs of `symbol`: from its module's tree in `snapshot`, else from
-/// std's index (D-1385), with a note for an item of one target only.
+/// std's index (D-1385) unless the module is one of the session's own
+/// (D-1700), with a note for an item of one target only.
 fn docs(snapshot: Option<&Snapshot>, symbol: &Symbol, std: StdAccess<'_>) -> Option<String> {
     let def = snapshot.and_then(|s| match s.find(symbol)? {
         SymbolTarget::Item(def) => Some((s, def)),
@@ -336,7 +337,12 @@ fn docs(snapshot: Option<&Snapshot>, symbol: &Symbol, std: StdAccess<'_>) -> Opt
         let view = s.module(def.module)?;
         item_docs(view.tree()?, view.resolved()?.item(def.index)?)
     });
-    let std_item = std.get().and_then(|index| index.get(symbol));
+    // An own module of the session, such as a std checkout's, reads only
+    // its own tree, never the binary's text (D-1700), as hover does.
+    let own = def.is_some_and(|(s, def)| s.module(def.module).is_some_and(ModuleView::is_own));
+    let std_item = (!own)
+        .then(|| std.get().and_then(|index| index.get(symbol)))
+        .flatten();
     let text = local.or_else(|| std_item.and_then(|i| i.doc.clone()));
     let targets = def
         .and_then(|(s, def)| s.interfaces().get(def.module)?.item(def.index))

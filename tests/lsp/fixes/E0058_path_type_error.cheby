@@ -1,0 +1,27 @@
+// @decisions: D-1388, D-1393, D-1736, D-1694, D-1639
+//! E0058's fix writes the closest field at a step of a field path too.
+//! With a type error in another function, which stays.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  origin: Point,
+  size: Int,
+}
+
+fn moved(s: Shape) -> Shape {
+  Shape { ..s, origni.x: 1 }
+}
+
+fn main() {
+  let shape = Shape { origin: Point { x: 0, y: 0 }, size: 1 }
+  assert moved(shape).size == 1
+}
+
+pub fn answer() -> Int {
+  "forty-two"
+}
+//> 16:16 action Use the field `origin`

@@ -1,0 +1,7 @@
+//! A probe that calls `probe_base`'s helper.
+
+import std::probe_base
+
+pub fn user() -> Int {
+  probe_base::bump(1)
+}

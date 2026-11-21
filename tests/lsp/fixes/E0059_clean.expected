@@ -1,0 +1,251 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0059",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0059.md"
+      },
+      "message": "missing field `y` in `Point`\nmissing `y`\nnote: a named-field constructor must initialize every field (§5.11.1)",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 10
+        },
+        "start": {
+          "character": 2,
+          "line": 10
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 4
+              },
+              "start": {
+                "character": 5,
+                "line": 4
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`Point` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0059",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0059.md"
+      },
+      "message": "field `x` is initialized twice\ninitialized again here",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 14
+        },
+        "start": {
+          "character": 22,
+          "line": 14
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 14
+              },
+              "start": {
+                "character": 10,
+                "line": 14
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "first initialized here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:3 action Add the missing fields as `todo`
+{
+  "actions": [
+    "Add the missing fields as `todo`",
+    "Explain E0059"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        196,
+        196
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0059",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0059.md"
+        },
+        "message": "missing field `y` in `Point`\nmissing `y`\nnote: a named-field constructor must initialize every field (§5.11.1)",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 10
+          },
+          "start": {
+            "character": 2,
+            "line": 10
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 4
+                },
+                "start": {
+                  "character": 5,
+                  "line": 4
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`Point` is declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": ", y: todo",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 10
+                },
+                "start": {
+                  "character": 14,
+                  "line": 10
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Add the missing fields as `todo`"
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:15:23 action Remove the field `x`
+{
+  "actions": [
+    "Remove the field `x`",
+    "Explain E0059"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        258,
+        258
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0059",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0059.md"
+        },
+        "message": "field `x` is initialized twice\ninitialized again here",
+        "range": {
+          "end": {
+            "character": 23,
+            "line": 14
+          },
+          "start": {
+            "character": 22,
+            "line": 14
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 14
+                },
+                "start": {
+                  "character": 10,
+                  "line": 14
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "first initialized here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 26,
+                  "line": 14
+                },
+                "start": {
+                  "character": 20,
+                  "line": 14
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 3
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Remove the field `x`"
+  },
+  "showMessage": []
+}

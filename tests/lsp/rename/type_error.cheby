@@ -1,0 +1,22 @@
+// @decisions: D-1389, D-1390
+//! A type error: a local, an item and a field still rename, since the
+//! resolver's data is whole for a file that parses, and the check compares
+//! the errors before and after, so the type error stays and adds nothing.
+
+type Pair {
+  left: Int,
+  //> 7:3 rename first
+  right: Int,
+}
+
+fn sum(p: Pair) -> Int {
+// ^ rename add_up
+  p.left + p.right
+}
+
+fn main() {
+  let p = Pair { left: 1, right: 2 }
+  //  ^ rename q
+  let s: String = sum(p)
+  assert s == "3"
+}

@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
       "message": "expected a line break or `}`, found `::`",
       "range": {
         "end": {
@@ -19,6 +22,9 @@
     },
     {
       "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
       "message": "expected a line break or `}`, found `::`",
       "range": {
         "end": {

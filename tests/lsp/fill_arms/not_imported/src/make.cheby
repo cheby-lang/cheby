@@ -1,0 +1,7 @@
+//! Makes a shape.
+
+import app::shape
+
+pub fn make_shape() -> shape::Shape {
+  shape::Dot
+}

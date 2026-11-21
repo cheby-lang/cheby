@@ -1,0 +1,7 @@
+//! Shapes.
+
+pub exposed type Shape {
+  Circle { radius: Float },
+  Square { side: Float },
+  Dot,
+}

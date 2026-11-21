@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1695
+//! After a line break, `fn` followed by a name starts a local function,
+//! never a closure, so an unfinished `let` above one reports its missing
+//! value there, and the function still parses.
+
+fn main() {
+  let y =
+  fn twice(n) { n * 2 }
+  assert twice(2) == 4
+}

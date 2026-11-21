@@ -6,7 +6,8 @@
 //! against its output, one `TextEdit` per hunk, with LF line breaks, so a
 //! CRLF text is converted as `cheby fmt` converts it (`ide::edits`).
 //! Range formatting keeps the hunks that touch the
-//! range's lines (D-1399). A text with a grammar error gets `null`, as
+//! range's lines (D-1399), widened to their neighbours until what it
+//! leaves out only reformats, and every hunk after eight rounds (D-1738). A text with a grammar error gets `null`, as
 //! `cheby fmt` refuses it (§13.7), and a formatted text gets `[]`.
 //!
 //! A document that is not editable, such as a std source, never reaches
@@ -16,7 +17,7 @@
 use lsp_types::{DocumentFormattingParams, DocumentRangeFormattingParams, TextEdit};
 use serde_json::Value;
 
-use crate::features::ide::edits::{TextChange, format_edits, format_touching};
+use crate::features::ide::edits::{AtCap, TextChange, format_edits, format_touching_with};
 use crate::features::{DocText, HandlerOutput, RequestCx, RequestError, params};
 
 /// `textDocument/formatting`.
@@ -34,11 +35,12 @@ pub(crate) fn formatting(
     answer(cx, doc, format_edits(&doc.text))
 }
 
-/// `textDocument/rangeFormatting` (D-1399).
+/// `textDocument/rangeFormatting` (D-1399, D-1738).
 ///
 /// # Errors
 ///
-/// `InvalidParams` when the parameters do not have the method's shape.
+/// `InvalidParams` when the parameters do not have the method's shape,
+/// and `Cancelled`.
 pub(crate) fn range_formatting(
     cx: &RequestCx<'_>,
     doc: &DocText,
@@ -47,7 +49,8 @@ pub(crate) fn range_formatting(
     let p: DocumentRangeFormattingParams = params(params_value)?;
     let range = doc.lines.text_range(&doc.text, p.range, cx.encoding);
     cx.cancel.check()?;
-    answer(cx, doc, format_touching(&doc.text, &[range]))
+    let changes = format_touching_with(&doc.text, &[range], AtCap::KeepEvery, cx.cancel)?;
+    answer(cx, doc, changes)
 }
 
 /// `changes` as the protocol's edits, or `null` for a text the formatter

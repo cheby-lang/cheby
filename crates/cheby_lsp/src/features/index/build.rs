@@ -89,10 +89,14 @@ enum Outcome {
         primary: Target,
         also: Option<Target>,
         role: Role,
-        /// One of a punned token's two meanings is unknown.
-        unknown: Option<Unknown>,
+        /// One of a punned token's two meanings is unknown, and whether it
+        /// is the field meaning.
+        unknown: Option<(Unknown, bool)>,
     },
     Unknown(Unknown),
+    /// A token in a field position whose field is unknown, and which
+    /// names nothing else.
+    UnknownField(Unknown),
     Unnamed(Unnamed),
 }
 
@@ -128,9 +132,30 @@ fn pair(
             primary,
             also: None,
             role,
-            unknown: Some(why),
+            unknown: Some((why, false)),
         },
         (Err(why), Some(Err(_))) => Outcome::Unknown(why),
+    }
+}
+
+/// A token in a field position: its meaning as a field, and the value or
+/// binding a punned one also names. An unknown field meaning is marked as
+/// one, since a field position never names an item (D-061), unless the
+/// token's other meaning is unknown too.
+fn field_pair(
+    field: Result<Target, Unknown>,
+    other: Option<Result<Target, Unknown>>,
+    role: Role,
+) -> Outcome {
+    match (field, other) {
+        (Err(why), None) => Outcome::UnknownField(why),
+        (Err(why), Some(Ok(primary))) => Outcome::Named {
+            primary,
+            also: None,
+            role,
+            unknown: Some((why, true)),
+        },
+        (field, other) => pair(field, other, role),
     }
 }
 
@@ -387,10 +412,11 @@ impl<'s> Cx<'s> {
 
     /// Records what `classify` found for the token at `range`.
     fn record(&mut self, range: TextRange, text: &str, outcome: Outcome) {
-        let unknown = |why| UnknownName {
+        let unknown = |why, field| UnknownName {
             range,
             text: text.into(),
             why,
+            field,
         };
         match outcome {
             Outcome::Named {
@@ -400,7 +426,10 @@ impl<'s> Cx<'s> {
                 unknown: why,
             } => {
                 let Some(symbol) = self.out.intern(primary) else {
-                    self.out.index.unknown.push(unknown(Unknown::NotRecorded));
+                    self.out
+                        .index
+                        .unknown
+                        .push(unknown(Unknown::NotRecorded, false));
                     return;
                 };
                 let also = also.and_then(|t| self.out.intern(t));
@@ -410,11 +439,12 @@ impl<'s> Cx<'s> {
                     also,
                     role,
                 });
-                if let Some(why) = why {
-                    self.out.index.unknown.push(unknown(why));
+                if let Some((why, field)) = why {
+                    self.out.index.unknown.push(unknown(why, field));
                 }
             }
-            Outcome::Unknown(why) => self.out.index.unknown.push(unknown(why)),
+            Outcome::Unknown(why) => self.out.index.unknown.push(unknown(why, false)),
+            Outcome::UnknownField(why) => self.out.index.unknown.push(unknown(why, true)),
             Outcome::Unnamed(what) => self.out.index.unnamed.push(UnnamedName { range, what }),
         }
     }
@@ -447,23 +477,23 @@ impl<'s> Cx<'s> {
             | K::VARIANT
             | K::INTERFACE_FN => self.declaration(parent, token),
             K::IDENT_PAT | K::AS_PAT | K::REST_PAT | K::LOCAL_FN => self.binding(parent),
-            K::FIELD_EXPR => single(self.field(parent, token), Role::FieldRead),
+            K::FIELD_EXPR => field_pair(self.field(parent, token), None, Role::FieldRead),
             K::FIELD_INIT => {
                 // A punned path `origin.y` binds its last name (D-1640).
                 let punned = !has_token(parent, K::COLON) && idents(parent).last() == Some(&token);
                 let value = punned.then(|| self.name_of(parent, token));
-                pair(self.field(parent, token), value, Role::FieldInit)
+                field_pair(self.field(parent, token), value, Role::FieldInit)
             }
             K::FIELD_PAT => {
                 let binding = (!has_token(parent, K::COLON)).then(|| self.bound(parent));
-                pair(self.field(parent, token), binding, Role::FieldPat)
+                field_pair(self.field(parent, token), binding, Role::FieldPat)
             }
             K::RECORD_FIELD => single(self.record_field(parent, token), Role::Decl),
             K::INTERPOLATION => {
                 if idents(parent).first() == Some(&token) {
                     single(self.name_of(parent, token), Role::InterpRoot)
                 } else {
-                    single(self.field(parent, token), Role::InterpField)
+                    field_pair(self.field(parent, token), None, Role::InterpField)
                 }
             }
             K::TYPE_PARAM => {
@@ -932,17 +962,23 @@ impl<'s> Cx<'s> {
     }
 
     /// An imported item's name in `import m::{name}`: the item itself.
+    /// With an `as` name, which two items of the list may share, one in
+    /// each namespace (`{Circle as X, Shape as X}`), only the items of the
+    /// token's own name: the alias binds both.
     fn import_item(&self, item: SyntaxNode<'_>, token: SyntaxToken<'_>) -> Outcome {
         let decl = item.parent().and_then(SyntaxNode::parent);
         let n = self.import_index(decl);
-        let bound = item
+        let alias = item
             .children()
             .find(|c| c.kind() == K::RENAME)
-            .and_then(|rename| idents(rename).first().map(|t| t.text()))
-            .unwrap_or_else(|| token.text());
+            .and_then(|rename| idents(rename).first().map(|t| t.text()));
+        let own = self.lookup(token.text());
         let mut targets = self
-            .imported(n, bound)
+            .imported(n, alias.unwrap_or_else(|| token.text()))
             .into_iter()
+            .filter(|&def| {
+                alias.is_none() || own.is_some_and(|own| self.item_name(def) == Some(own))
+            })
             .map(|def| self.item(def));
         match targets.next() {
             Some(first) => pair(first, targets.next(), Role::Import),

@@ -1,0 +1,14 @@
+// @decisions: D-1148, D-1691, D-1736
+//! Organize imports on unsorted imports with an unused one: it is offered
+//! with no `only`, since its edit is not empty, and its edit, computed on
+//! resolve, sorts the block and removes the unused import (D-1691, X §6.3).
+
+import std::list
+import std::io
+import std::int
+
+fn main() {
+  assert int::show(list::length([1])) == "1"
+}
+//> 11:3 codeAction source.organizeImports
+//> 11:3 action Organize imports

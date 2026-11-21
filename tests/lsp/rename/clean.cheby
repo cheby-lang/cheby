@@ -1,0 +1,19 @@
+// @decisions: D-1389, D-1390
+//! The clean state: a local, an item and a field renamed, each checked.
+
+type Pair {
+  left: Int,
+  //> 5:3 rename first
+  right: Int,
+}
+
+fn sum(p: Pair) -> Int {
+// ^ rename add_up
+  p.left + p.right
+}
+
+fn main() {
+  let p = Pair { left: 1, right: 2 }
+  //  ^ rename q
+  assert sum(p) == 3
+}

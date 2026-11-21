@@ -1,0 +1,13 @@
+// @decisions: D-1401, D-1731, D-1736, D-1753
+//! A `for` loop whose body's value is not `Nil`: the rewrite is listed,
+//! and its resolve is refused, since `list::each` takes a function that
+//! gives `Nil` (X §6.5).
+
+fn count(xs: List<Int>) {
+  for x in xs { x + 1 }
+}
+
+fn main() {
+  count([1, 2])
+}
+//> 7:7 action Rewrite as `list::each`

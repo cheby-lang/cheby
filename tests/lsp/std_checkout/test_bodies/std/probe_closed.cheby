@@ -1,0 +1,16 @@
+// @package: std-checkout
+// @probes: disk
+// @open: std/probe_open.cheby
+// @steps: idle, published, close std/probe_open.cheby, idle
+// @decisions: D-1701, D-1704
+//! A closed probe on disk whose test body has a type error, which is not
+//! published, since the test bodies of a closed module are not checked.
+
+pub fn two() -> Int {
+  2
+}
+
+test "two reads as a string" {
+  let text: String = two()
+  assert text == "2"
+}

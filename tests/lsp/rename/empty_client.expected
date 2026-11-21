@@ -1,0 +1,97 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0005",
+      "message": "the interface `Area` is never used in this package\nno module of the package uses it\nnote: without `pub`, only modules of this package can use the interface\nhelp: remove the interface, use it, or make it `pub` if other packages should use it",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 6
+        },
+        "start": {
+          "character": 10,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:15:4 rename size
+{
+  "answer": {
+    "changes": {
+      "src/main.cheby": [
+        {
+          "newText": "size",
+          "range": {
+            "end": {
+              "character": 7,
+              "line": 14
+            },
+            "start": {
+              "character": 3,
+              "line": 14
+            }
+          }
+        },
+        {
+          "newText": "size",
+          "range": {
+            "end": {
+              "character": 20,
+              "line": 21
+            },
+            "start": {
+              "character": 16,
+              "line": 21
+            }
+          }
+        }
+      ]
+    }
+  },
+  "showMessage": [
+    "warning: `Square` will no longer satisfy `Area`"
+  ]
+}
+
+== src/main.cheby:22:7 rename area2
+{
+  "answer": {
+    "changes": {
+      "src/main.cheby": [
+        {
+          "newText": "area2",
+          "range": {
+            "end": {
+              "character": 13,
+              "line": 21
+            },
+            "start": {
+              "character": 6,
+              "line": 21
+            }
+          }
+        },
+        {
+          "newText": "area2",
+          "range": {
+            "end": {
+              "character": 16,
+              "line": 23
+            },
+            "start": {
+              "character": 9,
+              "line": 23
+            }
+          }
+        }
+      ]
+    }
+  },
+  "showMessage": []
+}

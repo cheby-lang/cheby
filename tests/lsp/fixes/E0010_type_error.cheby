@@ -1,0 +1,14 @@
+// @decisions: D-1388, D-1393, D-1736, D-114
+// @newErrors: E0047
+//! E0010's fix closes a string at the end of its line.
+//! With a type error in another function, which the fix reveals.
+
+pub fn answer() -> Int {
+  "forty-two"
+}
+
+fn main() {
+  let s = "hello
+  assert s == s
+}
+//> 11:11 action Close the string

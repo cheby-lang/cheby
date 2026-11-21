@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
       "message": "mismatched types\nexpected `Int`, found `String`",
       "range": {
         "end": {
@@ -37,6 +40,9 @@
     },
     {
       "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
       "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
       "range": {
         "end": {
@@ -71,6 +77,9 @@
     },
     {
       "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
       "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
       "range": {
         "end": {
@@ -105,6 +114,9 @@
     },
     {
       "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
       "message": "this function takes 2 arguments but 3 arguments were supplied\nexpected 2 arguments",
       "range": {
         "end": {

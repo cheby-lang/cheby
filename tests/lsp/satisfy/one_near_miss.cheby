@@ -1,0 +1,33 @@
+// @decisions: D-1696, D-1736
+//! A type that misses an interface by one function gets "Satisfy
+//! interface…" on its declaration, a `source` action that writes that
+//! function's stub. An interface it misses by two, and one it satisfies,
+//! give none.
+
+interface Shape {
+  fn area(Self) -> Float
+  fn perimeter(Self) -> Float
+}
+
+interface Solid {
+  fn volume(Self) -> Float
+  fn mass(Self) -> Float
+  fn density(Self) -> Float
+}
+
+type Cube {
+  //   ^ action Satisfy interface `Shape`: add `perimeter`
+  side: Float,
+}
+
+fn area(cube: Cube) -> Float {
+  cube.side * cube.side
+}
+
+fn volume(cube: Cube) -> Float {
+  cube.side
+}
+
+fn main() {
+  assert area(Cube { side: 1.0 }) == volume(Cube { side: 1.0 })
+}

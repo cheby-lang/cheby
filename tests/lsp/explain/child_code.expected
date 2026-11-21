@@ -1,0 +1,39 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0075",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0075.md"
+      },
+      "message": "evaluating the constant `ratio` panicked\nits initializer panicked\nnote: panicked at src/main.cheby:9:20: division by zero",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 8
+        },
+        "start": {
+          "character": 6,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:9:7 action Explain E0075
+{
+  "actions": [
+    "Explain E0075"
+  ],
+  "answer": null,
+  "showDocument": [
+    {
+      "takeFocus": true,
+      "uri": "<cache>/lsp/explain/E0075.md"
+    }
+  ],
+  "showMessage": []
+}

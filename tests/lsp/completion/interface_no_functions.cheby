@@ -1,0 +1,24 @@
+// @decisions: D-1546, D-1549, D-1681
+//! An interface with no function, such as `Any`, is not offered where it
+//! would be written with `::`, since `Any::` opens an empty list. One
+//! that embeds `Show` names `show`, so it is. After `|>`, `Every`,
+//! whose function takes `Self` only inside a list, is left out too. A
+//! type offers every one, as in `dyn Any` (type error state).
+
+interface Any
+
+interface Every {
+  fn all(List<Self>) -> Bool
+}
+
+interface Labeled: Show
+
+fn order(a: Int) -> Bool {
+  let s = Ev
+  //        ^ completion Every Labeled Any
+  let t = a |> La
+  //             ^ completion Labeled Show Every Any
+  let d: dyn An = a
+  //           ^ completion Any Every Labeled
+  s == t
+}

@@ -1,0 +1,33 @@
+// @decisions: D-1391, D-1552
+//! An interface function renames the functions that satisfy it, in every
+//! module: `Point` satisfies `Display` directly, and `Label` through
+//! `Boxed`, which embeds it (D-1552). Each `show` also satisfies the
+//! builtin `Show`, by the same name, so the note says what they lose.
+
+import app::label
+import app::point
+
+interface Display {
+  fn show(Self) -> String
+  // ^ rename render
+  fn width(Self) -> Int
+}
+
+interface Boxed: Display {
+  fn border(Self) -> String
+}
+
+fn shown<T: Display>(x: T) -> String {
+  Display::show(x)
+}
+
+fn framed<T: Boxed>(x: T) -> String {
+  let b = Boxed::border(x)
+  let s = Boxed::show(x)
+  "{b}{s}{b}"
+}
+
+fn main() {
+  assert shown(point::Point { x: 1, y: 2 }) == "(1, 2)"
+  assert framed(label::Label("a")) == "|a|"
+}

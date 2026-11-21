@@ -1,0 +1,69 @@
+== diagnostics
+{}
+
+== src/main.cheby:9:6 rename render
+{
+  "answer": {
+    "changeAnnotations": {
+      "cheby.satisfaction": {
+        "label": "`Point` will no longer satisfy `Show`; `Int`, `Float`, `String`, `Bool`, `Nil`, `List`, `Result`, `Option`, `Order`, `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64` and `F32` will no longer satisfy `Pretty`",
+        "needsConfirmation": true
+      }
+    },
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 8
+              },
+              "start": {
+                "character": 5,
+                "line": 8
+              }
+            }
+          },
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 16
+              },
+              "start": {
+                "character": 3,
+                "line": 16
+              }
+            }
+          },
+          {
+            "annotationId": "cheby.satisfaction",
+            "newText": "render",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 22
+              },
+              "start": {
+                "character": 17,
+                "line": 22
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": [
+    "warning: `Point` will no longer satisfy `Show`; `Int`, `Float`, `String`, `Bool`, `Nil`, `List`, `Result`, `Option`, `Order`, `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64` and `F32` will no longer satisfy `Pretty`"
+  ]
+}

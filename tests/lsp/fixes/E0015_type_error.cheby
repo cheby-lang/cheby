@@ -1,0 +1,18 @@
+// @decisions: D-1388, D-1393, D-1736, D-1735
+// @newErrors: E0047
+//! E0015's fix inserts the closer of the one opener the parser names.
+//! With a type error in another function, which the fix reveals.
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  let x = add(1, 2
+  assert x == 3
+}
+
+pub fn answer() -> Int {
+  "forty-two"
+}
+//> 12:3 action Insert `)`

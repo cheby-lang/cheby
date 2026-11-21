@@ -1,0 +1,104 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Int` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: `Int` gets its functions from `std::int`, which has no function `area(Int) -> Float` (§8.2, D-447)",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 14
+        },
+        "start": {
+          "character": 9,
+          "line": 14
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:15:18 codeAction
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        314,
+        314
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Int` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: `Int` gets its functions from `std::int`, which has no function `area(Int) -> Float` (§8.2, D-447)",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 14
+          },
+          "start": {
+            "character": 9,
+            "line": 14
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "disabled": {
+      "reason": "`Int` is in `std`: wrap it in a new type (ADR-0023)"
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `area`"
+  },
+  {
+    "command": {
+      "arguments": [
+        "E0063"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0063"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        314,
+        314
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Int` does not satisfy `Area`\nrequired by a bound of `measure`\nnote: `Int` gets its functions from `std::int`, which has no function `area(Int) -> Float` (§8.2, D-447)",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 14
+          },
+          "start": {
+            "character": 9,
+            "line": 14
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0063"
+  }
+]

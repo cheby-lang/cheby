@@ -1,0 +1,32 @@
+// @decisions: D-1679, D-1510, D-1720
+// @settings: {"inlayHints": {"constants": true}}
+// @steps: idle
+// @requests: inlayHint
+//! Once the constants child has evaluated them, each constant whose
+//! initializer is not a literal shows its current value after the
+//! initializer, with no kind, one line cut at 40 characters with `…`.
+//! A literal's value is on the line, so it shows none (D-1679).
+
+import std::list
+
+const limit: Int = 20
+
+const name: String = "cheby"
+
+const flag: Bool = True
+
+const twice: Int = limit * 2
+
+const greeting: String = "hi {name}"
+
+const squares: List<Int> = list::map([1, 2, 3], square)
+
+const many: List<Int> = list::range(0, 30)
+
+fn square(n: Int) -> Int {
+  n * n
+}
+
+fn main() {
+  assert flag && greeting != name && twice > list::length(many) + list::length(squares)
+}

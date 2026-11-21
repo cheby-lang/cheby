@@ -1,0 +1,110 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 7
+        },
+        "start": {
+          "character": 13,
+          "line": 7
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected a pattern, found `=`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 16
+        },
+        "start": {
+          "character": 6,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:14 action Rewrite as `case`
+{
+  "actions": [
+    "Rewrite as `case`",
+    "Explain E0013"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        298,
+        298
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0013",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+        },
+        "message": "expected a line break or `}`, found identifier\nhelp: Cheby has no `if`; use `case`",
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 7
+          },
+          "start": {
+            "character": 13,
+            "line": 7
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "case {\n    flag => 1\n    a > 2 => a + 1\n    _ => 3\n  }",
+              "range": {
+                "end": {
+                  "character": 58,
+                  "line": 7
+                },
+                "start": {
+                  "character": 10,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Rewrite as `case`"
+  },
+  "showMessage": []
+}

@@ -1,0 +1,12 @@
+// @decisions: D-1388, D-1393, D-1689
+//! E0030's help on a one-element tuple type writes the element type
+//! alone.
+
+fn one(n: (Int,)) -> Int {
+  n
+}
+
+fn main() {
+  assert one(1) == 1
+}
+//> 5:11 action write the element type alone; there are no one-element tuples

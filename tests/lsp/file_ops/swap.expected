@@ -1,0 +1,32 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `moves::beta`\nno such module",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 5
+        },
+        "start": {
+          "character": 7,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== willRename src/alpha.cheby src/beta.cheby src/beta.cheby src/alpha.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: a move that swaps modules is not supported"
+  ]
+}

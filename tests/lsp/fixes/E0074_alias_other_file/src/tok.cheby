@@ -1,0 +1,7 @@
+//! Tokens.
+
+type Token {
+  Token(String),
+}
+
+type Tok = Token

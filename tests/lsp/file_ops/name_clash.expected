@@ -1,0 +1,32 @@
+== diagnostics
+{}
+
+== willRename src/util.cheby src/helpers.cheby
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "import moves::helpers::{greet}\nimport moves::helpers as util\nimport std::io",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 6
+              },
+              "start": {
+                "character": 0,
+                "line": 4
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

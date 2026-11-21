@@ -1,0 +1,9 @@
+// @package: std-checkout
+// @probes: none
+// @open: std/json.cheby, std/json/decode.cheby, std/json/tree.cheby
+// @steps: idle, status
+// @decisions: D-1699, D-1700, D-1704, D-1705
+//! Opens the real `std/json.cheby`, `std/json/decode.cheby` and
+//! `std/json/tree.cheby` of a std checkout: no module shows a diagnostic,
+//! warnings included, with the test bodies of the three checked. This file
+//! only carries the header.

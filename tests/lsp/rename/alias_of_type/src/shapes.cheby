@@ -1,0 +1,11 @@
+//! Shapes.
+
+/// A point, a record: its type and its constructor share one name.
+pub type Point {
+  x: Int,
+}
+
+/// A type whose one variant has its name: two names, two symbols.
+pub type Id {
+  Id(Int),
+}

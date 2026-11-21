@@ -1,0 +1,14 @@
+// @decisions: D-1736, D-1347
+//! With a grammar error in another function of the file E0043 is not
+//! reported (D-1347), so nothing is raised.
+
+import app::shape
+
+fn main() {
+  assert shape::secret() == shape::open()
+  //            ^ noAction Make `secret` package-visible
+}
+
+fn broken() {
+  let = 1
+}

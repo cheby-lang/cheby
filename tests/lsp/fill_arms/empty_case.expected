@@ -1,0 +1,72 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "a `case` needs at least one arm",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 12
+        },
+        "start": {
+          "character": 13,
+          "line": 12
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:13:8 action Add arms
+{
+  "actions": [
+    "Add arms"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "fillArms"
+      },
+      "range": [
+        370,
+        370
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n    Red => todo\n    Green => todo\n  ",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 12
+                },
+                "start": {
+                  "character": 14,
+                  "line": 12
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "refactor.rewrite",
+    "title": "Add arms"
+  },
+  "showMessage": []
+}

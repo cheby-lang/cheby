@@ -1,0 +1,19 @@
+// @decisions: D-1148, D-1691, D-1736, D-516
+//! Organize imports on unsorted imports with an unused one, with a type
+//! error in another function, which stays: W0003 is not reported, since
+//! not every body checked (D-516), so its edit, computed on resolve, sorts
+//! the block and removes nothing (D-1691, X §6.3).
+
+import std::list
+import std::io
+import std::int
+
+fn main() {
+  assert int::show(list::length([1])) == "1"
+}
+
+pub fn answer() -> Int {
+  "forty-two"
+}
+//> 12:3 codeAction source.organizeImports
+//> 12:3 action Organize imports

@@ -1,0 +1,178 @@
+== diagnostics
+{
+  "src/broken.cheby": [
+    {
+      "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
+      "message": "unclosed `(`\nexpected `)`",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 2
+        },
+        "start": {
+          "character": 13,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 2
+              },
+              "start": {
+                "character": 11,
+                "line": 2
+              }
+            },
+            "uri": "src/broken.cheby"
+          },
+          "message": "this `(` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0015",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0015.md"
+      },
+      "message": "unclosed `{`\nexpected `}`",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 2
+        },
+        "start": {
+          "character": 13,
+          "line": 2
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 2
+              },
+              "start": {
+                "character": 13,
+                "line": 2
+              }
+            },
+            "uri": "src/broken.cheby"
+          },
+          "message": "this `{` is never closed"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ],
+  "src/main.cheby": [
+    {
+      "code": "W0003",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0003.md"
+      },
+      "message": "unused import `std::io`\nnothing in this module uses it\nhelp: remove the import",
+      "range": {
+        "end": {
+          "character": 14,
+          "line": 6
+        },
+        "start": {
+          "character": 0,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:7:1 noAction Remove the unused import
+{
+  "actions": [
+    "Organize imports",
+    "Explain W0003"
+  ]
+}
+
+== src/main.cheby:10:3 codeAction source.organizeImports
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "organizeImports"
+      },
+      "range": [
+        279,
+        279
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  }
+]
+
+== src/main.cheby:10:3 action Organize imports
+{
+  "actions": [
+    "Organize imports"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "organizeImports"
+      },
+      "range": [
+        279,
+        279
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::io\nimport std::list",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 6
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  },
+  "showMessage": []
+}

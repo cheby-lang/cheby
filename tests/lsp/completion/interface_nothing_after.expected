@@ -1,0 +1,183 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected `=`, found `::`",
+      "range": {
+        "end": {
+          "character": 15,
+          "line": 10
+        },
+        "start": {
+          "character": 13,
+          "line": 10
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "a path has at most one module qualifier\nhelp: import the inner module and qualify with its last name, such as `ops::Add`",
+      "range": {
+        "end": {
+          "character": 23,
+          "line": 12
+        },
+        "start": {
+          "character": 21,
+          "line": 12
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "a path has at most one module qualifier\nhelp: import the inner module and qualify with its last name, such as `ops::Add`",
+      "range": {
+        "end": {
+          "character": 20,
+          "line": 14
+        },
+        "start": {
+          "character": 18,
+          "line": 14
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "a path has at most one module qualifier\nhelp: import the inner module and qualify with its last name, such as `ops::Add`",
+      "range": {
+        "end": {
+          "character": 30,
+          "line": 16
+        },
+        "start": {
+          "character": 28,
+          "line": 16
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "expected `=>`, found `::`",
+      "range": {
+        "end": {
+          "character": 10,
+          "line": 21
+        },
+        "start": {
+          "character": 8,
+          "line": 21
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0013",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0013.md"
+      },
+      "message": "a path has at most one module qualifier\nhelp: import the inner module and qualify with its last name, such as `ops::Add`",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 23
+        },
+        "start": {
+          "character": 16,
+          "line": 23
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:11:16 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:13:26 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:15:19 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:17:29 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:19:19 completion show
+{
+  "count": 1,
+  "isIncomplete": false,
+  "items": [
+    {
+      "detail": "fn show(Self) -> String\nof interface Show",
+      "insertTextFormat": 2,
+      "kind": 2,
+      "label": "show",
+      "sortText": "20show",
+      "textEdit": {
+        "newText": "show($1)$0",
+        "range": {
+          "end": {
+            "character": 18,
+            "line": 18
+          },
+          "start": {
+            "character": 16,
+            "line": 18
+          }
+        }
+      }
+    }
+  ]
+}
+
+== src/main.cheby:22:11 completion
+{
+  "isIncomplete": false,
+  "items": []
+}
+
+== src/main.cheby:24:20 completion
+{
+  "isIncomplete": false,
+  "items": []
+}

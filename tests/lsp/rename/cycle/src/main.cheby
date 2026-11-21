@@ -1,0 +1,13 @@
+// @decisions: D-1389, D-1390
+//! A package with an import cycle, which the run cuts: an import alias in
+//! a module on the cycle passes the gates, which need only its own file,
+//! and `verify` refuses it as `Blocked` (S-19). A local of a module off
+//! the cycle is refused the same way (D-1389).
+
+import app::a
+
+fn main() {
+  let x = a::f()
+  //  ^ rename y
+  assert x == 1
+}

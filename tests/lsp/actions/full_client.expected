@@ -1,0 +1,98 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `total`\nnever used",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 6
+        },
+        "start": {
+          "character": 6,
+          "line": 6
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    }
+  ]
+}
+
+== src/main.cheby:7:7 action if this is intentional, start the name with an underscore: `_total`
+{
+  "actions": [
+    "if this is intentional, start the name with an underscore: `_total`",
+    "Explain W0002"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        190,
+        190
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0002",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+        },
+        "message": "unused binding `total`\nnever used",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 6
+          },
+          "start": {
+            "character": 6,
+            "line": 6
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "_total",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 6
+                },
+                "start": {
+                  "character": 6,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "if this is intentional, start the name with an underscore: `_total`"
+  },
+  "showMessage": []
+}

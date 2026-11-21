@@ -1,0 +1,14 @@
+// @decisions: D-1353, D-1388, D-1393, D-1736
+//! A method call of a function of the receiver's home module becomes a
+//! pipe with the hole first (X §6.5).
+
+import std::list
+
+fn bump(xs: List<Int>) -> List<Int> {
+  xs.map(fn(x) { x + 1 })
+}
+
+fn main() {
+  assert bump([1]) == [2]
+}
+//> 8:6 action Write `xs |> list::map(_, fn(x) { x + 1 })`

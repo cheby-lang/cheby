@@ -1,0 +1,42 @@
+== diagnostics
+{}
+
+== src/main.cheby:10:3 codeAction source.organizeImports
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        250,
+        250
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  }
+]
+
+== src/main.cheby:10:3 codeAction source
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        250,
+        250
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  }
+]
+
+== src/main.cheby:10:3 codeAction
+[]
+
+== src/main.cheby:10:3 noAction Organize imports
+{
+  "actions": []
+}

@@ -5,10 +5,16 @@
 //! Every text names what the module imports as the module writes it
 //! (D-1384): `import a::b as c` shows `c::T`, never `b::T`. Diagnostics
 //! keep D-463's form, so they never come through here.
+//!
+//! A prelude type or constructor is written by its bare name, which a
+//! module may bind to an item of its own (D-146). [`hides_prelude`] tells
+//! code that writes such a name, and [`Printer::type_source`] gives no
+//! text for a type that names one (D-1678). Displays are unchanged.
 
 use cheby_driver::analysis::{
     DefId, DefKind, DepView, DisplayCx, Generics, ImportNames, ItemSig, ModulePath, ModuleView,
-    SigOpts, Snapshot, Ty, TyKind, display, item_signature, missing_imports, structure_visible,
+    Namespace, Res, SigOpts, Snapshot, Ty, TyKind, builtin, display, item_signature,
+    missing_imports, structure_visible,
 };
 
 /// How many variants a type's header shows before `…`, as `StdIndex`
@@ -88,10 +94,12 @@ impl<'s> Printer<'s> {
     }
 
     /// `ty` as code the module can hold (X §1.5). `None` when it has an
-    /// unknown part, or a type parameter that `generics` does not name, so
-    /// the caller offers nothing.
+    /// unknown part, a type parameter that `generics` does not name, or a
+    /// prelude type the module binds to something else, whose bare name
+    /// would name the module's own item (D-1678), so the caller offers
+    /// nothing.
     pub(crate) fn type_source(&self, ty: Ty, generics: Option<&Generics>) -> Option<TypeSource> {
-        if !self.writable(ty, generics) {
+        if !self.writable(ty, generics) || self.names_hidden(ty, generics) {
             return None;
         }
         let cx = self.cx(generics);
@@ -119,6 +127,29 @@ impl<'s> Printer<'s> {
             TyKind::Fn { params, ret } => {
                 params.iter().all(|&param| self.writable(param, generics))
                     && self.writable(*ret, generics)
+            }
+        }
+    }
+
+    /// Whether `ty` names, at any depth, a prelude type or interface that
+    /// the module, or a type parameter of `generics`, hides
+    /// ([`hides_prelude`]).
+    fn names_hidden(&self, ty: Ty, generics: Option<&Generics>) -> bool {
+        let hidden = |def| hides_prelude(self.snapshot, self.view, def, generics);
+        match self.snapshot.globals().types.kind(ty) {
+            TyKind::Error | TyKind::Never | TyKind::Param(_) => false,
+            TyKind::Named { def, args } => {
+                hidden(*def) || args.iter().any(|&arg| self.names_hidden(arg, generics))
+            }
+            TyKind::Dyn { iface, args } => {
+                hidden(*iface) || args.iter().any(|&arg| self.names_hidden(arg, generics))
+            }
+            TyKind::Tuple(elems) => elems.iter().any(|&elem| self.names_hidden(elem, generics)),
+            TyKind::Fn { params, ret } => {
+                params
+                    .iter()
+                    .any(|&param| self.names_hidden(param, generics))
+                    || self.names_hidden(*ret, generics)
             }
         }
     }
@@ -163,5 +194,136 @@ impl<'s> Printer<'s> {
             max_variants: MAX_VARIANTS,
         };
         Some(item_signature(def, item, &self.cx(None), opts))
+    }
+}
+
+/// Whether `def` is an item of the prelude (§7.6), a type, an interface
+/// or a constructor such as `Option` or `Some`, whose name the module
+/// `view` of `snapshot` binds in the same namespace to something else:
+/// an item of its own or an import (D-146), or, for a type or an
+/// interface, a type parameter of `generics`, the enclosing item's, as in
+/// `fn f<Option>` (D-1719). Code that writes the bare name would then
+/// name that other item, so an edit that would write it is not offered
+/// (D-1678). False for an item outside the prelude, for one the module
+/// imports itself, and for a module with no resolution.
+pub(crate) fn hides_prelude(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    def: DefId,
+    generics: Option<&Generics>,
+) -> bool {
+    if !builtin::is_prelude(def) {
+        return false;
+    }
+    let Some(item) = snapshot
+        .interfaces()
+        .get(def.module)
+        .and_then(|iface| iface.item(def.index))
+    else {
+        return false;
+    };
+    let ns = match item.kind {
+        DefKind::Type | DefKind::Alias | DefKind::Interface => Namespace::Type,
+        DefKind::Ctor | DefKind::Fn | DefKind::Const | DefKind::InterfaceFn => Namespace::Value,
+        DefKind::Test => return false,
+    };
+    if ns == Namespace::Type
+        && generics.is_some_and(|g| g.params.iter().any(|param| param.name == item.name))
+    {
+        return true;
+    }
+    view.resolved()
+        .and_then(|resolved| resolved.scope.get(ns, item.name))
+        .is_some_and(|entry| entry.res != Res::Def(def))
+}
+
+#[cfg(test)]
+mod tests {
+    //! The predicate of D-1678 on a module that hides a prelude type, one
+    //! that hides a prelude constructor, and one that imports the prelude
+    //! item itself. Front end only, so it runs on Windows too (D-1516).
+
+    use cheby_driver::analysis::{DefId, DefKind, ModuleId, builtin};
+
+    use super::hides_prelude;
+    use crate::features::ide::hover::tests::{Temp, analyze};
+
+    /// Whether `src/main.cheby` holding `text` hides each prelude item of
+    /// `names`, of kind `kind`.
+    fn hidden(text: &str, names: &[(&str, DefKind)]) -> Vec<bool> {
+        let temp = Temp::package("print", &[("main.cheby", text)]);
+        let path = temp.src("main.cheby");
+        let analyzed = analyze(&temp.0, &[(path.clone(), text)]);
+        let snapshot = &*analyzed.snapshot;
+        let view = snapshot
+            .module_at(snapshot.file_of(&path).expect("the file"))
+            .expect("the module");
+        let builtins = snapshot
+            .interfaces()
+            .get(ModuleId::BUILTIN)
+            .expect("the builtin module");
+        names
+            .iter()
+            .map(|&(name, kind)| {
+                let (index, _) = builtins
+                    .items
+                    .iter_enumerated()
+                    .find(|(_, item)| {
+                        item.kind == kind && snapshot.globals().names.get(item.name) == name
+                    })
+                    .expect("a prelude item");
+                let def = DefId::new(ModuleId::BUILTIN, index);
+                assert!(builtin::is_prelude(def), "{name}");
+                hides_prelude(snapshot, view, def, None)
+            })
+            .collect()
+    }
+
+    const PRELUDE: [(&str, DefKind); 4] = [
+        ("Option", DefKind::Type),
+        ("Some", DefKind::Ctor),
+        ("Result", DefKind::Type),
+        ("Ok", DefKind::Ctor),
+    ];
+
+    #[test]
+    fn a_module_type_hides_the_prelude_type_only() {
+        let text = "type Option {\n  Mine,\n}\n\nfn main() {\n  assert Mine == Mine\n}\n";
+        assert_eq!(hidden(text, &PRELUDE), [true, false, false, false]);
+    }
+
+    #[test]
+    fn a_module_constructor_hides_the_prelude_constructor_only() {
+        let text = "type Maybe {\n  Some(Int),\n  Nothing,\n}\n\nfn main() {\n  assert Some(1) != Nothing\n}\n";
+        assert_eq!(hidden(text, &PRELUDE), [false, true, false, false]);
+    }
+
+    #[test]
+    fn nothing_is_hidden_by_default_or_by_importing_the_item_itself() {
+        let text = "fn main() {\n  assert Some(1) != None\n}\n";
+        assert_eq!(hidden(text, &PRELUDE), [false; 4]);
+        let text = "import std::option::{Option}\n\nfn main() {\n  let x: Option<Int> = Some(1)\n  assert x != None\n}\n";
+        assert_eq!(hidden(text, &PRELUDE), [false; 4]);
+    }
+
+    #[test]
+    fn an_item_outside_the_prelude_is_never_hidden() {
+        let text = "type Map {\n  Mine,\n}\n\nfn main() {\n  assert Mine == Mine\n}\n";
+        let temp = Temp::package("print_map", &[("main.cheby", text)]);
+        let path = temp.src("main.cheby");
+        let analyzed = analyze(&temp.0, &[(path.clone(), text)]);
+        let snapshot = &*analyzed.snapshot;
+        let view = snapshot
+            .module_at(snapshot.file_of(&path).expect("the file"))
+            .expect("the module");
+        let builtins = snapshot.interfaces().get(ModuleId::BUILTIN).unwrap();
+        let (index, _) = builtins
+            .items
+            .iter_enumerated()
+            .find(|(_, item)| snapshot.globals().names.get(item.name) == "Map")
+            .expect("the builtin `Map`");
+        let def = DefId::new(ModuleId::BUILTIN, index);
+        assert!(!builtin::is_prelude(def));
+        assert!(!hides_prelude(snapshot, view, def, None));
     }
 }

@@ -1,0 +1,32 @@
+// @decisions: D-1640, D-1645, D-1392, D-1713
+//! Field paths (D-1645): a field renamed at each step of `origin.y`, a
+//! field renamed where it is a punned path's end (`origin.new: y`), and
+//! the variable renamed from that end (`origin.y: new`, D-1640, D-1392).
+
+type Point {
+  x: Int,
+  y: Int,
+  //> 8:3 rename depth
+}
+
+type Shape {
+  origin: Point,
+  size: Int,
+}
+
+fn drop_to(shape: Shape, y: Int) -> Shape {
+  Shape { ..shape, origin.y }
+  //               ^ rename base
+  //                      ^ prepareRename
+  //                      ^ rename level
+}
+
+fn lift(shape: Shape) -> Shape {
+  Shape { ..shape, origin.y: shape.origin.y + 1 }
+  //                      ^ rename height
+}
+
+fn main() {
+  let shape = Shape { origin: Point { x: 0, y: 0 }, size: 1 }
+  assert lift(drop_to(shape, 2)).origin.y == 3
+}

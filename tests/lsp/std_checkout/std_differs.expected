@@ -1,0 +1,16 @@
+== diagnostics
+{}
+
+== status
+{
+  "packages": [
+    {
+      "kind": "stdCheckout",
+      "root": "",
+      "stdDiffers": true
+    }
+  ],
+  "showMessage": [
+    "warning: This checkout's std/ is not the std that this cheby binary embeds, so an error may come from an older compiler and a rebuild may clear it."
+  ]
+}

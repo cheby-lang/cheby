@@ -1,0 +1,9 @@
+// @decisions: D-1693, D-1734
+// @client: empty
+// @steps: execute cheby.explain E0044
+//! A client without `window/showDocument` gets the summary and the page
+//! of the code through `window/showMessage` (D-1693), and no file.
+
+fn main() {
+  Nil
+}

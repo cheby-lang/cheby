@@ -1,0 +1,13 @@
+// @decisions: D-1400, D-1693, D-1733, D-1736
+//! The Explain action on a type error runs `cheby.explain`, which writes
+//! the explanation to the cache and opens it through
+//! `window/showDocument` (D-1693).
+
+fn answer() -> Int {
+  "forty-two"
+}
+
+fn main() {
+  assert answer() == 42
+}
+//> 7:3 action Explain E0047

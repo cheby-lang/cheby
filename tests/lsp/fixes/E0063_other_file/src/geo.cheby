@@ -1,0 +1,9 @@
+//! Circles.
+
+pub exposed type Circle {
+  radius: Float,
+}
+
+pub fn radius(circle: Circle) -> Float {
+  circle.radius
+}

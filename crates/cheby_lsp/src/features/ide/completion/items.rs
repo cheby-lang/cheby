@@ -381,6 +381,7 @@ fn modules(cx: &CompletionCx<'_>, out: &mut Items) {
 /// written `shape::` (D-1546), or bare, as `Show`, where a path's `::`
 /// follows (D-1530). The interfaces of the modules the file imports,
 /// through the import's binding, come from [`auto_import`] (D-1507).
+/// One whose path would name no function is left out (D-1681).
 pub(crate) fn scope_interfaces(cx: &CompletionCx<'_>, out: &mut Items) {
     let Some(resolved) = cx.resolved_view().and_then(ModuleView::resolved) else {
         return;
@@ -390,6 +391,7 @@ pub(crate) fn scope_interfaces(cx: &CompletionCx<'_>, out: &mut Items) {
         if cx
             .item(def)
             .is_none_or(|item| item.kind != DefKind::Interface)
+            || !cx.interface_names_functions(def)
         {
             continue;
         }
@@ -480,6 +482,41 @@ impl<'s> CompletionCx<'s> {
         } else {
             format!("{label}::")
         }
+    }
+
+    /// Whether the word follows `|>`, as in `xs |> Sh‸` or
+    /// `xs |> shape::Sh‸`.
+    pub(crate) fn after_pipe(&self) -> bool {
+        matches!(
+            self.found.context,
+            Context::Pipe { .. } | Context::Qualified { piped: Some(_), .. }
+        )
+    }
+
+    /// Whether the interface `def` has a function that a path through it
+    /// may name, embedded ones counted, so that it is offered where it is
+    /// written with `::`: an interface with none, such as `interface Any`,
+    /// would open an empty list (D-1681). After `|>`, the function must
+    /// take `Self` as a parameter, which the left side fills (D-1549).
+    /// An interface whose functions cannot be read names none, as
+    /// [`interface_items`] offers none for it.
+    pub(crate) fn interface_names_functions(&self, def: DefId) -> bool {
+        let set = self.snapshot.interfaces();
+        let Ok(fns) = interface_fns(def, &|d| set.get(d.module)?.item(d.index)) else {
+            return false;
+        };
+        let piped = self.after_pipe();
+        let types = &self.snapshot.globals().types;
+        fns.into_iter().any(|func| {
+            let Some(ItemSig::InterfaceFn(sig)) = self.item(func).map(|i| &i.sig) else {
+                return false;
+            };
+            !piped
+                || sig
+                    .params
+                    .iter()
+                    .any(|&param| matches!(types.kind(param), TyKind::Param(_)))
+        })
     }
 
     /// The text a module named `label` writes: `label::`, or `label` where
@@ -1456,18 +1493,25 @@ fn interpolation(cx: &CompletionCx<'_>, out: &mut Items) {
 /// D-1547). Before a turbofish, an expression gets only a module's
 /// functions and constructors, and an interface's functions are not
 /// offered, since they take no type arguments (E0023, D-1536). A type and
-/// a pattern keep their items there, as D-1525 has it.
+/// a pattern keep a module's items there, as D-1525 has it.
+///
+/// After `I::` or `m::I::`, an interface's functions come only in an
+/// expression, and not before a path's `::`, as in `I::f‸::x`, which
+/// would write `I::f::x`, as after `|>`. In a type or a pattern nothing
+/// is offered there, since each function wrote E0013 (D-1680).
 fn qualified(cx: &CompletionCx<'_>, qualifier: &[String], ns: PathNs, out: &mut Items) {
     // A third segment never follows in a type or a pattern (D-1547).
     if ns != PathNs::Value && cx.before_path() {
         return;
     }
     if let Some(def) = path_interface(cx, qualifier) {
-        // An interface's function takes no type arguments (E0023, D-1536).
-        if cx.before_turbofish() {
-            return;
+        // No path follows an interface's function, and it takes no type
+        // arguments (E0023, D-1536). A type or a pattern names none
+        // (E0013, D-1680).
+        if ns == PathNs::Value && !cx.before_path() && !cx.before_turbofish() {
+            interface_items(cx, def, false, out);
         }
-        return interface_items(cx, def, false, out);
+        return;
     }
     let [one] = qualifier else { return };
     let Some(module) = qualified_module(cx, one) else {
@@ -1618,7 +1662,8 @@ fn module_defs(
         return;
     };
     let Some(iface) = cx.snapshot.interfaces().get(module) else {
-        if let Some(index) = cx.std.get() {
+        // A std checkout's modules are never the std index's (D-1700).
+        if let Some(index) = cx.std.get().filter(|_| !cx.snapshot.is_std_checkout()) {
             let text = path.to_string();
             for item in index
                 .items
@@ -1664,6 +1709,14 @@ fn module_defs(
         if !fits(item.kind) {
             continue;
         }
+        // An expression writes an interface with `::`, so one whose path
+        // names no function is left out; a type names it bare (D-1681).
+        if ns == PathNs::Value
+            && item.kind == DefKind::Interface
+            && !cx.interface_names_functions(def)
+        {
+            continue;
+        }
         let label = cx.name_text(item.name);
         let Some(mut entry) = cx.def_entry(def, label, rank::MODULE) else {
             continue;
@@ -1682,7 +1735,8 @@ fn module_defs(
 
 /// A module path after `import` (X §4.1): the next segment of every
 /// module of the package and of std under `prefix`, the importing module
-/// left out.
+/// left out. In a std checkout, std's modules are the checkout's alone,
+/// never the std index's, and its synthetic root is none (D-1700).
 fn import_paths(cx: &CompletionCx<'_>, prefix: &[String], out: &mut Items) {
     let own: Option<&ModulePath> = cx.view.and_then(ModuleView::path);
     let mut paths: Vec<Vec<String>> = cx
@@ -1691,13 +1745,13 @@ fn import_paths(cx: &CompletionCx<'_>, prefix: &[String], out: &mut Items) {
         .filter_map(|view| {
             let path = view.path()?;
             let std = path.segments().first().is_some_and(|s| s == "std");
-            (view.is_local() || std)
+            (view.is_own() || std)
                 .then_some(path)
                 .filter(|p| Some(*p) != own)
                 .map(|p| p.segments().to_vec())
         })
         .collect();
-    if let Some(index) = cx.std.get() {
+    if let Some(index) = cx.std.get().filter(|_| !cx.snapshot.is_std_checkout()) {
         paths.extend(
             index
                 .modules
@@ -1749,7 +1803,8 @@ fn import_items(cx: &CompletionCx<'_>, module: &[String], written: &[String], ou
         .find(&path)
         .and_then(|m| Some((m, cx.snapshot.interfaces().get(m)?)));
     let Some((id, iface)) = loaded else {
-        if let Some(index) = cx.std.get() {
+        // A std checkout's modules are never the std index's (D-1700).
+        if let Some(index) = cx.std.get().filter(|_| !cx.snapshot.is_std_checkout()) {
             let text = path.to_string();
             for item in index
                 .items

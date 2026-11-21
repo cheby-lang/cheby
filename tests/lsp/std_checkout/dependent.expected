@@ -1,0 +1,42 @@
+== diagnostics
+{
+  "std/probe_user.cheby": [
+    {
+      "code": "E0048",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0048.md"
+      },
+      "message": "this function takes 2 arguments but 1 argument was supplied\nexpected 2 arguments",
+      "range": {
+        "end": {
+          "character": 21,
+          "line": 5
+        },
+        "start": {
+          "character": 18,
+          "line": 5
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 8
+              },
+              "start": {
+                "character": 7,
+                "line": 8
+              }
+            },
+            "uri": "std/probe_base.cheby"
+          },
+          "message": "`base` is declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+// @decisions: D-1388, D-1393, D-1689, D-1735
+//! A fix formats the lines it touches, and the line diff's hunks it keeps
+//! lose no code: the `  )` of one call matches the `  )` of the next, so
+//! one hunk deletes `let m` and a later one writes it back, and both are
+//! kept (D-1735).
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  let n = add((1,), // one
+    2)
+  let m = add(
+    1,
+    2
+  )
+  assert n == m
+}
+//> 12:15 action write the value alone; `(e)` is just `e` in parentheses

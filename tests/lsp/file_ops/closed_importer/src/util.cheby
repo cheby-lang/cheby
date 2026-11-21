@@ -1,0 +1,6 @@
+//! Helpers that other modules import.
+
+/// A greeting.
+pub fn greet() -> String {
+  "hi"
+}

@@ -322,9 +322,10 @@ fn advertised(encoding: &str) -> Value {
         "documentFormattingProvider": true,
         "documentRangeFormattingProvider": true,
         "codeActionProvider": {
-            "codeActionKinds": ["refactor.rewrite"],
-            "resolveProvider": false,
+            "codeActionKinds": ["quickfix", "refactor.rewrite", "source.organizeImports", "source"],
+            "resolveProvider": true,
         },
+        "executeCommandProvider": { "commands": ["cheby.explain"] },
         "foldingRangeProvider": true,
         "hoverProvider": true,
         "completionProvider": {
@@ -341,6 +342,7 @@ fn advertised(encoding: &str) -> Value {
         "callHierarchyProvider": true,
         "documentLinkProvider": { "resolveProvider": false },
         "workspaceSymbolProvider": true,
+        "renameProvider": { "prepareProvider": true },
         "semanticTokensProvider": {
             "legend": {
                 "tokenTypes": [
@@ -356,6 +358,17 @@ fn advertised(encoding: &str) -> Value {
         },
         "workspace": {
             "workspaceFolders": { "supported": true, "changeNotifications": true },
+            "fileOperations": {
+                "willRename": {
+                    "filters": [
+                        {
+                            "scheme": "file",
+                            "pattern": { "glob": "**/*.cheby", "matches": "file" },
+                        },
+                        { "scheme": "file", "pattern": { "glob": "**", "matches": "folder" } },
+                    ],
+                },
+            },
         },
     })
 }
@@ -812,6 +825,272 @@ fn a_swept_change_reruns_the_constants() {
     client.stop();
 }
 
+/// The generation of the only package, from `cheby/status`.
+fn generation(client: &mut Client) -> u64 {
+    let status = client.request("cheby/status", Value::Null).unwrap();
+    status["packages"][0]["generation"].as_u64().unwrap_or(0)
+}
+
+/// G1 plan §3 B and E, D-1389, D-1669: a rename that finds a closed file
+/// changed on disk is refused, and the `Effect::Sweep` that goes with the
+/// refusal makes the package read the file again at once. The client has
+/// a watcher, so the server neither sweeps every 2 s nor hears of the
+/// change (D-1374): only the effect can start the run that the next try
+/// reads, which then renames the uses the file has now.
+#[test]
+fn a_stale_rename_sweeps_the_package() {
+    const MAIN_R: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::helper()\n}\n";
+    const UTIL_R: &str = "//! Util.\n\npub fn helper() -> Int {\n  1\n}\n";
+    const UTIL_NEW: &str = "//! Util.\n\npub fn helper() -> Int {\n  1\n}\n\n\
+                            pub fn twice() -> Int {\n  helper() + helper()\n}\n";
+    let package = Temp::package(
+        "stale_sweep",
+        &[("src/main.cheby", MAIN_R), ("src/util.cheby", UTIL_R)],
+    );
+    let main = package.at("src/main.cheby");
+    let util = package.at("src/util.cheby");
+    let params = package.params(&json!({
+        "capabilities": {
+            "workspace": {
+                "didChangeWatchedFiles": { "dynamicRegistration": true },
+                "workspaceEdit": { "documentChanges": true },
+            },
+            "experimental": { "chebyIdle": true },
+        },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    open(&client, &main, MAIN_R, 1);
+    client.wait_publish(&main, |p| p["version"] == 1);
+    next_idle(&mut client);
+    let before = generation(&mut client);
+    std::fs::write(&util, UTIL_NEW).unwrap();
+    let rename = json!({
+        "textDocument": { "uri": uri(&main) },
+        "position": { "line": 5, "character": 17 },
+        "newName": "assist",
+    });
+    assert_eq!(
+        client.request("textDocument/rename", rename.clone()),
+        Ok(Value::Null),
+        "a stale file is answered `null`, with a warning (D-1711)"
+    );
+    let deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    while generation(&mut client) <= before {
+        assert!(
+            Instant::now() < deadline,
+            "the refusal's sweep started no run"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let edit = client.request("textDocument/rename", rename).unwrap();
+    let in_util: usize = edit["documentChanges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["textDocument"]["uri"] == uri(&util))
+        .map(|change| change["edits"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(in_util, 3, "the declaration and the two new uses: {edit}");
+    client.stop();
+}
+
+/// D-1731, D-1711: a cross-file fix that `verify` finds stale, because a
+/// closed file changed on disk, is answered with no `edit` and a warning,
+/// and its `Effect::Sweep` makes the package read the file again at once,
+/// as a stale rename's does, so the next resolve gets the edit. The fix is
+/// a test resolver's (`code_action::TEST_RESOLVERS`): it documents
+/// `helper` in `util.cheby`.
+#[test]
+fn a_stale_fix_sweeps_the_package() {
+    use cheby_driver::analysis::{PlainEdit, TextRange, TextSize, exact_key};
+
+    use crate::features::handlers::code_action::TEST_RESOLVERS;
+    use crate::features::ide::Refusal;
+    use crate::features::ide::actions::{ActionId, FixCx, Resolve};
+
+    fn resolvers(_: &ActionId) -> Resolve {
+        document_helper
+    }
+    #[expect(clippy::unnecessary_wraps, reason = "a resolver returns a `Result`")]
+    fn document_helper(
+        cx: &FixCx<'_>,
+        _: TextRange,
+        _: &ActionId,
+    ) -> Result<Vec<PlainEdit>, Refusal> {
+        let snapshot = &cx.analyzed.snapshot;
+        let path = snapshot.root().join("src").join("util.cheby");
+        let text = snapshot
+            .source(snapshot.file_of(&path).unwrap())
+            .unwrap()
+            .text();
+        let at = TextSize::try_from(text.find("pub fn helper").unwrap()).unwrap();
+        Ok(vec![PlainEdit {
+            path,
+            range: TextRange::empty(at),
+            replacement: "/// Helps.\n".to_owned(),
+        }])
+    }
+    const MAIN_R: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::helper()\n}\n";
+    const UTIL_R: &str = "//! Util.\n\npub fn helper() -> Int {\n  1\n}\n";
+    const UTIL_NEW: &str = "//! Util.\n\n\npub fn helper() -> Int {\n  1\n}\n";
+    TEST_RESOLVERS.set(resolvers).unwrap();
+    let package = Temp::package(
+        "stale_fix",
+        &[("src/main.cheby", MAIN_R), ("src/util.cheby", UTIL_R)],
+    );
+    let main = package.at("src/main.cheby");
+    let util = package.at("src/util.cheby");
+    let params = package.params(&json!({
+        "capabilities": {
+            "workspace": {
+                "didChangeWatchedFiles": { "dynamicRegistration": true },
+                "workspaceEdit": { "documentChanges": true },
+            },
+            "textDocument": { "codeAction": {
+                "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+                "resolveSupport": { "properties": ["edit"] },
+                "dataSupport": true,
+            } },
+            "experimental": { "chebyIdle": true },
+        },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    open(&client, &main, MAIN_R, 1);
+    client.wait_publish(&main, |p| p["version"] == 1);
+    next_idle(&mut client);
+    let before = generation(&mut client);
+    std::fs::write(&util, UTIL_NEW).unwrap();
+    let action = json!({
+        "title": "Document helper",
+        "kind": "quickfix",
+        "data": {
+            "uri": uri(&main),
+            "hash": exact_key(MAIN_R).to_hex(),
+            "range": [0, 0],
+            "id": { "kind": "habit", "index": 0 },
+        },
+    });
+    let shown = client.notifications.len();
+    let answer = client
+        .request("codeAction/resolve", action.clone())
+        .unwrap();
+    assert_eq!(
+        answer, action,
+        "a stale file is answered with no edit (D-1731)"
+    );
+    let warned = client.notifications[shown..].iter().any(|n| {
+        n.method == "window/showMessage"
+            && n.params["message"]
+                .as_str()
+                .is_some_and(|m| m.ends_with("util.cheby` changed on disk, try again"))
+    });
+    assert!(warned, "{:?}", &client.notifications[shown..]);
+    let deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    while generation(&mut client) <= before {
+        assert!(
+            Instant::now() < deadline,
+            "the refusal's sweep started no run"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let resolved = client.request("codeAction/resolve", action).unwrap();
+    let change = &resolved["edit"]["documentChanges"][0];
+    assert_eq!(change["textDocument"]["uri"], uri(&util), "{resolved}");
+    assert_eq!(
+        change["edits"][0]["range"]["start"]["line"], 3,
+        "the text on disk now: {resolved}"
+    );
+    client.stop();
+}
+
+/// D-1683, G1 plan §1.6: `codeAction/resolve` is a `Package` request, so
+/// a resolve sent right after an edit of another open document of the
+/// package waits for it, and its edit is against that document's new text
+/// and version (T-3). The fix is a test resolver's: it documents `helper`
+/// in `util.cheby`, which the edit moved down a line.
+#[test]
+fn a_resolve_reads_the_newest_other_document() {
+    use cheby_driver::analysis::{PlainEdit, TextRange, TextSize, exact_key};
+
+    use crate::features::handlers::code_action::TEST_RESOLVERS;
+    use crate::features::ide::Refusal;
+    use crate::features::ide::actions::{ActionId, FixCx, Resolve};
+
+    fn resolvers(_: &ActionId) -> Resolve {
+        document_helper
+    }
+    #[expect(clippy::unnecessary_wraps, reason = "a resolver returns a `Result`")]
+    fn document_helper(
+        cx: &FixCx<'_>,
+        _: TextRange,
+        _: &ActionId,
+    ) -> Result<Vec<PlainEdit>, Refusal> {
+        let snapshot = &cx.analyzed.snapshot;
+        let path = snapshot.root().join("src").join("util.cheby");
+        let text = snapshot
+            .source(snapshot.file_of(&path).unwrap())
+            .unwrap()
+            .text();
+        let at = TextSize::try_from(text.find("pub fn helper").unwrap()).unwrap();
+        Ok(vec![PlainEdit {
+            path,
+            range: TextRange::empty(at),
+            replacement: "/// Helps.\n".to_owned(),
+        }])
+    }
+    const MAIN_R: &str =
+        "//! Root.\n\nimport app::util\n\nfn main() {\n  let _ = util::helper()\n}\n";
+    const UTIL_R: &str = "//! Util.\n\npub fn helper() -> Int {\n  1\n}\n";
+    const UTIL_NEW: &str = "//! Util.\n\n\npub fn helper() -> Int {\n  1\n}\n";
+    TEST_RESOLVERS.set(resolvers).unwrap();
+    let package = Temp::package(
+        "resolve_waits",
+        &[("src/main.cheby", MAIN_R), ("src/util.cheby", UTIL_R)],
+    );
+    let main = package.at("src/main.cheby");
+    let util = package.at("src/util.cheby");
+    let params = package.params(&json!({
+        "capabilities": {
+            "workspace": { "workspaceEdit": { "documentChanges": true } },
+            "textDocument": { "codeAction": {
+                "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix"] } },
+                "resolveSupport": { "properties": ["edit"] },
+                "dataSupport": true,
+            } },
+            "experimental": { "chebyIdle": true },
+        },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    open(&client, &main, MAIN_R, 1);
+    open(&client, &util, UTIL_R, 1);
+    client.wait_publish(&main, |p| p["version"] == 1);
+    client.wait_publish(&util, |p| p["version"] == 1);
+    next_idle(&mut client);
+    let action = json!({
+        "title": "Document helper",
+        "kind": "quickfix",
+        "data": {
+            "uri": uri(&main),
+            "hash": exact_key(MAIN_R).to_hex(),
+            "range": [0, 0],
+            "id": { "kind": "habit", "index": 0 },
+        },
+    });
+    // The edit and the resolve come together, before any run of the edit.
+    change(&client, &util, UTIL_NEW, 2);
+    let resolved = client.request("codeAction/resolve", action).unwrap();
+    let change = &resolved["edit"]["documentChanges"][0];
+    assert_eq!(change["textDocument"]["uri"], uri(&util), "{resolved}");
+    assert_eq!(change["textDocument"]["version"], 2, "{resolved}");
+    assert_eq!(
+        change["edits"][0]["range"]["start"]["line"], 3,
+        "the edited text: {resolved}"
+    );
+    client.stop();
+}
+
 /// A client without `experimental.chebyIdle` never gets `cheby/idle`.
 #[test]
 fn no_idle_without_the_capability() {
@@ -829,4 +1108,166 @@ fn no_idle_without_the_capability() {
         client.notifications
     );
     client.stop();
+}
+
+/// The `workspace/inlayHint/refresh` requests among those `client` got.
+fn refreshes(client: &Client) -> usize {
+    client
+        .requests
+        .iter()
+        .filter(|request| request.method == "workspace/inlayHint/refresh")
+        .count()
+}
+
+/// Reads messages until a `cheby/idle`, answering the server's requests.
+fn next_idle(client: &mut Client) {
+    loop {
+        if let Message::Notification(note) = client.next()
+            && note.method == "cheby/idle"
+        {
+            return;
+        }
+    }
+}
+
+/// The refreshes a client with `refreshSupport` and the constant inlay
+/// row `on` gets, counted after each step: the open, whose clean report
+/// gives the canned run's values; an edit that makes the value stale; an
+/// edit back to the text the run read, which makes it current again; and
+/// an edit that makes it stale with a close right after it. Each edit is
+/// counted twice: while the analysis thread is held, so only `didChange`
+/// can have asked, and after its run, which must not ask again. The close
+/// is counted while still held, so only `didClose` can have asked: the
+/// closed file reads as the newest snapshot has it, the text the run read,
+/// so the value is current again. `main` is the text the fixture's run
+/// read.
+fn constant_refreshes(on: bool, main: &str, edited: &str) -> Vec<usize> {
+    let package = Temp::package(
+        &format!("constant_refresh_{on}"),
+        &[("src/main.cheby", main)],
+    );
+    let path = package.at("src/main.cheby");
+    let params = package.params(&json!({
+        "capabilities": {
+            "workspace": { "inlayHint": { "refreshSupport": true } },
+            "experimental": { "chebyIdle": true },
+        },
+        "initializationOptions": {
+            "analysis": { "debounceMs": 0 },
+            "inlayHints": { "constants": on },
+        },
+    }));
+    let (mut client, _) = Client::start(params, Vec::new());
+    // The settings of `initialize` may refresh once, before any value.
+    client.settings();
+    let base = refreshes(&client);
+    open(&client, &path, main, 1);
+    loop {
+        next_idle(&mut client);
+        let status = client.request("cheby/status", Value::Null).unwrap();
+        let constants = &status["packages"][0]["children"]["constants"];
+        if constants["values"] == 1 && constants["state"] == "idle" {
+            break;
+        }
+    }
+    client.settings();
+    let since = |client: &Client| refreshes(client).checked_sub(base).unwrap();
+    let mut counts = vec![since(&client)];
+    let hold = |client: &mut Client, hold: bool| {
+        let answer = client.request("cheby/testHold", json!({ "hold": hold }));
+        assert_eq!(answer, Ok(Value::Null));
+    };
+    for (text, version) in [(edited, 2), (main, 3)] {
+        hold(&mut client, true);
+        change(&client, &path, text, version);
+        client.settings();
+        counts.push(since(&client));
+        hold(&mut client, false);
+        client.wait_publish(&path, |p| p["version"] == version);
+        next_idle(&mut client);
+        client.settings();
+        counts.push(since(&client));
+    }
+    hold(&mut client, true);
+    change(&client, &path, edited, 4);
+    client.settings();
+    counts.push(since(&client));
+    client.notify(
+        "textDocument/didClose",
+        json!({ "textDocument": { "uri": uri(&path) } }),
+    );
+    client.settings();
+    counts.push(since(&client));
+    hold(&mut client, false);
+    next_idle(&mut client);
+    client.settings();
+    counts.push(since(&client));
+    client.stop();
+    counts
+}
+
+/// D-1679, D-1510: with the constant inlay row on, the server asks the
+/// client for its hints again once when a run's values arrive, once when
+/// an edit makes the value stale, at the edit and not again after its
+/// run, once when an edit makes it current again, and once when a close
+/// does; with the row off, never. The canned run of
+/// `CHEBY_LSP_CHILD_FIXTURE` stands in for the child, so this runs on
+/// Windows too.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "the fixture is read only in a debug build (S-24)"
+)]
+fn constant_values_refresh_the_inlay_hints() {
+    use cheby_driver::analysis::{Hash128, ModulePath, Symbol, SymbolNs, normalized_key};
+
+    use crate::child::wire::{
+        ConstantsSection, Envelope, FileHash, Front, Section, Sections, Status, SymbolData,
+        WireHash, WireValue,
+    };
+
+    const MAIN: &str =
+        "//! Root.\n\nconst limit: Int = 10 * 2\n\nfn main() {\n  assert limit > 0\n}\n";
+    const EDITED: &str =
+        "//! Root, edited.\n\nconst limit: Int = 10 * 2\n\nfn main() {\n  assert limit > 0\n}\n";
+    let tools = Temp::package("constant_refresh_fixture", &[]);
+    let fixture = tools.at("fixture.json");
+    let document = Envelope {
+        schema: crate::child::wire::SCHEMA,
+        status: Status::Ok,
+        manifest: Some(WireHash(Hash128([7; 16]))),
+        files: vec![FileHash {
+            path: "src/main.cheby".to_owned(),
+            hash: WireHash(normalized_key(MAIN)),
+        }],
+        front: Some(Front::Clean),
+        sections: Sections {
+            constants: Some(Section::Ok(ConstantsSection {
+                diagnostics: Vec::new(),
+                values: vec![WireValue {
+                    symbol: SymbolData::from(&Symbol::item(
+                        ModulePath::root("app"),
+                        SymbolNs::Value,
+                        "limit",
+                    )),
+                    text: "20".to_owned(),
+                    truncated: false,
+                    modules: None,
+                }],
+            })),
+            ownership: None,
+        },
+    };
+    std::fs::write(&fixture, serde_json::to_string(&[document]).unwrap()).unwrap();
+    // SAFETY: nextest runs each test in a process of its own (D-1553), and
+    // no other thread of this one runs yet: the servers start below and
+    // read the variable when they start.
+    unsafe {
+        std::env::set_var(super::child::FIXTURE_VAR, &fixture);
+    }
+    assert_eq!(
+        constant_refreshes(true, MAIN, EDITED),
+        [1, 2, 2, 3, 3, 4, 5, 5]
+    );
+    assert_eq!(constant_refreshes(false, MAIN, EDITED), [0; 8]);
 }

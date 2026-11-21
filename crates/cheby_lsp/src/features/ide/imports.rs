@@ -11,7 +11,10 @@
 //!   name would clash with a local or an item (E0044, E0041, D-1395).
 //! - A module that imports the file's module, directly or not, is refused,
 //!   since the import would close a cycle (E0040). So is the module itself,
-//!   a std module std does not ship, and a module of another package.
+//!   a std module std does not ship, and a module of another package. In a
+//!   std checkout, std's modules are the session's own: the cycle rule
+//!   holds among them, and a std module the checkout lacks is refused
+//!   (D-1700).
 //! - It goes where `cheby fmt` would keep it (D-1030, D-1148): into the
 //!   first block of imports, before the first whose module path sorts
 //!   after it in byte order, else after the block's last. A file with no
@@ -85,7 +88,10 @@ pub(crate) fn import_plan(
 }
 
 /// Whether `view` may import the module at `target`: a std module std
-/// ships, or a module of its own package that does not import it.
+/// ships, or a module of its own package that does not import it. In a
+/// std checkout, std's modules are the session's own (D-1700): one that
+/// imports `view` is refused (E0040), and a module the run did not load
+/// is not in the checkout, so importing it is E0039.
 fn importable(
     snapshot: &Snapshot,
     view: ModuleView<'_>,
@@ -101,13 +107,17 @@ fn importable(
                 return false;
             };
             if theirs.package == PackageId::STD {
-                return true;
+                return !snapshot.is_std_checkout() || !imports_module(snapshot, id, view.id());
             }
             let ours = table.get(view.id()).map(|i| i.package);
             !is_std && ours == Some(theirs.package) && !imports_module(snapshot, id, view.id())
         }
         // A std module the run did not load: one std ships, by its index.
-        None => is_std && std.is_some_and(|index| index.module(&path_text(target)).is_some()),
+        None => {
+            is_std
+                && !snapshot.is_std_checkout()
+                && std.is_some_and(|index| index.module(&path_text(target)).is_some())
+        }
     }
 }
 
@@ -131,7 +141,13 @@ fn imports_module(snapshot: &Snapshot, from: ModuleId, to: ModuleId) -> bool {
 /// when that is free at every point of the module, else an alias
 /// (D-1395): `std_<last>` for std, `<parent>_<last>` for a package
 /// module, then `_value`, `_value_2` and so on until one is free.
-fn binding(snapshot: &Snapshot, view: ModuleView<'_>, target: &ModulePath) -> Option<String> {
+/// A file move asks it whether a moved module's new last segment is
+/// free in an importer (X §3.6).
+pub(crate) fn binding(
+    snapshot: &Snapshot,
+    view: ModuleView<'_>,
+    target: &ModulePath,
+) -> Option<String> {
     let segments = target.segments();
     let (last, parents) = segments.split_last()?;
     let free = |name: &str| {
@@ -167,10 +183,28 @@ pub(crate) fn parse_path(text: &str) -> Option<ModulePath> {
 
 /// The insertion of `line`, an import of the module `path`, into the file
 /// of `root`, whose text is `text`.
-fn placement(root: SyntaxNode<'_>, text: &str, path: &str, line: &str) -> (TextRange, String) {
+pub(crate) fn placement(
+    root: SyntaxNode<'_>,
+    text: &str,
+    path: &str,
+    line: &str,
+) -> (TextRange, String) {
+    placement_without(root, text, path, line, &[])
+}
+
+/// [`placement`], as if the imports whose nodes cover `moved` were not
+/// in the file: where E0018's fix puts the imports that follow an item
+/// (D-1744). `line` may hold several imports, one per line.
+pub(crate) fn placement_without(
+    root: SyntaxNode<'_>,
+    text: &str,
+    path: &str,
+    line: &str,
+    moved: &[TextRange],
+) -> (TextRange, String) {
     let imports: Vec<SyntaxNode<'_>> = root
         .children()
-        .filter(|c| c.kind() == K::IMPORT_DECL)
+        .filter(|c| c.kind() == K::IMPORT_DECL && !moved.contains(&c.text_range()))
         .collect();
     if let Some((first, rest)) = imports.split_first() {
         let block = first_block(*first, rest, text);
@@ -278,7 +312,7 @@ fn after_line(text: &str, offset: TextSize, insert: String) -> (TextRange, Strin
 }
 
 /// The start of the line that holds `offset`.
-fn line_start(text: &str, offset: TextSize) -> TextSize {
+pub(crate) fn line_start(text: &str, offset: TextSize) -> TextSize {
     let at = usize::try_from(offset).unwrap_or(0);
     let start = text
         .get(..at)
@@ -289,7 +323,7 @@ fn line_start(text: &str, offset: TextSize) -> TextSize {
 
 /// The start of the line after the one that holds `offset`, if the line
 /// ends with a line break.
-fn next_line(text: &str, offset: TextSize) -> Option<TextSize> {
+pub(crate) fn next_line(text: &str, offset: TextSize) -> Option<TextSize> {
     let at = usize::try_from(offset).ok()?;
     let rest = text.get(at..)?;
     let n = rest.find('\n')?;

@@ -1,0 +1,142 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "there is no value `length` in module `std::io`\nnot found\nhelp: `std::bytes`, `std::list` and `std::string` have `length`",
+      "range": {
+        "end": {
+          "character": 19,
+          "line": 7
+        },
+        "start": {
+          "character": 13,
+          "line": 7
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 7
+              },
+              "start": {
+                "character": 9,
+                "line": 7
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "`std::io`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:8:14 action Use `list::length` and import `std::list`
+{
+  "actions": [
+    "Use `bytes::length` and import `std::bytes`",
+    "Use `list::length` and import `std::list`",
+    "Use `string::length` and import `std::string`",
+    "Explain E0042"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        244,
+        244
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0042",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+        },
+        "message": "there is no value `length` in module `std::io`\nnot found\nhelp: `std::bytes`, `std::list` and `std::string` have `length`",
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 7
+          },
+          "start": {
+            "character": 13,
+            "line": 7
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 7
+                },
+                "start": {
+                  "character": 9,
+                  "line": 7
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "`std::io`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::list\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            },
+            {
+              "newText": "list::length",
+              "range": {
+                "end": {
+                  "character": 19,
+                  "line": 7
+                },
+                "start": {
+                  "character": 9,
+                  "line": 7
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Use `list::length` and import `std::list`"
+  },
+  "showMessage": []
+}

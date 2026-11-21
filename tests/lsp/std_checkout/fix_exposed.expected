@@ -1,0 +1,31 @@
+== diagnostics
+{
+  "std/probe_fix_exposed.cheby": [
+    {
+      "code": "E0022",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0022.md"
+      },
+      "message": "`exposed` requires `pub`\nhelp: make the type `pub` as well",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 8
+        },
+        "start": {
+          "character": 0,
+          "line": 8
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== std/probe_fix_exposed.cheby:9:1 noAction make the type `pub` as well
+{
+  "actions": [
+    "Explain E0022"
+  ]
+}

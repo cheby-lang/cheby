@@ -1,0 +1,13 @@
+// @package: std-checkout
+// @probes: disk
+// @open: std/probe_Not-A-Module.cheby
+// @decisions: D-1686, D-1700
+//! A file under `std/` whose name is no module gets phase-A diagnostics
+//! only, and the frame serves it no fix, so each help keeps its line in
+//! the message (D-1686).
+
+fn main() {
+  let a = 1;
+  assert a == 1
+}
+//> 10:12 codeAction quickfix

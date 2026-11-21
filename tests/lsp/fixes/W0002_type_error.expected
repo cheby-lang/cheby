@@ -1,0 +1,135 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0002",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `total`\nnever used",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 5
+        },
+        "start": {
+          "character": 6,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby",
+      "tags": [
+        1
+      ]
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 9
+        },
+        "start": {
+          "character": 2,
+          "line": 9
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 8
+              },
+              "start": {
+                "character": 15,
+                "line": 8
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:7 action if this is intentional, start the name with an underscore: `_total`
+{
+  "actions": [
+    "if this is intentional, start the name with an underscore: `_total`",
+    "Explain W0002"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        161,
+        161
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0002",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+        },
+        "message": "unused binding `total`\nnever used",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 5
+          },
+          "start": {
+            "character": 6,
+            "line": 5
+          }
+        },
+        "severity": 2,
+        "source": "cheby",
+        "tags": [
+          1
+        ]
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "_total",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 5
+                },
+                "start": {
+                  "character": 6,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "if this is intentional, start the name with an underscore: `_total`"
+  },
+  "showMessage": []
+}

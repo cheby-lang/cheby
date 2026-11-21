@@ -1,0 +1,19 @@
+// @decisions: D-1388, D-1393, D-1658, D-1694, D-1736
+//! E0042 on an item that its std module lacks, which D-1658's table maps
+//! to `io::read_file`: the fix writes that item and imports `std::io`
+//! (D-1694).
+
+import std::file
+import std::string
+
+fn size() -> Int {
+  case file::read_text("notes.txt") {
+    Ok(text) => string::length(text)
+    Err(_) => 0
+  }
+}
+
+fn main() {
+  assert size() >= 0
+}
+//> 10:14 action Use `io::read_file` and import `std::io`

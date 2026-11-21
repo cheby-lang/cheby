@@ -1,0 +1,14 @@
+// @decisions: D-1387, D-1692, D-1736
+//! A `case` on an `Option` whose arm fixes the value gets `Some(_)` and
+//! `None`.
+
+fn pick(x: Option<Int>) -> Int {
+  case x {
+  //   ^ action Add the missing arms
+    Some(1) => 1
+  }
+}
+
+fn main() {
+  assert pick(Some(1)) == 1
+}

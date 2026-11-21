@@ -4,8 +4,9 @@
 //! interfaces come too (D-1538). Before a turbofish, only names that take
 //! type arguments (D-1536), and nothing after `xs.` (D-1537). Then the
 //! subject of a `let`, `let guard` and `let assert` pattern, with and
-//! without a type annotation (D-1531). Each test runs only the front end,
-//! so it runs on Windows too (D-1516).
+//! without a type annotation (D-1531). No interface function before a
+//! path's `::` (D-1680). Each test runs only the front end, so it runs on
+//! Windows too (D-1516).
 
 use std::sync::{Arc, OnceLock};
 
@@ -442,6 +443,29 @@ fn before_a_later_segments_colons_only_the_modules_interfaces_are_offered() {
     let (found, _) = at(&body("let a = s |> shape::‸"));
     assert!(labels(&found).contains(&"Shape"), "{:?}", labels(&found));
     assert!(labels(&found).contains(&"area"));
+}
+
+#[test]
+fn before_a_paths_colons_no_interface_function_is_offered() {
+    // D-1680: at `I::f‸::x` and `m::I::f‸::x` an interface's function
+    // would write `I::f::x`, so nothing is offered, as after `|>`
+    // (D-1545). With no `::` after the word, the functions come.
+    for (line, name) in [
+        ("let o = Show::sh‸::x", "show"),
+        ("let o = ops::Compare::comp‸::x", "compare"),
+        ("let o = shape::Shape::ar‸::x", "area"),
+        ("let o = Show::‸::x", "show"),
+    ] {
+        let (found, _) = at(&body(line));
+        assert_eq!(labels(&found), Vec::<&str>::new(), "{line}");
+        assert!(!found.incomplete, "{line}");
+        let (found, _) = at(&body(&line.replace("::x", "")));
+        assert!(
+            labels(&found).contains(&name),
+            "{line}: {:?}",
+            labels(&found)
+        );
+    }
 }
 
 /// The labels of the constructors ranked first, the subject's (X §4.1).

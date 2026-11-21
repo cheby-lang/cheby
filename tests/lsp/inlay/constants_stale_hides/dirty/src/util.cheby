@@ -1,0 +1,5 @@
+//! Arithmetic that an unsaved edit changes.
+
+pub fn triple(n: Int) -> Int {
+  n * 4
+}

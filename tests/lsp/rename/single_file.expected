@@ -1,0 +1,99 @@
+== diagnostics
+{}
+
+== single_file.cheby:7:4 rename twice
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "twice",
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 6
+              },
+              "start": {
+                "character": 3,
+                "line": 6
+              }
+            }
+          },
+          {
+            "newText": "twice",
+            "range": {
+              "end": {
+                "character": 16,
+                "line": 12
+              },
+              "start": {
+                "character": 10,
+                "line": 12
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "single_file.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== single_file.cheby:13:7 rename y
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "y",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 12
+              },
+              "start": {
+                "character": 6,
+                "line": 12
+              }
+            }
+          },
+          {
+            "newText": "y",
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 15
+              },
+              "start": {
+                "character": 9,
+                "line": 15
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "single_file.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== single_file.cheby:13:7 rename double
+{
+  "answer": {
+    "error": {
+      "code": -32803,
+      "message": "Renaming would cause: error[E0044]: `double` is the name of a function in this module at single_file.cheby:13:7"
+    }
+  },
+  "showMessage": []
+}

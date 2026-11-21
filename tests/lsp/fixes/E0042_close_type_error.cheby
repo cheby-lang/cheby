@@ -1,0 +1,13 @@
+// @decisions: D-1388, D-1393
+//! E0042's help writes the binding whose name is close.
+//! With a type error in another function.
+
+fn main() {
+  let total = 1
+  assert totl == 1
+}
+
+fn answer() -> Int {
+  "forty-two"
+}
+//> 7:10 action a binding with a similar name exists: `total`

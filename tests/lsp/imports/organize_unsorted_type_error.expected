@@ -1,0 +1,109 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 15
+        },
+        "start": {
+          "character": 2,
+          "line": 15
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 22,
+                "line": 14
+              },
+              "start": {
+                "character": 19,
+                "line": 14
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:12:3 codeAction source.organizeImports
+[
+  {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "organizeImports"
+      },
+      "range": [
+        384,
+        384
+      ],
+      "uri": "src/main.cheby"
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  }
+]
+
+== src/main.cheby:12:3 action Organize imports
+{
+  "actions": [
+    "Organize imports"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "kind": "organizeImports"
+      },
+      "range": [
+        384,
+        384
+      ],
+      "uri": "src/main.cheby"
+    },
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::int\nimport std::io\nimport std::list",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "source.organizeImports",
+    "title": "Organize imports"
+  },
+  "showMessage": []
+}

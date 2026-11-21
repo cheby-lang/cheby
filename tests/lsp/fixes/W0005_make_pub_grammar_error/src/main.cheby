@@ -1,0 +1,13 @@
+// @decisions: D-516, D-1736, D-1347
+//! With a grammar error in another module W0005 is not reported, so
+//! nothing is raised.
+
+import app::helper
+
+fn main() {
+  assert helper::used() == 1
+}
+
+fn broken() {
+  let = 1
+}

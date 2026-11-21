@@ -1,0 +1,698 @@
+== diagnostics
+{}
+
+== src/main.cheby:10:3 rename heading
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "heading",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 9
+              },
+              "start": {
+                "character": 2,
+                "line": 9
+              }
+            }
+          },
+          {
+            "newText": "heading: title",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 15
+              },
+              "start": {
+                "character": 9,
+                "line": 15
+              }
+            }
+          },
+          {
+            "newText": "heading: title",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 21
+              },
+              "start": {
+                "character": 13,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "heading",
+            "range": {
+              "end": {
+                "character": 34,
+                "line": 25
+              },
+              "start": {
+                "character": 29,
+                "line": 25
+              }
+            }
+          },
+          {
+            "newText": "heading",
+            "range": {
+              "end": {
+                "character": 23,
+                "line": 32
+              },
+              "start": {
+                "character": 18,
+                "line": 32
+              }
+            }
+          },
+          {
+            "newText": "heading: title",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 33
+              },
+              "start": {
+                "character": 14,
+                "line": 33
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:16:10 prepareRename
+{
+  "placeholder": "title",
+  "range": {
+    "end": {
+      "character": 14,
+      "line": 15
+    },
+    "start": {
+      "character": 9,
+      "line": 15
+    }
+  }
+}
+
+== src/main.cheby:16:10 rename name
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "name",
+            "range": {
+              "end": {
+                "character": 13,
+                "line": 14
+              },
+              "start": {
+                "character": 8,
+                "line": 14
+              }
+            }
+          },
+          {
+            "newText": "title: name",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 15
+              },
+              "start": {
+                "character": 9,
+                "line": 15
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 3
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:22:14 rename label
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "title: label",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 21
+              },
+              "start": {
+                "character": 13,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "label",
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 25
+              },
+              "start": {
+                "character": 4,
+                "line": 25
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 5
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:22:21 rename count
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 11
+              },
+              "start": {
+                "character": 2,
+                "line": 11
+              }
+            }
+          },
+          {
+            "newText": "count: pages",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 15
+              },
+              "start": {
+                "character": 16,
+                "line": 15
+              }
+            }
+          },
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 25,
+                "line": 21
+              },
+              "start": {
+                "character": 20,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 26,
+                "line": 33
+              },
+              "start": {
+                "character": 21,
+                "line": 33
+              }
+            }
+          },
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 35,
+                "line": 33
+              },
+              "start": {
+                "character": 30,
+                "line": 33
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 7
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:22:28 rename total
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "total",
+            "range": {
+              "end": {
+                "character": 28,
+                "line": 21
+              },
+              "start": {
+                "character": 27,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "total",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 25
+              },
+              "start": {
+                "character": 13,
+                "line": 25
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 9
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:26:5 rename text
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "title: text",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 21
+              },
+              "start": {
+                "character": 13,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "text",
+            "range": {
+              "end": {
+                "character": 9,
+                "line": 25
+              },
+              "start": {
+                "character": 4,
+                "line": 25
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 11
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:26:25 rename volume
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "volume",
+            "range": {
+              "end": {
+                "character": 16,
+                "line": 20
+              },
+              "start": {
+                "character": 12,
+                "line": 20
+              }
+            }
+          },
+          {
+            "newText": "volume",
+            "range": {
+              "end": {
+                "character": 37,
+                "line": 21
+              },
+              "start": {
+                "character": 33,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "volume",
+            "range": {
+              "end": {
+                "character": 28,
+                "line": 25
+              },
+              "start": {
+                "character": 24,
+                "line": 25
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 13
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:26:30 rename heading
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "heading",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 9
+              },
+              "start": {
+                "character": 2,
+                "line": 9
+              }
+            }
+          },
+          {
+            "newText": "heading: title",
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 15
+              },
+              "start": {
+                "character": 9,
+                "line": 15
+              }
+            }
+          },
+          {
+            "newText": "heading: title",
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 21
+              },
+              "start": {
+                "character": 13,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "heading",
+            "range": {
+              "end": {
+                "character": 34,
+                "line": 25
+              },
+              "start": {
+                "character": 29,
+                "line": 25
+              }
+            }
+          },
+          {
+            "newText": "heading",
+            "range": {
+              "end": {
+                "character": 23,
+                "line": 32
+              },
+              "start": {
+                "character": 18,
+                "line": 32
+              }
+            }
+          },
+          {
+            "newText": "heading: title",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 33
+              },
+              "start": {
+                "character": 14,
+                "line": 33
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 15
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:34:15 rename name
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "name",
+            "range": {
+              "end": {
+                "character": 11,
+                "line": 32
+              },
+              "start": {
+                "character": 6,
+                "line": 32
+              }
+            }
+          },
+          {
+            "newText": "title: name",
+            "range": {
+              "end": {
+                "character": 19,
+                "line": 33
+              },
+              "start": {
+                "character": 14,
+                "line": 33
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 17
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:34:31 rename count
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 7,
+                "line": 11
+              },
+              "start": {
+                "character": 2,
+                "line": 11
+              }
+            }
+          },
+          {
+            "newText": "count: pages",
+            "range": {
+              "end": {
+                "character": 21,
+                "line": 15
+              },
+              "start": {
+                "character": 16,
+                "line": 15
+              }
+            }
+          },
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 25,
+                "line": 21
+              },
+              "start": {
+                "character": 20,
+                "line": 21
+              }
+            }
+          },
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 26,
+                "line": 33
+              },
+              "start": {
+                "character": 21,
+                "line": 33
+              }
+            }
+          },
+          {
+            "newText": "count",
+            "range": {
+              "end": {
+                "character": 35,
+                "line": 33
+              },
+              "start": {
+                "character": 30,
+                "line": 33
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 19
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}
+
+== src/main.cheby:46:12 rename side
+{
+  "answer": {
+    "documentChanges": [
+      {
+        "edits": [
+          {
+            "newText": "side",
+            "range": {
+              "end": {
+                "character": 12,
+                "line": 45
+              },
+              "start": {
+                "character": 11,
+                "line": 45
+              }
+            }
+          },
+          {
+            "newText": "side",
+            "range": {
+              "end": {
+                "character": 24,
+                "line": 45
+              },
+              "start": {
+                "character": 23,
+                "line": 45
+              }
+            }
+          },
+          {
+            "newText": "side",
+            "range": {
+              "end": {
+                "character": 30,
+                "line": 45
+              },
+              "start": {
+                "character": 29,
+                "line": 45
+              }
+            }
+          }
+        ],
+        "textDocument": {
+          "uri": "src/main.cheby",
+          "version": 21
+        }
+      }
+    ]
+  },
+  "showMessage": []
+}

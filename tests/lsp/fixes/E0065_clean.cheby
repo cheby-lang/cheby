@@ -1,0 +1,13 @@
+// @decisions: D-1388, D-1393, D-1736, D-236, D-166
+//! E0065's fix bounds the type parameter that has no descriptor.
+
+interface Any
+
+fn wrap<T>(xs: List<T>) -> dyn Any {
+  xs
+}
+
+fn main() {
+  let _ = wrap([1])
+}
+//> 7:3 action Add bound `T: Any`

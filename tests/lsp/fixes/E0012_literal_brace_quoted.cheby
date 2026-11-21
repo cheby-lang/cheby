@@ -1,0 +1,11 @@
+// @decisions: D-1388, D-1393, D-1694, D-1661, D-1742
+//! D-1661's help on an interpolation whose first token is a string, in a
+//! shape where `\{` would leave a grammar error: `"\{" x "}"`. No fix is
+//! offered, and the help keeps its line in the message.
+
+fn main() {
+  let x = "3"
+  let line = "{"x"}"
+  assert line == line
+}
+//> 8:16 noAction Escape the brace as `\{`

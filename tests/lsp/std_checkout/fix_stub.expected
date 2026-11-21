@@ -1,0 +1,253 @@
+== diagnostics
+{
+  "std/probe_fix_stub.cheby": [
+    {
+      "code": "E0074",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0074.md"
+      },
+      "message": "the `pub` function `reveal` mentions the package-visible type `Token`\npackage-visible type\nnote: code that can use `reveal` could not name `Token` (D-148)\nhelp: make `Token` `pub`, or make `reveal` package-visible",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 25
+        },
+        "start": {
+          "character": 17,
+          "line": 25
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 10,
+                "line": 21
+              },
+              "start": {
+                "character": 5,
+                "line": 21
+              }
+            },
+            "uri": "std/probe_fix_stub.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Crate` does not satisfy `Measured`\nrequired by a bound of `measure`\nnote: this module declares `Crate` but has no function `size(Crate) -> Int` (§8.2, D-061)\nhelp: add a function `size(Crate) -> Int` to this module",
+      "range": {
+        "end": {
+          "character": 32,
+          "line": 35
+        },
+        "start": {
+          "character": 9,
+          "line": 35
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0063",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+      },
+      "message": "`Parcel` does not satisfy `Measured`\nrequired by a bound of `measure`\nnote: this module declares `Parcel` but has no function `size(Parcel) -> Int` (§8.2, D-061)\nhelp: add a function `size(Parcel) -> Int` to this module",
+      "range": {
+        "end": {
+          "character": 33,
+          "line": 37
+        },
+        "start": {
+          "character": 9,
+          "line": 37
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== std/probe_fix_stub.cheby:26:20 codeAction
+[
+  {
+    "command": {
+      "arguments": [
+        "E0074"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0074"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        478,
+        478
+      ],
+      "uri": "std/probe_fix_stub.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0074",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0074.md"
+        },
+        "message": "the `pub` function `reveal` mentions the package-visible type `Token`\npackage-visible type\nnote: code that can use `reveal` could not name `Token` (D-148)\nhelp: make `Token` `pub`, or make `reveal` package-visible",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 25
+          },
+          "start": {
+            "character": 17,
+            "line": 25
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 21
+                },
+                "start": {
+                  "character": 5,
+                  "line": 21
+                }
+              },
+              "uri": "std/probe_fix_stub.cheby"
+            },
+            "message": "declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0074"
+  }
+]
+
+== std/probe_fix_stub.cheby:36:18 action Add the missing function `size`
+{
+  "actions": [
+    "Add the missing function `size`",
+    "Explain E0063"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        630,
+        630
+      ],
+      "uri": "std/probe_fix_stub.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Crate` does not satisfy `Measured`\nrequired by a bound of `measure`\nnote: this module declares `Crate` but has no function `size(Crate) -> Int` (§8.2, D-061)\nhelp: add a function `size(Crate) -> Int` to this module",
+        "range": {
+          "end": {
+            "character": 32,
+            "line": 35
+          },
+          "start": {
+            "character": 9,
+            "line": 35
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "\n\nfn size(crate: Crate) -> Int {\n  todo\n}",
+              "range": {
+                "end": {
+                  "character": 1,
+                  "line": 15
+                },
+                "start": {
+                  "character": 1,
+                  "line": 15
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "std/probe_fix_stub.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Add the missing function `size`"
+  },
+  "showMessage": []
+}
+
+== std/probe_fix_stub.cheby:38:18 codeAction
+[
+  {
+    "command": {
+      "arguments": [
+        "E0063"
+      ],
+      "command": "cheby.explain",
+      "title": "Explain E0063"
+    },
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        726,
+        726
+      ],
+      "uri": "std/probe_fix_stub.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0063",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0063.md"
+        },
+        "message": "`Parcel` does not satisfy `Measured`\nrequired by a bound of `measure`\nnote: this module declares `Parcel` but has no function `size(Parcel) -> Int` (§8.2, D-061)\nhelp: add a function `size(Parcel) -> Int` to this module",
+        "range": {
+          "end": {
+            "character": 33,
+            "line": 37
+          },
+          "start": {
+            "character": 9,
+            "line": 37
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "kind": "quickfix",
+    "title": "Explain E0063"
+  }
+]

@@ -1,0 +1,18 @@
+// @decisions: D-1388, D-1393, D-211, D-425
+//! E0017's help turns a doc comment that documents nothing into an ordinary one.
+//! With a grammar error in another function, only the token checks
+//! run, so the code is not reported and no fix is offered (D-425).
+
+fn inc(n: Int) -> Int {
+  /// Not before a declaration.
+  n + 1
+}
+
+fn main() {
+  assert inc(1) == 2
+}
+
+fn broken() {
+  let = 1
+}
+//> 7:3 noAction use `//` for an ordinary comment

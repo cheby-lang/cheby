@@ -1,0 +1,10 @@
+== diagnostics
+{}
+
+== willRename src/app.cheby src/main.cheby
+{
+  "answer": null,
+  "showMessage": [
+    "warning: The imports were not updated: `src/app.cheby` would become the package's root module `src/main.cheby`"
+  ]
+}

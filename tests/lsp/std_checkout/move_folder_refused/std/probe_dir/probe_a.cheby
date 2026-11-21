@@ -1,0 +1,12 @@
+// @package: std-checkout
+// @probes: disk
+// @open: std/probe_dir/probe_a.cheby
+// @steps: willRename std/probe_dir std/probe_moved
+// @decisions: D-1706
+//! Moving a folder of the checkout's `std/` is refused as a file's move
+//! is, from routing alone, since a folder routes to no session: it renames
+//! every std module below it.
+
+pub fn one() -> Int {
+  1
+}

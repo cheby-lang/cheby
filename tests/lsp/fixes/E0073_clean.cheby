@@ -1,0 +1,15 @@
+// @decisions: D-1388, D-1393, D-140
+//! E0073's help asserts a `Bool` test body.
+
+fn double(n: Int) -> Int {
+  n * 2
+}
+
+test "double doubles" {
+  double(2) == 4
+}
+
+fn main() {
+  assert double(1) == 2
+}
+//> 9:3 action Add `assert`

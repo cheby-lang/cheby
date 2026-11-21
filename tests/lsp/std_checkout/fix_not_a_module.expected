@@ -1,0 +1,27 @@
+== diagnostics
+{
+  "std/probe_Not-A-Module.cheby": [
+    {
+      "code": "E0003",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0003.md"
+      },
+      "message": "unexpected character `;`\nhelp: statements are separated by line breaks, not `;`",
+      "range": {
+        "end": {
+          "character": 12,
+          "line": 9
+        },
+        "start": {
+          "character": 11,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== std/probe_Not-A-Module.cheby:10:12 codeAction quickfix
+[]

@@ -1,0 +1,91 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0045",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0045.md"
+      },
+      "message": "unknown attribute `@inline`\nhelp: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`",
+      "range": {
+        "end": {
+          "character": 7,
+          "line": 3
+        },
+        "start": {
+          "character": 0,
+          "line": 3
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:4:1 action Remove the attribute
+{
+  "actions": [
+    "Remove the attribute",
+    "Explain E0045"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        113,
+        113
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0045",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0045.md"
+        },
+        "message": "unknown attribute `@inline`\nhelp: the attributes are `@external`, `@target`, `@blocking`, `@async` and `@deprecated`",
+        "range": {
+          "end": {
+            "character": 7,
+            "line": 3
+          },
+          "start": {
+            "character": 0,
+            "line": 3
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 4
+                },
+                "start": {
+                  "character": 0,
+                  "line": 3
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Remove the attribute"
+  },
+  "showMessage": []
+}

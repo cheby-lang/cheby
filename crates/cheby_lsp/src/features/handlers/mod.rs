@@ -2,6 +2,10 @@
 
 pub(crate) mod code_action;
 pub(crate) mod completion;
+pub(crate) mod doc;
+pub(crate) mod edit;
+pub(crate) mod explain;
+pub(crate) mod file_ops;
 pub(crate) mod folding;
 pub(crate) mod format;
 pub(crate) mod hierarchy;
@@ -9,6 +13,7 @@ pub(crate) mod hover;
 pub(crate) mod inlay;
 pub(crate) mod links;
 pub(crate) mod nav;
+pub(crate) mod rename;
 pub(crate) mod selection;
 pub(crate) mod signature;
 pub(crate) mod symbols;

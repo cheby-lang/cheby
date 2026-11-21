@@ -1,0 +1,26 @@
+// @decisions: D-1387, D-1692, D-1736
+//! A `case` with two subjects gets rows of two patterns, and a tuple
+//! subject rows of tuples.
+
+type Color {
+  Red,
+  Green,
+}
+
+fn both(a: Color, b: Bool) -> Int {
+  case a, b {
+  //   ^ action Add the missing arms
+    Red, True => 1
+  }
+}
+
+fn tuple(p: (Color, Bool)) -> Int {
+  case p {
+  //   ^ action Add the missing arms
+    (Green, _) => 1
+  }
+}
+
+fn main() {
+  assert both(Red, True) == tuple((Green, False))
+}

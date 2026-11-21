@@ -121,7 +121,8 @@ impl Modifiers {
     pub(crate) const DECLARATION: Self = Self(1);
     /// The item has `@deprecated` (D-200).
     pub(crate) const DEPRECATED: Self = Self(1 << 1);
-    /// The definition is in std or the builtin module.
+    /// The definition is outside the session's own modules: in std, a
+    /// dependency or the builtin module (D-1700).
     pub(crate) const DEFAULT_LIBRARY: Self = Self(1 << 2);
     /// The function has `@async`.
     pub(crate) const ASYNC: Self = Self(1 << 3);
@@ -407,8 +408,9 @@ impl Cx<'_> {
         })
     }
 
-    /// Whether what `meaning` names is defined in std or the builtin
-    /// module.
+    /// Whether what `meaning` names is defined outside the session's own
+    /// modules: in std, a dependency or the builtin module. In a std
+    /// checkout, std's modules are the session's own (D-1700).
     fn is_library(&self, meaning: Meaning) -> bool {
         let module: ModuleId = match meaning {
             Meaning::Module(module) => module,
@@ -416,7 +418,7 @@ impl Cx<'_> {
             Meaning::TypeParam { item, .. } => item.module,
             Meaning::Local { .. } => return false,
         };
-        self.snapshot.module(module).is_some_and(|m| !m.is_local())
+        self.snapshot.module(module).is_some_and(|m| !m.is_own())
     }
 
     /// Whether the item `def` has `@deprecated` (D-200).

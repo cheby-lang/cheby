@@ -1,0 +1,132 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0043",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+      },
+      "message": "`secret` is private to module `app::shape`",
+      "range": {
+        "end": {
+          "character": 22,
+          "line": 9
+        },
+        "start": {
+          "character": 16,
+          "line": 9
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 14,
+                "line": 2
+              },
+              "start": {
+                "character": 8,
+                "line": 2
+              }
+            },
+            "uri": "src/shape.cheby"
+          },
+          "message": "declared here"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:17 action Make `secret` package-visible
+{
+  "actions": [
+    "Make `secret` package-visible",
+    "Explain E0043"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "id": {
+        "item": "secret",
+        "kind": "makeVisible",
+        "module": "app::shape"
+      },
+      "range": [
+        290,
+        290
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0043",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0043.md"
+        },
+        "message": "`secret` is private to module `app::shape`",
+        "range": {
+          "end": {
+            "character": 22,
+            "line": 9
+          },
+          "start": {
+            "character": 16,
+            "line": 9
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 2
+                },
+                "start": {
+                  "character": 8,
+                  "line": 2
+                }
+              },
+              "uri": "src/shape.cheby"
+            },
+            "message": "declared here"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "",
+              "range": {
+                "end": {
+                  "character": 5,
+                  "line": 2
+                },
+                "start": {
+                  "character": 0,
+                  "line": 2
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/shape.cheby",
+            "version": null
+          }
+        }
+      ]
+    },
+    "kind": "quickfix",
+    "title": "Make `secret` package-visible"
+  },
+  "showMessage": []
+}

@@ -1,0 +1,15 @@
+// @decisions: D-1691, D-1733, D-1736
+//! Organize imports on imports in order: offered with no edit when `only`
+//! names `source.organizeImports` or `source`, and absent with no `only`
+//! (D-1691).
+
+import std::int
+import std::list
+
+fn main() {
+  assert int::show(list::length([1])) == "1"
+}
+//> 10:3 codeAction source.organizeImports
+//> 10:3 codeAction source
+//> 10:3 codeAction
+//> 10:3 noAction Organize imports

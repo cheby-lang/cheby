@@ -1,0 +1,141 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0058",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+      },
+      "message": "`List<Int>` has no field `length`\nunknown field",
+      "range": {
+        "end": {
+          "character": 11,
+          "line": 6
+        },
+        "start": {
+          "character": 5,
+          "line": 6
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 4,
+                "line": 6
+              },
+              "start": {
+                "character": 2,
+                "line": 6
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "this has type `List<Int>`"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:7:6 action Write `list::length(xs)`
+{
+  "actions": [
+    "Write `list::length(xs)`",
+    "Explain E0058"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        265,
+        265
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0058",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
+        },
+        "message": "`List<Int>` has no field `length`\nunknown field",
+        "range": {
+          "end": {
+            "character": 11,
+            "line": 6
+          },
+          "start": {
+            "character": 5,
+            "line": 6
+          }
+        },
+        "relatedInformation": [
+          {
+            "location": {
+              "range": {
+                "end": {
+                  "character": 4,
+                  "line": 6
+                },
+                "start": {
+                  "character": 2,
+                  "line": 6
+                }
+              },
+              "uri": "src/main.cheby"
+            },
+            "message": "this has type `List<Int>`"
+          }
+        ],
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "import std::list\n\n",
+              "range": {
+                "end": {
+                  "character": 0,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            },
+            {
+              "newText": "list::length(xs)",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 6
+                },
+                "start": {
+                  "character": 2,
+                  "line": 6
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "Write `list::length(xs)`"
+  },
+  "showMessage": []
+}

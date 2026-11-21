@@ -1,0 +1,15 @@
+// @decisions: D-1388, D-1393, D-1347
+//! E0039's help imports the module whose name is close.
+//! With a grammar error in another function, the run that would report
+//! the code reads no text of the file, so no fix is offered (D-1347).
+
+import std::lst
+
+fn main() {
+  assert list::length([1]) == 1
+}
+
+fn broken() {
+  let = 1
+}
+//> 6:8 noAction a module with a similar name exists: `std::list`

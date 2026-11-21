@@ -1,0 +1,11 @@
+// @decisions: D-1388, D-1393, D-1689
+//! E0030's help on `()` as a value writes `Nil`.
+
+fn nothing() -> Nil {
+  ()
+}
+
+fn main() {
+  assert nothing() == Nil
+}
+//> 5:3 action the value that carries no information is `Nil`

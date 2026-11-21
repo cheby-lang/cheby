@@ -3,6 +3,9 @@
   "src/main.cheby": [
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "`st` is not imported\nnote: every module must be imported before use (§7.5)",
       "range": {
         "end": {
@@ -19,6 +22,9 @@
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "`s` is not imported\nnote: every module must be imported before use (§7.5)",
       "range": {
         "end": {
@@ -35,7 +41,10 @@
     },
     {
       "code": "W0002",
-      "message": "unused binding `m`\nnever used\nhelp: if this is intentional, start the name with an underscore: `_m`",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0002.md"
+      },
+      "message": "unused binding `m`\nnever used",
       "range": {
         "end": {
           "character": 7,
@@ -47,10 +56,16 @@
         }
       },
       "severity": 2,
-      "source": "cheby"
+      "source": "cheby",
+      "tags": [
+        1
+      ]
     },
     {
       "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
       "message": "cannot find value `st` in this scope\nnot found",
       "range": {
         "end": {

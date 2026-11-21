@@ -1,0 +1,35 @@
+== diagnostics
+{
+  "std/probe_typed.cheby": [
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `String`, found `Int`",
+      "range": {
+        "end": {
+          "character": 29,
+          "line": 11
+        },
+        "start": {
+          "character": 24,
+          "line": 11
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== status
+{
+  "packages": [
+    {
+      "kind": "stdCheckout",
+      "root": ""
+    }
+  ],
+  "showMessage": []
+}

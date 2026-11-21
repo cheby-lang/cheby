@@ -1,0 +1,6 @@
+//! A module beside the folder of its name.
+
+/// Zero.
+pub fn origin() -> Int {
+  0
+}

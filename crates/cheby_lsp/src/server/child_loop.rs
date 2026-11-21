@@ -19,23 +19,38 @@
 //! - `publish` appends `Children::diagnostics` after a file's own list,
 //!   as `report_back_end` appends them in `cheby check`, and
 //!   `republish_child` publishes report files again when only the child's
-//!   lists changed. Hover reads `Children::constants` through `RequestCx`,
-//!   and `cheby/status` is [`Server::on_status`].
+//!   lists changed. Hover and the constant inlay row read
+//!   `Children::constants` through `RequestCx`, and `cheby/status` is
+//!   [`Server::on_status`].
+//! - The constant inlay row shows only values that read current
+//!   (D-1679), so the client is asked for its hints again
+//!   (`workspace/inlayHint/refresh`) when the set of current values of a
+//!   package changes: when a run's values arrive or its marks change,
+//!   which [`Server::apply_outbox`] and [`Server::child_on_report`] see
+//!   as a new `ConstValues`, and when an edit, a close, a save or a new
+//!   snapshot changes the text a value is read against
+//!   ([`Server::recheck_constant_hints`]). Only with the row on and a
+//!   client that takes the request, and at most once per change.
 
-use std::collections::BTreeSet;
+use std::cell::{OnceCell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cheby_driver::analysis::{DefKind, Live, PackageKind, Report, Severity, Snapshot};
+use cheby_driver::analysis::{
+    DefKind, Hash128, Live, PackageKind, Report, Severity, Snapshot, Symbol, normalized_key,
+};
 use lsp_server::ResponseError;
 use lsp_types::Uri;
 use serde_json::{Value, json};
 
-use super::child::{ChildDone, ChildEnv, EditorText, Outbox, ReportFacts};
+use super::child::{ChildDone, ChildEnv, ConstValues, EditorText, Outbox, ReportFacts};
 use super::effects::Effect;
 use super::progress::IdleParams;
 use super::schedule::RunState;
-use super::{ClientCaps, Server, Settings, codes};
+use super::state::Doc;
+use super::{ClientCaps, Outgoing, Server, Settings, codes};
 use crate::ServerOptions;
 use crate::text::uri::{normalize, path_to_uri, uri_to_path};
 
@@ -57,16 +72,155 @@ fn child_env<'a>(
     }
 }
 
-/// Whether a local module of `snapshot` declares a constant (A §11.4).
+/// Whether one of the session's own modules declares a constant
+/// (A §11.4, D-1700).
 fn has_constants(snapshot: &Snapshot) -> bool {
-    snapshot.local_modules().any(|module| {
+    snapshot.own_modules().any(|module| {
         module
             .interface()
             .is_some_and(|iface| iface.items.iter().any(|item| item.kind == DefKind::Const))
     })
 }
 
+/// What the constant inlay row of one package was last computed from
+/// (D-1679): the values, held so that any later change to them makes a
+/// new `Arc`, and those of them that read current then.
+#[derive(Debug)]
+pub(crate) struct ShownConstants {
+    /// The package's values when last looked at.
+    values: Arc<ConstValues>,
+    /// The values that read current then, with their texts and cuts.
+    current: BTreeMap<Symbol, (String, bool)>,
+}
+
+/// What to look at again for the constant inlay row.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Recheck<'a> {
+    /// Every package whose values changed since they were last looked at.
+    Values,
+    /// The package at this root, whose text in the editor may have
+    /// changed: an edit, a close, a save or a new snapshot.
+    Text(&'a Path),
+}
+
+/// The package's text as the editor holds it now (D-1510): an open
+/// document's live text, else the newest snapshot's, which read the
+/// file from disk. Each hash is computed on first need, so an edit that
+/// no value depends on hashes nothing else.
+struct LiveEditor<'a> {
+    snapshot: Option<&'a Snapshot>,
+    docs: &'a BTreeMap<PathBuf, Doc>,
+    modules: OnceCell<BTreeSet<PathBuf>>,
+    hashes: RefCell<BTreeMap<PathBuf, Option<Hash128>>>,
+}
+
+impl<'a> LiveEditor<'a> {
+    fn new(snapshot: Option<&'a Snapshot>, docs: &'a BTreeMap<PathBuf, Doc>) -> Self {
+        Self {
+            snapshot,
+            docs,
+            modules: OnceCell::new(),
+            hashes: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    fn module_paths(&self) -> &BTreeSet<PathBuf> {
+        self.modules.get_or_init(|| {
+            self.snapshot
+                .map_or_else(BTreeSet::new, EditorText::modules)
+        })
+    }
+}
+
+impl EditorText for LiveEditor<'_> {
+    fn hash(&self, path: &Path) -> Option<Hash128> {
+        if let Some(&hash) = self.hashes.borrow().get(path) {
+            return hash;
+        }
+        let hash = if self.module_paths().contains(path) {
+            match self.docs.get(path) {
+                Some(doc) => Some(normalized_key(&doc.text)),
+                None => self.snapshot.and_then(|snapshot| snapshot.hash(path)),
+            }
+        } else {
+            None
+        };
+        self.hashes.borrow_mut().insert(path.to_path_buf(), hash);
+        hash
+    }
+
+    fn modules(&self) -> BTreeSet<PathBuf> {
+        self.module_paths().clone()
+    }
+}
+
 impl Server {
+    /// Whether the constant inlay row is on and the client takes
+    /// `workspace/inlayHint/refresh` (D-1679).
+    fn constant_hints_tracked(&self) -> bool {
+        let inlays = &self.settings.inlay_hints;
+        self.caps.inlay_refresh && inlays.enable && inlays.constants
+    }
+
+    /// Looks again at the packages `which` names, and asks the client for
+    /// its hints again, once, when the set of current values of one of
+    /// them changed since it was last looked at (D-1679).
+    pub(crate) fn recheck_constant_hints(&mut self, which: Recheck<'_>) {
+        if self.recompute_constant_hints(which) {
+            self.request("workspace/inlayHint/refresh", Value::Null, Outgoing::Ignore);
+        }
+    }
+
+    /// Computes again what the constant inlay row of the packages `which`
+    /// names would show, and keeps it. True when it changed for one of
+    /// them. Nothing is kept while the row is off or the client cannot be
+    /// asked again.
+    pub(crate) fn recompute_constant_hints(&mut self, which: Recheck<'_>) -> bool {
+        if !self.constant_hints_tracked() {
+            self.shown_constants.clear();
+            return false;
+        }
+        let packages = &self.packages;
+        self.shown_constants
+            .retain(|root, _| packages.contains_key(root));
+        let roots: Vec<PathBuf> = match which {
+            Recheck::Values => self.packages.keys().cloned().collect(),
+            Recheck::Text(root) => vec![root.to_path_buf()],
+        };
+        let mut changed = false;
+        for root in roots {
+            let values = self.children.constants(&root);
+            let shown = self.shown_constants.get(&root);
+            let same_values = match (shown, &values) {
+                (Some(shown), Some(values)) => Arc::ptr_eq(&shown.values, values),
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+            };
+            if same_values && matches!(which, Recheck::Values) {
+                continue;
+            }
+            let current = values.as_deref().map_or_else(BTreeMap::new, |values| {
+                let snapshot = self
+                    .packages
+                    .get(&root)
+                    .and_then(|package| package.snapshot.as_deref());
+                values.current_values(&LiveEditor::new(snapshot, &self.docs))
+            });
+            let before = shown.map(|shown| &shown.current);
+            changed |= before.map_or(!current.is_empty(), |before| *before != current);
+            match values {
+                Some(values) => {
+                    self.shown_constants
+                        .insert(root, ShownConstants { values, current });
+                }
+                None => {
+                    self.shown_constants.remove(&root);
+                }
+            }
+        }
+        changed
+    }
+
     /// Whether `path` is an open document edited since it was opened or
     /// saved. A closed file is read from disk.
     fn unsaved(&self, path: &Path) -> bool {
@@ -94,6 +248,8 @@ impl Server {
             let files = self.children.report_files(&root, &paths);
             self.republish_child(&root, &files);
         }
+        // A run's values, or its marks, may have changed (D-1679).
+        self.recheck_constant_hints(Recheck::Values);
     }
 
     /// A report of the package at `root` was published: keep its files,
@@ -141,6 +297,8 @@ impl Server {
         let env = child_env(&self.options, &self.settings, &self.caps, &analyzing);
         self.children
             .on_report(root, facts, report, &env, Instant::now());
+        // Errors on disk mark every value stale (D-1503).
+        self.recheck_constant_hints(Recheck::Values);
     }
 
     /// A Q run of the package at `root` ended: while it has a broken
@@ -156,6 +314,8 @@ impl Server {
                 .collect();
             self.children.on_broken(root, &saved);
         }
+        // A new snapshot: the text of a closed file may have changed.
+        self.recheck_constant_hints(Recheck::Text(root));
     }
 
     /// The settings were refreshed: apply `constants.*` to the children,
@@ -277,7 +437,9 @@ impl Server {
     }
 
     /// `cheby/status` (`progress`'s module docs). `params` may name a
-    /// `root` URI, else every package is listed.
+    /// `root` URI, else every package is listed. The entry of a std
+    /// checkout whose `std/` was not the binary's at the session's start
+    /// has `stdDiffers: true`, and no other entry has the field (D-1705).
     ///
     /// # Errors
     ///
@@ -312,11 +474,12 @@ impl Server {
             .filter(|(root, _)| only.as_ref().is_none_or(|only| only == *root))
             .map(|(root, package)| {
                 let snapshot = package.snapshot.as_ref();
-                json!({
+                let mut entry = json!({
                     "root": path_to_uri(root).map(|uri| uri.as_str().to_owned()).ok(),
                     "kind": match package.kind {
                         PackageKind::Package => "package",
                         PackageKind::SingleFile { .. } => "singleFile",
+                        PackageKind::StdCheckout { .. } => "stdCheckout",
                     },
                     "generation": self.generation(root),
                     "broken": snapshot.map_or_else(Vec::new, |s| {
@@ -334,12 +497,20 @@ impl Server {
                     "parked": self.parked.iter().filter(|p| &p.root == root).count(),
                     "children": self.children.status(
                         root,
-                        matches!(package.kind, PackageKind::Package),
+                        &package.kind,
                         snapshot.map(|snapshot| -> &dyn EditorText { &**snapshot }),
                         &env,
                         now,
                     ),
-                })
+                });
+                // Only on a std checkout whose `std/` is not the binary's
+                // (D-1705).
+                if package.std_differs
+                    && let Some(fields) = entry.as_object_mut()
+                {
+                    fields.insert("stdDiffers".to_owned(), Value::Bool(true));
+                }
+                entry
             })
             .collect();
         Ok(json!({

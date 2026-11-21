@@ -1,0 +1,92 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "E0030",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0030.md"
+      },
+      "message": "a tuple type has at least two elements",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 4
+        },
+        "start": {
+          "character": 10,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:11 action write the element type alone; there are no one-element tuples
+{
+  "actions": [
+    "write the element type alone; there are no one-element tuples",
+    "Explain E0030"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        129,
+        129
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "E0030",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0030.md"
+        },
+        "message": "a tuple type has at least two elements",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 4
+          },
+          "start": {
+            "character": 10,
+            "line": 4
+          }
+        },
+        "severity": 1,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "Int",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 4
+                },
+                "start": {
+                  "character": 10,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "write the element type alone; there are no one-element tuples"
+  },
+  "showMessage": []
+}
