@@ -1077,6 +1077,74 @@ fn list_ends_write_in_place() {
     }
 }
 
+/// Values appended to the keys of an ordered multimap that only the loop
+/// holds: `ordered_map::upsert` moves each key's list into its callback,
+/// so every push but each key's first writes in place. Before, the index
+/// still held the list during the callback and every push copied it.
+/// Both RC modes are run, with poisoning off, so the inline paths run.
+#[test]
+fn ordered_multimap_inserts_write_in_place() {
+    let dir = package(
+        "ordered_multimap_inserts",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Appends values to three keys of an ordered multimap.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 import std::ordered_multimap\n\
+                 import std::ordered_multimap::{OrderedMultimap}\n\
+                 \n\
+                 fn fill(m: OrderedMultimap<Int, Int>, n: Int) -> OrderedMultimap<Int, Int> {\n  \
+                   case n {\n    \
+                     0 => m\n    \
+                     _ => fill(ordered_multimap::insert(m, n % 3, n), n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let m = fill(ordered_multimap::new(), 3000)\n  \
+                   let keys = ordered_multimap::keys(m)\n  \
+                   let lengths = list::map(keys, fn(key) { list::length(ordered_multimap::get(m, key)) })\n  \
+                   let total = ordered_multimap::count(m)\n  \
+                   io::println(\"{keys} {lengths} {total}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for rc in [None, Some("naive")] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "[0, 2, 1] [1000, 1000, 1000] 3000\n");
+        let count = |name: &str| {
+            stat(&out.stderr, name).unwrap_or_else(|| panic!("no `{name}` line:\n{}", out.stderr))
+        };
+        assert_eq!(count("list push copied"), 0, "{rc:?}: {}", out.stderr);
+        // Every insert but the first of each key pushes, and so do `keys`
+        // and `list::map`.
+        assert!(
+            count("list push in place") >= 2997,
+            "{rc:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// A field every variant holds at the same place (D-071) is read without a
 /// test of the variant, so the read proves no layout to reuse (the fix
 /// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,

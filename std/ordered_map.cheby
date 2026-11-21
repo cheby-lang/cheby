@@ -171,30 +171,31 @@ test "last is the newest key" {
 
 // Updating
 
-/// The map with `key`, which is not in it, added at the end under the next
-/// insertion number.
-/// The record is taken apart first, here and in `insert`, `remove` and
-/// `upsert`, so `m` ends before its maps change: a map held only by the
-/// caller reaches `map` and `sorted_map` unshared and is updated in place
-/// (D-716).
-fn add<K, V>(m: OrderedMap<K, V>, key: K, value: V) -> OrderedMap<K, V> {
-  let OrderedMap { index, order, next } = m
-  OrderedMap {
-    index: map::insert(index, key, (next, value)),
-    order: sorted_map::insert(order, next, key),
-    next: next + 1,
-  }
-}
+// `insert`, `remove` and `upsert` take the record apart first, so `m` ends
+// before its maps change: a map held only by the caller reaches `map` and
+// `sorted_map` unshared and is updated in place (D-716). `insert` and
+// `upsert` change the index with one `map::upsert`, which gives a new key
+// the next insertion number. The index grows only for a new key, so its
+// size tells whether the key must also go into `order`.
 
 /// Returns the map with `value` stored under `key`. A new key goes at the
 /// end, and a key already present keeps its place (D-340).
 pub fn insert<K, V>(m: OrderedMap<K, V>, key: K, value: V) -> OrderedMap<K, V> {
-  case map::get(m.index, key) {
-    Some((place, _)) => {
-      let OrderedMap { index, order, next } = m
-      OrderedMap { index: map::insert(index, key, (place, value)), order, next }
+  let OrderedMap { index, order, next } = m
+  let before = map::size(index)
+  let changed = map::upsert(index, key, fn(found) {
+    case found {
+      Some((place, _)) => (place, value)
+      None => (next, value)
     }
-    None => add(m, key, value)
+  })
+  case map::size(changed) == before {
+    True => OrderedMap { index: changed, order, next }
+    False => OrderedMap {
+      index: changed,
+      order: sorted_map::insert(order, next, key),
+      next: next + 1,
+    }
   }
 }
 
@@ -234,13 +235,23 @@ test "remove then insert moves a key to the end" {
 /// result there. A key already present keeps its place, and a new key goes
 /// at the end (D-340).
 pub fn upsert<K, V>(m: OrderedMap<K, V>, key: K, update: fn(Option<V>) -> V) -> OrderedMap<K, V> {
-  case map::get(m.index, key) {
-    Some((place, value)) => {
-      let changed = update(Some(value))
-      let OrderedMap { index, order, next } = m
-      OrderedMap { index: map::insert(index, key, (place, changed)), order, next }
+  // On an index held only here, `map::upsert` moves the stored value into
+  // its callback, so `update` gets it unshared and can change it in place.
+  let OrderedMap { index, order, next } = m
+  let before = map::size(index)
+  let changed = map::upsert(index, key, fn(found) {
+    case found {
+      Some((place, value)) => (place, update(Some(value)))
+      None => (next, update(None))
     }
-    None => add(m, key, update(None))
+  })
+  case map::size(changed) == before {
+    True => OrderedMap { index: changed, order, next }
+    False => OrderedMap {
+      index: changed,
+      order: sorted_map::insert(order, next, key),
+      next: next + 1,
+    }
   }
 }
 
@@ -509,6 +520,48 @@ test "a key keeps its insertion number through updates" {
   assert keys(updated) == ["a", "b"]
   assert get(updated, "a") == Some(11)
   assert updated.next == 2
+}
+
+test "upsert gives update the stored value and leaves the old map as it was" {
+  let start = from_list([("a", [1]), ("b", [2])])
+  fn append(found: Option<List<Int>>) -> List<Int> {
+    case found {
+      Some(items) => list::push(items, 3)
+      None => [0]
+    }
+  }
+  let grown = upsert(start, "a", append)
+  let added = upsert(grown, "c", append)
+  assert to_list(start) == [("a", [1]), ("b", [2])]
+  assert to_list(grown) == [("a", [1, 3]), ("b", [2])]
+  assert to_list(added) == [("a", [1, 3]), ("b", [2]), ("c", [0])]
+  assert (start.next, grown.next, added.next) == (2, 2, 3)
+  assert sorted_map::count_entries(added.order) == 3
+}
+
+test "insert numbers only new keys" {
+  let start = from_list([("a", 1), ("b", 2)])
+  let replaced = insert(start, "a", 10)
+  let added = insert(replaced, "c", 3)
+  assert (replaced.next, added.next) == (2, 3)
+  assert sorted_map::count_entries(replaced.order) == 2
+  assert to_list(added) == [("a", 10), ("b", 2), ("c", 3)]
+  assert to_list(start) == [("a", 1), ("b", 2)]
+}
+
+test "upserts of a growing list keep every value and the order" {
+  let numbers = list::map(list::range(0, 2000), fn(n) { n % 7 })
+  let built = list::fold(numbers, new(), fn(acc, key) {
+    upsert(acc, key, fn(found) {
+      case found {
+        Some(items) => list::push(items, key)
+        None => [key]
+      }
+    })
+  })
+  assert keys(built) == [0, 1, 2, 3, 4, 5, 6]
+  assert list::map(values(built), list::length) == [286, 286, 286, 286, 286, 285, 285]
+  assert built.next == 7
 }
 
 test "removed numbers are never given again" {
