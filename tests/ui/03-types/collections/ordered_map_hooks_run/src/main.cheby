@@ -4,7 +4,7 @@
 //! `==`, hashing and debug printing of an ordered map go through its
 //! module's hooks even in a module that never calls the module's
 //! functions (D-342, D-584). Two maps with the same entries in the same
-//! order are `==` and hash alike although their insertion numbers differ,
+//! order are `==` and hash alike although they were built differently,
 //! and the same entries in another order are not `==` (D-343).
 
 import app::build

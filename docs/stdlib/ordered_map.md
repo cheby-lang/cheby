@@ -10,10 +10,10 @@ pub type OrderedMap<K, V>
 
 - **Order.** `keys`, `values`, `to_list`, `fold`, `try_fold`, `each`, `any`, `all`, `find`, `count`, `show` and debug printing go from the key inserted first to the key inserted last. Inserting a key that is already present keeps its position and replaces its value. Removing a key and inserting it again moves it to the end (D-340).
 - **Keys.** Keys need no interface. They are compared with `==` and hashed with the built-in hash, as in `Map` (§3.13), so a key that contains a function or a handle panics when it is inserted or looked up (D-233).
-- **Written in Cheby.** The module is written in Cheby over `std::map` and `std::sorted_map`, with no kernel of its own (D-336). The representation is not specified. One that meets the costs below is a `Map` from each key to an insertion number and its value, plus a sorted map from insertion number to key. Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
-- **Equality, hashing and printing.** Maps with the same entries in the same order can hold different insertion numbers, so the module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered maps are `==` only when they hold the same entries in the same order, and their hash covers the order (D-343). Debug printing writes `ordered_map::from_list([…])` with the entries in order, each one debug-printed (D-344).
+- **Written in Cheby.** The module is written in Cheby over `std::map`, with no kernel of its own (D-336). The representation is not specified. One that meets the costs below is a `Map` from each key to its value and the keys just before and after it, a doubly linked list threaded through the map, plus the oldest and the newest key. Keys are hashed and compared by the runtime's built-in routines, and no `compare` of the key type is ever called.
+- **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13), so they follow the entries in order rather than the representation. Two ordered maps are `==` only when they hold the same entries in the same order, and their hash covers the order (D-343). Debug printing writes `ordered_map::from_list([…])` with the entries in order, each one debug-printed (D-344).
 - **Interfaces.** `OrderedMap<K, V>` satisfies `Show` when `K` and `V` do (D-344). It does not satisfy `Compare`.
-- **Costs.** For a map of n entries, a lookup takes O(log n), effectively constant as in `Map`, and an update, including `remove`, takes O(log n). Iterating takes O(n) in the same sense as `Map`'s costs: `to_list`, `values`, `fold`, `each` and `map_values` walk the insertion order and look each key's value up in the hashed index, so they make n lookups, each O(log n) and effectively constant (D-848). `try_fold`, `any`, `all` and `find` walk the same way until they stop, so a walk that stops after k entries takes O(log n + k) (D-1082).
+- **Costs.** For a map of n entries, a lookup takes O(log n), effectively constant as in `Map`, and an update, including `remove`, takes O(log n): a few lookups and updates of the hashed index, with no comparison of keys. Iterating takes O(n) in the same sense as `Map`'s costs: `to_list`, `values`, `fold`, `each` and `map_values` walk the insertion order from the oldest key and look each key up in the hashed index, which gives its value and the next key, so they make n lookups, each O(log n) and effectively constant (D-848). `try_fold`, `any`, `all` and `find` walk the same way until they stop, so a walk that stops after k entries takes O(k) in the same sense (D-1082).
 
 ```cheby
 test "ordered maps compare, hash and print by contents and order" {
@@ -381,7 +381,7 @@ pub fn try_fold<K, V, A, E>(m: OrderedMap<K, V>, initial: A, f: fn(A, K, V) -> R
 Combines the entries like `fold`, in the map's order, with a callback that can fail. It calls `f` once per entry, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty map (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
-- **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k entries. Informative.
+- **Cost:** O(n), plus the calls to `f`, and O(k) when it stops after k entries. Informative.
 
 ```cheby
 test "try_fold stops at the first error" {
@@ -407,7 +407,7 @@ test "try_fold stops at the first error" {
 }
 ```
 
-`try_fold`, `any`, `all` and `find` walk the insertion order and look each value up, as `fold` does (D-848), and stop where the callback does, so the entries after the stop are never visited (D-1082).
+`try_fold`, `any`, `all` and `find` walk the insertion order and look each key up, as `fold` does (D-848), and stop where the callback does, so the entries after the stop are never visited (D-1082).
 
 ### `any`
 
@@ -417,7 +417,7 @@ pub fn any<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool
 
 Tells whether `predicate` returns `True` for some entry. It calls `predicate` in the map's order, stops at the first such entry, and is `False` for an empty map.
 
-- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k entries. Informative.
+- **Cost:** O(n), plus the calls to `predicate`, and O(k) when it stops after k entries. Informative.
 
 ```cheby
 test "any stops at the first match" {
@@ -441,7 +441,7 @@ pub fn all<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Bool
 
 Tells whether `predicate` returns `True` for every entry. It calls `predicate` in the map's order, stops at the first entry for which it returns `False`, and is `True` for an empty map.
 
-- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k entries. Informative.
+- **Cost:** O(n), plus the calls to `predicate`, and O(k) when it stops after k entries. Informative.
 
 ```cheby
 test "all needs every entry to match" {
@@ -466,7 +466,7 @@ pub fn find<K, V>(m: OrderedMap<K, V>, predicate: fn(K, V) -> Bool) -> Option<(K
 Returns the first entry in the map's order for which `predicate` returns `True`. It stops calling `predicate` at that entry.
 
 - **Fails:** `None` when no entry matches.
-- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k entries. Informative.
+- **Cost:** O(n), plus the calls to `predicate`, and O(k) when it stops after k entries. Informative.
 
 ```cheby
 test "find returns the first match in insertion order" {

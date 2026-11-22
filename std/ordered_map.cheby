@@ -1,33 +1,45 @@
 //! The insertion-ordered map `OrderedMap<K, V>`, a persistent map that
 //! keeps its entries in the order their keys were first inserted (D-331,
-//! D-337), written in Cheby over `std::map` and `std::sorted_map` with no
-//! runtime kernel (D-336, D-664).
+//! D-337), written in Cheby over `std::map` with no runtime kernel (D-336,
+//! D-664).
 //!
-//! A `Map` holds each key's insertion number and value, and a sorted map
-//! from insertion number to key holds the order. Inserting a key that is
-//! already present keeps its number, so it keeps its place; removing a key
-//! drops its number, so inserting it again puts it at the end (D-340).
-//! The next number only grows. Keys are hashed and compared by the
-//! runtime's built-in routines, and no `compare` of the key type is ever
-//! called.
+//! A `Map` holds each key's value together with the keys just before and
+//! just after it, so the order is a doubly linked list threaded through
+//! the map, and the record names the oldest and the newest key. A new key
+//! is linked after the newest one. Inserting a key that is already present
+//! leaves its links alone, so it keeps its place; removing a key links its
+//! two neighbours to each other, so inserting it again puts it at the end
+//! (D-340). Every update is a few map operations and no comparison: keys
+//! are hashed and compared by the runtime's built-in routines, and no
+//! `compare` of the key type is ever called.
 
 import std::list
 import std::map
 import std::set
-import std::sorted_map
 import std::string
 
+/// The place of a key in the order, and its value: `before` and `after`
+/// name the keys next to it, `None` at the two ends of the order.
+type Entry<K, V> {
+  before: Option<K>,
+  after: Option<K>,
+  value: V,
+}
+
 /// A persistent map in insertion order (D-331, D-337, D-340). `index`
-/// maps each key to its insertion number and value, `order` maps each
-/// number in use to its key, and `next` is the number the next new key
-/// gets. Every key of `index` is in `order` under its number, and the
-/// other way round. Equality, hashing and debug printing go through
-/// `equal`, `hash` and `debug` (D-342, D-343).
+/// maps each key to its entry, and `oldest` and `newest` name the two
+/// ends of the order, both `None` for an empty map. Following `after`
+/// from `oldest` visits every key of `index` once and stops at
+/// `newest`, and `before` links the same keys the other way. The links
+/// name only keys that are present, so two maps with the same entries in
+/// the same order have the same fields, whatever their history. Equality,
+/// hashing and debug printing go through `equal`, `hash` and `debug`
+/// (D-342, D-343).
 @std_hooks(equal, hash, debug)
 pub type OrderedMap<K, V> {
-  index: map::Map<K, (Int, V)>,
-  order: sorted_map::SortedMap<Int, K>,
-  next: Int,
+  index: map::Map<K, Entry<K, V>>,
+  oldest: Option<K>,
+  newest: Option<K>,
 }
 
 /// Whether two maps hold the same entries in the same order, keys and
@@ -63,7 +75,7 @@ test "ordered maps compare, hash and print by contents and order" {
 
 /// Returns an empty map.
 pub fn new<K, V>() -> OrderedMap<K, V> {
-  OrderedMap { index: map::new(), order: sorted_map::new(), next: 0 }
+  OrderedMap { index: map::new(), oldest: None, newest: None }
 }
 
 test "new is empty" {
@@ -111,7 +123,7 @@ test "is_empty tells an empty map" {
 /// Returns the value stored under `key`.
 pub fn get<K, V>(m: OrderedMap<K, V>, key: K) -> Option<V> {
   case map::get(m.index, key) {
-    Some((_, value)) => Some(value)
+    Some(found) => Some(found.value)
     None => None
   }
 }
@@ -133,11 +145,11 @@ test "has_key tells whether a key is present" {
   assert !has_key(ages, "alan")
 }
 
-/// The entry of `key`, which `order` named: its key and its value.
-fn entry<K, V>(m: OrderedMap<K, V>, found: Option<(Int, K)>) -> Option<(K, V)> {
-  case found {
-    Some((_, key)) => case map::get(m.index, key) {
-      Some((_, value)) => Some((key, value))
+/// The key `end`, one end of the order, with its value.
+fn end_entry<K, V>(index: map::Map<K, Entry<K, V>>, end: Option<K>) -> Option<(K, V)> {
+  case end {
+    Some(key) => case map::get(index, key) {
+      Some(found) => Some((key, found.value))
       None => None
     }
     None => None
@@ -147,7 +159,7 @@ fn entry<K, V>(m: OrderedMap<K, V>, found: Option<(Int, K)>) -> Option<(K, V)> {
 /// Returns the entry that comes first in the map's order, the oldest key
 /// still present.
 pub fn first<K, V>(m: OrderedMap<K, V>) -> Option<(K, V)> {
-  entry(m, sorted_map::first(m.order))
+  end_entry(m.index, m.oldest)
 }
 
 test "first is the oldest key" {
@@ -160,7 +172,7 @@ test "first is the oldest key" {
 /// Returns the entry that comes last in the map's order, the key inserted
 /// most recently.
 pub fn last<K, V>(m: OrderedMap<K, V>) -> Option<(K, V)> {
-  entry(m, sorted_map::last(m.order))
+  end_entry(m.index, m.newest)
 }
 
 test "last is the newest key" {
@@ -172,30 +184,66 @@ test "last is the newest key" {
 // Updating
 
 // `insert`, `remove` and `upsert` take the record apart first, so `m` ends
-// before its maps change: a map held only by the caller reaches `map` and
-// `sorted_map` unshared and is updated in place (D-716). `insert` and
-// `upsert` change the index with one `map::upsert`, which gives a new key
-// the next insertion number. The index grows only for a new key, so its
-// size tells whether the key must also go into `order`.
+// before its index changes: an index held only by the caller reaches
+// `map` unshared and is updated in place (D-716). `insert` and `upsert`
+// change the key's entry with one `map::upsert`, which links a new key
+// after the newest. The index grows only for a new key, so its size tells
+// whether the newest key's entry must also point to the new one.
+
+/// `found`, the entry of a key that a link names, with `after` as the key
+/// after it. Every key a link names is in the index, so `found` is never
+/// `None`.
+fn with_after<K, V>(found: Option<Entry<K, V>>, after: Option<K>) -> Entry<K, V> {
+  case found {
+    Some(entry) => Entry { ..entry, after }
+    None => panic as "an ordered map links to a key it does not hold"
+  }
+}
+
+/// `found`, the entry of a key that a link names, with `before` as the
+/// key before it, as in `with_after`.
+fn with_before<K, V>(found: Option<Entry<K, V>>, before: Option<K>) -> Entry<K, V> {
+  case found {
+    Some(entry) => Entry { ..entry, before }
+    None => panic as "an ordered map links to a key it does not hold"
+  }
+}
+
+/// The map of `index`, which already holds `key` as a new key whose
+/// entry follows `newest`: `newest`'s entry gets `key` after it, and
+/// `key` becomes the newest key, and the oldest too in a map that was
+/// empty.
+fn link_newest<K, V>(
+  index: map::Map<K, Entry<K, V>>,
+  oldest: Option<K>,
+  newest: Option<K>,
+  key: K,
+) -> OrderedMap<K, V> {
+  let added = Some(key)
+  case newest {
+    Some(previous) => OrderedMap {
+      index: map::upsert(index, previous, fn(found) { with_after(found, added) }),
+      oldest,
+      newest: added,
+    }
+    None => OrderedMap { index, oldest: added, newest: added }
+  }
+}
 
 /// Returns the map with `value` stored under `key`. A new key goes at the
 /// end, and a key already present keeps its place (D-340).
 pub fn insert<K, V>(m: OrderedMap<K, V>, key: K, value: V) -> OrderedMap<K, V> {
-  let OrderedMap { index, order, next } = m
-  let before = map::size(index)
+  let OrderedMap { index, oldest, newest } = m
+  let held = map::size(index)
   let changed = map::upsert(index, key, fn(found) {
     case found {
-      Some((place, _)) => (place, value)
-      None => (next, value)
+      Some(entry) => Entry { ..entry, value }
+      None => Entry { before: newest, after: None, value }
     }
   })
-  case map::size(changed) == before {
-    True => OrderedMap { index: changed, order, next }
-    False => OrderedMap {
-      index: changed,
-      order: sorted_map::insert(order, next, key),
-      next: next + 1,
-    }
+  case map::size(changed) == held {
+    True => OrderedMap { index: changed, oldest, newest }
+    False => link_newest(changed, oldest, newest, key)
   }
 }
 
@@ -210,12 +258,30 @@ test "insert adds at the end and replaces in place" {
 
 /// Returns the map without `key`, or unchanged when `key` is not in it.
 /// The other keys keep their order, and a removed key inserted again goes
-/// at the end (D-340).
+/// at the end (D-340). The keys before and after `key` are linked to each
+/// other, or become an end of the order.
 pub fn remove<K, V>(m: OrderedMap<K, V>, key: K) -> OrderedMap<K, V> {
   case map::get(m.index, key) {
-    Some((place, _)) => {
-      let OrderedMap { index, order, next } = m
-      OrderedMap { index: map::remove(index, key), order: sorted_map::remove(order, place), next }
+    Some(Entry { before, after, .. }) => {
+      let OrderedMap { index, oldest, newest } = m
+      let dropped = map::remove(index, key)
+      let forward = case before {
+        Some(previous) => map::upsert(dropped, previous, fn(found) { with_after(found, after) })
+        None => dropped
+      }
+      let linked = case after {
+        Some(following) => map::upsert(forward, following, fn(found) { with_before(found, before) })
+        None => forward
+      }
+      let first_key = case before {
+        Some(_) => oldest
+        None => after
+      }
+      let last_key = case after {
+        Some(_) => newest
+        None => before
+      }
+      OrderedMap { index: linked, oldest: first_key, newest: last_key }
     }
     None => m
   }
@@ -235,23 +301,20 @@ test "remove then insert moves a key to the end" {
 /// result there. A key already present keeps its place, and a new key goes
 /// at the end (D-340).
 pub fn upsert<K, V>(m: OrderedMap<K, V>, key: K, update: fn(Option<V>) -> V) -> OrderedMap<K, V> {
-  // On an index held only here, `map::upsert` moves the stored value into
-  // its callback, so `update` gets it unshared and can change it in place.
-  let OrderedMap { index, order, next } = m
-  let before = map::size(index)
+  // On an index held only here, `map::upsert` moves the stored entry into
+  // its callback, so `update` gets the value unshared and can change it in
+  // place.
+  let OrderedMap { index, oldest, newest } = m
+  let held = map::size(index)
   let changed = map::upsert(index, key, fn(found) {
     case found {
-      Some((place, value)) => (place, update(Some(value)))
-      None => (next, update(None))
+      Some(Entry { before, after, value }) => Entry { before, after, value: update(Some(value)) }
+      None => Entry { before: newest, after: None, value: update(None) }
     }
   })
-  case map::size(changed) == before {
-    True => OrderedMap { index: changed, order, next }
-    False => OrderedMap {
-      index: changed,
-      order: sorted_map::insert(order, next, key),
-      next: next + 1,
-    }
+  case map::size(changed) == held {
+    True => OrderedMap { index: changed, oldest, newest }
+    False => link_newest(changed, oldest, newest, key)
   }
 }
 
@@ -285,7 +348,7 @@ test "merge appends new keys and replaces shared ones in place" {
 
 /// Returns the keys in the map's order, O(n).
 pub fn keys<K, V>(m: OrderedMap<K, V>) -> List<K> {
-  sorted_map::fold_entries(m.order, [], fn(found, _, key) { list::push(found, key) })
+  fold(m, [], fn(found, key, _) { list::push(found, key) })
 }
 
 test "keys come in insertion order" {
@@ -293,8 +356,7 @@ test "keys come in insertion order" {
   assert keys(scores) == ["b", "c", "a"]
 }
 
-/// Returns the values in the order of their keys. It looks each key up as
-/// `to_list` does.
+/// Returns the values in the order of their keys.
 pub fn values<K, V>(m: OrderedMap<K, V>) -> List<V> {
   fold(m, [], fn(found, _, value) { list::push(found, value) })
 }
@@ -304,10 +366,10 @@ test "values follow the order of their keys" {
   assert values(scores) == [2, 3, 1]
 }
 
-/// Returns the entries as pairs, in the map's order. It walks `order` and
-/// looks each key's value up in `index`: n lookups, each O(log n) and
-/// effectively constant, so the walk is O(n) in the same sense as `Map`'s
-/// costs (D-848).
+/// Returns the entries as pairs, in the map's order. Like every walk, it
+/// follows the links from the oldest key and looks each key up in `index`:
+/// n lookups, each O(log n) and effectively constant, so the walk is O(n)
+/// in the same sense as `Map`'s costs (D-848).
 pub fn to_list<K, V>(m: OrderedMap<K, V>) -> List<(K, V)> {
   fold(m, [], fn(found, key, value) { list::push(found, (key, value)) })
 }
@@ -318,16 +380,27 @@ test "to_list gives the entries in insertion order" {
 }
 
 /// Combines the entries in the map's order, starting from `initial`. Like
-/// `to_list`, it looks each key's value up, effectively O(1) per entry
-/// (D-848).
+/// `to_list`, it looks each key up, effectively O(1) per entry (D-848).
 pub fn fold<K, V, A>(m: OrderedMap<K, V>, initial: A, f: fn(A, K, V) -> A) -> A {
-  let index = m.index
-  sorted_map::fold_entries(m.order, initial, fn(found, _, key) {
-    case map::get(index, key) {
-      Some((_, value)) => f(found, key, value)
+  fold_from(m.index, m.oldest, initial, f)
+}
+
+/// Combines the entries from `at` to the end of the order, starting from
+/// `found`. The call to itself is a tail call, so the stack stays flat
+/// however long the map is (D-015).
+fn fold_from<K, V, A>(
+  index: map::Map<K, Entry<K, V>>,
+  at: Option<K>,
+  found: A,
+  f: fn(A, K, V) -> A,
+) -> A {
+  case at {
+    Some(key) => case map::get(index, key) {
+      Some(entry) => fold_from(index, entry.after, f(found, key, entry.value), f)
       None => found
     }
-  })
+    None => found
+  }
 }
 
 test "fold visits the keys in insertion order" {
@@ -346,21 +419,35 @@ test "each calls the function once per entry" {
 }
 
 /// Combines the entries in the map's order like `fold`, and stops at the
-/// first `Err` that `f` returns (D-1080, D-1082). It walks `order` through
-/// `sorted_map::try_fold_entries` and looks each value up, as `fold` does
-/// (D-848), so a walk that stops after k entries takes O(log n + k).
+/// first `Err` that `f` returns (D-1080, D-1082). It follows the links
+/// and looks each key up, as `fold` does (D-848), so a walk that stops
+/// after k entries takes O(k).
 pub fn try_fold<K, V, A, E>(
   m: OrderedMap<K, V>,
   initial: A,
   f: fn(A, K, V) -> Result<A, E>,
 ) -> Result<A, E> {
-  let index = m.index
-  sorted_map::try_fold_entries(m.order, initial, fn(found, _, key) {
-    case map::get(index, key) {
-      Some((_, value)) => f(found, key, value)
+  try_fold_from(m.index, m.oldest, initial, f)
+}
+
+/// Combines the entries from `at` on like `fold_from`, and stops at the
+/// first `Err` that `f` returns. The call to itself is a tail call.
+fn try_fold_from<K, V, A, E>(
+  index: map::Map<K, Entry<K, V>>,
+  at: Option<K>,
+  found: A,
+  f: fn(A, K, V) -> Result<A, E>,
+) -> Result<A, E> {
+  case at {
+    Some(key) => case map::get(index, key) {
+      Some(entry) => case f(found, key, entry.value) {
+        Ok(stepped) => try_fold_from(index, entry.after, stepped, f)
+        Err(reason) => Err(reason)
+      }
       None => Ok(found)
     }
-  })
+    None => Ok(found)
+  }
 }
 
 test "try_fold stops at the first error" {
@@ -455,16 +542,31 @@ test "find returns the first match in insertion order" {
 
 /// Returns a map with the same keys in the same order, each value replaced
 /// by `f` of its key and value. `f` is called once per entry, in the map's
-/// order. The order and the insertion numbers are kept as they are.
+/// order. Each key keeps its links.
 pub fn map_values<K, V, W>(m: OrderedMap<K, V>, f: fn(K, V) -> W) -> OrderedMap<K, W> {
-  let index = m.index
-  let mapped = sorted_map::fold_entries(m.order, map::new(), fn(found, place, key) {
-    case map::get(index, key) {
-      Some((_, value)) => map::insert(found, key, (place, f(key, value)))
-      None => found
+  let mapped = map_from(m.index, m.oldest, map::new(), f)
+  OrderedMap { index: mapped, oldest: m.oldest, newest: m.newest }
+}
+
+/// `mapped` with the entries from `at` to the end of the order added, each
+/// with its links and `f` of its key and value. The call to itself is a
+/// tail call.
+fn map_from<K, V, W>(
+  index: map::Map<K, Entry<K, V>>,
+  at: Option<K>,
+  mapped: map::Map<K, Entry<K, W>>,
+  f: fn(K, V) -> W,
+) -> map::Map<K, Entry<K, W>> {
+  case at {
+    Some(key) => case map::get(index, key) {
+      Some(Entry { before, after, value }) => {
+        let entry = Entry { before, after, value: f(key, value) }
+        map_from(index, after, map::insert(mapped, key, entry), f)
+      }
+      None => mapped
     }
-  })
-  OrderedMap { index: mapped, order: m.order, next: m.next }
+    None => mapped
+  }
 }
 
 test "map_values keeps the keys and their order" {
@@ -509,7 +611,7 @@ test "an ordered map shows its entries in order" {
 
 // Internal tests
 
-test "a key keeps its insertion number through updates" {
+test "a key keeps its place through updates" {
   let start = from_list([("a", 1), ("b", 2)])
   let updated = upsert(insert(start, "a", 10), "a", fn(found) {
     case found {
@@ -519,7 +621,7 @@ test "a key keeps its insertion number through updates" {
   })
   assert keys(updated) == ["a", "b"]
   assert get(updated, "a") == Some(11)
-  assert updated.next == 2
+  assert (updated.oldest, updated.newest) == (Some("a"), Some("b"))
 }
 
 test "upsert gives update the stored value and leaves the old map as it was" {
@@ -535,16 +637,16 @@ test "upsert gives update the stored value and leaves the old map as it was" {
   assert to_list(start) == [("a", [1]), ("b", [2])]
   assert to_list(grown) == [("a", [1, 3]), ("b", [2])]
   assert to_list(added) == [("a", [1, 3]), ("b", [2]), ("c", [0])]
-  assert (start.next, grown.next, added.next) == (2, 2, 3)
-  assert sorted_map::count_entries(added.order) == 3
+  assert (start.newest, grown.newest, added.newest) == (Some("b"), Some("b"), Some("c"))
+  assert map::size(added.index) == 3
 }
 
-test "insert numbers only new keys" {
+test "insert links only new keys" {
   let start = from_list([("a", 1), ("b", 2)])
   let replaced = insert(start, "a", 10)
   let added = insert(replaced, "c", 3)
-  assert (replaced.next, added.next) == (2, 3)
-  assert sorted_map::count_entries(replaced.order) == 2
+  assert (replaced.oldest, replaced.newest) == (Some("a"), Some("b"))
+  assert (added.oldest, added.newest) == (Some("a"), Some("c"))
   assert to_list(added) == [("a", 10), ("b", 2), ("c", 3)]
   assert to_list(start) == [("a", 1), ("b", 2)]
 }
@@ -561,15 +663,71 @@ test "upserts of a growing list keep every value and the order" {
   })
   assert keys(built) == [0, 1, 2, 3, 4, 5, 6]
   assert list::map(values(built), list::length) == [286, 286, 286, 286, 286, 285, 285]
-  assert built.next == 7
+  assert (built.oldest, built.newest) == (Some(0), Some(6))
 }
 
-test "removed numbers are never given again" {
-  let start = from_list([("a", 1), ("b", 2), ("c", 3)])
-  let churned = insert(remove(insert(remove(start, "b"), "b", 4), "a"), "a", 5)
-  assert keys(churned) == ["c", "b", "a"]
-  assert churned.next == 5
-  assert sorted_map::count_entries(churned.order) == 3
+test "removing any entry keeps the links both ways" {
+  // The keys from the newest to the oldest, following `before`.
+  fn backward(
+    index: map::Map<Int, Entry<Int, Int>>,
+    at: Option<Int>,
+    found: List<Int>,
+  ) -> List<Int> {
+    case at {
+      Some(key) => case map::get(index, key) {
+        Some(entry) => backward(index, entry.before, list::push(found, key))
+        None => found
+      }
+      None => found
+    }
+  }
+  // Whether both walks give the same keys, `oldest` and `newest` are
+  // their ends, and the index holds nothing else.
+  fn linked(m: OrderedMap<Int, Int>) -> Bool {
+    let forward = keys(m)
+    let ends = (list::first(forward), list::last(forward))
+    backward(m.index, m.newest, []) == list::reverse(forward)
+      && (m.oldest, m.newest) == ends
+      && list::length(forward) == map::size(m.index)
+  }
+  let start = from_list([(1, 10), (2, 20), (3, 30), (4, 40)])
+  let no_first = remove(start, 1)
+  let no_last = remove(start, 4)
+  let no_middle = remove(start, 2)
+  let only = from_list([(5, 50)])
+  let emptied = remove(only, 5)
+  assert keys(no_first) == [2, 3, 4]
+  assert keys(no_last) == [1, 2, 3]
+  assert keys(no_middle) == [1, 3, 4]
+  assert linked(start) && linked(no_first) && linked(no_last) && linked(no_middle)
+  assert linked(remove(remove(no_middle, 3), 1))
+  assert linked(only) && linked(emptied)
+  assert (emptied.oldest, emptied.newest) == (None, None)
+  assert map::is_empty(emptied.index)
+  assert linked(insert(emptied, 6, 60))
+  assert first(no_first) == Some((2, 20))
+  assert last(no_last) == Some((3, 30))
+  assert keys(start) == [1, 2, 3, 4]
+}
+
+test "remove then insert links the key at the end" {
+  let start = from_list([(1, 10), (2, 20), (3, 30)])
+  let moved = insert(remove(start, 2), 2, 21)
+  let moved_first = insert(remove(moved, 1), 1, 11)
+  assert to_list(moved) == [(1, 10), (3, 30), (2, 21)]
+  assert to_list(moved_first) == [(3, 30), (2, 21), (1, 11)]
+  assert (moved_first.oldest, moved_first.newest) == (Some(3), Some(1))
+  assert to_list(start) == [(1, 10), (2, 20), (3, 30)]
+}
+
+test "maps built by different histories hold the same fields" {
+  let listed = from_list([("a", 1), ("b", 2), ("c", 3)])
+  let start = from_list([("z", 0), ("a", 1), ("b", 0)])
+  let churned = insert(insert(remove(insert(remove(start, "z"), "b", 2), "c"), "c", 3), "b", 2)
+  assert listed == churned
+  assert (listed.index, listed.oldest, listed.newest) ==
+    (churned.index, churned.oldest, churned.newest)
+  assert listed != from_list([("a", 1), ("c", 3), ("b", 2)])
 }
 
 test "a long map keeps its order through removals" {
@@ -581,6 +739,16 @@ test "a long map keeps its order through removals" {
   assert last(odd) == Some((1, 998))
   assert keys(odd) == list::filter(list::map(numbers, fn(n) { 999 - n }), fn(key) { key % 2 == 1 })
   assert from_list(to_list(odd)) == odd
+}
+
+test "a large map is walked without growing the stack" {
+  let numbers = list::range(0, 50_000)
+  let built = from_list(list::map(numbers, fn(n) { (n, n * 2) }))
+  assert fold(built, 0, fn(sum, key, value) { sum + key + value }) == 3_749_925_000
+  assert list::length(keys(built)) == 50_000
+  assert try_fold(built, 0, fn(seen, _, _) { Ok(seen + 1) }) == Ok::<Int, Nil>(50_000)
+  assert find(built, fn(key, _) { key == 49_999 }) == Some((49_999, 99_998))
+  assert last(map_values(built, fn(key, _) { key })) == Some((49_999, 49_999))
 }
 
 // Puzzle helpers. They sit at the end of the file, so no std location that
