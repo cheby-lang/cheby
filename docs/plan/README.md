@@ -471,6 +471,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1769    | Release code is compiled with Cranelift's `speed`                                                   |
 | D-1770    | Release inlines calls on lowered MIR within a budget, then cleans up boxes and branches             |
 | D-1771    | Release backtraces lack inlined frames; panics, output and exit status match debug                  |
+| D-1772    | A free that kills no field skips the worklist; `free_unique` takes the size from generated code     |
+| D-1773    | `list::get` and `map::get` matched at once build no `Some`; helpers `map_find`, `map_value_at`      |
+| D-1774    | Reading kernels borrow their arguments; `list::get`/`set` on a one-leaf list are inline             |
 
 ## Open questions
 

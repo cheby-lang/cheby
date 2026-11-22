@@ -423,3 +423,32 @@ A clean release build of `compile_large`'s 200 modules retires 1.41 times the in
 
 Found on the way: removing a move that looked dead changed when a handle's drop function ran, and example 020 printed an empty store. The clean-up now leaves alone every definition and branch whose removal would move the release of a value that may hold a handle.
 
+### Frees that kill no field, boxes through `ctx`, a sized `free_unique` (D-1772)
+
+The general free path was inlined into the fast ones and set up their frames, so freeing an object with no counted field cost about 100 instructions. It costs about 50 now. The boxing helpers no longer look the fiber up in thread-local storage, and a specialized drop passes the size it knows.
+
+Tried and not kept:
+
+- No block cache at all, every block from mimalloc: +4.6% instructions in `binary_trees`, +13.9% in `nbody`, +5.8% in `json_roundtrip`, +8.7% in `fannkuch_redux`.
+- A block cache of 65,536 blocks per class in place of 512: −8.4% in `binary_trees`, nothing elsewhere, and up to about 277 MB held per thread. Left as an Open item of the decision log.
+- An allocation fast path written inline in generated code: estimated at 2% in `binary_trees` and 3.5% in `nbody`, for a block cache whose layout becomes part of the ABI. Not built.
+
+### Lookups without the `Some`, reading kernels that borrow, one-leaf list indexes inline (D-1773, D-1774)
+
+`list::get` and `map::get` whose result is matched at once build no `Some`. Kernels that only read their arguments get them without an owned temporary. A read or a write of a list of one leaf is inline. `fannkuch_redux` at 9, by a compiler in its development build: 14.30 G instructions before, 7.61 G with the first part, 7.37 G with the second, 4.24 G with all three, and 1.6 million allocations where it made 12.9 million.
+
+### Readings after these, all changes of the round together
+
+Against the executables of `7a586d82`, as before. The load on the machine was lower for this reading than for the baseline's, so the cycles flatter the changes; the instructions do not.
+
+| Program          | Debug, instructions | Debug, cycles | Release, instructions | Release, cycles |
+| ---------------- | ------------------: | ------------: | --------------------: | --------------: |
+| `lru_cache`      |              −66.6% |        −77.1% |                −67.1% |          −77.7% |
+| `fannkuch_redux` |              −70.5% |        −72.6% |                −76.4% |          −77.1% |
+| `spectral_norm`  |              −57.4% |        −63.1% |                −59.1% |          −62.5% |
+| `mandelbrot`     |              −42.0% |        −44.4% |                −47.7% |          −52.5% |
+| `nbody`          |              −34.8% |        −43.6% |                −35.9% |          −46.9% |
+| `json_roundtrip` |              −19.0% |        −22.6% |                −20.2% |          −22.8% |
+| `word_freq`      |               −7.5% |        −38.6% |                 −9.4% |          −28.0% |
+| `binary_trees`   |               −2.3% |        −12.6% |                 −5.3% |          −13.0% |
+

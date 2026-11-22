@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-318, D-525
+// @decisions: D-318, D-525, D-1773, D-1774
 //! `list::get` and `list::set` at the edges of lists of 0, 1, 32 and 33
 //! elements, the largest that is one leaf and the smallest that is not.
 //! An index of -1, of the length, of `int::max_value` or of
