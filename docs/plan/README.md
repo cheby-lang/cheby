@@ -469,6 +469,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1767    | Code keys hold the profile; constants run on debug code; release compiles a package anew            |
 | D-1768    | Release code calls Cheby functions directly, with the borrow mask in the symbol                     |
 | D-1769    | Release code is compiled with Cranelift's `speed`                                                   |
+| D-1770    | Release inlines calls on lowered MIR within a budget, then cleans up boxes and branches             |
+| D-1771    | Release backtraces lack inlined frames; panics, output and exit status match debug                  |
 
 ## Open questions
 

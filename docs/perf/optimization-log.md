@@ -402,3 +402,24 @@ Tried and not kept, or left open:
 
 - A check for interrupts at each direct kernel call. The wrapper's entry check ran before every kernel. Now an interrupt that arrives before a kernel call is noticed at the next function entry or loop iteration. That is what the language promises, and a check per call site would give back part of the gain.
 - A read-only kernel such as `list::get` still gets a dup and a drop around the call when its argument is used afterwards. A list of kernels that never write in place would remove the pair.
+
+### The release profile inlines calls inside a module (D-1770, D-1771)
+
+In release, a call of a small function of the same module is replaced by its body before reference counts are inserted, and a clean-up pass cancels boxes against unboxes and folds what the merge made constant. A helper that returns a `Float` no longer boxes it.
+
+Instructions retired, in units of 10⁹, by executables of the compiler in its development build. The comparison's programs are written without helpers, because a helper used to box, so the inliner finds little in them. The last row is `spectral_norm` written the natural way, with its matrix entry in a helper function.
+
+| Program                      |  Debug | Release | Release, `inline` off | Release, `clif` off |
+| ---------------------------- | -----: | ------: | --------------------: | ------------------: |
+| `mandelbrot` 4000            |  19.42 |   17.54 |                 17.59 |               19.44 |
+| `nbody` 2200000              | 118.21 |  117.28 |                117.55 |              117.60 |
+| `spectral_norm` 1100         |  12.90 |   12.45 |                 12.45 |               12.89 |
+| `fannkuch_redux` 9           |  14.30 |   13.81 |                 14.30 |               13.80 |
+| `binary_trees` 18            |  68.42 |   67.77 |                 67.72 |               67.76 |
+| `json_roundtrip` 3 passes    |  62.95 |   62.56 |                 62.82 |               62.55 |
+| `spectral_norm`, with helper |  47.10 |   12.20 |                 46.57 |                   – |
+
+A clean release build of `compile_large`'s 200 modules retires 1.41 times the instructions of a clean debug build, against D-267's limit of 3.
+
+Found on the way: removing a move that looked dead changed when a handle's drop function ran, and example 020 printed an empty store. The clean-up now leaves alone every definition and branch whose removal would move the release of a value that may hold a handle.
+

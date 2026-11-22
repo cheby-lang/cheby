@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-717, D-852
+// @decisions: D-717, D-852, D-1770, D-1771
 // @flags: --reuse-report --release
 //! In a release build the report describes the code after inlining: a
 //! call that is inlined is no call any more, and the statements copied
