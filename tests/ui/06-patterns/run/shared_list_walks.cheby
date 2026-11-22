@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-893, D-1757, D-1759
+// @decisions: D-893, D-1757, D-1759, D-1781
 //! Pattern steps over a list that another reference holds: a parameter
 //! the caller still uses, a record's field, a constant and a closure's
 //! capture. Each walk dups its elements out of the shared leaves and

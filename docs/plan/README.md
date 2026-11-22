@@ -480,6 +480,8 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1778    | Std's release bodies and masks are one sealed cache record, decoded on demand                       |
 | D-1779    | A numeric std kernel that is one instruction compiles to it: `convert`, `float_sqrt`, `wrapping`    |
 | D-1780    | Release devirtualizes, clones functions for known dictionaries and callbacks, unboxes in clones     |
+| D-1781    | A list pattern step on a shared leaf is inline; raw `Float`s in list leaves measured, not built     |
+| D-1782    | Release reads scalar constants of every module as their values, computed ones from images           |
 
 ## Open questions
 

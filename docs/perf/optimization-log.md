@@ -552,3 +552,40 @@ Against the executables of `7a586d82`.
 | `word_freq`      |               −7.4% |        −34.5% |                −11.0% |          −35.2% |
 | `binary_trees`   |               −1.7% |         −9.8% |                 −4.7% |          −10.7% |
 
+### A list pattern step on a shared leaf, inline (D-1781)
+
+The inline step of `[x, ..rest]` needed a leaf that nothing else holds, so a function that walks a list it shares called the runtime at every step. The step now dups the element from a shared leaf and writes nothing to it. `spectral_norm` at 1100: 9.96 G instructions before and 7.18 G after in release, 1.61 G cycles before and 0.97 G after. The list code of the runtime falls from 42% of its samples to 13%.
+
+### Raw `Float`s in list leaves: measured, not built (D-1781)
+
+This was the ninth row of the list that started the round. After the step above, a build that skipped the dup and the drop of an element's box on the shared path retired 9.7% fewer instructions in `spectral_norm` and took 11.9% fewer cycles, about 14 instructions per element. That, plus one load per element, is what raw leaves could save, in one program of the comparison. The price is a second leaf representation in every list operation, and a box on every read by generic code. Not built. A read of the head as a `Float` in one step, with a flag for who owns the box, would get the same saving for less, and is left open.
+
+### Release reads scalar constants as their values (D-1782)
+
+In release a read of a scalar constant of any module is its value: a literal's from its source, a computed one's from its evaluated image. A loop of 50 million iterations that reads two imported computed `Float` constants retires 1.17 G instructions with the lever and 4.17 G without. The comparison's programs do not move, since their hot constants were literals of their own module, folded since D-1764. Build cost is within noise.
+
+### Final readings of the round
+
+Against the executables of `7a586d82`, with the same compiler in both profiles (`e9b09ee1`). The machine was quieter for this reading than for the baseline's, so the instruction columns are the ones to trust.
+
+| Program          | Debug, instructions | Debug, cycles | Release, instructions | Release, cycles |
+| ---------------- | ------------------: | ------------: | --------------------: | --------------: |
+| `fannkuch_redux` |              −70.8% |        −71.2% |                −78.7% |          −79.8% |
+| `spectral_norm`  |              −70.2% |        −75.0% |                −72.4% |          −76.8% |
+| `lru_cache`      |              −66.5% |        −76.1% |                −68.8% |          −76.8% |
+| `mandelbrot`     |              −49.8% |        −55.7% |                −53.2% |          −56.3% |
+| `nbody`          |              −35.0% |        −45.5% |                −40.5% |          −49.2% |
+| `json_roundtrip` |              −19.3% |        −22.4% |                −20.8% |          −24.1% |
+| `word_freq`      |               −7.3% |        −43.2% |                −10.9% |          −44.2% |
+| `binary_trees`   |               −1.7% |        −11.1% |                 −4.7% |          −11.5% |
+
+The three concurrency programs are still unread: their counts move too much from run to run on a loaded machine. The comparison's own runner, on a quiet machine, is the reading for them.
+
+### What the round leaves open
+
+- `map::upsert`'s callback: a kernel calls it through a trampoline, with a `Some` and a closure allocated per call. It is the largest cost left in `lru_cache` and `word_freq`, and neither clones nor inlining reach it. An update in two steps, find and then store, would.
+- An allocation fast path written inline, with a slow path that preserves registers, for the float spills around allocation calls in `nbody`.
+- Release records for a package's own modules, so that a release build is incremental.
+- Threading `ctx` through the list module's own allocations, about 4% of `nbody`.
+- `string::split`'s copies in `word_freq`, a `map` operation that removes a key and returns its value, a block cache that adapts, clones of a whole cycle.
+
