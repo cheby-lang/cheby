@@ -505,3 +505,50 @@ The cold builds include std's first use, which a toolchain pays once. A warm rel
 
 Looked at and left alone: `nbody`'s inner function `pull` lost its call of `sqrt` and kept its float spills, 22 stores and 27 reloads. It loads the fields of both bodies before the allocation and release calls of the record it rebuilds, and those calls clobber every float register. An allocation fast path written inline, with its slow path preserving registers as the entry check's does (D-1775), would remove them; that is the path D-1772 measured at 2% to 3.5% without counting the spills.
 
+### Release devirtualization, clones and unboxing in clones (D-1780)
+
+A call through a static dictionary, a known function value or a closure literal becomes a direct call, and a generic function called with one of them gets a clone in the caller's unit, which the inliner then works on. A clone's parameters and result are raw where every use allows it.
+
+Instructions retired, in units of 10⁹, by programs of `bench/runtime` and of the comparison. "Spec off" and "Unbox off" are the same compiler with that lever off.
+
+| Program                   | Debug | Release | Spec off | Unbox off |
+| ------------------------- | ----: | ------: | -------: | --------: |
+| `collections/sorted_map`  |  9.37 |    6.24 |     8.85 |      6.30 |
+| `collections/sorted_set`  | 10.68 |    7.51 |     9.86 |      7.54 |
+| `collections/ordered_map` |  2.93 |    2.71 |     2.73 |      2.71 |
+| `rc/list_pipeline`        |  3.74 |    2.41 |     3.48 |      2.43 |
+| `rc/record_updates`       |  5.25 |    3.57 |     4.89 |      3.57 |
+| `rc/tree_inserts`         |  5.45 |    3.66 |     3.66 |      3.66 |
+| `rc/map_updates`          |  4.12 |    4.11 |     4.11 |      4.11 |
+| `rc/string_building`      |  8.86 |    8.62 |     8.62 |      8.62 |
+| `nbody`                   | 42.03 |   38.52 |    40.81 |     38.52 |
+| `word_freq`               | 26.03 |   24.97 |    25.90 |     24.99 |
+| `lru_cache`               | 30.20 |   28.10 |    28.09 |     28.10 |
+
+A fold of a million `Float`s: 1,032,270 allocations in debug and with `unbox` off, 32,269 in release.
+
+Compile cost: a clean release build of `compile_large` takes 1.78 times the instructions of a clean debug build, and std's release first use 2.47 times its debug first use. A warm `cheby build --release` of `hello_world` retires 0.148 G instructions against 0.137 G in debug, and of `nbody` 0.287 G against 0.179 G.
+
+Found on the way: release `rc/tree_inserts` retired 14.86 G instructions with the inliner of D-1776 against 7.05 G with inlining off. An inlined `int::compare` left an `Order` switch that was not threaded, and that stopped a reuse. Threading now checks only that the values live elsewhere do not change.
+
+Left open:
+
+- A callback called by a runtime kernel is out of reach of clones: `map::upsert`'s, which `ordered_map` and `word_freq` use for every update. `lru_cache` gains nothing from this step.
+- A cycle of several functions is cloned one member at a time, so its calls between members stay generic.
+- Helpers copied with a clone are copied again for each clone.
+
+### Readings after these, all changes of the round together
+
+Against the executables of `7a586d82`.
+
+| Program          | Debug, instructions | Debug, cycles | Release, instructions | Release, cycles |
+| ---------------- | ------------------: | ------------: | --------------------: | --------------: |
+| `fannkuch_redux` |              −70.8% |        −71.3% |                −78.7% |          −80.2% |
+| `lru_cache`      |              −66.5% |        −71.1% |                −68.8% |          −72.1% |
+| `spectral_norm`  |              −59.1% |        −64.1% |                −61.7% |          −66.7% |
+| `mandelbrot`     |              −49.7% |        −55.4% |                −53.2% |          −56.1% |
+| `nbody`          |              −35.3% |        −46.2% |                −40.7% |          −48.8% |
+| `json_roundtrip` |              −19.1% |        −21.4% |                −20.6% |          −21.9% |
+| `word_freq`      |               −7.4% |        −34.5% |                −11.0% |          −35.2% |
+| `binary_trees`   |               −1.7% |         −9.8% |                 −4.7% |          −10.7% |
+

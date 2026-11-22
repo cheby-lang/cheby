@@ -479,6 +479,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1777    | Std's kernel bindings, release masks and bodies may cross into a package's build (ADR-0082)         |
 | D-1778    | Std's release bodies and masks are one sealed cache record, decoded on demand                       |
 | D-1779    | A numeric std kernel that is one instruction compiles to it: `convert`, `float_sqrt`, `wrapping`    |
+| D-1780    | Release devirtualizes, clones functions for known dictionaries and callbacks, unboxes in clones     |
 
 ## Open questions
 
