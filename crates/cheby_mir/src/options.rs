@@ -78,8 +78,8 @@ impl Profile {
 
 /// The levers of a release build, each switchable on its own
 /// (`CHEBY_RELEASE_OFF`, [`ReleaseOptions::from_env`]). All are on in a
-/// release build. Only [`ReleaseOptions::direct`] and
-/// [`ReleaseOptions::clif`] change code today; the others are read by
+/// release build. [`ReleaseOptions::inline`], [`ReleaseOptions::direct`]
+/// and [`ReleaseOptions::clif`] change code today; the others are read by
 /// passes that later work adds, and already enter the cache keys.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[expect(
@@ -87,7 +87,9 @@ impl Profile {
     reason = "independent levers, each switched off on its own"
 )]
 pub struct ReleaseOptions {
-    /// Inlining with its clean-up pass (`inline`).
+    /// Inlining inside each unit with its clean-up pass (`inline`,
+    /// [`crate::inline::optimize`]), on the package's lowered units before
+    /// borrowing inference.
     pub inline: bool,
     /// Specialization of clones for known dictionaries and functions
     /// (`spec`).

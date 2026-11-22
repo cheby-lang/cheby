@@ -1,0 +1,23 @@
+fn app::f0(_0: value) -> value check str#0 {
+  str#0 = "src/main.cheby:1:4"
+  str#1 = "src/main.cheby:3:5"
+  str#2 = "src/main.cheby:4:9"
+bb0:
+  goto bb2()
+bb1(_1: value):
+  _2: value = alloc tuple/2(_1, _0)
+  return _2
+bb2:
+  _3: bool = compare lt int const int 5, const int 0
+  branch _3, bb3, bb4
+bb3:
+  goto bb1(_0)
+bb4:
+  switch const int 5 [0 => bb5, _ => bb6]
+bb5:
+  panic explicit at str#1
+bb6:
+  _4: int = checked sub int const int 5, const int 1 at str#2
+  _5: value = call app::f2(_0, _4)
+  goto bb1(_5)
+}

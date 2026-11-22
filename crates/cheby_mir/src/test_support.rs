@@ -94,6 +94,11 @@ pub(crate) enum Mode {
     /// As `Uncounted`, the code units lowered as a REPL session lowers
     /// them ([`lower_items_late_bound`]).
     LateBound,
+    /// As a release build with the `inline` lever: the package's units
+    /// inlined and cleaned up ([`crate::inline::optimize`]) and checked as
+    /// lowered again, then, when `counted`, as `Counted`; otherwise left
+    /// as lowered.
+    Release { counted: bool },
 }
 
 impl Lowered {
@@ -391,6 +396,14 @@ pub(crate) fn lower_std_inferred() -> Result<Lowered, String> {
     )
 }
 
+/// [`lower_source`] as a release build with the `inline` lever lowers it
+/// ([`Mode::Release`]): counted when `counted`, else as lowered and
+/// optimized.
+pub(crate) fn lower_source_release(files: &[(&str, &str)], counted: bool) -> Lowered {
+    lower_package_with("app", files, false, None, Mode::Release { counted })
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
 /// [`lower_package_inferred`] for package `app`; front-end errors panic.
 pub(crate) fn lower_source_inferred(files: &[(&str, &str)], with_tests: bool) -> Lowered {
     lower_package_inferred("app", files, with_tests)
@@ -587,7 +600,8 @@ const fn split_of(mode: Mode) -> Option<usize> {
         | Mode::Uncounted
         | Mode::Inferred { .. }
         | Mode::CountedWith(_)
-        | Mode::LateBound => None,
+        | Mode::LateBound
+        | Mode::Release { .. } => None,
     }
 }
 
@@ -719,6 +733,9 @@ fn back_end(
         info: Some(&t.entry),
     }));
     push(lower_entries(&requests, &cx).unwrap());
+    if matches!(mode, Mode::Release { .. }) {
+        optimize_local(&mut units, modules);
+    }
     // The facts each unit contributes, named through the whole build's
     // interfaces, and their union (D-969).
     let facts = matches!(mode, Mode::Inferred { .. }).then(|| facts_check(&units, &cx.defs));
@@ -727,6 +744,25 @@ fn back_end(
     };
     let masks = finish(&mut units, mode, &per_unit);
     (units, masks, facts)
+}
+
+/// The release passes on the package's own units, before borrowing is
+/// inferred, as the driver runs them; each unit is checked as lowered
+/// again.
+fn optimize_local(units: &mut [MirModule], modules: &ModuleTable) {
+    for unit in units {
+        let local = unit
+            .module()
+            .and_then(|m| modules.get(m))
+            .is_some_and(|info| info.package == PackageId::LOCAL);
+        if !local {
+            continue;
+        }
+        crate::inline::optimize(unit).unwrap();
+        if let Err(ice) = crate::check_lowered(unit) {
+            panic!("{ice}\n{}", dump(unit).unwrap_or_default());
+        }
+    }
 }
 
 /// The facts each unit of `units` contributes, named through `defs` (the
@@ -773,14 +809,18 @@ fn finish(
         }
         // As a build does it (D-779): every unit lowered, then the masks
         // inferred over all of them and written into each, then counting.
-        Mode::Counted | Mode::Split { .. } | Mode::CountedWith(_) => {
+        Mode::Counted
+        | Mode::Split { .. }
+        | Mode::CountedWith(_)
+        | Mode::Release { counted: true } => {
             let options = match mode {
                 Mode::CountedWith(options) => options,
                 Mode::Counted
                 | Mode::Uncounted
                 | Mode::Split { .. }
                 | Mode::Inferred { .. }
-                | Mode::LateBound => MirOptions::default(),
+                | Mode::LateBound
+                | Mode::Release { .. } => MirOptions::default(),
             };
             // A build infers borrowing only when its options borrow
             // (D-808).
@@ -796,7 +836,7 @@ fn finish(
             }
             found
         }
-        Mode::Uncounted | Mode::LateBound => BTreeMap::new(),
+        Mode::Uncounted | Mode::LateBound | Mode::Release { counted: false } => BTreeMap::new(),
     };
     masks
         .into_iter()

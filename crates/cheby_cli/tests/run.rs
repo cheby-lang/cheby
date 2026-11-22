@@ -1913,3 +1913,108 @@ fn main() {
   io::println("{a} {b} {c} {d} {e}")
 }
 "#;
+
+/// A `Float` helper of the shape of cheby-compare's `spectral_norm`: a
+/// function that returns a boxed `Float` (D-453) and a loop that calls it.
+/// The source says the helper cost about 1.65x; that program writes it
+/// out by hand in the loop instead.
+const FLOAT_HELPER: &str =
+    "//! Sums A(i, j) = 1 / ((i + j)(i + j + 1) / 2 + i + 1) through a helper.
+
+import std::float
+import std::int
+import std::io
+
+fn a_of(i: Int, j: Int) -> Float {
+  let ij = i + j
+  1.0 / float::from_int(ij * (ij + 1) / 2 + i + 1)
+}
+
+fn row_sum(i: Int, j: Int, n: Int, sum: Float) -> Float {
+  case j == n {
+    True => sum
+    False => row_sum(i, j + 1, n, sum + a_of(i, j))
+  }
+}
+
+fn main() {
+  let total = row_sum(3, 0, 20000, 0.0)
+  let assert Ok(scaled) = float::round(total * 1000000.0)
+  io::println(int::show(scaled))
+}
+";
+
+/// [`FLOAT_HELPER`] with the helper written out in the loop by hand.
+const FLOAT_BY_HAND: &str = "//! Sums A(i, j) = 1 / ((i + j)(i + j + 1) / 2 + i + 1) in the loop.
+
+import std::float
+import std::int
+import std::io
+
+fn row_sum(i: Int, j: Int, n: Int, sum: Float) -> Float {
+  case j == n {
+    True => sum
+    False => {
+      let ij = i + j
+      let a = 1.0 / float::from_int(ij * (ij + 1) / 2 + i + 1)
+      row_sum(i, j + 1, n, sum + a)
+    }
+  }
+}
+
+fn main() {
+  let total = row_sum(3, 0, 20000, 0.0)
+  let assert Ok(scaled) = float::round(total * 1000000.0)
+  io::println(int::show(scaled))
+}
+";
+
+/// The allocations of `cheby run` (with `--release` when `release`) of
+/// package `name` holding `source`, and its standard output.
+#[expect(
+    clippy::panic,
+    reason = "a test helper: a failed run or a missing stats line fails the test"
+)]
+fn allocations(name: &str, source: &str, release: bool) -> (u64, String) {
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let cache = fresh_cache();
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_STATS", "1")
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut cmd);
+    let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    let Some(n) = stat(&out.stderr, "allocations") else {
+        panic!("no allocations line:\n{}", out.stderr)
+    };
+    (n, out.stdout)
+}
+
+/// The release profile inlines a `Float` helper into its loop and its
+/// result's box cancels with the loop's unbox (design T7): the release
+/// build allocates as little as the loop with the helper written out by
+/// hand, where the debug build boxes once per iteration.
+#[test]
+fn a_float_helper_inlines_to_no_box_in_release() {
+    let (debug, debug_out) = allocations("float_helper_debug", FLOAT_HELPER, false);
+    let (release, release_out) = allocations("float_helper_release", FLOAT_HELPER, true);
+    let (by_hand, by_hand_out) = allocations("float_by_hand", FLOAT_BY_HAND, true);
+    assert_eq!(debug_out, release_out);
+    assert_eq!(debug_out, by_hand_out);
+    assert_eq!(
+        release, by_hand,
+        "the release helper allocates more than the loop by hand"
+    );
+    assert!(
+        debug >= release.saturating_add(20_000),
+        "{debug} allocations in debug against {release} in release"
+    );
+}

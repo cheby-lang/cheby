@@ -1,0 +1,23 @@
+fn app::describe(_0: int, _1: int) -> value check str#0 {
+  str#0 = "src/main.cheby:53:4"
+  str#1 = "less"
+  str#2 = "equal"
+  str#3 = "greater"
+bb0:
+  _8: bool = compare lt int _0, _1
+  branch _8, bb2, bb3
+bb1(_5: value):
+  return _5
+bb2:
+  _4: value = const str#1
+  goto bb1(_4)
+bb3:
+  _10: bool = compare gt int _0, _1
+  branch _10, bb4, bb5
+bb4:
+  _7: value = const str#3
+  goto bb1(_7)
+bb5:
+  _6: value = const str#2
+  goto bb1(_6)
+}

@@ -43,6 +43,9 @@ mod golden_tests;
 pub mod hoist;
 #[cfg(test)]
 mod hoist_tests;
+pub mod inline;
+#[cfg(test)]
+mod inline_tests;
 pub mod ir;
 pub mod kernels_in_place;
 pub mod layout;
@@ -62,6 +65,7 @@ pub mod repr;
 pub mod reuse;
 #[cfg(test)]
 mod reuse_tests;
+pub mod simplify;
 pub mod stats;
 #[cfg(test)]
 mod test_support;

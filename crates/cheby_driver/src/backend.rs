@@ -69,7 +69,9 @@
 //! Every other build, the dumps for goldens and every evaluation module
 //! ([`kind_options`]) is debug. A release build reads and writes no package
 //! record ([`Reading::records`]) and takes std's release code from std's
-//! records, whose settings hold the profile.
+//! records, whose settings hold the profile. With the `inline` lever, its
+//! package units are inlined and cleaned up right after lowering, before
+//! borrowing is inferred ([`optimize_release`]).
 //!
 //! **The reuse report** (D-717): [`build_reporting`] with `reuse_report`
 //! lowers the package's own modules with [`MirOptions::record_sites`], so
@@ -1643,6 +1645,12 @@ fn lower_through_cache(
         tags.push(Some(at));
         units.push(unit);
     }
+    // The release passes run before borrowing is inferred over the units,
+    // so the masks describe the optimized code. A release build lowers
+    // every package unit here: it reads no package record.
+    if mir.release.is_some_and(|levers| levers.inline) {
+        optimize_release(front, &mut units, std.whole)?;
+    }
     if let Some(unit) = entries {
         tags.push(None);
         units.push(unit);
@@ -1869,6 +1877,32 @@ fn lower_through_cache(
         reads,
         keys,
     })
+}
+
+/// The release profile's `inline` lever over lowered `units`: each unit's
+/// calls of its own functions inlined and every function cleaned up
+/// ([`cheby_mir::inline::optimize`]), then the unit checked as lowered
+/// again. With `std_whole`, std's units are left as lowered: they take
+/// std's whole masks, inferred over std's lowered code (D-968), and the
+/// tail-call rule those masks were inferred under (D-715) need not hold
+/// in a changed body; std's code from its records is not inlined either.
+/// The units run in parallel; each one's result depends on itself only,
+/// and the first error in build order is reported (D-264).
+fn optimize_release(front: &Frontend, units: &mut [MirModule], std_whole: bool) -> Result<(), Ice> {
+    let done: Vec<Result<(), Ice>> = units
+        .par_iter_mut()
+        .filter(|unit| match unit.unit {
+            UnitKind::Code(module) | UnitKind::Tests(module) => {
+                !(std_whole && is_std(front, module))
+            }
+            UnitKind::Entries => false,
+        })
+        .map(|unit| {
+            cheby_mir::inline::optimize(unit)?;
+            check_lowered(unit)
+        })
+        .collect();
+    done.into_iter().collect()
 }
 
 /// Every package unit's code key ([`crate::borrowing::unit_keys`]): a

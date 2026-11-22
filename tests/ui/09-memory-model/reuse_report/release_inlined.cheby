@@ -1,0 +1,29 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-717, D-852
+// @flags: --reuse-report --release
+//! In a release build the report describes the code after inlining: a
+//! call that is inlined is no call any more, and the statements copied
+//! from the callee record no site, so they get no line. `shift` itself
+//! keeps its line, where it builds its `Point` from `p`; the copies
+//! of its body in `twice` get none, and neither does the inlined call.
+
+import std::io
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn shift(p: Point) -> Point {
+  Point { ..p, x: p.x + 1 }
+}
+
+fn twice(p: Point) -> Point {
+  shift(shift(p))
+}
+
+fn main() {
+  let moved = twice(Point { x: 1, y: 2 })
+  io::println("{moved.x} {moved.y}")
+}
