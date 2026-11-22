@@ -633,9 +633,11 @@ fn finish_unit(
     }
     functions.extend(closure::trampolines(pending.trampolines())?);
     let source = unit_positions(&mut functions, &pending, cx);
-    // Field reads move up to the consumption of a sibling projection, so
-    // every RC mode and borrowing inference see them there (D-911).
+    // A lookup taken apart at once needs no `Some`, and field reads move
+    // up to the consumption of a sibling projection, so every RC mode and
+    // borrowing inference see them there (D-911).
     for f in &mut functions {
+        crate::lookup::run(f)?;
         crate::hoist::run(f, &|ty| cx.defs.handle_free(ty))?;
     }
     let statics = pending.statics;

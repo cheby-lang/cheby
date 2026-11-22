@@ -113,6 +113,7 @@ const _: () = assert!(
         && META == 8
         && abi::list::LEAF_SLOTS_OFFSET == 16
         && SLOTS == 16
+        && abi::list::ROOT_LAYOUT == ROOT
         && abi::list::LEAF_LAYOUT == LEAF
         && abi::list::BIG_ROOT_LAYOUT == BIG_ROOT
 );

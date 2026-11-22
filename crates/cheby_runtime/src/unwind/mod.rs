@@ -1053,6 +1053,7 @@ mod tests {
     const READS: &str = "reads its arguments and allocates nothing";
     const COUNTS: &str = "adds one to a counter of the current domain (D-768)";
     const LIST_GET: &str = "reads an element whose index lowering checked";
+    const MAP_VALUE_AT: &str = "reads and dups the value word a lookup of a held map found";
     const STATIC: &str = "returns a static object";
     const READS_STATIC: &str = "reads its arguments and returns a static object (D-902)";
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
@@ -1125,6 +1126,7 @@ mod tests {
         ("list/kernels.rs", "cheby_rt_list_get", LIST_GET),
         ("list/kernels.rs", "cheby_list_length", READS),
         ("hamt/kernels.rs", "cheby_map_new", STATIC),
+        ("hamt/kernels.rs", "cheby_rt_map_value_at", MAP_VALUE_AT),
         ("hamt/kernels.rs", "cheby_map_size", READS),
         ("hamt/kernels.rs", "cheby_map_is_empty", READS),
         ("hamt/kernels.rs", "cheby_set_new", STATIC),

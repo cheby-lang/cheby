@@ -2305,3 +2305,36 @@ proptest! {
         });
     }
 }
+
+/// `cheby_rt_list_set` owns its list and its item: in place at count one,
+/// a copy when the list is shared, and outside the list, negative indexes
+/// included, the list unchanged and the item released (D-318).
+#[test]
+fn list_set_helper_owns_the_list_and_the_item() {
+    balanced(|| {
+        let null = std::ptr::null_mut();
+        let xs = list(&[0, 1, 2, 3]);
+        let set = |xs: Root, index: i64, v: i64| {
+            // SAFETY: live owned arguments, given up.
+            root(unsafe { cheby_rt_list_set(null, xs.word(), index, elem(v)) })
+        };
+        let changed = set(xs, 1, 30);
+        assert_eq!(changed, xs, "in place");
+        check(changed, &[0, 30, 2, 3]);
+        let mut xs = changed;
+        for index in [-1, 4, i64::MAX, i64::MIN] {
+            // A string item, released by the helper.
+            let same = set(xs, index, 9);
+            assert_eq!(same, xs, "{index}");
+            check(same, &[0, 30, 2, 3]);
+            xs = same;
+        }
+        dup_word(xs.word());
+        let copy = set(xs, 0, -3);
+        assert_ne!(copy, xs);
+        check(copy, &[-3, 30, 2, 3]);
+        check(xs, &[0, 30, 2, 3]);
+        release(copy);
+        release(xs);
+    });
+}

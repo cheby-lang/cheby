@@ -121,6 +121,7 @@ pub mod isa;
 pub mod jit_unit;
 mod layout;
 mod list_ends;
+mod list_index;
 #[cfg(test)]
 mod locs_tests;
 pub mod mangle;

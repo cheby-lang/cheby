@@ -1390,11 +1390,30 @@ pub enum RuntimeFn {
     /// (`lower::intrinsic`, D-1758), and a list literal prepends the
     /// elements before its first spread onto it (`lower::list`).
     ListPrepend,
+    /// `(map borrowed, key borrowed) -> U64`: the address of the value
+    /// word stored under `key` in the map's node, or 0 when the key is
+    /// absent. The address points into the map, which must stay held until
+    /// the [`Self::MapValueAt`] that reads it. The key is hashed and
+    /// compared as `map::get` does, so the call may run `@std_hooks`
+    /// functions and raise (D-233, D-482). Only the lookup pass emits it
+    /// ([`crate::lookup`]).
+    MapFind,
+    /// `(map borrowed, address: U64) -> T`: the value word at `address`,
+    /// a nonzero result of a [`Self::MapFind`] of the same map, dup'd, so
+    /// the result is owned. A load and a dup: it cannot raise.
+    MapValueAt,
+    /// `(list owned, index: Int, item owned) -> List`: `list::set` at a
+    /// direct call (D-318): the list with element `index` replaced by
+    /// `item`, in place along the path when the list is unique, or the
+    /// list unchanged and `item` released when `index` is outside it,
+    /// negative included. Result owned. Consumes both even when it raises
+    /// (D-698), as [`Self::ListPush`] does.
+    ListSet,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 21] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1413,16 +1432,23 @@ impl RuntimeFn {
         Self::ListUnconsOwned,
         Self::ListUnconsHead,
         Self::ListPrepend,
+        Self::MapFind,
+        Self::MapValueAt,
+        Self::ListSet,
     ];
 
     /// Whether a call of the helper may start or pass on an unwinding
-    /// (D-698): false for `StrEq`, `ListLength` and `ListGet`, true for
-    /// every other helper.
+    /// (D-698): false for `StrEq`, `ListLength`, `ListGet`,
+    /// `ListUnconsHead` and `MapValueAt`, true for every other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
         !matches!(
             self,
-            Self::StrEq | Self::ListLength | Self::ListGet | Self::ListUnconsHead
+            Self::StrEq
+                | Self::ListLength
+                | Self::ListGet
+                | Self::ListUnconsHead
+                | Self::MapValueAt
         )
     }
 
@@ -1430,14 +1456,16 @@ impl RuntimeFn {
     /// consumes it ([`UseKind::Owned`]) or only reads it.
     #[must_use]
     pub const fn params(self) -> &'static [(Repr, UseKind)] {
-        use Repr::{Bool, Int, Value};
+        use Repr::{Bool, Int, U64, Value};
         use UseKind::{Borrowed, Owned};
         match self {
             Self::StrWithCapacity => &[(Int, Borrowed)],
             Self::StrAppend | Self::ListAppend => &[(Value, Owned), (Value, Borrowed)],
-            Self::StrEq => &[(Value, Borrowed), (Value, Borrowed)],
+            Self::StrEq | Self::MapFind => &[(Value, Borrowed), (Value, Borrowed)],
+            Self::MapValueAt => &[(Value, Borrowed), (U64, Borrowed)],
             Self::Equal => &[(Value, Borrowed), (Value, Borrowed), (Value, Borrowed)],
             Self::ListPush | Self::ListPrepend => &[(Value, Owned), (Value, Owned)],
+            Self::ListSet => &[(Value, Owned), (Int, Borrowed), (Value, Owned)],
             Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
             Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
@@ -1477,9 +1505,12 @@ impl RuntimeFn {
             | Self::ListUnconsHead
             | Self::ListPrepend
             | Self::Debug
-            | Self::ScopeOpen => Some(Repr::Value),
+            | Self::ScopeOpen
+            | Self::MapValueAt
+            | Self::ListSet => Some(Repr::Value),
             Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
+            Self::MapFind => Some(Repr::U64),
             Self::EffectCheck => None,
         }
     }
@@ -1506,6 +1537,9 @@ impl RuntimeFn {
             Self::ListUnconsOwned => "list_uncons_owned",
             Self::ListUnconsHead => "list_uncons_head",
             Self::ListPrepend => "list_prepend",
+            Self::MapFind => "map_find",
+            Self::MapValueAt => "map_value_at",
+            Self::ListSet => "list_set",
         }
     }
 }

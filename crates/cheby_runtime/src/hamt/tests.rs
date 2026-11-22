@@ -1896,3 +1896,52 @@ fn measure() {
         drop_word(m);
     }
 }
+
+/// `cheby_rt_map_find` gives the address of the value stored under a key,
+/// or 0 for an absent key, in bitmap and collision nodes alike, and
+/// `cheby_rt_map_value_at` reads it there with one reference more, as
+/// `cheby_map_get` reads it into its `Some`.
+#[test]
+fn map_find_gives_the_address_of_the_stored_value() {
+    for mask in [u64::MAX, 0] {
+        balanced(|| {
+            with_mask(mask, || {
+                let model: BTreeMap<Key, i64> = (0..sized(300, 30))
+                    .map(|i| (Key::Str(format!("key-{i}")), i))
+                    .collect();
+                let m = map_of(5, &model);
+                let null = std::ptr::null_mut();
+                for (key, &v) in &model {
+                    let k = key_word(key);
+                    // SAFETY: a live map and key, borrowed; the address is
+                    // read while the map is held.
+                    let value = unsafe {
+                        let at = cheby_rt_map_find(null, m, k);
+                        assert_ne!(at, 0, "{key:?}");
+                        cheby_rt_map_value_at(at)
+                    };
+                    // SAFETY: as above.
+                    let some = unsafe { cheby_map_get(m, k) };
+                    // SAFETY: the kernel's live `Option`.
+                    let kernel = unsafe { values::read_option(some) }.map(self::value);
+                    drop_word(some);
+                    assert_eq!(kernel, Some(v));
+                    assert_eq!(value_and_drop(value), v);
+                    drop_word(k);
+                }
+                let absent = key_word(&Key::Str("absent".to_owned()));
+                // SAFETY: as above.
+                assert_eq!(unsafe { cheby_rt_map_find(null, m, absent) }, 0);
+                drop_word(absent);
+                drop_word(m);
+            });
+        });
+    }
+}
+
+/// The model value of an owned value word, which is released.
+fn value_and_drop(word: Word) -> i64 {
+    let v = value(word);
+    drop_word(word);
+    v
+}

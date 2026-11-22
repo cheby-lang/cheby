@@ -605,7 +605,27 @@ fn the_builder_refuses_misplaced_edges() {
 
 #[test]
 fn the_scope_helpers() {
-    assert_eq!(RuntimeFn::ALL.len(), 18);
+    assert_eq!(RuntimeFn::ALL.len(), 21);
+    // `list_set` takes its list and its item over, and `map_find` and
+    // `map_value_at` only read.
+    assert_eq!(
+        RuntimeFn::ListSet.params(),
+        [
+            (Repr::Value, UseKind::Owned),
+            (Repr::Int, UseKind::Borrowed),
+            (Repr::Value, UseKind::Owned),
+        ]
+    );
+    assert!(RuntimeFn::ListSet.may_unwind());
+    assert_eq!(RuntimeFn::MapFind.ret(), Some(Repr::U64));
+    assert!(RuntimeFn::MapFind.may_unwind());
+    assert_eq!(
+        RuntimeFn::MapValueAt.params(),
+        [
+            (Repr::Value, UseKind::Borrowed),
+            (Repr::U64, UseKind::Borrowed),
+        ]
+    );
     // `list_prepend` takes both arguments over, as `list_push` does.
     assert_eq!(
         RuntimeFn::ListPrepend.params(),
@@ -643,7 +663,8 @@ fn the_scope_helpers() {
             RuntimeFn::StrEq,
             RuntimeFn::ListLength,
             RuntimeFn::ListGet,
-            RuntimeFn::ListUnconsHead
+            RuntimeFn::ListUnconsHead,
+            RuntimeFn::MapValueAt
         ]
     );
     assert_eq!(Const::Ctx.repr(), Repr::U64);

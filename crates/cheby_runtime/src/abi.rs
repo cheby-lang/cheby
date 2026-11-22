@@ -352,6 +352,8 @@ pub mod list {
     pub const BIG_TAIL_OFFSET: i32 = 48;
     /// Byte offset of a leaf's length and capacity.
     pub const LEAF_META_OFFSET: i32 = 8;
+    /// The layout of roots that are not big: the tree is the whole list.
+    pub const ROOT_LAYOUT: LayoutId = layout::LIST_FIRST;
     /// Byte offset of a leaf's first slot.
     pub const LEAF_SLOTS_OFFSET: i32 = 16;
     /// The layout of leaves.
@@ -703,6 +705,21 @@ pub mod sym {
     /// consumes both, in place when the list is unique, as `LIST_PUSH`
     /// does at the other end (D-1758).
     pub const LIST_PREPEND: &str = "cheby_rt_list_prepend";
+    /// `uint64_t cheby_rt_map_find(ExecCtx *ctx, uint64_t map, uint64_t key)`:
+    /// the address of the value stored under the borrowed `key` in the
+    /// borrowed map, or 0 when the key is absent; hashes and compares the
+    /// key as `cheby_map_get` does.
+    pub const MAP_FIND: &str = "cheby_rt_map_find";
+    /// `uint64_t cheby_rt_map_value_at(uint64_t address)`: the word at a
+    /// nonzero address [`MAP_FIND`] gave, of a map still held, dup'd.
+    /// Generated code reads it inline instead.
+    pub const MAP_VALUE_AT: &str = "cheby_rt_map_value_at";
+    /// `uint64_t cheby_rt_list_set(ExecCtx *ctx, uint64_t list, int64_t index, uint64_t item)`:
+    /// `list::set` of a list and an item it consumes, in place when the
+    /// list is unique; outside the list the list unchanged and the item
+    /// released. Generated code writes a unique one-leaf list inline
+    /// instead ([`super::list`]).
+    pub const LIST_SET: &str = "cheby_rt_list_set";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -802,7 +819,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 75] = [
+    pub const ALL: [&str; 78] = [
         ALLOC,
         DUP,
         DROP,
@@ -852,6 +869,9 @@ pub mod sym {
         LIST_UNCONS,
         LIST_UNCONS_OWNED,
         LIST_PREPEND,
+        MAP_FIND,
+        MAP_VALUE_AT,
+        LIST_SET,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -1042,9 +1062,9 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(50..73), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(53..76), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
-            sym::ALL.get(73..),
+            sym::ALL.get(76..),
             Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
         );
         assert_eq!(

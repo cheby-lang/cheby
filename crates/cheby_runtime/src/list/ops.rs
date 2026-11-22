@@ -110,6 +110,14 @@ pub(crate) fn push_bound(list: Root) -> u64 {
     nodes_and_root(h.saturating_mul(3).saturating_add(5).saturating_add(fold))
 }
 
+/// [`set`] of an element of `list` of height `h`: a copy of each node
+/// on its path (`h + 1`) and a root, after the fold of a big root's head
+/// and tail leaves.
+pub(crate) fn set_bound(list: Root) -> u64 {
+    let (h, fold) = height_and_fold(list);
+    nodes_and_root(h.saturating_add(1).saturating_add(fold))
+}
+
 /// [`append`] of `a` and `b`, the taller of height `h`: both trimmed at
 /// both ends (`4(h + 1)` nodes), the shorter wrapped up to `h` (`h`), the
 /// merged leaves (1), at each branch level the seam's children repacked

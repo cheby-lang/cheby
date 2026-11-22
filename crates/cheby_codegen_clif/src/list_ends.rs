@@ -88,13 +88,13 @@ impl Translator<'_, '_> {
         }
     }
 
-    fn load_word(&mut self, base: Value, offset: i32) -> Value {
+    pub(crate) fn load_word(&mut self, base: Value, offset: i32) -> Value {
         self.b
             .ins()
             .load(types::I64, MemFlagsData::trusted(), base, offset)
     }
 
-    fn store_word(&mut self, value: Value, base: Value, offset: i32) {
+    pub(crate) fn store_word(&mut self, value: Value, base: Value, offset: i32) {
         self.b
             .ins()
             .store(MemFlagsData::trusted(), value, base, offset);
@@ -102,7 +102,7 @@ impl Translator<'_, '_> {
 
     /// Branches to `slow` unless `cond` holds, and continues in a new
     /// block.
-    fn unless(&mut self, cond: Value, slow: Block) {
+    pub(crate) fn unless(&mut self, cond: Value, slow: Block) {
         let next = self.b.create_block();
         self.b.ins().brif(cond, next, &[], slow, &[]);
         self.b.switch_to_block(next);
@@ -114,16 +114,7 @@ impl Translator<'_, '_> {
     /// Nothing is written.
     fn end_leaf(&mut self, list: Value, end: End, slow: Block) -> Result<EndLeaf, CodegenError> {
         // The helper counts the update while events are counted.
-        let flag_address = self.static_object(abi::sym::STATS_COUNTING)?;
-        let flag = self
-            .b
-            .ins()
-            .load(types::I8, MemFlagsData::trusted(), flag_address, 0);
-        let off = self
-            .b
-            .ins()
-            .icmp_imm_s(IntCC::Equal, flag, i64::from(abi::sym::COUNTING_OFF));
-        self.unless(off, slow);
+        self.unless_counting_off(slow)?;
         let header = self.load_word(list, abi::HEADER_RC_OFFSET);
         let small = self
             .b
@@ -169,6 +160,22 @@ impl Translator<'_, '_> {
         Ok(EndLeaf { small, field, leaf })
     }
 
+    /// Branches to `slow` unless the runtime's event counting is off: a
+    /// helper counts its in-place updates while it is on (D-768).
+    pub(crate) fn unless_counting_off(&mut self, slow: Block) -> Result<(), CodegenError> {
+        let flag_address = self.static_object(abi::sym::STATS_COUNTING)?;
+        let flag = self
+            .b
+            .ins()
+            .load(types::I8, MemFlagsData::trusted(), flag_address, 0);
+        let off = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::Equal, flag, i64::from(abi::sym::COUNTING_OFF));
+        self.unless(off, slow);
+        Ok(())
+    }
+
     /// A leaf's meta word and the length in its low half.
     fn leaf_meta(&mut self, leaf: Value) -> (Value, Value) {
         let meta = self.load_word(leaf, abi::list::LEAF_META_OFFSET);
@@ -177,7 +184,7 @@ impl Translator<'_, '_> {
     }
 
     /// The address of slot `index` of `leaf`, less the slots' offset.
-    fn slot(&mut self, leaf: Value, index: Value) -> Value {
+    pub(crate) fn slot(&mut self, leaf: Value, index: Value) -> Value {
         let bytes = self.b.ins().ishl_imm_u(index, 3);
         self.b.ins().iadd(leaf, bytes)
     }

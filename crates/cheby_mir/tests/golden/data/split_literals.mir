@@ -157,11 +157,10 @@ fn app::main() -> value check str#0 {
   str#1 = "n"
 bb0:
   _0: value = call app::numbers(const int 1, const int 2) ; unwind bb1
-  _1: value = _0
-  _2: int = call_foreign "cheby_list_length"(borrow _1) -> i64
-  drop _1
-  _4: value = call app::text(const str#1, _2) ; unwind bb1
-  tail_call std::io::println(_4)
+  _1: int = call_foreign "cheby_list_length"(borrow _0) -> i64
+  drop _0
+  _3: value = call app::text(const str#1, _1) ; unwind bb1
+  tail_call std::io::println(_3)
 bb1:
   resume
 }

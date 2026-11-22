@@ -11,9 +11,10 @@
 //! and `to_list` O(n).
 
 use super::node::{Collection, Root, dup_word};
-use super::ops::{self, Entries};
+use super::ops::{self, Entries, Found};
 use crate::abi::Word;
 use crate::callback;
+use crate::ctx::ExecCtx;
 use crate::entry;
 use crate::list;
 use crate::unwind::guard::{DropOnUnwind, guarded};
@@ -139,6 +140,40 @@ pub unsafe extern "C" fn cheby_map_get(m: u64, key: u64) -> u64 {
         held.disarm();
         result
     })
+}
+
+/// `MapFind` (`map::get` whose `Option` generated code takes apart at
+/// once): the map and the key borrowed; the address of the value stored
+/// under `key`, or 0 when the key is absent. Generated code reads the
+/// value there with [`cheby_rt_map_value_at`], or inline, while it holds
+/// the map. The key is hashed and compared as by [`cheby_map_get`].
+/// O(log n).
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's control block, `m` is a live
+/// map and `key` a live uniform word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_find(ctx: *mut ExecCtx, m: u64, key: u64) -> u64 {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        ops::find(unsafe { map(m) }, Collection::Map, key).map_or(0, Found::value_address)
+    })
+}
+
+/// `MapValueAt`: the value word at `address`, dup'd, so the result is
+/// owned. Never unwinds.
+///
+/// # Safety
+///
+/// `address` is a nonzero result of [`cheby_rt_map_find`] of a map the
+/// caller still holds.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_value_at(address: u64) -> u64 {
+    // SAFETY: forwarded from the caller: the slot of a live node.
+    let value = unsafe { crate::object::read_field(crate::object::word_to_ptr(address), 0) };
+    dup_word(value);
+    value
 }
 
 /// `map::has_key`. O(log n).

@@ -14,7 +14,7 @@
 use std::cmp::Ordering;
 
 use super::buffers;
-use super::node::{Root, dup_word, register};
+use super::node::{Root, drop_word, dup_word, register};
 use super::ops;
 use crate::abi::{PanicKind, Word};
 use crate::alloc::{self, scratch::ScratchVec};
@@ -107,6 +107,40 @@ pub unsafe extern "C" fn cheby_rt_list_push(ctx: *mut ExecCtx, list: u64, elem: 
         alloc::preflight(unsafe { ctx.as_ref() }, || ops::push_bound(list));
         owned.disarm();
         ops::push(list, elem).word()
+    })
+}
+
+/// `ListSet`: `list::set` at a direct call, `list` and `item` owned;
+/// result owned. Outside the list, negative indexes included, the list
+/// comes back unchanged and `item` is released (D-318); otherwise the
+/// element is replaced, in place along the path when the list is unique,
+/// as [`cheby_list_set`] does. Both are consumed even when it raises, as
+/// [`cheby_rt_list_push`] says.
+///
+/// # Safety
+///
+/// `list` is a live list and `item` a live uniform word, both owned by
+/// the caller and given up.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_list_set(
+    ctx: *mut ExecCtx,
+    list: u64,
+    index: i64,
+    item: u64,
+) -> u64 {
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([list, item]);
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        let Some(index) = usize::try_from(index).ok().filter(|&i| i < ops::len(list)) else {
+            owned.disarm();
+            drop_word(item);
+            return list.word();
+        };
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::set_bound(list));
+        owned.disarm();
+        ops::set(list, index, item).word()
     })
 }
 

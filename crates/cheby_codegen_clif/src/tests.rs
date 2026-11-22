@@ -149,6 +149,12 @@ fn runtime_helper_signatures() {
         if helper == RuntimeFn::ListUnconsHead {
             continue;
         }
+        // `map_value_at`'s map only keeps the map held; the C function
+        // takes the address alone.
+        if helper == RuntimeFn::MapValueAt {
+            assert_eq!(RuntimeFunc::of(helper).0.ctypes().0.len(), 1);
+            continue;
+        }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
         let (params, ret) = f.ctypes();
         let ctx = usize::from(takes_ctx);
@@ -775,11 +781,36 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 39);
+    assert_eq!(RuntimeFunc::ALL.len(), 42);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        15,
+        18,
         "only the functions added since M2 are declared on demand"
+    );
+    // The lookups taken apart at once and `list::set` at a direct call.
+    for (f, index, helper, takes_ctx) in [
+        (RuntimeFunc::MapFind, 39, RuntimeFn::MapFind, true),
+        (RuntimeFunc::MapValueAt, 40, RuntimeFn::MapValueAt, false),
+        (RuntimeFunc::ListSet, 41, RuntimeFn::ListSet, true),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+        assert_eq!(RuntimeFunc::of(helper), (f, takes_ctx), "{f:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::MapFind.ctypes(),
+        (&[CType::Ptr, CType::U64, CType::U64][..], CType::U64)
+    );
+    assert_eq!(
+        RuntimeFunc::MapValueAt.ctypes(),
+        (&[CType::U64][..], CType::U64)
+    );
+    assert_eq!(
+        RuntimeFunc::ListSet.ctypes(),
+        (
+            &[CType::Ptr, CType::U64, CType::I64, CType::U64][..],
+            CType::U64
+        )
     );
     // `cheby_rt_list_prepend(ctx, list, elem)`, as `cheby_rt_list_push`.
     assert_eq!(RuntimeFunc::ListPrepend.index(), 38);
@@ -2029,4 +2060,172 @@ fn list_lengths_load_and_steps_pass_a_slot() {
         text.contains(cheby_runtime::abi::sym::LIST_UNCONS),
         "{text}"
     );
+}
+
+/// `f(xs) { x = helper(xs, args…); return x }`, counts left out: one call
+/// of a list or map helper on the parameter.
+fn index_unit(helper: cheby_mir::RuntimeFn, rest: Vec<Operand>, result: Repr) -> MirModule {
+    use cheby_mir::{Local, Rvalue};
+    let mut u = unit();
+    let function = &mut u.functions[0];
+    function.locals = IndexVec::from_raw(
+        [Repr::Value, result]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let l = Local::from_u32;
+    let mut args = vec![Operand::Local(l(0))];
+    args.extend(rest);
+    function.blocks = IndexVec::from_raw(vec![Block {
+        pos: Vec::new(),
+        params: Vec::new(),
+        stmts: vec![Stmt::Assign {
+            dst: l(1),
+            value: Rvalue::CallRuntime { func: helper, args },
+        }],
+        term: Terminator::Return(Operand::Local(l(1))),
+        unwind: Vec::new(),
+    }])
+    .unwrap();
+    u
+}
+
+/// A header word as CLIF prints a constant: hexadecimal, in groups of
+/// four.
+fn clif_constant(word: u64) -> String {
+    let digits = format!("{word:x}");
+    let grouped: Vec<&str> = digits
+        .as_bytes()
+        .rchunks(4)
+        .rev()
+        .map(|group| std::str::from_utf8(group).unwrap())
+        .collect();
+    format!("iconst.i64 0x{}", grouped.join("_"))
+}
+
+/// `list_get` of a list that is one leaf is a load of the slot and an
+/// inline `dup`, after tests of the root's and the leaf's layouts, with
+/// the helper's call in a cold block for every other list; no count and
+/// no counting flag is read. With `checked_rc` only the call is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn list_reads_at_an_index_are_written_inline() {
+    use cheby_mir::RuntimeFn;
+    use cheby_runtime::abi::{list, sym};
+    let get = || {
+        index_unit(
+            RuntimeFn::ListGet,
+            vec![Operand::Const(Const::Int(1))],
+            Repr::Value,
+        )
+    };
+    let text = clif_of(&[get()], &CodegenOptions::default());
+    for offset in [list::ROOT_TREE_OFFSET, list::ROOT_OFFSET_OFFSET] {
+        assert!(text.contains(&format!("+{offset}\n")), "{offset}\n{text}");
+    }
+    assert!(
+        text.contains(&format!("+{}\n", list::LEAF_SLOTS_OFFSET)),
+        "{text}"
+    );
+    assert!(text.contains(sym::LIST_GET), "{text}");
+    assert!(text.contains(" cold:"), "{text}");
+    assert!(!text.contains(sym::STATS_COUNTING), "{text}");
+    assert!(
+        !text.contains(&clif_constant(list::UNIQUE_ROOT)),
+        "a read tests no count\n{text}"
+    );
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[get()], &checked);
+    assert!(text.contains(sym::LIST_GET), "{text}");
+    assert!(
+        !text.contains(&format!("+{}\n", list::ROOT_OFFSET_OFFSET)),
+        "{text}"
+    );
+}
+
+/// `list_set` of a unique list that is one leaf stores the item and
+/// releases the old element inline, after tests of the counting flag, the
+/// root's and the leaf's headers and an unsigned bounds test, with the
+/// helper's call in a cold block for every other list. With `checked_rc`
+/// only the call is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn list_writes_at_an_index_are_written_inline() {
+    use cheby_mir::RuntimeFn;
+    use cheby_runtime::abi::{list, sym};
+    let set = || {
+        index_unit(
+            RuntimeFn::ListSet,
+            vec![Operand::Const(Const::Int(2)), Operand::Const(Const::Nil)],
+            Repr::Value,
+        )
+    };
+    let text = clif_of(&[set()], &CodegenOptions::default());
+    for header in [list::UNIQUE_ROOT, list::UNIQUE_LEAF] {
+        let constant = clif_constant(header);
+        assert!(text.contains(&constant), "no {constant}\n{text}");
+    }
+    assert!(text.contains(sym::STATS_COUNTING), "{text}");
+    assert!(text.contains("icmp ult"), "{text}");
+    assert!(
+        text.contains(&format!("+{}\n", list::LEAF_SLOTS_OFFSET)),
+        "{text}"
+    );
+    assert!(text.contains("store notrap aligned"), "{text}");
+    assert!(text.contains(sym::LIST_SET), "{text}");
+    assert!(text.contains(" cold:"), "{text}");
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[set()], &checked);
+    assert!(text.contains(sym::LIST_SET), "{text}");
+    assert!(!text.contains(sym::STATS_COUNTING), "{text}");
+    assert!(!text.contains("store notrap aligned"), "{text}");
+}
+
+/// `map_value_at` is a load at the address `map_find` gave and an inline
+/// `dup`; with `checked_rc` it is the runtime's call of the address.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn map_values_are_read_inline() {
+    use cheby_mir::RuntimeFn;
+    use cheby_runtime::abi::sym;
+    let read = || {
+        index_unit(
+            RuntimeFn::MapValueAt,
+            vec![Operand::Const(Const::Sized {
+                repr: Repr::U64,
+                bits: 64,
+            })],
+            Repr::Value,
+        )
+    };
+    let text = clif_of(&[read()], &CodegenOptions::default());
+    assert!(!text.contains(sym::MAP_VALUE_AT), "{text}");
+    assert!(text.contains(sym::DUP), "the slow path of the dup\n{text}");
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[read()], &checked);
+    assert!(text.contains(sym::MAP_VALUE_AT), "{text}");
 }

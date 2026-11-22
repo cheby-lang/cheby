@@ -1,0 +1,139 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-318, D-525
+//! `list::get` and `list::set` at the edges of lists of 0, 1, 32 and 33
+//! elements, the largest that is one leaf and the smallest that is not.
+//! An index of -1, of the length, of `int::max_value` or of
+//! `int::min_value` is outside the list: `get` gives `None` and `set`
+//! gives the list unchanged. The elements are strings, so every read and
+//! every replaced element is counted. A `set` of a list that another
+//! value still holds copies it, and the other holder keeps the old
+//! elements. The `.env` file turns poisoning off, so the inline paths of
+//! code generation run.
+
+@!target(native)
+
+import std::int
+import std::io
+import std::list
+import std::map
+
+/// The element at `i`, or `-` outside the list.
+fn at(xs: List<String>, i: Int) -> String {
+  case list::get(xs, i) {
+    Some(x) => x
+    None => "-"
+  }
+}
+
+/// The element at `i`, or `?` outside the list.
+fn at_or(xs: List<String>, i: Int) -> String {
+  let guard Some(x) = list::get(xs, i) else {
+    "?"
+  }
+  x
+}
+
+/// The element at `i`, which must be there.
+fn at_known(xs: List<String>, i: Int) -> String {
+  let assert Some(x) = list::get(xs, i)
+  x
+}
+
+fn names(n: Int) -> List<String> {
+  list::map(list::range(0, n), fn(i) { "e{i}" })
+}
+
+/// What `get` reads at each edge of `xs`.
+fn reads(xs: List<String>) -> String {
+  let n = list::length(xs)
+  let before = at(xs, -1)
+  let first = at(xs, 0)
+  let last = at_or(xs, n - 1)
+  let past = at_or(xs, n)
+  let huge = at(xs, int::max_value)
+  let tiny = at(xs, int::min_value)
+  "{n}: {before} {first} {last} {past} {huge} {tiny}"
+}
+
+/// What `set` writes at each edge of `xs`, which stays held.
+fn writes(xs: List<String>) -> String {
+  let n = list::length(xs)
+  let before = list::set(xs, -1, "neg")
+  let past = list::set(xs, n, "end")
+  let huge = list::set(xs, int::max_value, "max")
+  let first = list::set(xs, 0, "first")
+  let last = list::set(xs, n - 1, "last")
+  let same = before == xs && past == xs && huge == xs
+  let a = at(first, 0)
+  let b = at(last, n - 1)
+  let c = at(xs, 0)
+  let d = at(xs, n - 1)
+  "{n}: {same} {a} {b} {c} {d}"
+}
+
+/// Rotates `xs` left by one, `times` times, writing in place.
+fn rotate(xs: List<String>, times: Int) -> List<String> {
+  fn shift(ys: List<String>, i: Int, n: Int) -> List<String> {
+    case i < n - 1 {
+      True => shift(list::set(ys, i, at_known(ys, i + 1)), i + 1, n)
+      False => ys
+    }
+  }
+  case times {
+    0 => xs
+    _ => {
+      let n = list::length(xs)
+      let head = at_known(xs, 0)
+      rotate(list::set(shift(xs, 0, n), n - 1, head), times - 1)
+    }
+  }
+}
+
+fn main() {
+  for_sizes([0, 1, 32, 33])
+  let held = names(3)
+  let other = held
+  let changed = list::set(held, 1, "changed")
+  io::println("held: {other} {changed}")
+  let unique = list::set(list::set(names(32), 31, "x"), 0, "y")
+  io::println("unique: {unique}")
+  let rotated = rotate(names(10), 13)
+  io::println("rotated: {rotated}")
+  let bigger = rotate(names(33), 2)
+  let ends = [at(bigger, 0), at(bigger, 31), at(bigger, 32)]
+  io::println("bigger: {ends}")
+  let ages = map::from_list([("ada", "36"), ("alan", "41")])
+  let ada = case map::get(ages, "ada") {
+    Some(age) => age
+    None => "none"
+  }
+  let grace = case map::get(ages, "grace") {
+    Some(age) => age
+    None => "none"
+  }
+  let guarded = list::get(names(2), 1) |> show_option
+  io::println("map: {ada} {grace} {guarded}")
+}
+
+fn show_option(o: Option<String>) -> String {
+  case o {
+    Some(x) => "Some({x})"
+    None => "None"
+  }
+}
+
+fn for_sizes(sizes: List<Int>) {
+  case sizes {
+    [] => Nil
+    [n, ..rest] => {
+      let xs = names(n)
+      io::println(reads(xs))
+      case n {
+        0 => Nil
+        _ => io::println(writes(xs))
+      }
+      for_sizes(rest)
+    }
+  }
+}

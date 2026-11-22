@@ -348,7 +348,8 @@ struct InPlaceCall {
 /// argument is a local: a call of its wrapper, or a direct call of the
 /// kernel (`cheby_mir`'s `lower/external.rs`). A direct call borrows a
 /// temporary that each counted argument is moved into, so the argument and
-/// the statement that consumes it are those of the move.
+/// the statement that consumes it are those of the move. A direct call of
+/// `list::set` is the helper `list_set`, which consumes the list itself.
 fn in_place_call(
     unit: &MirModule,
     value: &Rvalue,
@@ -399,6 +400,23 @@ fn in_place_call(
                 item.to_owned(),
                 first,
                 point,
+                others,
+                false,
+            )
+        }
+        Rvalue::CallRuntime {
+            func: RuntimeFn::ListSet,
+            args,
+        } => {
+            let Some(Operand::Local(first)) = args.first() else {
+                return Ok(None);
+            };
+            let others = args.iter().skip(1).filter_map(Operand::local).collect();
+            (
+                "std::list".to_owned(),
+                "set".to_owned(),
+                *first,
+                at,
                 others,
                 false,
             )
@@ -1003,11 +1021,19 @@ impl<'f> Flow<'f> {
                     _ => None,
                 };
                 match func {
-                    RuntimeFn::ListPush | RuntimeFn::ListAppend | RuntimeFn::ListPrepend => {
+                    RuntimeFn::ListPush
+                    | RuntimeFn::ListAppend
+                    | RuntimeFn::ListPrepend
+                    | RuntimeFn::ListSet => {
                         args.iter().any(|op| held(holds, op)) && join_into(holds, dst, Hold::Any)
                     }
-                    RuntimeFn::ListGet | RuntimeFn::ListSlice | RuntimeFn::ListSliceOwned => {
-                        let get = matches!(func, RuntimeFn::ListGet);
+                    RuntimeFn::ListGet
+                    | RuntimeFn::ListSlice
+                    | RuntimeFn::ListSliceOwned
+                    | RuntimeFn::MapValueAt => {
+                        // A map's value works as a list's element at an
+                        // unknown index.
+                        let get = matches!(func, RuntimeFn::ListGet | RuntimeFn::MapValueAt);
                         // An element of a list that holds the object there,
                         // or a view of one, which shares its root.
                         let reaches =
@@ -1042,7 +1068,8 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ScopeClose
                     | RuntimeFn::ListUncons
                     | RuntimeFn::ListUnconsOwned
-                    | RuntimeFn::ListUnconsHead => false,
+                    | RuntimeFn::ListUnconsHead
+                    | RuntimeFn::MapFind => false,
                 }
             }
             Rvalue::Call { .. } | Rvalue::CallForeign { .. } => {

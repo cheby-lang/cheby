@@ -17,7 +17,9 @@
 //! ([`DIRECT_MODULES`]). The call gives the kernel the counts the wrapper
 //! gave it (D-525): every counted argument is moved into an owned
 //! temporary that the call borrows, so a value used after the call is
-//! `dup`ed first and the kernel never updates it in place. The result
+//! `dup`ed first and the kernel never updates it in place. A kernel that
+//! only reads its arguments (`crate::kernels_reading`) borrows them as
+//! they are, with no temporary. The result
 //! keeps its own representation, so a `Float` result is never boxed. The
 //! wrapper stays for function values, dictionaries and every other call.
 //! A foreign call may raise (out of memory, a callback's panic), so it
@@ -362,6 +364,10 @@ pub(super) fn lower_js_only(
     b.finish()
 }
 
+/// The kernel of `list::set`, whose direct call is the runtime helper
+/// `list_set` ([`RuntimeFn::ListSet`]), which owns its list and its item.
+const LIST_SET: &str = "cheby_list_set";
+
 /// The std modules whose plain kernels a direct call calls at the call
 /// site, without the wrapper: the modules of [`CONST_SAFE_MODULES`]
 /// except `option`. Their wrappers make no effect check, so the wrapper's
@@ -418,7 +424,12 @@ impl BodyCx<'_, '_> {
     /// borrows (D-187) and counting releases after it. A value at its
     /// last use arrives with the count it has, so a unique one may be
     /// updated in place; a value used afterwards is `dup`ed into its
-    /// temporary, so the kernel sees it shared and copies it. The result
+    /// temporary, so the kernel sees it shared and copies it. A kernel of
+    /// [`crate::kernels_reading`] only reads its arguments, so the call
+    /// borrows them as they are, as a Cheby call borrows a parameter.
+    /// `list::set` is the helper `list_set` instead, which owns the list
+    /// and the item, so a unique list is written in place without a
+    /// temporary. The result
     /// is used as it comes: a scalar stays unboxed, a `Nil` result is the
     /// static `Nil`, and a counted one is owned by the caller. In tail
     /// position (`tail`) a Cheby function returns it as a uniform word,
@@ -441,6 +452,33 @@ impl BodyCx<'_, '_> {
         let sig = self.cx.defs.fn_sig(def)?;
         let fsig = foreign_sig_with_context(sig, globals, false);
         let ret_repr = repr_of(sig.ret, globals);
+        if &*symbol == LIST_SET {
+            // `list::set` takes its list and its item over, so code
+            // generation can write a unique list in place (`list_set`).
+            let call = Rvalue::CallRuntime {
+                func: RuntimeFn::ListSet,
+                args,
+            };
+            return self.finish_kernel_call(call, &fsig, ret_repr, ret_ty, tail);
+        }
+        let ops = if crate::kernels_reading::only_reads(&symbol) {
+            // A kernel that only reads borrows the arguments themselves.
+            args
+        } else {
+            self.owned_temporaries(args)?
+        };
+        let call = Rvalue::CallForeign {
+            symbol,
+            sig: fsig.clone(),
+            args: ops,
+            blocking: false,
+        };
+        self.finish_kernel_call(call, &fsig, ret_repr, ret_ty, tail)
+    }
+
+    /// The operands of a direct kernel call for `args`: each counted local
+    /// moved into an owned temporary (D-525, [`Self::call_kernel`]).
+    fn owned_temporaries(&mut self, args: Vec<Operand>) -> Result<Vec<Operand>, Ice> {
         let mut ops = Vec::with_capacity(args.len());
         for op in args {
             let Operand::Local(local) = op else {
@@ -460,12 +498,21 @@ impl BodyCx<'_, '_> {
             })?;
             ops.push(Operand::Local(owned));
         }
-        let call = Rvalue::CallForeign {
-            symbol,
-            sig: fsig.clone(),
-            args: ops,
-            blocking: false,
-        };
+        Ok(ops)
+    }
+
+    /// The rest of a direct kernel call ([`Self::call_kernel`]): `call`,
+    /// whose C signature is `fsig` and whose result has `ret_repr`,
+    /// emitted, and its result converted to `ret_ty`'s representation, or
+    /// returned in tail position (`tail`).
+    fn finish_kernel_call(
+        &mut self,
+        call: Rvalue,
+        fsig: &ForeignSig,
+        ret_repr: Repr,
+        ret_ty: Ty,
+        tail: bool,
+    ) -> Result<Option<Operand>, Ice> {
         let (result, repr) = if fsig.ret == CType::Void {
             self.emit(Stmt::Eval(call))?;
             (Operand::Const(Const::Nil), Repr::Value)

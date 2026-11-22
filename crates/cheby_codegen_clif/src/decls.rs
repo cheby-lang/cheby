@@ -1176,7 +1176,8 @@ impl Decls {
     }
 
     /// Declares the counting flag ([`crate::runtime::ON_DEMAND_DATA`]),
-    /// once: reuse's code and the inline pattern steps test it (D-768).
+    /// once: reuse's code, the inline pattern steps and the inline writes
+    /// at an index test it (D-768).
     fn declare_on_demand_data<M: Module>(&mut self, module: &mut M) -> Result<(), CodegenError> {
         for symbol in crate::runtime::ON_DEMAND_DATA {
             if !self.static_data.contains_key(symbol) {
@@ -1212,8 +1213,12 @@ impl Decls {
                         if f.on_demand() {
                             self.declare_runtime_func(module, f)?;
                         }
-                        // The pattern steps written inline (`list_ends`).
-                        if *func == cheby_mir::RuntimeFn::ListUnconsOwned {
+                        // The pattern steps and the writes at an index
+                        // written inline (`list_ends`, `list_index`).
+                        if matches!(
+                            func,
+                            cheby_mir::RuntimeFn::ListUnconsOwned | cheby_mir::RuntimeFn::ListSet
+                        ) {
                             self.declare_on_demand_data(module)?;
                         }
                     }

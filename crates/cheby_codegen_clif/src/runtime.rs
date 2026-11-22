@@ -108,11 +108,17 @@ pub enum RuntimeFunc {
     ListUnconsOwned,
     /// `uint64_t cheby_rt_list_prepend(ExecCtx *ctx, uint64_t list, uint64_t elem)`.
     ListPrepend,
+    /// `uint64_t cheby_rt_map_find(ExecCtx *ctx, uint64_t map, uint64_t key)`.
+    MapFind,
+    /// `uint64_t cheby_rt_map_value_at(uint64_t address)`.
+    MapValueAt,
+    /// `uint64_t cheby_rt_list_set(ExecCtx *ctx, uint64_t list, int64_t index, uint64_t item)`.
+    ListSet,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 42] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -152,6 +158,9 @@ impl RuntimeFunc {
         Self::ListUncons,
         Self::ListUnconsOwned,
         Self::ListPrepend,
+        Self::MapFind,
+        Self::MapValueAt,
+        Self::ListSet,
     ];
 
     /// The symbol.
@@ -197,6 +206,9 @@ impl RuntimeFunc {
             Self::ListUncons => sym::LIST_UNCONS,
             Self::ListUnconsOwned => sym::LIST_UNCONS_OWNED,
             Self::ListPrepend => sym::LIST_PREPEND,
+            Self::MapFind => sym::MAP_FIND,
+            Self::MapValueAt => sym::MAP_VALUE_AT,
+            Self::ListSet => sym::LIST_SET,
         }
     }
 
@@ -211,6 +223,7 @@ impl RuntimeFunc {
             | Self::ListPush
             | Self::ListPrepend
             | Self::ListAppend
+            | Self::MapFind
             | Self::AllocMiss
             | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
             Self::ReleaseFields => (&[Ptr, U64], Void),
@@ -230,6 +243,8 @@ impl RuntimeFunc {
             Self::Equal => (&[Ptr, U64, U64, U64], Bool),
             Self::ListLength => (&[U64], I64),
             Self::ListGet => (&[U64, I64], U64),
+            Self::MapValueAt => (&[U64], U64),
+            Self::ListSet => (&[Ptr, U64, I64, U64], U64),
             Self::ListSlice | Self::ListSliceOwned => (&[Ptr, U64, I64, I64], U64),
             Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
             Self::ScopeOpen => (&[Ptr, Bool, I64, I64], U64),
@@ -263,6 +278,9 @@ impl RuntimeFunc {
                 | Self::ListUncons
                 | Self::ListUnconsOwned
                 | Self::ListPrepend
+                | Self::MapFind
+                | Self::MapValueAt
+                | Self::ListSet
         )
     }
 
@@ -309,6 +327,9 @@ impl RuntimeFunc {
             Self::ListUncons => 36,
             Self::ListUnconsOwned => 37,
             Self::ListPrepend => 38,
+            Self::MapFind => 39,
+            Self::MapValueAt => 40,
+            Self::ListSet => 41,
         }
     }
 
@@ -338,6 +359,9 @@ impl RuntimeFunc {
             RuntimeFn::ListUncons | RuntimeFn::ListUnconsHead => (Self::ListUncons, true),
             RuntimeFn::ListUnconsOwned => (Self::ListUnconsOwned, true),
             RuntimeFn::ListPrepend => (Self::ListPrepend, true),
+            RuntimeFn::MapFind => (Self::MapFind, true),
+            RuntimeFn::MapValueAt => (Self::MapValueAt, false),
+            RuntimeFn::ListSet => (Self::ListSet, true),
         }
     }
 }

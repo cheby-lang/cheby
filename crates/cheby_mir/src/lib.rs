@@ -10,6 +10,9 @@
 //!   external wrappers and entry thunks. Every THIR construct lowers, so
 //!   lowering reports no diagnostics (D-554); its only error is an
 //!   internal one.
+//! - [`lookup`]: a `list::get` or `map::get` whose `Option` is taken
+//!   apart at once reads the element without the `Some`, at the end of
+//!   lowering.
 //! - [`hoist`]: field reads move up to the consumption of a sibling
 //!   projection, at the end of lowering, under every RC mode (D-911).
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
@@ -48,8 +51,10 @@ pub mod inline;
 mod inline_tests;
 pub mod ir;
 pub mod kernels_in_place;
+pub mod kernels_reading;
 pub mod layout;
 mod liveness;
+pub mod lookup;
 pub mod lower;
 #[cfg(test)]
 mod lower_tests;

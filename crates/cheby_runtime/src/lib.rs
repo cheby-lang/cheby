@@ -66,6 +66,8 @@ pub mod image;
 #[cfg(test)]
 mod image_tests;
 pub mod io;
+#[cfg(test)]
+mod kernels_reading_tests;
 pub mod layout;
 #[doc(hidden)]
 pub mod list;

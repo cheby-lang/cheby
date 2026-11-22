@@ -1,0 +1,3 @@
+panicked at tests/ui/09-memory-model/list_get_taken_apart_fails.cheby:13:14:
+`let assert` pattern did not match
+  value: None

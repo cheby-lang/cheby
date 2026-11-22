@@ -837,6 +837,24 @@ impl Translator<'_, '_> {
                 abi::list::ROOT_LEN_OFFSET,
             )));
         }
+        if let (RuntimeFn::MapValueAt, [_, address]) = (helper, args) {
+            // The value word a `map_find` of the map found: loaded and
+            // dup'd inline, as a field read and its `dup` are. The map
+            // operand only keeps the map held; the runtime's helper takes
+            // the address alone.
+            let address = self.operand(address)?;
+            if self.opts.checked_rc {
+                return Ok(Some(
+                    self.runtime_value(RuntimeFunc::MapValueAt, &[address])?,
+                ));
+            }
+            let value = self
+                .b
+                .ins()
+                .load(types::I64, MemFlagsData::trusted(), address, 0);
+            self.dup(value)?;
+            return Ok(Some(value));
+        }
         if helper == RuntimeFn::ListUnconsHead {
             // The word the `list_uncons` right before it wrote (D-909).
             let slot = self.uncons_slot.ok_or_else(|| {
@@ -851,6 +869,10 @@ impl Translator<'_, '_> {
         }
         if let Some(value) = self.list_end_inline(helper, args)? {
             // An end of a unique list, written in place.
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.list_index_inline(helper, args)? {
+            // An index of a list that is one leaf.
             return Ok(Some(value));
         }
         let (f, takes_ctx) = RuntimeFunc::of(helper);

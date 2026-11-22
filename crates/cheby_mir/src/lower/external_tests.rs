@@ -161,6 +161,7 @@ const DIRECT: &str = r#"//! Direct calls of std kernels.
 import std::float
 import std::io
 import std::list
+import std::map
 
 fn scaled(n: Int) -> Float {
   let x = float::from_int(n)
@@ -177,6 +178,11 @@ fn kept(xs: List<Int>) -> List<Int> {
   list::push(ys, n)
 }
 
+fn stocked(m: map::Map<Int, Int>) -> Int {
+  let more = map::insert(m, 1, 2)
+  map::size(more) + map::size(m)
+}
+
 fn values(xs: List<Int>) -> List<Float> {
   list::map(xs, float::from_int)
 }
@@ -185,7 +191,8 @@ fn main() {
   let xs = kept([1, 2, 3])
   let f = scaled(2) + root(4.0)
   let ys = values(xs)
-  io::println("{xs} {f} {ys}")
+  let n = stocked(map::new())
+  io::println("{xs} {f} {ys} {n}")
 }
 "#;
 
@@ -218,33 +225,62 @@ fn direct_kernel_call_is_the_foreign_call() {
     assert!(!root.contains("tail_call"), "{root}");
 }
 
-/// D-525: each counted argument is moved into an owned temporary that the
-/// kernel borrows and counting drops after the call. `xs`, used again
-/// after `list::set`, is `dup`ed into its temporary, so the kernel sees
-/// it shared; at its last use, `list::length`'s, it is moved without a
-/// `dup`. `list::push` is an intrinsic (D-1758) and keeps its call.
+/// The index of the first line of `text` that starts with `line`, once
+/// trimmed.
+fn line_at(text: &str, line: &str) -> usize {
+    text.lines()
+        .map(str::trim)
+        .position(|s| s.starts_with(line))
+        .unwrap_or_else(|| panic!("no `{line}` in:\n{text}"))
+}
+
+/// D-525: each counted argument of a kernel that may update it in place is
+/// moved into an owned temporary that the kernel borrows and counting
+/// drops after the call. `m`, used again after `map::insert`, is
+/// `dup`ed into its temporary, so the kernel sees it shared. A kernel
+/// that only reads (`map::size`, `crate::kernels_reading`) borrows its
+/// argument itself, with no temporary.
 #[test]
 fn direct_kernel_call_moves_each_argument_into_a_temporary() {
     let lowered = lower_source(&[("", DIRECT)]);
-    let kept = lowered.function("app", "app::kept");
-    let stmts: Vec<&str> = kept.lines().map(str::trim).collect();
-    let at = |line: &str| {
-        stmts
-            .iter()
-            .position(|s| s.starts_with(line))
-            .unwrap_or_else(|| panic!("no `{line}` in:\n{kept}"))
-    };
+    let stocked = lowered.function("app", "app::stocked");
+    let at = |line: &str| line_at(&stocked, line);
     let dup = at("dup _0");
-    let moved = at("_2: value = _0");
-    let set =
-        at("_4: value = call_foreign \"cheby_list_set\"(borrow _2, borrow const int 0, borrow _3)");
-    let released = at("drop _2");
-    assert!(dup < moved && moved < set && set < released, "{kept}");
-    let last = at("_5: value = _0");
-    let length = at("_6: int = call_foreign \"cheby_list_length\"(borrow _5) -> i64");
-    assert!(released < last && last < length, "{kept}");
+    let moved = at("_3: value = _0");
+    let insert =
+        at("_6: value = call_foreign \"cheby_map_insert\"(borrow _3, borrow _4, borrow _5)");
+    let released = at("drop _3");
+    assert!(
+        dup < moved && moved < insert && insert < released,
+        "{stocked}"
+    );
+    assert!(
+        stocked.contains("call_foreign \"cheby_map_size\"(borrow _6) -> i64"),
+        "{stocked}"
+    );
+    assert!(
+        stocked.contains("call_foreign \"cheby_map_size\"(borrow _0) -> i64"),
+        "{stocked}"
+    );
+    assert_eq!(stocked.matches("dup _0").count(), 1, "{stocked}");
+}
+
+/// A direct call of `list::set` is the helper `list_set`, which owns the
+/// list and the item: `xs`, used again after it, is `dup`ed into the
+/// call, and `list::length`, which only reads, borrows `xs` itself.
+/// `list::push` is an intrinsic (D-1758) and keeps its call.
+#[test]
+fn a_direct_list_set_owns_its_list_and_its_item() {
+    let lowered = lower_source(&[("", DIRECT)]);
+    let kept = lowered.function("app", "app::kept");
+    let at = |line: &str| line_at(&kept, line);
+    let dup = at("dup _0");
+    let set = at("_2: value = call_runtime list_set(_0, borrow const int 0, _1) ; unwind");
+    let length = at("_3: int = call_foreign \"cheby_list_length\"(borrow _0) -> i64");
+    assert!(dup < set && set < length, "{kept}");
+    assert!(!kept.contains("cheby_list_set"), "{kept}");
     assert_eq!(kept.matches("dup _0").count(), 1, "{kept}");
-    assert!(kept.contains("tail_call std::list::push(_4, "), "{kept}");
+    assert!(kept.contains("tail_call std::list::push(_2, "), "{kept}");
 }
 
 /// The wrapper stays for everything but a direct call: a function value

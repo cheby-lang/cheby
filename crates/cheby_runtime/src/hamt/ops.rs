@@ -51,6 +51,12 @@ impl Found {
     pub(super) fn value(self) -> Word {
         Bitmap(self.node).get(self.key_slot.wrapping_add(1))
     }
+
+    /// The address of the stored value of a map entry: [`Self::value`]
+    /// reads the word there.
+    pub(super) fn value_address(self) -> u64 {
+        Bitmap(self.node).slot_address(self.key_slot.wrapping_add(1))
+    }
 }
 
 /// Looks `key` up in a borrowed root, hashing with the root's own seed.

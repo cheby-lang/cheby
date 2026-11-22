@@ -22,6 +22,7 @@ use crate::abi::sym;
 use crate::alloc::cheby_rt_alloc;
 use crate::consteval::{cheby_rt_const_missing, cheby_rt_effect_check, cheby_rt_unresolved};
 use crate::fiber_ops::scope::{cheby_rt_scope_close, cheby_rt_scope_open};
+use crate::hamt::{cheby_rt_map_find, cheby_rt_map_value_at};
 use crate::helpers::{
     cheby_rt_box_f32, cheby_rt_box_f64, cheby_rt_box_i64, cheby_rt_box_u64, cheby_rt_debug,
     cheby_rt_equal, cheby_rt_fmod_f32, cheby_rt_fmod_f64, cheby_rt_str_append, cheby_rt_str_eq,
@@ -29,8 +30,8 @@ use crate::helpers::{
 };
 use crate::list::{
     cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_prepend,
-    cheby_rt_list_push, cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
-    cheby_rt_list_uncons_owned, cheby_rt_static_empty_list,
+    cheby_rt_list_push, cheby_rt_list_set, cheby_rt_list_slice, cheby_rt_list_slice_owned,
+    cheby_rt_list_uncons, cheby_rt_list_uncons_owned, cheby_rt_static_empty_list,
 };
 use crate::object::{
     cheby_rt_static_equal, cheby_rt_static_err_nil, cheby_rt_static_false, cheby_rt_static_greater,
@@ -60,7 +61,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 50] {
+fn runtime_symbols() -> [(&'static str, *const u8); 53] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -135,6 +136,9 @@ fn runtime_symbols() -> [(&'static str, *const u8); 50] {
             cheby_rt_list_uncons_owned as *const u8,
         ),
         (sym::LIST_PREPEND, cheby_rt_list_prepend as *const u8),
+        (sym::MAP_FIND, cheby_rt_map_find as *const u8),
+        (sym::MAP_VALUE_AT, cheby_rt_map_value_at as *const u8),
+        (sym::LIST_SET, cheby_rt_list_set as *const u8),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }

@@ -510,6 +510,14 @@ impl Bitmap {
         unsafe { read_field(self.ptr(), slot(i)) }
     }
 
+    /// The address of slot `i` (below `used`), as a word: generated code
+    /// reads the slot through it while it holds the node's map
+    /// (`cheby_rt_map_find`). A collision node's slots lie at the same
+    /// offsets.
+    pub(super) fn slot_address(self, i: usize) -> u64 {
+        self.0.wrapping_add(to_u64(slot(i)))
+    }
+
     /// Writes slot `i` (below the capacity) without releasing what was
     /// there.
     pub(super) fn put(self, i: usize, word: Word) {

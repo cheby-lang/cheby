@@ -327,12 +327,14 @@ fn equality_and_ordering_by_type() {
 fn ordering_through_compare() {
     let l = scalars();
     let lt = f(&l, "lt_strings");
+    // `string::compare` only reads, so it borrows the parameters
+    // themselves.
     assert!(
-        lt.contains("_4: value = call_foreign \"cheby_string_compare\"(borrow _2, borrow _3)"),
+        lt.contains("_2: value = call_foreign \"cheby_string_compare\"(borrow _0, borrow _1)"),
         "{lt}"
     );
-    assert!(lt.contains("read_tag _4 of order"), "{lt}");
-    assert!(lt.contains("compare eq int _5, const int 0"), "{lt}");
+    assert!(lt.contains("read_tag _2 of order"), "{lt}");
+    assert!(lt.contains("compare eq int _3, const int 0"), "{lt}");
     let gt = f(&l, "gt_money");
     assert!(gt.contains("call app::compare("), "{gt}");
     assert!(gt.contains("const int 2"), "{gt}");

@@ -1855,6 +1855,92 @@ fn direct_kernel_calls_update_in_place_only_at_a_last_use() {
     }
 }
 
+/// A loop of reads and writes at an index of a list of ten numbers, as in
+/// the comparison's `fannkuch_redux`, allocates nothing per step: a
+/// `list::get` matched at once builds no `Some`, and a `list::set` of
+/// the unique list writes it in place. Ten times the steps make the same
+/// number of allocations, under both RC modes. Run with poisoning off, so
+/// the inline reads run; the writes call the helper while events are
+/// counted.
+#[test]
+fn indexed_list_steps_allocate_nothing() {
+    let dir = package(
+        "indexed_list_steps",
+        &[MANIFEST, ("src/main.cheby", INDEXED_LIST_STEPS)],
+    );
+    for rc in [None, Some("naive")] {
+        let mut counts = Vec::new();
+        for (steps, total) in [("1000", "4500"), ("10000", "45000")] {
+            let cache = fresh_cache();
+            let mut cmd = Command::new(CHEBY);
+            cmd.args(["--color=never", "run", "--", steps])
+                .current_dir(&dir)
+                .env("NO_COLOR", "1")
+                .env("CHEBY_RT_STATS", "1")
+                .env("CHEBY_RT_POISON", "0")
+                .env_remove("CHEBY_DUMP_DIR");
+            cache.apply(&mut cmd);
+            match rc {
+                Some(mode) => cmd.env("CHEBY_RC", mode),
+                None => cmd.env_remove("CHEBY_RC"),
+            };
+            let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+            assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+            assert_eq!(out.stdout, format!("{total}\n"), "{rc:?}");
+            let allocations = stat(&out.stderr, "allocations")
+                .unwrap_or_else(|| panic!("no `allocations` line:\n{}", out.stderr));
+            counts.push(allocations);
+        }
+        assert_eq!(
+            counts[0], counts[1],
+            "{rc:?}: allocations grow with the steps"
+        );
+    }
+}
+
+/// The program of [`indexed_list_steps_allocate_nothing`].
+const INDEXED_LIST_STEPS: &str = r#"//! Reversals of a prefix of a list of ten numbers with `list::get` and `list::set`.
+
+import std::env
+import std::int
+import std::io
+import std::list
+
+fn at(xs: List<Int>, i: Int) -> Int {
+  let assert Some(x) = list::get(xs, i)
+  x
+}
+
+fn reverse(xs: List<Int>, low: Int, high: Int) -> List<Int> {
+  case low < high {
+    True => {
+      let a = at(xs, low)
+      let b = at(xs, high)
+      reverse(list::set(list::set(xs, low, b), high, a), low + 1, high - 1)
+    }
+    False => xs
+  }
+}
+
+fn steps(xs: List<Int>, n: Int, total: Int) -> Int {
+  case n {
+    0 => total
+    _ => {
+      let flipped = reverse(xs, 0, n % 10)
+      let first = at(flipped, 0)
+      steps(flipped, n - 1, total + first)
+    }
+  }
+}
+
+fn main() {
+  let assert [arg] = env::args()
+  let assert Ok(n) = int::parse(arg)
+  let total = steps(list::range(0, 10), n, 0)
+  io::println("{total}")
+}
+"#;
+
 /// The program of [`direct_kernel_calls_update_in_place_only_at_a_last_use`].
 const DIRECT_KERNEL_UPDATES: &str = r#"//! Updates with std kernels, at their last use and with the old value used afterwards.
 
