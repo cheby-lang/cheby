@@ -478,6 +478,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1776    | Release inlining takes bodies from the build's other units and std's by name                        |
 | D-1777    | Std's kernel bindings, release masks and bodies may cross into a package's build (ADR-0082)         |
 | D-1778    | Std's release bodies and masks are one sealed cache record, decoded on demand                       |
+| D-1779    | A numeric std kernel that is one instruction compiles to it: `convert`, `float_sqrt`, `wrapping`    |
 
 ## Open questions
 

@@ -499,3 +499,9 @@ A release command no longer checks and optimizes std in every process: std's exp
 
 The cold builds include std's first use, which a toolchain pays once. A warm release build of `compile_large` still compiles its 200 modules anew, since release keeps no records of a package's own modules yet. Tried and not kept: decoding the whole record at once, which left `hello_world` at 0.157 G.
 
+### Numeric kernels as instructions (D-1779)
+
+82 std kernels that are one machine operation, the conversions that cannot fail, `float::sqrt` and the wrapping arithmetic, compile to it at a direct call. `spectral_norm` retires 4% fewer instructions, `mandelbrot` and `nbody` under 1%.
+
+Looked at and left alone: `nbody`'s inner function `pull` lost its call of `sqrt` and kept its float spills, 22 stores and 27 reloads. It loads the fields of both bodies before the allocation and release calls of the record it rebuilds, and those calls clobber every float register. An allocation fast path written inline, with its slow path preserving registers as the entry check's does (D-1775), would remove them; that is the path D-1772 measured at 2% to 3.5% without counting the spills.
+
