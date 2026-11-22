@@ -1027,7 +1027,7 @@ proptest! {
     #[test]
     fn split_matches_the_reference_and_join_inverts_it(
         text in small_text(),
-        sep in prop::sample::select(vec!["", ",", " ", "a,", "é\u{301}", "𝄞", "ab"]),
+        sep in prop::sample::select(vec!["", ",", " ", "a,", "é", "é\u{301}", "𝄞", "ab"]),
     ) {
         balanced(|| {
             let parts = split(&text, sep);

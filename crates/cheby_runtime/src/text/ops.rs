@@ -39,16 +39,52 @@ pub(crate) fn code_points(text: &str) -> impl Iterator<Item = &str> {
 /// The parts of `text` between occurrences of `separator`, searched from
 /// the start; an empty separator gives the code points (D-315). The parts
 /// are found as they are taken, so splitting holds no buffer of them.
+///
+/// A one-byte separator, which is ASCII, is found with `memchr` instead of
+/// a substring searcher; the parts are the same.
 pub(crate) fn split<'a>(text: &'a str, separator: &'a str) -> impl Iterator<Item = &'a str> {
-    let (points, parts) = if separator.is_empty() {
-        (Some(code_points(text)), None)
-    } else {
-        (None, Some(text.split(separator)))
+    let (points, bytes, parts) = match *separator.as_bytes() {
+        [] => (Some(code_points(text)), None, None),
+        [byte] => (
+            None,
+            Some(ByteSplit {
+                rest: Some(text),
+                byte,
+            }),
+            None,
+        ),
+        _ => (None, None, Some(text.split(separator))),
     };
     points
         .into_iter()
         .flatten()
+        .chain(bytes.into_iter().flatten())
         .chain(parts.into_iter().flatten())
+}
+
+/// The parts of a text between occurrences of one ASCII byte, which in
+/// UTF-8 text is always a whole code point.
+#[derive(Debug)]
+struct ByteSplit<'a> {
+    /// The text after the last separator found, or `None` once the last
+    /// part is taken.
+    rest: Option<&'a str>,
+    byte: u8,
+}
+
+impl<'a> Iterator for ByteSplit<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let rest = self.rest?;
+        let Some(at) = memchr::memchr(self.byte, rest.as_bytes()) else {
+            self.rest = None;
+            return Some(rest);
+        };
+        // An ASCII byte stands at a character boundary on both sides.
+        self.rest = rest.get(at.saturating_add(1)..);
+        rest.get(..at)
+    }
 }
 
 /// The parts of `text` before and after the first `separator`, or `None`

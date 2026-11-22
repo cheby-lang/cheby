@@ -198,3 +198,49 @@ Tried and not kept:
   switch, which is assembly. A cheaper `dup` of a shared handle would need `fetch_sub`, which is
   not safe where a count overflows to static (D-454).
 
+### Numbers to text, appends and splits without the detours
+
+- `show` and the debug text of an integer built a Rust `String` and copied it into a Cheby one.
+  The digits are now written into a 21-byte stack buffer, two at a time from a table, and the Cheby
+  string is made from that. The text is the same byte for byte: one test covers every power of ten
+  and its neighbours and each type's ends, and a property test draws 10,000 values per type.
+- `cheby_rt_str_append` checked the accumulator, then its growth path, then appended. It is one
+  call now, whose in-place case is inline and whose growth is out of line, and it allocates and
+  frees through the fiber's own control block. D-577's and D-849's capacities are unchanged.
+- A copy of up to 32 bytes is two overlapping loads and stores in place of a `memcpy` call.
+- `string::split` on a one-byte separator searches with `memchr` in place of the general
+  searcher, and takes its first part before deciding whether the text has the separator at all, in
+  place of a separate scan.
+- The kernels that build a text piece by piece look the running fiber up once, and those that
+  sized their result exactly append without the growth check.
+
+Medians of nine runs against `36850571`, with the AOT executables timed directly beside them:
+
+| Benchmark            | `bench-run`      | AOT executable |
+| -------------------- | ---------------- | -------------- |
+| `rc/string_building` | −27.4%, −32.0%   | −32.1%         |
+| `json/roundtrip`     | −7.3%, −3.1%     | −3.5%          |
+| `json/value`         | −6.3%, −3.7%     | −5.0%          |
+
+The RC group's geometric mean is −6.1%. Miri on the `string`, `text`, `bytes` and `values` groups
+and the thread sanitizer's runtime step report nothing.
+
+`time/now_loop` reads +1.6% to +4.1%. Its hot functions disassemble the same in both binaries;
+`cheby_rt_alloc` and `cheby_rt_free_unique` happened to start on 64-byte boundaries before and do
+not now. Nothing was done about it.
+
+Tried and not kept:
+
+- A cheaper lookup of the running fiber. One `tls::current_fiber()` costs 1.9 ns on macOS: an
+  out-of-line call and a call through the thread-local machinery, with no lazy check and no
+  `RefCell`. Only inlining it into generated code could make it cheaper, which D-686 rules out, so
+  the number of lookups was cut instead. The "10%" that a profile showed inside `cheby_map_upsert`
+  was sampling skid: adding four lookups there made `collections/multimap` 3.5% slower, so one
+  costs about 0.9%.
+- `str::split(char)` for a one-character separator, before `memchr`: it still called `memcmp` for
+  each match.
+- More work on `cheby_bytes_get`. It was already a bounds test, a load and a static `Some`. The
+  rest of a byte loop's cost is in generated code: the wrapper, `bytes::fold`'s closure and
+  `int::from_u8`.
+- The `show` of a float still builds Rust strings. No benchmark spends time there.
+

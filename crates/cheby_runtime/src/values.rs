@@ -21,6 +21,7 @@ use std::cmp::Ordering;
 use crate::abi::{self, LayoutId, Word, layout};
 use crate::alloc;
 use crate::ctx::ExecCtx;
+use crate::num::text::{DECIMAL_ROOM, SignMagnitude, write_decimal};
 use crate::object::{self, read_field, scan_and_layout, to_u64, word_to_ptr, write_field};
 use crate::panic::fatal;
 use crate::string;
@@ -262,6 +263,18 @@ pub fn tuple(elements: &[Word]) -> Word {
 #[must_use]
 pub fn string(text: &str) -> Word {
     string::new_string(text)
+}
+
+/// A new `String` holding the decimal text of `n`, its `show` (D-312),
+/// written on the stack and copied once into the new object.
+#[must_use]
+pub(crate) fn decimal_string(n: impl SignMagnitude) -> Word {
+    let mut buffer = [0; DECIMAL_ROOM];
+    let (negative, magnitude) = n.sign_magnitude();
+    string::new_text(
+        write_decimal(negative, magnitude, &mut buffer),
+        layout::STRING,
+    )
 }
 
 /// A new `Bytes` holding `data`.
@@ -517,8 +530,10 @@ pub unsafe fn read_tuple(word: Word) -> Vec<Word> {
 #[must_use]
 pub unsafe fn str_of<'a>(word: Word) -> &'a str {
     // SAFETY: forwarded from the caller.
-    unsafe { string::as_str(word) }
-        .unwrap_or_else(|| fatal(format_args!("{word:#x} is not a String")))
+    match unsafe { string::as_str(word) } {
+        Some(text) => text,
+        None => not_a(word, "a String"),
+    }
 }
 
 /// The bytes of a `Bytes` (or the UTF-8 bytes of a `String`), borrowed.
@@ -529,8 +544,19 @@ pub unsafe fn str_of<'a>(word: Word) -> &'a str {
 #[must_use]
 pub unsafe fn bytes_of<'a>(word: Word) -> &'a [u8] {
     // SAFETY: forwarded from the caller.
-    unsafe { string::text_bytes(word) }
-        .unwrap_or_else(|| fatal(format_args!("{word:#x} is not a Bytes or a String")))
+    match unsafe { string::text_bytes(word) } {
+        Some(data) => data,
+        None => not_a(word, "a Bytes or a String"),
+    }
+}
+
+/// Ends the process for a word that is not `what`. Out of line and given
+/// the word by value, so the readers above spill nothing to the stack on
+/// their common path.
+#[cold]
+#[inline(never)]
+fn not_a(word: Word, what: &str) -> ! {
+    fatal(format_args!("{word:#x} is not {what}"))
 }
 
 #[cfg(test)]

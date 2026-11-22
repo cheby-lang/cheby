@@ -67,7 +67,7 @@ fn build(cap: u64, write: impl FnOnce(&mut dyn FnMut(&[u8]))) -> Word {
     write(&mut |piece: &[u8]| {
         // SAFETY: `text` is the unique string built here, owned by this
         // function; `piece` lies outside it.
-        text = unsafe { string::append(text, piece) };
+        text = unsafe { string::append_in_room(text, piece) };
     });
     text
 }
@@ -89,8 +89,8 @@ unsafe fn extend(
     let (mut out, reused) = unsafe { string::with_room(text, extra, reuse) };
     write(&mut |piece: &[u8]| {
         // SAFETY: `out` is unique with room for every piece (`with_room`),
-        // so `append` writes in place, and the pieces lie outside it.
-        out = unsafe { string::append(out, piece) };
+        // and the pieces lie outside it.
+        out = unsafe { string::append_in_room(out, piece) };
     });
     if reused {
         // SAFETY: `out` is the live argument, changed in place; the caller
@@ -112,9 +112,15 @@ unsafe fn keep(text: Word, range: std::ops::Range<usize>, reuse: bool) -> Word {
     unsafe { string::keep_range(text, range, reuse) }
 }
 
-/// A new list of new strings, one per part.
+/// A new list of new strings, one per part. One lookup of the running
+/// fiber serves every part's allocation: the kernel runs on one fiber from
+/// its start to its end and never switches.
 fn string_list<'a>(parts: impl IntoIterator<Item = &'a str>) -> Word {
-    list::from_iter(parts.into_iter().map(values::string))
+    let ctx = crate::tls::current_fiber();
+    list::from_iter(parts.into_iter().map(|part| {
+        // SAFETY: `ctx` is null or the fiber running on this thread.
+        unsafe { string::new_text_for(ctx, part.as_bytes(), crate::abi::layout::STRING) }
+    }))
 }
 
 // ---------------------------------------------------------------------
@@ -208,7 +214,11 @@ pub(crate) unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) 
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (whole, sep) = unsafe { (arg(text), arg(separator)) };
-        if !sep.is_empty() && !whole.contains(sep) {
+        let mut parts = ops::split(whole, sep);
+        let first = parts.next();
+        // The first part is the whole text exactly when a separator that is
+        // not empty does not occur.
+        if !sep.is_empty() && first.is_some_and(|part| part.len() == whole.len()) {
             // SAFETY: a live string; the list gets a reference of its own,
             // released if the list cannot be allocated.
             unsafe { rc::dup(text) };
@@ -217,7 +227,7 @@ pub(crate) unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) 
             held.disarm();
             return parts;
         }
-        string_list(ops::split(whole, sep))
+        string_list(first.into_iter().chain(parts))
     })
 }
 
