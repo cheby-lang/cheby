@@ -857,15 +857,19 @@ impl Translator<'_, '_> {
         }
         if helper == RuntimeFn::ListUnconsHead {
             // The word the `list_uncons` right before it wrote (D-909).
-            let slot = self.uncons_slot.ok_or_else(|| {
-                CodegenError::ice("a `list_uncons_head` without its `list_uncons`")
-            })?;
-            return Ok(Some(self.b.ins().stack_load(
-                types::I64,
-                types::I64,
-                slot,
-                0,
-            )));
+            return self.uncons_word().map(Some);
+        }
+        if let Some((RuntimeFn::ListUnconsHead, repr)) = helper.scalar_read() {
+            // The number the inline step right before it yielded
+            // (`list_ends`), or else the number in the word the helper
+            // wrote, which the head owns and releases.
+            if let Some(number) = self.uncons_scalar.take() {
+                return Ok(Some(number));
+            }
+            let word = self.uncons_word()?;
+            let number = self.unbox_word(word, repr);
+            self.drop_value(word)?;
+            return Ok(Some(number));
         }
         if let Some(value) = self.list_end_inline(helper, args)? {
             // An end of a unique list, written in place.
@@ -901,6 +905,15 @@ impl Translator<'_, '_> {
                 "the runtime helper {helper:?} and its C signature disagree on a result"
             ))),
         }
+    }
+
+    /// The word the `list_uncons` right before the head being translated
+    /// wrote to its stack slot (D-909).
+    pub(crate) fn uncons_word(&mut self) -> Result<Value, CodegenError> {
+        let slot = self
+            .uncons_slot
+            .ok_or_else(|| CodegenError::ice("a `list_uncons_head` without its `list_uncons`"))?;
+        Ok(self.b.ins().stack_load(types::I64, types::I64, slot, 0))
     }
 
     /// The stack slot where a `list_uncons` writes its element (D-909),
@@ -1026,17 +1039,25 @@ impl Translator<'_, '_> {
                 let untagged = self.b.ins().sshr_imm_u(w, 1);
                 self.b.ins().ireduce(repr_type(to), untagged)
             }
-            Repr::Float | Repr::F32 => {
-                self.b
-                    .ins()
-                    .load(repr_type(to), MemFlagsData::trusted(), w, payload)
-            }
+            Repr::Float | Repr::F32 => self.unbox_word(w, to),
             Repr::Bool => {
                 let truth = self.static_object(abi::sym::STATIC_TRUE)?;
                 self.b.ins().icmp(IntCC::Equal, w, truth)
             }
             Repr::Value => return Err(unsupported("`unbox` to a uniform word")),
         })
+    }
+
+    /// The number in `word`, a uniform word of a `Float` or an `F32`, which
+    /// is always a box of the number (D-521): a load of the box's payload.
+    /// The word is borrowed.
+    pub(crate) fn unbox_word(&mut self, word: Value, repr: Repr) -> Value {
+        self.b.ins().load(
+            repr_type(repr),
+            MemFlagsData::trusted(),
+            word,
+            abi::FIRST_FIELD_OFFSET,
+        )
     }
 
     /// One more reference to the uniform word `v` (D-273). Inline: tagged

@@ -366,7 +366,11 @@ impl RuntimeFunc {
             RuntimeFn::ListPush => (Self::ListPush, true),
             RuntimeFn::ListAppend => (Self::ListAppend, true),
             RuntimeFn::ListLength => (Self::ListLength, false),
-            RuntimeFn::ListGet => (Self::ListGet, false),
+            // A read of the element as a raw number calls the read of its
+            // word, where it calls anything (`list_index`).
+            RuntimeFn::ListGet | RuntimeFn::ListGetFloat | RuntimeFn::ListGetF32 => {
+                (Self::ListGet, false)
+            }
             RuntimeFn::ListSlice => (Self::ListSlice, true),
             RuntimeFn::ListSliceOwned => (Self::ListSliceOwned, true),
             RuntimeFn::Equal => (Self::Equal, true),
@@ -377,7 +381,10 @@ impl RuntimeFunc {
             // The head calls nothing: it loads the stack slot that the
             // `list_uncons` right before it wrote (D-909), so it needs that
             // call's declaration only.
-            RuntimeFn::ListUncons | RuntimeFn::ListUnconsHead => (Self::ListUncons, true),
+            RuntimeFn::ListUncons
+            | RuntimeFn::ListUnconsHead
+            | RuntimeFn::ListUnconsHeadFloat
+            | RuntimeFn::ListUnconsHeadF32 => (Self::ListUncons, true),
             RuntimeFn::ListUnconsOwned => (Self::ListUnconsOwned, true),
             RuntimeFn::ListPrepend => (Self::ListPrepend, true),
             RuntimeFn::MapFind => (Self::MapFind, true),

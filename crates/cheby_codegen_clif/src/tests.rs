@@ -146,7 +146,7 @@ fn runtime_helper_signatures() {
     use runtime::RuntimeFunc;
     for helper in RuntimeFn::ALL {
         // The element a `list_uncons` keeps is read from its stack slot.
-        if helper == RuntimeFn::ListUnconsHead {
+        if helper.is_uncons_head() {
             continue;
         }
         // `map_value_at`'s map only keeps the map held; the C function
@@ -2185,6 +2185,233 @@ fn list_reads_at_an_index_are_written_inline() {
         !text.contains(&format!("+{}\n", list::ROOT_OFFSET_OFFSET)),
         "{text}"
     );
+}
+
+/// `owned_step_unit` with the head read as a number of `repr`
+/// (`list_uncons_head_float`), boxed again to be returned.
+fn scalar_step_unit(front: bool, repr: Repr) -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let mut u = owned_step_unit(front);
+    let l = Local::from_u32;
+    let function = &mut u.functions[0];
+    function.locals.get_mut(l(3)).unwrap().repr = repr;
+    function
+        .locals
+        .push(LocalDecl {
+            repr: Repr::Value,
+            name: None,
+            ty: None,
+        })
+        .unwrap();
+    let block = function.blocks.iter_mut().next().unwrap();
+    block.stmts[2] = Stmt::Assign {
+        dst: l(3),
+        value: Rvalue::CallRuntime {
+            func: RuntimeFn::as_scalar(RuntimeFn::ListUnconsHead, repr).unwrap(),
+            args: Vec::new(),
+        },
+    };
+    block.stmts.push(Stmt::Assign {
+        dst: l(4),
+        value: Rvalue::Box {
+            value: Operand::Local(l(3)),
+            from: repr,
+        },
+    });
+    block.term = Terminator::Return(Operand::Local(l(4)));
+    u
+}
+
+/// `f(xs) { x = list_get_float(xs, 1); return box x }`, or its `F32`
+/// form.
+fn scalar_index_unit(repr: Repr) -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let get = RuntimeFn::as_scalar(RuntimeFn::ListGet, repr).unwrap();
+    let mut u = index_unit(get, vec![Operand::Const(Const::Int(1))], repr);
+    let l = Local::from_u32;
+    let function = &mut u.functions[0];
+    function
+        .locals
+        .push(LocalDecl {
+            repr: Repr::Value,
+            name: None,
+            ty: None,
+        })
+        .unwrap();
+    let block = function.blocks.iter_mut().next().unwrap();
+    block.stmts.push(Stmt::Assign {
+        dst: l(2),
+        value: Rvalue::Box {
+            value: Operand::Local(l(1)),
+            from: repr,
+        },
+    });
+    block.term = Terminator::Return(Operand::Local(l(2)));
+    u
+}
+
+/// The lines of `text` that load a number of `ty` (`f64`, `f32`), each
+/// with the line before it.
+fn number_loads<'t>(text: &'t str, ty: &str) -> Vec<(&'t str, &'t str)> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .windows(2)
+        .filter(|pair| pair[1].contains(&format!("= load.{ty} ")))
+        .map(|pair| (pair[0], pair[1]))
+        .collect()
+}
+
+/// Whether `load`, a load of a number, reads through the value that
+/// `before`, a load of a word, defines: the two loads are next to each
+/// other, with no call and no yield point between them.
+fn loads_through(before: &str, load: &str) -> bool {
+    let defined = before.trim().split(' ').next().unwrap_or_default();
+    (before.contains("= load.i64 ") || before.contains("= stack_load.i64 "))
+        && load.contains(&format!(" {defined}+"))
+}
+
+/// A pattern step whose head reads the element as a number yields it from
+/// the inline step: on every path the number is loaded right after the
+/// word of its box, with nothing between the two loads. No path dups the
+/// element: a shared leaf keeps its box and no count changes, and an
+/// element moved out of a unique leaf is dropped after the read, as is
+/// the word the helper writes to the slot. The slot is written only by
+/// the helper and read only on its path. With `checked_rc` the head
+/// reads the slot, unboxes and drops, as a head and its `unbox` and
+/// `drop` would.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn float_steps_read_the_number_without_a_count() {
+    use cheby_runtime::abi::sym;
+    for (repr, ty) in [(Repr::Float, "f64"), (Repr::F32, "f32")] {
+        for front in [true, false] {
+            let text = clif_of(&[scalar_step_unit(front, repr)], &CodegenOptions::default());
+            let loads = number_loads(&text, ty);
+            // The inline paths, one for each kind of leaf at the back but
+            // a shared load before the branch at the front, and the
+            // helper's.
+            assert_eq!(
+                loads.len(),
+                if front { 2 } else { 3 },
+                "{front}
+{text}"
+            );
+            for (before, load) in &loads {
+                assert!(
+                    loads_through(before, load),
+                    "{before}
+{load}
+{text}"
+                );
+            }
+            assert!(
+                !text.contains(sym::DUP),
+                "{front}
+{text}"
+            );
+            assert!(
+                text.contains(sym::DROP),
+                "{front}
+{text}"
+            );
+            // The helper gets the slot's address and its path reads the
+            // word back through it; the inline paths store nothing there.
+            assert_eq!(text.matches("stack_addr.i64 ss0").count(), 2, "{text}");
+            assert!(!text.contains("stack_store"), "{text}");
+            assert!(
+                text.contains(sym::LIST_UNCONS_OWNED),
+                "{front}
+{text}"
+            );
+            let checked = CodegenOptions {
+                checked_rc: true,
+                ..CodegenOptions::default()
+            };
+            let text = clif_of(&[scalar_step_unit(front, repr)], &checked);
+            let loads = number_loads(&text, ty);
+            assert_eq!(
+                loads.len(),
+                1,
+                "{front}
+{text}"
+            );
+            assert!(loads_through(loads[0].0, loads[0].1), "{text}");
+            assert!(
+                text.contains(sym::DROP),
+                "{front}
+{text}"
+            );
+            assert!(
+                !text.contains(sym::STATS_COUNTING),
+                "{front}
+{text}"
+            );
+        }
+    }
+}
+
+/// `list_get_float` of a list that is one leaf loads the slot's word and
+/// the number through it, with no count touched, and the helper's path
+/// unboxes the word the helper returns and drops it. With `checked_rc`
+/// only that path is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn float_index_reads_load_the_number() {
+    use cheby_runtime::abi::{list, sym};
+    for (repr, ty) in [(Repr::Float, "f64"), (Repr::F32, "f32")] {
+        let text = clif_of(&[scalar_index_unit(repr)], &CodegenOptions::default());
+        let loads = number_loads(&text, ty);
+        assert_eq!(loads.len(), 2, "{text}");
+        let (before, load) = loads[0];
+        assert!(
+            loads_through(before, load),
+            "{before}
+{load}
+{text}"
+        );
+        assert!(
+            before.contains(
+                &format!(
+                    "+{}
+",
+                    list::LEAF_SLOTS_OFFSET
+                )
+                .trim_end()
+                .to_owned()
+            ),
+            "the slot's word
+{text}"
+        );
+        assert!(!text.contains(sym::DUP), "{text}");
+        assert!(text.contains(sym::LIST_GET), "{text}");
+        assert!(
+            text.contains(sym::DROP),
+            "the helper's word
+{text}"
+        );
+        let checked = CodegenOptions {
+            checked_rc: true,
+            ..CodegenOptions::default()
+        };
+        let text = clif_of(&[scalar_index_unit(repr)], &checked);
+        assert_eq!(number_loads(&text, ty).len(), 1, "{text}");
+        assert!(text.contains(sym::LIST_GET), "{text}");
+        assert!(text.contains(sym::DROP), "{text}");
+        assert!(
+            !text.contains(&format!(
+                "+{}
+",
+                list::ROOT_OFFSET_OFFSET
+            )),
+            "{text}"
+        );
+    }
 }
 
 /// `list_set` of a unique list that is one leaf stores the item and

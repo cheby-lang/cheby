@@ -19,6 +19,12 @@
 //! what the helper's own fast path does
 //! (`cheby_runtime::list::buffers`), without the call.
 //!
+//! When the head after the step reads the element as a raw number
+//! (`list_uncons_head_float` and its `F32` form, made by `cheby_mir::rc`
+//! of a head whose only use is an `unbox`), the inline step yields the
+//! number: it reads it through a shared leaf's element with no count
+//! touched, and drops an element it moved out of a unique leaf.
+//!
 //! `list_push` and `list_prepend` stay calls: written inline in the
 //! bodies of `std::list`'s `push` and `prepend`, they measured no faster
 //! than the helpers' fast paths.
@@ -29,14 +35,15 @@
 //! count operations (plan §4.3.4).
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, MemFlagsData, Value, types};
+use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, MemFlagsData, StackSlot, Value, types};
 
-use cheby_mir::{Const, Operand, RuntimeFn};
+use cheby_mir::{Const, Operand, Repr, RuntimeFn};
 use cheby_runtime::abi;
 
 use crate::CodegenError;
 use crate::func::Translator;
 use crate::runtime::RuntimeFunc;
+use crate::sig::repr_type;
 
 /// A header or an immediate word as a CLIF constant.
 const fn imm(word: u64) -> i64 {
@@ -61,6 +68,28 @@ struct EndLeaf {
     /// Whether the leaf's count is one: the element moves out of it.
     /// Otherwise another list holds the leaf, and the element is dup'd.
     unique: Value,
+}
+
+/// What both paths of an inline pattern step work with (`list_step`).
+struct Step {
+    /// The list, and the end of the spread its arguments give.
+    list: Value,
+    end: Value,
+    /// The list's length, and whether it is above one.
+    len: Value,
+    several: Value,
+    /// The leaf's meta word, and its length.
+    meta: Value,
+    slots: Value,
+    /// The function's `list_uncons` slot.
+    out: StackSlot,
+    /// The helper's block, and the block after the step, which takes the
+    /// rest and, with `scalar`, the number.
+    slow: Block,
+    join: Block,
+    /// The representation of the number the head after the step reads,
+    /// when it reads one.
+    scalar: Option<Repr>,
 }
 
 impl Translator<'_, '_> {
@@ -233,6 +262,19 @@ impl Translator<'_, '_> {
     /// from a leaf that another list holds it is dup'd, and the leaf is
     /// not written. The step that would use up the leaf goes to the
     /// helper, which releases the leaf and finds the next one.
+    ///
+    /// When the head after the step reads the element as a raw number
+    /// (`list_uncons_head_float`, [`Translator::next_scalar_head`]), the
+    /// step yields the number instead ([`Translator::uncons_scalar`]) and
+    /// writes no slot on its inline paths. From a shared leaf it loads the
+    /// element's word and then the number through it, and touches no
+    /// count: the leaf holds the box, and the list, which this step owns,
+    /// holds the leaf, and nothing runs between the two loads that could
+    /// release either, no call and no yield point. From a unique leaf the
+    /// element is moved out as before, so its reference is the step's: it
+    /// loads the number and then drops the word, which frees a box that
+    /// only the list held. The helper's path writes the slot as always,
+    /// and the number is unboxed from the word and the word dropped there.
     fn list_step(
         &mut self,
         which: End,
@@ -240,6 +282,7 @@ impl Translator<'_, '_> {
         args: &[Operand],
         end: &Operand,
     ) -> Result<Value, CodegenError> {
+        let scalar = self.next_scalar_head;
         let list = self.operand(list)?;
         let end = self.operand(end)?;
         let out = self.make_uncons_slot();
@@ -247,89 +290,206 @@ impl Translator<'_, '_> {
         self.b.set_cold_block(slow);
         let join = self.b.create_block();
         let result = self.b.append_block_param(join, types::I64);
+        let number = scalar.map(|repr| self.b.append_block_param(join, repr_type(repr)));
         let at = self.end_leaf(list, which, slow)?;
         let (meta, slots) = self.leaf_meta(at.leaf);
         let len = self.load_word(list, abi::list::ROOT_LEN_OFFSET);
         let several = self.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, len, 1);
+        let st = Step {
+            list,
+            end,
+            len,
+            several,
+            meta,
+            slots,
+            out,
+            slow,
+            join,
+            scalar,
+        };
         match which {
-            End::Front => {
-                let first = self.load_word(at.field, 8);
-                let next = self.b.ins().iadd_imm_s(first, 1);
-                let more = self.b.ins().icmp(IntCC::UnsignedLessThan, next, slots);
-                // The spread reaches the list's end.
-                let whole = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, end, len);
-                let fits = self.b.ins().band(several, more);
-                let fits = self.b.ins().band(fits, whole);
-                self.unless(fits, slow);
-                let place = self.slot(at.leaf, first);
-                let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
-                let moved = self.b.create_block();
-                let shared = self.b.create_block();
+            End::Front => self.step_front(&at, &st)?,
+            End::Back => self.step_back(&at, &st)?,
+        }
+        self.b.switch_to_block(slow);
+        let mut vals = vec![self.ctx()?];
+        vals.extend(self.operands(args)?);
+        vals.push(self.b.ins().stack_addr(types::I64, out, 0));
+        let rest = self.edge_runtime_value(RuntimeFunc::ListUnconsOwned, &vals)?;
+        let mut join_args = vec![BlockArg::Value(rest)];
+        if let Some(repr) = scalar {
+            // The helper wrote the element, owned, to the slot.
+            let word = self.uncons_word()?;
+            let value = self.unbox_word(word, repr);
+            self.drop_value(word)?;
+            join_args.push(BlockArg::Value(value));
+        }
+        self.b.ins().jump(join, &join_args);
+        self.b.switch_to_block(join);
+        self.uncons_scalar = number;
+        Ok(result)
+    }
+
+    /// Clears the slot at `place` that a step moved its element out of.
+    fn clear_slot(&mut self, place: Value) {
+        let cleared = self.b.ins().iconst(types::I64, imm(abi::list::CLEARED));
+        self.store_word(cleared, place, abi::list::LEAF_SLOTS_OFFSET);
+    }
+
+    /// The inline step that takes the first element (`list_step`).
+    fn step_front(&mut self, at: &EndLeaf, st: &Step) -> Result<(), CodegenError> {
+        let first = self.load_word(at.field, 8);
+        let next = self.b.ins().iadd_imm_s(first, 1);
+        let more = self.b.ins().icmp(IntCC::UnsignedLessThan, next, st.slots);
+        // The spread reaches the list's end.
+        let whole = self
+            .b
+            .ins()
+            .icmp(IntCC::SignedGreaterThanOrEqual, st.end, st.len);
+        let fits = self.b.ins().band(st.several, more);
+        let fits = self.b.ins().band(fits, whole);
+        self.unless(fits, st.slow);
+        let place = self.slot(at.leaf, first);
+        let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
+        let moved = self.b.create_block();
+        let shared = self.b.create_block();
+        match st.scalar {
+            None => {
                 let taken = self.b.create_block();
                 self.b.ins().brif(at.unique, moved, &[], shared, &[]);
                 self.b.switch_to_block(moved);
-                let cleared = self.b.ins().iconst(types::I64, imm(abi::list::CLEARED));
-                self.store_word(cleared, place, abi::list::LEAF_SLOTS_OFFSET);
+                self.clear_slot(place);
                 self.b.ins().jump(taken, &[]);
                 self.b.switch_to_block(shared);
                 self.dup(elem)?;
                 self.b.ins().jump(taken, &[]);
                 self.b.switch_to_block(taken);
                 self.store_word(next, at.field, 8);
-                self.bump_len(list, len, -1);
-                self.b.ins().stack_store(types::I64, elem, out, 0);
+                self.bump_len(st.list, st.len, -1);
+                self.b.ins().stack_store(types::I64, elem, st.out, 0);
+                self.b.ins().jump(st.join, &[BlockArg::Value(st.list)]);
             }
-            End::Back => {
-                // The element is the list's last, and the spread is
-                // everything before it.
-                let others = self.b.ins().iadd_imm_s(len, -1);
-                let whole = self.b.ins().icmp(IntCC::Equal, end, others);
-                let fits = self.b.ins().band(several, whole);
-                let moved = self.b.create_block();
-                let shared = self.b.create_block();
+            Some(repr) => {
+                // The number, right after its box's word (`list_step`).
+                let value = self.unbox_word(elem, repr);
                 self.b.ins().brif(at.unique, moved, &[], shared, &[]);
                 self.b.switch_to_block(moved);
-                let at_end = self.ends_with_leaf(&at, list, len, slots);
-                let more = self
-                    .b
-                    .ins()
-                    .icmp_imm_s(IntCC::UnsignedGreaterThan, slots, 1);
-                let fits_here = self.b.ins().band(fits, more);
-                let fits_here = self.b.ins().band(fits_here, at_end);
-                self.unless(fits_here, slow);
-                let index = self.b.ins().iadd_imm_s(slots, -1);
-                let place = self.slot(at.leaf, index);
-                let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
-                let shrunk = self.b.ins().iadd_imm_s(meta, -1);
-                self.store_word(shrunk, at.leaf, abi::list::LEAF_META_OFFSET);
-                let taken = self.b.create_block();
-                let taken_elem = self.b.append_block_param(taken, types::I64);
-                self.b.ins().jump(taken, &[BlockArg::Value(elem)]);
-                // A big root's tail leaf is always unique, so a shared
-                // leaf is a root's tree: the element is at `offset +
-                // len - 1`, and only the length changes.
+                self.clear_slot(place);
+                self.store_word(next, at.field, 8);
+                self.bump_len(st.list, st.len, -1);
+                self.yield_number(Some(elem), value, st.list, st.join)?;
                 self.b.switch_to_block(shared);
-                let fits_here = self.b.ins().band(fits, at.small);
-                self.unless(fits_here, slow);
-                let offset = self.load_word(list, abi::list::ROOT_OFFSET_OFFSET);
-                let index = self.b.ins().iadd(offset, others);
-                let place = self.slot(at.leaf, index);
-                let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
-                self.dup(elem)?;
-                self.b.ins().jump(taken, &[BlockArg::Value(elem)]);
-                self.b.switch_to_block(taken);
-                self.bump_len(list, len, -1);
-                self.b.ins().stack_store(types::I64, taken_elem, out, 0);
+                self.store_word(next, at.field, 8);
+                self.bump_len(st.list, st.len, -1);
+                self.yield_number(None, value, st.list, st.join)?;
             }
         }
-        self.b.ins().jump(join, &[BlockArg::Value(list)]);
-        self.b.switch_to_block(slow);
-        let mut vals = vec![self.ctx()?];
-        vals.extend(self.operands(args)?);
-        vals.push(self.b.ins().stack_addr(types::I64, out, 0));
-        let rest = self.edge_runtime_value(RuntimeFunc::ListUnconsOwned, &vals)?;
-        self.b.ins().jump(join, &[BlockArg::Value(rest)]);
-        self.b.switch_to_block(join);
-        Ok(result)
+        Ok(())
+    }
+
+    /// The inline step that takes the last element (`list_step`).
+    fn step_back(&mut self, at: &EndLeaf, st: &Step) -> Result<(), CodegenError> {
+        // The element is the list's last, and the spread is
+        // everything before it.
+        let others = self.b.ins().iadd_imm_s(st.len, -1);
+        let whole = self.b.ins().icmp(IntCC::Equal, st.end, others);
+        let fits = self.b.ins().band(st.several, whole);
+        let moved = self.b.create_block();
+        let shared = self.b.create_block();
+        // Where the word goes into the slot, when the step yields
+        // no number.
+        let taken = st.scalar.is_none().then(|| {
+            let taken = self.b.create_block();
+            let elem = self.b.append_block_param(taken, types::I64);
+            (taken, elem)
+        });
+        self.b.ins().brif(at.unique, moved, &[], shared, &[]);
+        self.b.switch_to_block(moved);
+        let at_end = self.ends_with_leaf(at, st.list, st.len, st.slots);
+        let more = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::UnsignedGreaterThan, st.slots, 1);
+        let fits_here = self.b.ins().band(fits, more);
+        let fits_here = self.b.ins().band(fits_here, at_end);
+        self.unless(fits_here, st.slow);
+        let index = self.b.ins().iadd_imm_s(st.slots, -1);
+        let place = self.slot(at.leaf, index);
+        let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
+        let value = st.scalar.map(|repr| self.unbox_word(elem, repr));
+        let shrunk = self.b.ins().iadd_imm_s(st.meta, -1);
+        self.store_word(shrunk, at.leaf, abi::list::LEAF_META_OFFSET);
+        self.back_tail(st, elem, true, value, taken)?;
+        // A big root's tail leaf is always unique, so a shared
+        // leaf is a root's tree: the element is at `offset +
+        // len - 1`, and only the length changes.
+        self.b.switch_to_block(shared);
+        let fits_here = self.b.ins().band(fits, at.small);
+        self.unless(fits_here, st.slow);
+        let offset = self.load_word(st.list, abi::list::ROOT_OFFSET_OFFSET);
+        let index = self.b.ins().iadd(offset, others);
+        let place = self.slot(at.leaf, index);
+        let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
+        // The number, right after its box's word (`list_step`).
+        let value = st.scalar.map(|repr| self.unbox_word(elem, repr));
+        if value.is_none() {
+            self.dup(elem)?;
+        }
+        self.back_tail(st, elem, false, value, taken)?;
+        if let Some((taken, taken_elem)) = taken {
+            self.b.switch_to_block(taken);
+            self.bump_len(st.list, st.len, -1);
+            self.b.ins().stack_store(types::I64, taken_elem, st.out, 0);
+            self.b.ins().jump(st.join, &[BlockArg::Value(st.list)]);
+        }
+        Ok(())
+    }
+
+    /// The end of a path of the step at the back, from a unique leaf
+    /// (`moved`) or a shared one: a jump to `taken` with the element's
+    /// word, or, when the step yields the element's number `value`, the
+    /// length written and the number yielded.
+    fn back_tail(
+        &mut self,
+        st: &Step,
+        elem: Value,
+        moved: bool,
+        value: Option<Value>,
+        taken: Option<(Block, Value)>,
+    ) -> Result<(), CodegenError> {
+        match (value, taken) {
+            (Some(value), _) => {
+                self.bump_len(st.list, st.len, -1);
+                self.yield_number(moved.then_some(elem), value, st.list, st.join)
+            }
+            (None, Some((taken, _))) => {
+                self.b.ins().jump(taken, &[BlockArg::Value(elem)]);
+                Ok(())
+            }
+            (None, None) => Err(CodegenError::ice(
+                "a pattern step with neither a slot nor a number",
+            )),
+        }
+    }
+
+    /// The end of an inline step that yields the element's number
+    /// `value`, once the root says the element is gone: a jump to `join`
+    /// with the list and the number, after a drop of the element's word
+    /// when it was `moved` out of its leaf, whose reference is then the
+    /// step's.
+    fn yield_number(
+        &mut self,
+        moved: Option<Value>,
+        value: Value,
+        list: Value,
+        join: Block,
+    ) -> Result<(), CodegenError> {
+        if let Some(elem) = moved {
+            self.drop_value(elem)?;
+        }
+        self.b
+            .ins()
+            .jump(join, &[BlockArg::Value(list), BlockArg::Value(value)]);
+        Ok(())
     }
 }

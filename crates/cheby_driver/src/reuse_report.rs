@@ -1075,7 +1075,12 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ListUncons
                     | RuntimeFn::ListUnconsOwned
                     | RuntimeFn::ListUnconsHead
-                    | RuntimeFn::MapFind => false,
+                    | RuntimeFn::MapFind
+                    // A raw number holds nothing.
+                    | RuntimeFn::ListUnconsHeadFloat
+                    | RuntimeFn::ListUnconsHeadF32
+                    | RuntimeFn::ListGetFloat
+                    | RuntimeFn::ListGetF32 => false,
                 }
             }
             Rvalue::Call { .. } | Rvalue::CallForeign { .. } => {

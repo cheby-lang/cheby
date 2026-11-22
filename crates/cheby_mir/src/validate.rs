@@ -60,7 +60,10 @@
 //! A list pattern step read in one call (D-909): a `list_uncons` defines
 //! its result and the next statement of its block is the
 //! `list_uncons_head` that takes its element, which follows nothing else;
-//! `list_uncons_owned` appears only after counting.
+//! `list_uncons_owned` appears only after counting, and so do the reads
+//! of an element as a raw number that counting makes of a head or a
+//! `list_get` and its `unbox` (`list_uncons_head_float`,
+//! `list_get_float` and their `F32` forms).
 //!
 //! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
 //! only to `resume` and that normal control flow does not reach, are left
@@ -981,8 +984,9 @@ impl FnCx<'_> {
     /// A list pattern step read in one call (D-909): each `list_uncons`
     /// and `list_uncons_owned` defines its result and is followed at once,
     /// in its block, by the `list_uncons_head` that takes the element it
-    /// kept, and each `list_uncons_head` follows one; `list_uncons_owned`,
-    /// which the RC pass emits, only once counts are placed.
+    /// kept, and each `list_uncons_head` follows one; `list_uncons_owned`
+    /// and the reads as a raw number, which the RC pass emits, only once
+    /// counts are placed.
     fn check_uncons(&mut self, stage: Stage) {
         let f = self.f;
         let counted = self.counted(stage);
@@ -1008,8 +1012,15 @@ impl FnCx<'_> {
                 let Some((func, assigned)) = call else {
                     continue;
                 };
+                if func.scalar_read().is_some() && !counted {
+                    self.err(format!(
+                        "bb{} statement {j}: {} before counting",
+                        id.as_u32(),
+                        func.name()
+                    ));
+                }
                 let uncons = matches!(func, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned);
-                if !uncons && func != RuntimeFn::ListUnconsHead {
+                if !uncons && !func.is_uncons_head() {
                     continue;
                 }
                 if !assigned {
@@ -1026,10 +1037,11 @@ impl FnCx<'_> {
                     ));
                 }
                 let paired = if uncons {
-                    matches!(
-                        j.checked_add(1).and_then(|k| funcs.get(k)),
-                        Some(Some((RuntimeFn::ListUnconsHead, _)))
-                    )
+                    j.checked_add(1)
+                        .and_then(|k| funcs.get(k))
+                        .copied()
+                        .flatten()
+                        .is_some_and(|(next, _)| next.is_uncons_head())
                 } else {
                     matches!(
                         j.checked_sub(1).and_then(|k| funcs.get(k)),
@@ -2260,7 +2272,7 @@ impl FnCx<'_> {
 /// Whether `stmt` only releases or adds references, running nothing a
 /// handle could observe (D-851): `dup`, `drop`,
 /// `drop_reuse` and specialized drops, and the `list_uncons_head` that
-/// completes the instruction before it (D-909).
+/// completes the instruction before it (D-909), also as a raw number.
 fn releases_only(stmt: &Stmt) -> bool {
     matches!(
         stmt,
@@ -2273,7 +2285,9 @@ fn releases_only(stmt: &Stmt) -> bool {
                     // code: what counting releases after that instruction
                     // follows it (D-909).
                     | Rvalue::CallRuntime {
-                        func: RuntimeFn::ListUnconsHead,
+                        func: RuntimeFn::ListUnconsHead
+                            | RuntimeFn::ListUnconsHeadFloat
+                            | RuntimeFn::ListUnconsHeadF32,
                         ..
                     },
                 ..

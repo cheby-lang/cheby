@@ -1455,11 +1455,31 @@ pub enum RuntimeFn {
     /// negative included. Result owned. Consumes both even when it raises
     /// (D-698), as [`Self::ListPush`] does.
     ListSet,
+    /// `() -> Float`: the element that the [`Self::ListUncons`] or
+    /// [`Self::ListUnconsOwned`] right before it kept, a `Float`, as its
+    /// raw value, with the element's reference given up: the
+    /// [`Self::ListUnconsHead`], the `unbox` and the `drop` of an element
+    /// whose only use is that `unbox`, in one step. Only the RC pass emits
+    /// it ([`crate::rc`]). Like the head it replaces, it must be the very
+    /// next statement after the step, and it cannot raise.
+    ListUnconsHeadFloat,
+    /// `() -> F32`: [`Self::ListUnconsHeadFloat`] for an element of type
+    /// `F32`.
+    ListUnconsHeadF32,
+    /// `(list borrowed, index: Int) -> Float`: the element at `index`, a
+    /// `Float`, as its raw value, which lowering has checked is in range:
+    /// the [`Self::ListGet`], the `unbox` and the `drop` of an element
+    /// whose only use is that `unbox`, in one step. Only the RC pass emits
+    /// it ([`crate::rc`]). It cannot raise.
+    ListGetFloat,
+    /// `(list borrowed, index: Int) -> F32`: [`Self::ListGetFloat`] for
+    /// an element of type `F32`.
+    ListGetF32,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 25] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1481,11 +1501,72 @@ impl RuntimeFn {
         Self::MapFind,
         Self::MapValueAt,
         Self::ListSet,
+        Self::ListUnconsHeadFloat,
+        Self::ListUnconsHeadF32,
+        Self::ListGetFloat,
+        Self::ListGetF32,
     ];
 
+    /// Whether the helper is a head of the pattern step right before it
+    /// (D-909): [`Self::ListUnconsHead`] or one that reads the element as
+    /// a raw number.
+    #[must_use]
+    pub const fn is_uncons_head(self) -> bool {
+        matches!(
+            self,
+            Self::ListUnconsHead | Self::ListUnconsHeadFloat | Self::ListUnconsHeadF32
+        )
+    }
+
+    /// For a helper that reads a list's element as a raw number, the
+    /// helper that reads the element as a uniform word and the number's
+    /// representation; `None` for every other helper.
+    #[must_use]
+    pub const fn scalar_read(self) -> Option<(Self, Repr)> {
+        match self {
+            Self::ListUnconsHeadFloat => Some((Self::ListUnconsHead, Repr::Float)),
+            Self::ListUnconsHeadF32 => Some((Self::ListUnconsHead, Repr::F32)),
+            Self::ListGetFloat => Some((Self::ListGet, Repr::Float)),
+            Self::ListGetF32 => Some((Self::ListGet, Repr::F32)),
+            Self::StrWithCapacity
+            | Self::StrAppend
+            | Self::StrEq
+            | Self::ListPush
+            | Self::ListAppend
+            | Self::ListLength
+            | Self::ListGet
+            | Self::ListSlice
+            | Self::ListSliceOwned
+            | Self::Equal
+            | Self::Debug
+            | Self::EffectCheck
+            | Self::ScopeOpen
+            | Self::ScopeClose
+            | Self::ListUncons
+            | Self::ListUnconsOwned
+            | Self::ListUnconsHead
+            | Self::ListPrepend
+            | Self::MapFind
+            | Self::MapValueAt
+            | Self::ListSet => None,
+        }
+    }
+
+    /// The helper that reads the element `self` reads, a
+    /// [`Self::ListUnconsHead`] or a [`Self::ListGet`], as a raw number of
+    /// `repr`, when there is one: `Float` and `F32`, whose uniform words
+    /// are always boxes (D-521).
+    #[must_use]
+    pub fn as_scalar(self, repr: Repr) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|f| f.scalar_read() == Some((self, repr)))
+    }
+
     /// Whether a call of the helper may start or pass on an unwinding
-    /// (D-698): false for `StrEq`, `ListLength`, `ListGet`,
-    /// `ListUnconsHead` and `MapValueAt`, true for every other helper.
+    /// (D-698): false for `StrEq`, `ListLength`, `ListGet`, the heads of a
+    /// pattern step, `MapValueAt` and the reads of an element as a raw
+    /// number, true for every other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
         !matches!(
@@ -1495,6 +1576,10 @@ impl RuntimeFn {
                 | Self::ListGet
                 | Self::ListUnconsHead
                 | Self::MapValueAt
+                | Self::ListUnconsHeadFloat
+                | Self::ListUnconsHeadF32
+                | Self::ListGetFloat
+                | Self::ListGetF32
         )
     }
 
@@ -1513,7 +1598,9 @@ impl RuntimeFn {
             Self::ListPush | Self::ListPrepend => &[(Value, Owned), (Value, Owned)],
             Self::ListSet => &[(Value, Owned), (Int, Borrowed), (Value, Owned)],
             Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
-            Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
+            Self::ListGet | Self::ListGetFloat | Self::ListGetF32 => {
+                &[(Value, Borrowed), (Int, Borrowed)]
+            }
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
             Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
             Self::ScopeOpen => &[(Bool, Borrowed), (Int, Borrowed), (Int, Borrowed)],
@@ -1530,7 +1617,7 @@ impl RuntimeFn {
                 (Int, Borrowed),
                 (Int, Borrowed),
             ],
-            Self::ListUnconsHead => &[],
+            Self::ListUnconsHead | Self::ListUnconsHeadFloat | Self::ListUnconsHeadF32 => &[],
         }
     }
 
@@ -1557,6 +1644,8 @@ impl RuntimeFn {
             Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
             Self::MapFind => Some(Repr::U64),
+            Self::ListUnconsHeadFloat | Self::ListGetFloat => Some(Repr::Float),
+            Self::ListUnconsHeadF32 | Self::ListGetF32 => Some(Repr::F32),
             Self::EffectCheck => None,
         }
     }
@@ -1586,6 +1675,10 @@ impl RuntimeFn {
             Self::MapFind => "map_find",
             Self::MapValueAt => "map_value_at",
             Self::ListSet => "list_set",
+            Self::ListUnconsHeadFloat => "list_uncons_head_float",
+            Self::ListUnconsHeadF32 => "list_uncons_head_f32",
+            Self::ListGetFloat => "list_get_float",
+            Self::ListGetF32 => "list_get_f32",
         }
     }
 }

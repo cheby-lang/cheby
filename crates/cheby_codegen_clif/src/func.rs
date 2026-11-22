@@ -130,6 +130,8 @@ fn build(
         tokens: FxHashSet::default(),
         call_tag: None,
         uncons_slot: None,
+        next_scalar_head: None,
+        uncons_scalar: None,
         self_loop: None,
     };
     body(&mut t)?;
@@ -205,6 +207,14 @@ pub(crate) struct Translator<'a, 'f> {
     /// The stack slot where a `list_uncons` writes the element that the
     /// `list_uncons_head` right after it reads, made at the first one.
     pub(crate) uncons_slot: Option<StackSlot>,
+    /// The representation of the number that the statement after the one
+    /// being translated reads, when it is a head of a pattern step read
+    /// as a raw number (`list_uncons_head_float`): the inline step then
+    /// yields the number itself (`list_ends`).
+    pub(crate) next_scalar_head: Option<Repr>,
+    /// The number an inline pattern step yielded for the head right after
+    /// it, which takes it.
+    pub(crate) uncons_scalar: Option<Value>,
     /// The loop header of a function whose self tail calls jump inside it
     /// ([`Translator::self_call`]): the block after the entry block that
     /// takes the parameters after `ctx` and makes the entry check.
@@ -461,6 +471,22 @@ pub(crate) fn write_external_drops<M: cranelift_module::Module>(
     Ok(())
 }
 
+/// The representation of the number `stmt` reads when it is a head of a
+/// pattern step read as a raw number (`list_uncons_head_float`).
+fn scalar_head(stmt: &Stmt) -> Option<Repr> {
+    let Stmt::Assign {
+        value: Rvalue::CallRuntime { func, .. },
+        ..
+    } = stmt
+    else {
+        return None;
+    };
+    match func.scalar_read() {
+        Some((cheby_mir::RuntimeFn::ListUnconsHead, repr)) => Some(repr),
+        Some(_) | None => None,
+    }
+}
+
 /// Whether statement `i` of `stmts` is a foreign call whose
 /// result a later statement of the block, after nothing but `dup`s and
 /// `drop`s, hands to `cheby_rt_ffi_value` or `cheby_rt_ffi_external` (as
@@ -603,7 +629,9 @@ impl Translator<'_, '_> {
                 // D-938: every instruction a statement emits at its
                 // position.
                 self.set_pos(block.pos_at(i));
+                self.next_scalar_head = block.stmts.get(i.saturating_add(1)).and_then(scalar_head);
                 self.stmt(stmt)?;
+                self.next_scalar_head = None;
             }
             self.pad = pad_of(block.stmts.len(), self).transpose()?;
             self.set_pos(block.term_pos());

@@ -12,6 +12,9 @@
 //!   slot and `dup`s the element, as the helper does. Whose list it is
 //!   does not matter, so any count, a shared one or a static list's
 //!   included, takes this path.
+//!   `list_get_float` (and its `F32` form), a `list_get` whose element is
+//!   only unboxed and dropped (`cheby_mir::rc`), loads the number through
+//!   the slot's word instead, with no count touched.
 //! - `list_set` (a direct call of `list::set`) owns its list and its
 //!   item. When the root and the leaf are both unique and the index is in
 //!   range, it stores the item in the slot and releases the element that
@@ -28,12 +31,13 @@
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{BlockArg, InstBuilder, Value, types};
 
-use cheby_mir::{Operand, RuntimeFn};
+use cheby_mir::{Operand, Repr, RuntimeFn};
 use cheby_runtime::abi;
 
 use crate::CodegenError;
 use crate::func::Translator;
 use crate::runtime::RuntimeFunc;
+use crate::sig::repr_type;
 
 /// A header word as a CLIF constant.
 const fn imm(word: u64) -> i64 {
@@ -48,11 +52,15 @@ impl Translator<'_, '_> {
         helper: RuntimeFn,
         args: &[Operand],
     ) -> Result<Option<Value>, CodegenError> {
+        if let (Some((RuntimeFn::ListGet, repr)), [list, index]) = (helper.scalar_read(), args) {
+            // Also under `checked_rc`, where it is the helper's call.
+            return self.list_get(list, index, Some(repr)).map(Some);
+        }
         if self.opts.checked_rc {
             return Ok(None);
         }
         match (helper, args) {
-            (RuntimeFn::ListGet, [list, index]) => self.list_get(list, index).map(Some),
+            (RuntimeFn::ListGet, [list, index]) => self.list_get(list, index, None).map(Some),
             (RuntimeFn::ListSet, [list, index, item]) => self.list_set(list, index, item).map(Some),
             _ => Ok(None),
         }
@@ -64,14 +72,39 @@ impl Translator<'_, '_> {
         self.b.ins().icmp_imm_s(IntCC::Equal, layout, i64::from(id))
     }
 
-    /// `list_get(list, index)`, `index` in range: element `index`, dup'd.
-    fn list_get(&mut self, list: &Operand, index: &Operand) -> Result<Value, CodegenError> {
+    /// `list_get(list, index)`, `index` in range: element `index`, dup'd,
+    /// or, for `list_get_float` (`scalar`), the number in it.
+    ///
+    /// The number is read with no count touched: a load of the element's
+    /// word from the leaf, then of the number through it. The list is
+    /// borrowed for the statement, so whoever lends it holds the root, the
+    /// root holds the leaf and the leaf holds the box, whatever their
+    /// counts, and nothing runs between the two loads that could release
+    /// any of them, no call and no yield point. The helper's path, and
+    /// every read under `checked_rc`, unbox the owned word it returns and
+    /// drop it.
+    fn list_get(
+        &mut self,
+        list: &Operand,
+        index: &Operand,
+        scalar: Option<Repr>,
+    ) -> Result<Value, CodegenError> {
         let list = self.operand(list)?;
         let index = self.operand(index)?;
+        if self.opts.checked_rc {
+            let called = self.runtime_value(RuntimeFunc::ListGet, &[list, index])?;
+            let repr = scalar
+                .ok_or_else(|| CodegenError::ice("an inline `list_get` under `checked_rc`"))?;
+            let number = self.unbox_word(called, repr);
+            self.drop_value(called)?;
+            return Ok(number);
+        }
         let slow = self.b.create_block();
         self.b.set_cold_block(slow);
         let join = self.b.create_block();
-        let result = self.b.append_block_param(join, types::I64);
+        let result = self
+            .b
+            .append_block_param(join, scalar.map_or(types::I64, repr_type));
         let root = self.layout_is(list, abi::list::ROOT_LAYOUT);
         self.unless(root, slow);
         let leaf = self.load_word(list, abi::list::ROOT_TREE_OFFSET);
@@ -82,11 +115,23 @@ impl Translator<'_, '_> {
         let at = self.b.ins().iadd(offset, index);
         let place = self.slot(leaf, at);
         let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
-        self.dup(elem)?;
-        self.b.ins().jump(join, &[BlockArg::Value(elem)]);
+        let read = if let Some(repr) = scalar {
+            self.unbox_word(elem, repr)
+        } else {
+            self.dup(elem)?;
+            elem
+        };
+        self.b.ins().jump(join, &[BlockArg::Value(read)]);
         self.b.switch_to_block(slow);
         let called = self.runtime_value(RuntimeFunc::ListGet, &[list, index])?;
-        self.b.ins().jump(join, &[BlockArg::Value(called)]);
+        let read = if let Some(repr) = scalar {
+            let number = self.unbox_word(called, repr);
+            self.drop_value(called)?;
+            number
+        } else {
+            called
+        };
+        self.b.ins().jump(join, &[BlockArg::Value(read)]);
         self.b.switch_to_block(join);
         Ok(result)
     }
