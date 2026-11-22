@@ -7,10 +7,14 @@
 //! that the root reaches directly (`cheby_runtime::abi::list`): the tree
 //! itself when a root's list is one leaf, and a big root's head or tail
 //! leaf. The inline code tests the root's whole header against the two
-//! headers of a unique root, takes that leaf, tests its header against a
-//! unique leaf's, checks that the element is there and is not the leaf's
-//! last, and then moves the element out and writes the position and the
-//! length. It reads everything it tests before it writes anything, so a
+//! headers of a unique root, takes that leaf, tests that it is a leaf,
+//! checks that the element is there and is not the leaf's last, and then
+//! takes the element and writes the position and the length. From a
+//! leaf whose count is one the element moves out and its slot is cleared
+//! (or the leaf shortened, at the back). From a leaf that another list
+//! holds, as when a function walks a list its caller still uses, the
+//! element is dup'd and the leaf is not written: the root's view moves
+//! past it. It reads everything it tests before it writes anything, so a
 //! list it cannot serve reaches the helper unchanged. What it does is
 //! what the helper's own fast path does
 //! (`cheby_runtime::list::buffers`), without the call.
@@ -54,6 +58,9 @@ struct EndLeaf {
     field: Value,
     /// The leaf.
     leaf: Value,
+    /// Whether the leaf's count is one: the element moves out of it.
+    /// Otherwise another list holds the leaf, and the element is dup'd.
+    unique: Value,
 }
 
 impl Translator<'_, '_> {
@@ -108,10 +115,10 @@ impl Translator<'_, '_> {
         self.b.switch_to_block(next);
     }
 
-    /// The leaf at `end` of `list` when the list's count is one and the
-    /// leaf's is too, with a branch to `slow` for any other list: a
-    /// root's tree, when it is a leaf, or a big root's head or tail leaf.
-    /// Nothing is written.
+    /// The leaf at `end` of `list` when the list's count is one, with a
+    /// branch to `slow` for any other list: a root's tree, when it is a
+    /// leaf, or a big root's head or tail leaf. The leaf's own count may
+    /// be any. Nothing is written.
     fn end_leaf(&mut self, list: Value, end: End, slow: Block) -> Result<EndLeaf, CodegenError> {
         // The helper counts the update while events are counted.
         self.unless_counting_off(slow)?;
@@ -152,12 +159,26 @@ impl Translator<'_, '_> {
         let leaf = self.load_word(field, 0);
         self.unless(leaf, slow);
         let leaf_header = self.load_word(leaf, abi::HEADER_RC_OFFSET);
-        let unique_leaf =
+        let unique =
             self.b
                 .ins()
                 .icmp_imm_s(IntCC::Equal, leaf_header, imm(abi::list::UNIQUE_LEAF));
-        self.unless(unique_leaf, slow);
-        Ok(EndLeaf { small, field, leaf })
+        // A root's tree may be a branch, whose words are not slots.
+        let layout = self
+            .b
+            .ins()
+            .ushr_imm_u(leaf_header, i64::from(abi::HEADER_LAYOUT_SHIFT));
+        let is_leaf =
+            self.b
+                .ins()
+                .icmp_imm_s(IntCC::Equal, layout, i64::from(abi::list::LEAF_LAYOUT));
+        self.unless(is_leaf, slow);
+        Ok(EndLeaf {
+            small,
+            field,
+            leaf,
+            unique,
+        })
     }
 
     /// Branches to `slow` unless the runtime's event counting is off: a
@@ -207,10 +228,11 @@ impl Translator<'_, '_> {
     /// `list_uncons_owned(list, at, start, end)` for the step that takes
     /// the first or the last element and leaves the rest, given what the
     /// arguments' shape shows of it; `end` is checked against the length
-    /// here. The element moves out of its slot into the function's
-    /// `list_uncons` slot (D-909), and the list is the rest. The step
-    /// that would leave its leaf empty goes to the helper, which
-    /// releases the leaf.
+    /// here. The element goes into the function's `list_uncons` slot
+    /// (D-909), and the list is the rest. It moves out of a unique leaf;
+    /// from a leaf that another list holds it is dup'd, and the leaf is
+    /// not written. The step that would use up the leaf goes to the
+    /// helper, which releases the leaf and finds the next one.
     fn list_step(
         &mut self,
         which: End,
@@ -241,33 +263,63 @@ impl Translator<'_, '_> {
                 self.unless(fits, slow);
                 let place = self.slot(at.leaf, first);
                 let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
+                let moved = self.b.create_block();
+                let shared = self.b.create_block();
+                let taken = self.b.create_block();
+                self.b.ins().brif(at.unique, moved, &[], shared, &[]);
+                self.b.switch_to_block(moved);
                 let cleared = self.b.ins().iconst(types::I64, imm(abi::list::CLEARED));
                 self.store_word(cleared, place, abi::list::LEAF_SLOTS_OFFSET);
+                self.b.ins().jump(taken, &[]);
+                self.b.switch_to_block(shared);
+                self.dup(elem)?;
+                self.b.ins().jump(taken, &[]);
+                self.b.switch_to_block(taken);
                 self.store_word(next, at.field, 8);
                 self.bump_len(list, len, -1);
                 self.b.ins().stack_store(types::I64, elem, out, 0);
             }
             End::Back => {
+                // The element is the list's last, and the spread is
+                // everything before it.
+                let others = self.b.ins().iadd_imm_s(len, -1);
+                let whole = self.b.ins().icmp(IntCC::Equal, end, others);
+                let fits = self.b.ins().band(several, whole);
+                let moved = self.b.create_block();
+                let shared = self.b.create_block();
+                self.b.ins().brif(at.unique, moved, &[], shared, &[]);
+                self.b.switch_to_block(moved);
                 let at_end = self.ends_with_leaf(&at, list, len, slots);
                 let more = self
                     .b
                     .ins()
                     .icmp_imm_s(IntCC::UnsignedGreaterThan, slots, 1);
-                // The element is the list's last, and the spread is
-                // everything before it.
-                let others = self.b.ins().iadd_imm_s(len, -1);
-                let whole = self.b.ins().icmp(IntCC::Equal, end, others);
-                let fits = self.b.ins().band(several, more);
-                let fits = self.b.ins().band(fits, at_end);
-                let fits = self.b.ins().band(fits, whole);
-                self.unless(fits, slow);
+                let fits_here = self.b.ins().band(fits, more);
+                let fits_here = self.b.ins().band(fits_here, at_end);
+                self.unless(fits_here, slow);
                 let index = self.b.ins().iadd_imm_s(slots, -1);
                 let place = self.slot(at.leaf, index);
                 let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
                 let shrunk = self.b.ins().iadd_imm_s(meta, -1);
                 self.store_word(shrunk, at.leaf, abi::list::LEAF_META_OFFSET);
+                let taken = self.b.create_block();
+                let taken_elem = self.b.append_block_param(taken, types::I64);
+                self.b.ins().jump(taken, &[BlockArg::Value(elem)]);
+                // A big root's tail leaf is always unique, so a shared
+                // leaf is a root's tree: the element is at `offset +
+                // len - 1`, and only the length changes.
+                self.b.switch_to_block(shared);
+                let fits_here = self.b.ins().band(fits, at.small);
+                self.unless(fits_here, slow);
+                let offset = self.load_word(list, abi::list::ROOT_OFFSET_OFFSET);
+                let index = self.b.ins().iadd(offset, others);
+                let place = self.slot(at.leaf, index);
+                let elem = self.load_word(place, abi::list::LEAF_SLOTS_OFFSET);
+                self.dup(elem)?;
+                self.b.ins().jump(taken, &[BlockArg::Value(elem)]);
+                self.b.switch_to_block(taken);
                 self.bump_len(list, len, -1);
-                self.b.ins().stack_store(types::I64, elem, out, 0);
+                self.b.ins().stack_store(types::I64, taken_elem, out, 0);
             }
         }
         self.b.ins().jump(join, &[BlockArg::Value(list)]);

@@ -23,7 +23,7 @@ use proptest::prelude::*;
 
 use super::kernels::*;
 use super::node::{M, Node, Root, View, drop_word, dup_word, empty};
-use super::{from_iter, iter, ops, tree};
+use super::{buffers, from_iter, iter, ops, tree};
 use crate::abi::{self, Word};
 use crate::alloc::live;
 use crate::string::{new_string, to_rust_string};
@@ -1918,6 +1918,122 @@ fn a_step_that_is_not_at_an_end_takes_the_checked_path() {
             drop_word(head);
             check(rest, &model[2..]);
             release(rest);
+        }
+    });
+}
+
+/// A walk from the front over a list that another list holds, the shape
+/// of a function that walks a list its caller still uses. The first step
+/// copies the shared root and the second gives the copy its first leaf,
+/// shared. From then on the fast path serves every step until one element
+/// is left, the step that uses up a head leaf included: it shares the
+/// tree's next leaf in place. Each element is dup'd, and the kept list is
+/// unchanged.
+#[test]
+fn a_walk_over_a_shared_list_stays_on_the_fast_path() {
+    balanced(|| {
+        for n in [2_i64, 3, 32, 33, 34, 64, 65, 100, sized(1_100, 200)] {
+            let model: Vec<i64> = (0..n).collect();
+            let original = list(&model);
+            dup_word(original.word());
+            let mut left = model.clone();
+            let mut xs = original;
+            for _ in 0..2.min(n - 1) {
+                let (head, rest) = step_owned(xs, true);
+                assert_eq!(value(head), left.remove(0), "n {n}");
+                drop_word(head);
+                xs = rest;
+            }
+            while left.len() > 1 {
+                // SAFETY: a live list that only this walk holds.
+                let Some(head) = (unsafe { buffers::uncons_front_fast(xs.word()) }) else {
+                    panic!("n {n}: the fast path declined {}", left[0]);
+                };
+                let want = left.remove(0);
+                assert_eq!(value(head), want, "n {n}");
+                if !abi::is_tagged_int(head) {
+                    assert_eq!(count(head), 2, "n {n}: {want} is dup'd, not moved");
+                }
+                drop_word(head);
+                if thorough(left.len()) {
+                    peek(xs, &left);
+                }
+            }
+            // The last element is the helper's: the step empties the list.
+            // SAFETY: as above.
+            assert!(unsafe { buffers::uncons_front_fast(xs.word()) }.is_none());
+            let (head, rest) = step_owned(xs, true);
+            assert_eq!(value(head), left.remove(0));
+            drop_word(head);
+            check(rest, &[]);
+            release(rest);
+            check(original, &model);
+            release(original);
+        }
+    });
+}
+
+/// The same walk at the back: a root whose one leaf another list holds
+/// gives up its last element with a dup, leaving the leaf as it is.
+#[test]
+fn a_walk_from_the_back_of_a_shared_leaf_stays_on_the_fast_path() {
+    balanced(|| {
+        for n in [2_i64, 3, 31, 32] {
+            let model: Vec<i64> = (0..n).collect();
+            let original = list(&model);
+            dup_word(original.word());
+            let mut left = model.clone();
+            let (head, xs) = step_owned(original, false);
+            assert_eq!(Some(value(head)), left.pop());
+            drop_word(head);
+            while left.len() > 1 {
+                // SAFETY: a live list that only this walk holds.
+                let Some(head) = (unsafe { buffers::uncons_back_fast(xs.word()) }) else {
+                    panic!("n {n}: the fast path declined {left:?}");
+                };
+                assert_eq!(Some(value(head)), left.pop(), "n {n}");
+                drop_word(head);
+                peek(xs, &left);
+            }
+            let (head, rest) = step_owned(xs, false);
+            assert_eq!(Some(value(head)), left.pop());
+            drop_word(head);
+            release(rest);
+            check(original, &model);
+            release(original);
+        }
+    });
+}
+
+/// A walk over a list whose front only it holds and whose back another
+/// list shares: the front leaves holes as the walk takes its leaves out,
+/// and the back's leaves are shared, each in turn, with the holes still
+/// before them. The shared part is unchanged.
+#[test]
+fn a_walk_from_unique_leaves_into_shared_ones_keeps_both_right() {
+    balanced(|| {
+        for (unique, shared) in [(64_i64, 70_i64), (100, 33), (sized(2_000, 300), 200)] {
+            let back: Vec<i64> = (unique..unique + shared).collect();
+            let kept = list(&back);
+            // `append` borrows its second list.
+            let front: Vec<i64> = (0..unique).collect();
+            let mut xs = ops::append(list(&front), kept);
+            let mut left: Vec<i64> = (0..unique + shared).collect();
+            let mut saw_holes = false;
+            while !left.is_empty() {
+                let (head, rest) = step_owned(xs, true);
+                assert_eq!(value(head), left.remove(0));
+                drop_word(head);
+                xs = rest;
+                saw_holes |= holey(xs);
+                if thorough(left.len()) {
+                    peek(xs, &left);
+                }
+            }
+            assert!(saw_holes || unique < 64, "{unique}: no holes");
+            release(xs);
+            check(kept, &back);
+            release(kept);
         }
     });
 }

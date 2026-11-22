@@ -1987,10 +1987,12 @@ fn owned_step_unit(front: bool) -> MirModule {
 /// An owned pattern step at either end of a list is written inline for a
 /// unique list whose leaf at that end is at hand, with the helper's call
 /// in a cold block for every other list: it tests the root's header
-/// against the two unique roots', the leaf's against a unique leaf's,
-/// and the counting flag, then moves the element into the step's stack
-/// slot and writes the position and the length. With `checked_rc` only
-/// the call is left.
+/// against the two unique roots', the leaf's layout and the counting
+/// flag, then takes the element into the step's stack slot and writes the
+/// position and the length. The element moves out of a leaf whose header
+/// is a unique leaf's, and is dup'd from one that another list holds, a
+/// walk over a list the caller still uses. With `checked_rc` only the
+/// call is left.
 #[test]
 #[cfg_attr(
     windows,
@@ -2013,6 +2015,18 @@ fn owned_list_steps_are_written_inline() {
             assert!(text.contains(&constant), "{front}: no {constant}\n{text}");
         }
         assert!(text.contains(sym::STATS_COUNTING), "{front}\n{text}");
+        // The leaf's layout, read from its header, and the dup of an
+        // element under a shared leaf, whose slow path is a call.
+        let shift = cheby_runtime::abi::HEADER_LAYOUT_SHIFT;
+        assert!(
+            text.contains(&format!("iconst.i64 {shift}\n")),
+            "{front}\n{text}"
+        );
+        assert!(
+            text.contains(&format!("iconst.i64 {}\n", list::LEAF_LAYOUT)),
+            "{front}\n{text}"
+        );
+        assert!(text.contains(sym::DUP), "{front}\n{text}");
         // One slot: the inline code stores the element there, the
         // helper gets its address in a cold block, and the head is read
         // back from it.
@@ -2047,6 +2061,7 @@ fn owned_list_steps_are_written_inline() {
             "{front}\n{text}"
         );
         assert!(!text.contains(sym::STATS_COUNTING), "{front}\n{text}");
+        assert!(!text.contains(sym::DUP), "{front}\n{text}");
         assert!(text.contains(sym::LIST_UNCONS_OWNED), "{front}\n{text}");
     }
 }

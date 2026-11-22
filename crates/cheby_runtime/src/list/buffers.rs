@@ -231,16 +231,7 @@ impl Pieces {
         if self.take_head_leaf() {
             return;
         }
-        // The leaf holding the first element, and whether its path is
-        // unique.
-        let (mut node, mut i) = (tree, self.offset);
-        let mut unique = node.is_unique();
-        while !node.is_leaf() {
-            let (j, before) = node.locate(i);
-            node = node.child(j);
-            i = i.saturating_sub(before);
-            unique = unique && node.is_unique();
-        }
+        let (node, i, unique) = first_leaf(tree, self.offset);
         if unique {
             // Cut the tree to the list's part of it, then take the first
             // leaf out: all in place along a unique path.
@@ -253,13 +244,7 @@ impl Pieces {
             self.pos = 0;
             return;
         }
-        let in_leaf = node.slots().saturating_sub(i);
-        if in_leaf <= tree_len {
-            // Another list holds the leaf: share it, and move past it.
-            self.head = Some(node.dup());
-            self.pos = i;
-            self.offset = self.offset.saturating_add(in_leaf);
-            self.drop_dead_tree();
+        if self.share_head_leaf(node, i) {
             return;
         }
         // The list's part of the tree ends inside this shared leaf: copy
@@ -274,6 +259,27 @@ impl Pieces {
         self.head = Some(leaf);
         self.pos = 0;
         self.drop_dead_tree();
+    }
+
+    /// Gives a list without a head leaf the leaf `node` that holds its
+    /// first element, at slot `i`, as its head leaf, shared, when the
+    /// list's part of the tree takes the leaf to its end. The caller has
+    /// found that another list holds a node on the leaf's path. The tree
+    /// stays whole and the offset moves past the leaf. Returns whether it
+    /// did; nothing changes otherwise. Allocates nothing and raises
+    /// nothing, so the fast path of a step runs it too ([`head_in_place`]):
+    /// a walk over a list that another list shares takes each leaf in
+    /// place.
+    fn share_head_leaf(&mut self, node: Node, i: usize) -> bool {
+        let in_leaf = node.slots().saturating_sub(i);
+        if in_leaf > self.tree_len() {
+            return false;
+        }
+        self.head = Some(node.dup());
+        self.pos = i;
+        self.offset = self.offset.saturating_add(in_leaf);
+        self.drop_dead_tree();
+        true
     }
 
     /// Gives a list without a head leaf the tree's first leaf as its head
@@ -645,10 +651,11 @@ pub(crate) unsafe fn prepend_fast(word: Word, elem: Word) -> bool {
 
 /// The first element of the list `word`, owned, when the list's count is
 /// one, it has more than one element, and the first is in the head leaf of
-/// a big root or in the leaf of a root; the list is then the rest. The
-/// element is moved out of a unique leaf and dup'd under a leaf that
-/// another list holds (D-893, D-909). `None`, with nothing changed,
-/// otherwise.
+/// a big root, in the leaf of a root, or in the tree's leaf that a big root
+/// without a head leaf shares as one in place ([`head_in_place`]); the
+/// list is then the rest. The element is moved out of a unique leaf and
+/// dup'd under a leaf that another list holds (D-893, D-909). `None`,
+/// with nothing changed, otherwise.
 ///
 /// # Safety
 ///
@@ -682,7 +689,13 @@ fn front_fast(list: Fast) -> Option<Word> {
         Fast::Big(big) => {
             let list = big.root();
             let len = list.len();
-            let head = big.head().filter(|_| len > 1)?;
+            if len <= 1 {
+                return None;
+            }
+            let head = match big.head() {
+                Some(head) => head,
+                None => head_in_place(big)?,
+            };
             let pos = big.head_pos();
             let elem = head.elem(pos);
             if head.is_unique() {
@@ -717,6 +730,41 @@ fn refill_head_in_place(big: Big) {
     if pieces.take_head_leaf() {
         big.attach(pieces);
     }
+}
+
+/// The head leaf that a step on a unique big root without one gives it,
+/// when another list holds a node on the path to the tree's leaf that
+/// holds the list's first element, and [`Pieces::refill_head`] would
+/// share that leaf ([`Pieces::share_head_leaf`]). `None`, with nothing
+/// changed, otherwise: a path that only this list holds is the helper's,
+/// which moves the leaf out or cuts the tree and releases what the cut
+/// leaves (D-893). It runs at the step that needs the leaf, as the helper
+/// would, and not at the step that used up the last one: a leaf shared
+/// then may be the walk's alone by now.
+#[inline(never)]
+fn head_in_place(big: Big) -> Option<Node> {
+    let mut pieces = big.pieces();
+    let (node, i, unique) = first_leaf(pieces.tree?, pieces.offset);
+    if unique || !pieces.share_head_leaf(node, i) {
+        return None;
+    }
+    big.attach(pieces);
+    big.head()
+}
+
+/// The leaf of `tree` that holds its element `offset`, that element's
+/// slot in it, and whether every node on the leaf's path, the leaf
+/// included, is unique.
+fn first_leaf(tree: Node, offset: usize) -> (Node, usize, bool) {
+    let (mut node, mut i) = (tree, offset);
+    let mut unique = node.is_unique();
+    while !node.is_leaf() {
+        let (j, before) = node.locate(i);
+        node = node.child(j);
+        i = i.saturating_sub(before);
+        unique = unique && node.is_unique();
+    }
+    (node, i, unique)
 }
 
 /// The last element of the list `word`, owned, when the list's count is
