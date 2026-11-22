@@ -92,7 +92,7 @@ pub use cheby_package::Target;
 pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
-    TestResult, prepare_test, prepare_test_cached, test_std,
+    TestResult, prepare_test, prepare_test_cached, test_std, test_std_in,
 };
 
 /// What a command reads and writes in the build cache (D-956 to D-965):

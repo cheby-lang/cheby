@@ -734,7 +734,7 @@ fn back_end(
     }));
     push(lower_entries(&requests, &cx).unwrap());
     if matches!(mode, Mode::Release { .. }) {
-        optimize_local(&mut units, modules);
+        optimize_local(&mut units, modules, &cx.defs);
     }
     // The facts each unit contributes, named through the whole build's
     // interfaces, and their union (D-969).
@@ -747,21 +747,32 @@ fn back_end(
 }
 
 /// The release passes on the package's own units, before borrowing is
-/// inferred, as the driver runs them; each unit is checked as lowered
-/// again.
-fn optimize_local(units: &mut [MirModule], modules: &ModuleTable) {
-    for unit in units {
-        let local = unit
-            .module()
+/// inferred, as the driver runs them: in layers, each unit inlining the
+/// package's bodies of earlier layers and std's bodies by name (exported
+/// from the std units lowered here and imported back through `defs`, as
+/// a release build reads std's own front end's), and each unit checked as
+/// lowered again.
+fn optimize_local(units: &mut [MirModule], modules: &ModuleTable, defs: &Defs<'_>) {
+    let is_std = |unit: &MirModule| {
+        unit.module()
             .and_then(|m| modules.get(m))
-            .is_some_and(|info| info.package == PackageId::LOCAL);
-        if !local {
-            continue;
-        }
-        crate::inline::optimize(unit).unwrap();
-        if let Err(ice) = crate::check_lowered(unit) {
-            panic!("{ice}\n{}", dump(unit).unwrap_or_default());
-        }
+            .is_some_and(|info| info.package == PackageId::STD)
+    };
+    let std_units: Vec<MirModule> = units.iter().filter(|u| is_std(u)).cloned().collect();
+    let budget = crate::inline::InlineBudget::DEFAULT;
+    let portable = crate::export::portable_exports(&std_units, defs, &budget).unwrap();
+    let local = |unit: &MirModule| {
+        unit.module()
+            .and_then(|m| modules.get(m))
+            .is_some_and(|info| info.package == PackageId::LOCAL)
+    };
+    let each = |refs: &mut [&mut MirModule], step: &crate::export::LayerStep<'_>| {
+        refs.iter_mut().map(|unit| step(unit)).collect()
+    };
+    if let Err(ice) = crate::export::optimize_build(units, &local, &portable, defs, &budget, &each)
+    {
+        let dumps: Vec<String> = units.iter().filter_map(|u| dump(u).ok()).collect();
+        panic!("{ice}\n{}", dumps.join("\n"));
     }
 }
 

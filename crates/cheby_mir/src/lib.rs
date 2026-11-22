@@ -38,6 +38,7 @@ mod call_locs_tests;
 pub mod const_prop;
 mod defs;
 pub mod dump;
+pub mod export;
 pub mod fuse;
 #[cfg(test)]
 mod fuse_tests;
@@ -47,6 +48,8 @@ pub mod hoist;
 #[cfg(test)]
 mod hoist_tests;
 pub mod inline;
+#[cfg(test)]
+mod inline_across_tests;
 #[cfg(test)]
 mod inline_tests;
 pub mod ir;

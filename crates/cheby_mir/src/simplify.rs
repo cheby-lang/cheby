@@ -71,6 +71,16 @@ impl Tags {
         Self(out)
     }
 
+    /// Adds the constructors of `layouts`, layouts of other modules that a
+    /// body from another unit brought in ([`crate::inline::optimize_across`]).
+    pub fn extend(&mut self, layouts: &[crate::layout::LayoutDesc]) {
+        for d in layouts {
+            if let LayoutRef::Ctor(def) = d.layout {
+                self.0.insert(def, (d.type_def, d.tag));
+            }
+        }
+    }
+
     /// The tag a [`Rvalue::ReadTag`] of `ty` reads from the static object
     /// of constructor `def`: the declaration order of its type's
     /// constructors (D-522), the runtime's layout id less the first one's
@@ -489,11 +499,24 @@ const fn compare(op: CmpOp, ordering: std::cmp::Ordering) -> bool {
     }
 }
 
-/// The bits a [`Terminator::Switch`] case holds for constant `c`.
+/// The bits a [`Terminator::Switch`] case holds for constant `c`: a
+/// sized integer's bits within its width, as lowering writes the cases
+/// (a constant's bits are sign-extended, a case's are not).
 const fn switch_bits(c: &Const) -> Option<u64> {
     match c {
         Const::Int(v) => Some(v.cast_unsigned()),
-        Const::Sized { bits, .. } => Some(*bits),
+        Const::Sized { repr, bits } => Some(match repr {
+            Repr::I8 | Repr::U8 => *bits & 0xff,
+            Repr::I16 | Repr::U16 => *bits & 0xffff,
+            Repr::I32 | Repr::U32 => *bits & 0xffff_ffff,
+            Repr::Int
+            | Repr::I64
+            | Repr::U64
+            | Repr::Value
+            | Repr::Float
+            | Repr::F32
+            | Repr::Bool => *bits,
+        }),
         Const::Float(_)
         | Const::Bool(_)
         | Const::Str(_)
@@ -738,6 +761,10 @@ fn same_params(f: &mut Function) -> bool {
 /// A block parameter that every jump fills with a `box` of one
 /// representation, and that only `unbox`es to it read, takes the raw
 /// value (module docs).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the plan, the new parameters and the unboxes they replace, in order"
+)]
 fn raw_params(f: &mut Function) -> Result<bool, Ice> {
     let boxes = boxes(f);
     let counts = use_counts(f);
@@ -802,7 +829,9 @@ fn raw_params(f: &mut Function) -> Result<bool, Ice> {
         return Ok(false);
     }
     let mut subst: FxHashMap<Local, Operand> = FxHashMap::default();
-    for (id, k, repr, raw) in plans {
+    // The parameters made raw, whose unboxes go.
+    let mut raw: Vec<Local> = Vec::new();
+    for (id, k, repr, fed) in plans {
         let preds = gotos.get(id.index()).cloned().unwrap_or_default();
         let Some(&p) = f.block(id)?.params.get(k) else {
             continue;
@@ -818,7 +847,7 @@ fn raw_params(f: &mut Function) -> Result<bool, Ice> {
         {
             *slot = new;
         }
-        for (&pred, x) in preds.iter().zip(raw) {
+        for (&pred, x) in preds.iter().zip(fed) {
             if let Some(b) = f.blocks.get_mut(pred)
                 && let Terminator::Goto { args, .. } = &mut b.term
                 && let Some(slot) = args.get_mut(k)
@@ -829,6 +858,23 @@ fn raw_params(f: &mut Function) -> Result<bool, Ice> {
         for &(u, _) in unboxes.get(&p).map_or(&[][..], Vec::as_slice) {
             subst.insert(u, Operand::Local(new));
         }
+        raw.push(p);
+    }
+    // The unboxes of a parameter that is raw now read nothing: each one's
+    // result is the raw parameter, so it goes, whatever `dead` keeps.
+    for b in &mut f.blocks {
+        b.retain_stmts(|s| {
+            !matches!(
+                s,
+                Stmt::Assign {
+                    value: Rvalue::Unbox {
+                        value: Operand::Local(x),
+                        ..
+                    },
+                    ..
+                } if raw.contains(x)
+            )
+        });
     }
     substitute(f, &subst);
     Ok(true)

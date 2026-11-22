@@ -1,5 +1,6 @@
-//! The release profile's inliner (design T5, T6): a callee's body copied
-//! into its caller at a direct call, inside one unit.
+//! The release profile's inliner (design T5, T6, T8): a callee's body
+//! copied into its caller at a direct call, inside one unit or from
+//! another unit's export ([`crate::export`]).
 //!
 //! The inliner runs on lowered MIR ([`crate::Stage::Lowered`]), after
 //! lowering and before borrowing inference and reference counting, in a
@@ -41,8 +42,11 @@
 //!   report describes the caller's own expressions after inlining.
 //! - **Everything else** (callee declarations, layouts, statics, closures,
 //!   constants) is shared: a body of the same unit names the same defs,
-//!   statics and functions. A body from another unit must be translated
-//!   into the caller's unit before it is spliced.
+//!   statics and functions. A body from another unit is brought into the
+//!   caller's unit first ([`optimize_across`]): its statics, closures and
+//!   shared functions join the unit, and the unit's callee declarations,
+//!   foreign layouts and names are computed again. A constant stays a
+//!   read of its slot.
 //!
 //! An inlined body that tail-calls the caller calls the caller itself, so
 //! code generation's loop jump for a self tail call stays right wherever
@@ -74,17 +78,30 @@
 //!   allocator.
 //! - The functions are visited by the strongly connected components of the
 //!   call graph, callees first, and each one's calls in block and statement
-//!   order, greedily in one pass. A copied body is never searched again, so
-//!   bodies are inlined flat. Every order comes from the unit's own order,
-//!   so the result does not depend on threads (D-264).
+//!   order, greedily in one pass. A copied body of the unit is never
+//!   searched again, so bodies are inlined flat. A body of another unit is
+//!   searched once more for calls of other units' functions only, which
+//!   its own unit may have left for its budgets, and what that copies is
+//!   searched no more. Every order comes from the unit's own order, so the
+//!   result does not depend on threads (D-264).
+//! - [`optimize_across`] also takes the functions of other units whose
+//!   exports [`Bodies`] gives, chosen with the same budgets; each such
+//!   function is a leaf of the unit's call graph. A shared function (a
+//!   value shim, a tuple function, a `dyn` forwarder) is never inlined
+//!   into: every unit that needs one defines its own copy, and every copy
+//!   of a symbol must be the same (D-918).
 //! - Every function is then cleaned up ([`crate::simplify`]).
 
-use cheby_iface::{Ice, Idx};
+use std::sync::Arc;
+
+use cheby_iface::{DefId, Ice, Idx};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::defs::Defs;
+use crate::export::Exported;
 use crate::ir::{
     Abi, Block, BlockId, Callee, Const, FnKey, Function, Local, LocalDecl, MirModule, Operand,
-    Rvalue, Stmt, StrId, Terminator,
+    Rvalue, StaticId, StaticObject, Stmt, StrId, Terminator, UnitKind,
 };
 use crate::positions::{Pos, PosRef};
 use crate::repr::Repr;
@@ -1021,10 +1038,51 @@ pub fn optimize(unit: &mut MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] for malformed MIR.
 pub fn optimize_with(unit: &mut MirModule, budget: &InlineBudget) -> Result<(), Ice> {
+    optimize_inner(unit, budget, None)
+}
+
+/// Where the inliner finds the bodies of functions that other units
+/// define (design T8, T9): the other modules of the build, from memory,
+/// and std's bodies by name ([`crate::export::PortableBody`]).
+pub trait Bodies: Sync {
+    /// The export of `def`, a function another unit defines, in the defs
+    /// of the reading unit's build; `None` when it has none.
+    fn body(&self, def: DefId) -> Option<Arc<Exported>>;
+}
+
+/// [`optimize`] that also inlines the calls of functions other units
+/// define, whose exports `bodies` gives (design T8, T9; module docs):
+/// such a callee is a leaf of the unit's call graph, chosen with the same
+/// budgets, and its bundle is brought into the unit first
+/// ([`crate::export`]): its statics joined to the unit's, its closures
+/// renumbered as closures of the host, and the value shims, tuple
+/// functions and `dyn` forwarders the unit lacks added. A body from
+/// another file takes the call's position (D-1172). The unit's callee
+/// declarations, foreign layouts and names are then computed again
+/// through `defs`, the whole build's interfaces.
+///
+/// # Errors
+///
+/// An [`Ice`] for malformed MIR, or a def `defs` cannot see.
+pub fn optimize_across(
+    unit: &mut MirModule,
+    budget: &InlineBudget,
+    bodies: &dyn Bodies,
+    defs: &Defs<'_>,
+) -> Result<(), Ice> {
+    optimize_inner(unit, budget, Some((bodies, defs)))
+}
+
+/// [`optimize_with`], and with `across`, [`optimize_across`].
+fn optimize_inner(
+    unit: &mut MirModule,
+    budget: &InlineBudget,
+    across: Option<(&dyn Bodies, &Defs<'_>)>,
+) -> Result<(), Ice> {
     let index = unit.function_index();
     let graph = call_graph(unit, &index);
     let (order, in_cycle) = components(&graph);
-    let tags = crate::simplify::Tags::of(unit);
+    let mut tags = crate::simplify::Tags::of(unit);
     let callable: Vec<bool> = unit
         .functions
         .iter()
@@ -1036,22 +1094,143 @@ pub fn optimize_with(unit: &mut MirModule, budget: &InlineBudget) -> Result<(), 
         .iter()
         .map(cost)
         .fold(0, usize::saturating_add);
-    let mut budget_left = before
-        .saturating_mul(budget.unit_growth_percent)
-        .checked_div(100)
-        .unwrap_or(0);
+    let mut cx = Inlining {
+        index: &index,
+        callable: &callable,
+        budget,
+        unit_left: before
+            .saturating_mul(budget.unit_growth_percent)
+            .checked_div(100)
+            .unwrap_or(0),
+        across,
+        imported: false,
+    };
     for host in order {
-        inline_into(unit, host, &index, &callable, budget, &mut budget_left)?;
+        inline_into(unit, host, &mut cx, &mut tags)?;
         if let Some(f) = unit.functions.get_mut(host) {
             crate::simplify::run(f, &tags)?;
         }
     }
+    if cx.imported
+        && let Some((_, defs)) = across
+    {
+        crate::lower::refresh_tables(unit, defs)?;
+    }
     Ok(())
+}
+
+/// Which functions of `unit` are in a cycle of its call graph, by index
+/// into [`MirModule::functions`] (`index` is the unit's
+/// [`MirModule::function_index`]).
+pub(crate) fn cycles(unit: &MirModule, index: &FxHashMap<FnKey, usize>) -> Vec<bool> {
+    components(&call_graph(unit, index)).1
+}
+
+/// The order in which the units of one build are optimized when they
+/// inline each other's bodies ([`optimize_across`]): layers of indexes
+/// into `units`, each unit after every other unit whose functions it
+/// calls directly ([`MirModule::callees`]), so the bodies it inlines are
+/// optimized already; a module's tests unit comes after its code unit.
+/// Each layer is in the order of `units`, so the units of one layer may
+/// be optimized in parallel and the result does not depend on threads
+/// (D-264). The modules of a package import no cycle (§7), so no call
+/// goes back to a later layer; a call that would is ignored.
+#[must_use]
+pub fn layers(units: &[MirModule]) -> Vec<Vec<usize>> {
+    // The depth of each unit, found depth first in unit order; a unit on
+    // the current path is a cycle's back edge, which counts as no edge.
+    const UNSEEN: usize = usize::MAX;
+    const ON_PATH: usize = usize::MAX - 1;
+    let code: FxHashMap<cheby_iface::ModuleId, usize> = units
+        .iter()
+        .enumerate()
+        .filter_map(|(n, u)| match u.unit {
+            UnitKind::Code(m) => Some((m, n)),
+            UnitKind::Tests(_) | UnitKind::Entries => None,
+        })
+        .collect();
+    let deps: Vec<Vec<usize>> = units
+        .iter()
+        .enumerate()
+        .map(|(n, u)| {
+            let mut out: Vec<usize> = u
+                .callees
+                .iter()
+                .filter_map(|c| code.get(&c.def.module).copied())
+                .filter(|&d| d != n)
+                .collect();
+            if let UnitKind::Tests(m) = u.unit {
+                out.extend(code.get(&m).copied());
+            }
+            out.sort_unstable();
+            out.dedup();
+            out
+        })
+        .collect();
+    let mut depth = vec![UNSEEN; units.len()];
+    for root in 0..units.len() {
+        if depth.get(root) != Some(&UNSEEN) {
+            continue;
+        }
+        let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
+        if let Some(d) = depth.get_mut(root) {
+            *d = ON_PATH;
+        }
+        while let Some(&mut (node, ref mut at)) = stack.last_mut() {
+            let succs = deps.get(node).map_or(&[][..], Vec::as_slice);
+            if let Some(&next) = succs.get(*at) {
+                *at = at.saturating_add(1);
+                if depth.get(next) == Some(&UNSEEN) {
+                    if let Some(d) = depth.get_mut(next) {
+                        *d = ON_PATH;
+                    }
+                    stack.push((next, 0));
+                }
+                continue;
+            }
+            stack.pop();
+            let mine = succs
+                .iter()
+                .filter_map(|&s| depth.get(s).copied())
+                .filter(|&d| d < ON_PATH)
+                .map(|d| d.saturating_add(1))
+                .max()
+                .unwrap_or(0);
+            if let Some(d) = depth.get_mut(node) {
+                *d = mine;
+            }
+        }
+    }
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for (n, &d) in depth.iter().enumerate() {
+        while out.len() <= d {
+            out.push(Vec::new());
+        }
+        if let Some(layer) = out.get_mut(d) {
+            layer.push(n);
+        }
+    }
+    out
+}
+
+/// What one unit's inlining reads and spends ([`optimize_inner`]).
+struct Inlining<'a, 'b> {
+    /// [`MirModule::function_index`] of the unit before inlining.
+    index: &'a FxHashMap<FnKey, usize>,
+    /// Which of the unit's functions may be inlined, by index.
+    callable: &'a [bool],
+    budget: &'a InlineBudget,
+    /// How much the unit may still grow.
+    unit_left: usize,
+    /// The bodies of other units, with the build's interfaces.
+    across: Option<(&'b dyn Bodies, &'b Defs<'b>)>,
+    /// Whether a body of another unit was brought in.
+    imported: bool,
 }
 
 /// Whether `f`, a function of `unit`, may be inlined at its direct calls,
 /// cycles aside (module docs).
-fn is_callee(unit: &MirModule, f: &Function) -> bool {
+pub(crate) fn is_callee(unit: &MirModule, f: &Function) -> bool {
     let FnKey::Item(def) = f.key else {
         return false;
     };
@@ -1281,35 +1460,50 @@ fn visit(
     stack.push(node);
 }
 
+/// The callee of a call the inliner may inline.
+enum Target {
+    /// A function of the unit, by index.
+    Own(usize),
+    /// A function of another unit, with its export.
+    Other(Arc<Exported>),
+}
+
 /// The next direct call of block `b` of `f` from statement `from` on, of a
-/// function `callable` names: its place and the callee's index.
+/// function `cx` may inline: its place and its callee. With
+/// `other_only`, only a call of another unit's function counts.
 fn next_site(
     f: &Function,
     b: BlockId,
     from: usize,
-    index: &FxHashMap<FnKey, usize>,
-    callable: &[bool],
-) -> Option<(SiteAt, usize)> {
+    cx: &Inlining<'_, '_>,
+    other_only: bool,
+) -> Option<(SiteAt, Target)> {
     let block = f.blocks.get(b)?;
-    let pick = |callee: &Callee| -> Option<usize> {
+    let pick = |callee: &Callee| -> Option<Target> {
         let Callee::Direct(def) = callee else {
             return None;
         };
-        let at = *index.get(&FnKey::Item(*def))?;
-        (callable.get(at) == Some(&true) && f.key != FnKey::Item(*def)).then_some(at)
+        if f.key == FnKey::Item(*def) {
+            return None;
+        }
+        if let Some(&at) = cx.index.get(&FnKey::Item(*def)) {
+            return (!other_only && cx.callable.get(at) == Some(&true)).then_some(Target::Own(at));
+        }
+        let (bodies, _) = cx.across?;
+        bodies.body(*def).map(Target::Other)
     };
     for (i, s) in block.stmts.iter().enumerate().skip(from) {
         if let Stmt::Assign {
             value: Rvalue::Call { callee, .. },
             ..
         } = s
-            && let Some(at) = pick(callee)
+            && let Some(target) = pick(callee)
         {
-            return Some((SiteAt::Stmt(i), at));
+            return Some((SiteAt::Stmt(i), target));
         }
     }
     if let Terminator::TailCall { callee, .. } = &block.term {
-        return pick(callee).map(|at| (SiteAt::Tail, at));
+        return pick(callee).map(|target| (SiteAt::Tail, target));
     }
     None
 }
@@ -1367,26 +1561,63 @@ fn site_args(f: &Function, b: BlockId, at: SiteAt) -> Vec<Operand> {
     }
 }
 
+/// Whether `f` may be inlined into: a counted Cheby function without
+/// unwind edges whose code is its own. A value shim, a tuple function or
+/// a `dyn` forwarder is defined by every unit that needs it, and every
+/// copy of its symbol must be the same (D-918), so it is never changed.
+fn is_host(f: &Function) -> bool {
+    f.abi == Abi::Cheby
+        && !f.precounted
+        && f.blocks.iter().all(|b| b.unwind.is_empty())
+        && !matches!(
+            f.key,
+            FnKey::ValueShim(_)
+                | FnKey::TupleDictFn { .. }
+                | FnKey::DynForward { .. }
+                | FnKey::Trampoline(_)
+                | FnKey::Entry(_)
+        )
+}
+
+/// How [`inline_into`] searches a block of the host.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Scan {
+    /// Every call: the host's own blocks and the continuations.
+    All,
+    /// Only calls of other units' functions: a body of another unit,
+    /// copied once, whose own unit may have left such a call for its
+    /// budgets (std's `log::info_at` calls `log::write_at`). Its copies
+    /// are searched no more, so growth cannot compound.
+    Other,
+    /// Nothing: a body of the unit's own, which was optimized before the
+    /// host, or a body copied at the second level.
+    No,
+}
+
 /// Inlines the calls of function `host` of `unit` that the budgets allow
-/// (module docs), searching only its own blocks and the continuations.
+/// (module docs), searching its own blocks, the continuations and, for
+/// calls of other units' functions only, the bodies of other units it
+/// copied ([`Scan`]). A body of another unit is brought into the unit
+/// first ([`import`]), and the layouts it names join `tags`.
 fn inline_into(
     unit: &mut MirModule,
     host: usize,
-    index: &FxHashMap<FnKey, usize>,
-    callable: &[bool],
-    budget: &InlineBudget,
-    unit_left: &mut usize,
+    cx: &mut Inlining<'_, '_>,
+    tags: &mut crate::simplify::Tags,
 ) -> Result<(), Ice> {
     let Some(f) = unit.functions.get(host) else {
         return Ok(());
     };
-    if f.abi != Abi::Cheby || f.precounted || f.blocks.iter().any(|b| !b.unwind.is_empty()) {
+    if !is_host(f) {
         return Ok(());
     }
-    let mut scan = vec![true; f.blocks.len()];
+    let mut scan = vec![Scan::All; f.blocks.len()];
+    // The reuse pairs of the host as it is, cleaned up: computed when a
+    // splice that would join returns is weighed, again after a splice.
+    let mut pairs_now: Option<usize> = None;
     let mut b = 0_usize;
-    while scan.get(b).is_some() {
-        if scan.get(b) != Some(&true) {
+    while let Some(&how) = scan.get(b) {
+        if how == Scan::No {
             b = b.saturating_add(1);
             continue;
         }
@@ -1396,18 +1627,43 @@ fn inline_into(
             let Some(f) = unit.functions.get(host) else {
                 return Ok(());
             };
-            let Some((at, callee)) = next_site(f, id, from, index, callable) else {
+            let Some((at, target)) = next_site(f, id, from, cx, how == Scan::Other) else {
                 break;
             };
-            let Some(body) = unit.functions.get(callee) else {
-                break;
+            let body: &Function = match &target {
+                Target::Own(callee) => match unit.functions.get(*callee) {
+                    Some(body) => body,
+                    None => break,
+                },
+                Target::Other(export) => &export.function,
             };
             let size = cost(body);
             let grows = growth(body, at, &site_args(f, id, at));
-            let fits = cost(f).saturating_add(grows) <= budget.function;
-            let tiny = size <= budget.always;
-            let accepted = fits && (tiny || (size <= budget.inline && grows <= *unit_left));
-            if !accepted {
+            let fits = cost(f).saturating_add(grows) <= cx.budget.function;
+            let tiny = size <= cx.budget.always;
+            let mut accepted =
+                fits && (tiny || (size <= cx.budget.inline && grows <= cx.unit_left));
+            if accepted && matches!(at, SiteAt::Stmt(_)) && body.blocks.len() > 1 {
+                let positions = match &target {
+                    Target::Other(export)
+                        if export.source.is_none() || export.source != unit.source =>
+                    {
+                        CopiedPositions::AtCall
+                    }
+                    Target::Own(_) | Target::Other(_) => CopiedPositions::Own,
+                };
+                let call = CallSite { block: id, at };
+                accepted = keeps_reuse(unit, host, call, body, positions, tags, &mut pairs_now)?;
+            }
+            let copied = match (&target, accepted) {
+                (_, false) => None,
+                (Target::Own(_), true) => Some((body.clone(), CopiedPositions::Own)),
+                (Target::Other(export), true) => {
+                    let Some((_, defs)) = cx.across else { break };
+                    import(unit, host, id, at, export, defs, tags)?
+                }
+            };
+            let Some((body, positions)) = copied else {
                 match at {
                     SiteAt::Stmt(i) => {
                         from = i.saturating_add(1);
@@ -1415,23 +1671,273 @@ fn inline_into(
                     }
                     SiteAt::Tail => break,
                 }
+            };
+            let copied_scan = match (&target, how) {
+                (Target::Other(_), Scan::All) => Scan::Other,
+                (Target::Other(_) | Target::Own(_), _) => Scan::No,
+            };
+            if matches!(target, Target::Other(_)) {
+                cx.imported = true;
             }
-            let body = body.clone();
             let f = unit
                 .functions
                 .get_mut(host)
                 .ok_or_else(|| Ice::new("inline: the host"))?;
-            let spliced = splice(f, CallSite { block: id, at }, &body, CopiedPositions::Own)?;
+            let spliced = splice(f, CallSite { block: id, at }, &body, positions)?;
+            pairs_now = None;
             if !tiny {
-                *unit_left = unit_left.saturating_sub(grows);
+                cx.unit_left = cx.unit_left.saturating_sub(grows);
             }
+            // The rest of the call's block is searched as the block was.
             if spliced.cont.is_some() {
-                scan.push(true);
+                scan.push(how);
             }
-            scan.extend(std::iter::repeat_n(false, spliced.body.len()));
+            scan.extend(std::iter::repeat_n(copied_scan, spliced.body.len()));
             break;
         }
         b = b.saturating_add(1);
     }
     Ok(())
+}
+
+/// Whether splicing `body` at `site` of function `host` of `unit` keeps
+/// the reuse the host has (D-839): the pairs of drops and allocations
+/// counting and reuse would make, with the host cleaned up before and
+/// after, on copies. A splice at a call in a statement of a body of
+/// several blocks puts a join between the call's block and the rest of
+/// it: the body's own join or its exits meeting in the continuation. Reuse
+/// carries a dropped object's block only into blocks with one
+/// predecessor, so a node rebuilt after the call
+/// (`std::sorted_map::insert`'s `Bin` after `count_entries`) would
+/// allocate again. `pairs_now` caches the host's count until the host
+/// changes.
+fn keeps_reuse(
+    unit: &MirModule,
+    host: usize,
+    site: CallSite,
+    body: &Function,
+    positions: CopiedPositions,
+    tags: &crate::simplify::Tags,
+    pairs_now: &mut Option<usize>,
+) -> Result<bool, Ice> {
+    let Some(f) = unit.functions.get(host) else {
+        return Ok(true);
+    };
+    let before = if let Some(n) = *pairs_now {
+        n
+    } else {
+        let mut copy = f.clone();
+        crate::simplify::run(&mut copy, tags)?;
+        let n = crate::reuse::pair_count(unit, &copy);
+        *pairs_now = Some(n);
+        n
+    };
+    if before == 0 {
+        return Ok(true);
+    }
+    let mut trial = f.clone();
+    splice(&mut trial, site, body, positions)?;
+    crate::simplify::run(&mut trial, tags)?;
+    Ok(crate::reuse::pair_count(unit, &trial) >= before)
+}
+
+/// The def whose closures a host's closures are: a top-level function's,
+/// a closure's or continuation's owner, a constant's, a test's.
+const fn closure_owner(key: FnKey) -> Option<DefId> {
+    match key {
+        FnKey::Item(d)
+        | FnKey::Closure { owner: d, .. }
+        | FnKey::Continuation { owner: d, .. }
+        | FnKey::ConstInit(d)
+        | FnKey::Test(d) => Some(d),
+        FnKey::ValueShim(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. }
+        | FnKey::Trampoline(_)
+        | FnKey::Entry(_) => None,
+    }
+}
+
+/// Brings the bundle of `export` into `unit` for its call at `at` in
+/// block `block` of function `host` (module docs of [`crate::export`]):
+/// its statics joined to the unit's, each static of the same kind, module
+/// and name being the same object (D-523); its closures renumbered after
+/// the host owner's; the shared functions the unit lacks added. Returns
+/// the function to splice and where its positions come from: its own
+/// when its unit is in the host's file, the call's otherwise. `None`, with
+/// the unit unchanged, when a static of the bundle has another's symbol
+/// with other contents, or the host has no closure owner.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the steps of the import, in their order"
+)]
+fn import(
+    unit: &mut MirModule,
+    host: usize,
+    block: BlockId,
+    at: SiteAt,
+    export: &Exported,
+    defs: &Defs<'_>,
+    tags: &mut crate::simplify::Tags,
+) -> Result<Option<(Function, CopiedPositions)>, Ice> {
+    let host_fn = unit
+        .functions
+        .get(host)
+        .ok_or_else(|| Ice::new("inline: the host"))?;
+    let Some(owner) = closure_owner(host_fn.key) else {
+        return Ok(None);
+    };
+    // The statics: each bundle static's id in the unit, the new ones
+    // appended in the bundle's order.
+    let mut ids: Vec<StaticId> = Vec::with_capacity(export.statics.len());
+    let mut added: Vec<StaticObject> = Vec::new();
+    for object in &export.statics {
+        let mut copy = object.clone();
+        let mut remap = |id: StaticId| {
+            ids.get(id.index())
+                .copied()
+                .ok_or_else(|| Ice::new("inline: a static names a later one"))
+        };
+        crate::export::rewrite_static(&mut copy, &mut remap)?;
+        let existing = unit
+            .statics
+            .iter()
+            .chain(&added)
+            .find(|s| s.kind == copy.kind && s.module == copy.module && s.name == copy.name);
+        match existing {
+            Some(s)
+                if s.layout == copy.layout
+                    && s.fields == copy.fields
+                    && s.strings == copy.strings =>
+            {
+                ids.push(s.id);
+            }
+            Some(_) => return Ok(None),
+            None => {
+                let n = unit.statics.len().saturating_add(added.len());
+                copy.id =
+                    StaticId::from_u32(u32::try_from(n).map_err(|_| Ice::new("too many statics"))?);
+                ids.push(copy.id);
+                added.push(copy);
+            }
+        }
+    }
+    // The closures: numbered after the owner's closures in the unit.
+    let next = unit
+        .functions
+        .iter()
+        .filter_map(|f| match f.key {
+            FnKey::Closure { owner: o, index } if o == owner => index.checked_add(1),
+            FnKey::Item(_)
+            | FnKey::ValueShim(_)
+            | FnKey::Closure { .. }
+            | FnKey::ConstInit(_)
+            | FnKey::Test(_)
+            | FnKey::Entry(_)
+            | FnKey::Trampoline(_)
+            | FnKey::TupleDictFn { .. }
+            | FnKey::DynForward { .. }
+            | FnKey::Continuation { .. } => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut keys: FxHashMap<FnKey, FnKey> = FxHashMap::default();
+    for (n, c) in export.closures.iter().enumerate() {
+        let index = u32::try_from(n)
+            .ok()
+            .and_then(|n| next.checked_add(n))
+            .ok_or_else(|| Ice::new("too many closures"))?;
+        keys.insert(c.key, FnKey::Closure { owner, index });
+    }
+    let same_file = export.source.is_some() && export.source == unit.source;
+    let call_pos = host_fn
+        .block(block)
+        .map(|b| match at {
+            SiteAt::Stmt(i) => b.pos_at(i),
+            SiteAt::Tail => b.term_pos(),
+        })
+        .ok()
+        .and_then(|r| host_fn.positions.get(r));
+    let span = host_fn.span;
+    let mut remap_static = |id: StaticId| {
+        ids.get(id.index())
+            .copied()
+            .ok_or_else(|| Ice::new("inline: a static outside the bundle"))
+    };
+    let mut rekey = |k: FnKey| keys.get(&k).copied().unwrap_or(k);
+    let mut new_functions: Vec<Function> = Vec::new();
+    for c in &export.closures {
+        let mut copy = c.clone();
+        crate::export::rewrite_function(&mut copy, &mut rekey, &mut remap_static)?;
+        copy.span = span;
+        copy.sites.clear();
+        if !same_file {
+            at_position(&mut copy, call_pos);
+        }
+        new_functions.push(copy);
+    }
+    for shared in &export.shared {
+        let present = unit
+            .functions
+            .iter()
+            .chain(&new_functions)
+            .any(|f| f.key == shared.key);
+        if present {
+            continue;
+        }
+        let mut copy = shared.clone();
+        crate::export::rewrite_function(&mut copy, &mut rekey, &mut remap_static)?;
+        copy.span = span;
+        copy.sites.clear();
+        if !same_file {
+            // A unit's own copy of a shim of another file's function has
+            // no positions (D-1170): the same as lowering would give it.
+            clear_positions(&mut copy);
+        }
+        new_functions.push(copy);
+    }
+    let mut body = export.function.clone();
+    crate::export::rewrite_function(&mut body, &mut rekey, &mut remap_static)?;
+    body.sites.clear();
+    let mut layouts_of: Vec<Function> = new_functions.clone();
+    layouts_of.push(body.clone());
+    tags.extend(&crate::lower::foreign_layouts_of(
+        &layouts_of,
+        &added,
+        defs,
+    )?);
+    unit.statics.extend(added);
+    unit.functions.extend(new_functions);
+    let positions = if same_file {
+        CopiedPositions::Own
+    } else {
+        CopiedPositions::AtCall
+    };
+    Ok(Some((body, positions)))
+}
+
+/// Gives every statement and terminator of `f` the position `pos`, its
+/// entry's too, or none when `pos` is `None`: a function copied from
+/// another file, whose line table names one file (D-1172).
+fn at_position(f: &mut Function, pos: Option<Pos>) {
+    let Some(pos) = pos else {
+        clear_positions(f);
+        return;
+    };
+    let entry = PosRef::from_bits(1);
+    f.positions = crate::positions::Positions {
+        table: vec![pos],
+        entry,
+    };
+    for b in &mut f.blocks {
+        b.pos = vec![entry; b.stmts.len().saturating_add(1)];
+    }
+}
+
+/// Removes every source position of `f`.
+fn clear_positions(f: &mut Function) {
+    f.positions = crate::positions::Positions::default();
+    for b in &mut f.blocks {
+        b.pos.clear();
+    }
 }

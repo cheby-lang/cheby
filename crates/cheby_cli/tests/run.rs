@@ -2104,3 +2104,305 @@ fn a_float_helper_inlines_to_no_box_in_release() {
         "{debug} allocations in debug against {release} in release"
     );
 }
+
+/// [`LOG_THROUGH_INLINED_BODIES`]'s padding: a function large enough
+/// that the inliner's growth budget, half the unit, fits the bodies of
+/// `log`'s calls.
+const LOG_PADDING: &str = "
+fn describe(n: Int) -> String {
+  case n {
+    0 => \"zero\"
+    1 => \"one\"
+    2 => \"two\"
+    3 => \"three\"
+    4 => \"four\"
+    5 => \"five\"
+    6 => \"six\"
+    7 => \"seven\"
+    8 => \"eight\"
+    9 => \"nine\"
+    10 => \"ten\"
+    11 => \"eleven\"
+    12 => \"twelve\"
+    13 => \"thirteen\"
+    14 => \"fourteen\"
+    15 => \"fifteen\"
+    16 => \"sixteen\"
+    17 => \"seventeen\"
+    18 => \"eighteen\"
+    19 => \"nineteen\"
+    _ => {
+      let a = n + 1
+      let b = n * 2
+      let c = n * n
+      \"many: {n}, {a}, {b}, {c}\"
+    }
+  }
+}
+";
+
+/// Logs under a fixed clock: `log::info`'s call site is a call of the
+/// package-visible `log::write_at` (D-1630), whose body calls
+/// `log::takes`, which borrows its logger.
+const LOG_THROUGH_INLINED_BODIES: &str = "//! Logs at three levels under a fixed clock.
+
+import std::context
+import std::duration
+import std::io
+import std::log
+import std::time
+
+/// 2026-11-17T10:00:00Z.
+const opening: time::Timestamp = time::from_unix(duration::seconds(1_794_909_600))
+
+fn main() {
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  log::info(\"one\")
+  log::warn(\"two\")
+  log::debug(\"dropped\")
+  io::println(describe(3))
+  io::println(describe(42))
+}
+";
+
+/// `cheby run` of package `name` holding `source`, with `--release`
+/// when `release`, the runtime's statistics on, and the MIR dumped into
+/// `dump` when given.
+#[expect(
+    clippy::panic,
+    reason = "a test helper: a run that cannot start fails the test"
+)]
+fn run_with_stats(name: &str, source: &str, release: bool, dump: Option<&Path>) -> RunOutput {
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let cache = fresh_cache();
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_STATS", "1")
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    if let Some(dump) = dump {
+        cmd.env("CHEBY_DUMP_DIR", dump);
+    }
+    cache.apply(&mut cmd);
+    process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+/// Design T9: a std body inlined into user code calls a std function that
+/// borrows. A release build inlines `log::info_at`, the call site of
+/// `log::info`, into `main`'s closure and then the `log::write_at` it
+/// calls, so the package's unit calls `log::takes` with std's release mask,
+/// which the build writes into package units by name (refining D-787 and
+/// D-968). The release run prints what the debug run prints, with no leak
+/// (D-458) and as many objects allocated, and the executable links: a
+/// mask that disagreed with std's code would fail to resolve (D-917,
+/// D-1109).
+#[test]
+fn an_inlined_std_body_calls_a_borrowing_std_function() {
+    let source = format!("{LOG_THROUGH_INLINED_BODIES}{LOG_PADDING}");
+    let dump = package("log_inlined_dump", &[]).join("dump");
+    let release = run_with_stats("log_inlined_release", &source, true, Some(&dump));
+    let debug = run_with_stats("log_inlined_debug", &source, false, None);
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(release.status, Some(0), "{}", release.stderr);
+    assert_eq!(release.stdout, debug.stdout);
+    let lines = |stderr: &str| -> Vec<String> {
+        stderr
+            .lines()
+            .take_while(|l| !l.starts_with("runtime stats"))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(lines(&release.stderr), lines(&debug.stderr));
+    assert_eq!(
+        stat(&release.stderr, "allocations"),
+        stat(&debug.stderr, "allocations")
+    );
+    let mir = std::fs::read_to_string(dump.join("mir/app.mir")).unwrap_or_default();
+    assert!(
+        mir.contains("call std::log::takes(") && mir.contains("borrow const ctor std::log::Info"),
+        "{mir}"
+    );
+    // The executable links against std's release records and prints the
+    // same.
+    let dir = package(
+        "log_inlined_build",
+        &[MANIFEST, ("src/main.cheby", &source)],
+    );
+    let exe = dir.join("log_inlined");
+    let cache = fresh_cache();
+    let mut build = Command::new(CHEBY);
+    build
+        .args(["--color=never", "build", "--release", "-o"])
+        .arg(&exe)
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut build);
+    let linked = process::run(build, None, TIMEOUT).unwrap();
+    assert_eq!(linked.status, Some(0), "{}", linked.stderr);
+    let mut exec = Command::new(&exe);
+    exec.current_dir(&dir).env("CHEBY_RT_STATS", "1");
+    let ran = process::run(exec, None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, debug.stdout);
+    assert_eq!(lines(&ran.stderr), lines(&debug.stderr));
+}
+
+/// Looks keys up in std's maps: `ordered_map::get` reads a field of
+/// `ordered_map`'s package-visible `Entry`, and `sorted_map::is_empty`
+/// reads the tag of `SortedMap`, whose type has `@std_hooks`.
+const MAP_ACCESSORS: &str = "//! Looks keys up in std's maps.
+
+import std::io
+import std::ordered_map
+import std::sorted_map
+
+fn main() {
+  let o = ordered_map::from_list([(\"a\", 1), (\"b\", 2)])
+  let s = sorted_map::from_list([(1, \"x\")])
+  let found = case ordered_map::get(o, \"b\") {
+    Some(v) => v
+    None => 0
+  }
+  let empty = sorted_map::is_empty(s)
+  io::println(\"{found} {empty}\")
+  io::println(describe(found))
+}
+";
+
+/// Design T9's flagged risk: a release build inlines std's accessors into
+/// user code over std's decoded interfaces (D-953), so the layouts of the
+/// constructors they read come from those interfaces alone (D-246),
+/// `ordered_map`'s package-visible `Entry` and `sorted_map`'s `Bin`
+/// included. The build runs with an empty cache, where std's first use
+/// writes std's release records, and again with that cache warm, and both
+/// print what the debug build prints.
+#[test]
+fn std_accessors_inline_over_decoded_interfaces_cold_and_warm() {
+    let source = format!("{MAP_ACCESSORS}{LOG_PADDING}");
+    let dir = package(
+        "std_accessors_release",
+        &[MANIFEST, ("src/main.cheby", &source)],
+    );
+    let cache = fresh_cache();
+    let run = |release: bool, dump: Option<&Path>| {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        if let Some(dump) = dump {
+            cmd.env("CHEBY_DUMP_DIR", dump);
+        }
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    let cold = run(true, None);
+    let warm = run(true, None);
+    let debug = run(false, None);
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(debug.stdout, "2 False\ntwo\n");
+    for out in [&cold, &warm] {
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert_eq!(out.stdout, debug.stdout);
+    }
+    let dump = dir.join("dump");
+    let dumped = run(true, Some(&dump));
+    assert_eq!(dumped.status, Some(0), "{}", dumped.stderr);
+    let mir = std::fs::read_to_string(dump.join("mir/app.mir")).unwrap_or_default();
+    assert!(mir.contains("fn app::main("), "{mir}");
+    for inlined in ["std::ordered_map::get(", "std::sorted_map::is_empty("] {
+        assert!(!mir.contains(inlined), "{inlined} was not inlined:\n{mir}");
+    }
+}
+
+/// `app::util` of [`TWO_MODULES`]: a closure that captures, a static
+/// dictionary and a function value, each in a body another module inlines.
+const TWO_MODULES_UTIL: &str = "//! Helpers that `app` inlines in a release build.
+
+import std::int
+import std::list
+
+/// Each element times `k`, through a closure that captures `k`.
+fn scale(xs: List<Int>, k: Int) -> List<Int> {
+  list::map(xs, fn(x) { x * k })
+}
+
+/// The list in order, through `Compare`'s static dictionary of `Int`.
+fn sorted(xs: List<Int>) -> List<Int> {
+  list::sort(xs)
+}
+
+/// Each element as text, through a function value.
+fn texts(xs: List<Int>) -> List<String> {
+  list::map(xs, int::show)
+}
+";
+
+/// `app`, which calls [`TWO_MODULES_UTIL`]'s helpers.
+const TWO_MODULES: &str = "//! Calls the helpers of `app::util`.
+
+import std::io
+import std::list
+import app::util
+
+fn main() {
+  let xs = util::scale([3, 1, 2], 10)
+  let ys = util::sorted(xs)
+  let zs = util::texts(ys)
+  let more = list::map(util::sorted([5, 4]), fn(x) { x + 1 })
+  io::println(\"{zs} {more}\")
+}
+";
+
+/// Design T8: a release executable of two modules whose bodies, closures,
+/// static dictionaries and value shims cross into the other module links
+/// (no duplicate symbol, and every local copy of a shared symbol the same,
+/// D-918) and prints what the debug run prints.
+#[test]
+fn a_release_executable_of_two_modules_inlined_across_links() {
+    let files = [
+        MANIFEST,
+        ("src/main.cheby", TWO_MODULES),
+        ("src/util.cheby", TWO_MODULES_UTIL),
+    ];
+    let dir = package("two_modules_release", &files);
+    let cache = fresh_cache();
+    let mut run = Command::new(CHEBY);
+    run.args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut run);
+    let debug = process::run(run, None, TIMEOUT).unwrap();
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(debug.stdout, "[10, 20, 30] [5, 6]\n");
+    let exe = dir.join("two_modules");
+    let mut build = Command::new(CHEBY);
+    build
+        .args(["--color=never", "build", "--release", "-o"])
+        .arg(&exe)
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut build);
+    let linked = process::run(build, None, TIMEOUT).unwrap();
+    assert_eq!(linked.status, Some(0), "{}", linked.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, debug.stdout);
+}

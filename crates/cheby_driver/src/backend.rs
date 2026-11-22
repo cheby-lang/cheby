@@ -69,9 +69,11 @@
 //! Every other build, the dumps for goldens and every evaluation module
 //! ([`kind_options`]) is debug. A release build reads and writes no package
 //! record ([`Reading::records`]) and takes std's release code from std's
-//! records, whose settings hold the profile. With the `inline` lever, its
-//! package units are inlined and cleaned up right after lowering, before
-//! borrowing is inferred ([`optimize_release`]).
+//! records, whose settings hold the profile, with or without a cache. With
+//! the `inline` lever, its package units are inlined, across units and
+//! with std's bodies too, and cleaned up right after lowering, before
+//! borrowing is inferred ([`optimize_release`]); std's release masks join
+//! the masks written into them.
 //!
 //! **The reuse report** (D-717): [`build_reporting`] with `reuse_report`
 //! lowers the package's own modules with [`MirOptions::record_sites`], so
@@ -1382,8 +1384,10 @@ impl StdUnits {
 
     /// Writes std's whole masks into the std units among `units` (D-968),
     /// which the build lowered itself; a std unit's calls name only std's
-    /// functions and the package's units call only std's `pub` ones, which
-    /// never borrow (D-787), so no other unit needs them.
+    /// functions and a debug build's package units call only std's `pub`
+    /// ones, which never borrow (D-787), so no other unit needs them. A
+    /// release build takes std from its records and gives its package units
+    /// std's release masks instead (`lower_through_cache`).
     fn apply_masks(&self, front: &Frontend, units: &mut [MirModule]) -> Result<(), Ice> {
         let Some(masks) = &self.masks else {
             return Ok(());
@@ -1466,6 +1470,18 @@ fn std_units(
         ));
         let paths: Vec<String> = std_parts.iter().map(|(_, path)| path.clone()).collect();
         let mut found = crate::std_cache::std_records(&store, &paths, &settings, std_mir)?;
+        for (at, path) in std_parts {
+            let record = found
+                .remove(&path)
+                .ok_or_else(|| Ice::new(format!("no std record of `{path}`")))?;
+            out.cached.insert(at, record);
+        }
+    } else if crate::std_cache::is_release(std_mir) {
+        // A release build takes std's release code from records even
+        // without a cache, so its units meet the code std's release masks
+        // describe (design T9).
+        let paths: Vec<String> = std_parts.iter().map(|(_, path)| path.clone()).collect();
+        let mut found = crate::std_cache::release_records_in_process(&paths, std_mir)?;
         for (at, path) in std_parts {
             let record = found
                 .remove(&path)
@@ -1684,10 +1700,16 @@ fn lower_through_cache(
             tags.push(Some(at));
             units.push(unit);
         }
-        let by_def: borrow::Masks = stored
+        let mut by_def: borrow::Masks = stored
             .values()
             .flat_map(|s| s.by_def.iter().map(|(&def, &mask)| (def, mask)))
             .collect();
+        // Design T9: a release build's package units may call std
+        // functions that borrow, from std bodies they inlined, so they get
+        // std's release masks by name too (refining D-787 and D-968).
+        if std.whole && crate::std_cache::is_release(std.mir) && std.mir.borrows() {
+            by_def.extend(crate::std_cache::std_release_masks_in(front)?);
+        }
         records::infer_with(front, &mut units, facts, &by_def, &|unit, facts| {
             cx.masks_for(unit, facts, std.whole)
         })?
@@ -1879,30 +1901,51 @@ fn lower_through_cache(
     })
 }
 
-/// The release profile's `inline` lever over lowered `units`: each unit's
-/// calls of its own functions inlined and every function cleaned up
-/// ([`cheby_mir::inline::optimize`]), then the unit checked as lowered
-/// again. With `std_whole`, std's units are left as lowered: they take
-/// std's whole masks, inferred over std's lowered code (D-968), and the
-/// tail-call rule those masks were inferred under (D-715) need not hold
-/// in a changed body; std's code from its records is not inlined either.
-/// The units run in parallel; each one's result depends on itself only,
-/// and the first error in build order is reported (D-264).
+/// The release profile's `inline` lever over lowered `units` (design T6,
+/// T8, T9): the units inlined as one build, layer by layer, each unit
+/// taking the bodies of the units it calls and, with `std_whole`, std's
+/// bodies by name from std's release code ([`crate::std_cache::ReleaseStd`]),
+/// and every function cleaned up; each unit is then checked as lowered
+/// again ([`cheby_mir::export::optimize_build`]). With `std_whole`,
+/// std's units come from std's records and are not among `units`; a
+/// build without std's one code (a dump for goldens, std's self-test, the
+/// code-generation benchmark) optimizes its std units with the others,
+/// since its masks are inferred over all of them. The entries unit is not
+/// optimized. The units of a layer run in parallel; each one's result
+/// depends on the layers before it only, and the first error in build
+/// order is reported (D-264).
 fn optimize_release(front: &Frontend, units: &mut [MirModule], std_whole: bool) -> Result<(), Ice> {
-    let done: Vec<Result<(), Ice>> = units
-        .par_iter_mut()
-        .filter(|unit| match unit.unit {
-            UnitKind::Code(module) | UnitKind::Tests(module) => {
-                !(std_whole && is_std(front, module))
-            }
-            UnitKind::Entries => false,
-        })
-        .map(|unit| {
-            cheby_mir::inline::optimize(unit)?;
-            check_lowered(unit)
-        })
-        .collect();
-    done.into_iter().collect()
+    let release = if std_whole {
+        Some(crate::std_cache::release_std()?)
+    } else {
+        None
+    };
+    let none = cheby_mir::export::PortableBodies::new();
+    let portable = release.as_ref().map_or(&none, |r| r.exports());
+    let selected = |unit: &MirModule| match unit.unit {
+        UnitKind::Code(module) | UnitKind::Tests(module) => !(std_whole && is_std(front, module)),
+        UnitKind::Entries => false,
+    };
+    crate::borrowing::with_build_defs(front, |defs| {
+        cheby_mir::export::optimize_build(
+            units,
+            &selected,
+            portable,
+            defs,
+            &cheby_mir::inline::InlineBudget::DEFAULT,
+            &each_in_parallel,
+        )
+    })
+}
+
+/// Runs `step` over `units` in parallel on rayon's global pool, the
+/// results in the order of `units` (D-264): how a release build optimizes
+/// one layer of its units ([`cheby_mir::export::optimize_build`]).
+pub(crate) fn each_in_parallel(
+    units: &mut [&mut MirModule],
+    step: &cheby_mir::export::LayerStep<'_>,
+) -> Vec<Result<Vec<cheby_mir::export::Exported>, Ice>> {
+    units.par_iter_mut().map(|unit| step(unit)).collect()
 }
 
 /// Every package unit's code key ([`crate::borrowing::unit_keys`]): a

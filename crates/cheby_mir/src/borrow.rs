@@ -401,6 +401,18 @@ impl FactName {
     }
 }
 
+/// The module path (empty for the builtin module) and item text by which
+/// facts, masks and portable bodies name `def` ([`find_defs`] finds it
+/// again), read through `defs`.
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see `def`.
+pub(crate) fn def_text(def: DefId, defs: &Defs<'_>) -> Result<(Box<str>, Box<str>), Ice> {
+    let name = FactName::of(def, defs)?;
+    Ok((name.module, name.item))
+}
+
 /// The text of `item` (the item `def`) in a [`FactName`].
 fn item_text(def: DefId, item: &cheby_iface::IfaceItem, defs: &Defs<'_>) -> Result<String, Ice> {
     let names = &defs.globals.names;

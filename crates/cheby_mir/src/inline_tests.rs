@@ -19,7 +19,7 @@ use crate::ir::{
 };
 use crate::positions::Pos;
 use crate::repr::{CType, ForeignSig, Repr};
-use crate::test_support::{Lowered, lower_source_release};
+use crate::test_support::{Lowered, lower_source, lower_source_release};
 use crate::unwind_ir_tests::{builder, def, module};
 use crate::validate::{Stage, validate};
 use crate::{MirOptions, count_lowered_with, dump, dump_function};
@@ -690,4 +690,101 @@ fn cost_counts_statements_and_blocks() {
     b.terminate(Terminator::Return(Operand::Const(Const::Nil)))
         .unwrap();
     assert_eq!(cost(&b.finish().unwrap()), 2);
+}
+
+/// The clean-up folds a switch on a negative sized constant to its case:
+/// a case holds the value's bits within its width, while the constant's
+/// bits are sign-extended (std's `i16::checked_div(min_value, -1)` takes
+/// its `-1` arm).
+#[test]
+fn a_switch_on_a_negative_sized_constant_takes_its_case() {
+    let source = "//! Classifies an `I16`.
+
+import std::int
+import std::io
+
+fn classify(b: I16) -> Int {
+  case b {
+    0 => 10
+    -1 => 11
+    _ => 12
+  }
+}
+
+fn main() {
+  io::println(int::show(classify(-1)))
+}
+";
+    let lowered = lower_source_release(&[("", source)], false);
+    let main = lowered.function("app", "app::main");
+    assert!(main.contains("const int 11"), "{main}");
+    assert!(!main.contains("const int 12"), "{main}");
+}
+
+/// D-839: a helper with a join of its own (`size`'s `case`) is not
+/// inlined at a call in a statement where the join would stop the matched
+/// node's block from reaching the node rebuilt after the call, the shape of
+/// `std::sorted_map::insert`: the release build reuses as many nodes as the
+/// debug build.
+#[test]
+fn a_join_that_would_lose_reuse_is_not_inlined() {
+    let source = "//! A tree that rebuilds its nodes.
+
+import std::int
+import std::io
+
+type Tree {
+  Leaf,
+  Node(Int, Int, Tree, Tree),
+}
+
+fn size(t: Tree) -> Int {
+  case t {
+    Leaf => 0
+    Node(n, _, _, _) => n
+  }
+}
+
+fn insert(t: Tree, k: Int) -> Tree {
+  case t {
+    Leaf => Node(1, k, Leaf, Leaf)
+    Node(n, x, l, r) => case k < x {
+      True => {
+        let grown = insert(l, k)
+        let s = size(grown) + size(r) + 1
+        Node(s, x, grown, r)
+      }
+      False => {
+        let grown = insert(r, k)
+        let s = size(l) + size(grown) + 1
+        Node(s, x, l, grown)
+      }
+    }
+  }
+}
+
+fn main() {
+  let t = insert(insert(insert(Leaf, 2), 1), 3)
+  io::println(int::show(size(t)))
+}
+";
+    let debug = lower_source(&[("", source)]);
+    let release = lower_source_release(&[("", source)], true);
+    let reuses = |l: &Lowered| {
+        l.function("app", "app::insert")
+            .matches("alloc_reuse")
+            .count()
+    };
+    assert_eq!(
+        reuses(&debug),
+        2,
+        "{}",
+        debug.function("app", "app::insert")
+    );
+    assert_eq!(
+        reuses(&release),
+        2,
+        "{}",
+        release.function("app", "app::insert")
+    );
 }

@@ -641,59 +641,7 @@ fn finish_unit(
         crate::hoist::run(f, &|ty| cx.defs.handle_free(ty))?;
     }
     let statics = pending.statics;
-    let mut m = Mentions::default();
-    for f in &functions {
-        collect_defs(f, &mut m);
-    }
-    for s in &statics {
-        if let LayoutRef::Ctor(d) = s.layout {
-            m.ctors.insert(d);
-        }
-        for c in &s.fields {
-            const_defs(c, &mut m);
-        }
-    }
-    let own: BTreeSet<LayoutRef> = layouts.iter().map(|l| l.layout).collect();
-    let mut foreign: Vec<LayoutDesc> = Vec::new();
-    for &ctor in &m.ctors {
-        if !own.contains(&LayoutRef::Ctor(ctor)) {
-            foreign.push(ctor_layout(ctor, &cx.defs)?);
-        }
-    }
-    for &ty in &m.tag_types {
-        foreign.extend(
-            type_layouts(ty, &cx.defs)?
-                .into_iter()
-                .filter(|d| !own.contains(&d.layout)),
-        );
-        m.defs.insert(ty);
-    }
-    foreign.sort_by_key(|d| d.layout);
-    foreign.dedup_by_key(|d| d.layout);
-    let mut mentioned = std::mem::take(&mut m.defs);
-    for l in layouts.iter().chain(&foreign) {
-        if let LayoutRef::Ctor(d) = l.layout {
-            mentioned.insert(d);
-        }
-        if let Some(hooks) = l.hooks {
-            mentioned.extend(hooks);
-        }
-    }
-    let direct = m.direct;
-    let callees = direct
-        .iter()
-        .map(|&def| {
-            Ok(CalleeDecl {
-                def,
-                sig: abi_sig(cx.defs.fn_sig(def)?, cx.defs.globals),
-            })
-        })
-        .collect::<Result<Vec<_>, Ice>>()?;
-    mentioned.extend(direct);
-    let names = mentioned
-        .into_iter()
-        .map(|d| cx.defs.name(d))
-        .collect::<Result<Vec<_>, Ice>>()?;
+    let tables = Tables::of(&functions, &statics, &layouts, &cx.defs)?;
     let path = match unit {
         UnitKind::Code(m) | UnitKind::Tests(m) => cx.defs.modules.try_get(m)?.path.to_string(),
         UnitKind::Entries => String::new(),
@@ -702,17 +650,131 @@ fn finish_unit(
         unit,
         path: path.into(),
         functions,
-        callees,
+        callees: tables.callees,
         layouts,
         externals: match unit {
             UnitKind::Code(module) => crate::layout::module_externals(module, &cx.defs)?,
             UnitKind::Tests(_) | UnitKind::Entries => Vec::new(),
         },
-        foreign_layouts: foreign,
+        foreign_layouts: tables.foreign,
         statics,
-        names,
+        names: tables.names,
         source,
     })
+}
+
+/// The tables of a unit that its functions, statics and own layouts
+/// determine: the declarations of its direct callees, the layouts of the
+/// other modules' constructors its code needs, and the name of every def
+/// it mentions ([`MirModule::callees`], [`MirModule::foreign_layouts`],
+/// [`MirModule::names`]).
+struct Tables {
+    callees: Vec<CalleeDecl>,
+    foreign: Vec<LayoutDesc>,
+    names: Vec<crate::ir::DefName>,
+}
+
+impl Tables {
+    /// The tables of a unit of `functions`, `statics` and `layouts`, read
+    /// through `defs`.
+    fn of(
+        functions: &[Function],
+        statics: &[StaticObject],
+        layouts: &[LayoutDesc],
+        defs: &Defs<'_>,
+    ) -> Result<Self, Ice> {
+        let mut m = Mentions::default();
+        for f in functions {
+            collect_defs(f, &mut m);
+        }
+        for s in statics {
+            if let LayoutRef::Ctor(d) = s.layout {
+                m.ctors.insert(d);
+            }
+            for c in &s.fields {
+                const_defs(c, &mut m);
+            }
+        }
+        let own: BTreeSet<LayoutRef> = layouts.iter().map(|l| l.layout).collect();
+        let mut foreign: Vec<LayoutDesc> = Vec::new();
+        for &ctor in &m.ctors {
+            if !own.contains(&LayoutRef::Ctor(ctor)) {
+                foreign.push(ctor_layout(ctor, defs)?);
+            }
+        }
+        for &ty in &m.tag_types {
+            foreign.extend(
+                type_layouts(ty, defs)?
+                    .into_iter()
+                    .filter(|d| !own.contains(&d.layout)),
+            );
+            m.defs.insert(ty);
+        }
+        foreign.sort_by_key(|d| d.layout);
+        foreign.dedup_by_key(|d| d.layout);
+        let mut mentioned = std::mem::take(&mut m.defs);
+        for l in layouts.iter().chain(&foreign) {
+            if let LayoutRef::Ctor(d) = l.layout {
+                mentioned.insert(d);
+            }
+            if let Some(hooks) = l.hooks {
+                mentioned.extend(hooks);
+            }
+        }
+        let direct = m.direct;
+        let callees = direct
+            .iter()
+            .map(|&def| {
+                Ok(CalleeDecl {
+                    def,
+                    sig: abi_sig(defs.fn_sig(def)?, defs.globals),
+                })
+            })
+            .collect::<Result<Vec<_>, Ice>>()?;
+        mentioned.extend(direct);
+        let names = mentioned
+            .into_iter()
+            .map(|d| defs.name(d))
+            .collect::<Result<Vec<_>, Ice>>()?;
+        Ok(Self {
+            callees,
+            foreign,
+            names,
+        })
+    }
+}
+
+/// The layouts of the constructors that `functions` and `statics` allocate,
+/// read, use as static objects or read the tags of, read through `defs`:
+/// what a body from another unit brings into the one it is inlined in.
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see a def they mention.
+pub(crate) fn foreign_layouts_of(
+    functions: &[Function],
+    statics: &[StaticObject],
+    defs: &Defs<'_>,
+) -> Result<Vec<LayoutDesc>, Ice> {
+    Ok(Tables::of(functions, statics, &[], defs)?.foreign)
+}
+
+/// Computes `unit`'s callee declarations, foreign layouts and names again
+/// from its functions, statics and own layouts, through `defs`, which must
+/// see every def the unit mentions (the whole build's interfaces do): what
+/// lowering computes at the end of a unit, after a pass added code to it,
+/// such as the release inliner's bodies from other units. The callees'
+/// signatures are the lowered ones, all-owned: borrowing is inferred after.
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see a def the unit mentions.
+pub fn refresh_tables(unit: &mut MirModule, defs: &Defs<'_>) -> Result<(), Ice> {
+    let tables = Tables::of(&unit.functions, &unit.statics, &unit.layouts, defs)?;
+    unit.callees = tables.callees;
+    unit.foreign_layouts = tables.foreign;
+    unit.names = tables.names;
+    Ok(())
 }
 
 /// The unit's source path when it records positions (D-938,

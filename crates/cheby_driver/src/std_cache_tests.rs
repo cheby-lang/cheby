@@ -402,6 +402,66 @@ fn std_cache_masks_whole() {
     assert_eq!(whole.named(), again.named());
 }
 
+/// Design T9: std's release code is optimized, its masks inferred over it
+/// as one unit (D-968), the same twice; some of its exports call a std
+/// function that borrows, which is why a release build writes std's
+/// release masks into its package units.
+#[test]
+fn std_cache_release_exports_and_masks() {
+    let release = std_cache::release_std().unwrap();
+    assert!(!release.named().is_empty(), "no std function borrows");
+    assert!(!release.exports().is_empty(), "std exports nothing");
+    let borrows: std::collections::BTreeSet<(&str, &str)> = release
+        .named()
+        .iter()
+        .map(|(m, i, _)| (m.as_str(), i.as_str()))
+        .collect();
+    let mut calls = Vec::new();
+    for (name, body) in release.exports() {
+        let b = body.body();
+        for f in std::iter::once(&b.function).chain(&b.closures) {
+            for block in &f.blocks {
+                let callees = block.stmts.iter().filter_map(|s| {
+                    if let cheby_mir::Stmt::Assign {
+                        value: cheby_mir::Rvalue::Call { callee, .. },
+                        ..
+                    } = s
+                    {
+                        callee.direct()
+                    } else {
+                        None
+                    }
+                });
+                let tail = if let cheby_mir::Terminator::TailCall { callee, .. } = &block.term {
+                    callee.direct()
+                } else {
+                    None
+                };
+                for def in callees.chain(tail) {
+                    if let Some(callee) = body.name_of(def)
+                        && borrows.contains(&callee)
+                    {
+                        calls.push(format!(
+                            "{}::{} ({}) -> {}::{}",
+                            name.0,
+                            name.1,
+                            body.cost(),
+                            callee.0,
+                            callee.1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    calls.sort();
+    calls.dedup();
+    assert!(
+        !calls.is_empty(),
+        "no export calls a borrowing std function"
+    );
+}
+
 /// A constant whose evaluation keeps lists live through `std::list`'s
 /// code: its memory peak depends on how std's functions count (D-617,
 /// D-978).
