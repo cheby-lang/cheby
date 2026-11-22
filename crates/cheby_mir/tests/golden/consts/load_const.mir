@@ -3,9 +3,11 @@ module app
 fn const_init app::base() -> value check str#0 {
   entry unwind bb1
   str#0 = "src/main.cheby:3:7"
+  str#1 = "src/main.cheby:3:19"
 bb0:
-  _0: value = box int const int 40
-  return _0
+  _0: int = checked mul int const int 4, const int 10 at str#1 ; unwind bb1
+  _1: value = box int _0 ; unwind bb1
+  return _1
 bb1:
   resume
 }

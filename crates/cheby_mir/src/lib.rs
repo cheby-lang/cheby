@@ -92,7 +92,8 @@ pub use ir::{
 };
 pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
-    EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
+    EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_items_late_bound,
+    lower_module, lower_tests, scalar_literal,
 };
 pub use options::{MirOptions, RcMode, check_lowered, count_and_check_with, count_lowered_with};
 pub use positions::{Pos, PosRef, Positions};

@@ -609,7 +609,7 @@ fn zero(repr: Repr) -> Result<Const, Ice> {
 /// The integer `v` as a constant of `repr`, if it is an integer
 /// representation that holds `v` (the front end has checked the range,
 /// D-084).
-fn int_const(v: i128, repr: Repr) -> Option<Const> {
+pub(super) fn int_const(v: i128, repr: Repr) -> Option<Const> {
     let (min, max): (i128, i128) = match repr {
         Repr::Int | Repr::I64 => (i64::MIN.into(), i64::MAX.into()),
         Repr::I8 => (i8::MIN.into(), i8::MAX.into()),
@@ -639,7 +639,7 @@ fn int_const(v: i128, repr: Repr) -> Option<Const> {
 /// The float literal `v` as a constant of `repr` (`Float` or `F32`). An
 /// `F32` literal is the nearest `F32` to its decimal text, rounded once by
 /// the front end (§3.3.4, D-496, D-569).
-fn float_const(v: FloatLit, repr: Repr) -> Option<Const> {
+pub(super) fn float_const(v: FloatLit, repr: Repr) -> Option<Const> {
     match repr {
         Repr::Float => Some(Const::Float(v.wide.to_bits())),
         Repr::F32 => Some(Const::Sized {

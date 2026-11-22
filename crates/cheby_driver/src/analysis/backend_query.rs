@@ -257,19 +257,27 @@ fn constants(
         }
         Ok(built) => {
             // Only a constant with a slot was compiled: `debug_texts` takes
-            // no other.
+            // no other. A scalar literal was not evaluated: its text comes
+            // from its value, as the runtime prints it.
             let evaluated: Vec<&LocalConst> = consts
                 .iter()
-                .filter(|c| built.jit.const_slot(c.def).is_some())
+                .filter(|c| {
+                    built.jit.const_slot(c.def).is_some() && !built.literals.contains_key(&c.def)
+                })
                 .collect();
             let defs: Vec<DefId> = evaluated.iter().map(|c| c.def).collect();
             let texts = match cheby_consteval::debug_texts(&built.jit, &defs) {
                 Ok(texts) => texts,
                 Err(ice) => return Section::Failed(ice.message().to_owned()),
             };
+            let literals = consts.iter().filter_map(|c| {
+                let value = built.literals.get(&c.def)?;
+                Some((c, Some(value.debug_text())))
+            });
             let mut values: Vec<ConstValue> = evaluated
                 .into_iter()
                 .zip(texts)
+                .chain(literals)
                 .filter_map(|(c, text)| {
                     let (text, truncated) = cut_text(text?, max_text);
                     let modules = built

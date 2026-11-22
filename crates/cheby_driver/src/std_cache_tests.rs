@@ -258,7 +258,11 @@ fn std_cache_one_code_for_every_command() {
     let app = f.package(&[("main.cheby", CONST_MAIN)]);
     let run = f.run(&app);
     assert!(!lines(&run, "parse.std").is_empty(), "{run:?}");
-    for log in [f.check(&app), f.test(&app), f.run(&app)] {
+    // A check whose constant hits the run's entry builds no evaluation
+    // module (D-1260), so the check is of a package whose constant misses.
+    let edited = CONST_MAIN.replace("range(0, 10)", "range(0, 11)");
+    let missing = f.package(&[("main.cheby", &edited)]);
+    for log in [f.check(&missing), f.test(&app), f.run(&app)] {
         assert!(misses(&log, "code.std").is_empty(), "{log:?}");
         assert!(!lines(&log, "code.std").is_empty(), "{log:?}");
         assert!(lines(&log, "parse.std").is_empty(), "{log:?}");

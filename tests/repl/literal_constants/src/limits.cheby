@@ -1,0 +1,14 @@
+//! A literal constant and the functions of its module that read it.
+
+/// The limit.
+pub const limit: Int = 3
+
+/// The limit, twice.
+pub fn twice() -> Int {
+  limit * 2
+}
+
+/// A function that reads the limit when it is called.
+pub fn reader() -> fn() -> Int {
+  fn() -> Int { limit }
+}

@@ -34,7 +34,7 @@ use crate::borrow::{
     BorrowMask, BuildFacts, IfaceEligibility, Masks, UnitFacts, collect_facts, infer, infer_build,
     unit_facts,
 };
-use crate::lower::{lower_items_split, lower_tests_split};
+use crate::lower::{lower_items_late_bound, lower_items_split, lower_tests_split};
 use crate::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Root, Stage,
     count_lowered_with, dump, dump_function, lower_entries, reachable, validate,
@@ -91,6 +91,9 @@ pub(crate) enum Mode {
     /// As `Counted`, counted with these options (fusion's tests compare
     /// options, D-850).
     CountedWith(MirOptions),
+    /// As `Uncounted`, the code units lowered as a REPL session lowers
+    /// them ([`lower_items_late_bound`]).
+    LateBound,
 }
 
 impl Lowered {
@@ -332,6 +335,13 @@ pub(crate) fn lower_source_split(files: &[(&str, &str)], size: usize, with_tests
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
+/// [`lower_source_uncounted`] whose code units are lowered as a REPL
+/// session lowers them: every constant read from its slot.
+pub(crate) fn lower_source_late_bound(files: &[(&str, &str)]) -> Lowered {
+    lower_package_with("app", files, false, None, Mode::LateBound)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
 /// [`lower_source`] without reference counts: the units as lowered,
 /// validated at `Stage::Lowered` (what borrowing inference reads).
 pub(crate) fn lower_source_uncounted(files: &[(&str, &str)]) -> Lowered {
@@ -569,6 +579,33 @@ fn lower_package_with(
     })
 }
 
+/// Where `mode` cuts large literals (D-780), `None` at [`crate::lower::SPLIT_SIZE`].
+const fn split_of(mode: Mode) -> Option<usize> {
+    match mode {
+        Mode::Split { size } => Some(size),
+        Mode::Counted
+        | Mode::Uncounted
+        | Mode::Inferred { .. }
+        | Mode::CountedWith(_)
+        | Mode::LateBound => None,
+    }
+}
+
+/// The code unit of `thir`'s items that `wanted` selects, lowered as
+/// `mode` asks.
+fn lower_code(
+    thir: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    mode: Mode,
+) -> MirModule {
+    if matches!(mode, Mode::LateBound) {
+        lower_items_late_bound(thir, wanted, cx).unwrap()
+    } else {
+        lower_items_split(thir, wanted, cx, split_of(mode)).unwrap()
+    }
+}
+
 /// The back end of [`lower_package_with`]: the units, each counted and
 /// checked or only validated as lowered (`mode`), and the borrow masks
 /// of [`Mode::Inferred`]. An internal error panics with the unit's dump.
@@ -656,13 +693,9 @@ fn back_end(
             sources,
         };
         let wanted = |def| reach_all || reach.contains(def);
-        let split = match mode {
-            Mode::Split { size } => Some(size),
-            Mode::Counted | Mode::Uncounted | Mode::Inferred { .. } | Mode::CountedWith(_) => None,
-        };
-        push(lower_items_split(thir, &wanted, &cx, split).unwrap());
+        push(lower_code(thir, &wanted, &cx, mode));
         if tests.iter().any(|&(m, _)| m == id) {
-            push(lower_tests_split(thir, &cx, split).unwrap());
+            push(lower_tests_split(thir, &cx, split_of(mode)).unwrap());
         }
     }
     let mut all: Vec<ModuleId> = order.to_vec();
@@ -743,9 +776,11 @@ fn finish(
         Mode::Counted | Mode::Split { .. } | Mode::CountedWith(_) => {
             let options = match mode {
                 Mode::CountedWith(options) => options,
-                Mode::Counted | Mode::Uncounted | Mode::Split { .. } | Mode::Inferred { .. } => {
-                    MirOptions::default()
-                }
+                Mode::Counted
+                | Mode::Uncounted
+                | Mode::Split { .. }
+                | Mode::Inferred { .. }
+                | Mode::LateBound => MirOptions::default(),
             };
             // A build infers borrowing only when its options borrow
             // (D-808).
@@ -761,7 +796,7 @@ fn finish(
             }
             found
         }
-        Mode::Uncounted => BTreeMap::new(),
+        Mode::Uncounted | Mode::LateBound => BTreeMap::new(),
     };
     masks
         .into_iter()

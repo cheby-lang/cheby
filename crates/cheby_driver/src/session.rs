@@ -82,7 +82,7 @@ use cheby_mir::reach::{Reach, Root, reachable_with_hooks};
 use cheby_mir::repr::foreign_sig_with_context;
 use cheby_mir::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, count_and_check_with,
-    lower_entries, lower_items, lower_tests,
+    lower_entries, lower_items, lower_items_late_bound, lower_tests,
 };
 use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, Target, Targets};
 use cheby_resolve::repl::{Entered, SessionScope};
@@ -2192,6 +2192,24 @@ impl Session {
         Ok(units)
     }
 
+    /// The items of `thir`, `module`'s, that `wanted` selects. Std's
+    /// constants never change, so std's code is lowered as every command
+    /// lowers it; the session's own code reads every constant from its
+    /// slot, since a later entry may redefine one in place (D-043, D-547).
+    fn lower_items_of(
+        &self,
+        module: ModuleId,
+        thir: &thir::Module,
+        wanted: &dyn Fn(DefId) -> bool,
+        cx: &LowerCx<'_>,
+    ) -> Result<MirModule, Ice> {
+        if self.is_std(module) {
+            lower_items(thir, wanted, cx)
+        } else {
+            lower_items_late_bound(thir, wanted, cx)
+        }
+    }
+
     /// Whether `module` is a std module.
     fn is_std(&self, module: ModuleId) -> bool {
         self.front
@@ -2394,7 +2412,7 @@ impl Session {
                 },
                 sources: &self.sources,
             };
-            let mut unit = lower_items(thir, &wanted, &cx)?;
+            let mut unit = self.lower_items_of(module, thir, &wanted, &cx)?;
             if !self.is_std(module) {
                 name_native_generation(&mut unit, self.native_generation);
                 crate::native::attach_drops(&self.front, module, &mut unit, self.native_generation);

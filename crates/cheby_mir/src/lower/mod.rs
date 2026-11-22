@@ -61,6 +61,7 @@ use cheby_diag::{FileId, SourceMap, Span};
 use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, PackageId, Ty, display};
 use cheby_types::thir;
 
+pub use consts::scalar_literal;
 pub use entry::{EntryRequest, lower_entries};
 pub use intrinsic::{Intrinsic, intrinsic_symbols};
 pub use split::{SPLIT_SIZE, STATEMENT_BUDGET, TUPLE_INIT_THRESHOLD};
@@ -159,6 +160,11 @@ pub(crate) struct Pending {
     /// [`Pending::for_module`]); only spans in it get one, since a line
     /// table names one file.
     positions: Option<FileId>,
+    /// The module's constants whose initializer is a scalar literal, each
+    /// with its value and type, which the module's code reads in place of
+    /// their slots (`consts.rs`); empty for a tests unit and in a REPL
+    /// session.
+    literal_consts: BTreeMap<DefId, (Const, Ty)>,
 }
 
 impl Pending {
@@ -202,6 +208,12 @@ impl Pending {
         // never lowers std's tests, so this costs nothing there.
         self.call_locs = self.outside_std || tests;
         Ok(self)
+    }
+
+    /// The value and type of `def` when it is a constant of the unit's
+    /// module whose initializer is a scalar literal.
+    pub(crate) fn literal_const(&self, def: DefId) -> Option<(Const, Ty)> {
+        self.literal_consts.get(&def).cloned()
     }
 
     /// Whether the unit's functions record positions (D-938).
@@ -350,7 +362,23 @@ pub fn lower_items(
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, Ice> {
-    lower_items_with(module, wanted, cx, Pending::default())
+    lower_items_with(module, wanted, cx, Pending::default(), true)
+}
+
+/// [`lower_items`] for a REPL session: every constant is read from its
+/// slot, a scalar literal of the same module too, since a later entry may
+/// redefine the constant in place and earlier code must see the new value
+/// (D-043, D-547).
+///
+/// # Errors
+///
+/// As [`lower_module`].
+pub fn lower_items_late_bound(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+) -> Result<MirModule, Ice> {
+    lower_items_with(module, wanted, cx, Pending::default(), false)
 }
 
 /// [`lower_items`] that, with `record_sites`, records in each body the
@@ -373,7 +401,7 @@ pub fn lower_items_recording(
         record_sites,
         ..Pending::default()
     };
-    lower_items_with(module, wanted, cx, pending)
+    lower_items_with(module, wanted, cx, pending, true)
 }
 
 /// [`lower_items`] with large literals cut at `split` (D-780), or at
@@ -389,7 +417,7 @@ pub(crate) fn lower_items_split(
         split,
         ..Pending::default()
     };
-    lower_items_with(module, wanted, cx, pending)
+    lower_items_with(module, wanted, cx, pending, true)
 }
 
 /// [`lower_tests`] with large literals cut at `split`, as
@@ -407,13 +435,19 @@ pub(crate) fn lower_tests_split(
     lower_tests_with(module, cx, pending)
 }
 
+/// [`lower_items`] with `pending`; with `fold_consts`, the module's scalar
+/// literal constants are read as their literals (`consts.rs`).
 fn lower_items_with(
     module: &thir::Module,
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
     pending: Pending,
+    fold_consts: bool,
 ) -> Result<MirModule, Ice> {
     let mut pending = pending.for_module(module.module, false, cx)?;
+    if fold_consts {
+        pending.literal_consts = consts::literal_consts(module, cx.defs.globals);
+    }
     let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();

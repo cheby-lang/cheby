@@ -76,6 +76,11 @@
 //! with the program's trampolines: hashing a key may call a type's
 //! `@std_hooks` closure.
 //!
+//! The image of a scalar value, the constant of a scalar literal's, is
+//! written without the value ([`scalar_image`]): the bytes [`serialize`]
+//! writes for the word the runtime makes of it, so such a constant needs
+//! no evaluation.
+//!
 //! The program image's `constants` table ([`encode_table`]) is `"CHBT"`,
 //! the image count (a number), then each image's length (a number) and
 //! bytes, in D-535's order; a program without constants has an empty table.
@@ -474,6 +479,102 @@ unsafe fn serialize_with(
         });
     }
     Ok(out)
+}
+
+/// A value of a scalar type, as the constant of a scalar literal holds it
+/// (D-979): [`scalar_image`] writes its image without the value, so a
+/// constant whose initializer is a literal needs no evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scalar {
+    /// An `Int` or a sized integer up to 64 bits signed (`I8` to `I64`)
+    /// or 32 bits unsigned (`U8` to `U32`): tagged when it fits 63 bits,
+    /// else a boxed `Int`.
+    Int(i64),
+    /// A `U64`: tagged up to 2^62 - 1, else a boxed `U64`.
+    U64(u64),
+    /// A `Float`, as its bits: a boxed `Float`.
+    Float(u64),
+    /// An `F32`, as its bits: a boxed `F32`.
+    F32(u32),
+    /// `Nil`.
+    Nil,
+    /// `True` or `False`.
+    Bool(bool),
+    /// `None`.
+    None,
+    /// `Less`, `Equal` or `Greater`.
+    Order(std::cmp::Ordering),
+}
+
+impl Scalar {
+    /// The value's root reference, and its one object (kind and payload)
+    /// when it is boxed: what [`serialize`] writes for the word the
+    /// runtime makes of it (`values::int_word`, `u64_word`, `f64_word`,
+    /// `f32_word` and the statics).
+    fn reference(self) -> (Ref, Option<(u8, u64)>) {
+        let boxed = |kind: u8, bits: u64| (Ref::Local(0), Some((kind, bits)));
+        match self {
+            Self::Int(n) => match abi::tag_int(n) {
+                Some(word) => (Ref::Imm(word), None),
+                None => boxed(kind::BOXED_INT, n.cast_unsigned()),
+            },
+            Self::U64(n) => match i64::try_from(n).ok().and_then(abi::tag_int) {
+                Some(word) => (Ref::Imm(word), None),
+                None => boxed(kind::BOXED_U64, n),
+            },
+            Self::Float(bits) => boxed(kind::BOXED_FLOAT, bits),
+            Self::F32(bits) => boxed(kind::BOXED_F32, u64::from(bits)),
+            Self::Nil => (Ref::Static(Static::Nil), None),
+            Self::Bool(false) => (Ref::Static(Static::False), None),
+            Self::Bool(true) => (Ref::Static(Static::True), None),
+            Self::None => (Ref::Static(Static::None), None),
+            Self::Order(std::cmp::Ordering::Less) => (Ref::Static(Static::Less), None),
+            Self::Order(std::cmp::Ordering::Equal) => (Ref::Static(Static::Equal), None),
+            Self::Order(std::cmp::Ordering::Greater) => (Ref::Static(Static::Greater), None),
+        }
+    }
+
+    /// The value's debug text, as `generic::debug_string` prints the
+    /// word the runtime makes of it (§3.3.6, D-531).
+    #[must_use]
+    pub fn debug_text(self) -> String {
+        match self {
+            Self::Int(n) => n.to_string(),
+            Self::U64(n) => n.to_string(),
+            Self::Float(bits) => crate::num::text::float_to_string(f64::from_bits(bits)),
+            Self::F32(bits) => crate::num::text::f32_to_string(f32::from_bits(bits)),
+            Self::Nil => "Nil".to_owned(),
+            Self::Bool(b) => if b { "True" } else { "False" }.to_owned(),
+            Self::None => "None".to_owned(),
+            Self::Order(std::cmp::Ordering::Less) => "Less".to_owned(),
+            Self::Order(std::cmp::Ordering::Equal) => "Equal".to_owned(),
+            Self::Order(std::cmp::Ordering::Greater) => "Greater".to_owned(),
+        }
+    }
+}
+
+/// The image of the constant `path` whose value is `value`: the bytes
+/// [`serialize`] writes for the word the runtime makes of `value`, byte
+/// for byte. Such an image references no other image and no other image
+/// can reference it unless a constant read the value while it was
+/// evaluated, so it can be written without any evaluation.
+#[must_use]
+pub fn scalar_image(path: &str, value: Scalar) -> ConstImage {
+    let (root, object) = value.reference();
+    let mut bytes = Vec::with_capacity(path.len().saturating_add(32));
+    bytes.extend_from_slice(MAGIC);
+    bytes.push(IMAGE_FORMAT);
+    put_bytes(&mut bytes, path.as_bytes());
+    put_number(&mut bytes, u64::from(object.is_some()));
+    put_ref(&mut bytes, root, &[]);
+    if let Some((kind, bits)) = object {
+        bytes.push(kind);
+        put_u64(&mut bytes, bits);
+    }
+    ConstImage {
+        path: path.into(),
+        bytes,
+    }
 }
 
 /// The reference of a word that is no object of an image: a tagged

@@ -29,6 +29,13 @@
 //! are never stored, and a REPL session looks nothing up (D-1190): only
 //! `backend.rs`'s evaluation modules and `cheby check`'s build come here.
 //!
+//! A constant that misses and whose initializer is a scalar literal is
+//! not evaluated: its image is written from the literal
+//! ([`literal_images`], `scalar_image`) and stored like a fresh one, under
+//! the same key, so every later lookup and warm decision is as before.
+//! Only when a constant that is evaluated reads it is it evaluated too,
+//! since that one's image may reference its object.
+//!
 //! An image may reference objects of earlier images of the same
 //! evaluation (D-1188's tag 3), so a cached image is valid only beside the
 //! very images it was written with. Its entry therefore lists each image
@@ -45,16 +52,19 @@
 //! hash of its bytes, then the image's bytes), 1 for a failure (the blob
 //! of one list of diagnostics, `replay`'s encoding).
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use cheby_consteval::ConstInfo;
 use cheby_diag::{Diagnostic, LabelStyle, SourceMap};
-use cheby_iface::{DefId, Ice, ModuleId, ModuleTable, PackageId};
+use cheby_iface::{DefId, Ice, ModuleId, ModuleTable, PackageId, builtin};
+use cheby_mir::ir::Const;
 use cheby_mir::reach::Reach;
-use cheby_mir::{MirOptions, RcMode};
+use cheby_mir::{MirOptions, RcMode, Repr};
 use cheby_package::{Target, Targets};
-use cheby_runtime::consteval::image::ConstImage;
+use cheby_runtime::consteval::image::{ConstImage, Scalar, scalar_image};
+use cheby_types::thir;
 
 use super::front::{FrontRecord, MentionerKind, sealed, unsealed};
 use super::index::IndexEntry;
@@ -276,13 +286,6 @@ impl ConstStore {
         ConstEntry::decode(path, &bytes)
     }
 
-    /// [`ConstStore::find`], logged as `const <path> hit|miss` (D-973).
-    fn lookup(&self, path: &str, key: &Key) -> Option<ConstEntry> {
-        let found = self.find(path, key);
-        self.log.record(ARTIFACT, path, found.is_some());
-        found
-    }
-
     /// Writes `entry` under `key` behind the command (D-1138), at most once
     /// per process (D-1139); a write that fails is skipped (D-1129).
     fn put(&self, key: &Key, entry: &ConstEntry) {
@@ -376,8 +379,10 @@ pub(crate) struct ConstPlan<'i> {
     store: Option<ConstStore>,
     infos: &'i [ConstInfo],
     keys: Vec<Key>,
-    /// Per constant: its usable hit.
+    /// Per constant: its usable hit, or its literal's image.
     hits: Vec<Option<Hit>>,
+    /// Per constant: whether its lookup found an entry, for the log.
+    found: Vec<bool>,
 }
 
 /// A usable hit.
@@ -385,12 +390,27 @@ enum Hit {
     Image(ConstImage, Vec<(Box<str>, Hash128)>),
     /// The failure's diagnostics, replayed.
     Failed(Vec<Diagnostic>),
+    /// A constant that missed whose initializer is a scalar literal: its
+    /// image written without evaluating it ([`literal_images`]), stored as a
+    /// fresh one would be.
+    Literal(ConstImage, Scalar),
+}
+
+impl Hit {
+    /// The image the hit installs, if any.
+    const fn image(&self) -> Option<&ConstImage> {
+        match self {
+            Self::Image(image, _) | Self::Literal(image, _) => Some(image),
+            Self::Failed(_) => None,
+        }
+    }
 }
 
 impl<'i> ConstPlan<'i> {
     /// Looks up every constant of `infos` (the build's, in D-535's order,
-    /// reached in `reach`) and decides what to evaluate (module docs).
-    /// Without a cache everything is evaluated; with `dump`
+    /// reached in `reach`) and decides what to evaluate (module docs),
+    /// each lookup logged. Without a cache everything is evaluated but the
+    /// scalar literals ([`literal_images`]); with `dump`
     /// (`CHEBY_DUMP_DIR`) nothing is read (D-965) and everything is
     /// evaluated and written.
     ///
@@ -405,46 +425,100 @@ impl<'i> ConstPlan<'i> {
         mir: MirOptions,
         dump: bool,
     ) -> Result<Self, Ice> {
-        let Some(mut store) = ConstStore::of_front(front) else {
-            return Ok(Self {
-                store: None,
-                infos,
-                keys: Vec::new(),
-                hits: infos.iter().map(|_| None).collect(),
-            });
+        let plan = Self::unlogged(front, sources, reach, infos, mir, dump)?;
+        plan.log();
+        Ok(plan)
+    }
+
+    /// [`ConstPlan::new`] without logging its lookups: `cheby check`
+    /// decides with it whether to lower anything, and logs the lookups
+    /// with [`ConstPlan::log`] where it always did.
+    ///
+    /// # Errors
+    ///
+    /// As for [`ConstPlan::new`].
+    pub(crate) fn unlogged(
+        front: &Frontend,
+        sources: &SourceMap,
+        reach: &Reach,
+        infos: &'i [ConstInfo],
+        mir: MirOptions,
+        dump: bool,
+    ) -> Result<Self, Ice> {
+        // A dump holds the debug text of every evaluated constant (D-965),
+        // so with one even a literal is evaluated.
+        let literals = if dump {
+            infos.iter().map(|_| None).collect()
+        } else {
+            literal_images(front, infos)
         };
-        if dump {
-            store.reads = false;
-        }
-        let build = store.store.build_id();
-        let keys = keys_after_check(
-            front,
-            sources,
-            reach,
-            infos,
-            build,
-            &settings(mir),
-            &ConstLimits::of(front),
-        )?;
+        let store = ConstStore::of_front(front).map(|mut store| {
+            if dump {
+                store.reads = false;
+            }
+            store
+        });
+        let keys = match &store {
+            Some(store) => keys_after_check(
+                front,
+                sources,
+                reach,
+                infos,
+                store.store.build_id(),
+                &settings(mir),
+                &ConstLimits::of(front),
+            )?,
+            None => Vec::new(),
+        };
         let mut hits: Vec<Option<Hit>> = Vec::with_capacity(infos.len());
-        for (info, key) in infos.iter().zip(&keys) {
-            let hit = match store.lookup(&info.path, key) {
+        let mut found: Vec<bool> = Vec::with_capacity(infos.len());
+        for (n, (info, literal)) in infos.iter().zip(literals).enumerate() {
+            let entry = match (&store, keys.get(n)) {
+                (Some(store), Some(key)) => store.find(&info.path, key),
+                (Some(_) | None, _) => None,
+            };
+            found.push(entry.is_some());
+            let hit = match entry {
                 Some(ConstEntry::Image(image, refs)) => Some(Hit::Image(image, refs)),
                 Some(ConstEntry::Failed(blob)) => {
                     replay_failure(front, sources, info, &blob)?.map(Hit::Failed)
                 }
                 None => None,
             };
-            hits.push(hit);
+            hits.push(hit.or_else(|| literal.map(|(image, value)| Hit::Literal(image, value))));
         }
         let mut plan = Self {
-            store: Some(store),
+            store,
             infos,
             keys,
             hits,
+            found,
         };
         plan.close(reach);
         Ok(plan)
+    }
+
+    /// Logs each lookup as `const <path> hit|miss` (D-973), in D-535's
+    /// order; nothing without a cache.
+    pub(crate) fn log(&self) {
+        if let Some(store) = &self.store {
+            for (info, &found) in self.infos.iter().zip(&self.found) {
+                store.log.record(ARTIFACT, &info.path, found);
+            }
+        }
+    }
+
+    /// The constants this build writes images for without evaluating them,
+    /// each with its value: `cheby check`'s JIT holds no value for them.
+    pub(crate) fn literals(&self) -> BTreeMap<DefId, Scalar> {
+        self.infos
+            .iter()
+            .zip(&self.hits)
+            .filter_map(|(info, hit)| match hit {
+                Some(Hit::Literal(_, value)) => Some((info.def, *value)),
+                Some(Hit::Image(..) | Hit::Failed(_)) | None => None,
+            })
+            .collect()
     }
 
     /// Drops every hit that cannot be installed beside the others (module
@@ -466,7 +540,11 @@ impl<'i> ConstPlan<'i> {
             for (path, _) in refs {
                 if let Some(&n) = index.get(&**path)
                     && !hashes.contains_key(&n)
-                    && let Some(Some(Hit::Image(image, _))) = self.hits.get(n)
+                    && let Some(image) = self
+                        .hits
+                        .get(n)
+                        .and_then(Option::as_ref)
+                        .and_then(Hit::image)
                 {
                     hashes.insert(n, Hash128::of(&image.bytes));
                 }
@@ -478,7 +556,7 @@ impl<'i> ConstPlan<'i> {
             Some(Hit::Image(_, refs)) => refs
                 .iter()
                 .all(|(path, hash)| index.get(&**path).and_then(|n| hashes.get(n)) == Some(hash)),
-            Some(Hit::Failed(_)) => true,
+            Some(Hit::Failed(_) | Hit::Literal(..)) => true,
             None => false,
         }) {
             return;
@@ -501,13 +579,18 @@ impl<'i> ConstPlan<'i> {
                     Some(Some(Hit::Image(_, refs))) => {
                         refs.iter().all(|(path, hash)| {
                             index.get(&**path).is_some_and(|&m| {
-                                matches!(self.hits.get(m), Some(Some(Hit::Image(..))))
-                                    && hashes.get(&m) == Some(hash)
+                                matches!(
+                                    self.hits.get(m),
+                                    Some(Some(Hit::Image(..) | Hit::Literal(..)))
+                                ) && hashes.get(&m) == Some(hash)
                             })
                         }) && self.reads_only_hits(reads.get(n))
                     }
                     Some(Some(Hit::Failed(_))) => self.reads_only_hits(reads.get(n)),
-                    Some(None) | None => true,
+                    // A literal reads nothing; it is evaluated only when an
+                    // evaluated constant reads it (below), so that what that
+                    // one's image references comes from the same evaluation.
+                    Some(Some(Hit::Literal(..)) | None) | None => true,
                 };
                 if !keep && let Some(slot) = self.hits.get_mut(n) {
                     *slot = None;
@@ -588,7 +671,19 @@ impl<'i> ConstPlan<'i> {
                         *slot = Some(image);
                     }
                 }
-                self.store_images(&evaluated, &images);
+                // The literals' images are stored as fresh ones: the
+                // entries are the ones their evaluation would write.
+                let mut written = evaluated;
+                for (n, hit) in self.hits.iter().enumerate() {
+                    if let Some(Hit::Literal(image, _)) = hit
+                        && let Some(slot) = images.get_mut(n)
+                    {
+                        *slot = Some(image.clone());
+                        written.push(n);
+                    }
+                }
+                written.sort_unstable();
+                self.store_images(&written, &images);
             }
             Err(failed) => {
                 self.store_failures(front, sources, &failed)?;
@@ -598,7 +693,9 @@ impl<'i> ConstPlan<'i> {
         let mut out = Vec::with_capacity(self.infos.len());
         for (slot, hit) in images.into_iter().zip(self.hits) {
             match (slot, hit) {
-                (Some(image), _) | (None, Some(Hit::Image(image, _))) => out.push(image),
+                (Some(image), _) | (None, Some(Hit::Image(image, _) | Hit::Literal(image, _))) => {
+                    out.push(image);
+                }
                 (None, Some(Hit::Failed(replayed))) => diagnostics.extend(replayed),
                 (None, None) => {}
             }
@@ -713,6 +810,82 @@ pub(crate) fn images_through_cache(
         evaluate(&subset)?
     };
     plan.finish(front, sources, fresh)
+}
+
+/// The largest `Int` whose magnitude JavaScript represents exactly,
+/// 2^53 - 1 (E0078, D-540).
+const JS_SAFE_MAX: u64 = (1 << 53) - 1;
+
+/// The image and value of each of `infos` whose initializer is a scalar
+/// literal (`cheby_mir::scalar_literal`), written as its evaluation would
+/// write it (`scalar_image`, D-979), so it needs no evaluation module. `None`
+/// for any other constant; for one whose module has no checked body here
+/// (a warm hit, or a std module whose records hit, K6), which keeps its
+/// entry or is evaluated; and for an `Int` outside ±(2^53 - 1) that
+/// exists on `js` in a package that targets it, whose range check (E0078,
+/// D-540) runs on the evaluated value. A literal cannot fail, read another constant or
+/// approach the limits of D-536, so nothing else the evaluation reports
+/// can apply to it.
+fn literal_images(front: &Frontend, infos: &[ConstInfo]) -> Vec<Option<(ConstImage, Scalar)>> {
+    let js = front.package_targets.contains(Target::Js);
+    let mut by_module: BTreeMap<ModuleId, BTreeMap<DefId, &thir::ConstDef>> = BTreeMap::new();
+    let mut out = Vec::with_capacity(infos.len());
+    for info in infos {
+        let consts = by_module.entry(info.def.module).or_insert_with(|| {
+            front
+                .checked_quiet(info.def.module)
+                .map_or_else(BTreeMap::new, |c| {
+                    c.thir.consts.iter().map(|c| (c.def, c)).collect()
+                })
+        });
+        let value = consts
+            .get(&info.def)
+            .and_then(|c| cheby_mir::scalar_literal(c, &front.globals))
+            .filter(|value| !(js && info.on_js) || js_safe(value))
+            .and_then(|value| scalar_of(&value));
+        out.push(value.map(|value| (scalar_image(&info.path, value), value)));
+    }
+    out
+}
+
+/// The runtime's scalar of a MIR constant of a scalar type's
+/// representation (`cheby_mir::scalar_literal`'s values).
+fn scalar_of(value: &Const) -> Option<Scalar> {
+    Some(match *value {
+        Const::Int(n) => Scalar::Int(n),
+        Const::Float(bits) => Scalar::Float(bits),
+        Const::Bool(b) => Scalar::Bool(b),
+        Const::Nil => Scalar::Nil,
+        // Signed bits are sign-extended, unsigned ones zero-extended, as
+        // `box` widens them before tagging.
+        Const::Sized { repr, bits } => match repr {
+            Repr::I8 | Repr::I16 | Repr::I32 | Repr::I64 => Scalar::Int(bits.cast_signed()),
+            Repr::U8 | Repr::U16 | Repr::U32 => Scalar::Int(i64::try_from(bits).ok()?),
+            Repr::U64 => Scalar::U64(bits),
+            Repr::F32 => Scalar::F32(u32::try_from(bits).ok()?),
+            Repr::Value | Repr::Int | Repr::Float | Repr::Bool => return None,
+        },
+        Const::StaticCtor(def) if def == builtin::NONE => Scalar::None,
+        Const::StaticCtor(def) if def == builtin::LESS => Scalar::Order(Ordering::Less),
+        Const::StaticCtor(def) if def == builtin::EQUAL => Scalar::Order(Ordering::Equal),
+        Const::StaticCtor(def) if def == builtin::GREATER => Scalar::Order(Ordering::Greater),
+        Const::StaticCtor(_)
+        | Const::Str(_)
+        | Const::FnValue(_)
+        | Const::Code(_)
+        | Const::EmptyList
+        | Const::Static(_)
+        | Const::BuiltinDesc(_)
+        | Const::Ctx
+        | Const::ErrNil => return None,
+    })
+}
+
+/// Whether `value` is no `Int` that JavaScript cannot represent exactly:
+/// E0078's range check reads only `Int`s (D-540), which are
+/// [`Const::Int`] in their representation.
+const fn js_safe(value: &Const) -> bool {
+    !matches!(value, Const::Int(n) if n.unsigned_abs() > JS_SAFE_MAX)
 }
 
 /// The constants the initializer of `def` reads, directly or through

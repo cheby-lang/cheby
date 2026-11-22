@@ -85,6 +85,7 @@ use cheby_mir::{
     borrow, check_lowered, count_lowered_with, lower_entries,
 };
 use cheby_package::Target;
+use cheby_runtime::consteval::image::Scalar;
 use cheby_types::thir;
 use rayon::prelude::*;
 
@@ -167,6 +168,11 @@ pub(crate) struct Built {
     /// language server's child reports them, so a value counts as current
     /// only while those modules are unchanged (D-1510).
     pub const_modules: BTreeMap<DefId, Vec<ModuleId>>,
+    /// For [`Roots::Constants`], the constants whose initializer is a
+    /// scalar literal and whose images were written without evaluating
+    /// them, by value: `jit` holds no value for them. Empty for the other
+    /// roots.
+    pub literals: BTreeMap<DefId, Scalar>,
 }
 
 /// The MIR options of a build, read from the environment once per build:
@@ -328,8 +334,54 @@ pub(crate) fn build_scoped(
         resolves: program.then_some(resolves),
         reuse: reuse_report && mir.record_sites,
     };
+    // K5b: `cheby check` looks its constants up first (D-977), over the
+    // reach its lowering computes. When every one hits or is a scalar
+    // literal, which needs no evaluation, it lowers, compiles and evaluates
+    // nothing, installs nothing and replays the cached failures (D-1187).
+    // The lookups are logged where they were before lowering came after
+    // them.
+    let consts_span = crate::phases::span(crate::phases::Phase::Consts);
+    let check_reach = if check {
+        Some(constants_reach(front, scope)?)
+    } else {
+        None
+    };
+    let check_infos = match &check_reach {
+        Some((reach, _)) => const_infos(front, sources, reach)?,
+        None => Vec::new(),
+    };
+    let mut check_plan = match &check_reach {
+        Some((reach, _)) => Some(crate::cache::consts::ConstPlan::unlogged(
+            front,
+            sources,
+            reach,
+            &check_infos,
+            mir_options,
+            dump.is_some(),
+        )?),
+        None => None,
+    };
+    drop(consts_span);
+    if !reuse_report
+        && let Some((reach, _)) = &check_reach
+        && let Some(plan) =
+            check_plan.take_if(|plan| !check_infos.is_empty() && plan.to_evaluate().is_empty())
+    {
+        plan.log();
+        let literals = plan.literals();
+        return Ok(match plan.finish(front, sources, Ok(Vec::new()))? {
+            Ok(_) => Ok(Built {
+                jit: Jit::new().map_err(jit_ice)?,
+                rc_ops: None,
+                reuse_report: None,
+                const_modules: reach.const_modules(),
+                literals,
+            }),
+            Err(diagnostics) => Err(diagnostics),
+        });
+    }
     let lower_span = crate::phases::span(crate::phases::Phase::Lower);
-    let lowered = lower_reading(front, sources, roots, mir, scope, reading)?;
+    let lowered = lower_reached(front, sources, roots, mir, scope, reading, check_reach)?;
     drop(lower_span);
     if let Some(dir) = &code_dump {
         write_mir_dumps(dir, &lowered.units)?;
@@ -351,39 +403,27 @@ pub(crate) fn build_scoped(
             return Ok(Err(diagnostics));
         }
     }
-    // K5b: `cheby check` looks its constants up first (D-977); when every
-    // one hits, it compiles and evaluates nothing, installs nothing and
-    // replays the cached failures (D-1187).
-    let check_infos = if check {
-        const_infos(front, sources, &lowered.reach)?
-    } else {
-        Vec::new()
-    };
-    let mut check_plan = if check {
-        Some(crate::cache::consts::ConstPlan::new(
-            front,
-            sources,
-            &lowered.reach,
-            &check_infos,
-            mir_options,
-            dump.is_some(),
-        )?)
-    } else {
-        None
-    };
+    // `cheby check` with `--reuse-report` lowers first; the lookups are
+    // logged here.
+    if let Some(plan) = &check_plan {
+        plan.log();
+    }
     if let Some(plan) =
         check_plan.take_if(|plan| !check_infos.is_empty() && plan.to_evaluate().is_empty())
     {
+        let literals = plan.literals();
         return Ok(match plan.finish(front, sources, Ok(Vec::new()))? {
             Ok(_) => Ok(Built {
                 jit: Jit::new().map_err(jit_ice)?,
                 rc_ops,
                 reuse_report,
                 const_modules: lowered.reach.const_modules(),
+                literals,
             }),
             Err(diagnostics) => Err(diagnostics),
         });
     }
+    let mut literals = BTreeMap::new();
     let options = JitOptions {
         stub_unresolved: check || scope == Scope::Whole,
         ..jit_options(capture_clif)
@@ -434,7 +474,10 @@ pub(crate) fn build_scoped(
             // K5b: only the constants that miss are evaluated, and their
             // images or failures stored (D-977).
             let evaluate = match &check_plan {
-                Some(plan) => plan.to_evaluate(),
+                Some(plan) => {
+                    literals = plan.literals();
+                    plan.to_evaluate()
+                }
                 None => infos.to_vec(),
             };
             let evaluated = match evaluate_in(front, sources, &mut jit, &evaluate, mode)? {
@@ -491,6 +534,7 @@ pub(crate) fn build_scoped(
         rc_ops,
         reuse_report,
         const_modules,
+        literals,
     }))
 }
 
@@ -984,6 +1028,22 @@ pub(crate) fn lower_reading(
     scope: Scope,
     reading: Reading<'_>,
 ) -> Result<Lowered, Ice> {
+    lower_reached(front, sources, roots, mir, scope, reading, None)
+}
+
+/// [`lower_reading`] over `reached`, the reach and code modules that
+/// [`reach_in`] gives for `roots` in `scope`, when the caller computed
+/// them already (`cheby check`'s [`constants_reach`]): the walk reads
+/// std's summaries, which a second walk would read again.
+fn lower_reached(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+    scope: Scope,
+    reading: Reading<'_>,
+    reached: Option<(Reach, BTreeSet<ModuleId>)>,
+) -> Result<Lowered, Ice> {
     let local = local_modules(front);
     let mut starts: Vec<Start<'_>> = Vec::new();
     let mut walk_roots: Vec<Root<'_>> = Vec::new();
@@ -1010,13 +1070,7 @@ pub(crate) fn lower_reading(
                 tests.entry(t.module).or_default().push(t.test);
             }
         }
-        Roots::Constants => {
-            for &module in &local {
-                let consts = &checked(front, module)?.thir.consts;
-                walk_roots.extend(consts.iter().map(Root::Const));
-                starts.extend(consts.iter().map(|c| Start::Const(c.def)));
-            }
-        }
+        Roots::Constants => constant_roots(front, &local, &mut walk_roots, &mut starts)?,
         Roots::AllFunctions => {
             for &module in &local {
                 let fns = &checked(front, module)?.thir.fns;
@@ -1037,7 +1091,10 @@ pub(crate) fn lower_reading(
         }
     }
     let selected: BTreeSet<DefId> = tests.values().flatten().map(|t| t.def).collect();
-    let (reach, code_modules) = reach_in(front, &walk_roots, &starts, &mut tests, scope)?;
+    let (reach, code_modules) = match reached {
+        Some(reached) => reached,
+        None => reach_in(front, &walk_roots, &starts, &mut tests, scope)?,
+    };
     // The constants' entry thunks: in an evaluation module, and in the
     // dumps for goldens, which keep D-1175's view. A command's own JIT
     // runs no constant entry: its constants come from images (D-979).
@@ -1863,6 +1920,33 @@ fn reach_in<'a>(
             Ok((reach, modules.into_iter().collect()))
         }
     }
+}
+
+/// The roots of `cheby check`'s build, `Roots::Constants`: every constant
+/// of the modules `local` (D-459, D-534).
+fn constant_roots<'a>(
+    front: &'a Frontend,
+    local: &[ModuleId],
+    walk_roots: &mut Vec<Root<'a>>,
+    starts: &mut Vec<Start<'a>>,
+) -> Result<(), Ice> {
+    for &module in local {
+        let consts = &checked(front, module)?.thir.consts;
+        walk_roots.extend(consts.iter().map(Root::Const));
+        starts.extend(consts.iter().map(|c| Start::Const(c.def)));
+    }
+    Ok(())
+}
+
+/// The reach and code modules of `cheby check`'s build in `scope`: what
+/// [`lower_reading`] computes for `Roots::Constants`, without lowering
+/// anything.
+fn constants_reach(front: &Frontend, scope: Scope) -> Result<(Reach, BTreeSet<ModuleId>), Ice> {
+    let mut walk_roots: Vec<Root<'_>> = Vec::new();
+    let mut starts: Vec<Start<'_>> = Vec::new();
+    constant_roots(front, &local_modules(front), &mut walk_roots, &mut starts)?;
+    let mut tests = BTreeMap::new();
+    reach_in(front, &walk_roots, &starts, &mut tests, scope)
 }
 
 /// An empty read log per module of `jobs` outside std (D-955); std

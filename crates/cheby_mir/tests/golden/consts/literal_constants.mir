@@ -1,0 +1,446 @@
+module app
+
+fn const_init app::count() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:5:7"
+bb0:
+  _0: value = box int const int 1000003
+  return _0
+bb1:
+  resume
+}
+
+fn const_init app::huge() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:7:7"
+bb0:
+  _0: value = box int const int -9223372036854775808 ; unwind bb1
+  return _0
+bb1:
+  resume
+}
+
+fn const_init app::ratio() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:9:7"
+bb0:
+  _0: value = box float const float -2.5 ; unwind bb1
+  return _0
+bb1:
+  resume
+}
+
+fn const_init app::small() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:11:7"
+bb0:
+  _0: value = box u8 const u8 200
+  return _0
+bb1:
+  resume
+}
+
+fn const_init app::wide() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:13:7"
+bb0:
+  _0: value = box u64 const u64 18446744073709551615 ; unwind bb1
+  return _0
+bb1:
+  resume
+}
+
+fn const_init app::flag() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:15:7"
+bb0:
+  return const ctor True
+bb1:
+  resume
+}
+
+fn const_init app::nothing() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:17:7"
+bb0:
+  return const ctor None
+bb1:
+  resume
+}
+
+fn const_init app::product() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:19:7"
+  str#1 = "src/main.cheby:19:22"
+bb0:
+  _0: int = checked mul int const int 2, const int 3 at str#1 ; unwind bb1
+  _1: value = box int _0 ; unwind bb1
+  return _1
+bb1:
+  resume
+}
+
+fn const_init app::items() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:21:7"
+bb0:
+  _0: value = box int const int 1
+  _1: value = call_runtime list_push(const empty_list, _0) ; unwind bb1
+  _2: value = box int const int 2
+  _3: value = call_runtime list_push(_1, _2) ; unwind bb1
+  return _3
+bb1:
+  resume
+}
+
+fn const_init app::label() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:23:7"
+  str#1 = "label"
+bb0:
+  return const str#1
+bb1:
+  resume
+}
+
+fn app::total() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:25:4"
+  str#1 = "src/main.cheby:26:3"
+bb0:
+  _0: int = checked add int const int 1000003, const int -9223372036854775808 at str#1 ; unwind bb1
+  _1: value = load_const app::product ; unwind bb1
+  dup _1
+  _2: int = unbox int _1
+  drop _1
+  _3: int = checked add int _0, _2 at str#1 ; unwind bb1
+  _4: value = load_const app::util::shared ; unwind bb1
+  dup _4
+  _5: int = unbox int _4
+  drop _4
+  _6: int = checked add int _3, _5 at str#1 ; unwind bb1
+  _7: value = box int _6 ; unwind bb1
+  return _7
+bb1:
+  resume
+}
+
+fn app::numbers() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:29:4"
+bb0:
+  _0: value = box float const float -2.5 ; unwind bb1
+  _1: value = box u8 const u8 200
+  _2: value = box u64 const u64 18446744073709551615 ; unwind bb3
+  _3: value = alloc tuple/3(_0, _1, _2) ; unwind bb4
+  return _3
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
+}
+
+fn app::others() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:33:4"
+bb0:
+  _0: value = load_const app::items ; unwind bb1
+  dup _0
+  _1: value = alloc tuple/3(const ctor True, const ctor None, _0) ; unwind bb2
+  return _1
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+}
+
+fn app::name() -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:37:4"
+bb0:
+  _0: value = load_const app::label ; unwind bb1
+  dup _0
+  return _0
+bb1:
+  resume
+}
+
+fn app::main() -> value check str#0 {
+  entry unwind bb26
+  str#0 = "src/main.cheby:41:4"
+  str#1 = "assertion failed: total() != 0"
+  str#2 = "\n  left: "
+  str#3 = "\n right: "
+  str#4 = "src/main.cheby:42:10"
+  str#5 = "assertion failed: numbers() == numbers()"
+  str#6 = "src/main.cheby:43:10"
+  str#7 = "src/main.cheby:44:10"
+  str#8 = "assertion failed: others() == others()"
+  str#9 = "assertion failed: name() == name()"
+  str#10 = "src/main.cheby:45:10"
+bb0:
+  _0: value = call app::total() ; unwind bb26
+  _1: int = unbox int _0
+  drop _0
+  _2: bool = compare ne int _1, const int 0
+  branch _2, bb1, bb2
+bb1:
+  _13: value = call app::numbers() ; unwind bb26
+  _14: value = call app::numbers() ; unwind bb27
+  _16: value = field _13.0 of tuple/3
+  _17: float = unbox float _16
+  _18: value = field _14.0 of tuple/3
+  _19: float = unbox float _18
+  _20: bool = compare eq float _17, _19
+  branch _20, bb5, bb4
+bb2:
+  _3: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb26
+  _4: value = call_runtime str_append(_3, borrow const str#1) ; unwind bb26
+  _5: value = call_runtime str_append(_4, borrow const str#2) ; unwind bb26
+  _6: value = box int _1 ; unwind bb28
+  _7: value = call_runtime debug(borrow _6) ; unwind bb29
+  drop _6
+  _8: value = call_runtime str_append(_5, borrow _7) ; unwind bb30
+  drop _7
+  _9: value = call_runtime str_append(_8, borrow const str#3) ; unwind bb26
+  _10: value = box int const int 0
+  _11: value = call_runtime debug(borrow _10) ; unwind bb32
+  drop _10
+  _12: value = call_runtime str_append(_9, borrow _11) ; unwind bb33
+  drop _11
+  panic assert _12 at str#4 ; unwind bb34
+bb3(_15: bool):
+  branch _15, bb8, bb9
+bb4:
+  goto bb3(const bool false)
+bb5:
+  _21: value = field _13.1 of tuple/3
+  _22: u8 = unbox u8 _21
+  _23: value = field _14.1 of tuple/3
+  _24: u8 = unbox u8 _23
+  _25: bool = compare eq u8 _22, _24
+  branch _25, bb6, bb4
+bb6:
+  _26: value = field _13.2 of tuple/3
+  _27: u64 = unbox u64 _26
+  _28: value = field _14.2 of tuple/3
+  _29: u64 = unbox u64 _28
+  _30: bool = compare eq u64 _27, _29
+  branch _30, bb7, bb4
+bb7:
+  goto bb3(const bool true)
+bb8:
+  drop _13
+  drop _14
+  _39: value = call app::others() ; unwind bb26
+  _40: value = call app::others() ; unwind bb35
+  _42: value = field _39.0 of tuple/3
+  _43: bool = unbox bool _42
+  _44: value = field _40.0 of tuple/3
+  _45: bool = unbox bool _44
+  _46: bool = compare eq bool _43, _45
+  branch _46, bb12, bb11
+bb9:
+  _31: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb36
+  _32: value = call_runtime str_append(_31, borrow const str#5) ; unwind bb36
+  _33: value = call_runtime str_append(_32, borrow const str#2) ; unwind bb36
+  _34: value = call_runtime debug(borrow _13) ; unwind bb37
+  drop _13
+  _35: value = call_runtime str_append(_33, borrow _34) ; unwind bb39
+  drop _34
+  _36: value = call_runtime str_append(_35, borrow const str#3) ; unwind bb38
+  _37: value = call_runtime debug(borrow _14) ; unwind bb40
+  drop _14
+  _38: value = call_runtime str_append(_36, borrow _37) ; unwind bb41
+  drop _37
+  panic assert _38 at str#6 ; unwind bb42
+bb10(_41: bool):
+  branch _41, bb21, bb22
+bb11:
+  goto bb10(const bool false)
+bb12:
+  _47: value = field _39.1 of tuple/3
+  _48: value = field _40.1 of tuple/3
+  _50: int = read_tag _47 of option
+  _51: int = read_tag _48 of option
+  _52: bool = compare eq int _50, _51
+  branch _52, bb15, bb25
+bb13(_49: bool):
+  branch _49, bb19, bb11
+bb14:
+  goto bb13(const bool false)
+bb15:
+  switch _50 [0 => bb16, _ => bb17]
+bb16:
+  _53: value = field _47.0 of ctor Some
+  dup _53
+  _54: int = unbox int _53
+  drop _53
+  _55: value = field _48.0 of ctor Some
+  dup _55
+  _56: int = unbox int _55
+  drop _55
+  _57: bool = compare eq int _54, _56
+  branch _57, bb18, bb14
+bb17:
+  goto bb13(const bool true)
+bb18:
+  goto bb13(const bool true)
+bb19:
+  _58: value = field _39.2 of tuple/3
+  _59: value = field _40.2 of tuple/3
+  _60: bool = call_runtime equal(borrow _58, borrow _59, borrow const str#7) ; unwind bb43
+  branch _60, bb20, bb11
+bb20:
+  goto bb10(const bool true)
+bb21:
+  drop _39
+  drop _40
+  _69: value = call app::name() ; unwind bb26
+  _70: value = call app::name() ; unwind bb44
+  _71: bool = call_runtime str_eq(borrow _69, borrow _70)
+  branch _71, bb23, bb24
+bb22:
+  _61: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb43
+  _62: value = call_runtime str_append(_61, borrow const str#8) ; unwind bb43
+  _63: value = call_runtime str_append(_62, borrow const str#2) ; unwind bb43
+  _64: value = call_runtime debug(borrow _39) ; unwind bb45
+  drop _39
+  _65: value = call_runtime str_append(_63, borrow _64) ; unwind bb47
+  drop _64
+  _66: value = call_runtime str_append(_65, borrow const str#3) ; unwind bb46
+  _67: value = call_runtime debug(borrow _40) ; unwind bb48
+  drop _40
+  _68: value = call_runtime str_append(_66, borrow _67) ; unwind bb49
+  drop _67
+  panic assert _68 at str#7 ; unwind bb50
+bb23:
+  drop _69
+  drop _70
+  return const nil
+bb24:
+  _72: value = call_runtime str_with_capacity(borrow const int 64) ; unwind bb51
+  _73: value = call_runtime str_append(_72, borrow const str#9) ; unwind bb51
+  _74: value = call_runtime str_append(_73, borrow const str#2) ; unwind bb51
+  _75: value = call_runtime debug(borrow _69) ; unwind bb52
+  drop _69
+  _76: value = call_runtime str_append(_74, borrow _75) ; unwind bb54
+  drop _75
+  _77: value = call_runtime str_append(_76, borrow const str#3) ; unwind bb53
+  _78: value = call_runtime debug(borrow _70) ; unwind bb55
+  drop _70
+  _79: value = call_runtime str_append(_77, borrow _78) ; unwind bb56
+  drop _78
+  panic assert _79 at str#10 ; unwind bb57
+bb25:
+  goto bb14()
+bb26:
+  resume
+bb27:
+  drop _13
+  goto bb26()
+bb28:
+  drop _5
+  goto bb26()
+bb29:
+  drop _6
+  goto bb28()
+bb30:
+  drop _7
+  goto bb26()
+bb31:
+  drop _9
+  goto bb26()
+bb32:
+  drop _10
+  goto bb31()
+bb33:
+  drop _11
+  goto bb26()
+bb34:
+  drop _12
+  goto bb26()
+bb35:
+  drop _39
+  goto bb26()
+bb36:
+  drop _14
+  goto bb27()
+bb37:
+  drop _33
+  goto bb36()
+bb38:
+  drop _14
+  goto bb26()
+bb39:
+  drop _34
+  goto bb38()
+bb40:
+  drop _36
+  goto bb38()
+bb41:
+  drop _37
+  goto bb26()
+bb42:
+  drop _38
+  goto bb26()
+bb43:
+  drop _40
+  goto bb35()
+bb44:
+  drop _69
+  goto bb26()
+bb45:
+  drop _63
+  goto bb43()
+bb46:
+  drop _40
+  goto bb26()
+bb47:
+  drop _64
+  goto bb46()
+bb48:
+  drop _66
+  goto bb46()
+bb49:
+  drop _67
+  goto bb26()
+bb50:
+  drop _68
+  goto bb26()
+bb51:
+  drop _70
+  goto bb44()
+bb52:
+  drop _74
+  goto bb51()
+bb53:
+  drop _70
+  goto bb26()
+bb54:
+  drop _75
+  goto bb53()
+bb55:
+  drop _77
+  goto bb53()
+bb56:
+  drop _78
+  goto bb26()
+bb57:
+  drop _79
+  goto bb26()
+}
+
+foreign_layout ctor Some: Option.Some tag 0 key af80d07f7bb18e70 [value @8]
+callee app::total() -> value
+callee app::numbers() -> value
+callee app::others() -> value
+callee app::name() -> value

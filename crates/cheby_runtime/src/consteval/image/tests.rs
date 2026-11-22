@@ -499,3 +499,73 @@ fn const_image_deep_values_need_no_deep_stack() {
         .unwrap();
     worker.join().unwrap();
 }
+
+/// The scalars of [`scalar_image`]'s test, with the words the runtime
+/// makes of them: both sides of each tagged range, every boxed kind and
+/// every static.
+fn scalars() -> Vec<(Scalar, Word)> {
+    let mut out = Vec::new();
+    for n in [
+        0,
+        1,
+        -1,
+        1_000_003,
+        abi::INT63_MAX,
+        abi::INT63_MIN,
+        abi::INT63_MAX + 1,
+        abi::INT63_MIN - 1,
+        i64::MAX,
+        i64::MIN,
+    ] {
+        out.push((Scalar::Int(n), values::int_word(n)));
+    }
+    for n in [0, 7, (1 << 62) - 1, 1 << 62, u64::MAX] {
+        out.push((Scalar::U64(n), values::u64_word(n)));
+    }
+    for x in [
+        0.0,
+        -0.0,
+        1.5,
+        -2.25e300,
+        f64::INFINITY,
+        f64::NAN,
+        f64::MIN_POSITIVE,
+    ] {
+        out.push((Scalar::Float(x.to_bits()), values::f64_word(x)));
+    }
+    for x in [0.0_f32, -0.0, 0.1, f32::NEG_INFINITY, f32::NAN] {
+        out.push((Scalar::F32(x.to_bits()), values::f32_word(x)));
+    }
+    out.push((Scalar::Nil, values::nil()));
+    out.push((Scalar::Bool(false), values::bool_word(false)));
+    out.push((Scalar::Bool(true), values::bool_word(true)));
+    out.push((Scalar::None, values::none()));
+    for order in [
+        std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal,
+        std::cmp::Ordering::Greater,
+    ] {
+        out.push((Scalar::Order(order), values::order(order)));
+    }
+    out
+}
+
+/// D-979: the image of a scalar written without its value is the one
+/// `serialize` writes for the runtime's word of it, byte for byte, and
+/// its debug text is the word's.
+#[test]
+fn const_image_of_a_scalar_needs_no_value() {
+    let domain = alloc::Domain::new();
+    alloc::with_domain(Arc::clone(&domain), || {
+        for (n, (scalar, word)) in scalars().into_iter().enumerate() {
+            let path = format!("app::k{n}");
+            // SAFETY: a live value of this thread.
+            let images = unsafe { serialize(&[(&path, word)]) }.unwrap();
+            assert_eq!(images, [scalar_image(&path, scalar)], "{scalar:?}");
+            assert_eq!(scalar.debug_text(), text(word), "{scalar:?}");
+            // SAFETY: the value, owned here.
+            unsafe { rc::drop(word) };
+        }
+        assert_eq!(domain.live_objects(), 0);
+    });
+}

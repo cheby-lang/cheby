@@ -225,8 +225,10 @@ fn std_cache_second_command_parses_no_std() {
             "{command}: {:?}",
             second.log
         );
+        // A second `cheby check` whose constants all hit loads no code at
+        // all (D-1260).
         assert!(
-            !second.lines("code.std").is_empty(),
+            command == "check" || !second.lines("code.std").is_empty(),
             "{command}: {:?}",
             second.log
         );
