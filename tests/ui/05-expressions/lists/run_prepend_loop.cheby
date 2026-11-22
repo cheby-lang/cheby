@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-157, D-1757
+// @decisions: D-157, D-1757, D-1763
 //! A loop that conses 100_000 elements with `[n, ..acc]` builds the list
 //! in order: each literal prepends onto the list the last one made, which
 //! nothing else holds (§5.13).

@@ -1,5 +1,5 @@
 // @mode: run-fail
-// @decisions: D-120, D-157, D-449
+// @decisions: D-120, D-157, D-449, D-1763
 //! A panic in the middle element of `[a, b, c, ..xs]` comes after the
 //! first element is evaluated and before the later items are: the elements
 //! held for the spread are released, and nothing after the panic runs

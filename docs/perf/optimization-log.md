@@ -307,7 +307,7 @@ Tried and not kept:
 These would be faster, but each changes something the decision log pins, so none was built or
 committed. They are proposals.
 
-- **`[item, ..xs]` as `list_prepend`.** The literal lowers to a push and an append today, O(log n)
+- **`[item, ..xs]` as `list_prepend`.** Done on 2026-11-22 as D-1763. The literal lowered to a push and an append then, O(log n)
   where D-1757 makes a prepend amortized O(1). The result is the same list, but MIR and the lines
   of `--reuse-report` change (D-717, D-852). It is an Open item of the 2026-11-21 session.
 - **An `Int` interpolated straight into the accumulator.** `"{n}"` calls `show`, which allocates
@@ -326,3 +326,49 @@ committed. They are proposals.
 
 The first Open item of the decision log's 2026-11-21 session, the hole in place of the shifted
 branch, is done by the list-walk change above and can be struck through there.
+
+## 2026-11-22: the round after the language comparison
+
+The comparison in `../cheby-compare` was run again on 2026-11-22, and its notes name the costs that are left. This round takes them in turn. The decisions are D-1761 onward, in the session of the same date in the decision log.
+
+**How these numbers are taken.** The machine was shared with other builds during this round, so wall time was useless. Each reading is instructions retired and cycles from `/usr/bin/time -l` for one run of a comparison program built with `cheby build`, against the executable of the same program built at `7a586d82`. Instructions repeat within 1%. Cycles move by a few percent with the load, so a change under 5% in cycles alone is noise. The sizes are smaller than the comparison's where a run is long: `lru_cache 100000 4000000`, `nbody 2200000`, `spectral_norm 1100`, `fannkuch_redux 9`, `json_roundtrip` with 3 passes.
+
+### A self tail call jumps inside its function (D-1761)
+
+Every loop is a self tail call, and each iteration ran the epilogue and the prologue, spilled its parameters and jumped through the slot. The call is now a jump to a loop header before the entry check, so the check still runs in every iteration. REPL sessions and the inner bodies of large frames keep the call.
+
+### `ordered_map` keeps its order as links through its index (D-1762)
+
+The sorted tree from insertion number to key is gone. Each entry of the hashed index holds the keys before and after it. In `lru_cache` a hit removes a key and inserts it again, which was two tree updates with dictionary comparisons.
+
+### A list literal prepends its leading elements onto its first spread (D-1763)
+
+`[x, ..xs]` was a push onto a new list and an append of `xs`. It is `list_prepend` now, in place when `xs` is not used again. `spawn_many` makes 3.0 allocations per task where it made 7.9.
+
+### A scalar literal constant is not evaluated, and its own module reads the literal (D-1764)
+
+A module that held any constant was compiled a second time, on `plain` code, for the evaluation module. For the 200 modules of `compile_large`, each with one literal constant, that was most of a cold `cheby check`. A read of a constant through its slot was also a load, a fill check, a dup and a drop in every iteration of a loop.
+
+### Readings for the four changes together
+
+| Program          | Instructions | Cycles |
+| ---------------- | -----------: | -----: |
+| `lru_cache`      |       −61.9% | −44.0% |
+| `spawn_many`     |       −31.0% | −17.7% |
+| `mandelbrot`     |       −28.4% |  −6.5% |
+| `nbody`          |       −18.5% | −17.9% |
+| `spectral_norm`  |        −3.5% |  −0.7% |
+| `json_roundtrip` |        −3.0% |  −4.5% |
+| `fannkuch_redux` |        −1.4% |  −0.8% |
+| `word_freq`      |        −1.1% | −10.6% |
+| `binary_trees`   |        −0.1% |  −3.2% |
+
+`mandelbrot` retires 28% fewer instructions and takes only 6.5% fewer cycles: its loop is bound by a chain of float operations and reloads of spilled parameters, not by the count of instructions.
+
+A cold build of `compile_large`'s 200 modules, from a cache that holds std, before and after D-1764:
+
+| Command       | Instructions before | After   |
+| ------------- | ------------------: | ------: |
+| `cheby check` |             17.87 G |  2.53 G |
+| `cheby run`   |             33.66 G | 13.54 G |
+| `cheby build` |             34.31 G | 14.16 G |
