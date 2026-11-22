@@ -461,9 +461,20 @@ pub(crate) struct ReleaseStd {
     named: Vec<(String, String, BorrowMask)>,
     /// The bodies a package's units may inline, by module path and item.
     exports: cheby_mir::export::PortableBodies,
+    /// With the `consts` lever, std's scalar literal constants by path
+    /// (`module::name`), sorted, with their values: what a package's
+    /// release units fold of std's constants (design T10). Empty without
+    /// the lever.
+    literals: Vec<(String, cheby_mir::Const)>,
 }
 
 impl ReleaseStd {
+    /// Std's scalar literal constants by path, sorted, with their values
+    /// (empty without the `consts` lever).
+    pub(crate) fn literals(&self) -> &[(String, cheby_mir::Const)] {
+        &self.literals
+    }
+
     /// The bodies a package's units may inline, by module path and item.
     pub(crate) const fn exports(&self) -> &cheby_mir::export::PortableBodies {
         &self.exports
@@ -505,12 +516,24 @@ pub(crate) fn release_std(levers: ReleaseOptions) -> Result<Arc<ReleaseStd>, Ice
 }
 
 /// Optimizes std's units under `levers`, infers std's release masks over
-/// them and takes their exports (design T8, T9).
+/// them and takes their exports (design T8, T9). With the `consts` lever,
+/// std's units first read its scalar literal constants of other std
+/// modules as their values, and only those (design T10): folding std's
+/// computed constants would make std's release code depend on an
+/// evaluation.
 fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<ReleaseStd, Ice> {
     let front = &whole.front;
     let budget = cheby_mir::inline::InlineBudget::DEFAULT;
     let mut units = whole.units.clone();
     let none = cheby_mir::export::PortableBodies::new();
+    let (values, literals) = if levers.consts {
+        std_literals(front)?
+    } else {
+        (cheby_mir::fold_consts::ConstValues::new(), Vec::new())
+    };
+    for unit in &mut units {
+        cheby_mir::fold_consts::fold_unit(unit, &values);
+    }
     // The exports as the layers found them: a function whose calls got
     // clones is exported as it was before (`cheby_mir::specialize`).
     let exports = crate::borrowing::with_build_defs(front, |defs| {
@@ -521,6 +544,7 @@ fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<Relea
             defs,
             &budget,
             cheby_mir::inline::Passes::of(&levers),
+            &values,
             &crate::backend::each_in_parallel,
         )?;
         cheby_mir::export::portable_of(found, defs)
@@ -546,7 +570,44 @@ fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<Relea
         by_def: inferred.masks,
         named,
         exports,
+        literals,
     })
+}
+
+/// Std's scalar literal constants (`cheby_mir::scalar_literal`), from
+/// std's own front end `front`: by def, and by path (`module::name`, as
+/// a build's constants are named), sorted.
+fn std_literals(
+    front: &Frontend,
+) -> Result<
+    (
+        cheby_mir::fold_consts::ConstValues,
+        Vec<(String, cheby_mir::Const)>,
+    ),
+    Ice,
+> {
+    let mut values = cheby_mir::fold_consts::ConstValues::new();
+    let mut by_path = Vec::new();
+    for module in std_modules(front) {
+        let path = front.modules.try_get(module)?.path.to_string();
+        let checked = front
+            .checked(module)
+            .ok_or_else(|| Ice::new(format!("std module `{path}` was not checked")))?;
+        for c in &checked.thir.consts {
+            let Some(value) = cheby_mir::scalar_literal(c, &front.globals) else {
+                continue;
+            };
+            let item = checked
+                .interface
+                .item(c.def.index)
+                .ok_or_else(|| Ice::new(format!("a constant of `{path}` has no item")))?;
+            let name = front.globals.names.get(item.name);
+            by_path.push((format!("{path}::{name}"), value.clone()));
+            values.insert(c.def, value);
+        }
+    }
+    by_path.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((values, by_path))
 }
 
 /// Whether std's code under `mir` is its release code ([`ReleaseStd`]):

@@ -903,10 +903,29 @@ fn std_cache_export_record_round_trips() {
             name.1
         );
     }
+    // Design T10: std's literal constants, by path, which a package's
+    // release units fold; a computed one such as `float::infinity` is not
+    // among them.
+    let literals = made.literals();
+    assert_eq!(literals, release.literals());
+    assert!(
+        literals.contains(&(
+            "std::float::pi".to_owned(),
+            cheby_mir::Const::Float(std::f64::consts::PI.to_bits())
+        )),
+        "{literals:?}"
+    );
+    assert!(
+        literals
+            .iter()
+            .all(|(path, _)| path != "std::float::infinity"),
+        "{literals:?}"
+    );
     let payload = made.encode();
     let back = std_cache::StdExports::decode(&payload).unwrap();
     assert!(back.same(&made));
     assert_eq!(back.named(), made.named());
+    assert_eq!(back.literals(), literals);
     assert_eq!(back.encode(), payload);
     // A body is decoded alone, as a build asks for it.
     let encoded =

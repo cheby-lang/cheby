@@ -94,10 +94,11 @@ pub(crate) enum Mode {
     /// As `Uncounted`, the code units lowered as a REPL session lowers
     /// them ([`lower_items_late_bound`]).
     LateBound,
-    /// As a release build with the `inline` lever: the package's units
-    /// inlined and cleaned up ([`crate::inline::optimize`]) and checked as
-    /// lowered again, then, when `counted`, as `Counted`; otherwise left
-    /// as lowered.
+    /// As a release build with the `inline` and `consts` levers: the
+    /// reads of every scalar literal constant folded
+    /// ([`crate::fold_consts`]), the package's units inlined and cleaned up
+    /// ([`crate::inline::optimize`]) and checked as lowered again, then,
+    /// when `counted`, as `Counted`; otherwise left as lowered.
     Release { counted: bool },
 }
 
@@ -734,7 +735,7 @@ fn back_end(
     }));
     push(lower_entries(&requests, &cx).unwrap());
     if matches!(mode, Mode::Release { .. }) {
-        optimize_local(&mut units, modules, &cx.defs);
+        optimize_local(&mut units, modules, &cx.defs, checked, globals);
     }
     // The facts each unit contributes, named through the whole build's
     // interfaces, and their union (D-969).
@@ -746,13 +747,36 @@ fn back_end(
     (units, masks, facts)
 }
 
+/// What the `consts` lever folds in a test build: what a release build
+/// knows without an evaluation, every scalar literal constant of
+/// `checked`, std's included.
+fn literal_values(
+    checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
+    globals: &Globals,
+) -> crate::fold_consts::ConstValues {
+    checked
+        .values()
+        .flat_map(|(thir, _)| &thir.consts)
+        .filter_map(|c| Some((c.def, crate::scalar_literal(c, globals)?)))
+        .collect()
+}
+
 /// The release passes on the package's own units, before borrowing is
 /// inferred, as the driver runs them: in layers, each unit inlining the
 /// package's bodies of earlier layers and std's bodies by name (exported
 /// from the std units lowered here and imported back through `defs`, as
 /// a release build reads std's own front end's), and each unit checked as
-/// lowered again.
-fn optimize_local(units: &mut [MirModule], modules: &ModuleTable, defs: &Defs<'_>) {
+/// lowered again. The reads of the scalar literal constants of `checked`
+/// are folded first and in the clean-up ([`literal_values`],
+/// [`crate::fold_consts`]).
+fn optimize_local(
+    units: &mut [MirModule],
+    modules: &ModuleTable,
+    defs: &Defs<'_>,
+    checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
+    globals: &Globals,
+) {
+    let values = &literal_values(checked, globals);
     let is_std = |unit: &MirModule| {
         unit.module()
             .and_then(|m| modules.get(m))
@@ -770,9 +794,13 @@ fn optimize_local(units: &mut [MirModule], modules: &ModuleTable, defs: &Defs<'_
         refs.iter_mut().map(|unit| step(unit)).collect()
     };
     let passes = crate::inline::Passes::ALL;
-    if let Err(ice) =
-        crate::export::optimize_build(units, &local, &portable, defs, &budget, passes, &each)
-            .map(|_| ())
+    for unit in units.iter_mut().filter(|unit| local(unit)) {
+        crate::fold_consts::fold_unit(unit, values);
+    }
+    if let Err(ice) = crate::export::optimize_build(
+        units, &local, &portable, defs, &budget, passes, values, &each,
+    )
+    .map(|_| ())
     {
         let dumps: Vec<String> = units.iter().filter_map(|u| dump(u).ok()).collect();
         panic!("{ice}\n{}", dumps.join("\n"));

@@ -41,6 +41,7 @@ mod defs;
 mod devirt_tests;
 pub mod dump;
 pub mod export;
+pub mod fold_consts;
 pub mod fuse;
 #[cfg(test)]
 mod fuse_tests;

@@ -4,9 +4,11 @@
 //! std again.
 //!
 //! The record holds std's release masks by name (the masks a release
-//! build writes into its package units, [`super::std_release_masks_in`])
-//! and std's exports in their byte form ([`cheby_mir::export::encode_bodies`]),
-//! both taken from [`super::ReleaseStd`]. It lies under [`std_export_key`]:
+//! build writes into its package units, [`super::std_release_masks_in`]),
+//! with the `consts` lever std's scalar literal constants by path, which
+//! a release build folds into its package units (design T10), and std's
+//! exports in their byte form ([`cheby_mir::export::encode_bodies`]),
+//! all taken from [`super::ReleaseStd`]. It lies under [`std_export_key`]:
 //! [`KeyKind::Export`] over the build ID, the tag `std-x1` and std's release
 //! settings, the profile and the levers among them ([`super::std_settings`]).
 //! The build ID fixes std's sources (D-957), so no source hash enters it.
@@ -41,6 +43,9 @@ pub(crate) struct StdExports {
     named: Vec<(String, String, BorrowMask)>,
     /// The bodies a package's units may inline, by module path and item.
     bodies: Bodies,
+    /// With the `consts` lever, std's scalar literal constants by path,
+    /// sorted, with their values (design T10).
+    literals: Vec<(String, cheby_mir::Const)>,
 }
 
 /// Std's exports: [`super::ReleaseStd`]'s, or the record's, each decoded
@@ -67,6 +72,13 @@ impl StdExports {
         }
     }
 
+    /// Std's scalar literal constants by path (`module::name`), sorted,
+    /// with their values: what a package's release units fold of std's
+    /// constants (design T10). Empty without the `consts` lever.
+    pub(crate) fn literals(&self) -> &[(String, cheby_mir::Const)] {
+        &self.literals
+    }
+
     /// Every body, decoded, for the checks that compare records.
     pub(crate) fn decoded(&self) -> Result<PortableBodies, Ice> {
         match &self.bodies {
@@ -75,15 +87,16 @@ impl StdExports {
         }
     }
 
-    /// Whether `self` and `other` hold the same masks and bodies.
+    /// Whether `self` and `other` hold the same masks, literals and bodies.
     pub(crate) fn same(&self, other: &Self) -> bool {
         self.named == other.named
+            && self.literals == other.literals
             && matches!((self.decoded(), other.decoded()), (Ok(a), Ok(b)) if a == b)
     }
 
     /// The record's payload before its seal: a magic, a version, the
-    /// masks and the bodies' bytes, every count and length a little-endian
-    /// `u32`.
+    /// masks, the literals ([`cheby_mir::export::encode_folded`]) and the
+    /// bodies' bytes, every count and length a little-endian `u32`.
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(MAGIC);
@@ -94,6 +107,7 @@ impl StdExports {
             put_str(&mut out, item);
             out.extend_from_slice(&mask.0.to_le_bytes());
         }
+        out.extend_from_slice(&cheby_mir::export::encode_folded(&self.literals));
         match &self.bodies {
             Bodies::Made(bodies) => {
                 out.extend_from_slice(&cheby_mir::export::encode_bodies(bodies));
@@ -121,18 +135,21 @@ impl StdExports {
             r = rest;
             named.push((module, item, BorrowMask(u64::from_le_bytes(*word))));
         }
-        let bodies = EncodedBodies::read(r.to_vec()).ok()?;
+        let (literals, rest) = cheby_mir::export::decode_folded(r)?;
+        let bodies = EncodedBodies::read(rest.to_vec()).ok()?;
         Some(Self {
             named,
             bodies: Bodies::Read(bodies),
+            literals,
         })
     }
 }
 
 /// The first bytes of the record's payload.
 const MAGIC: &[u8; 4] = b"CBSX";
-/// The version of the payload.
-const VERSION: u8 = 1;
+/// The version of the payload: 2 added std's literal constants
+/// (design T10).
+const VERSION: u8 = 2;
 
 /// Appends a count as four little-endian bytes (saturated).
 fn put_len(out: &mut Vec<u8>, len: usize) {
@@ -256,6 +273,7 @@ pub(crate) fn in_process(levers: ReleaseOptions) -> Result<Arc<StdExports>, Ice>
             Arc::new(StdExports {
                 named: release.named.clone(),
                 bodies: Bodies::Made(release.exports().clone()),
+                literals: release.literals().to_vec(),
             })
         })
         .map_err(|e| e.message().to_owned());

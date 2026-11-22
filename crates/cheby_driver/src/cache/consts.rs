@@ -884,6 +884,132 @@ fn scalar_of(value: &Const) -> Option<Scalar> {
     })
 }
 
+/// What a release build with the `consts` lever folds into the readers
+/// of its constants (design T10, [`cheby_mir::fold_consts`]), from
+/// `infos`, the build's constants, and `images`, their images: a
+/// constant outside std whose initializer is a scalar literal, by its
+/// literal; one of a scalar representation (`Int`, `Float`, `Bool`, a
+/// sized number, D-257's "small scalar constants") whose value is
+/// computed, by the value its image holds; and each std constant that
+/// `std` lists, std's scalar literal constants from its export record,
+/// sorted by path. Std's computed constants are not folded, so std's
+/// release code never depends on an evaluation. A constant whose module
+/// has no checked body here, or whose image holds no scalar, is not
+/// folded.
+pub(crate) fn folded_values(
+    front: &Frontend,
+    infos: &[ConstInfo],
+    images: &[ConstImage],
+    std: &[(String, Const)],
+) -> cheby_mir::fold_consts::ConstValues {
+    let by_path: BTreeMap<&str, &ConstImage> =
+        images.iter().map(|image| (&*image.path, image)).collect();
+    let earlier = |path: &str| by_path.get(path).copied();
+    let mut by_module: BTreeMap<ModuleId, BTreeMap<DefId, &thir::ConstDef>> = BTreeMap::new();
+    let mut out = cheby_mir::fold_consts::ConstValues::new();
+    for info in infos {
+        let in_std = front
+            .modules
+            .get(info.def.module)
+            .is_some_and(|m| m.package == PackageId::STD);
+        if in_std {
+            if let Ok(at) = std.binary_search_by(|(path, _)| path.as_str().cmp(&info.path))
+                && let Some((_, value)) = std.get(at)
+            {
+                out.insert(info.def, value.clone());
+            }
+            continue;
+        }
+        let consts = by_module.entry(info.def.module).or_insert_with(|| {
+            front
+                .checked_quiet(info.def.module)
+                .map_or_else(BTreeMap::new, |c| {
+                    c.thir.consts.iter().map(|c| (c.def, c)).collect()
+                })
+        });
+        let Some(c) = consts.get(&info.def) else {
+            continue;
+        };
+        let value = cheby_mir::scalar_literal(c, &front.globals).or_else(|| {
+            let repr = cheby_mir::repr_of(c.body.ret, &front.globals);
+            let image = by_path.get(&*info.path)?;
+            const_of(
+                cheby_runtime::consteval::image::scalar_value(image, &earlier)?,
+                repr,
+            )
+        });
+        if let Some(value) = value.filter(cheby_mir::fold_consts::folds) {
+            out.insert(info.def, value);
+        }
+    }
+    out
+}
+
+/// The MIR constant of the scalar `value` in `repr`, a scalar type's
+/// representation: [`scalar_of`]'s inverse. `None` for `Repr::Value`
+/// and for a value that is not one of `repr`.
+fn const_of(value: Scalar, repr: Repr) -> Option<Const> {
+    let int = || {
+        if let Scalar::Int(n) = value {
+            Some(n)
+        } else {
+            None
+        }
+    };
+    // A sized integer's bits, sign-extended for a signed type (`Const::Sized`).
+    let sized = |fits: bool, n: i64| {
+        fits.then_some(Const::Sized {
+            repr,
+            bits: n.cast_unsigned(),
+        })
+    };
+    match repr {
+        Repr::Int => int().map(Const::Int),
+        Repr::I8 => int().and_then(|n| sized(i8::try_from(n).is_ok(), n)),
+        Repr::I16 => int().and_then(|n| sized(i16::try_from(n).is_ok(), n)),
+        Repr::I32 => int().and_then(|n| sized(i32::try_from(n).is_ok(), n)),
+        Repr::I64 => int().and_then(|n| sized(true, n)),
+        Repr::U8 => int().and_then(|n| sized(u8::try_from(n).is_ok(), n)),
+        Repr::U16 => int().and_then(|n| sized(u16::try_from(n).is_ok(), n)),
+        Repr::U32 => int().and_then(|n| sized(u32::try_from(n).is_ok(), n)),
+        Repr::U64 => match value {
+            Scalar::Int(n) => sized(n >= 0, n),
+            Scalar::U64(bits) => Some(Const::Sized { repr, bits }),
+            Scalar::Float(_)
+            | Scalar::F32(_)
+            | Scalar::Nil
+            | Scalar::Bool(_)
+            | Scalar::None
+            | Scalar::Order(_) => None,
+        },
+        Repr::Float => {
+            if let Scalar::Float(bits) = value {
+                Some(Const::Float(bits))
+            } else {
+                None
+            }
+        }
+        Repr::F32 => {
+            if let Scalar::F32(bits) = value {
+                Some(Const::Sized {
+                    repr,
+                    bits: u64::from(bits),
+                })
+            } else {
+                None
+            }
+        }
+        Repr::Bool => {
+            if let Scalar::Bool(b) = value {
+                Some(Const::Bool(b))
+            } else {
+                None
+            }
+        }
+        Repr::Value => None,
+    }
+}
+
 /// Whether `value` is no `Int` that JavaScript cannot represent exactly:
 /// E0078's range check reads only `Int`s (D-540), which are
 /// [`Const::Int`] in their representation.

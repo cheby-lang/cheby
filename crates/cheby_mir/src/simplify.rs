@@ -2,7 +2,9 @@
 //! lowered MIR ([`crate::Stage::Lowered`]) before borrowing inference and
 //! counting, one function at a time ([`run`]):
 //!
-//! - `unbox` of a `box` of the same representation is the boxed value;
+//! - `unbox` of a `box` of the same representation is the boxed value,
+//!   and `unbox` of a constant's slot word is the constant's value when
+//!   the build folds it ([`Known::set_consts`], [`crate::fold_consts`]);
 //! - a block parameter that every jump fills with a `box` of one
 //!   representation, and that only `unbox`es to it read, takes the raw
 //!   value instead: what an inlined `Float` helper's result needs;
@@ -85,6 +87,11 @@ pub struct Known {
     /// Whether calls of known values become direct calls ([`devirt`]):
     /// the release profile's `spec` lever.
     devirt: bool,
+    /// The values of the constants the build folds
+    /// ([`crate::fold_consts`]): an `unbox` of such a constant's slot word
+    /// is its raw value. Empty unless the release profile's `consts`
+    /// lever gives them.
+    consts: crate::fold_consts::ConstValues,
 }
 
 impl Known {
@@ -112,6 +119,11 @@ impl Known {
                 self.tags.insert(def, (d.type_def, d.tag));
             }
         }
+    }
+
+    /// Folds the constants of `values` ([`crate::fold_consts`]).
+    pub fn set_consts(&mut self, values: &crate::fold_consts::ConstValues) {
+        self.consts.clone_from(values);
     }
 
     /// Adds static objects that joined the unit.
@@ -478,6 +490,7 @@ fn cannot_panic(value: &Rvalue) -> bool {
         &FxHashMap::default(),
         &none,
         &FxHashMap::default(),
+        &FxHashMap::default(),
         &Known::default(),
     )
     .is_some()
@@ -501,13 +514,15 @@ const fn raw_constant(c: &Const) -> bool {
 }
 
 /// The value `value` folds to, its operands read through `subst`:
-/// `unbox` of a `box` (`boxes`), a raw constant moved, a comparison,
-/// `not`, checked `Int` arithmetic that does not panic, a tag read of a
-/// static constructor.
+/// `unbox` of a `box` (`boxes`) or of the slot word of a constant
+/// whose value the build folds (`loads`, [`Known::set_consts`]), a raw
+/// constant moved, a comparison, `not`, checked `Int` arithmetic that
+/// does not panic, a tag read of a static constructor.
 fn fold_rvalue(
     value: &Rvalue,
     boxes: &FxHashMap<Local, (Operand, Repr)>,
     unboxes: &FxHashMap<Local, (Local, Repr)>,
+    loads: &FxHashMap<Local, DefId>,
     subst: &FxHashMap<Local, Operand>,
     tags: &Known,
 ) -> Option<Operand> {
@@ -521,6 +536,9 @@ fn fold_rvalue(
                 Operand::Local(l) => l,
                 Operand::Const(_) => return None,
             };
+            if let Some(&def) = loads.get(&target) {
+                return crate::fold_consts::unboxed(&tags.consts, def, *to).map(Operand::Const);
+            }
             let (x, from) = boxes.get(&target)?;
             (from == to).then(|| resolve(subst, x))
         }
@@ -676,18 +694,33 @@ fn boxes(f: &Function) -> FxHashMap<Local, (Operand, Repr)> {
 fn fold(f: &mut Function, tags: &Known) -> bool {
     let boxes = boxes(f);
     let mut unboxes: FxHashMap<Local, (Local, Repr)> = FxHashMap::default();
+    // The slot words of the constants the build folds.
+    let mut loads: FxHashMap<Local, DefId> = FxHashMap::default();
     for b in &f.blocks {
         for s in &b.stmts {
-            if let Stmt::Assign {
-                dst,
-                value:
-                    Rvalue::Unbox {
-                        value: Operand::Local(x),
-                        to,
-                    },
-            } = s
-            {
-                unboxes.insert(*dst, (*x, *to));
+            match s {
+                Stmt::Assign {
+                    dst,
+                    value:
+                        Rvalue::Unbox {
+                            value: Operand::Local(x),
+                            to,
+                        },
+                } => {
+                    unboxes.insert(*dst, (*x, *to));
+                }
+                Stmt::Assign {
+                    dst,
+                    value: Rvalue::LoadConst(def),
+                } if tags.consts.contains_key(def) => {
+                    loads.insert(*dst, *def);
+                }
+                Stmt::Assign { .. }
+                | Stmt::Eval(_)
+                | Stmt::Dup(_)
+                | Stmt::Drop(_)
+                | Stmt::DropKeep { .. }
+                | Stmt::ClearUnwind => {}
             }
         }
     }
@@ -695,7 +728,7 @@ fn fold(f: &mut Function, tags: &Known) -> bool {
     for b in &f.blocks {
         for s in &b.stmts {
             if let Stmt::Assign { dst, value } = s
-                && let Some(v) = fold_rvalue(value, &boxes, &unboxes, &subst, tags)
+                && let Some(v) = fold_rvalue(value, &boxes, &unboxes, &loads, &subst, tags)
                 && v != Operand::Local(*dst)
             {
                 subst.insert(*dst, v);

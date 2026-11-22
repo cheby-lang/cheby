@@ -327,17 +327,28 @@ fn build_once(
         reuse: false,
         records: mir.release.is_none(),
     };
-    let lowered = match backend::lower_reading(
+    // A release build that folds its constants evaluates them before it
+    // optimizes, in the module and with the options of `constant_images`
+    // below, and reports them there (design T10).
+    let first = backend::ConstsFirst {
+        codegen: backend::codegen_options(mir, false),
+        mir,
+        dump: None,
+        scope: backend::command_scope(),
+    };
+    let mut lowered = match backend::lower_reading_first(
         &front,
         &out.sources,
         &backend::Roots::Main(main),
         mir,
         backend::command_scope(),
         reading,
+        &first,
     ) {
         Err(_) if again() => return Err(crate::Restart::Again(mark)),
         lowered => lowered.map_err(Error::from)?,
     };
+    let consts_first = lowered.consts_first.take();
     let compiled = compile_lowered(&front, &lowered, main.def, mir)?;
     // D-943: E0053 for the symbols reached functions name and the build
     // resolver cannot find; a stub in the program object for each one
@@ -365,7 +376,7 @@ fn build_once(
     // no evaluation module (D-977, D-1261), and the misses evaluated in a
     // module of their own on `plain` code as under `cheby run`.
     // D-1286.
-    let images = match backend::constant_images(&front, &out.sources, &lowered, mir) {
+    let images = match backend::constant_images(&front, &out.sources, &lowered, mir, consts_first) {
         Err(_) if again() => return Err(crate::Restart::Again(mark)),
         images => images.map_err(Error::from)?,
     };

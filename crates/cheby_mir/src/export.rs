@@ -715,6 +715,9 @@ pub struct BuildBodies<'d, 'a> {
     own: BTreeMap<DefId, Arc<Exported>>,
     portable: &'d dyn PortableSource,
     defs: &'d Defs<'a>,
+    /// The constants whose reads the clean-up folds
+    /// ([`crate::inline::Bodies::consts`]).
+    consts: &'d crate::fold_consts::ConstValues,
     /// The portable bodies imported so far, by def: an import is a function
     /// of the body and the interfaces, so the order of the requests cannot
     /// change a result.
@@ -731,13 +734,19 @@ impl std::fmt::Debug for BuildBodies<'_, '_> {
 }
 
 impl<'d, 'a> BuildBodies<'d, 'a> {
-    /// No exports of the build yet, and `portable`'s bodies.
+    /// No exports of the build yet, `portable`'s bodies, and the values
+    /// `consts` of the constants the build folds.
     #[must_use]
-    pub fn new(portable: &'d dyn PortableSource, defs: &'d Defs<'a>) -> Self {
+    pub fn new(
+        portable: &'d dyn PortableSource,
+        defs: &'d Defs<'a>,
+        consts: &'d crate::fold_consts::ConstValues,
+    ) -> Self {
         Self {
             own: BTreeMap::new(),
             portable,
             defs,
+            consts,
             imported: Mutex::new(BTreeMap::new()),
         }
     }
@@ -769,6 +778,10 @@ impl crate::inline::Bodies for BuildBodies<'_, '_> {
         imported.insert(def, found.clone());
         found
     }
+
+    fn consts(&self) -> &crate::fold_consts::ConstValues {
+        self.consts
+    }
 }
 
 /// One layer's work for [`optimize_build`]: each unit of the layer
@@ -784,15 +797,21 @@ pub type LayerRun<'r> =
 /// picks, which inline each other's bodies and `portable`'s (design T8,
 /// T9): layer by layer ([`crate::inline::layers`]), each unit inlined
 /// ([`crate::inline::optimize_across`]), checked as lowered again and
-/// exported ([`exports`]), so a later layer reads its bodies. `each` runs
-/// the step over a layer's units, in any order or in parallel, and gives
-/// the results in the layer's order; the first error in that order is
-/// returned, so the result does not depend on threads (D-264).
+/// exported ([`exports`]), so a later layer reads its bodies. The
+/// clean-up folds the reads of the constants `consts` gives
+/// ([`crate::fold_consts`]). `each` runs the step over a layer's units,
+/// in any order or in parallel, and gives the results in the layer's
+/// order; the first error in that order is returned, so the result does
+/// not depend on threads (D-264).
 ///
 /// # Errors
 ///
 /// An [`Ice`] for malformed MIR, a def `defs` cannot see, or a unit that
 /// is no longer valid lowered MIR.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the build's units, its bodies, its constants and how to run a layer"
+)]
 pub fn optimize_build(
     units: &mut [MirModule],
     selected: &dyn Fn(&MirModule) -> bool,
@@ -800,10 +819,11 @@ pub fn optimize_build(
     defs: &Defs<'_>,
     budget: &InlineBudget,
     passes: crate::inline::Passes,
+    consts: &crate::fold_consts::ConstValues,
     each: &LayerRun<'_>,
 ) -> Result<Vec<Exported>, Ice> {
     let layers = crate::inline::layers(units);
-    let mut bodies = BuildBodies::new(portable, defs);
+    let mut bodies = BuildBodies::new(portable, defs, consts);
     let mut all = Vec::new();
     for layer in layers {
         let mut refs: Vec<&mut MirModule> = units
@@ -1158,4 +1178,7 @@ fn for_operands_mut(value: &mut Rvalue, f: &mut dyn FnMut(&mut Operand)) {
 
 mod bytes;
 
-pub use bytes::{EncodedBodies, PLACEHOLDER_SPAN, decode_bodies, encode_bodies};
+pub use bytes::{
+    EncodedBodies, Folded, PLACEHOLDER_SPAN, decode_bodies, decode_folded, encode_bodies,
+    encode_folded,
+};

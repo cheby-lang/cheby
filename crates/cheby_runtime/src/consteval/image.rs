@@ -577,6 +577,88 @@ pub fn scalar_image(path: &str, value: Scalar) -> ConstImage {
     }
 }
 
+/// The value of `image` when it is a scalar ([`Scalar`]): what
+/// [`scalar_image`] writes, or [`serialize`] for the word of a scalar,
+/// read back, so a release build can fold an evaluated constant into its
+/// readers (design T10). A root that is the object of an earlier image (a
+/// constant whose value is another's, D-539) is read from that image,
+/// which `earlier` gives by path. `None` for the image of any other
+/// value, for malformed bytes and for an earlier image `earlier` does not
+/// give: such a constant is not folded.
+#[must_use]
+pub fn scalar_value<'i>(
+    image: &'i ConstImage,
+    earlier: &dyn Fn(&str) -> Option<&'i ConstImage>,
+) -> Option<Scalar> {
+    let mut r = Reader::new(&image.path, &image.bytes);
+    r.header().ok()?;
+    let count = r.number().ok()?;
+    let value = match r.byte().ok()? {
+        tag::IMM => {
+            let word = r.u64().ok()?;
+            if count != 0 || !abi::is_tagged_int(word) {
+                return None;
+            }
+            Scalar::Int(abi::untag_int(word))
+        }
+        tag::STATIC => {
+            if count != 0 {
+                return None;
+            }
+            match r.byte().ok()? {
+                0 => Scalar::Nil,
+                1 => Scalar::Bool(false),
+                2 => Scalar::Bool(true),
+                3 => Scalar::Order(std::cmp::Ordering::Less),
+                4 => Scalar::Order(std::cmp::Ordering::Equal),
+                5 => Scalar::Order(std::cmp::Ordering::Greater),
+                6 => Scalar::None,
+                _ => return None,
+            }
+        }
+        tag::LOCAL => {
+            if count != 1 || r.index().ok()? != 0 {
+                return None;
+            }
+            boxed_scalar(&mut r)?
+        }
+        tag::EXTERN => {
+            let path = r.text().ok()?;
+            if count != 0 || r.index().ok()? != 0 {
+                return None;
+            }
+            // Object 0 of the earlier image is a boxed scalar only when it
+            // is that image's one object and its root.
+            let other = earlier(path)?;
+            let mut o = Reader::new(&other.path, &other.bytes);
+            o.header().ok()?;
+            if o.number().ok()? != 1 || o.byte().ok()? != tag::LOCAL || o.index().ok()? != 0 {
+                return None;
+            }
+            let value = boxed_scalar(&mut o)?;
+            if !o.at_end() {
+                return None;
+            }
+            value
+        }
+        _ => return None,
+    };
+    r.at_end().then_some(value)
+}
+
+/// A boxed scalar object at `r`: its kind and its payload's bits.
+fn boxed_scalar(r: &mut Reader<'_>) -> Option<Scalar> {
+    let kind = r.byte().ok()?;
+    let bits = r.u64().ok()?;
+    Some(match kind {
+        kind::BOXED_INT => Scalar::Int(bits.cast_signed()),
+        kind::BOXED_FLOAT => Scalar::Float(bits),
+        kind::BOXED_F32 => Scalar::F32(u32::try_from(bits).ok()?),
+        kind::BOXED_U64 => Scalar::U64(bits),
+        _ => return None,
+    })
+}
+
 /// The reference of a word that is no object of an image: a tagged
 /// integer, a runtime static, or, `in_process`, any other static object
 /// by its address.

@@ -214,6 +214,40 @@ fn read_index(bytes: &[u8]) -> Option<Index> {
     r.rest.is_empty().then_some(index)
 }
 
+/// The constants a build folds, each by its path ([`encode_folded`]).
+pub type Folded = Vec<(String, Const)>;
+
+/// The bytes of the constants a build folds, each by its path (design
+/// T10, [`crate::fold_consts`]): a count, then each path and constant in
+/// the form's constants. Only values [`crate::fold_consts::folds`] takes
+/// belong here; their only defs are builtin unit constructors, which
+/// every front end numbers alike.
+#[must_use]
+pub fn encode_folded(values: &[(String, Const)]) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.len(values.len());
+    for (path, value) in values {
+        w.str(path);
+        w.constant(value);
+    }
+    w.0
+}
+
+/// What [`encode_folded`] wrote at the start of `bytes`, and the bytes
+/// after it; `None` for anything else, a value that does not fold or a
+/// constructor outside the builtin module among it.
+#[must_use]
+pub fn decode_folded(bytes: &[u8]) -> Option<(Folded, &[u8])> {
+    let mut r = Reader { rest: bytes };
+    let values = r.list(|r| {
+        let path = r.str()?.into_string();
+        let value = r.constant()?;
+        let builtin = !matches!(value, Const::StaticCtor(def) if def.module != ModuleId::BUILTIN);
+        (crate::fold_consts::folds(&value) && builtin).then_some((path, value))
+    })?;
+    Some((values, r.rest))
+}
+
 /// One body's bytes, as [`Writer::portable`] wrote them.
 fn decode_one(bytes: &[u8]) -> Option<PortableBody> {
     let mut r = Reader { rest: bytes };

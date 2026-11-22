@@ -442,7 +442,27 @@ pub(crate) fn build_scoped(
         });
     }
     let lower_span = crate::phases::span(crate::phases::Phase::Lower);
-    let lowered = lower_reached(front, sources, roots, mir, scope, reading, check_reach)?;
+    // A release build folds its constants, so it has their images before it
+    // optimizes (design T10): its evaluation module is the one below's.
+    let first = ConstsFirst {
+        codegen: CodegenOptions {
+            capture_clif: capture_clif || dump.is_some(),
+            ..codegen
+        },
+        mir: mir_options,
+        dump,
+        scope,
+    };
+    let mut lowered = lower_reached(
+        front,
+        sources,
+        roots,
+        mir,
+        scope,
+        reading,
+        check_reach,
+        Some(&first),
+    )?;
     drop(lower_span);
     if let Some(dir) = &code_dump {
         write_mir_dumps(dir, &lowered.units)?;
@@ -564,21 +584,30 @@ pub(crate) fn build_scoped(
         // images before any entry runs (D-978, D-979).
         Roots::Main(_) | Roots::Tests(_) => {
             let _consts = crate::phases::span(crate::phases::Phase::Consts);
-            let infos = const_infos(front, sources, &lowered.reach)?;
+            // A release build that folds its constants evaluated them before
+            // it optimized ([`ConstsFirst`]); its failures are reported here,
+            // where every build reports them.
+            let (infos, evaluated) = if let Some(first) = lowered.consts_first.take() {
+                first
+            } else {
+                let infos = const_infos(front, sources, &lowered.reach)?;
+                // K5b: the hits come from the store; only the misses are
+                // evaluated, and with none no evaluation module is built
+                // (D-977).
+                let evaluated = crate::cache::consts::images_through_cache(
+                    front,
+                    sources,
+                    &lowered.reach,
+                    &infos,
+                    mir_options,
+                    dump.is_some(),
+                    |subset| {
+                        evaluation_module(front, sources, subset, codegen, mir_options, dump, scope)
+                    },
+                )?;
+                (infos, evaluated)
+            };
             crate::code_cache::name_consts(front, &mut jit, &infos)?;
-            // K5b: the hits come from the store; only the misses are
-            // evaluated, and with none no evaluation module is built (D-977).
-            let evaluated = crate::cache::consts::images_through_cache(
-                front,
-                sources,
-                &lowered.reach,
-                &infos,
-                mir_options,
-                dump.is_some(),
-                |subset| {
-                    evaluation_module(front, sources, subset, codegen, mir_options, dump, scope)
-                },
-            )?;
             match evaluated {
                 Err(diagnostics) => return Ok(Err(diagnostics)),
                 Ok(images) => cheby_consteval::install(&jit, &images, &infos)?,
@@ -615,7 +644,9 @@ fn reuse_report_of(
 /// The images of the constants a lowered build of `main` reaches (D-979),
 /// evaluated in the evaluation module (D-978) with the MIR options `mir`
 /// as under `cheby run`: `cheby build`'s path to the program object
-/// (D-924). `Err` holds the constants' diagnostics, sorted.
+/// (D-924). `first` is [`Lowered::consts_first`], their outcome when the
+/// build evaluated them before it optimized. `Err` holds the constants'
+/// diagnostics, sorted.
 ///
 /// # Errors
 ///
@@ -625,7 +656,11 @@ pub(crate) fn constant_images(
     sources: &SourceMap,
     lowered: &Lowered,
     mir: MirOptions,
+    first: Option<ConstOutcome>,
 ) -> Result<Result<Vec<ConstImage>, Vec<Diagnostic>>, Ice> {
+    if let Some((_, outcome)) = first {
+        return Ok(outcome);
+    }
     let infos = const_infos(front, sources, &lowered.reach)?;
     // K5b: the hits by value from the store; the misses evaluated (D-977).
     crate::cache::consts::images_through_cache(
@@ -1004,6 +1039,29 @@ pub(crate) struct Lowered {
     /// of [`Lowered::units`], or a package unit's record from the store,
     /// which was not lowered (K4c).
     pub order: Vec<Placed>,
+    /// The constants of a release build that folds them (`consts`,
+    /// [`ConstsFirst`]), evaluated before it optimized: their infos and
+    /// their images or diagnostics, which the build reports where every
+    /// build reports its constants'. `None` for every other build.
+    pub consts_first: Option<ConstOutcome>,
+}
+
+/// A build's constants and their outcome: their images, or their
+/// diagnostics, sorted.
+pub(crate) type ConstOutcome = (Vec<ConstInfo>, Result<Vec<ConstImage>, Vec<Diagnostic>>);
+
+/// How a release build with the `consts` lever evaluates its constants
+/// before it optimizes (design T10): the evaluation module's
+/// code-generation options, the command's MIR options before the build's
+/// kind (D-978), the dump directory and the scope. The outcome is the one
+/// the build would get after compiling, since the evaluation reads only
+/// the reach (D-977, D-1764); only its place moves, so a failing constant
+/// reports exactly as before and nothing is folded from it.
+pub(crate) struct ConstsFirst<'a> {
+    pub codegen: CodegenOptions,
+    pub mir: MirOptions,
+    pub dump: Option<&'a Path>,
+    pub scope: Scope,
 }
 
 /// The hidden reads of one module's units in lowering and borrow
@@ -1094,13 +1152,49 @@ pub(crate) fn lower_reading(
     scope: Scope,
     reading: Reading<'_>,
 ) -> Result<Lowered, Ice> {
-    lower_reached(front, sources, roots, mir, scope, reading, None)
+    lower_reached(front, sources, roots, mir, scope, reading, None, None)
+}
+
+/// [`lower_reading`] for a build of `main` or of tests that evaluates its
+/// constants as `first` says when it is a release build with the
+/// `consts` lever ([`ConstsFirst`], [`Lowered::consts_first`]):
+/// `cheby build`'s lowering.
+pub(crate) fn lower_reading_first(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+    scope: Scope,
+    reading: Reading<'_>,
+    first: &ConstsFirst<'_>,
+) -> Result<Lowered, Ice> {
+    lower_reached(
+        front,
+        sources,
+        roots,
+        mir,
+        scope,
+        reading,
+        None,
+        Some(first),
+    )
 }
 
 /// [`lower_reading`] over `reached`, the reach and code modules that
 /// [`reach_in`] gives for `roots` in `scope`, when the caller computed
 /// them already (`cheby check`'s [`constants_reach`]): the walk reads
-/// std's summaries, which a second walk would read again.
+/// std's summaries, which a second walk would read again. With `first`,
+/// a release build of `main` or of tests with the `consts` lever
+/// evaluates its constants once the reach is known, before it lowers, and
+/// folds them ([`ConstsFirst`]).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "lower_reading's arguments, the reach a caller computed and the constants' evaluation"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one lowering's steps in order: the roots, the reach, the constants a release build folds, the units"
+)]
 fn lower_reached(
     front: &Frontend,
     sources: &SourceMap,
@@ -1109,6 +1203,7 @@ fn lower_reached(
     scope: Scope,
     reading: Reading<'_>,
     reached: Option<(Reach, BTreeSet<ModuleId>)>,
+    first: Option<&ConstsFirst<'_>>,
 ) -> Result<Lowered, Ice> {
     let local = local_modules(front);
     let mut starts: Vec<Start<'_>> = Vec::new();
@@ -1161,6 +1256,10 @@ fn lower_reached(
         Some(reached) => reached,
         None => reach_in(front, &walk_roots, &starts, &mut tests, scope)?,
     };
+    let consts_first = match first {
+        Some(first) => evaluate_first(front, sources, roots, mir, &reach, first)?,
+        None => None,
+    };
     // The constants' entry thunks: in an evaluation module, and in the
     // dumps for goldens, which keep D-1175's view. A command's own JIT
     // runs no constant entry: its constants come from images (D-979).
@@ -1206,7 +1305,14 @@ fn lower_reached(
     } else {
         Some(lower_entry_unit(front, sources, &entries)?)
     };
-    let done = lower_through_cache(&cx, entries_unit, roots, mir, reading)?;
+    let done = lower_through_cache(
+        &cx,
+        entries_unit,
+        roots,
+        mir,
+        reading,
+        consts_first.as_ref(),
+    )?;
     Ok(Lowered {
         units: done.units,
         order: done.order,
@@ -1214,7 +1320,50 @@ fn lower_reached(
         reads: done.reads,
         selected,
         keys: done.keys,
+        consts_first,
     })
+}
+
+/// The constants of `reach` and their outcome, as `first` says
+/// ([`ConstsFirst`], design T10), when `roots` are `main` or tests and
+/// `mir` is a release build's with the `consts` lever: the same lookups
+/// and evaluation module as after compiling (D-977, D-978), only earlier.
+/// `None` for every other build.
+fn evaluate_first(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: &Roots<'_>,
+    mir: MirOptions,
+    reach: &Reach,
+    first: &ConstsFirst<'_>,
+) -> Result<Option<ConstOutcome>, Ice> {
+    if !(matches!(roots, Roots::Main(_) | Roots::Tests(_))
+        && mir.release.is_some_and(|levers| levers.consts))
+    {
+        return Ok(None);
+    }
+    let _consts = crate::phases::span(crate::phases::Phase::Consts);
+    let infos = const_infos(front, sources, reach)?;
+    let outcome = crate::cache::consts::images_through_cache(
+        front,
+        sources,
+        reach,
+        &infos,
+        first.mir,
+        first.dump.is_some(),
+        |subset| {
+            evaluation_module(
+                front,
+                sources,
+                subset,
+                first.codegen,
+                first.mir,
+                first.dump,
+                first.scope,
+            )
+        },
+    )?;
+    Ok(Some((infos, outcome)))
 }
 
 /// One lowering's modules and how to lower them ([`lower_scoped`]).
@@ -1617,6 +1766,7 @@ fn lower_through_cache(
     roots: &Roots<'_>,
     mir: MirOptions,
     reading: Reading<'_>,
+    consts: Option<&ConstOutcome>,
 ) -> Result<CachedLowering, Ice> {
     use crate::borrowing::{self as records, Planned, StoredMasks};
     let front = cx.front;
@@ -1669,11 +1819,44 @@ fn lower_through_cache(
     } else {
         None
     };
+    // Design T10: a release build with the `consts` lever reads the
+    // constants whose values it knows as those values, in every package
+    // unit, before inlining, and the clean-up after inlining folds the rest
+    // of their reads. Std's units, which only a build without std's one
+    // code lowers here, are not folded: std folds its literal constants in
+    // its own release code (`std_cache.rs`).
+    // Nothing is folded from constants that failed: the build stops at
+    // their diagnostics.
+    let values = match consts {
+        Some((infos, Ok(images))) => crate::cache::consts::folded_values(
+            front,
+            infos,
+            images,
+            std_release.as_deref().map_or(&[], |s| s.literals()),
+        ),
+        Some((_, Err(_))) | None => cheby_mir::fold_consts::ConstValues::new(),
+    };
+    for unit in &mut units {
+        let package = match unit.unit {
+            UnitKind::Code(module) | UnitKind::Tests(module) => !is_std(front, module),
+            UnitKind::Entries => false,
+        };
+        if package {
+            cheby_mir::fold_consts::fold_unit(unit, &values);
+        }
+    }
     // The release passes run before borrowing is inferred over the units,
     // so the masks describe the optimized code. A release build lowers
     // every package unit here: it reads no package record.
     if let Some(levers) = mir.release.filter(|levers| levers.inline) {
-        optimize_release(front, &mut units, std.whole, std_release.as_deref(), levers)?;
+        optimize_release(
+            front,
+            &mut units,
+            std.whole,
+            std_release.as_deref(),
+            levers,
+            &values,
+        )?;
     }
     if let Some(unit) = entries {
         tags.push(None);
@@ -1924,13 +2107,15 @@ fn lower_through_cache(
 /// since its masks are inferred over all of them. The entries unit is not
 /// optimized. The units of a layer run in parallel; each one's result
 /// depends on the layers before it only, and the first error in build
-/// order is reported (D-264).
+/// order is reported (D-264). The clean-up folds the reads of the
+/// constants `consts` gives ([`cheby_mir::fold_consts`]).
 fn optimize_release(
     front: &Frontend,
     units: &mut [MirModule],
     std_whole: bool,
     std: Option<&crate::std_cache::StdExports>,
     levers: cheby_mir::ReleaseOptions,
+    consts: &cheby_mir::fold_consts::ConstValues,
 ) -> Result<(), Ice> {
     let none = cheby_mir::export::PortableBodies::new();
     let portable: &dyn cheby_mir::export::PortableSource = std.map_or(&none, |s| s.bodies());
@@ -1946,6 +2131,7 @@ fn optimize_release(
             defs,
             &cheby_mir::inline::InlineBudget::DEFAULT,
             cheby_mir::inline::Passes::of(&levers),
+            consts,
             &each_in_parallel,
         )
         .map(|_| ())

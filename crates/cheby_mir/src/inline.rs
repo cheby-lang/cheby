@@ -1121,7 +1121,17 @@ pub trait Bodies: Sync {
     /// The export of `def`, a function another unit defines, in the defs
     /// of the reading unit's build; `None` when it has none.
     fn body(&self, def: DefId) -> Option<Arc<Exported>>;
+
+    /// The values of the constants whose reads the clean-up folds
+    /// ([`crate::fold_consts`], the release profile's `consts` lever):
+    /// none unless the build gives them.
+    fn consts(&self) -> &crate::fold_consts::ConstValues {
+        &NO_CONSTS
+    }
 }
+
+/// The values of [`Bodies::consts`] when a build folds no constant.
+static NO_CONSTS: crate::fold_consts::ConstValues = crate::fold_consts::ConstValues::new();
 
 /// [`optimize`] that also inlines the calls of functions other units
 /// define, whose exports `bodies` gives (design T8, T9; module docs):
@@ -1162,6 +1172,9 @@ fn optimize_inner(
     let (order, in_cycle) = components(&graph);
     let mut tags = crate::simplify::Known::of(unit);
     tags.set_devirt(passes.spec);
+    if let Some((bodies, _)) = across {
+        tags.set_consts(bodies.consts());
+    }
     let callable: Vec<bool> = unit
         .functions
         .iter()

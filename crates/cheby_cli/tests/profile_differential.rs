@@ -1,7 +1,7 @@
 //! The profile differential: every example of `docs/examples` that is
-//! run, and every program of `bench/runtime`, gives the same standard
-//! output, standard error and exit status in the release profile as in
-//! the debug profile.
+//! run, every program of `bench/runtime`, and a few packages whose
+//! constants fail to evaluate, give the same standard output, standard
+//! error and exit status in the release profile as in the debug profile.
 //!
 //! Each program runs three times with the workspace's `cheby`: `cheby
 //! run` (debug, the reference), `cheby run --release` and the executable
@@ -291,6 +291,188 @@ fn check_all(programs: &[Program]) {
         programs.len(),
         failures.join("\n\n")
     );
+}
+
+/// Packages whose constants fail to evaluate, or that fail before their
+/// constants are reported: each a name, the manifest's extra lines and
+/// `src/main.cheby`. A release build with the `consts` lever evaluates
+/// its constants before it optimizes (design T10), and each must still
+/// report exactly what the debug build reports, in the same order: a
+/// panic (E0075), a forbidden effect (E0077), a failed dependency, the
+/// time and memory limits of `[const-eval]` (E0076), and an E0053 that
+/// comes before the constants' diagnostics.
+const FAILING_CONSTANTS: [(&str, &str, &str); 6] = [
+    (
+        "const_panic",
+        "",
+        "//! A constant that panics, beside one that folds.
+
+import std::io
+
+const scale: Float = 2.0 * 1.5
+
+const checked: Int = must_be_positive(-3)
+
+fn must_be_positive(n: Int) -> Int {
+  assert n > 0 as \"a size must be positive\"
+  n
+}
+
+fn main() {
+  io::println(\"main ran: {checked} {scale}\")
+}
+",
+    ),
+    (
+        "const_effect",
+        "",
+        "//! A constant that reaches an effect.
+
+import std::io
+
+const home: String = read_name()
+
+fn read_name() -> String {
+  case io::read_line() {
+    Ok(Some(line)) => line
+    _ => \"nobody\"
+  }
+}
+
+fn main() {
+  io::println(\"main ran: {home}\")
+}
+",
+    ),
+    (
+        "const_failed_dependency",
+        "",
+        "//! Constants that read a constant that panicked.
+
+const base: Int = first([])
+
+const next: Int = base + 1
+
+const last: Int = next * 2
+
+fn first(items: List<Int>) -> Int {
+  case items {
+    [item, ..] => item
+    [] => panic as \"no items\"
+  }
+}
+
+fn main() {
+  assert last > 0
+}
+",
+    ),
+    (
+        "const_time_limit",
+        "\n[const-eval]\ntime-limit = \"100ms\"\n",
+        "//! A constant that never finishes, and one that reads it.
+
+import std::io
+
+const forever: Int = ping(0)
+
+const after: Int = forever + 1
+
+fn ping(n: Int) -> Int {
+  pong(n + 1)
+}
+
+fn pong(n: Int) -> Int {
+  ping(n - 1)
+}
+
+fn main() {
+  io::println(\"{after}\")
+}
+",
+    ),
+    (
+        "const_memory_limit",
+        "\n[const-eval]\nmemory-limit = \"1MiB\"\n",
+        "//! A constant larger than the memory limit, beside one that is not.
+
+import std::io
+import std::list
+import std::string
+
+const small: Int = churn(50, 0)
+
+const wide: String = string::repeat(\"ab\", 1_000_000)
+
+fn churn(n: Int, acc: Int) -> Int {
+  case n {
+    0 => acc
+    _ => churn(n - 1, acc + list::length(list::range(0, 10_000)))
+  }
+}
+
+fn main() {
+  let size = string::length(wide)
+  io::println(\"{small} {size}\")
+}
+",
+    ),
+    (
+        "const_after_missing_symbol",
+        "targets = [\"native\"]\n",
+        "//! A native symbol nothing defines, and a constant that panics.
+
+import std::io
+
+const checked: Int = must_be_positive(-3)
+
+@external(native, \"app_missing_symbol\")
+fn missing() -> Int
+
+fn must_be_positive(n: Int) -> Int {
+  assert n > 0 as \"a size must be positive\"
+  n
+}
+
+fn main() {
+  io::println(\"main ran: {checked}\")
+  let _ = missing()
+}
+",
+    ),
+];
+
+/// Design T10: every package of [`FAILING_CONSTANTS`] reports in release
+/// as in debug, under `cheby run --release` and `cheby build --release`.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code and builds executables; Windows support is M6 (D-545, D-935)"
+)]
+fn profile_differential_failing_constants() {
+    let mut dirs = Vec::new();
+    let mut programs = Vec::new();
+    for (name, manifest, source) in FAILING_CONSTANTS {
+        let dir = FreshDir::create(&format!("cheby-profile-{name}")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("cheby.toml"),
+            format!("name = \"app\"\nversion = \"0.1.0\"\n{manifest}"),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/main.cheby"), source).unwrap();
+        programs.push(Program {
+            name: name.to_owned(),
+            dir: dir.path().to_path_buf(),
+            args: Vec::new(),
+            env: Vec::new(),
+            stdin: None,
+            timing: false,
+        });
+        dirs.push(dir);
+    }
+    check_all(&programs);
+    drop(dirs);
 }
 
 #[test]

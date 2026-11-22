@@ -78,9 +78,7 @@ impl Profile {
 
 /// The levers of a release build, each switchable on its own
 /// (`CHEBY_RELEASE_OFF`, [`ReleaseOptions::from_env`]). All are on in a
-/// release build. [`ReleaseOptions::inline`], [`ReleaseOptions::direct`]
-/// and [`ReleaseOptions::clif`] change code today; the others are read by
-/// passes that later work adds, and already enter the cache keys.
+/// release build, and each enters the cache keys.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -96,7 +94,8 @@ pub struct ReleaseOptions {
     pub spec: bool,
     /// Unboxing of scalar parameters and results in clones (`unbox`).
     pub unbox: bool,
-    /// Constants folded into their readers (`consts`).
+    /// Constants whose values the build knows folded into their readers
+    /// (`consts`, [`crate::fold_consts`]).
     pub consts: bool,
     /// Calls between Cheby functions go to the callee's symbol, not
     /// through its slot (`direct`).

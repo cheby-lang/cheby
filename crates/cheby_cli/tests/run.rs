@@ -2878,3 +2878,242 @@ fn a_panic_unwinds_through_a_raw_result_clone() {
     assert_eq!(release.stderr, debug.stderr);
     assert_eq!(release.stdout, debug.stdout);
 }
+
+/// `app::util` of [`FOLDED_CONSTANTS`]: computed scalar constants at the
+/// edges of their types, a literal one and a computed `Bool`.
+const FOLDED_CONSTANTS_UTIL: &str = "//! Constants that `app` reads.
+
+import std::float
+import std::f32
+import std::i8
+import std::int
+import std::u64
+
+pub const solar_mass: Float = 4.0 * float::pi * float::pi
+
+pub const scale: Float = 2.5
+
+pub const not_a_number: Float = 0.0 / 0.0
+
+pub const negative_zero: Float = -1.0 * 0.0
+
+pub const below: Float = float::neg_infinity * 2.0
+
+pub const highest: Int = int::max_value - 5 + 5
+
+pub const lowest: Int = int::min_value + 1 - 1
+
+pub const widest: U64 = u64::max_value - 0
+
+pub const least: I8 = i8::min_value + 0
+
+pub const third: F32 = f32::pi / 3.0
+
+pub const flag: Bool = 1 < 2
+";
+
+/// Reads [`FOLDED_CONSTANTS_UTIL`]'s constants, a computed one of its own,
+/// std's literal `float::pi`, a list constant, and `scale` as a list's
+/// element, where its slot's word is kept.
+const FOLDED_CONSTANTS: &str = "//! Prints constants of another module.
+
+import std::float
+import std::f32
+import std::i8
+import std::int
+import std::io
+import std::u64
+import app::util
+
+const own_mass: Float = util::solar_mass * 2.0
+
+const names: List<String> = [\"a\", \"b\"]
+
+fn step(i: Int, n: Int, acc: Float) -> Float {
+  case i == n {
+    True => acc
+    False => step(i + 1, n, acc + util::solar_mass * util::scale + own_mass)
+  }
+}
+
+fn main() {
+  io::println(float::show(step(0, 10, 0.0)))
+  io::println(float::show(float::pi))
+  io::println(float::show(util::not_a_number))
+  io::println(float::show(util::negative_zero))
+  io::println(float::show(util::below))
+  io::println(int::show(util::highest))
+  io::println(int::show(util::lowest))
+  io::println(u64::show(util::widest))
+  io::println(i8::show(util::least))
+  io::println(f32::show(util::third))
+  let xs = [util::scale]
+  io::println(\"{xs} {names}\")
+  case util::flag {
+    True => io::println(\"flag\")
+    False => io::println(\"no flag\")
+  }
+}
+";
+
+/// `cheby run` (with `--release` when `release`) of the package of
+/// [`FOLDED_CONSTANTS`] in `dir`, its MIR dumped into `dump` when given
+/// and the levers `off` turned off when given.
+#[expect(
+    clippy::panic,
+    reason = "a test helper: a run that cannot start fails the test"
+)]
+fn run_folded(
+    dir: &Path,
+    cache: &HarnessCache,
+    release: bool,
+    dump: Option<&Path>,
+    off: Option<&str>,
+) -> RunOutput {
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(dir)
+        .env("NO_COLOR", "1")
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    if let Some(dump) = dump {
+        cmd.env("CHEBY_DUMP_DIR", dump);
+    }
+    if let Some(off) = off {
+        cmd.env("CHEBY_RELEASE_OFF", off);
+    }
+    cache.apply(&mut cmd);
+    process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+/// The package of [`FOLDED_CONSTANTS`], named `name`.
+fn folded_package(name: &str) -> PathBuf {
+    package(
+        name,
+        &[
+            NATIVE_MANIFEST,
+            ("src/main.cheby", FOLDED_CONSTANTS),
+            ("src/util.cheby", FOLDED_CONSTANTS_UTIL),
+        ],
+    )
+}
+
+/// What [`FOLDED_CONSTANTS`] prints.
+const FOLDED_CONSTANTS_OUT: &str = "1776.5287921960844\n3.141592653589793\nNaN\n-0.0\n-inf\n\
+    9223372036854775807\n-9223372036854775808\n18446744073709551615\n-128\n1.0471976\n\
+    [2.5] [a, b]\nflag\n";
+
+/// Design T10 (refining D-257 and D-977): a release build reads the
+/// scalar constants it knows as their values, a computed one from its
+/// evaluated image, in its own module and in another, and std's literal
+/// ones, and the clean-up folds the branch on a `Bool` constant. A list
+/// constant, and a scalar constant whose word becomes a list element,
+/// still read their slots, which are installed as before. The values are
+/// the bits the images hold at the edges of each type (NaN, -0.0, an
+/// infinity, the integer extremes), so the release run and the debug run
+/// print the same.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn release_reads_scalar_constants_as_their_values() {
+    let dir = folded_package("folded_constants");
+    let cache = fresh_cache();
+    let debug = run_folded(&dir, &cache, false, None, None);
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(debug.stdout, FOLDED_CONSTANTS_OUT);
+    let folded = dir.join("dump");
+    let release = run_folded(&dir, &cache, true, Some(&folded), None);
+    assert_eq!(release.status, Some(0), "{}", release.stderr);
+    assert_eq!(release.stdout, debug.stdout);
+    let mir = std::fs::read_to_string(folded.join("mir/app.mir")).unwrap_or_default();
+    let code: String = mir
+        .split("\n\n")
+        .filter(|f| f.starts_with("fn app::step(") || f.starts_with("fn app::main("))
+        .collect();
+    assert!(
+        code.contains("fn app::step(") && code.contains("fn app::main("),
+        "{mir}"
+    );
+    let scale = "load_const app::util::scale";
+    for read in [
+        "load_const app::util::",
+        "load_const app::own_mass",
+        "load_const std::",
+    ] {
+        let kept: Vec<&str> = code.lines().filter(|l| l.contains(read)).collect();
+        assert!(
+            kept.iter().all(|l| l.contains(scale)),
+            "{read} was not folded:\n{code}"
+        );
+    }
+    for value in [
+        "const float 39.47841760435743",
+        "const float 78.95683520871486",
+        "const float 3.141592653589793",
+        "const float NaN",
+        "const float -0.0",
+        "const float -inf",
+        "const int 9223372036854775807",
+        "const int -9223372036854775808",
+        "const u64 18446744073709551615",
+        "const i8 -128",
+    ] {
+        assert!(code.contains(value), "no `{value}`:\n{code}");
+    }
+    // The list and the list's element read their slots; the branch on
+    // `flag` is gone.
+    assert!(code.contains("load_const app::names"), "{code}");
+    assert!(code.contains(scale), "{code}");
+    let main = code.split("fn app::main(").nth(1).unwrap_or_default();
+    assert!(
+        !main.contains("load_const app::util::flag") && !main.contains("branch "),
+        "{main}"
+    );
+}
+
+/// Design T10: with the `consts` lever off, a release build reads the
+/// constants' slots as before, and the release executable, which folds
+/// them, prints what the debug run prints.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code and builds executables; Windows support is M6 (D-545, D-935)"
+)]
+fn the_consts_lever_off_reads_slots_and_executables_fold() {
+    let dir = folded_package("folded_constants_off");
+    let cache = fresh_cache();
+    let off = dir.join("dump_off");
+    let unfolded = run_folded(&dir, &cache, true, Some(&off), Some("consts"));
+    assert_eq!(unfolded.status, Some(0), "{}", unfolded.stderr);
+    assert_eq!(unfolded.stdout, FOLDED_CONSTANTS_OUT);
+    let mir = std::fs::read_to_string(off.join("mir/app.mir")).unwrap_or_default();
+    for read in [
+        "load_const app::util::solar_mass",
+        "load_const app::own_mass",
+        "load_const app::util::not_a_number",
+        "load_const std::float::pi",
+    ] {
+        assert!(mir.contains(read), "no `{read}` with the lever off:\n{mir}");
+    }
+    let exe = dir.join("folded_constants");
+    let mut build = Command::new(CHEBY);
+    build
+        .args(["--color=never", "build", "--release", "-o"])
+        .arg(&exe)
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut build);
+    let linked = process::run(build, None, TIMEOUT).unwrap();
+    assert_eq!(linked.status, Some(0), "{}", linked.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, FOLDED_CONSTANTS_OUT);
+}
