@@ -487,3 +487,15 @@ Against the executables of `7a586d82`.
 | `word_freq`      |               −7.4% |        −39.5% |                 −7.9% |          −39.8% |
 | `binary_trees`   |               −1.7% |        −11.0% |                 −4.7% |          −11.6% |
 
+### Std's release exports in the cache (D-1778)
+
+A release command no longer checks and optimizes std in every process: std's exported bodies and release masks are one record in the cache, and a body is decoded when the inliner asks for it. Instructions retired by `cheby build`, in units of 10⁹:
+
+| Project         | Debug, cold | Debug, warm | Release, cold | Release, warm before | Release, warm after |
+| --------------- | ----------: | ----------: | ------------: | -------------------: | ------------------: |
+| `hello_world`   |        4.70 |       0.130 |         10.81 |                1.501 |               0.137 |
+| `nbody`         |        4.83 |       0.169 |         11.02 |                1.588 |               0.251 |
+| `compile_large` |       18.72 |        2.11 |         29.80 |                19.28 |               17.81 |
+
+The cold builds include std's first use, which a toolchain pays once. A warm release build of `compile_large` still compiles its 200 modules anew, since release keeps no records of a package's own modules yet. Tried and not kept: decoding the whole record at once, which left `hello_world` at 0.157 G.
+

@@ -477,6 +477,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1775    | The entry check's slow paths save every register and are called with `preserve_all`                 |
 | D-1776    | Release inlining takes bodies from the build's other units and std's by name                        |
 | D-1777    | Std's kernel bindings, release masks and bodies may cross into a package's build (ADR-0082)         |
+| D-1778    | Std's release bodies and masks are one sealed cache record, decoded on demand                       |
 
 ## Open questions
 
