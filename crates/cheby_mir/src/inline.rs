@@ -97,6 +97,11 @@
 //!   when the clean-up after inlining settles more of them, its calls are
 //!   searched once more.
 //! - Every function is then cleaned up ([`crate::simplify`]).
+//! - With the `spec` lever each host's calls then get their clones
+//!   ([`crate::specialize`]), and the clones, in creation order, are
+//!   inlined into and cleaned up as hosts are, and get clones of their own
+//!   to the depth allowed. The inliner copies a host's body as it was
+//!   before its calls got clones, and so does an export.
 
 use std::sync::Arc;
 
@@ -1025,9 +1030,11 @@ fn intern_used(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Passes {
     /// Calls of known dictionaries, function values and closures made
-    /// direct by the clean-up ([`crate::simplify`]).
+    /// direct by the clean-up ([`crate::simplify`]), and clones for the
+    /// calls that pass them ([`crate::specialize`]).
     pub spec: bool,
-    /// Unboxed parameters and results (reserved).
+    /// Unboxed parameters and results of clones ([`crate::unbox`]), with
+    /// `spec`.
     pub unbox: bool,
 }
 
@@ -1060,6 +1067,16 @@ pub struct InlineBudget {
     pub function: usize,
     /// How much inlining may grow a unit, in percent of its size before.
     pub unit_growth_percent: usize,
+    /// The largest function cloned for a call ([`crate::specialize`]).
+    pub clone: usize,
+    /// How much the clones of one unit may cost together, at least.
+    pub clone_unit: usize,
+    /// How much the clones of one unit may cost together, in percent of
+    /// the unit's size before, when that is more than [`Self::clone_unit`].
+    pub clone_unit_percent: usize,
+    /// How deep a clone may be made from inside clones: 1 is a clone made
+    /// for a call outside clones.
+    pub clone_depth: u32,
 }
 
 impl InlineBudget {
@@ -1069,6 +1086,10 @@ impl InlineBudget {
         always: 8,
         function: crate::lower::SPLIT_SIZE,
         unit_growth_percent: 50,
+        clone: 150,
+        clone_unit: 300,
+        clone_unit_percent: 25,
+        clone_depth: 2,
     };
 }
 
@@ -1090,7 +1111,7 @@ pub fn optimize(unit: &mut MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] for malformed MIR.
 pub fn optimize_with(unit: &mut MirModule, budget: &InlineBudget) -> Result<(), Ice> {
-    optimize_inner(unit, budget, None, Passes::ALL)
+    optimize_inner(unit, budget, None, Passes::ALL).map(|_| ())
 }
 
 /// Where the inliner finds the bodies of functions that other units
@@ -1111,7 +1132,10 @@ pub trait Bodies: Sync {
 /// functions and `dyn` forwarders the unit lacks added. A body from
 /// another file takes the call's position (D-1172). The unit's callee
 /// declarations, foreign layouts and names are then computed again
-/// through `defs`, the whole build's interfaces.
+/// through `defs`, the whole build's interfaces. Returns the bodies, before
+/// their calls got clones, of the functions whose calls got clones
+/// ([`crate::specialize`]), in the unit's order: what another unit inlines
+/// and clones of them ([`crate::export::exports`]).
 ///
 /// # Errors
 ///
@@ -1122,7 +1146,7 @@ pub fn optimize_across(
     passes: Passes,
     bodies: &dyn Bodies,
     defs: &Defs<'_>,
-) -> Result<(), Ice> {
+) -> Result<Vec<Function>, Ice> {
     optimize_inner(unit, budget, Some((bodies, defs)), passes)
 }
 
@@ -1132,7 +1156,7 @@ fn optimize_inner(
     budget: &InlineBudget,
     across: Option<(&dyn Bodies, &Defs<'_>)>,
     passes: Passes,
-) -> Result<(), Ice> {
+) -> Result<Vec<Function>, Ice> {
     let index = unit.function_index();
     let graph = call_graph(unit, &index);
     let (order, in_cycle) = components(&graph);
@@ -1143,6 +1167,13 @@ fn optimize_inner(
         .iter()
         .zip(&in_cycle)
         .map(|(f, &cycle)| !cycle && is_callee(unit, f))
+        .collect();
+    // A function in a cycle may be cloned all the same: its clone's calls
+    // of itself become calls of the clone.
+    let cloneable: Vec<bool> = unit
+        .functions
+        .iter()
+        .map(|f| matches!(f.key, FnKey::Item(_)) && is_callee(unit, f))
         .collect();
     let before = unit
         .functions
@@ -1159,30 +1190,44 @@ fn optimize_inner(
             .unwrap_or(0),
         across,
         imported: false,
+        plain: FxHashMap::default(),
     };
+    let mut clones = crate::specialize::Clones::new(before, budget);
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
     for host in order {
-        // Calls of known closures and function values become calls the
-        // inliner sees (design T11).
-        if let Some(f) = unit.functions.get_mut(host)
-            && is_host(f)
-            && crate::simplify::has_indirect_call(f)
-        {
-            crate::simplify::run(f, &tags)?;
+        optimize_host(unit, host, &mut cx, &mut tags)?;
+        if passes.spec {
+            specialize_host(
+                unit,
+                host,
+                &mut cx,
+                &cloneable,
+                &mut clones,
+                &mut tags,
+                &mut queue,
+            )?;
         }
-        inline_into(unit, host, &mut cx, &mut tags)?;
-        cx.sync(unit);
-        let Some(f) = unit.functions.get_mut(host) else {
-            continue;
-        };
-        let indirect = crate::simplify::indirect_calls(f);
-        crate::simplify::run(f, &tags)?;
-        // The clean-up made direct calls of indirect ones in inlined
-        // bodies (a function value an inlined helper calls): one more
-        // round inlines them.
-        if crate::simplify::indirect_calls(f) < indirect {
-            inline_into(unit, host, &mut cx, &mut tags)?;
-            cx.sync(unit);
-            if let Some(f) = unit.functions.get_mut(host) {
+    }
+    // The clones, in creation order: each is inlined into and cleaned up
+    // as a host is, and its own calls get clones to the depth allowed.
+    while let Some(clone) = queue.pop_front() {
+        optimize_host(unit, clone, &mut cx, &mut tags)?;
+        specialize_host(
+            unit,
+            clone,
+            &mut cx,
+            &cloneable,
+            &mut clones,
+            &mut tags,
+            &mut queue,
+        )?;
+    }
+    // Raw parameters and results of the clones, whose calls are all known
+    // (design T14); the clean-up cancels the boxes and unboxes it adds.
+    if passes.spec && passes.unbox {
+        let keys: Vec<FnKey> = clones.keys().collect();
+        for changed in crate::unbox::run(unit, &keys)? {
+            if let Some(f) = unit.functions.get_mut(changed) {
                 crate::simplify::run(f, &tags)?;
             }
         }
@@ -1192,6 +1237,91 @@ fn optimize_inner(
     {
         crate::lower::refresh_tables(unit, defs)?;
     }
+    let mut plain: Vec<(usize, Function)> = cx.plain.into_iter().collect();
+    plain.sort_unstable_by_key(|&(n, _)| n);
+    Ok(plain.into_iter().map(|(_, f)| f).collect())
+}
+
+/// Inlines the calls of function `host` of `unit` and cleans it up
+/// (module docs): calls of known values become direct first, and when the
+/// clean-up after inlining makes more of them, the inliner runs once more.
+fn optimize_host(
+    unit: &mut MirModule,
+    host: usize,
+    cx: &mut Inlining<'_, '_>,
+    tags: &mut crate::simplify::Known,
+) -> Result<(), Ice> {
+    // Calls of known closures and function values become calls the
+    // inliner sees (design T11).
+    if let Some(f) = unit.functions.get_mut(host)
+        && is_host(f)
+        && crate::simplify::has_indirect_call(f)
+    {
+        crate::simplify::run(f, tags)?;
+    }
+    inline_into(unit, host, cx, tags)?;
+    cx.sync(unit);
+    let Some(f) = unit.functions.get_mut(host) else {
+        return Ok(());
+    };
+    let indirect = crate::simplify::indirect_calls(f);
+    crate::simplify::run(f, tags)?;
+    // The clean-up made direct calls of indirect ones in inlined bodies (a
+    // function value an inlined helper calls): one more round inlines
+    // them.
+    if crate::simplify::indirect_calls(f) < indirect {
+        inline_into(unit, host, cx, tags)?;
+        cx.sync(unit);
+        if let Some(f) = unit.functions.get_mut(host) {
+            crate::simplify::run(f, tags)?;
+        }
+    }
+    Ok(())
+}
+
+/// Gives the calls of function `host` of `unit` their clones
+/// ([`crate::specialize`]), keeping `host`'s body as it was for export and
+/// for the inliner when they change it, and queues the clones made.
+fn specialize_host(
+    unit: &mut MirModule,
+    host: usize,
+    cx: &mut Inlining<'_, '_>,
+    cloneable: &[bool],
+    clones: &mut crate::specialize::Clones,
+    tags: &mut crate::simplify::Known,
+    queue: &mut std::collections::VecDeque<usize>,
+) -> Result<(), Ice> {
+    let before = unit.functions.get(host).cloned();
+    let src = crate::specialize::Sources {
+        index: &cx.index,
+        cloneable,
+        across: cx.across,
+        budget: cx.budget,
+    };
+    let (made, changed) = crate::specialize::specialize_calls(unit, host, clones, &src, tags)?;
+    if changed
+        && let Some(f) = before
+        && !matches!(f.key, FnKey::Specialized { .. })
+    {
+        cx.plain.entry(host).or_insert(f);
+    }
+    // A clone grows the unit, and its own inlining may grow it by the same
+    // share as the unit's functions.
+    for &n in &made {
+        if let Some(f) = unit.functions.get(n) {
+            cx.unit_left = cx.unit_left.saturating_add(
+                cost(f)
+                    .saturating_mul(cx.budget.unit_growth_percent)
+                    .checked_div(100)
+                    .unwrap_or(0),
+            );
+        }
+    }
+    if !made.is_empty() && cx.across.is_some() {
+        cx.imported = true;
+    }
+    cx.sync(unit);
+    queue.extend(made);
     Ok(())
 }
 
@@ -1303,6 +1433,9 @@ struct Inlining<'a, 'b> {
     across: Option<(&'b dyn Bodies, &'b Defs<'b>)>,
     /// Whether a body of another unit was brought in.
     imported: bool,
+    /// The bodies of the unit's functions before their calls got clones,
+    /// by index: what the inliner copies of them.
+    plain: FxHashMap<usize, Function>,
 }
 
 impl Inlining<'_, '_> {
@@ -1346,7 +1479,8 @@ pub(crate) fn is_callee(unit: &MirModule, f: &Function) -> bool {
         | FnKey::Trampoline(_)
         | FnKey::TupleDictFn { .. }
         | FnKey::DynForward { .. }
-        | FnKey::Continuation { .. } => return false,
+        | FnKey::Continuation { .. }
+        | FnKey::Specialized { .. } => return false,
     }
     if check_body(f).is_err() {
         return false;
@@ -1633,7 +1767,7 @@ fn next_site(
             return (!other_only && cx.callable.get(at) == Some(&true)).then_some(Target::Own(at));
         }
         let (bodies, _) = cx.across?;
-        bodies.body(*def).map(Target::Other)
+        bodies.body(*def).filter(|e| e.inline).map(Target::Other)
     };
     for (i, s) in block.stmts.iter().enumerate().skip(from) {
         if let Stmt::Assign {
@@ -1708,7 +1842,7 @@ fn site_args(f: &Function, b: BlockId, at: SiteAt) -> Vec<Operand> {
 /// unwind edges whose code is its own. A value shim, a tuple function or
 /// a `dyn` forwarder is defined by every unit that needs it, and every
 /// copy of its symbol must be the same (D-918), so it is never changed.
-fn is_host(f: &Function) -> bool {
+pub(crate) fn is_host(f: &Function) -> bool {
     f.abi == Abi::Cheby
         && !f.precounted
         && f.blocks.iter().all(|b| b.unwind.is_empty())
@@ -1774,10 +1908,12 @@ fn inline_into(
                 break;
             };
             let body: &Function = match &target {
-                Target::Own(callee) => match unit.functions.get(*callee) {
-                    Some(body) => body,
-                    None => break,
-                },
+                Target::Own(callee) => {
+                    match cx.plain.get(callee).or_else(|| unit.functions.get(*callee)) {
+                        Some(body) => body,
+                        None => break,
+                    }
+                }
                 Target::Other(export) => &export.function,
             };
             let size = cost(body);
@@ -1886,11 +2022,12 @@ fn keeps_reuse(
 
 /// The def whose closures a host's closures are: a top-level function's,
 /// a closure's or continuation's owner, a constant's, a test's.
-const fn closure_owner(key: FnKey) -> Option<DefId> {
+pub(crate) const fn closure_owner(key: FnKey) -> Option<DefId> {
     match key {
         FnKey::Item(d)
         | FnKey::Closure { owner: d, .. }
         | FnKey::Continuation { owner: d, .. }
+        | FnKey::Specialized { owner: d, .. }
         | FnKey::ConstInit(d)
         | FnKey::Test(d) => Some(d),
         FnKey::ValueShim(_)
@@ -1914,7 +2051,7 @@ const fn closure_owner(key: FnKey) -> Option<DefId> {
     clippy::too_many_lines,
     reason = "the steps of the import, in their order"
 )]
-fn import(
+pub(crate) fn import(
     unit: &mut MirModule,
     host: usize,
     block: BlockId,
@@ -1980,7 +2117,8 @@ fn import(
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => None,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => None,
         })
         .max()
         .unwrap_or(0);
@@ -1991,6 +2129,36 @@ fn import(
             .and_then(|n| next.checked_add(n))
             .ok_or_else(|| Ice::new("too many closures"))?;
         keys.insert(c.key, FnKey::Closure { owner, index });
+    }
+    // The helpers of a clone's body: numbered as the unit's clones are,
+    // after them ([`crate::specialize`]).
+    let next_clone = crate::specialize::next_index(unit);
+    for (n, h) in export.helpers.iter().enumerate() {
+        let index = u32::try_from(n)
+            .ok()
+            .and_then(|n| next_clone.checked_add(n))
+            .ok_or_else(|| Ice::new("too many clones"))?;
+        let origin = match h.key {
+            FnKey::Specialized { origin, .. } => origin,
+            FnKey::Item(_)
+            | FnKey::ValueShim(_)
+            | FnKey::Closure { .. }
+            | FnKey::ConstInit(_)
+            | FnKey::Test(_)
+            | FnKey::Entry(_)
+            | FnKey::Trampoline(_)
+            | FnKey::TupleDictFn { .. }
+            | FnKey::DynForward { .. }
+            | FnKey::Continuation { .. } => export.def,
+        };
+        keys.insert(
+            h.key,
+            FnKey::Specialized {
+                owner,
+                index,
+                origin,
+            },
+        );
     }
     let same_file = export.source.is_some() && export.source == unit.source;
     let call_pos = host_fn
@@ -2009,7 +2177,7 @@ fn import(
     };
     let mut rekey = |k: FnKey| keys.get(&k).copied().unwrap_or(k);
     let mut new_functions: Vec<Function> = Vec::new();
-    for c in &export.closures {
+    for c in export.closures.iter().chain(&export.helpers) {
         let mut copy = c.clone();
         crate::export::rewrite_function(&mut copy, &mut rekey, &mut remap_static)?;
         copy.span = span;
@@ -2046,6 +2214,15 @@ fn import(
     layouts_of.push(body.clone());
     let (layouts, callees) = crate::lower::tables_of(&layouts_of, &added, defs)?;
     tags.extend(&layouts);
+    // The unit knows the layouts at once, so the reuse the inliner weighs
+    // in the bodies it copies is counted (`keeps_reuse`); the tables are
+    // computed again at the end.
+    for d in layouts {
+        if unit.layout(d.layout).is_none() {
+            unit.foreign_layouts.push(d);
+        }
+    }
+    unit.foreign_layouts.sort_by_key(|d| d.layout);
     tags.add_callees(&callees);
     tags.add_statics(&added);
     tags.add_functions(&new_functions);
@@ -2078,7 +2255,7 @@ fn at_position(f: &mut Function, pos: Option<Pos>) {
 }
 
 /// Removes every source position of `f`.
-fn clear_positions(f: &mut Function) {
+pub(crate) fn clear_positions(f: &mut Function) {
     f.positions = crate::positions::Positions::default();
     for b in &mut f.blocks {
         b.pos.clear();

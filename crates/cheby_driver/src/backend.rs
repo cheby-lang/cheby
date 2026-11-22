@@ -957,7 +957,8 @@ fn reached_units(units: &[MirModule], lowered: &Lowered) -> Vec<MirModule> {
                 | cheby_mir::FnKey::ConstInit(def)
                 | cheby_mir::FnKey::Test(def)
                 | cheby_mir::FnKey::Closure { owner: def, .. }
-                | cheby_mir::FnKey::Continuation { owner: def, .. } => keep(def),
+                | cheby_mir::FnKey::Continuation { owner: def, .. }
+                | cheby_mir::FnKey::Specialized { owner: def, .. } => keep(def),
                 cheby_mir::FnKey::Entry(_)
                 | cheby_mir::FnKey::Trampoline(_)
                 | cheby_mir::FnKey::TupleDictFn { .. }
@@ -1947,6 +1948,7 @@ fn optimize_release(
             cheby_mir::inline::Passes::of(&levers),
             &each_in_parallel,
         )
+        .map(|_| ())
     })
 }
 

@@ -14,6 +14,15 @@
 //! `priv` item when they read the module's decoded interface (D-953), so
 //! the rule holds for every body, whoever reads it.
 //!
+//! With the `spec` lever a unit also exports, for clones only
+//! ([`crate::specialize`]), a function above the inliner's budget, up to
+//! the clone budget, and one in a cycle; [`Exported::inline`] tells the
+//! two apart. Such an export may bring the `priv` functions of its module
+//! it calls, directly or through each other, as helpers
+//! ([`Exported::helpers`]), each keyed as a clone and called by key: no
+//! other module can name them. A function whose calls got clones is
+//! exported as it was before, so another unit's copy names no clone.
+//!
 //! An export is lowered MIR after its own unit's release passes, so the
 //! inliner copies it flat and never searches it again. It is a bundle:
 //!
@@ -75,6 +84,17 @@ pub struct Exported {
     /// The source file of its unit ([`MirModule::source`]): a copy into a
     /// unit of the same file keeps its positions.
     pub source: Option<Box<str>>,
+    /// Whether the inliner may copy it. When not, it is a function that
+    /// only a clone copies ([`crate::specialize`]): one in a cycle of its
+    /// unit's call graph, one above the inliner's budget, or one with
+    /// helpers.
+    pub inline: bool,
+    /// The `priv` functions of its module that it calls, directly or
+    /// through each other, which the importer copies with the clone, since
+    /// no other module can name them (module docs): each keyed as a clone
+    /// of the function ([`FnKey::Specialized`], numbered from 0), and
+    /// called by key.
+    pub helpers: Vec<Function>,
 }
 
 /// The functions of `unit` that other units may inline (module docs), in
@@ -88,23 +108,35 @@ pub fn exports(
     unit: &MirModule,
     defs: &Defs<'_>,
     budget: &InlineBudget,
+    plain: &[Function],
+    clones: bool,
 ) -> Result<Vec<Exported>, Ice> {
     let index = unit.function_index();
     let in_cycle = crate::inline::cycles(unit, &index);
+    let plain: FxHashMap<FnKey, &Function> = plain.iter().map(|f| (f.key, f)).collect();
     let mut out = Vec::new();
     for (n, f) in unit.functions.iter().enumerate() {
         let FnKey::Item(def) = f.key else { continue };
-        if in_cycle.get(n) != Some(&false)
-            || crate::inline::cost(f) > budget.inline
-            || !crate::inline::is_callee(unit, f)
-        {
+        let f = plain.get(&f.key).copied().unwrap_or(f);
+        let size = crate::inline::cost(f);
+        let inline = in_cycle.get(n) == Some(&false) && size <= budget.inline;
+        let clone = clones && size <= budget.clone;
+        if !(inline || clone) || !crate::inline::is_callee(unit, f) {
             continue;
         }
-        let Some(body) = bundle(unit, def, f, &index)? else {
+        let Some(mut body) = bundle(unit, def, f, &index, &plain)? else {
             continue;
         };
+        body.inline = inline;
         if names_hidden(&body, defs) {
-            continue;
+            // A clone may bring the `priv` functions it calls along.
+            if !clone || !add_helpers(unit, &mut body, defs, budget, &index, &plain)? {
+                continue;
+            }
+            body.inline = false;
+            if names_hidden(&body, defs) {
+                continue;
+            }
         }
         out.push(body);
     }
@@ -118,6 +150,7 @@ fn bundle(
     def: DefId,
     f: &Function,
     index: &FxHashMap<FnKey, usize>,
+    plain: &FxHashMap<FnKey, &Function>,
 ) -> Result<Option<Exported>, Ice> {
     // The functions of the bundle, by index into the unit, found from the
     // function itself.
@@ -148,6 +181,7 @@ fn bundle(
             | FnKey::DynForward { .. } => {}
             FnKey::Item(_) => continue,
             FnKey::Continuation { .. }
+            | FnKey::Specialized { .. }
             | FnKey::ConstInit(_)
             | FnKey::Test(_)
             | FnKey::Entry(_)
@@ -164,6 +198,7 @@ fn bundle(
             .functions
             .get(at)
             .ok_or_else(|| Ice::new("export: a function index"))?;
+        let g = plain.get(&g.key).copied().unwrap_or(g);
         names_of(g, &mut queue, &mut static_queue);
     }
     taken.sort_unstable();
@@ -182,11 +217,11 @@ fn bundle(
     let mut closures = Vec::new();
     let mut shared = Vec::new();
     for at in taken {
-        let mut g = unit
+        let g = unit
             .functions
             .get(at)
-            .ok_or_else(|| Ice::new("export: a function index"))?
-            .clone();
+            .ok_or_else(|| Ice::new("export: a function index"))?;
+        let mut g = plain.get(&g.key).copied().unwrap_or(g).clone();
         map_function(&mut g, &mut |d| Ok(d), &mut |id| map_static(id))?;
         if matches!(g.key, FnKey::Closure { .. }) {
             closures.push(g);
@@ -213,6 +248,8 @@ fn bundle(
         shared,
         statics: objects,
         source: unit.source.clone(),
+        inline: true,
+        helpers: Vec::new(),
     }))
 }
 
@@ -302,6 +339,7 @@ fn defs_of(body: &Exported) -> Result<Vec<DefId>, Ice> {
     for f in std::iter::once(&mut probe.function)
         .chain(&mut probe.closures)
         .chain(&mut probe.shared)
+        .chain(&mut probe.helpers)
     {
         map_function(f, &mut record, &mut same)?;
     }
@@ -313,6 +351,144 @@ fn defs_of(body: &Exported) -> Result<Vec<DefId>, Ice> {
     Ok(out)
 }
 
+/// How many times the clone budget a body with its helpers may cost: the
+/// helpers are copied as they are and specialize nothing, so they count
+/// for the unit's code size, not for the clone budget.
+const HELPERS_SHARE: usize = 4;
+
+/// Gives `body`, a clone's export, the `priv` functions of `unit` it calls,
+/// directly or through each other, as helpers ([`Exported::helpers`]):
+/// each a callee the inliner could copy, cycles aside, that names no
+/// closure, no static and no shared function, together within
+/// [`HELPERS_SHARE`] times the clone budget. Their calls become calls by key. Returns whether every
+/// such function could come along.
+fn add_helpers(
+    unit: &MirModule,
+    body: &mut Exported,
+    defs: &Defs<'_>,
+    budget: &InlineBudget,
+    index: &FxHashMap<FnKey, usize>,
+    plain: &FxHashMap<FnKey, &Function>,
+) -> Result<bool, Ice> {
+    let mut helpers: Vec<(DefId, Function)> = Vec::new();
+    let mut total = crate::inline::cost(&body.function);
+    loop {
+        let mut wanted: Vec<DefId> = Vec::new();
+        for f in std::iter::once(&body.function)
+            .chain(&body.closures)
+            .chain(helpers.iter().map(|(_, h)| h))
+        {
+            for d in direct_callees(f) {
+                if !helpers.iter().any(|(h, _)| *h == d) && is_hidden(d, defs) {
+                    wanted.push(d);
+                }
+            }
+        }
+        wanted.sort_unstable();
+        wanted.dedup();
+        if wanted.is_empty() {
+            break;
+        }
+        for d in wanted {
+            let Some(&at) = index.get(&FnKey::Item(d)) else {
+                return Ok(false);
+            };
+            let g = unit
+                .functions
+                .get(at)
+                .ok_or_else(|| Ice::new("export: a function index"))?;
+            let g = plain.get(&g.key).copied().unwrap_or(g);
+            let mut keys = Vec::new();
+            let mut statics = Vec::new();
+            names_of(g, &mut keys, &mut statics);
+            if !keys.is_empty() || !statics.is_empty() || !crate::inline::is_callee(unit, g) {
+                return Ok(false);
+            }
+            total = total.saturating_add(crate::inline::cost(g));
+            if total > budget.clone.saturating_mul(HELPERS_SHARE) {
+                return Ok(false);
+            }
+            helpers.push((d, g.clone()));
+        }
+    }
+    let key_of = |d: DefId| -> Option<FnKey> {
+        let n = helpers.iter().position(|(h, _)| *h == d)?;
+        Some(FnKey::Specialized {
+            owner: body.def,
+            index: u32::try_from(n).ok()?,
+            origin: body.def,
+        })
+    };
+    let mut out = Vec::with_capacity(helpers.len());
+    for (d, mut h) in helpers.iter().cloned() {
+        h.key = key_of(d).ok_or_else(|| Ice::new("export: a helper"))?;
+        h.sites.clear();
+        out.push(h);
+    }
+    for f in std::iter::once(&mut body.function)
+        .chain(&mut body.closures)
+        .chain(&mut out)
+    {
+        call_by_key(f, &key_of);
+    }
+    body.helpers = out;
+    Ok(true)
+}
+
+/// The direct callees of `f`, in order, with duplicates.
+fn direct_callees(f: &Function) -> Vec<DefId> {
+    let mut out = Vec::new();
+    for b in &f.blocks {
+        for s in &b.stmts {
+            if let Stmt::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: Callee::Direct(d) | Callee::Borrowing(d, _),
+                        ..
+                    },
+                ..
+            } = s
+            {
+                out.push(*d);
+            }
+        }
+        if let Terminator::TailCall {
+            callee: Callee::Direct(d) | Callee::Borrowing(d, _),
+            ..
+        } = &b.term
+        {
+            out.push(*d);
+        }
+    }
+    out
+}
+
+/// Each direct call of `f` of a function `key_of` keys becomes a call of
+/// that key.
+fn call_by_key(f: &mut Function, key_of: &dyn Fn(DefId) -> Option<FnKey>) {
+    let retarget = |c: &mut Callee| {
+        if let Callee::Direct(d) | Callee::Borrowing(d, _) = c
+            && let Some(key) = key_of(*d)
+        {
+            *c = Callee::Code(key);
+        }
+    };
+    for b in &mut f.blocks {
+        for s in &mut b.stmts {
+            if let Stmt::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } = s
+            {
+                retarget(callee);
+            }
+        }
+        if let Terminator::TailCall { callee, .. } = &mut b.term {
+            retarget(callee);
+        }
+    }
+}
+
 /// Whether `body` names a def that a unit of another module cannot see:
 /// a `priv` item, or a constructor or interface function of a `priv`
 /// parent (module docs); or one `defs` cannot read.
@@ -320,21 +496,26 @@ fn names_hidden(body: &Exported, defs: &Defs<'_>) -> bool {
     let Ok(all) = defs_of(body) else {
         return true;
     };
-    all.into_iter().any(|def| {
-        if def.module == ModuleId::BUILTIN {
-            return false;
-        }
-        let Ok(item) = defs.item(def) else {
-            return true;
-        };
-        let parent_hidden =
-            item.parent
-                .is_some_and(|p| match defs.item(DefId::new(def.module, p)) {
-                    Ok(parent) => parent.vis == Vis::Priv,
-                    Err(_) => true,
-                });
-        item.vis == Vis::Priv || item.kind == DefKind::Test || parent_hidden
-    })
+    all.into_iter().any(|def| is_hidden(def, defs))
+}
+
+/// Whether a unit of another module cannot see `def`: a `priv` item, a
+/// test, or a constructor or interface function of a `priv` parent; or
+/// one `defs` cannot read.
+fn is_hidden(def: DefId, defs: &Defs<'_>) -> bool {
+    if def.module == ModuleId::BUILTIN {
+        return false;
+    }
+    let Ok(item) = defs.item(def) else {
+        return true;
+    };
+    let parent_hidden = item
+        .parent
+        .is_some_and(|p| match defs.item(DefId::new(def.module, p)) {
+            Ok(parent) => parent.vis == Vis::Priv,
+            Err(_) => true,
+        });
+    item.vis == Vis::Priv || item.kind == DefKind::Test || parent_hidden
 }
 
 /// An [`Exported`] whose defs are named by module path and item, so a
@@ -443,6 +624,7 @@ impl PortableBody {
         for f in std::iter::once(&mut body.function)
             .chain(&mut body.closures)
             .chain(&mut body.shared)
+            .chain(&mut body.helpers)
         {
             map_function(f, &mut lookup, &mut same)?;
             for decl in &mut f.locals {
@@ -497,15 +679,28 @@ pub fn portable_exports(
     units: &[MirModule],
     defs: &Defs<'_>,
     budget: &InlineBudget,
+    clones: bool,
 ) -> Result<PortableBodies, Ice> {
-    let mut out = PortableBodies::new();
+    let mut all = Vec::new();
     for unit in units {
-        for body in exports(unit, defs, budget)? {
-            let portable = PortableBody::of(body, defs)?;
-            if let Some((module, item)) = portable.name() {
-                let key = (Box::from(module), Box::from(item));
-                out.insert(key, portable);
-            }
+        all.extend(exports(unit, defs, budget, &[], clones)?);
+    }
+    portable_of(all, defs)
+}
+
+/// `exports` as portable bodies by name, named through `defs`, the
+/// interfaces of the front end that lowered them.
+///
+/// # Errors
+///
+/// An [`Ice`] for a def `defs` cannot name.
+pub fn portable_of(exports: Vec<Exported>, defs: &Defs<'_>) -> Result<PortableBodies, Ice> {
+    let mut out = PortableBodies::new();
+    for body in exports {
+        let portable = PortableBody::of(body, defs)?;
+        if let Some((module, item)) = portable.name() {
+            let key = (Box::from(module), Box::from(item));
+            out.insert(key, portable);
         }
     }
     Ok(out)
@@ -606,9 +801,10 @@ pub fn optimize_build(
     budget: &InlineBudget,
     passes: crate::inline::Passes,
     each: &LayerRun<'_>,
-) -> Result<(), Ice> {
+) -> Result<Vec<Exported>, Ice> {
     let layers = crate::inline::layers(units);
     let mut bodies = BuildBodies::new(portable, defs);
+    let mut all = Vec::new();
     for layer in layers {
         let mut refs: Vec<&mut MirModule> = units
             .iter_mut()
@@ -621,18 +817,19 @@ pub fn optimize_build(
         }
         let shared = &bodies;
         let step = |unit: &mut MirModule| -> Result<Vec<Exported>, Ice> {
-            crate::inline::optimize_across(unit, budget, passes, shared, defs)?;
+            let plain = crate::inline::optimize_across(unit, budget, passes, shared, defs)?;
             crate::check_lowered(unit)?;
-            exports(unit, defs, budget)
+            exports(unit, defs, budget, &plain, passes.spec)
         };
         let done = each(&mut refs, &step);
         let mut found = Vec::new();
         for result in done {
             found.extend(result?);
         }
+        all.extend(found.iter().cloned());
         bodies.add(found);
     }
-    Ok(())
+    Ok(all)
 }
 
 /// A rewrite of the defs a function or static names.
@@ -672,6 +869,15 @@ fn map_key(key: FnKey, defs: &mut MapDef<'_>) -> Result<FnKey, Ice> {
         FnKey::Continuation { owner, index } => FnKey::Continuation {
             owner: defs(owner)?,
             index,
+        },
+        FnKey::Specialized {
+            owner,
+            index,
+            origin,
+        } => FnKey::Specialized {
+            owner: defs(owner)?,
+            index,
+            origin: defs(origin)?,
         },
     })
 }

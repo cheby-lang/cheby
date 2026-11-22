@@ -827,7 +827,9 @@ impl FnCx<'_> {
         }
         match f.abi {
             Abi::Cheby => {
-                if f.ret != Repr::Value {
+                // A clone, called only by key from its unit, may return a
+                // raw value (design T14, D-453's unboxed entry).
+                if f.ret != Repr::Value && !matches!(f.key, FnKey::Specialized { .. }) {
                     self.err("a Cheby-ABI function returns a uniform value");
                 }
                 if f.entry_loc.is_none() {
@@ -1631,16 +1633,19 @@ impl FnCx<'_> {
         sig
     }
 
-    fn check_call(&mut self, callee: &Callee, args: &[Operand]) {
+    /// Checks a Cheby call's callee and arguments, and gives the
+    /// representation of its result: uniform, but for a clone's raw one
+    /// (design T14).
+    fn check_call(&mut self, callee: &Callee, args: &[Operand]) -> Repr {
         if let Callee::Indirect(_) = callee {
             self.callee_sig(callee);
             for arg in args {
                 self.expect_repr(arg, Repr::Value, "indirect call argument");
             }
-            return;
+            return Repr::Value;
         }
         let Some(sig) = self.callee_sig(callee) else {
-            return;
+            return Repr::Value;
         };
         if sig.params.len() != args.len() {
             self.err(format!(
@@ -1648,11 +1653,12 @@ impl FnCx<'_> {
                 args.len(),
                 sig.params.len()
             ));
-            return;
+            return sig.ret;
         }
         for (arg, &want) in args.iter().zip(&sig.params) {
             self.expect_repr(arg, want, "call argument");
         }
+        sig.ret
     }
 
     /// The representation a foreign call with the C signature `sig`
@@ -1702,10 +1708,7 @@ impl FnCx<'_> {
                 self.check_const(op, false);
                 self.repr(op)
             }
-            Rvalue::Call { callee, args } => {
-                self.check_call(callee, args);
-                Some(Repr::Value)
-            }
+            Rvalue::Call { callee, args } => Some(self.check_call(callee, args)),
             Rvalue::CallForeign {
                 sig,
                 args,
@@ -2193,7 +2196,12 @@ impl FnCx<'_> {
                 if f.abi != Abi::Cheby {
                     self.err("a tail call in a C-ABI function");
                 }
-                self.check_call(callee, args);
+                if self.check_call(callee, args) != f.ret {
+                    self.err(format!(
+                        "a tail call of {callee:?}, whose result is not the caller's {}",
+                        f.ret
+                    ));
+                }
             }
             Terminator::Goto { target, args } => {
                 let params = f.block(*target)?.params.clone();

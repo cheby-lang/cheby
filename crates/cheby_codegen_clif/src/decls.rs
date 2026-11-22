@@ -327,6 +327,7 @@ const fn owner_of(key: FnKey) -> Option<DefId> {
         | FnKey::ConstInit(def)
         | FnKey::Closure { owner: def, .. }
         | FnKey::Continuation { owner: def, .. }
+        | FnKey::Specialized { owner: def, .. }
         | FnKey::Entry(EntryKind::Const(def)) => Some(def),
         FnKey::Test(_)
         | FnKey::Entry(_)
@@ -1295,6 +1296,14 @@ impl Decls {
                     None => mangle::continuation(&name, index),
                 }
             }
+            // Named as the owner's closures are (design T12).
+            FnKey::Specialized { owner, index, .. } => {
+                let name = self.def_name(unit, owner)?;
+                match self.test_ordinals.get(&owner) {
+                    Some(&ordinal) => mangle::test_specialized(&name.module, ordinal, index),
+                    None => mangle::specialized(&name, index),
+                }
+            }
             FnKey::ConstInit(def) => mangle::item(Kind::Cinit, &self.def_name(unit, def)?),
             FnKey::Test(def) => {
                 let UnitKind::Tests(module) = unit.unit else {
@@ -1397,7 +1406,8 @@ impl Decls {
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => Linkage::Local,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => Linkage::Local,
         };
         let id = module
             .declare_function(&symbol, linkage, &signature)

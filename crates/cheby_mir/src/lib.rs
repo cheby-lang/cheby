@@ -77,11 +77,17 @@ pub mod reuse;
 #[cfg(test)]
 mod reuse_tests;
 pub mod simplify;
+mod specialize;
+#[cfg(test)]
+mod specialize_tests;
 pub mod stats;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
+mod unbox;
+#[cfg(test)]
+mod unbox_tests;
 #[cfg(test)]
 mod unit_facts_tests;
 pub mod unwind;

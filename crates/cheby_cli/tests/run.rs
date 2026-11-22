@@ -2667,3 +2667,214 @@ fn a_release_executable_of_two_modules_inlined_across_links() {
     assert_eq!(ran.status, Some(0), "{}", ran.stderr);
     assert_eq!(ran.stdout, debug.stdout);
 }
+
+/// [`DEEP_FOLD`]'s manifest: the root fiber's stack is the smallest a
+/// manifest may give it (D-660).
+const SMALL_STACK_MANIFEST: (&str, &str) = (
+    "cheby.toml",
+    "name = \"app\"\nversion = \"0.1.0\"\n\n[runtime]\nmain-stack = \"1MiB\"\n",
+);
+
+/// A fold whose callback inserts into a sorted map: in release the fold and
+/// `sorted_map::insert` get clones (design T12, T13).
+const DEEP_FOLD: &str = "//! Inserts many keys through a fold.
+
+import std::int
+import std::io
+import std::list
+import std::sorted_map
+
+fn main() {
+  let n = 300_000
+  let m = list::fold(list::range(0, n), sorted_map::new(), fn(acc, i) {
+    sorted_map::insert(acc, i * 7 % n, i)
+  })
+  io::println(int::show(sorted_map::size(m)))
+}
+";
+
+/// D-015, D-1761: the clone of `list::fold` calls itself in tail position,
+/// so a fold over 300,000 elements runs in a stack of 1 MiB in release as
+/// in debug, and prints the same.
+#[test]
+fn a_clone_loop_does_not_grow_the_stack() {
+    let dir = package(
+        "deep_fold",
+        &[SMALL_STACK_MANIFEST, ("src/main.cheby", DEEP_FOLD)],
+    );
+    for release in [false, true] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        let out = process::run(cmd, None, TIMEOUT).unwrap();
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert_eq!(out.stdout, "300000\n");
+    }
+}
+
+/// A panic inside a fold's callback.
+const PANIC_IN_FOLD: &str = "//! Panics inside a fold's callback.
+
+import std::int
+import std::io
+import std::list
+
+fn main() {
+  let total = list::fold(list::range(0, 10), 0, fn(acc, x) {
+    case x == 7 {
+      True => panic as \"seven\"
+      False => acc + x
+    }
+  })
+  io::println(int::show(total))
+}
+";
+
+/// D-1771: in release the callback is inlined into the clone of
+/// `list::fold`, and a backtrace names the clone as `std::list::fold`, at the
+/// panic's location, which the inlined callback keeps. The panic's message
+/// and location are the debug run's.
+#[test]
+fn a_backtrace_names_a_clone_as_its_function() {
+    let dir = package(
+        "panic_in_fold",
+        &[MANIFEST, ("src/main.cheby", PANIC_IN_FOLD)],
+    );
+    let run = |release: bool| {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_BACKTRACE", "1")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    let debug = run(false);
+    let release = run(true);
+    assert_eq!(debug.status, Some(101), "{}", debug.stderr);
+    assert_eq!(release.status, Some(101), "{}", release.stderr);
+    let head = |stderr: &str| {
+        stderr
+            .lines()
+            .take(2)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(head(&release.stderr), head(&debug.stderr));
+    assert!(
+        release
+            .stderr
+            .contains("panicked at src/main.cheby:10:15:\nseven\n"),
+        "{}",
+        release.stderr
+    );
+    for frame in [
+        "  in std::list::fold at src/main.cheby:10:15\n",
+        "  in app::main at src/main.cheby:8:15\n",
+    ] {
+        assert!(
+            release.stderr.contains(frame),
+            "{frame}:\n{}",
+            release.stderr
+        );
+    }
+}
+
+/// A fold that carries a `Float`: in release its clone takes and returns
+/// the `Float` raw (design T14).
+const FLOAT_FOLD: &str = "//! Sums floats through a fold.
+
+import std::float
+import std::io
+import std::list
+
+fn main() {
+  let total = list::fold(list::range(0, 20000), 0.0, fn(acc, i) { acc + float::from_int(i) })
+  io::println(float::show(total))
+}
+";
+
+/// Design T14: the clone of `list::fold` for a callback that adds floats
+/// takes and returns its accumulator raw, so the release run boxes nothing
+/// per element, where the debug run boxes once per element; both print
+/// the same.
+#[test]
+fn a_float_fold_boxes_nothing_per_element_in_release() {
+    let (debug, debug_out) = allocations("float_fold_debug", FLOAT_FOLD, false);
+    let (release, release_out) = allocations("float_fold_release", FLOAT_FOLD, true);
+    assert_eq!(debug_out, release_out);
+    assert_eq!(release_out, "199990000.0\n");
+    assert!(
+        debug >= release.saturating_add(20_000),
+        "{debug} allocations in debug against {release} in release"
+    );
+}
+
+/// A panic inside the callback of a fold whose clone returns a raw
+/// `Float`.
+const PANIC_IN_FLOAT_FOLD: &str = "//! Panics inside a fold that carries a float.
+
+import std::float
+import std::io
+import std::list
+
+fn main() {
+  let total = list::fold(list::range(0, 10), 0.5, fn(acc, i) {
+    case i == 7 {
+      True => panic as \"seven\"
+      False => acc + float::from_int(i)
+    }
+  })
+  io::println(float::show(total))
+}
+";
+
+/// D-734: a panic in a clone with a raw result unwinds through the caller,
+/// which tests the unwind flag after the call, with the debug run's message
+/// and location and, in a toolchain with debug assertions, no leak (102
+/// would say one).
+#[test]
+fn a_panic_unwinds_through_a_raw_result_clone() {
+    let dir = package(
+        "panic_in_float_fold",
+        &[MANIFEST, ("src/main.cheby", PANIC_IN_FLOAT_FOLD)],
+    );
+    let run = |release: bool| {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_BACKTRACE")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    let debug = run(false);
+    let release = run(true);
+    assert_eq!(debug.status, Some(101), "{}", debug.stderr);
+    assert_eq!(release.status, Some(101), "{}", release.stderr);
+    assert_eq!(release.stderr, debug.stderr);
+    assert_eq!(release.stdout, debug.stdout);
+}

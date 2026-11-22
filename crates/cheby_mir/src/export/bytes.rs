@@ -39,8 +39,10 @@ use crate::repr::{CType, ForeignSig, Repr};
 /// The first bytes of [`encode_bodies`].
 const MAGIC: &[u8; 4] = b"CBXB";
 /// The version of the form: 2 added the operations of the instruction
-/// kernels (`crate::kernels_instr`).
-const VERSION: u8 = 2;
+/// kernels (`crate::kernels_instr`), 3 the exports for clones
+/// (`crate::specialize`): an export's `inline` flag, its helpers and the
+/// clone key.
+const VERSION: u8 = 3;
 
 /// The span of every function of a body in [`portable_form`]: the
 /// exporter's spans name files of its own source map, which no reader
@@ -56,6 +58,7 @@ pub(super) fn portable_form(body: &mut Exported) {
     for f in std::iter::once(&mut body.function)
         .chain(&mut body.closures)
         .chain(&mut body.shared)
+        .chain(&mut body.helpers)
     {
         for decl in &mut f.locals {
             decl.name = None;
@@ -326,6 +329,11 @@ impl Writer {
             self.static_object(s);
         }
         self.opt_str(e.source.as_deref());
+        self.bool(e.inline);
+        self.len(e.helpers.len());
+        for f in &e.helpers {
+            self.function(f);
+        }
     }
 
     fn static_object(&mut self, s: &StaticObject) {
@@ -850,6 +858,16 @@ impl Writer {
                 self.def(owner);
                 self.u32(index);
             }
+            FnKey::Specialized {
+                owner,
+                index,
+                origin,
+            } => {
+                self.u8(10);
+                self.def(owner);
+                self.u32(index);
+                self.def(origin);
+            }
         }
     }
 
@@ -1137,6 +1155,8 @@ impl<'a> Reader<'a> {
             shared: self.list(Self::function)?,
             statics: self.list(Self::static_object)?,
             source: self.opt_str()?,
+            inline: self.bool()?,
+            helpers: self.list(Self::function)?,
         })
     }
 
@@ -1492,6 +1512,11 @@ impl<'a> Reader<'a> {
                 owner: self.def()?,
                 index: self.u32()?,
             },
+            10 => FnKey::Specialized {
+                owner: self.def()?,
+                index: self.u32()?,
+                origin: self.def()?,
+            },
             _ => return None,
         })
     }
@@ -1640,6 +1665,8 @@ mod tests {
             shared: Vec::new(),
             statics: Vec::new(),
             source: None,
+            inline: true,
+            helpers: Vec::new(),
         };
         portable_form(&mut body);
         let portable = PortableBody {

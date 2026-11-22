@@ -135,6 +135,17 @@ impl Known {
         }
     }
 
+    /// Records what the parameters of the clone `key` hold, in parameter
+    /// order ([`crate::specialize`]).
+    pub(crate) fn set_shapes(&mut self, key: FnKey, shapes: Vec<Option<Shape>>) {
+        self.shapes.insert(key, shapes);
+    }
+
+    /// The kind of the static object `id`.
+    pub(crate) fn static_kind(&self, id: StaticId) -> Option<StaticKind> {
+        self.statics.get(&id).map(|&(kind, _)| kind)
+    }
+
     /// Turns devirtualization ([`devirt`]) on or off.
     pub(crate) const fn set_devirt(&mut self, on: bool) {
         self.devirt = on;
@@ -454,6 +465,7 @@ const fn is_pure(value: &Rvalue) -> bool {
 /// overflow: [`fold_rvalue`] folds its uses, and it may go like a pure
 /// value.
 fn cannot_panic(value: &Rvalue) -> bool {
+    let none = FxHashMap::default();
     matches!(
         value,
         Rvalue::Checked {
@@ -464,6 +476,7 @@ fn cannot_panic(value: &Rvalue) -> bool {
     ) && fold_rvalue(
         value,
         &FxHashMap::default(),
+        &none,
         &FxHashMap::default(),
         &Known::default(),
     )
@@ -494,6 +507,7 @@ const fn raw_constant(c: &Const) -> bool {
 fn fold_rvalue(
     value: &Rvalue,
     boxes: &FxHashMap<Local, (Operand, Repr)>,
+    unboxes: &FxHashMap<Local, (Local, Repr)>,
     subst: &FxHashMap<Local, Operand>,
     tags: &Known,
 ) -> Option<Operand> {
@@ -511,6 +525,15 @@ fn fold_rvalue(
             (from == to).then(|| resolve(subst, x))
         }
         Rvalue::Use(Operand::Const(c)) if raw_constant(c) => konst(c.clone()),
+        // A box of a value unboxed from a uniform word in the same
+        // representation is that word: boxing is canonical (D-278).
+        Rvalue::Box {
+            value: Operand::Local(u),
+            from,
+        } => {
+            let (x, to) = unboxes.get(u)?;
+            (to == from).then(|| resolve(subst, &Operand::Local(*x)))
+        }
         Rvalue::Compare { op, lhs, rhs, .. } => match (resolve(subst, lhs), resolve(subst, rhs)) {
             (Operand::Const(Const::Int(a)), Operand::Const(Const::Int(b))) => {
                 konst(Const::Bool(compare(*op, a.cmp(&b))))
@@ -652,11 +675,27 @@ fn boxes(f: &Function) -> FxHashMap<Local, (Operand, Repr)> {
 /// Folds values and branches on constants (module docs).
 fn fold(f: &mut Function, tags: &Known) -> bool {
     let boxes = boxes(f);
+    let mut unboxes: FxHashMap<Local, (Local, Repr)> = FxHashMap::default();
+    for b in &f.blocks {
+        for s in &b.stmts {
+            if let Stmt::Assign {
+                dst,
+                value:
+                    Rvalue::Unbox {
+                        value: Operand::Local(x),
+                        to,
+                    },
+            } = s
+            {
+                unboxes.insert(*dst, (*x, *to));
+            }
+        }
+    }
     let mut subst: FxHashMap<Local, Operand> = FxHashMap::default();
     for b in &f.blocks {
         for s in &b.stmts {
             if let Stmt::Assign { dst, value } = s
-                && let Some(v) = fold_rvalue(value, &boxes, &subst, tags)
+                && let Some(v) = fold_rvalue(value, &boxes, &unboxes, &subst, tags)
                 && v != Operand::Local(*dst)
             {
                 subst.insert(*dst, v);
@@ -1860,34 +1899,64 @@ fn dead(f: &mut Function) -> bool {
     let mut changed = false;
     loop {
         let mut round = false;
-        for b in &mut f.blocks {
-            let before = b.stmts.len();
-            b.retain_stmts(|s| {
+        let live = Liveness::compute(f).ok();
+        for index in 0..f.blocks.len() {
+            let Some(id) = BlockId::from_usize(index) else {
+                break;
+            };
+            let Some(b) = f.blocks.get_mut(id) else {
+                break;
+            };
+            // The locals used after each statement: later in the block or
+            // live out of it.
+            let mut after: rustc_hash::FxHashSet<Local> = live
+                .as_ref()
+                .and_then(|l| l.live_out.get(id))
+                .map_or_else(Default::default, |s| s.iter().copied().collect());
+            after.extend(b.term.uses().into_iter().map(|(l, _)| l));
+            let mut keep = vec![true; b.stmts.len()];
+            for (i, s) in b.stmts.iter().enumerate().rev() {
                 let Stmt::Assign { dst, value } = s else {
-                    return true;
+                    if let Stmt::Eval(v) = s {
+                        after.extend(v.uses().into_iter().map(|(l, _)| l));
+                    }
+                    continue;
                 };
                 // A use of a local that may hold a handle keeps it alive
                 // to here (D-205): such a definition stays, as the move
                 // that keeps an `@external` wrapper's handle alive across
-                // its foreign call does.
-                let keeps_alive = value
-                    .uses()
-                    .iter()
-                    .any(|&(l, _)| plain.get(l.index()) != Some(&true));
-                if count(&counts, *dst) != 0
-                    || !(is_pure(value) || cannot_panic(value))
-                    || keeps_alive
-                {
-                    return true;
-                }
-                for (l, _) in value.uses() {
-                    if let Some(c) = counts.get_mut(l.index()) {
-                        *c = c.saturating_sub(1);
+                // its foreign call does, unless the local is used after it
+                // anyway.
+                let keeps_alive = value.uses().iter().any(|&(l, _)| {
+                    plain.get(l.index()) != Some(&true) && (live.is_none() || !after.contains(&l))
+                });
+                let removable = count(&counts, *dst) == 0
+                    && (is_pure(value) || cannot_panic(value))
+                    && !keeps_alive;
+                if removable {
+                    if let Some(k) = keep.get_mut(i) {
+                        *k = false;
                     }
+                    for (l, _) in value.uses() {
+                        if let Some(c) = counts.get_mut(l.index()) {
+                            *c = c.saturating_sub(1);
+                        }
+                    }
+                } else {
+                    after.extend(value.uses().into_iter().map(|(l, _)| l));
+                    after.extend(value.kept().iter().map(|&(_, p)| p));
                 }
-                false
+            }
+            if keep.iter().all(|&k| k) {
+                continue;
+            }
+            let mut n = 0_usize;
+            b.retain_stmts(|_| {
+                let k = keep.get(n).copied().unwrap_or(true);
+                n = n.saturating_add(1);
+                k
             });
-            round |= b.stmts.len() != before;
+            round = true;
         }
         let (gotos, _) = predecessors(f);
         let mut removed: Vec<(BlockId, usize)> = Vec::new();

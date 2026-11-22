@@ -1013,7 +1013,8 @@ pub fn infer(
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => None,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => None,
         })
         .collect();
     let mut masks: Vec<BorrowMask> = module
@@ -1113,7 +1114,8 @@ pub fn infer(
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => None,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => None,
         })
         .collect()
 }

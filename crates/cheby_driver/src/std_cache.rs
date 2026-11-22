@@ -511,8 +511,10 @@ fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<Relea
     let budget = cheby_mir::inline::InlineBudget::DEFAULT;
     let mut units = whole.units.clone();
     let none = cheby_mir::export::PortableBodies::new();
-    crate::borrowing::with_build_defs(front, |defs| {
-        cheby_mir::export::optimize_build(
+    // The exports as the layers found them: a function whose calls got
+    // clones is exported as it was before (`cheby_mir::specialize`).
+    let exports = crate::borrowing::with_build_defs(front, |defs| {
+        let found = cheby_mir::export::optimize_build(
             &mut units,
             &|_| true,
             &none,
@@ -520,7 +522,8 @@ fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<Relea
             &budget,
             cheby_mir::inline::Passes::of(&levers),
             &crate::backend::each_in_parallel,
-        )
+        )?;
+        cheby_mir::export::portable_of(found, defs)
     })?;
     let mut masked = units.clone();
     let inferred = crate::borrowing::infer(front, &mut masked, &|unit, facts| {
@@ -538,9 +541,6 @@ fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<Relea
         }
     }
     named.sort();
-    let exports = crate::borrowing::with_build_defs(front, |defs| {
-        cheby_mir::export::portable_exports(&units, defs, &budget)
-    })?;
     Ok(ReleaseStd {
         units,
         by_def: inferred.masks,

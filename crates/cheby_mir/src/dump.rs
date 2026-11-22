@@ -351,6 +351,11 @@ fn key_text(m: &MirModule, key: FnKey) -> Result<String, Ice> {
         FnKey::Continuation { owner, index } => {
             format!("continuation {}#{index}", def(m, owner)?)
         }
+        FnKey::Specialized {
+            owner,
+            index,
+            origin,
+        } => format!("spec {}#{index} of {}", def(m, owner)?, def(m, origin)?),
     })
 }
 

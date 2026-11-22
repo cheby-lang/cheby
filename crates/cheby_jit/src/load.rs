@@ -143,6 +143,7 @@ const fn owner_of(key: FnKey) -> Option<DefId> {
         | FnKey::ConstInit(def)
         | FnKey::Closure { owner: def, .. }
         | FnKey::Continuation { owner: def, .. }
+        | FnKey::Specialized { owner: def, .. }
         | FnKey::Entry(cheby_mir::EntryKind::Const(def)) => Some(def),
         FnKey::Test(_)
         | FnKey::Entry(_)

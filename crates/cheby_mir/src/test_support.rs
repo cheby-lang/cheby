@@ -760,7 +760,7 @@ fn optimize_local(units: &mut [MirModule], modules: &ModuleTable, defs: &Defs<'_
     };
     let std_units: Vec<MirModule> = units.iter().filter(|u| is_std(u)).cloned().collect();
     let budget = crate::inline::InlineBudget::DEFAULT;
-    let portable = crate::export::portable_exports(&std_units, defs, &budget).unwrap();
+    let portable = crate::export::portable_exports(&std_units, defs, &budget, true).unwrap();
     let local = |unit: &MirModule| {
         unit.module()
             .and_then(|m| modules.get(m))
@@ -772,6 +772,7 @@ fn optimize_local(units: &mut [MirModule], modules: &ModuleTable, defs: &Defs<'_
     let passes = crate::inline::Passes::ALL;
     if let Err(ice) =
         crate::export::optimize_build(units, &local, &portable, defs, &budget, passes, &each)
+            .map(|_| ())
     {
         let dumps: Vec<String> = units.iter().filter_map(|u| dump(u).ok()).collect();
         panic!("{ice}\n{}", dumps.join("\n"));

@@ -508,3 +508,109 @@ fn std_cache_release_reads_the_export_record() {
     );
     assert!(fourth.lines("parse.std").is_empty(), "{:?}", fourth.log);
 }
+
+/// Inserts into a sorted map and sums floats through folds: in release,
+/// `list::fold` and `sorted_map::insert` get clones, the latter with its
+/// `priv` helpers, and the float fold's clone takes and returns floats.
+const CLONES: &str = "//! Builds a sorted map and sums floats through folds.
+
+import std::float
+import std::int
+import std::io
+import std::list
+import std::sorted_map
+
+fn main() {
+  let m = list::fold(list::range(0, 200), sorted_map::new(), fn(acc, i) {
+    sorted_map::insert(acc, i * 7 % 200, i)
+  })
+  let total = list::fold(list::range(0, 100), 0.0, fn(acc, i) { acc + float::from_int(i) })
+  io::println(int::show(sorted_map::size(m)))
+  io::println(float::show(total))
+}
+";
+
+/// Design T15 with T12 to T14: what a release build clones and unboxes from
+/// std comes from std's export record as it comes from std's exports made
+/// in the process. A cold `cheby build --release` computes std's exports
+/// and writes the record, a warm one reads it and checks no std, and one
+/// that bypasses reads (`CHEBY_DUMP_DIR`) computes them again: the three
+/// executables are the same bytes, and they print what the debug build
+/// prints.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "builds and runs native code; Windows support is M6 (D-545)"
+)]
+fn std_cache_release_clones_the_same_with_and_without_the_record() {
+    let s = Scratch::new("clones");
+    let app = s.package("app", CLONES);
+    let cache = s.path().join("cache");
+    let build = |n: &str| {
+        let exe = s.path().join(n).join("app");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        let out = cheby(
+            &app,
+            &["build", "--release", "-o", exe.to_str().unwrap()],
+            &cache,
+            &s.path().join(format!("{n}.log")),
+        );
+        assert_eq!(out.out.status, Some(0), "{}", out.out.stderr);
+        (exe, out)
+    };
+    let (cold_exe, cold) = build("cold");
+    assert_eq!(
+        cold.lines("export.std"),
+        ["export.std release miss"],
+        "{:?}",
+        cold.log
+    );
+    let (warm_exe, warm) = build("warm");
+    assert_eq!(
+        warm.lines("export.std"),
+        ["export.std release hit"],
+        "{:?}",
+        warm.log
+    );
+    assert!(warm.lines("parse.std").is_empty(), "{:?}", warm.log);
+    let bypass_exe = s.path().join("bypass").join("app");
+    std::fs::create_dir_all(bypass_exe.parent().unwrap()).unwrap();
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "build", "--release", "-o"])
+        .arg(&bypass_exe)
+        .current_dir(&app)
+        .env("NO_COLOR", "1")
+        .env(CACHE_ENV, s.path().join("bypass-cache"))
+        .env("CHEBY_DUMP_DIR", s.path().join("dump"))
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC");
+    let bypass = process::run(cmd, None, TIMEOUT).unwrap();
+    assert_eq!(bypass.status, Some(0), "{}", bypass.stderr);
+    let bytes = |p: &Path| std::fs::read(p).unwrap();
+    assert!(
+        bytes(&cold_exe) == bytes(&warm_exe),
+        "cold and warm executables differ"
+    );
+    assert!(
+        bytes(&cold_exe) == bytes(&bypass_exe),
+        "the record changed the executable"
+    );
+    // `cheby run` dumps the MIR the build optimized.
+    let mut dumped = Command::new(CHEBY);
+    dumped
+        .args(["--color=never", "run", "--release"])
+        .current_dir(&app)
+        .env("NO_COLOR", "1")
+        .env(CACHE_ENV, s.path().join("bypass-cache"))
+        .env("CHEBY_DUMP_DIR", s.path().join("dump"))
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC");
+    let dumped = process::run(dumped, None, TIMEOUT).unwrap();
+    assert_eq!(dumped.status, Some(0), "{}", dumped.stderr);
+    let mir = std::fs::read_to_string(s.path().join("dump/mir/app.mir")).unwrap();
+    assert!(mir.contains("of std::sorted_map::insert>("), "{mir}");
+    assert!(mir.contains("float = call <spec "), "{mir}");
+    let ran = process::run(Command::new(&warm_exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, "200\n4950.0\n");
+}

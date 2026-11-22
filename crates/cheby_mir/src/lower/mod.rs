@@ -948,6 +948,10 @@ fn key_defs(key: FnKey, out: &mut BTreeSet<DefId>) {
             out.insert(iface_fn);
             out.insert(dyn_iface);
         }
+        FnKey::Specialized { owner, origin, .. } => {
+            out.insert(owner);
+            out.insert(origin);
+        }
         FnKey::Entry(EntryKind::Repl(_)) | FnKey::Trampoline(_) => {}
     }
 }

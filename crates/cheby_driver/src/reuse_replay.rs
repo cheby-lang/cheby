@@ -300,7 +300,8 @@ fn owner_of(unit: &MirModule, key: FnKey) -> Result<Option<String>, Ice> {
         | FnKey::ConstInit(def)
         | FnKey::Test(def)
         | FnKey::Closure { owner: def, .. }
-        | FnKey::Continuation { owner: def, .. } => Ok(Some(unit.name(def)?.item.to_string())),
+        | FnKey::Continuation { owner: def, .. }
+        | FnKey::Specialized { owner: def, .. } => Ok(Some(unit.name(def)?.item.to_string())),
         FnKey::Entry(_)
         | FnKey::Trampoline(_)
         | FnKey::TupleDictFn { .. }

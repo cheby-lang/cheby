@@ -1474,7 +1474,9 @@ impl Translator<'_, '_> {
     /// - a closure's code calling its own `self`, its first parameter, as a
     ///   local function calls itself by name (D-453). A closure's code is
     ///   reached only through its own closure object, whose code word is
-    ///   that code, so the call reaches the code being translated.
+    ///   that code, so the call reaches the code being translated;
+    /// - a clone calling itself by key (design T12): a clone is called only
+    ///   by key from its unit, through no slot.
     fn is_self_call(&self, callee: &Callee) -> bool {
         if self.func.abi != Abi::Cheby {
             return false;
@@ -1489,7 +1491,7 @@ impl Translator<'_, '_> {
                 matches!(self.func.key, FnKey::Closure { .. })
                     && self.func.params.first() == Some(closure)
             }
-            Callee::Code(_) => false,
+            Callee::Code(key) => *key == self.func.key && matches!(key, FnKey::Specialized { .. }),
         }
     }
 
@@ -1528,6 +1530,7 @@ impl Translator<'_, '_> {
                 }
             }
             Callee::Indirect(closure) => values.push(self.local(*closure)?),
+            Callee::Code(FnKey::Specialized { .. }) => {}
             Callee::Code(_) => return Err(CodegenError::ice("a self call of code by key")),
         }
         values.extend(self.operands(args)?);

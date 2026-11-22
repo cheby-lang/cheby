@@ -319,6 +319,19 @@ pub enum FnKey {
     /// function holding the literal, each later one by a tail call of
     /// the one before.
     Continuation { owner: DefId, index: u32 },
+    /// A clone of the top-level function `origin` made by the release
+    /// profile for what one of its calls knows (design T12, T13,
+    /// [`crate::specialize`]): numbered in its unit in creation order, owned
+    /// by the closure owner of the function whose call made it, so the keys
+    /// of two units never meet. Cheby ABI with a signature of its own
+    /// ([`Function::sig`]); never borrowing (it is not an item, D-715).
+    /// Called only through [`Callee::Code`] from its own unit. A backtrace
+    /// names it as `origin`.
+    Specialized {
+        owner: DefId,
+        index: u32,
+        origin: DefId,
+    },
 }
 
 impl FnKey {

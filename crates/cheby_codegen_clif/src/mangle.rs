@@ -54,6 +54,8 @@ pub enum Kind {
     Big,
     /// A continuation of a large literal (D-780, D-811).
     Cont,
+    /// A clone of a function for what a call knows (design T12).
+    Spec,
     /// The C-ABI shim through which the blocking pool calls an `@blocking`
     /// foreign function (D-683, D-818).
     Blk,
@@ -69,7 +71,7 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Fn,
         Self::Slot,
         Self::Shim,
@@ -89,6 +91,7 @@ impl Kind {
         Self::DynFwd,
         Self::Big,
         Self::Cont,
+        Self::Spec,
         Self::Blk,
         Self::Imp,
         Self::Mod,
@@ -118,6 +121,7 @@ impl Kind {
             Self::DynFwd => "dynfwd",
             Self::Big => "big",
             Self::Cont => "cont",
+            Self::Spec => "spec",
             Self::Blk => "blk",
             Self::Imp => "imp",
             Self::Mod => "mod",
@@ -263,6 +267,25 @@ pub fn test_continuation(module: &str, ordinal: u32, index: u32) -> String {
     format!(
         "{PREFIX}{}$test${}${ordinal}${index}",
         Kind::Cont.word(),
+        path_part(module)
+    )
+}
+
+/// `cb$spec$<module path>$<owner>$<n>`: clone `n` of its unit, owned by the
+/// item or constant `owner` (design T12), named as `owner`'s closures are
+/// ([`closure`]) under a kind of its own. A clone is local to its unit.
+#[must_use]
+pub fn specialized(owner: &DefName, index: u32) -> String {
+    format!("{}${index}", item(Kind::Spec, owner))
+}
+
+/// `cb$spec$test$<module path>$<ordinal>$<n>`: clone `n` of a tests unit,
+/// owned by the test with that ordinal in its module ([`test_closure`]).
+#[must_use]
+pub fn test_specialized(module: &str, ordinal: u32, index: u32) -> String {
+    format!(
+        "{PREFIX}{}$test${}${ordinal}${index}",
+        Kind::Spec.word(),
         path_part(module)
     )
 }
