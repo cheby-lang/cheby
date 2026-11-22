@@ -217,6 +217,106 @@ fn const_cache_warm_run_parses_no_constant_module() {
     assert_eq!(warm.lines("parse "), Vec::<String>::new());
 }
 
+/// The profile changes every code key and no constant key (`--release`):
+/// a release run after a debug run of one package hits every constant,
+/// reads and writes no package record (no `code.run`, `facts`, `masks` or
+/// `key` line), and compiles std for itself (`parse.std`). A second
+/// release run hits std's release records and parses no std module, a
+/// release run with a lever off compiles std again, and a debug run after
+/// them still hits its own records. Every run prints what the first
+/// printed.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn const_cache_release_shares_constants_and_no_code() {
+    let scratch = Scratch::new("release");
+    let dir = package(&scratch.path().join("app"), MAIN);
+    let cache = scratch.path().join("cache");
+    let log = |n: u32| scratch.path().join(format!("log-{n}"));
+    let debug = cheby(&dir, &["run"], &cache, &log(1), &[]);
+    assert_eq!(debug.out.status, Some(0), "{}", debug.out.stderr);
+    assert_eq!(
+        debug.out.stdout,
+        "warm 1000 100
+"
+    );
+    assert!(!debug.lines("code.run ").is_empty(), "{:?}", debug.log);
+    let release = cheby(&dir, &["run", "--release"], &cache, &log(2), &[]);
+    same_output(&debug, &release);
+    assert_eq!(release.lines("const "), every(&LINES, "hit"));
+    for prefix in ["code.run ", "code.plain ", "facts ", "masks ", "key "] {
+        assert_eq!(release.lines(prefix), Vec::<String>::new(), "{prefix}");
+    }
+    assert!(!release.lines("parse.std ").is_empty(), "{:?}", release.log);
+    let again = cheby(&dir, &["run", "--release"], &cache, &log(3), &[]);
+    same_output(&debug, &again);
+    assert_eq!(again.lines("parse.std "), Vec::<String>::new());
+    let std_lines = again.lines("code.std ");
+    assert!(
+        !std_lines.is_empty() && std_lines.iter().all(|l| l.ends_with(" hit")),
+        "{std_lines:?}"
+    );
+    // `CHEBY_RELEASE_OFF` is in the settings: std's code without a lever is
+    // other code.
+    let lever = cheby(
+        &dir,
+        &["run", "--release"],
+        &cache,
+        &log(4),
+        &[("CHEBY_RELEASE_OFF", "direct,clif")],
+    );
+    same_output(&debug, &lever);
+    assert!(!lever.lines("parse.std ").is_empty(), "{:?}", lever.log);
+    let warm = cheby(&dir, &["run"], &cache, &log(5), &[]);
+    same_output(&debug, &warm);
+    let code = warm.lines("code.run ");
+    assert!(
+        !code.is_empty() && code.iter().all(|l| l.ends_with(" hit")),
+        "{code:?}"
+    );
+    assert_eq!(warm.lines("parse.std "), Vec::<String>::new());
+}
+
+/// `CHEBY_RELEASE_OFF` is read only with `--release`: a name that is no
+/// lever is a tool error of a release run, and a debug run ignores it.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn const_cache_release_levers_are_read_only_with_release() {
+    let scratch = Scratch::new("levers");
+    let dir = package(&scratch.path().join("app"), MAIN);
+    let cache = scratch.path().join("cache");
+    let bogus = [("CHEBY_RELEASE_OFF", "fast")];
+    let debug = cheby(
+        &dir,
+        &["run"],
+        &cache,
+        &scratch.path().join("log-1"),
+        &bogus,
+    );
+    assert_eq!(debug.out.status, Some(0), "{}", debug.out.stderr);
+    let release = cheby(
+        &dir,
+        &["run", "--release"],
+        &cache,
+        &scratch.path().join("log-2"),
+        &bogus,
+    );
+    assert_eq!(release.out.status, Some(1), "{}", release.out.stderr);
+    assert!(
+        release
+            .out
+            .stderr
+            .contains("CHEBY_RELEASE_OFF names levers among inline, spec, unbox, consts, direct, clif, not `fast`"),
+        "{}",
+        release.out.stderr
+    );
+}
+
 /// A warm `cheby test` installs the cached images as `cheby run` does.
 #[test]
 #[cfg_attr(

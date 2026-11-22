@@ -147,7 +147,7 @@ impl Pkg {
             None,
             &mut out,
             Some(&cache),
-            Some((false, None)),
+            Some((false, None, Profile::Debug)),
         )
         .unwrap()
         .unwrap();
@@ -164,6 +164,7 @@ impl Pkg {
             jit: true,
             resolves: None,
             reuse: false,
+            records: true,
         };
         let lowered =
             backend::lower_reading(&front, &out.sources, &roots, mir, Scope::Whole, reading)

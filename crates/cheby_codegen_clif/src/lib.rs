@@ -175,9 +175,35 @@ pub enum CallMode {
     /// (D-916).
     #[default]
     Indirect,
-    /// Call the callee's symbol directly. No build uses it (D-916: direct
-    /// calls are reconsidered with M6's release profile).
+    /// Call the callee's symbol directly: release builds (D-916's
+    /// reconsideration). A top-level function's symbol then carries its
+    /// borrow mask as its slot does ([`mangle::function`], D-917,
+    /// D-1109), at its definition and at every import, so a caller
+    /// compiled against another mask fails to resolve. Slots stay defined.
     Direct,
+}
+
+/// Cranelift's optimization level (`opt_level`): `none` in debug builds
+/// (D-259, D-912), `speed` in release builds unless `CHEBY_RELEASE_OFF`
+/// turns the `clif` lever off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum OptLevel {
+    /// `opt_level=none`, the default.
+    #[default]
+    None,
+    /// `opt_level=speed`.
+    Speed,
+}
+
+impl OptLevel {
+    /// The value of Cranelift's `opt_level` flag.
+    #[must_use]
+    pub const fn flag(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Speed => "speed",
+        }
+    }
 }
 
 /// How generated code declares an `@external(native, …)` symbol. In both
@@ -237,6 +263,13 @@ pub struct CodegenOptions {
     /// that takes over the slot at its next iteration (D-043); `false` by
     /// default.
     pub slot_self_calls: bool,
+    /// Cranelift's optimization level, which the ISA is built with
+    /// ([`isa::host_isa_with`]).
+    pub opt_level: OptLevel,
+    /// The profile the code is compiled in, written into every code record
+    /// ([`record::CodeRecord::profile`]), so that a batch or a link of
+    /// mixed profiles is refused.
+    pub profile: cheby_mir::Profile,
 }
 
 /// The default [`CodegenOptions::large_frame_threshold`]: 64 KiB (D-679).
@@ -255,6 +288,8 @@ impl Default for CodegenOptions {
             unwind_edges: true,
             large_frame_threshold: LARGE_FRAME_THRESHOLD,
             slot_self_calls: false,
+            opt_level: OptLevel::None,
+            profile: cheby_mir::Profile::Debug,
         }
     }
 }
@@ -291,7 +326,7 @@ pub fn declare<M: Module>(
     _cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<(), CodegenError> {
-    decls.declare_units(module, mirs, opts.foreign_import)
+    decls.declare_units(module, mirs, opts.foreign_import, opts.call_mode)
 }
 
 /// What one call of [`define_with_stats`] defined: the size of the machine

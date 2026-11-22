@@ -1193,6 +1193,7 @@ mod blocking;
 mod borrow;
 mod code_map;
 mod control;
+mod direct_calls;
 mod entry_unwind;
 mod large_frame;
 mod literals;

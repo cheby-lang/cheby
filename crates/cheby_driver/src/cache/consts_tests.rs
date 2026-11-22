@@ -24,6 +24,7 @@ fn settings() -> Settings {
         checked_counts: false,
         stack_check: true,
         target: "aarch64-macos".to_owned(),
+        release: None,
     }
 }
 
@@ -32,6 +33,28 @@ const LIMITS: ConstLimits = ConstLimits {
     memory_limit: 1 << 30,
     targets: cheby_package::Targets::ALL,
 };
+
+/// The profile changes no constant key: a release command evaluates its
+/// constants on debug code and shares a debug command's entries (D-978).
+#[test]
+fn const_cache_key_is_the_same_in_both_profiles() {
+    let debug = cheby_mir::MirOptions::default();
+    let release = cheby_mir::MirOptions {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..debug
+    };
+    let lever_off = cheby_mir::MirOptions {
+        release: Some(cheby_mir::ReleaseOptions::parse_off("direct,clif").unwrap()),
+        ..debug
+    };
+    let base = super::consts::settings(debug);
+    assert_eq!(base.release, None);
+    assert_eq!(super::consts::settings(release), base);
+    assert_eq!(super::consts::settings(lever_off), base);
+    let deps = [("app::a", Hash128([1; 16]))];
+    let key = |s: &Settings| const_key(BUILD, s, &LIMITS, "app", "app::a", "x", &deps);
+    assert_eq!(key(&super::consts::settings(release)), key(&base));
+}
 
 #[test]
 fn const_cache_key_holds_every_seed_input() {

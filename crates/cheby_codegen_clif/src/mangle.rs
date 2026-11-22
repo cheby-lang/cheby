@@ -189,7 +189,23 @@ pub fn item(kind: Kind, name: &DefName) -> String {
 /// [`static_object`].
 #[must_use]
 pub fn slot(name: &DefName, borrow: cheby_mir::borrow::BorrowMask) -> String {
-    let base = item(Kind::Slot, name);
+    masked(item(Kind::Slot, name), borrow)
+}
+
+/// `cb$fn$<module path>$<item>` followed by [`slot`]'s `$$b<mask>` suffix
+/// when its ABI signature borrows a parameter: a top-level function's
+/// symbol in a release build, whose calls go to the symbol and not
+/// through the slot ([`crate::CallMode::Direct`]). The definition and
+/// every import carry the suffix, so a caller compiled against a stale
+/// mask fails to resolve, as D-917 makes a slot's caller fail. Debug
+/// builds keep D-456's `cb$fn$` name for every function.
+#[must_use]
+pub fn function(name: &DefName, borrow: cheby_mir::borrow::BorrowMask) -> String {
+    masked(item(Kind::Fn, name), borrow)
+}
+
+/// `base` with D-1109's `$$b<mask>` suffix unless `borrow` is all-owned.
+fn masked(base: String, borrow: cheby_mir::borrow::BorrowMask) -> String {
     if borrow.is_owned() {
         base
     } else {

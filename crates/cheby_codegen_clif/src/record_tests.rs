@@ -422,7 +422,15 @@ fn record_alignment_bounded() {
 fn record_decode_checks_counts() {
     let mut bytes = b"cbcr".to_vec();
     bytes.extend_from_slice(&RECORD_VERSION.to_le_bytes());
-    // No source (version 2, D-938).
+    // The debug profile (version 4), then no source (version 2, D-938).
+    bytes.push(0);
+    let mut profile = bytes.clone();
+    profile[8] = 2;
+    profile.extend_from_slice(&[0; 13]);
+    assert_eq!(
+        CodeRecord::decode(&profile),
+        Err(RecordError::Malformed("an unknown profile"))
+    );
     bytes.push(0);
     let mut huge = bytes.clone();
     huge.extend_from_slice(&u32::MAX.to_le_bytes());
@@ -444,7 +452,15 @@ fn record_decode_checks_counts() {
             functions: Vec::new(),
             data: Vec::new(),
             source: None,
+            profile: cheby_mir::Profile::Debug,
         })
+    );
+    // The release byte reads back as release.
+    let mut release = empty.clone();
+    release[8] = 1;
+    assert_eq!(
+        CodeRecord::decode(&release).map(|r| r.profile),
+        Ok(cheby_mir::Profile::Release)
     );
     let mut trailing = empty.clone();
     trailing.push(0);

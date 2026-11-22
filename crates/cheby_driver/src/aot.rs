@@ -41,6 +41,12 @@
 //! - the runtime archive is found and its runtime ID checked (D-929,
 //!   D-930).
 //!
+//! With `--release` ([`BuildOptions::profile`]) the units are compiled in
+//! the release profile, fresh, since a release build reads and writes no
+//! package record, with std's release records; every record and the
+//! entries unit are release code, which [`cheby_link::link::check_profiles`]
+//! checks before anything links, and the executable goes to the same path.
+//!
 //! On Windows `cheby build --target native` is a "not available yet (M6)"
 //! tool error (D-935), what remains of D-924's refusals.
 //!
@@ -74,6 +80,9 @@ pub struct BuildOptions {
     /// `--deny-warnings`: a warning stops the build before anything is
     /// linked (D-549).
     pub deny_warnings: bool,
+    /// `--release`: the executable is compiled in the release profile;
+    /// debug by default. Both write the same output path.
+    pub profile: crate::Profile,
 }
 
 /// The outcome of [`build_cached`].
@@ -275,7 +284,7 @@ fn build_once(
         None,
         &mut out,
         cache,
-        warm.then_some((false, options.module_path.as_deref())),
+        warm.then_some((false, options.module_path.as_deref(), options.profile)),
     )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -300,7 +309,7 @@ fn build_once(
             &path,
         )),
     };
-    let mir = backend::mir_options_from_env()?;
+    let mir = backend::mir_options_for(options.profile)?;
     // A warm build that wants a hit's body starts again (D-1256).
     let again = || warm && front.wanted_body();
     // D-914, D-1250 (N9): the units come through `cheby run`'s code records,
@@ -316,6 +325,7 @@ fn build_once(
         jit: true,
         resolves: Some(&found),
         reuse: false,
+        records: mir.release.is_none(),
     };
     let lowered = match backend::lower_reading(
         &front,
@@ -371,6 +381,7 @@ fn build_once(
         main_stack: front.main_stack,
         fiber_stack: front.fiber_stack,
         unwind_edges: mir.unwind_edges,
+        opt_level: build_codegen(mir).opt_level,
     };
     let objects = write_objects(
         &compiled,
@@ -578,7 +589,7 @@ fn fresh_records(
     if units.is_empty() {
         return Ok(Vec::new());
     }
-    let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
+    let isa = isa::host_isa_with(codegen.opt_level).map_err(|e| Error::new(e.to_string()))?;
     let seed = cheby_codegen_clif::jit_unit::Seed::default();
     let jobs: Vec<(&MirModule, Option<&cheby_codegen_clif::jit_unit::Seed>)> =
         units.iter().map(|&unit| (unit, Some(&seed))).collect();
@@ -657,6 +668,8 @@ struct Stacks {
     main_stack: u64,
     fiber_stack: u64,
     unwind_edges: bool,
+    /// The build's Cranelift level, which every object is written with.
+    opt_level: cheby_codegen_clif::OptLevel,
 }
 
 /// The objects of the link: each record replayed under its module path,
@@ -670,20 +683,24 @@ fn write_objects(
     stubs: &[String],
     constants: &[u8],
 ) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    let mut copies: Vec<(&str, &CodeRecord)> = compiled
+        .code
+        .iter()
+        .zip(&compiled.records)
+        .map(|(unit, record)| (unit.path, record))
+        .collect();
+    copies.push((PROGRAM_OBJECT_NAME, &compiled.entries));
+    // One profile per link: a release record calls its callees' masked
+    // symbols, which only release records define.
+    cheby_link::link::check_profiles(&copies).map_err(link_error)?;
     if cfg!(debug_assertions) {
-        let mut copies: Vec<(&str, &CodeRecord)> = compiled
-            .code
-            .iter()
-            .zip(&compiled.records)
-            .map(|(unit, record)| (unit.path, record))
-            .collect();
-        copies.push((PROGRAM_OBJECT_NAME, &compiled.entries));
         cheby_link::link::check_copies(&copies).map_err(link_error)?;
     }
+    let host_isa = || isa::host_isa_with(stacks.opt_level).map_err(|e| Error::new(e.to_string()));
     let mut objects = Vec::with_capacity(compiled.records.len().saturating_add(1));
     let mut module_records = Vec::with_capacity(compiled.records.len());
     for (unit, record) in compiled.code.iter().zip(&compiled.records) {
-        let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
+        let isa = host_isa()?;
         let object = cheby_link::object::replay(record, isa, unit.path).map_err(link_error)?;
         objects.push((unit.path.to_owned(), object));
         module_records.push(mangle::module_record(unit.path));
@@ -697,7 +714,7 @@ fn write_objects(
         stubs,
         constants,
     };
-    let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
+    let isa = host_isa()?;
     let program =
         cheby_link::program::program_object(isa, &spec, &compiled.entries).map_err(link_error)?;
     objects.push((PROGRAM_OBJECT_NAME.to_owned(), program));
@@ -758,8 +775,9 @@ fn entries_record(
     let ucx = UnitCx {
         named_outside: &|def: DefId| named.contains(def),
     };
-    let isa = isa::host_isa().map_err(|e| Error::new(e.to_string()))?;
+    let isa = isa::host_isa_with(codegen.opt_level).map_err(|e| Error::new(e.to_string()))?;
     let mut module = RecordingModule::new(isa);
+    module.set_profile(codegen.profile);
     compile_unit(&mut module, unit, &ucx, codegen).map_err(|e| Error::new(e.to_string()))?;
     module.finish().map_err(|e| Error::new(e.to_string()))
 }

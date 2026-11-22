@@ -107,8 +107,10 @@ impl ConstLimits {
 }
 
 /// The settings of constant evaluation for a command whose MIR options
-/// are `mir` (D-978, D-958): the `plain` kind, and the command's
-/// `CHEBY_RC`, unwind edges, poisoning, stack check and target.
+/// are `mir` (D-978, D-958): the `plain` kind, the debug profile, and the
+/// command's `CHEBY_RC`, unwind edges, poisoning, stack check and target.
+/// A release command evaluates its constants on debug code, so its
+/// entries are a debug command's.
 pub(crate) fn settings(mir: MirOptions) -> Settings {
     Settings {
         kind: BuildKind::Plain,
@@ -117,6 +119,7 @@ pub(crate) fn settings(mir: MirOptions) -> Settings {
         checked_counts: cheby_runtime::alloc::poison_enabled(),
         stack_check: cheby_codegen_clif::CodegenOptions::default().stack_check,
         target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        release: None,
     }
 }
 

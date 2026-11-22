@@ -95,6 +95,9 @@ pub struct TestOptions {
     /// D-717). A test build can infer other borrow masks than `cheby run`
     /// (D-779, D-813), so its report can differ.
     pub reuse_report: bool,
+    /// `--release`: the tests are compiled in the release profile; debug
+    /// by default.
+    pub profile: crate::Profile,
 }
 
 /// The outcome of [`prepare_test`].
@@ -430,7 +433,7 @@ fn prepare_test_once(
         None,
         &mut out,
         cache,
-        warm.map(|reuse| (reuse, None)),
+        warm.map(|reuse| (reuse, None, options.profile)),
     )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -487,6 +490,7 @@ fn prepare_test_once(
             Roots::Tests(roots),
             false,
             options.reuse_report,
+            options.profile,
         ) {
             Err(_) if warm.is_some() && front.wanted_body() => {
                 return Err(crate::Restart::Again(mark));

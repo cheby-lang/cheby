@@ -95,7 +95,10 @@ pub use lower::{
     EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_items_late_bound,
     lower_module, lower_tests, scalar_literal,
 };
-pub use options::{MirOptions, RcMode, check_lowered, count_and_check_with, count_lowered_with};
+pub use options::{
+    MirOptions, Profile, RcMode, ReleaseOptions, check_lowered, count_and_check_with,
+    count_lowered_with,
+};
 pub use positions::{Pos, PosRef, Positions};
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};

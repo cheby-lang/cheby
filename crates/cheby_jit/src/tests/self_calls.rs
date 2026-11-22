@@ -178,6 +178,26 @@ fn a_self_tail_call_jumps_to_the_entry_check() {
     assert_eq!(int_of(word), i128::from(n) * i128::from(n + 1) / 2);
 }
 
+/// Release code calls its callees' symbols (`CallMode::Direct`), and a
+/// self tail call is still a jump to the loop header, at Cranelift's
+/// `speed` too.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn a_self_tail_call_jumps_in_release_code() {
+    let n = 10_000_000;
+    let (jit, clif, target) = compile_count(direct_calls::release(), n);
+    assert_loops(function_text(&clif, "cb$fn$app$count"));
+    let word = returned(run_with_stack(
+        &jit,
+        target,
+        cheby_runtime::entry::MIN_STACK_SIZE,
+    ));
+    assert_eq!(int_of(word), i128::from(n) * i128::from(n + 1) / 2);
+}
+
 /// In a REPL session (`slot_self_calls`), the same self tail call goes
 /// through the slot, so a redefinition reaches a running loop (D-043);
 /// the loop gives the same result.

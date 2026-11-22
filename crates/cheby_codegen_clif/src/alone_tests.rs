@@ -964,6 +964,23 @@ fn alone_slot_mask_names() {
     );
 }
 
+/// A release function's symbol takes its slot's suffix (D-917, D-1109):
+/// `cb$fn$` with `$$b<mask>` when it borrows, D-456's name when it owns
+/// every parameter.
+#[test]
+fn alone_function_mask_names() {
+    let n = name(h(), "m", "h");
+    assert_eq!(mangle::function(&n, BorrowMask::OWNED), "cb$fn$m$h");
+    assert_eq!(mangle::function(&n, BorrowMask(1)), "cb$fn$m$h$$b1");
+    assert_eq!(mangle::function(&n, BorrowMask(0x1a)), "cb$fn$m$h$$b1a");
+    for mask in [0, 1, 0x1a, u64::MAX] {
+        assert_eq!(
+            mangle::function(&n, BorrowMask(mask)).strip_prefix("cb$fn$"),
+            mangle::slot(&n, BorrowMask(mask)).strip_prefix("cb$slot$")
+        );
+    }
+}
+
 /// The JIT and units alone name a borrowing slot with its mask, and an
 /// owned one without; the tests unit imports the borrowing slot under the
 /// masked name, which the code unit defines hidden.

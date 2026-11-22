@@ -49,6 +49,7 @@ fn settings() -> Settings {
         checked_counts: false,
         stack_check: true,
         target: "aarch64-apple-darwin".to_owned(),
+        release: None,
     }
 }
 
@@ -143,7 +144,9 @@ fn cache_key_stability_pins_hex_constants() {
         .hash(Hash128([2; 16]))
         .settings(&settings())
         .finish();
-    assert_eq!(code.hash().to_hex(), "015b31ead847d81e53b22343df30ac0b");
+    // The settings hold the profile and the release levers since the
+    // release profile came.
+    assert_eq!(code.hash().to_hex(), "49d6d6ce840e1b8fded1962a2ba8da6a");
 }
 
 #[test]
@@ -236,6 +239,17 @@ fn cache_key_every_setting_enters_the_key() {
         stack_check: false,
         ..base.clone()
     });
+    // The profile, and each release lever on its own.
+    variants.push(Settings {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..base.clone()
+    });
+    for lever in cheby_mir::ReleaseOptions::LEVERS {
+        variants.push(Settings {
+            release: Some(cheby_mir::ReleaseOptions::parse_off(lever).unwrap()),
+            ..base.clone()
+        });
+    }
     variants.push(Settings {
         target: "x86_64-unknown-linux-gnu".to_owned(),
         ..base

@@ -190,9 +190,11 @@ pub(crate) fn std_summaries(
     Ok(Some(record.references))
 }
 
-/// D-968, D-980: the settings of std's one code, `BuildKind::Std` with the
+/// D-968, D-980: the settings of std's code, `BuildKind::Std` with the
 /// command's other D-958 settings, shared by `run`, `test`, `plain` and
-/// `check`.
+/// `check`. The profile is one of them, so std has one code per profile:
+/// a release command's std records are release records, and its
+/// evaluation module reads std's debug ones.
 pub(crate) fn std_settings(command: &Settings) -> Settings {
     Settings {
         kind: BuildKind::Std,

@@ -5,7 +5,9 @@
 //! (`cheby_codegen_clif::jit_unit`) or takes one from the store, and loads
 //! the batch's records here, in build order:
 //!
-//! 1. Before anything is declared, the batch is checked: no global symbol
+//! 1. Before anything is declared, the batch is checked: every record has
+//!    the JIT's profile (a batch never mixes debug and release code, whose
+//!    calls reach their callees differently), no global symbol
 //!    is defined twice, in the batch or by an earlier batch; every
 //!    generated symbol (`cb$…`) a record imports is defined by the batch or
 //!    an earlier one, or the batch is an internal error; and every runtime
@@ -61,6 +63,21 @@ const MODULE_RECORD: &str = "cb$mod$";
 
 /// The prefix of a constant slot's symbol (E6).
 const CONST_SLOT: &str = "cb$const$";
+
+/// Refuses a batch with a record of another profile than `profile`, the
+/// JIT's: a release record calls its callees' masked symbols directly,
+/// which no debug record defines, and the JIT runs one profile's code.
+fn check_profiles(items: &[Item<'_>], profile: cheby_mir::Profile) -> Result<(), JitError> {
+    match items.iter().find(|item| item.record.profile != profile) {
+        Some(item) => Err(JitError::ice(format!(
+            "a batch of {} code holds a {} record of `{}`",
+            profile.name(),
+            item.record.profile.name(),
+            item.path
+        ))),
+        None => Ok(()),
+    }
+}
 
 /// One record of a batch to load.
 pub(crate) struct Item<'a> {
@@ -169,6 +186,7 @@ impl Jit {
     /// symbol nothing defines, a global defined twice, or a record the
     /// module refuses.
     pub(crate) fn load_items(&mut self, items: &[Item<'_>]) -> Result<(), JitError> {
+        check_profiles(items, self.codegen.profile)?;
         let mut runs = Vec::with_capacity(items.len());
         for item in items {
             runs.push(code_run(item)?);

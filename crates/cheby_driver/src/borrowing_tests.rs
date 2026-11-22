@@ -572,6 +572,45 @@ fn code_key_kind_changes_every_key() {
 }
 
 /// Every field of a code key changes it: the kind and each setting of
+/// The profile changes every code key (D-958): a release build's key,
+/// with all its levers or one off, is never a debug build's.
+#[test]
+fn code_key_profile_changes_every_key() {
+    let debug = Settings {
+        kind: BuildKind::Run,
+        rc_naive: false,
+        unwind_edges: true,
+        checked_counts: false,
+        stack_check: true,
+        target: "aarch64-macos".to_owned(),
+        release: None,
+    };
+    let identity = Key::builder(KeyKind::Code, BUILD).str("c2").finish();
+    let key = |settings: &Settings, part: UnitPart| {
+        code_key(&CodeKeyInputs {
+            build: BUILD,
+            part,
+            settings,
+            positions: true,
+            identity,
+            own: &[],
+            callees: &[],
+        })
+    };
+    for part in [UnitPart::Code, UnitPart::Tests] {
+        let mut keys = vec![key(&debug, part)];
+        for off in ["", "direct", "clif", "inline,spec"] {
+            let release = Settings {
+                release: Some(cheby_mir::ReleaseOptions::parse_off(off).unwrap()),
+                ..debug.clone()
+            };
+            keys.push(key(&release, part));
+        }
+        let distinct: std::collections::BTreeSet<_> = keys.iter().map(Key::hash).collect();
+        assert_eq!(distinct.len(), keys.len(), "{part:?}");
+    }
+}
+
 /// D-958, the positions switch (D-1173), the identity, the own masks and
 /// the callees' slot symbols (D-1109), and the unit part.
 #[test]
@@ -583,6 +622,7 @@ fn code_key_settings_change_every_key() {
         checked_counts: false,
         stack_check: true,
         target: "aarch64-macos".to_owned(),
+        release: None,
     };
     let identity = Key::builder(KeyKind::Code, BUILD).str("c2").finish();
     let own = vec![("f".to_owned(), BorrowMask(1))];

@@ -74,6 +74,61 @@ fn compiled(unit: &MirModule) -> (Vec<String>, Vec<crate::DefinedCode>) {
     (code.clif, code.defined)
 }
 
+/// What `unit` compiled alone with `opts` defined, its ISA at
+/// `opts.opt_level`.
+fn defined_with(unit: &MirModule, opts: &CodegenOptions) -> Vec<crate::DefinedCode> {
+    let mut module = RecordingModule::new(isa::host_isa_with(opts.opt_level).unwrap());
+    let ucx = UnitCx {
+        named_outside: &named,
+    };
+    compile_unit(&mut module, unit, &ucx, opts).unwrap().defined
+}
+
+/// Release code (`opt_level=speed`, direct calls) keeps what code
+/// generation relies on at `none`: every call with a location keeps its
+/// call site, with the same location and a return offset inside the
+/// function, in increasing order; the rows stay sorted by strictly
+/// increasing offset inside the code; and no libcall appears, which the
+/// compile itself checks (`define_with_stats` refuses one).
+#[test]
+fn release_code_keeps_call_sites_and_sorted_rows() {
+    let release = CodegenOptions {
+        call_mode: crate::CallMode::Direct,
+        opt_level: crate::OptLevel::Speed,
+        profile: cheby_mir::Profile::Release,
+        ..CodegenOptions::default()
+    };
+    let mut sites = 0;
+    for unit in units() {
+        let unit = with_positions(unit);
+        let debug = defined_with(&unit, &CodegenOptions::default());
+        let fast = defined_with(&unit, &release);
+        assert_eq!(debug.len(), fast.len(), "{}", unit.path);
+        for (d, r) in debug.iter().zip(&fast) {
+            let locations = |code: &crate::DefinedCode| -> Vec<String> {
+                code.sites.iter().map(|s| s.location.clone()).collect()
+            };
+            assert_eq!(locations(d), locations(r), "{}", unit.path);
+            assert!(
+                r.sites
+                    .windows(2)
+                    .all(|w| w[0].ret_offset < w[1].ret_offset),
+                "{}",
+                unit.path
+            );
+            assert!(r.sites.iter().all(|s| s.ret_offset <= r.len));
+            assert!(
+                r.positions.windows(2).all(|w| w[0].offset < w[1].offset),
+                "{:?}",
+                r.positions
+            );
+            assert!(r.positions.iter().all(|p| p.offset < r.len));
+            sites += r.sites.len();
+        }
+    }
+    assert!(sites > 0, "the units have no located call");
+}
+
 /// The machine code is the same with positions on and off: every
 /// function's bytes and relocations, every symbol and data object; only
 /// the rows and the source differ.
@@ -167,11 +222,13 @@ fn record_positions_round_trip() {
         let decoded = CodeRecord::decode(&bytes).unwrap();
         assert_eq!(decoded, r);
         assert_eq!(decoded.encode(), bytes);
-        // The path once, right after the version: 1, its length, its bytes.
+        // The path once, right after the version and the profile: 1, its
+        // length, its bytes.
         let path = b"src/main.cheby";
-        assert_eq!(bytes[8], 1);
-        assert_eq!(bytes[9..13], (path.len() as u32).to_le_bytes());
-        assert_eq!(&bytes[13..13 + path.len()], path);
+        assert_eq!(bytes[8], 0);
+        assert_eq!(bytes[9], 1);
+        assert_eq!(bytes[10..14], (path.len() as u32).to_le_bytes());
+        assert_eq!(&bytes[14..14 + path.len()], path);
     }
 }
 
@@ -184,11 +241,11 @@ fn record_positions_same_unit_twice_same_bytes() {
 }
 
 /// A record of version 1, which had no positions, is refused like any
-/// other version, and the version is 3 (D-938; 3 since the module records
-/// name their functions, D-1041).
+/// other version, and the version is 4 (D-938; 3 since the module records
+/// name their functions, D-1041; 4 since records hold their profile).
 #[test]
 fn record_positions_old_version_refused() {
-    assert_eq!(RECORD_VERSION, 3);
+    assert_eq!(RECORD_VERSION, 4);
     let mut bytes = record(&with_positions(code_model_unit())).encode();
     bytes[4..8].copy_from_slice(&1_u32.to_le_bytes());
     assert_eq!(CodeRecord::decode(&bytes), Err(RecordError::Version(1)));

@@ -318,6 +318,7 @@ fn std_cache_keys() {
         checked_counts: false,
         stack_check: true,
         target: "aarch64-macos".to_owned(),
+        release: None,
     };
     let std = std_settings(&command);
     assert_eq!(std.kind, BuildKind::Std);
@@ -338,6 +339,13 @@ fn std_cache_keys() {
         ..std.clone()
     };
     assert_ne!(key, std_code_key(BUILD, "std::io", &naive));
+    // Std has one code per profile.
+    let release = Settings {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..std.clone()
+    };
+    assert_ne!(key, std_code_key(BUILD, "std::io", &release));
+    assert_eq!(std_settings(&release).release, release.release);
     let self_test = Settings {
         kind: BuildKind::StdSelfTest,
         ..std
@@ -774,7 +782,7 @@ fn std_cache_priv_constant_of_std_is_evaluated() {
         None,
         &mut out,
         Some(&cache),
-        Some((false, None)),
+        Some((false, None, Profile::Debug)),
     )
     .unwrap()
     .unwrap();

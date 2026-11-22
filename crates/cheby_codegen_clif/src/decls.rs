@@ -21,7 +21,7 @@ use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
 use crate::session::{SessionName, SessionNames, is_entry_module};
 use crate::sig;
-use crate::{CodegenError, ForeignImport};
+use crate::{CallMode, CodegenError, ForeignImport};
 
 /// A declared function of generated code.
 #[derive(Clone, Debug)]
@@ -236,6 +236,12 @@ pub struct Decls {
     /// batch of its JIT declared them ([`Seed::layouts`]): its module
     /// record does not list their types again.
     pub(crate) seeded_layouts: FxHashSet<LayoutRef>,
+    /// Whether calls between Cheby functions go to the callee's symbol
+    /// ([`CallMode::Direct`], release builds), set by each
+    /// [`Decls::declare_units`]: a top-level function's symbol then carries
+    /// its borrow mask ([`mangle::function`]), and a unit alone imports its
+    /// callees' symbols instead of their slots.
+    direct: bool,
 }
 
 impl std::fmt::Debug for Decls {
@@ -447,6 +453,7 @@ impl Decls {
             alone: None,
             seed: None,
             seeded_layouts: FxHashSet::default(),
+            direct: false,
         })
     }
 
@@ -995,7 +1002,12 @@ impl Decls {
         module: &mut M,
         mirs: &[MirModule],
         import: ForeignImport,
+        call_mode: CallMode,
     ) -> Result<(), CodegenError> {
+        self.direct = match call_mode {
+            CallMode::Indirect => false,
+            CallMode::Direct => true,
+        };
         self.declare_runtime(module)?;
         if self.is_alone() {
             for unit in mirs {
@@ -1324,7 +1336,15 @@ impl Decls {
                 "the body of {def:?} does not have its declared signature"
             )));
         }
-        let symbol = self.symbol(unit, key)?;
+        // A release build's calls go to the symbol, which carries the mask
+        // its slot would (D-917, D-1109).
+        let symbol = if let FnKey::Item(def) = key
+            && self.direct
+        {
+            mangle::function(&self.def_name(unit, def)?, abi_sig.borrow)
+        } else {
+            self.symbol(unit, key)?
+        };
         let signature = sig::signature(&abi_sig, self.call_conv);
         // D-917: in a unit alone, an item, test body or constant initializer
         // that another unit may name is global hidden (the entries unit
@@ -1520,11 +1540,13 @@ impl Decls {
 
     /// In a unit alone (D-917), declares with `Linkage::Import` what
     /// another unit defines and `unit`'s code reaches: the slot of every
-    /// direct callee whose function is not the unit's own, and the code of
-    /// every function the unit calls or names directly without defining it
-    /// (the entries unit's test bodies and constant initializers, the only
-    /// direct calls across units, D-916). Text reaches both PC-relative,
-    /// since every generated symbol is colocated (D-913).
+    /// direct callee whose function is not the unit's own, or in a release
+    /// build ([`CallMode::Direct`]) that callee's function, by its masked
+    /// symbol ([`mangle::function`]); and the code of every function the
+    /// unit calls or names directly without defining it (the entries
+    /// unit's test bodies and constant initializers, the only direct calls
+    /// across units of a debug build, D-916). Text reaches all of them
+    /// PC-relative, since every generated symbol is colocated (D-913).
     ///
     /// # Errors
     ///
@@ -1536,6 +1558,10 @@ impl Decls {
         unit: &MirModule,
     ) -> Result<(), CodegenError> {
         for callee in &unit.callees {
+            if self.direct {
+                self.declare_callee_import(module, unit, callee)?;
+                continue;
+            }
             let key = SlotKey {
                 path: self.slot_path(unit, callee.def)?.into(),
                 sig: callee.sig.clone(),
@@ -1606,6 +1632,47 @@ impl Decls {
                 },
             );
         }
+        Ok(())
+    }
+
+    /// In a release build's unit alone, declares the function of `callee`
+    /// with `Linkage::Import` under its masked symbol, unless the unit
+    /// defines it: a direct call reaches it PC-relative (D-913), and a
+    /// symbol whose mask differs from the definer's does not resolve
+    /// (D-917, D-1109). The slot is not imported, since no call loads it.
+    fn declare_callee_import<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+        callee: &cheby_mir::CalleeDecl,
+    ) -> Result<(), CodegenError> {
+        let key = FnKey::Item(callee.def);
+        if let Some(existing) = self.funcs.get(&key) {
+            if existing.abi != callee.sig {
+                return Err(CodegenError::ice(format!(
+                    "{:?} is called with another signature than its declaration",
+                    callee.def
+                )));
+            }
+            return Ok(());
+        }
+        let symbol = mangle::function(&self.def_name(unit, callee.def)?, callee.sig.borrow);
+        let signature = sig::signature(&callee.sig, self.call_conv);
+        let id = module
+            .declare_function(&symbol, Linkage::Import, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), symbol.clone());
+        self.funcs.insert(
+            key,
+            FuncDecl {
+                id,
+                symbol,
+                sig: signature,
+                abi: callee.sig.clone(),
+                // Another unit defines it: never defined here.
+                defined: true,
+            },
+        );
         Ok(())
     }
 

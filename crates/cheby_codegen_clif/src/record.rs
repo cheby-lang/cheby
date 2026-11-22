@@ -33,6 +33,7 @@
 //! | --------- | ----------------------------------------------------------------------------------------------------- |
 //! | magic     | the 4 bytes `cbcr`                                                                                    |
 //! | version   | `u32`, [`RECORD_VERSION`]                                                                             |
+//! | profile   | `u8`: 0 debug, 1 release ([`CodeRecord::profile`])                                                    |
 //! | source    | 0 for none, or 1 then the path (`u32` length, UTF-8 bytes)                                            |
 //! | symbols   | `u32` count, then each: kind `u8`, linkage `u8`, name (`u32` length, UTF-8 bytes)                     |
 //! | functions | `u32` count, then each: symbol `u32`, align `u64`, code (`u32` length, bytes), relocations, positions |
@@ -54,6 +55,7 @@
 //!
 //! Version 2 (D-938) added the source and the positions; version 1, which
 //! had neither, is refused like every other ([`RecordError::Version`]).
+//! Version 4 added the profile.
 //!
 //! [`CodeRecord::decode`] reads exactly this form and never panics
 //! (D-422): every length and count is checked against the bytes that
@@ -76,8 +78,9 @@ use crate::{CodegenError, SourceRow};
 
 /// The version of [`CodeRecord`]'s encoding. A record of another version
 /// is refused, never read. Version 2 holds the source positions of D-938.
-/// Version 3 (D-1041) holds the module records' function names.
-pub const RECORD_VERSION: u32 = 3;
+/// Version 3 (D-1041) holds the module records' function names. Version 4
+/// holds the profile.
+pub const RECORD_VERSION: u32 = 4;
 
 /// The first bytes of an encoded record.
 const MAGIC: [u8; 4] = *b"cbcr";
@@ -309,6 +312,11 @@ pub struct CodeRecord {
     /// (D-938); `None` with positions off and for units without source
     /// (the entries unit). A record whose functions have rows names one.
     pub source: Option<String>,
+    /// The profile the record's code was compiled in. A release record
+    /// calls its callees' symbols directly and may use other Cranelift
+    /// settings, so the JIT and the linker refuse a batch that mixes
+    /// profiles.
+    pub profile: cheby_mir::Profile,
 }
 
 /// Why a record could not be made, read or replayed.
@@ -372,6 +380,8 @@ pub struct RecordingModule {
     failed: Option<String>,
     /// The record's [`CodeRecord::source`].
     source: Option<String>,
+    /// The record's [`CodeRecord::profile`].
+    profile: cheby_mir::Profile,
 }
 
 impl fmt::Debug for RecordingModule {
@@ -400,7 +410,14 @@ impl RecordingModule {
             data: Vec::new(),
             failed: None,
             source: None,
+            profile: cheby_mir::Profile::Debug,
         }
+    }
+
+    /// Marks the record as compiled in `profile` ([`CodeRecord::profile`]);
+    /// debug unless set.
+    pub const fn set_profile(&mut self, profile: cheby_mir::Profile) {
+        self.profile = profile;
     }
 
     /// Names the unit's source file (D-421's diagnostic path) in the
@@ -450,6 +467,7 @@ impl RecordingModule {
             functions: self.functions,
             data: self.data,
             source: self.source,
+            profile: self.profile,
         };
         record.check()?;
         Ok(record)
@@ -829,6 +847,7 @@ pub(crate) fn record_into(
         cheby_mir::UnitKind::Tests(_) => Some(crate::mangle::tests_module_record(&unit.path)),
         cheby_mir::UnitKind::Entries => None,
     };
+    module.set_profile(opts.profile);
     let (code, parts) = crate::unit::compile_unit_with(&mut module, unit, ucx, seed, opts)?;
     if let Some(name) = &name {
         crate::modrec::define_unit(&mut module, name, &code)?;
@@ -1094,6 +1113,7 @@ impl CodeRecord {
         let mut out = Writer(Vec::new());
         out.bytes(&MAGIC);
         out.u32(RECORD_VERSION);
+        out.u8(profile_code(self.profile));
         match &self.source {
             None => out.u8(0),
             Some(source) => {
@@ -1161,6 +1181,7 @@ impl CodeRecord {
         if version != RECORD_VERSION {
             return Err(RecordError::Version(version));
         }
+        let profile = profile_of(input.u8()?)?;
         let source = match input.u8()? {
             0 => None,
             1 => Some(
@@ -1246,9 +1267,27 @@ impl CodeRecord {
             functions,
             data,
             source,
+            profile,
         };
         record.check()?;
         Ok(record)
+    }
+}
+
+/// A profile's code in the encoding: 0 debug, 1 release.
+const fn profile_code(profile: cheby_mir::Profile) -> u8 {
+    match profile {
+        cheby_mir::Profile::Debug => 0,
+        cheby_mir::Profile::Release => 1,
+    }
+}
+
+/// The profile of the code `code` ([`profile_code`]).
+const fn profile_of(code: u8) -> Result<cheby_mir::Profile, RecordError> {
+    match code {
+        0 => Ok(cheby_mir::Profile::Debug),
+        1 => Ok(cheby_mir::Profile::Release),
+        _ => Err(RecordError::Malformed("an unknown profile")),
     }
 }
 
