@@ -1,0 +1,8 @@
+fn app::scaled(_0: int, _1: int) -> value check str#0 {
+  str#0 = "src/main.cheby:30:4"
+  str#1 = "src/main.cheby:31:19"
+bb0:
+  _8: int = checked mul int _1, _0 at str#1
+  _9: value = box int _8
+  return _9
+}

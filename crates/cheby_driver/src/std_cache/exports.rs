@@ -22,12 +22,12 @@
 //! without a cache, or one that bypasses reads (`CHEBY_DUMP_DIR`, D-965),
 //! computes it in the process and writes nothing.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use cheby_iface::Ice;
-use cheby_mir::MirOptions;
 use cheby_mir::borrow::BorrowMask;
 use cheby_mir::export::{EncodedBodies, PortableBodies, PortableSource};
+use cheby_mir::{MirOptions, ReleaseOptions};
 
 use super::StdStore;
 use crate::cache::{BuildId, BuildKind, Key, KeyKind, Settings};
@@ -183,16 +183,20 @@ pub(crate) fn std_exports(front: &Frontend, std_mir: MirOptions) -> Result<Arc<S
         Some(at) => {
             let settings =
                 super::std_settings(&crate::borrowing::settings(BuildKind::Std, std_mir));
-            from_store(&at, &settings)
+            from_store(&at, &settings, release_levers(std_mir))
         }
-        None => in_process(),
+        None => in_process(release_levers(std_mir)),
     }
 }
 
 /// Std's export record under `settings` from `at`, or, on a miss, made in
 /// the process and stored behind the command (D-1138); a write that fails
 /// is skipped, and a later command misses (D-1129).
-fn from_store(at: &StdStore<'_>, settings: &Settings) -> Result<Arc<StdExports>, Ice> {
+fn from_store(
+    at: &StdStore<'_>,
+    settings: &Settings,
+    levers: ReleaseOptions,
+) -> Result<Arc<StdExports>, Ice> {
     let key = std_export_key(at.store.build_id(), settings);
     at.log.key("export.std", "release", &key);
     let found = if at.reads {
@@ -210,7 +214,7 @@ fn from_store(at: &StdStore<'_>, settings: &Settings) -> Result<Arc<StdExports>,
     for module in &whole.modules {
         at.log.parsed_std(module);
     }
-    let made = in_process()?;
+    let made = in_process(levers)?;
     let payload = made.encode();
     // A debug toolchain checks that the record gives back what it holds,
     // so a form of MIR the bytes miss fails every test that writes one.
@@ -226,23 +230,36 @@ fn from_store(at: &StdStore<'_>, settings: &Settings) -> Result<Arc<StdExports>,
     Ok(made)
 }
 
-/// [`StdExports`] from [`super::ReleaseStd`], made once per process.
+/// The release levers of `mir`, std's release options; every lever for
+/// options without them, which no release build passes.
+fn release_levers(mir: MirOptions) -> ReleaseOptions {
+    mir.release.unwrap_or(ReleaseOptions::ALL)
+}
+
+/// [`StdExports`] under `levers` from [`super::ReleaseStd`], made once
+/// per process and levers, as std's release code is.
 ///
 /// # Errors
 ///
 /// [`super::release_std`]'s errors.
-pub(crate) fn in_process() -> Result<Arc<StdExports>, Ice> {
-    static MADE: OnceLock<Result<Arc<StdExports>, String>> = OnceLock::new();
-    MADE.get_or_init(|| {
-        super::release_std()
-            .map(|release| {
-                Arc::new(StdExports {
-                    named: release.named.clone(),
-                    bodies: Bodies::Made(release.exports().clone()),
-                })
+pub(crate) fn in_process(levers: ReleaseOptions) -> Result<Arc<StdExports>, Ice> {
+    type Made = Vec<(ReleaseOptions, Result<Arc<StdExports>, String>)>;
+    static MADE: Mutex<Made> = Mutex::new(Vec::new());
+    let mut made = MADE
+        .lock()
+        .map_err(|_| Ice::new("std's exports were poisoned"))?;
+    if let Some((_, found)) = made.iter().find(|(l, _)| *l == levers) {
+        return found.clone().map_err(Ice::new);
+    }
+    let computed = super::release_std(levers)
+        .map(|release| {
+            Arc::new(StdExports {
+                named: release.named.clone(),
+                bodies: Bodies::Made(release.exports().clone()),
             })
-            .map_err(|e| e.message().to_owned())
-    })
-    .clone()
-    .map_err(Ice::new)
+        })
+        .map_err(|e| e.message().to_owned());
+    made.push((levers, computed.clone()));
+    drop(made);
+    computed.map_err(Ice::new)
 }

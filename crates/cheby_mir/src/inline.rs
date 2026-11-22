@@ -90,6 +90,12 @@
 //!   value shim, a tuple function, a `dyn` forwarder) is never inlined
 //!   into: every unit that needs one defines its own copy, and every copy
 //!   of a symbol must be the same (D-918).
+//! - A closure's code is a callee too where a call names it by key, which
+//!   the clean-up writes for a call of a closure it knows (design T11),
+//!   unless it calls its own `self`. A host whose indirect calls the
+//!   clean-up may settle is cleaned up before its calls are searched, and
+//!   when the clean-up after inlining settles more of them, its calls are
+//!   searched once more.
 //! - Every function is then cleaned up ([`crate::simplify`]).
 
 use std::sync::Arc;
@@ -190,7 +196,7 @@ pub fn splice(
                 dst,
                 value:
                     Rvalue::Call {
-                        callee: Callee::Direct(_),
+                        callee: Callee::Direct(_) | Callee::Code(_),
                         args,
                     },
             }) => (Some(*dst), args.clone(), block.pos_at(i)),
@@ -198,7 +204,7 @@ pub fn splice(
         },
         SiteAt::Tail => {
             let Terminator::TailCall {
-                callee: Callee::Direct(_),
+                callee: Callee::Direct(_) | Callee::Code(_),
                 args,
             } = &block.term
             else {
@@ -1014,6 +1020,34 @@ fn intern_used(
     Ok(out)
 }
 
+/// Which release passes run beside inlining and its clean-up: the
+/// release profile's `spec` and `unbox` levers ([`crate::ReleaseOptions`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Passes {
+    /// Calls of known dictionaries, function values and closures made
+    /// direct by the clean-up ([`crate::simplify`]).
+    pub spec: bool,
+    /// Unboxed parameters and results (reserved).
+    pub unbox: bool,
+}
+
+impl Passes {
+    /// Every pass.
+    pub const ALL: Self = Self {
+        spec: true,
+        unbox: true,
+    };
+
+    /// The passes that `levers` leave on.
+    #[must_use]
+    pub const fn of(levers: &crate::ReleaseOptions) -> Self {
+        Self {
+            spec: levers.spec,
+            unbox: levers.unbox,
+        }
+    }
+}
+
 /// The budgets of the selection (module docs). Compiler constants, so the
 /// build ID covers them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1056,7 +1090,7 @@ pub fn optimize(unit: &mut MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] for malformed MIR.
 pub fn optimize_with(unit: &mut MirModule, budget: &InlineBudget) -> Result<(), Ice> {
-    optimize_inner(unit, budget, None)
+    optimize_inner(unit, budget, None, Passes::ALL)
 }
 
 /// Where the inliner finds the bodies of functions that other units
@@ -1085,10 +1119,11 @@ pub trait Bodies: Sync {
 pub fn optimize_across(
     unit: &mut MirModule,
     budget: &InlineBudget,
+    passes: Passes,
     bodies: &dyn Bodies,
     defs: &Defs<'_>,
 ) -> Result<(), Ice> {
-    optimize_inner(unit, budget, Some((bodies, defs)))
+    optimize_inner(unit, budget, Some((bodies, defs)), passes)
 }
 
 /// [`optimize_with`], and with `across`, [`optimize_across`].
@@ -1096,11 +1131,13 @@ fn optimize_inner(
     unit: &mut MirModule,
     budget: &InlineBudget,
     across: Option<(&dyn Bodies, &Defs<'_>)>,
+    passes: Passes,
 ) -> Result<(), Ice> {
     let index = unit.function_index();
     let graph = call_graph(unit, &index);
     let (order, in_cycle) = components(&graph);
-    let mut tags = crate::simplify::Tags::of(unit);
+    let mut tags = crate::simplify::Known::of(unit);
+    tags.set_devirt(passes.spec);
     let callable: Vec<bool> = unit
         .functions
         .iter()
@@ -1113,8 +1150,8 @@ fn optimize_inner(
         .map(cost)
         .fold(0, usize::saturating_add);
     let mut cx = Inlining {
-        index: &index,
-        callable: &callable,
+        index,
+        callable,
         budget,
         unit_left: before
             .saturating_mul(budget.unit_growth_percent)
@@ -1124,9 +1161,30 @@ fn optimize_inner(
         imported: false,
     };
     for host in order {
-        inline_into(unit, host, &mut cx, &mut tags)?;
-        if let Some(f) = unit.functions.get_mut(host) {
+        // Calls of known closures and function values become calls the
+        // inliner sees (design T11).
+        if let Some(f) = unit.functions.get_mut(host)
+            && is_host(f)
+            && crate::simplify::has_indirect_call(f)
+        {
             crate::simplify::run(f, &tags)?;
+        }
+        inline_into(unit, host, &mut cx, &mut tags)?;
+        cx.sync(unit);
+        let Some(f) = unit.functions.get_mut(host) else {
+            continue;
+        };
+        let indirect = crate::simplify::indirect_calls(f);
+        crate::simplify::run(f, &tags)?;
+        // The clean-up made direct calls of indirect ones in inlined
+        // bodies (a function value an inlined helper calls): one more
+        // round inlines them.
+        if crate::simplify::indirect_calls(f) < indirect {
+            inline_into(unit, host, &mut cx, &mut tags)?;
+            cx.sync(unit);
+            if let Some(f) = unit.functions.get_mut(host) {
+                crate::simplify::run(f, &tags)?;
+            }
         }
     }
     if cx.imported
@@ -1233,10 +1291,11 @@ pub fn layers(units: &[MirModule]) -> Vec<Vec<usize>> {
 
 /// What one unit's inlining reads and spends ([`optimize_inner`]).
 struct Inlining<'a, 'b> {
-    /// [`MirModule::function_index`] of the unit before inlining.
-    index: &'a FxHashMap<FnKey, usize>,
+    /// [`MirModule::function_index`] of the unit, kept up to date as
+    /// functions join it ([`Inlining::sync`]).
+    index: FxHashMap<FnKey, usize>,
     /// Which of the unit's functions may be inlined, by index.
-    callable: &'a [bool],
+    callable: Vec<bool>,
     budget: &'a InlineBudget,
     /// How much the unit may still grow.
     unit_left: usize,
@@ -1246,17 +1305,50 @@ struct Inlining<'a, 'b> {
     imported: bool,
 }
 
+impl Inlining<'_, '_> {
+    /// Takes in the functions that joined `unit` since the call graph was
+    /// read: the closures, shims and other shared functions of another
+    /// unit's bodies. Such a closure may be inlined at a call of it by key
+    /// when it does not call itself; the others never are.
+    fn sync(&mut self, unit: &MirModule) {
+        for (n, f) in unit.functions.iter().enumerate().skip(self.callable.len()) {
+            self.index.entry(f.key).or_insert(n);
+            self.callable
+                .push(matches!(f.key, FnKey::Closure { .. }) && is_callee(unit, f));
+        }
+    }
+}
+
 /// Whether `f`, a function of `unit`, may be inlined at its direct calls,
 /// cycles aside (module docs).
 pub(crate) fn is_callee(unit: &MirModule, f: &Function) -> bool {
-    let FnKey::Item(def) = f.key else {
-        return false;
-    };
-    if check_body(f).is_err()
-        || unit
-            .name(def)
-            .is_ok_and(|n| crate::waits::keeps_frame(&n.module, &n.item))
-    {
+    match f.key {
+        FnKey::Item(def) => {
+            if unit
+                .name(def)
+                .is_ok_and(|n| crate::waits::keeps_frame(&n.module, &n.item))
+            {
+                return false;
+            }
+        }
+        // A closure's code, called by key where the clean-up knew the
+        // closure (design T11), unless it calls its own `self`: a local
+        // function's loop.
+        FnKey::Closure { .. } => {
+            if calls_self(f) {
+                return false;
+            }
+        }
+        FnKey::ValueShim(_)
+        | FnKey::ConstInit(_)
+        | FnKey::Test(_)
+        | FnKey::Entry(_)
+        | FnKey::Trampoline(_)
+        | FnKey::TupleDictFn { .. }
+        | FnKey::DynForward { .. }
+        | FnKey::Continuation { .. } => return false,
+    }
+    if check_body(f).is_err() {
         return false;
     }
     let counted_param = |op: &Operand| {
@@ -1329,6 +1421,29 @@ pub(crate) fn is_callee(unit: &MirModule, f: &Function) -> bool {
         }
     }
     true
+}
+
+/// Whether `f` calls itself: by its key, by its item, or through its
+/// `self` parameter when it is a closure's code.
+fn calls_self(f: &Function) -> bool {
+    let this = f.params.first().copied();
+    let is_self = |c: &Callee| match c {
+        Callee::Direct(def) | Callee::Borrowing(def, _) => f.key == FnKey::Item(*def),
+        Callee::Code(key) => *key == f.key,
+        Callee::Indirect(l) => matches!(f.key, FnKey::Closure { .. }) && Some(*l) == this,
+    };
+    f.blocks.iter().any(|b| {
+        matches!(&b.term, Terminator::TailCall { callee, .. } if is_self(callee))
+            || b.stmts.iter().any(|s| {
+                matches!(
+                    s,
+                    Stmt::Assign {
+                        value: Rvalue::Call { callee, .. },
+                        ..
+                    } if is_self(callee)
+                )
+            })
+    })
 }
 
 /// The functions each function of `unit` calls or names by key (a
@@ -1501,8 +1616,15 @@ fn next_site(
 ) -> Option<(SiteAt, Target)> {
     let block = f.blocks.get(b)?;
     let pick = |callee: &Callee| -> Option<Target> {
-        let Callee::Direct(def) = callee else {
-            return None;
+        let def = match callee {
+            Callee::Direct(def) => def,
+            // A closure's code called by key (design T11).
+            Callee::Code(key) => {
+                let at = *cx.index.get(key)?;
+                return (*key != f.key && !other_only && cx.callable.get(at) == Some(&true))
+                    .then_some(Target::Own(at));
+            }
+            Callee::Borrowing(..) | Callee::Indirect(_) => return None,
         };
         if f.key == FnKey::Item(*def) {
             return None;
@@ -1624,7 +1746,7 @@ fn inline_into(
     unit: &mut MirModule,
     host: usize,
     cx: &mut Inlining<'_, '_>,
-    tags: &mut crate::simplify::Tags,
+    tags: &mut crate::simplify::Known,
 ) -> Result<(), Ice> {
     let Some(f) = unit.functions.get(host) else {
         return Ok(());
@@ -1738,7 +1860,7 @@ fn keeps_reuse(
     site: CallSite,
     body: &Function,
     positions: CopiedPositions,
-    tags: &crate::simplify::Tags,
+    tags: &crate::simplify::Known,
     pairs_now: &mut Option<usize>,
 ) -> Result<bool, Ice> {
     let Some(f) = unit.functions.get(host) else {
@@ -1799,7 +1921,7 @@ fn import(
     at: SiteAt,
     export: &Exported,
     defs: &Defs<'_>,
-    tags: &mut crate::simplify::Tags,
+    tags: &mut crate::simplify::Known,
 ) -> Result<Option<(Function, CopiedPositions)>, Ice> {
     let host_fn = unit
         .functions
@@ -1922,11 +2044,11 @@ fn import(
     body.sites.clear();
     let mut layouts_of: Vec<Function> = new_functions.clone();
     layouts_of.push(body.clone());
-    tags.extend(&crate::lower::foreign_layouts_of(
-        &layouts_of,
-        &added,
-        defs,
-    )?);
+    let (layouts, callees) = crate::lower::tables_of(&layouts_of, &added, defs)?;
+    tags.extend(&layouts);
+    tags.add_callees(&callees);
+    tags.add_statics(&added);
+    tags.add_functions(&new_functions);
     unit.statics.extend(added);
     unit.functions.extend(new_functions);
     let positions = if same_file {

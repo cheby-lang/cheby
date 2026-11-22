@@ -37,6 +37,8 @@ pub mod builder;
 mod call_locs_tests;
 pub mod const_prop;
 mod defs;
+#[cfg(test)]
+mod devirt_tests;
 pub mod dump;
 pub mod export;
 pub mod fuse;

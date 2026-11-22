@@ -604,6 +604,7 @@ pub fn optimize_build(
     portable: &dyn PortableSource,
     defs: &Defs<'_>,
     budget: &InlineBudget,
+    passes: crate::inline::Passes,
     each: &LayerRun<'_>,
 ) -> Result<(), Ice> {
     let layers = crate::inline::layers(units);
@@ -620,7 +621,7 @@ pub fn optimize_build(
         }
         let shared = &bodies;
         let step = |unit: &mut MirModule| -> Result<Vec<Exported>, Ice> {
-            crate::inline::optimize_across(unit, budget, shared, defs)?;
+            crate::inline::optimize_across(unit, budget, passes, shared, defs)?;
             crate::check_lowered(unit)?;
             exports(unit, defs, budget)
         };

@@ -745,18 +745,21 @@ impl Tables {
 }
 
 /// The layouts of the constructors that `functions` and `statics` allocate,
-/// read, use as static objects or read the tags of, read through `defs`:
-/// what a body from another unit brings into the one it is inlined in.
+/// read, use as static objects or read the tags of, and the declarations of
+/// the direct callees of `functions`, all-owned as lowering writes them,
+/// read through `defs`: what a body from another unit brings into the one
+/// it is inlined in.
 ///
 /// # Errors
 ///
 /// An [`Ice`] if `defs` cannot see a def they mention.
-pub(crate) fn foreign_layouts_of(
+pub(crate) fn tables_of(
     functions: &[Function],
     statics: &[StaticObject],
     defs: &Defs<'_>,
-) -> Result<Vec<LayoutDesc>, Ice> {
-    Ok(Tables::of(functions, statics, &[], defs)?.foreign)
+) -> Result<(Vec<LayoutDesc>, Vec<CalleeDecl>), Ice> {
+    let tables = Tables::of(functions, statics, &[], defs)?;
+    Ok((tables.foreign, tables.callees))
 }
 
 /// Computes `unit`'s callee declarations, foreign layouts and names again

@@ -13,6 +13,17 @@
 //!   of constants fold, and so do branches and switches on constants;
 //! - a jump with a static constructor into a block that only reads its
 //!   tag and switches on it goes to the case directly;
+//! - with the `spec` lever (design T11), what a local is known to hold
+//!   ([`Shape`]) settles calls: a field of a static dictionary or static
+//!   closure is the field's constant, a capture of a closure allocated in
+//!   the function that is a box or a constant is that box or constant
+//!   again, a tag read of a static constructor is its tag, an indirect call
+//!   of a function value is a direct call with the unboxes its value shim
+//!   makes, and an indirect call of a static closure or of a closure of
+//!   known code calls that code by key with the closure as `self`, which
+//!   the inliner may then copy. The calls of shared functions (value
+//!   shims, tuple functions, `dyn` forwarders) never change (D-918);
+//! - a jump to a block that holds only a jump goes to that jump's target;
 //! - unreachable blocks, unused block parameters and unused definitions
 //!   of pure values go.
 //!
@@ -27,10 +38,13 @@
 //! drop function the program can see (D-101, D-205): a definition that
 //! uses such a value stays even when its result is unused (the move that
 //! keeps an `@external` wrapper's handle alive across its foreign call is
-//! one), a parameter whose argument may hold one stays, and a branch folds
-//! or a jump is threaded only when no such value live into a dropped
-//! target is dead in the taken one. Raw values, boxes of raw values and
-//! constants hold no handle.
+//! one), a parameter whose argument may hold one stays, a branch folds
+//! only when no such value live into a dropped target is dead in the taken
+//! one, and a jump is threaded only from a block of pure statements and
+//! only when every other block keeps the values it holds live as before,
+//! so the values the skipped switch's other cases need die where the jump
+//! starts, with nothing a program sees in between. Raw values, boxes of raw
+//! values and constants hold no handle.
 //!
 //! Counting runs after this pass, so removing a definition or a parameter
 //! needs no count of its own. Every rewrite keeps the statements' source
@@ -41,9 +55,11 @@
 use cheby_iface::{DefId, Ice, Idx, IndexVec, builtin};
 use rustc_hash::FxHashMap;
 
+use crate::abi::AbiSig;
 use crate::ir::{
-    ArithOp, Block, BlockId, Callee, CmpOp, Const, Function, LayoutRef, Local, LocalDecl,
-    MirModule, Operand, Rvalue, Stmt, TagType, Terminator,
+    ArithOp, Block, BlockId, Callee, CalleeDecl, CmpOp, Const, FnKey, Function, LayoutRef, Local,
+    LocalDecl, MirModule, Operand, Rvalue, StaticId, StaticKind, StaticObject, Stmt, TagType,
+    Terminator,
 };
 use crate::liveness::Liveness;
 use crate::positions::PosRef;
@@ -53,22 +69,39 @@ use crate::repr::Repr;
 /// next, and a few reach the fixed point of an inlined body.
 const ROUNDS: usize = 8;
 
-/// The tags of the constructors a unit knows ([`MirModule::layouts`] and
-/// [`MirModule::foreign_layouts`]), with their types.
+/// What the clean-up knows of a unit beyond the function it cleans up:
+/// the tags of the constructors the unit knows ([`MirModule::layouts`] and
+/// [`MirModule::foreign_layouts`]) with their types, the fields of its
+/// static objects, the signatures of its direct callees, the number of
+/// parameters of each function it defines, and what the parameters of its
+/// clones are known to hold ([`crate::specialize`]).
 #[derive(Clone, Debug, Default)]
-pub struct Tags(FxHashMap<DefId, (DefId, u32)>);
+pub struct Known {
+    tags: FxHashMap<DefId, (DefId, u32)>,
+    statics: FxHashMap<StaticId, (StaticKind, Box<[Const]>)>,
+    sigs: FxHashMap<DefId, AbiSig>,
+    arity: FxHashMap<FnKey, usize>,
+    shapes: FxHashMap<FnKey, Vec<Option<Shape>>>,
+    /// Whether calls of known values become direct calls ([`devirt`]):
+    /// the release profile's `spec` lever.
+    devirt: bool,
+}
 
-impl Tags {
-    /// The constructors of `unit`'s layouts.
+impl Known {
+    /// What `unit` holds: its layouts' constructors, its statics, its
+    /// callees and its functions.
     #[must_use]
     pub fn of(unit: &MirModule) -> Self {
-        let mut out = FxHashMap::default();
-        for d in unit.layouts.iter().chain(&unit.foreign_layouts) {
-            if let LayoutRef::Ctor(def) = d.layout {
-                out.insert(def, (d.type_def, d.tag));
-            }
-        }
-        Self(out)
+        let mut out = Self {
+            devirt: true,
+            ..Self::default()
+        };
+        out.extend(&unit.layouts);
+        out.extend(&unit.foreign_layouts);
+        out.add_statics(&unit.statics);
+        out.add_callees(&unit.callees);
+        out.add_functions(&unit.functions);
+        out
     }
 
     /// Adds the constructors of `layouts`, layouts of other modules that a
@@ -76,9 +109,35 @@ impl Tags {
     pub fn extend(&mut self, layouts: &[crate::layout::LayoutDesc]) {
         for d in layouts {
             if let LayoutRef::Ctor(def) = d.layout {
-                self.0.insert(def, (d.type_def, d.tag));
+                self.tags.insert(def, (d.type_def, d.tag));
             }
         }
+    }
+
+    /// Adds static objects that joined the unit.
+    pub(crate) fn add_statics(&mut self, statics: &[StaticObject]) {
+        for s in statics {
+            self.statics.insert(s.id, (s.kind, s.fields.clone()));
+        }
+    }
+
+    /// Adds the signatures of direct callees.
+    pub(crate) fn add_callees(&mut self, callees: &[CalleeDecl]) {
+        for c in callees {
+            self.sigs.insert(c.def, c.sig.clone());
+        }
+    }
+
+    /// Adds functions that joined the unit, by key.
+    pub(crate) fn add_functions(&mut self, functions: &[Function]) {
+        for f in functions {
+            self.arity.insert(f.key, f.params.len());
+        }
+    }
+
+    /// Turns devirtualization ([`devirt`]) on or off.
+    pub(crate) const fn set_devirt(&mut self, on: bool) {
+        self.devirt = on;
     }
 
     /// The tag a [`Rvalue::ReadTag`] of `ty` reads from the static object
@@ -88,7 +147,7 @@ impl Tags {
     fn tag(&self, def: DefId, ty: TagType) -> Option<u32> {
         let builtin: &[DefId] = match ty {
             TagType::Adt(want) => {
-                let &(type_def, tag) = self.0.get(&def)?;
+                let &(type_def, tag) = self.tags.get(&def)?;
                 return (want == type_def).then_some(tag);
             }
             TagType::Option => &[builtin::SOME, builtin::NONE],
@@ -106,16 +165,18 @@ impl Tags {
 /// # Errors
 ///
 /// An [`Ice`] for malformed MIR.
-pub fn run(f: &mut Function, tags: &Tags) -> Result<bool, Ice> {
+pub fn run(f: &mut Function, tags: &Known) -> Result<bool, Ice> {
     if f.precounted || f.entry_unwind.is_some() || f.blocks.iter().any(|b| !b.unwind.is_empty()) {
         return Ok(false);
     }
     let mut changed = false;
     for _ in 0..ROUNDS {
-        let mut round = fold(f, tags);
+        let mut round = devirt(f, tags)?;
+        round |= fold(f, tags);
         round |= same_params(f);
         round |= raw_params(f)?;
         round |= thread(f, tags);
+        round |= forward_empty(f);
         round |= drop_unreachable(f)?;
         round |= merge(f);
         round |= dead(f);
@@ -389,6 +450,26 @@ const fn is_pure(value: &Rvalue) -> bool {
     }
 }
 
+/// Whether `value` is checked arithmetic on constants that does not
+/// overflow: [`fold_rvalue`] folds its uses, and it may go like a pure
+/// value.
+fn cannot_panic(value: &Rvalue) -> bool {
+    matches!(
+        value,
+        Rvalue::Checked {
+            lhs: Operand::Const(_),
+            rhs: Operand::Const(_),
+            ..
+        }
+    ) && fold_rvalue(
+        value,
+        &FxHashMap::default(),
+        &FxHashMap::default(),
+        &Known::default(),
+    )
+    .is_some()
+}
+
 /// The value of a raw constant that may stand for its local everywhere.
 const fn raw_constant(c: &Const) -> bool {
     match c {
@@ -414,7 +495,7 @@ fn fold_rvalue(
     value: &Rvalue,
     boxes: &FxHashMap<Local, (Operand, Repr)>,
     subst: &FxHashMap<Local, Operand>,
-    tags: &Tags,
+    tags: &Known,
 ) -> Option<Operand> {
     let konst = |c: Const| Some(Operand::Const(c));
     match value {
@@ -569,7 +650,7 @@ fn boxes(f: &Function) -> FxHashMap<Local, (Operand, Repr)> {
 }
 
 /// Folds values and branches on constants (module docs).
-fn fold(f: &mut Function, tags: &Tags) -> bool {
+fn fold(f: &mut Function, tags: &Known) -> bool {
     let boxes = boxes(f);
     let mut subst: FxHashMap<Local, Operand> = FxHashMap::default();
     for b in &f.blocks {
@@ -890,8 +971,58 @@ fn raw_params(f: &mut Function) -> Result<bool, Ice> {
 }
 
 /// A jump with a static constructor into a block that only reads its tag
-/// and switches on it goes to the case directly (module docs).
-fn thread(f: &mut Function, tags: &Tags) -> bool {
+/// and switches on it goes to the case directly (module docs), one jump at
+/// a time ([`thread_one`]).
+fn thread(f: &mut Function, tags: &Known) -> bool {
+    let mut changed = false;
+    for _ in 0..f.blocks.len() {
+        if !thread_one(f, tags) {
+            break;
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Whether every statement of `b` is pure ([`is_pure`], [`cannot_panic`]).
+fn pure_block(b: &Block) -> bool {
+    b.stmts.iter().all(|s| match s {
+        Stmt::Assign { value, .. } => is_pure(value) || cannot_panic(value),
+        Stmt::Eval(_)
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => false,
+    })
+}
+
+/// Whether the counted locals that may hold a handle are live into and out
+/// of every block but `except` alike in `old` and `new`: then a change
+/// that makes `new` moves no release outside `except` (D-205).
+fn same_releases(old: &Liveness, new: &Liveness, plain: &[bool], except: BlockId) -> bool {
+    let held = |set: &crate::liveness::LocalSet| -> Vec<Local> {
+        set.iter()
+            .copied()
+            .filter(|l| plain.get(l.index()) != Some(&true))
+            .collect()
+    };
+    old.live_in
+        .iter_enumerated()
+        .zip(new.live_in.iter())
+        .zip(old.live_out.iter().zip(new.live_out.iter()))
+        .all(|(((id, oi), ni), (oo, no))| {
+            id == except || (held(oi) == held(ni) && held(oo) == held(no))
+        })
+}
+
+/// Threads the first jump with a static constructor into a block that only
+/// reads its tag and switches on it, straight to the case (module docs);
+/// returns whether there was one. The jumping block must hold only pure
+/// statements, and the jump is kept when the locals that may hold a
+/// handle are live anywhere else otherwise than before: the values the
+/// skipped switch's other cases need die at the jumping block instead of
+/// at the case, with nothing a program can see between (D-205).
+fn thread_one(f: &mut Function, tags: &Known) -> bool {
     let candidate = f.blocks.iter().any(|b| {
         matches!(
             b.stmts.as_slice(),
@@ -959,25 +1090,571 @@ fn thread(f: &mut Function, tags: &Tags) -> bool {
             if !args.iter().all(|a| is_plain(&plain, a)) {
                 continue;
             }
+            if !f.blocks.get(pred).is_some_and(pure_block) {
+                continue;
+            }
             if let Some(case) = tags
                 .tag(*def, *ty)
                 .and_then(|t| switch_target(cases, *default, u64::from(t)))
-                && moves_no_release(&live, &plain, id, case)
             {
                 jumps.push((pred, case));
             }
         }
     }
-    let changed = !jumps.is_empty();
     for (pred, case) in jumps {
-        if let Some(b) = f.blocks.get_mut(pred) {
-            b.term = Terminator::Goto {
+        let Some(b) = f.blocks.get_mut(pred) else {
+            continue;
+        };
+        let saved = std::mem::replace(
+            &mut b.term,
+            Terminator::Goto {
                 target: case,
                 args: Vec::new(),
-            };
+            },
+        );
+        let kept = Liveness::compute(f).is_ok_and(|new| same_releases(&live, &new, &plain, pred));
+        if kept {
+            return true;
+        }
+        if let Some(b) = f.blocks.get_mut(pred) {
+            b.term = saved;
         }
     }
-    changed
+    false
+}
+
+/// What the clean-up knows a local holds (design T11, T13): a constant,
+/// or a closure object of known code whose captures may be known too.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum Shape {
+    /// The constant itself: a static dictionary, a function value, a static
+    /// closure or any other constant.
+    Const(Const),
+    /// A closure allocated with the code word `code`, its captures (fields
+    /// 1 on) as far as they are known.
+    Closure {
+        code: FnKey,
+        captures: Vec<Option<Shape>>,
+    },
+}
+
+/// How deep a shape's captures are followed: a clone's key holds its
+/// arguments' shapes ([`crate::specialize`]), and a deeper one would only
+/// make keys larger.
+const SHAPE_DEPTH: usize = 3;
+
+impl Shape {
+    /// The shape with the captures below `depth` levels forgotten.
+    fn bounded(self, depth: usize) -> Self {
+        match self {
+            Self::Const(_) => self,
+            Self::Closure { code, captures } => {
+                let captures = if depth == 0 {
+                    vec![None; captures.len()]
+                } else {
+                    captures
+                        .into_iter()
+                        .map(|c| c.map(|c| c.bounded(depth.saturating_sub(1))))
+                        .collect()
+                };
+                Self::Closure { code, captures }
+            }
+        }
+    }
+}
+
+/// The shape of field `field` of a value of shape `base`: a static
+/// object's constant field, or a closure's known capture.
+fn field_shape(base: &Shape, field: u32, known: &Known) -> Option<Shape> {
+    let at = usize::try_from(field).ok()?;
+    match base {
+        // A static's string indexes the static's own table, and a code word
+        // stands only in a closure's first field: neither is an operand.
+        Shape::Const(Const::Static(id)) => match known.statics.get(id)?.1.get(at)? {
+            Const::Str(_) | Const::Code(_) => None,
+            c @ (Const::Int(_)
+            | Const::Float(_)
+            | Const::Bool(_)
+            | Const::Sized { .. }
+            | Const::Nil
+            | Const::StaticCtor(_)
+            | Const::FnValue(_)
+            | Const::EmptyList
+            | Const::Static(_)
+            | Const::BuiltinDesc(_)
+            | Const::Ctx
+            | Const::ErrNil) => Some(Shape::Const(c.clone())),
+        },
+        Shape::Closure { captures, .. } => captures.get(at.checked_sub(1)?).cloned().flatten(),
+        Shape::Const(_) => None,
+    }
+}
+
+/// The shape of each local of `f`, by index (module docs): a clone's
+/// parameters as [`Known`] records them, constants moved into locals,
+/// closures allocated with a code word, and fields of values of known
+/// shape. Block parameters stay unknown.
+pub(crate) fn shapes(f: &Function, known: &Known) -> Vec<Option<Shape>> {
+    let mut out: Vec<Option<Shape>> = vec![None; f.locals.len()];
+    if let Some(params) = known.shapes.get(&f.key) {
+        for (&p, s) in f.params.iter().zip(params) {
+            if let Some(slot) = out.get_mut(p.index()) {
+                slot.clone_from(s);
+            }
+        }
+    }
+    let operand = |out: &[Option<Shape>], op: &Operand| match op {
+        Operand::Const(c) => Some(Shape::Const(c.clone())),
+        Operand::Local(l) => out.get(l.index()).cloned().flatten(),
+    };
+    // Definitions in block order; a block may read what a later one
+    // defines, so a few passes reach every definition of an inlined body.
+    for _ in 0..4 {
+        let mut changed = false;
+        for b in &f.blocks {
+            for s in &b.stmts {
+                let Stmt::Assign { dst, value } = s else {
+                    continue;
+                };
+                if out.get(dst.index()).is_none_or(Option::is_some) {
+                    continue;
+                }
+                let shape = match value {
+                    Rvalue::Use(op) => operand(&out, op),
+                    Rvalue::Alloc {
+                        layout: LayoutRef::Closure(_),
+                        fields,
+                    } => match fields.split_first() {
+                        Some((Operand::Const(Const::Code(code)), captures)) => {
+                            Some(Shape::Closure {
+                                code: *code,
+                                captures: captures.iter().map(|op| operand(&out, op)).collect(),
+                            })
+                        }
+                        _ => None,
+                    },
+                    Rvalue::Field { base, field, .. } => out
+                        .get(base.index())
+                        .and_then(Option::as_ref)
+                        .and_then(|s| field_shape(s, *field, known)),
+                    Rvalue::Call { .. }
+                    | Rvalue::CallForeign { .. }
+                    | Rvalue::CallRuntime { .. }
+                    | Rvalue::Alloc { .. }
+                    | Rvalue::AllocPlaceholder { .. }
+                    | Rvalue::InitField { .. }
+                    | Rvalue::ReadLayout { .. }
+                    | Rvalue::LoadConst(_)
+                    | Rvalue::Box { .. }
+                    | Rvalue::Unbox { .. }
+                    | Rvalue::Checked { .. }
+                    | Rvalue::Compare { .. }
+                    | Rvalue::FloatArith { .. }
+                    | Rvalue::Bitwise { .. }
+                    | Rvalue::FloatNeg { .. }
+                    | Rvalue::Convert { .. }
+                    | Rvalue::FloatSqrt { .. }
+                    | Rvalue::Wrapping { .. }
+                    | Rvalue::Not(_)
+                    | Rvalue::ReadTag { .. }
+                    | Rvalue::DropReuse { .. }
+                    | Rvalue::AllocReuse { .. } => None,
+                };
+                if let Some(shape) = shape.map(|s| s.bounded(SHAPE_DEPTH))
+                    && let Some(slot) = out.get_mut(dst.index())
+                {
+                    *slot = Some(shape);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    out
+}
+
+/// Whether the clean-up may change the calls of `f`: not a function every
+/// unit that needs it defines the same way (D-918).
+const fn rewrites_calls(key: FnKey) -> bool {
+    !matches!(
+        key,
+        FnKey::ValueShim(_)
+            | FnKey::TupleDictFn { .. }
+            | FnKey::DynForward { .. }
+            | FnKey::Trampoline(_)
+            | FnKey::Entry(_)
+    )
+}
+
+/// An argument of a devirtualized call: the operand, and the
+/// representation it is unboxed to first when the callee takes it raw.
+type DevirtArg = (Operand, Option<Repr>);
+
+/// The call an indirect call of a value of shape `shape` with `args`
+/// becomes (module docs): a function value's function, directly, with the
+/// unboxes its value shim makes; a static closure's code or a known
+/// closure's code, by key, with the closure as `self`. `callee` is the
+/// operand that holds the value.
+fn devirt_call(
+    shape: &Shape,
+    callee: &Operand,
+    args: &[Operand],
+    known: &Known,
+) -> Option<(Callee, Vec<DevirtArg>)> {
+    let arity = args.len().checked_add(1)?;
+    let with_self = |code: FnKey| -> Option<(Callee, Vec<DevirtArg>)> {
+        (known.arity.get(&code) == Some(&arity)).then(|| {
+            let all = std::iter::once((callee.clone(), None))
+                .chain(args.iter().map(|a| (a.clone(), None)))
+                .collect();
+            (Callee::Code(code), all)
+        })
+    };
+    match shape {
+        Shape::Const(Const::FnValue(def)) => {
+            let sig = known.sigs.get(def)?;
+            let fits = sig.params.len() == args.len()
+                && sig.ret == Repr::Value
+                && sig.borrow.is_owned()
+                && sig.abi == crate::ir::Abi::Cheby;
+            fits.then(|| {
+                let all = args
+                    .iter()
+                    .zip(&sig.params)
+                    .map(|(a, &r)| (a.clone(), (r != Repr::Value).then_some(r)))
+                    .collect();
+                (Callee::Direct(*def), all)
+            })
+        }
+        Shape::Const(Const::Static(id)) => match known.statics.get(id) {
+            Some((StaticKind::FnValue, fields)) => match fields.first() {
+                Some(Const::Code(code)) => with_self(*code),
+                _ => None,
+            },
+            _ => None,
+        },
+        Shape::Closure { code, .. } => with_self(*code),
+        Shape::Const(_) => None,
+    }
+}
+
+/// A rewrite [`devirt`] found.
+enum Devirt {
+    /// Statement `stmt` of `block` defines its local as `value`.
+    Value {
+        block: BlockId,
+        stmt: usize,
+        value: Rvalue,
+    },
+    /// The call in statement `at` of `block`, or its tail call when `at`
+    /// is `None`, becomes a call of `callee` with `args`.
+    Call {
+        block: BlockId,
+        at: Option<usize>,
+        callee: Callee,
+        args: Vec<DevirtArg>,
+    },
+}
+
+/// What the shapes of locals settle (design T11; module docs): a field of
+/// a static object, or a closure's capture that is a constant, is that
+/// constant, and a capture of a closure allocated here that is a box or a
+/// constant is that box or constant again; a tag read of a static
+/// constructor is its tag; an indirect call of a value of known shape is
+/// a call of its code ([`devirt_call`]). Returns whether anything changed.
+///
+/// # Errors
+///
+/// An [`Ice`] for an unknown local.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the rewrites of the module docs, found and then applied in order"
+)]
+fn devirt(f: &mut Function, known: &Known) -> Result<bool, Ice> {
+    if !known.devirt || !rewrites_calls(f.key) {
+        return Ok(false);
+    }
+    let candidate = f.blocks.iter().any(|b| {
+        matches!(
+            b.term,
+            Terminator::TailCall {
+                callee: Callee::Indirect(_),
+                ..
+            }
+        ) || b.stmts.iter().any(|s| {
+            matches!(
+                s,
+                Stmt::Assign {
+                    value: Rvalue::Field { .. }
+                        | Rvalue::ReadTag { .. }
+                        | Rvalue::Call {
+                            callee: Callee::Indirect(_),
+                            ..
+                        },
+                    ..
+                }
+            )
+        })
+    });
+    if !candidate {
+        return Ok(false);
+    }
+    let shapes = shapes(f, known);
+    let shape_of = |l: Local| shapes.get(l.index()).and_then(Option::as_ref);
+    // The closures allocated here and the definitions of boxes and
+    // constants, which a capture may be forwarded to.
+    let mut allocs: FxHashMap<Local, &[Operand]> = FxHashMap::default();
+    let mut defs: FxHashMap<Local, &Rvalue> = FxHashMap::default();
+    for b in &f.blocks {
+        for s in &b.stmts {
+            if let Stmt::Assign { dst, value } = s {
+                match value {
+                    Rvalue::Alloc {
+                        layout: LayoutRef::Closure(_),
+                        fields,
+                    } => {
+                        allocs.insert(*dst, fields);
+                    }
+                    Rvalue::Box { .. } | Rvalue::Use(Operand::Const(_)) => {
+                        defs.insert(*dst, value);
+                    }
+                    Rvalue::Use(_)
+                    | Rvalue::Call { .. }
+                    | Rvalue::CallForeign { .. }
+                    | Rvalue::CallRuntime { .. }
+                    | Rvalue::Alloc { .. }
+                    | Rvalue::AllocPlaceholder { .. }
+                    | Rvalue::InitField { .. }
+                    | Rvalue::Field { .. }
+                    | Rvalue::ReadLayout { .. }
+                    | Rvalue::LoadConst(_)
+                    | Rvalue::Unbox { .. }
+                    | Rvalue::Checked { .. }
+                    | Rvalue::Compare { .. }
+                    | Rvalue::FloatArith { .. }
+                    | Rvalue::Bitwise { .. }
+                    | Rvalue::FloatNeg { .. }
+                    | Rvalue::Convert { .. }
+                    | Rvalue::FloatSqrt { .. }
+                    | Rvalue::Wrapping { .. }
+                    | Rvalue::Not(_)
+                    | Rvalue::ReadTag { .. }
+                    | Rvalue::DropReuse { .. }
+                    | Rvalue::AllocReuse { .. } => {}
+                }
+            }
+        }
+    }
+    let mut found: Vec<Devirt> = Vec::new();
+    for (id, b) in f.blocks.iter_enumerated() {
+        for (i, s) in b.stmts.iter().enumerate() {
+            let Stmt::Assign { dst, value } = s else {
+                continue;
+            };
+            match value {
+                Rvalue::Field { base, field, .. } => {
+                    if f.local(*dst)?.repr != Repr::Value {
+                        continue;
+                    }
+                    let forwarded = allocs
+                        .get(base)
+                        .and_then(|fields| fields.get(usize::try_from(*field).ok()?))
+                        .and_then(|op| match op {
+                            Operand::Const(c) => Some(Rvalue::Use(Operand::Const(c.clone()))),
+                            Operand::Local(l) => defs.get(l).map(|&v| v.clone()),
+                        });
+                    let constant =
+                        || match shape_of(*base).and_then(|s| field_shape(s, *field, known)) {
+                            Some(Shape::Const(c)) => Some(Rvalue::Use(Operand::Const(c))),
+                            Some(Shape::Closure { .. }) | None => None,
+                        };
+                    if let Some(value) = forwarded.or_else(constant) {
+                        found.push(Devirt::Value {
+                            block: id,
+                            stmt: i,
+                            value,
+                        });
+                    }
+                }
+                Rvalue::ReadTag {
+                    base: Operand::Local(base),
+                    ty,
+                } => {
+                    if let Some(Shape::Const(Const::StaticCtor(def))) = shape_of(*base)
+                        && let Some(tag) = known.tag(*def, *ty)
+                    {
+                        found.push(Devirt::Value {
+                            block: id,
+                            stmt: i,
+                            value: Rvalue::Use(Operand::Const(Const::Int(i64::from(tag)))),
+                        });
+                    }
+                }
+                Rvalue::Call {
+                    callee: Callee::Indirect(l),
+                    args,
+                } => {
+                    if let Some(shape) = shape_of(*l)
+                        && let Some((callee, args)) =
+                            devirt_call(shape, &Operand::Local(*l), args, known)
+                    {
+                        found.push(Devirt::Call {
+                            block: id,
+                            at: Some(i),
+                            callee,
+                            args,
+                        });
+                    }
+                }
+                Rvalue::Use(_)
+                | Rvalue::Call { .. }
+                | Rvalue::CallForeign { .. }
+                | Rvalue::CallRuntime { .. }
+                | Rvalue::Alloc { .. }
+                | Rvalue::AllocPlaceholder { .. }
+                | Rvalue::InitField { .. }
+                | Rvalue::ReadLayout { .. }
+                | Rvalue::LoadConst(_)
+                | Rvalue::Box { .. }
+                | Rvalue::Unbox { .. }
+                | Rvalue::Checked { .. }
+                | Rvalue::Compare { .. }
+                | Rvalue::FloatArith { .. }
+                | Rvalue::Bitwise { .. }
+                | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
+                | Rvalue::Not(_)
+                | Rvalue::ReadTag { .. }
+                | Rvalue::DropReuse { .. }
+                | Rvalue::AllocReuse { .. } => {}
+            }
+        }
+        if let Terminator::TailCall {
+            callee: Callee::Indirect(l),
+            args,
+        } = &b.term
+            && let Some(shape) = shape_of(*l)
+            && let Some((callee, args)) = devirt_call(shape, &Operand::Local(*l), args, known)
+        {
+            found.push(Devirt::Call {
+                block: id,
+                at: None,
+                callee,
+                args,
+            });
+        }
+    }
+    if found.is_empty() {
+        return Ok(false);
+    }
+    // Later sites first within a block, so earlier indexes stay right.
+    found.reverse();
+    for rewrite in found {
+        match rewrite {
+            Devirt::Value { block, stmt, value } => {
+                if let Some(Stmt::Assign { value: v, .. }) =
+                    f.blocks.get_mut(block).and_then(|b| b.stmts.get_mut(stmt))
+                {
+                    *v = value;
+                }
+            }
+            Devirt::Call {
+                block,
+                at,
+                callee,
+                args,
+            } => {
+                let mut unboxes = Vec::new();
+                let mut operands = Vec::with_capacity(args.len());
+                for (op, raw) in args {
+                    match raw {
+                        Some(to) => {
+                            let u = f.locals.push(LocalDecl {
+                                repr: to,
+                                name: None,
+                                ty: None,
+                            })?;
+                            unboxes.push(Stmt::Assign {
+                                dst: u,
+                                value: Rvalue::Unbox { value: op, to },
+                            });
+                            operands.push(Operand::Local(u));
+                        }
+                        None => operands.push(op),
+                    }
+                }
+                let Some(b) = f.blocks.get_mut(block) else {
+                    continue;
+                };
+                let at_index = at.unwrap_or(b.stmts.len());
+                let pos = b.pos_at(at_index);
+                match at {
+                    Some(i) => {
+                        if let Some(Stmt::Assign {
+                            value: Rvalue::Call { callee: c, args: a },
+                            ..
+                        }) = b.stmts.get_mut(i)
+                        {
+                            *c = callee;
+                            *a = operands;
+                        }
+                    }
+                    None => {
+                        b.term = Terminator::TailCall {
+                            callee,
+                            args: operands,
+                        };
+                    }
+                }
+                b.insert_stmts(at_index, unboxes, pos);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Whether `f` makes an indirect call: what [`devirt`] may settle before
+/// the inliner looks for direct calls.
+#[must_use]
+pub(crate) fn has_indirect_call(f: &Function) -> bool {
+    indirect_calls(f) != 0
+}
+
+/// How many indirect calls `f` makes.
+#[must_use]
+pub(crate) fn indirect_calls(f: &Function) -> usize {
+    f.blocks
+        .iter()
+        .map(|b| {
+            let tail = usize::from(matches!(
+                b.term,
+                Terminator::TailCall {
+                    callee: Callee::Indirect(_),
+                    ..
+                }
+            ));
+            b.stmts
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s,
+                        Stmt::Assign {
+                            value: Rvalue::Call {
+                                callee: Callee::Indirect(_),
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                })
+                .count()
+                .saturating_add(tail)
+        })
+        .fold(0, usize::saturating_add)
 }
 
 /// Removes the blocks the entry does not reach, renumbering the others in
@@ -1049,6 +1726,61 @@ fn renumber(t: &mut Terminator, map: &[Option<BlockId>]) -> Result<(), Ice> {
         | Terminator::Unreachable
         | Terminator::Resume => Ok(()),
     }
+}
+
+/// A jump to a block that holds nothing but a jump without arguments to a
+/// block without parameters goes to that block directly: the values live
+/// into both are the same, so no release moves.
+fn forward_empty(f: &mut Function) -> bool {
+    let n = f.blocks.len();
+    let mut to: Vec<Option<BlockId>> = vec![None; n];
+    for (id, b) in f.blocks.iter_enumerated() {
+        if id.index() == 0 || !b.params.is_empty() || !b.stmts.is_empty() {
+            continue;
+        }
+        if let Terminator::Goto { target, args } = &b.term
+            && args.is_empty()
+            && *target != id
+            && f.blocks.get(*target).is_some_and(|t| t.params.is_empty())
+            && let Some(slot) = to.get_mut(id.index())
+        {
+            *slot = Some(*target);
+        }
+    }
+    // Follow chains of such blocks, never round a cycle of them.
+    let last = |mut b: BlockId| {
+        for _ in 0..n {
+            match to.get(b.index()).copied().flatten() {
+                Some(next) => b = next,
+                None => break,
+            }
+        }
+        b
+    };
+    let mut changed = false;
+    for index in 0..n {
+        let Some(id) = BlockId::from_usize(index) else {
+            break;
+        };
+        let Some(b) = f.blocks.get(id) else {
+            break;
+        };
+        let succs = b.term.successors();
+        let mut term = b.term.clone();
+        for s in succs {
+            if to.get(s.index()).copied().flatten().is_some() {
+                let end = last(s);
+                if end != s && end != id {
+                    term.retarget(s, end);
+                    changed = true;
+                }
+            }
+        }
+        if let Some(b) = f.blocks.get_mut(id) {
+            b.term = term;
+        }
+    }
+    changed
 }
 
 /// A block whose only predecessor jumps to it without arguments joins that
@@ -1142,7 +1874,10 @@ fn dead(f: &mut Function) -> bool {
                     .uses()
                     .iter()
                     .any(|&(l, _)| plain.get(l.index()) != Some(&true));
-                if count(&counts, *dst) != 0 || !is_pure(value) || keeps_alive {
+                if count(&counts, *dst) != 0
+                    || !(is_pure(value) || cannot_panic(value))
+                    || keeps_alive
+                {
                     return true;
                 }
                 for (l, _) in value.uses() {

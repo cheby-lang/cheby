@@ -641,14 +641,16 @@ fn a_function_never_passes_the_bound() {
     for n in 0..200 {
         writeln!(lets, "  let x{} = twice(x{n})", n + 1).unwrap();
     }
+    // The chain starts from a parameter, so the clean-up cannot fold it.
     let source = format!(
         "//! Many calls of a tiny helper.\n\nimport std::int\nimport std::io\n\n\
          fn twice(x: Int) -> Int {{\n  x * 2 % 1000\n}}\n\n\
-         fn main() {{\n  let x0 = 1\n{lets}  io::println(int::show(x200))\n}}\n"
+         fn chain(x0: Int) -> Int {{\n{lets}  x200\n}}\n\n\
+         fn main() {{\n  io::println(int::show(chain(1)))\n}}\n"
     );
     let lowered = lower_source_release(&[("", source.as_str())], false);
     let unit = lowered.unit("app");
-    let main = named(unit, "main");
+    let main = named(unit, "chain");
     assert!(cost(main) <= crate::lower::SPLIT_SIZE, "{}", cost(main));
     let text = dump_function(unit, main).unwrap();
     assert!(text.contains("call app::twice("), "nothing left to inline");
@@ -658,7 +660,11 @@ fn a_function_never_passes_the_bound() {
     );
     // The counted program is valid too.
     let counted = lower_source_release(&[("", source.as_str())], true);
-    assert!(counted.function("app", "app::main").contains("checked rem"));
+    assert!(
+        counted
+            .function("app", "app::chain")
+            .contains("checked rem")
+    );
 }
 
 /// The inliner and its clean-up are deterministic (D-264): the same

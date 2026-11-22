@@ -57,14 +57,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use cheby_codegen_clif::record::CodeRecord;
 use cheby_diag::{Diagnostic, SourceMap};
 use cheby_iface::{Ice, ModuleId, PackageId};
 use cheby_jit::{BatchCx, BatchUnit, Jit, JitOptions};
 use cheby_mir::borrow::{self, BorrowMask};
-use cheby_mir::{FnKey, MirModule, MirOptions, UnitKind};
+use cheby_mir::{FnKey, MirModule, MirOptions, ReleaseOptions, UnitKind};
 use cheby_package::{Manifest, ModulePath};
 use rayon::prelude::*;
 
@@ -477,30 +477,36 @@ impl ReleaseStd {
     }
 }
 
-/// [`ReleaseStd`], computed once per process.
-static RELEASE: OnceLock<Result<Arc<ReleaseStd>, String>> = OnceLock::new();
+/// [`ReleaseStd`] by release levers, computed once per process and levers.
+type ReleaseByLevers = Vec<(ReleaseOptions, Result<Arc<ReleaseStd>, String>)>;
 
-/// Std's release code ([`ReleaseStd`]), computed on the first call of the
-/// process from [`whole_std`].
+/// Std's release code under `levers` ([`ReleaseStd`]), computed on the
+/// first call of the process with those levers from [`whole_std`]: the
+/// levers change std's code as they change the package's.
 ///
 /// # Errors
 ///
 /// An internal error when std does not optimize or infer.
-pub(crate) fn release_std() -> Result<Arc<ReleaseStd>, Ice> {
-    RELEASE
-        .get_or_init(|| {
-            whole_std()
-                .and_then(|whole| compute_release_std(&whole))
-                .map(Arc::new)
-                .map_err(|e| e.message().to_owned())
-        })
-        .clone()
-        .map_err(Ice::new)
+pub(crate) fn release_std(levers: ReleaseOptions) -> Result<Arc<ReleaseStd>, Ice> {
+    static RELEASE: Mutex<ReleaseByLevers> = Mutex::new(Vec::new());
+    let mut done = RELEASE
+        .lock()
+        .map_err(|_| Ice::new("std's release code was poisoned"))?;
+    if let Some((_, found)) = done.iter().find(|(l, _)| *l == levers) {
+        return found.clone().map_err(Ice::new);
+    }
+    let computed = whole_std()
+        .and_then(|whole| compute_release_std(&whole, levers))
+        .map(Arc::new)
+        .map_err(|e| e.message().to_owned());
+    done.push((levers, computed.clone()));
+    drop(done);
+    computed.map_err(Ice::new)
 }
 
-/// Optimizes std's units, infers std's release masks over them and takes
-/// their exports (design T8, T9).
-fn compute_release_std(whole: &WholeStd) -> Result<ReleaseStd, Ice> {
+/// Optimizes std's units under `levers`, infers std's release masks over
+/// them and takes their exports (design T8, T9).
+fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<ReleaseStd, Ice> {
     let front = &whole.front;
     let budget = cheby_mir::inline::InlineBudget::DEFAULT;
     let mut units = whole.units.clone();
@@ -512,6 +518,7 @@ fn compute_release_std(whole: &WholeStd) -> Result<ReleaseStd, Ice> {
             &none,
             defs,
             &budget,
+            cheby_mir::inline::Passes::of(&levers),
             &crate::backend::each_in_parallel,
         )
     })?;
@@ -898,7 +905,7 @@ pub(crate) fn release_records_in_process(
     mir: MirOptions,
 ) -> Result<BTreeMap<String, CodeRecord>, Ice> {
     type Compiled = Arc<BTreeMap<String, CodeRecord>>;
-    static DONE: std::sync::Mutex<Vec<(MirOptions, Compiled)>> = std::sync::Mutex::new(Vec::new());
+    static DONE: Mutex<Vec<(MirOptions, Compiled)>> = Mutex::new(Vec::new());
     let _std = crate::phases::span(crate::phases::Phase::Std);
     let mut done = DONE
         .lock()
@@ -1066,10 +1073,9 @@ pub(crate) fn first_use(
 fn compile_whole(whole: &WholeStd, mir: MirOptions) -> Result<BTreeMap<String, CodeRecord>, Ice> {
     // A release build's std is optimized, its masks inferred over the
     // optimized code (design T9).
-    let release = if is_release(mir) {
-        Some(release_std()?)
-    } else {
-        None
+    let release = match mir.release {
+        Some(levers) if is_release(mir) => Some(release_std(levers)?),
+        Some(_) | None => None,
     };
     let (mut units, by_def) = match &release {
         Some(release) => (release.units.clone(), &release.by_def),

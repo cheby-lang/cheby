@@ -769,7 +769,9 @@ fn optimize_local(units: &mut [MirModule], modules: &ModuleTable, defs: &Defs<'_
     let each = |refs: &mut [&mut MirModule], step: &crate::export::LayerStep<'_>| {
         refs.iter_mut().map(|unit| step(unit)).collect()
     };
-    if let Err(ice) = crate::export::optimize_build(units, &local, &portable, defs, &budget, &each)
+    let passes = crate::inline::Passes::ALL;
+    if let Err(ice) =
+        crate::export::optimize_build(units, &local, &portable, defs, &budget, passes, &each)
     {
         let dumps: Vec<String> = units.iter().filter_map(|u| dump(u).ok()).collect();
         panic!("{ice}\n{}", dumps.join("\n"));

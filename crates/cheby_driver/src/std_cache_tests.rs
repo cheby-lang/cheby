@@ -408,7 +408,7 @@ fn std_cache_masks_whole() {
 /// release masks into its package units.
 #[test]
 fn std_cache_release_exports_and_masks() {
-    let release = std_cache::release_std().unwrap();
+    let release = std_cache::release_std(cheby_mir::ReleaseOptions::ALL).unwrap();
     assert!(!release.named().is_empty(), "no std function borrows");
     assert!(!release.exports().is_empty(), "std exports nothing");
     let borrows: std::collections::BTreeSet<(&str, &str)> = release
@@ -877,8 +877,8 @@ fn std_cache_priv_constant_of_std_is_evaluated() {
 /// `export_bytes_round_trip_instruction_kernels` covers `FloatSqrt`.
 #[test]
 fn std_cache_export_record_round_trips() {
-    let release = std_cache::release_std().unwrap();
-    let made = std_cache::exports_in_process().unwrap();
+    let release = std_cache::release_std(cheby_mir::ReleaseOptions::ALL).unwrap();
+    let made = std_cache::exports_in_process(cheby_mir::ReleaseOptions::ALL).unwrap();
     assert_eq!(made.decoded().unwrap(), *release.exports());
     assert!(!made.bodies().is_empty() && !made.named().is_empty());
     for operation in ["Convert {", "Wrapping {"] {

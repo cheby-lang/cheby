@@ -1671,8 +1671,8 @@ fn lower_through_cache(
     // The release passes run before borrowing is inferred over the units,
     // so the masks describe the optimized code. A release build lowers
     // every package unit here: it reads no package record.
-    if mir.release.is_some_and(|levers| levers.inline) {
-        optimize_release(front, &mut units, std.whole, std_release.as_deref())?;
+    if let Some(levers) = mir.release.filter(|levers| levers.inline) {
+        optimize_release(front, &mut units, std.whole, std_release.as_deref(), levers)?;
     }
     if let Some(unit) = entries {
         tags.push(None);
@@ -1929,6 +1929,7 @@ fn optimize_release(
     units: &mut [MirModule],
     std_whole: bool,
     std: Option<&crate::std_cache::StdExports>,
+    levers: cheby_mir::ReleaseOptions,
 ) -> Result<(), Ice> {
     let none = cheby_mir::export::PortableBodies::new();
     let portable: &dyn cheby_mir::export::PortableSource = std.map_or(&none, |s| s.bodies());
@@ -1943,6 +1944,7 @@ fn optimize_release(
             portable,
             defs,
             &cheby_mir::inline::InlineBudget::DEFAULT,
+            cheby_mir::inline::Passes::of(&levers),
             &each_in_parallel,
         )
     })
