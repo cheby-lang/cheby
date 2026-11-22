@@ -151,3 +151,50 @@ Tried and not kept:
 This settles the first Open item of the decision log's 2026-11-21 session ("Leaving a hole in the
 branch would avoid it"). The log itself is not edited here.
 
+### Sends, spawns and scopes without work they did not need
+
+- `rc::mark_shared`, which every `channel::send` and every spawn calls, built a worklist and pushed
+  a step even for a tagged integer. It now returns at once for a tagged integer, a static object or
+  an object that is already shared, and marks an object whose value fields are all such words
+  without a worklist. Anything else takes the walk from its start, as before, so a big list root is
+  still folded when it is entered.
+- A scope's `nested_slot` and `interrupt` were each a `Mutex<Option<usize>>` that only the opening
+  fiber touches. They are relaxed atomics now.
+- The close takes the timer's lock only for a timed scope, borrows the chain of parents in
+  `outermost_failing` and clones only the scope it returns, and releases its handle through the
+  fiber's own control block, which spares the free a thread-local lookup.
+- The swap of a fiber's context bindings is a load and a store: the field has one writer at a time.
+
+Medians of nine runs against `265d9f20`, read twice:
+
+| Benchmark                | First reading | Second reading |
+| ------------------------ | ------------- | -------------- |
+| `fiber/buffered_4x4`     | −20.3%        | −18.0%         |
+| `fiber/ping_pong`        | −11.6%        | −16.2%         |
+| `fiber/scope_open_close` | −12.1%        | −12.0%         |
+| `fiber/sieve`            | −11.5%        | −10.3%         |
+| `fiber/spawn_join`       | −4.5%         | −3.4%          |
+
+The fiber group's geometric mean is −12.1%. The AOT executables, timed directly, agree within two
+points. Miri on the `alloc` and `rc` groups and the thread sanitizer's runtime step report nothing,
+and the `loom` models pass.
+
+One thing changes that no program can reach: marking a value with no local field allocates no
+scratch memory, so under an exhausted memory budget that step no longer raises the memory limit.
+A budget exists only while a constant is evaluated, where a send or a spawn is already an error
+(E0077). Two runtime tests that used the raise now mark values that still need the walk.
+
+Tried and not kept:
+
+- Allocating the `Ok` and `Err` of a receive and a send through the fiber's control block: 0%.
+- Moving the fast path of `cheby_rt_alloc` out of its guard, with the cache miss out of line:
+  ±0.1% on `time/now_loop` and `rc/string_building`; LLVM still saved three register pairs on
+  entry.
+- Allocating `time::now`'s tuple through the control block: +0.1%.
+- Borrowing the scope's state from its handle in the close, in place of an `Arc` clone: −0.7%, for
+  lifetime reasoning that was not worth it.
+- The channel's send and receive themselves. In `fiber/buffered_4x4` about 40% of the samples are
+  contention on the channel's lock, and in `fiber/ping_pong` the cost is the return after the stack
+  switch, which is assembly. A cheaper `dup` of a shared handle would need `fetch_sub`, which is
+  not safe where a count overflows to static (D-454).
+

@@ -36,6 +36,7 @@
 //! on every path (step 2), and a firing that loses the race to the scope's
 //! end does nothing, since the walk skips an ended scope.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
@@ -75,18 +76,21 @@ pub(crate) struct ScopeState {
     /// which is how a fiber's outermost target is chosen (D-667).
     depth: u32,
     /// The scope's slot among its parent's nested scopes, set by the open
-    /// once it is linked; only the fiber that opened the scope reads it,
-    /// at the close.
-    nested_slot: Mutex<Option<usize>>,
+    /// once it is linked, or [`NO_SLOT`]. Only the fiber that opened the
+    /// scope touches it, at the open and the close, so relaxed loads and
+    /// stores are enough: the switch that moves a fiber to another thread
+    /// orders what it wrote before what it reads there.
+    nested_slot: AtomicUsize,
     /// The timer of a timed scope (D-671), set by the open once the scope
     /// is linked and cancelled by the close (step 2); only the fiber that
     /// opened the scope touches it.
     timer: Mutex<Option<TimerHandle>>,
     /// The signal registry's slot of a scope of `fiber::interruptible`
     /// (D-1073, `sched::signal`), set by `sys_arm_interrupt` in the body
-    /// and taken by the close (step 2); only the fiber that opened the
-    /// scope touches it.
-    interrupt: Mutex<Option<usize>>,
+    /// and taken by the close (step 2), or [`NO_SLOT`]; only the fiber
+    /// that opened the scope touches it, so a relaxed atomic is enough, as
+    /// for `nested_slot`.
+    interrupt: AtomicUsize,
     /// Whether the scope was opened timed, by `fiber::timeout` (D-671),
     /// whatever its deadline: its close's wait is named `fiber::timeout` in
     /// a deadlock report, any other's `fiber::scope` (D-858).
@@ -108,6 +112,15 @@ pub(crate) struct ScopeState {
     /// every way out; only the fiber that opened the scope touches it. A
     /// base scope records nothing.
     saved: ScopeSaved,
+}
+
+/// What `ScopeState::nested_slot` and `ScopeState::interrupt` hold when
+/// they hold no slot.
+const NO_SLOT: usize = usize::MAX;
+
+/// The slot `word` holds, or `None` for [`NO_SLOT`].
+fn slot_of(word: usize) -> Option<usize> {
+    (word != NO_SLOT).then_some(word)
 }
 
 /// The target of a timed scope's timer (D-671): it holds the scope weakly,
@@ -283,9 +296,9 @@ impl ScopeState {
             parent,
             owner,
             depth,
-            nested_slot: Mutex::new(None),
+            nested_slot: AtomicUsize::new(NO_SLOT),
             timer: Mutex::new(None),
-            interrupt: Mutex::new(None),
+            interrupt: AtomicUsize::new(NO_SLOT),
             of_timeout: false,
             base: false,
             root: false,
@@ -404,7 +417,7 @@ impl ScopeState {
                 }
                 index
             };
-            *state.nested_slot.lock() = Some(index);
+            state.nested_slot.store(index, Ordering::Relaxed);
         }
     }
 
@@ -547,8 +560,9 @@ impl ScopeState {
     /// Unlinks the closing scope from its parent's nested scopes.
     fn unlink(&self) {
         if let Some(parent) = &self.parent
-            && let Some(index) = self.nested_slot.lock().take()
+            && let Some(index) = slot_of(self.nested_slot.load(Ordering::Relaxed))
         {
+            self.nested_slot.store(NO_SLOT, Ordering::Relaxed);
             parent.inner.lock().nested.remove(index, self);
         }
     }
@@ -657,16 +671,17 @@ impl ScopeState {
         let Some(runtime) = owner.sched.runtime() else {
             return;
         };
-        let mut slot = self.interrupt.lock();
-        if slot.is_none() {
-            *slot = crate::sched::signal::arm(runtime, self);
+        if slot_of(self.interrupt.load(Ordering::Relaxed)).is_none()
+            && let Some(slot) = crate::sched::signal::arm(runtime, self)
+        {
+            self.interrupt.store(slot, Ordering::Relaxed);
         }
     }
 
     /// Whether the scope is armed for signals (D-1073).
     #[cfg(all(test, unix))]
     pub(crate) fn interrupt_armed(&self) -> bool {
-        self.interrupt.lock().is_some()
+        slot_of(self.interrupt.load(Ordering::Relaxed)).is_some()
     }
 
     /// Whether the scope holds a timer its close has not cancelled yet.
@@ -949,7 +964,12 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_close(
         // (I-B, I-C). No lock is held.
         state.saved.restore(me, !unwound);
         state.unlink();
-        let timer = state.timer.lock().take();
+        // Only a timed scope's open arms a timer.
+        let timer = if state.of_timeout {
+            state.timer.lock().take()
+        } else {
+            None
+        };
         if let Some(timer) = timer {
             timer.cancel();
         }
@@ -957,7 +977,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_close(
         // upgraded it already finds it ended (step 1) and skips it. When
         // the first signal's walk cancelled it (`reached`), the close
         // settles that signal once it has decided (`signal::settle`).
-        let interrupt = state.interrupt.lock().take();
+        let interrupt = slot_of(state.interrupt.load(Ordering::Relaxed));
+        state.interrupt.store(NO_SLOT, Ordering::Relaxed);
         let reached = interrupt.is_some_and(crate::sched::signal::disarm);
         // 3. Decide, after the target (D-769): a
         // cancellation of an enclosing scope reached this fiber when that
@@ -967,7 +988,7 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_close(
         // count. The body's own panic was recorded
         // in this scope when it started, unless an earlier one was; the
         // record is taken either way.
-        if let Some(outer) = cancel::outermost_failing(state.parent().cloned()) {
+        if let Some(outer) = cancel::outermost_failing(state.parent()) {
             cancel::set_target(me, &outer);
         }
         let target = cancel::at_close(me, &state);
@@ -1005,7 +1026,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_scope_close(
             )),
             None => None,
         };
-        drop(handle);
+        // SAFETY: `ctx` is the running fiber's context.
+        unsafe { handle.release_in(ctx) };
         let succeeded = match own_cause.or(unwound_cause) {
             Some(failure) => {
                 me.conc.set_last_failure(failure);

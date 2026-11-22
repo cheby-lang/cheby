@@ -1879,6 +1879,21 @@ unsafe fn check_fast_shape(obj: *mut u8, fast: Fast) {
     }
 }
 
+/// The value fields of `obj` from the free-shape table: the byte offset
+/// of the first and their number, the very words `shape_of` or the
+/// kind's `children` give, in order; `None` where [`fast_shape`] gives
+/// nothing. `rc::mark_shared` reads them to settle a value without its
+/// worklist.
+///
+/// # Safety
+///
+/// `obj` points to a live object.
+#[inline]
+pub(crate) unsafe fn fast_fields(obj: *mut u8) -> Option<(usize, usize)> {
+    // SAFETY: forwarded from the caller.
+    unsafe { fast_shape(obj) }.map(|fast| (fast.first, fast.count))
+}
+
 /// [`fast_shape`] without the debug check.
 ///
 /// # Safety

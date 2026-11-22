@@ -327,7 +327,7 @@ pub(crate) fn check(me: &ExecCtx) -> Result<(), Cancelled> {
 /// channel's other end going away (it unwinds and takes nothing, as a
 /// cancelled wait does, D-670), step 3 of a scope's close (D-667), and a
 /// spawn (D-666). Every other check reads the target alone.
-pub(crate) fn check_chain(me: &ExecCtx, from: Option<Arc<ScopeState>>) -> Result<(), Cancelled> {
+pub(crate) fn check_chain(me: &ExecCtx, from: Option<&Arc<ScopeState>>) -> Result<(), Cancelled> {
     match outermost_failing(from) {
         Some(scope) => {
             set_target(me, &scope);
@@ -339,17 +339,19 @@ pub(crate) fn check_chain(me: &ExecCtx, from: Option<Arc<ScopeState>>) -> Result
 
 /// The outermost scope from `from` up through its parents that has failed
 /// or is being cancelled ([`check_chain`]), each scope's lock taken in turn
-/// and released before the next. Entered with no runtime lock held.
-pub(crate) fn outermost_failing(from: Option<Arc<ScopeState>>) -> Option<Arc<ScopeState>> {
+/// and released before the next. Entered with no runtime lock held. The
+/// walk borrows the chain, which `from` keeps alive through the parents'
+/// references, and takes a reference only to a scope it returns.
+pub(crate) fn outermost_failing(from: Option<&Arc<ScopeState>>) -> Option<Arc<ScopeState>> {
     let mut outermost = None;
     let mut next = from;
     while let Some(scope) = next {
-        next = scope.parent().cloned();
+        next = scope.parent();
         if scope.failing() {
             outermost = Some(scope);
         }
     }
-    outermost
+    outermost.cloned()
 }
 
 /// Publishes the running fiber's wait node, already linked under the lock

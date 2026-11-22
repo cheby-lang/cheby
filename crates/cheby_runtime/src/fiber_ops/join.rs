@@ -50,7 +50,9 @@ pub(crate) unsafe extern "C" fn cheby_fiber_sys_join(ctx: *mut ExecCtx, fiber: W
             // joiner's position too: a fiber that failed because an
             // enclosing scope of the joiner was cancelled can end before
             // the walk reaches the joiner (review finding CONC-W2-1).
-            Ok(Joined::Failed) if cancel::check_chain(me, me.conc.responsible_scope()).is_err() => {
+            Ok(Joined::Failed)
+                if cancel::check_chain(me, me.conc.responsible_scope().as_ref()).is_err() =>
+            {
                 raise_cancel(Some(ctx))
             }
             Ok(Joined::Failed) => {

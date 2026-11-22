@@ -335,8 +335,13 @@ pub(crate) fn bindings_of(me: &ExecCtx) -> Word {
 
 /// Replaces the fiber's bindings word with `word`, whose reference the
 /// field takes, and returns the old one, whose reference the caller gets.
+/// A load and a store, not a swap: the field has one writer at a time
+/// (the fiber, or its spawner before it first runs), so no write can come
+/// between them.
 fn swap_bindings(me: &ExecCtx, word: Word) -> Word {
-    me.context.bindings.swap(word, Ordering::Relaxed)
+    let old = me.context.bindings.load(Ordering::Relaxed);
+    me.context.bindings.store(word, Ordering::Relaxed);
+    old
 }
 
 /// Gives up an owned reference to a bindings word, 0 included. Never
@@ -456,7 +461,9 @@ impl ScopeSaved {
     /// the recorded depth, this half is a load, a load and a test. Never
     /// raises.
     pub(crate) fn restore(&self, me: &ExecCtx, returned: bool) {
-        let saved = self.bindings.swap(0, Ordering::Relaxed);
+        // Only the opening fiber touches the field: a load and a store.
+        let saved = self.bindings.load(Ordering::Relaxed);
+        self.bindings.store(0, Ordering::Relaxed);
         let old = swap_bindings(me, saved);
         if cfg!(debug_assertions) && returned && old != saved {
             fatal(format_args!(
