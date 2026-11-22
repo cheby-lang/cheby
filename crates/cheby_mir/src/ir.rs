@@ -1081,7 +1081,9 @@ impl Stmt {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Callee {
     /// A top-level Cheby function, always through its indirection slot
-    /// (D-043), even in the same module. Its signature is in
+    /// (D-043), even in the same module. Native code generation compiles a
+    /// function's tail call of itself as a jump inside the function
+    /// instead, outside the REPL. Its signature is in
     /// [`MirModule::callees`]. Every argument is owned.
     Direct(DefId),
     /// [`Callee::Direct`] of a function that borrows the parameters its

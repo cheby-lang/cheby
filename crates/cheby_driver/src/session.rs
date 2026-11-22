@@ -359,7 +359,12 @@ impl Session {
             borrow: false,
             ..crate::backend::mir_options_from_env()?
         };
-        let codegen = crate::backend::codegen_options(mir, false);
+        // D-043: a redefinition reaches a running loop, as every
+        // self-recursive call goes through the slot it takes over.
+        let codegen = cheby_codegen_clif::CodegenOptions {
+            slot_self_calls: true,
+            ..crate::backend::codegen_options(mir, false)
+        };
         let mut sources = SourceMap::new();
         let mut diagnostics = Vec::new();
         let root = find_package_root(dir);

@@ -130,6 +130,7 @@ fn build(
         tokens: FxHashSet::default(),
         call_tag: None,
         uncons_slot: None,
+        self_loop: None,
     };
     body(&mut t)?;
     t.b.seal_all_blocks();
@@ -204,6 +205,10 @@ pub(crate) struct Translator<'a, 'f> {
     /// The stack slot where a `list_uncons` writes the element that the
     /// `list_uncons_head` right after it reads, made at the first one.
     pub(crate) uncons_slot: Option<StackSlot>,
+    /// The loop header of a function whose self tail calls jump inside it
+    /// ([`Translator::self_call`]): the block after the entry block that
+    /// takes the parameters after `ctx` and makes the entry check.
+    self_loop: Option<ir::Block>,
 }
 
 /// Where a Cheby-ABI call goes: a known function, or an address with a
@@ -550,9 +555,14 @@ impl Translator<'_, '_> {
         } else {
             (None, None)
         };
+        // A self tail call jumps to a loop header before the entry check,
+        // so every iteration makes the check a call would make. The inner
+        // body of a large frame has no check of its own (D-679), so its
+        // self calls keep going through the outer function.
+        let looping = check == EntryCheck::Frame && self.has_self_tail_call();
         // D-938: the prologue and the entry check at the function's name.
         self.set_pos(self.func.positions.entry);
-        self.entry(check, entry_pad, release.as_ref())?;
+        self.entry(check, entry_pad, release.as_ref(), looping)?;
         // Reverse postorder translates a definition before its uses, as a
         // block's dominators come before it. Unreachable blocks are never
         // translated (their CLIF blocks stay out of the layout): no
@@ -622,11 +632,20 @@ impl Translator<'_, '_> {
     /// parameters itself and branches to the chain's `resume` when it
     /// started an unwinding (D-775); with `entry_pad`,
     /// it unwinds to that pad (D-698).
+    ///
+    /// With `looping`, the entry block only jumps to a loop header that
+    /// takes the parameters after `ctx` as block parameters, and the check
+    /// and everything after it start there: a self tail call jumps to the
+    /// header with its arguments ([`Translator::self_call`]), so it makes
+    /// the entry check again, and with it the yield, cancellation and
+    /// deadline checks (D-028, D-124, D-195, D-453). `ctx` is the same in
+    /// every iteration, as a call passes its own `ctx` on.
     fn entry(
         &mut self,
         check: EntryCheck,
         entry_pad: Option<BlockId>,
         release: Option<&EntryRelease>,
+        looping: bool,
     ) -> Result<(), CodegenError> {
         let entry = self.b.create_block();
         self.b.append_block_params_for_function_params(entry);
@@ -641,6 +660,22 @@ impl Translator<'_, '_> {
             ));
         }
         self.ctx = Some(ctx);
+        let rest = if looping {
+            let header = self.b.create_block();
+            let mut values = Vec::with_capacity(rest.len());
+            for &value in rest {
+                let ty = self.b.func.dfg.value_type(value);
+                values.push(self.b.append_block_param(header, ty));
+            }
+            let args: Vec<BlockArg> = rest.iter().copied().map(BlockArg::Value).collect();
+            self.b.ins().jump(header, &args);
+            self.b.switch_to_block(header);
+            self.self_loop = Some(header);
+            values
+        } else {
+            rest.to_vec()
+        };
+        let rest = rest.as_slice();
         for (&local, &value) in self.func.params.iter().zip(rest) {
             self.bind(local, value)?;
         }
@@ -1425,14 +1460,107 @@ impl Translator<'_, '_> {
         block
     }
 
+    /// Whether a call of `callee` calls the function being translated
+    /// itself, so that as a tail call it may jump to the loop header
+    /// ([`Translator::self_call`]):
+    ///
+    /// - a top-level function calling itself, unless its calls must reach
+    ///   whatever its slot holds: in a REPL session
+    ///   ([`CodegenOptions::slot_self_calls`]), or for an item with a
+    ///   session name, which a redefinition can take over (D-043);
+    /// - a closure's code calling its own `self`, its first parameter, as a
+    ///   local function calls itself by name (D-453). A closure's code is
+    ///   reached only through its own closure object, whose code word is
+    ///   that code, so the call reaches the code being translated.
+    fn is_self_call(&self, callee: &Callee) -> bool {
+        if self.func.abi != Abi::Cheby {
+            return false;
+        }
+        match callee {
+            Callee::Direct(def) | Callee::Borrowing(def, _) => {
+                self.func.key == FnKey::Item(*def)
+                    && !self.opts.slot_self_calls
+                    && self.decls.session_name(*def).is_none()
+            }
+            Callee::Indirect(closure) => {
+                matches!(self.func.key, FnKey::Closure { .. })
+                    && self.func.params.first() == Some(closure)
+            }
+            Callee::Code(_) => false,
+        }
+    }
+
+    /// Whether a block of the function ends with a self tail call
+    /// ([`Translator::is_self_call`]).
+    fn has_self_tail_call(&self) -> bool {
+        self.func.blocks.iter().any(|block| {
+            matches!(&block.term, Terminator::TailCall { callee, .. } if self.is_self_call(callee))
+        })
+    }
+
+    /// A self tail call ([`Translator::is_self_call`]) as a jump to the
+    /// loop header `header` with the arguments, a closure's `self` first,
+    /// as block parameters. The jump passes exactly what the
+    /// `return_call` would pass, minus `ctx`, which does not change, to
+    /// the same code, so counts, borrows and unwinding are as for the call;
+    /// block parameters are assigned all at once, so arguments that permute
+    /// the parameters arrive in place. The header then makes the entry
+    /// check, as the callee's entry would.
+    fn self_call(
+        &mut self,
+        callee: &Callee,
+        args: &[Operand],
+        header: ir::Block,
+    ) -> Result<(), CodegenError> {
+        let mut values = Vec::with_capacity(args.len().saturating_add(1));
+        match callee {
+            Callee::Direct(def) | Callee::Borrowing(def, _) => {
+                let decl = self.unit.callee(*def).ok_or_else(|| {
+                    CodegenError::ice(format!("callee {def:?} has no declaration in its unit"))
+                })?;
+                if decl.sig.borrow != callee.borrow_mask() {
+                    return Err(CodegenError::ice(format!(
+                        "a call of {def:?} with another borrow mask than its declaration"
+                    )));
+                }
+            }
+            Callee::Indirect(closure) => values.push(self.local(*closure)?),
+            Callee::Code(_) => return Err(CodegenError::ice("a self call of code by key")),
+        }
+        values.extend(self.operands(args)?);
+        let params = self.b.block_params(header);
+        let dfg = &self.b.func.dfg;
+        if params.len() != values.len()
+            || params
+                .iter()
+                .zip(&values)
+                .any(|(&p, &v)| dfg.value_type(p) != dfg.value_type(v))
+        {
+            return Err(CodegenError::ice(
+                "a self tail call whose arguments differ from the parameters",
+            ));
+        }
+        let args: Vec<BlockArg> = values.into_iter().map(BlockArg::Value).collect();
+        self.b.ins().jump(header, &args);
+        Ok(())
+    }
+
     /// A Cheby-ABI call; with `tail`, a `return_call` (D-015) that ends
-    /// the block.
+    /// the block, or a jump to the loop header for a self tail call
+    /// ([`Translator::self_call`]).
     fn call(
         &mut self,
         callee: &Callee,
         args: &[Operand],
         tail: bool,
     ) -> Result<Option<Value>, CodegenError> {
+        if tail
+            && let Some(header) = self.self_loop
+            && self.is_self_call(callee)
+        {
+            self.self_call(callee, args, header)?;
+            return Ok(None);
+        }
         let ctx = self.ctx()?;
         let mut vals = vec![ctx];
         // The callee's MIR result, which decides how an unwind edge tests

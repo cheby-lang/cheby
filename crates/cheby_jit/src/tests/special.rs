@@ -118,9 +118,9 @@ fn the_same_recursion_without_tail_calls_overflows() {
 }
 
 /// E2 through closures: a closure that tail-calls itself through `self`
-/// (the uniform convention, `return_call_indirect`) ten million times in
-/// constant stack, unboxing and boxing its counter on the way; nothing
-/// leaks.
+/// (the uniform convention, compiled as a jump to its loop header) ten
+/// million times in constant stack, unboxing and boxing its counter on the
+/// way; nothing leaks.
 #[test]
 #[expect(clippy::too_many_lines, reason = "one hand-built MIR program")]
 fn ten_million_tail_calls_through_a_closure() {

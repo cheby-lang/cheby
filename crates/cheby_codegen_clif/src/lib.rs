@@ -46,7 +46,14 @@
 //! Lowering rules (D-453): every Cheby-ABI function uses Cranelift's
 //! `tail` convention with the hidden `ctx` parameter first, and a tail call
 //! is `return_call` (D-015). Every call of a top-level function loads the
-//! callee's slot (D-043, [`CallMode::Indirect`]). Entry thunks use the
+//! callee's slot (D-043, [`CallMode::Indirect`]), with one exception: a
+//! tail call of a function by itself, a top-level function calling itself
+//! or a closure's code calling its own `self`, is a jump to a loop header
+//! inside the function, placed before the entry check so that every
+//! iteration makes the check. A REPL session keeps a top-level function's
+//! self calls on its slot ([`CodegenOptions::slot_self_calls`]), and the
+//! inner body of a large frame keeps them on the outer function, whose
+//! check it lacks (D-679). Entry thunks use the
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
@@ -224,6 +231,12 @@ pub struct CodegenOptions {
     /// [`CodegenOptions::stack_check`] is set. Tests lower it to split
     /// small functions.
     pub large_frame_threshold: u32,
+    /// Compile a top-level function's tail calls of itself as every other
+    /// call, through its slot, instead of as a jump inside the function.
+    /// A REPL session sets it, so a running loop reaches a redefinition
+    /// that takes over the slot at its next iteration (D-043); `false` by
+    /// default.
+    pub slot_self_calls: bool,
 }
 
 /// The default [`CodegenOptions::large_frame_threshold`]: 64 KiB (D-679).
@@ -241,6 +254,7 @@ impl Default for CodegenOptions {
             checked_rc: false,
             unwind_edges: true,
             large_frame_threshold: LARGE_FRAME_THRESHOLD,
+            slot_self_calls: false,
         }
     }
 }

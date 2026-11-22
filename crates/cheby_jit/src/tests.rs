@@ -1202,6 +1202,7 @@ mod records;
 mod repl;
 mod reuse;
 mod scalars;
+mod self_calls;
 mod special;
 mod std_context;
 mod unwind_flag;
