@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-521, D-1759, D-1774, D-1781
+// @decisions: D-521, D-1759, D-1774, D-1781, D-1783
 //! Lists of `Float` and `F32` read one element at a time: pattern steps
 //! from the front and from the back, and reads at an index, over lists
 //! that only the walk holds and over lists that the caller keeps and walks

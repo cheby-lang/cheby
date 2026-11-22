@@ -613,3 +613,11 @@ Compile time did not pay for it. `cheby build --release` of `hello_world` takes 
 
 Checks behind the round: the whole suite passes on the final code (8,265 tests), with std's own tests in both profiles, the determinism check in both profiles, and every lint of CI. Miri, the address sanitizer and the thread sanitizer passed on `68d73eee`, which holds every runtime change of the round except the shared-leaf step of D-1781; that one passed Miri's list group and the address sanitizer's runtime step on its own.
 
+## 2026-11-23: the two rows that were measured and not built
+
+The round's first report left two rows of the original list measured and not built. Both are built now.
+
+### A list element read as a `Float` in one step (D-1783)
+
+The user chose the narrow form of the ninth row over raw `Float`s in list leaves. When an element is only unboxed to a `Float`, the read gives the number: from a shared leaf, and for an indexed read, with no count update at all. `spectral_norm` at 1100 retires 6.17 G instructions in release where it retired 6.79 G, 9.1% fewer, and 8.4% fewer in debug. `nbody` and `fannkuch_redux` do not move: their loops read no floats out of lists. From a unique leaf the gain is small, since the box is still freed there.
+
