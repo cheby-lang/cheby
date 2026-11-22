@@ -71,31 +71,35 @@ bb2:
   goto bb1()
 }
 
-fn app::middle(borrow _0: value, borrow _1: value) -> value check str#0 {
-  entry unwind bb1
+fn app::middle(_0: value, borrow _1: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:23:4"
 bb0:
   _2: value = box int const int 0
-  _3: value = call_runtime list_push(const empty_list, _2) ; unwind bb1
-  _4: value = call_runtime list_append(_3, borrow _0) ; unwind bb1
-  _5: value = box int const int 99
-  _6: value = call_runtime list_push(_4, _5) ; unwind bb1
-  _7: value = call_runtime list_append(_6, borrow _1) ; unwind bb1
-  return _7
+  _3: value = call_runtime list_prepend(_0, _2) ; unwind bb1
+  _4: value = box int const int 99
+  _5: value = call_runtime list_push(_3, _4) ; unwind bb1
+  _6: value = call_runtime list_append(_5, borrow _1) ; unwind bb1
+  return _6
 bb1:
   resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
-fn app::last(borrow _0: value) -> value check str#0 {
-  entry unwind bb1
+fn app::last(_0: value) -> value check str#0 {
+  entry unwind bb2
   str#0 = "src/main.cheby:27:4"
 bb0:
   _1: value = box int const int 0
-  _2: value = call_runtime list_push(const empty_list, _1) ; unwind bb1
-  _3: value = call_runtime list_append(_2, borrow _0) ; unwind bb1
-  return _3
+  _2: value = call_runtime list_prepend(_0, _1) ; unwind bb1
+  return _2
 bb1:
   resume
+bb2:
+  drop _0
+  goto bb1()
 }
 
 fn app::twice(_0: value) -> value check str#0 {
@@ -113,11 +117,113 @@ bb2:
   goto bb1()
 }
 
+fn app::cons(_0: value, _1: value, _2: value) -> value check str#0 {
+  entry unwind bb4
+  str#0 = "src/main.cheby:35:4"
+bb0:
+  _3: value = call_runtime list_prepend(_2, _1) ; unwind bb2
+  _4: value = call_runtime list_prepend(_3, _0) ; unwind bb1
+  return _4
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _1
+  goto bb2()
+bb4:
+  drop _2
+  goto bb3()
+}
+
+fn app::around(_0: value, _1: int) -> value check str#0 {
+  entry unwind bb2
+  str#0 = "src/main.cheby:39:4"
+bb0:
+  _2: value = box int _1 ; unwind bb2
+  _3: value = call_runtime list_prepend(_0, _2) ; unwind bb1
+  _4: value = box int _1 ; unwind bb3
+  _5: value = call_runtime list_push(_3, _4) ; unwind bb1
+  return _5
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _3
+  goto bb1()
+}
+
+fn app::spreads(_0: value, borrow _1: value) -> value check str#0 {
+  entry unwind bb2
+  str#0 = "src/main.cheby:43:4"
+bb0:
+  _2: value = box int const int 7
+  _3: value = call_runtime list_prepend(_0, _2) ; unwind bb1
+  _4: value = call_runtime list_append(_3, borrow _1) ; unwind bb1
+  return _4
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+}
+
+fn app::shared(_0: value) -> value check str#0 {
+  entry unwind bb2
+  str#0 = "src/main.cheby:47:4"
+bb0:
+  _1: value = box int const int 0
+  dup _0
+  _2: value = call_runtime list_prepend(_0, _1) ; unwind bb2
+  _3: value = alloc tuple/2(_2, _0) ; unwind bb3
+  return _3
+bb1:
+  resume
+bb2:
+  drop _0
+  goto bb1()
+bb3:
+  drop _2
+  goto bb2()
+}
+
+fn app::many(borrow _0: value) -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:51:4"
+bb0:
+  _1: value = box int const int 1
+  _2: value = call_runtime list_push(const empty_list, _1) ; unwind bb1
+  _3: value = box int const int 2
+  _4: value = call_runtime list_push(_2, _3) ; unwind bb1
+  _5: value = box int const int 3
+  _6: value = call_runtime list_push(_4, _5) ; unwind bb1
+  _7: value = box int const int 4
+  _8: value = call_runtime list_push(_6, _7) ; unwind bb1
+  _9: value = box int const int 5
+  _10: value = call_runtime list_push(_8, _9) ; unwind bb1
+  _11: value = box int const int 6
+  _12: value = call_runtime list_push(_10, _11) ; unwind bb1
+  _13: value = box int const int 7
+  _14: value = call_runtime list_push(_12, _13) ; unwind bb1
+  _15: value = box int const int 8
+  _16: value = call_runtime list_push(_14, _15) ; unwind bb1
+  _17: value = box int const int 9
+  _18: value = call_runtime list_push(_16, _17) ; unwind bb1
+  _19: value = call_runtime list_append(_18, borrow _0) ; unwind bb1
+  return _19
+bb1:
+  resume
+}
+
 fn app::main() -> value check str#0 {
   entry unwind bb1
-  str#0 = "src/main.cheby:35:4"
+  str#0 = "src/main.cheby:55:4"
   str#1 = "a"
   str#2 = "b"
+  str#3 = "c"
 bb0:
   _0: value = call app::empty() ; unwind bb1
   drop _0
@@ -139,19 +245,40 @@ bb0:
   _14: value = call_runtime list_push(const empty_list, _13) ; unwind bb1
   _15: value = box int const int 2
   _16: value = call_runtime list_push(const empty_list, _15) ; unwind bb4
-  _17: value = call app::middle(borrow _14, borrow _16) ; unwind bb5
-  drop _14
+  _17: value = call app::middle(_14, borrow _16) ; unwind bb5
   drop _16
   drop _17
   _18: value = box int const int 1
   _19: value = call_runtime list_push(const empty_list, _18) ; unwind bb1
-  _20: value = call app::last(borrow _19) ; unwind bb6
-  drop _19
+  _20: value = call app::last(_19) ; unwind bb1
   drop _20
   _21: value = box int const int 1
   _22: value = call_runtime list_push(const empty_list, _21) ; unwind bb1
   _23: value = call app::twice(_22) ; unwind bb1
   drop _23
+  _27: value = call_runtime list_push(const empty_list, const str#3) ; unwind bb1
+  _28: value = call app::cons(const str#1, const str#2, _27) ; unwind bb1
+  drop _28
+  _29: value = box int const int 1
+  _30: value = call_runtime list_push(const empty_list, _29) ; unwind bb1
+  _31: value = call app::around(_30, const int 2) ; unwind bb1
+  drop _31
+  _32: value = box int const int 1
+  _33: value = call_runtime list_push(const empty_list, _32) ; unwind bb1
+  _34: value = box int const int 2
+  _35: value = call_runtime list_push(const empty_list, _34) ; unwind bb6
+  _36: value = call app::spreads(_33, borrow _35) ; unwind bb7
+  drop _35
+  drop _36
+  _37: value = box int const int 1
+  _38: value = call_runtime list_push(const empty_list, _37) ; unwind bb1
+  _39: value = call app::shared(_38) ; unwind bb1
+  drop _39
+  _40: value = box int const int 10
+  _41: value = call_runtime list_push(const empty_list, _40) ; unwind bb1
+  _42: value = call app::many(borrow _41) ; unwind bb8
+  drop _41
+  drop _42
   return const nil
 bb1:
   resume
@@ -166,9 +293,15 @@ bb4:
   goto bb1()
 bb5:
   drop _16
-  goto bb4()
+  goto bb1()
 bb6:
-  drop _19
+  drop _33
+  goto bb1()
+bb7:
+  drop _35
+  goto bb1()
+bb8:
+  drop _41
   goto bb1()
 }
 
@@ -177,6 +310,11 @@ callee app::elements(int) -> value
 callee app::strings(value) -> value
 callee app::push_found(value, value) -> value
 callee app::first(value, borrow value) -> value
-callee app::middle(borrow value, borrow value) -> value
-callee app::last(borrow value) -> value
+callee app::middle(value, borrow value) -> value
+callee app::last(value) -> value
 callee app::twice(value) -> value
+callee app::cons(value, value, value) -> value
+callee app::around(value, int) -> value
+callee app::spreads(value, borrow value) -> value
+callee app::shared(value) -> value
+callee app::many(borrow value) -> value

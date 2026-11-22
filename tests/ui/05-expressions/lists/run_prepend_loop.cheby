@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-157, D-1757
+//! A loop that conses 100_000 elements with `[n, ..acc]` builds the list
+//! in order: each literal prepends onto the list the last one made, which
+//! nothing else holds (§5.13).
+
+import std::io
+import std::list
+
+fn build(n: Int, acc: List<Int>) -> List<Int> {
+  case n {
+    0 => acc
+    _ => build(n - 1, [n, ..acc])
+  }
+}
+
+fn main() {
+  let xs = build(100_000, [])
+  let n = list::length(xs)
+  let first = list::get(xs, 0)
+  let second = list::get(xs, 1)
+  let last = list::get(xs, n - 1)
+  let total = list::fold(xs, 0, fn(acc, x) { acc + x })
+  let ordered = list::fold(xs, (0, True), fn((prev, ok), x) { (x, ok && x == prev + 1) })
+  let (_, in_order) = ordered
+  io::println("{n} {first:?} {second:?} {last:?} {total} {in_order}")
+}

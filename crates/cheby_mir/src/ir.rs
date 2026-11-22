@@ -1386,8 +1386,9 @@ pub enum RuntimeFn {
     ListUnconsHead,
     /// `(list owned, elem owned) -> List`: adds `elem` at the front, in
     /// place when the list is unique, as [`Self::ListPush`] does at the
-    /// end. Result owned. Only the body of `std::list`'s `prepend` has it
-    /// (`lower::intrinsic`, D-1758).
+    /// end. Result owned. The body of `std::list`'s `prepend` is one
+    /// (`lower::intrinsic`, D-1758), and a list literal prepends the
+    /// elements before its first spread onto it (`lower::list`).
     ListPrepend,
 }
 

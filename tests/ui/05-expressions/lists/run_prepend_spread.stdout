@@ -1,0 +1,41 @@
+evaluating a
+evaluating xs
+4: 1 10 20 30
+evaluating a
+evaluating b
+evaluating xs
+5: 1 2 10 20 30
+evaluating a
+evaluating xs
+evaluating b
+5: 1 10 20 30 2
+evaluating a
+evaluating xs
+evaluating ys
+5: 1 10 20 30 40
+evaluating xs
+evaluating a
+4: 10 20 30 1
+evaluating xs
+evaluating ys
+4: 10 20 30 40
+evaluating 1
+evaluating 2
+evaluating 3
+evaluating 4
+evaluating 5
+evaluating 6
+evaluating 7
+evaluating 8
+evaluating 9
+evaluating xs
+12: 1 2 3 4 5 6 7 8 9 10 20 30
+evaluating a
+evaluating b
+evaluating xs
+2: 1 2
+1: 0
+4: 0 10 20 30
+5: 1 2 10 20 30
+3: 10 20 30
+5: 7 8 0 1 2

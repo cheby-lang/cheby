@@ -1,0 +1,40 @@
+// @mode: run-fail
+// @decisions: D-120, D-157, D-449
+//! A panic in the middle element of `[a, b, c, ..xs]` comes after the
+//! first element is evaluated and before the later items are: the elements
+//! held for the spread are released, and nothing after the panic runs
+//! (§5.13, §11.6).
+
+import std::io
+import std::list
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn traced(label: String, xs: List<Int>) -> List<Int> {
+  io::println("evaluating {label}")
+  xs
+}
+
+fn boom(n: Int) -> Int {
+  io::println("evaluating boom")
+  case n {
+    0 => panic as "boom in the middle"
+    _ => n
+  }
+}
+
+fn build(n: Int, xs: List<Int>) -> List<Int> {
+  [trace("a", 1), boom(n), trace("c", 3), ..traced("xs", xs)]
+}
+
+fn main() {
+  let xs = [10, 20]
+  let ok = build(2, xs)
+  let n = list::length(ok)
+  io::println("{n}")
+  let _ = build(0, xs)
+  io::println("not reached")
+}
