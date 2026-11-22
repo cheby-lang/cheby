@@ -39,6 +39,10 @@ pub enum KeyKind {
     /// A package index (a hint, D-962), over the package root's absolute
     /// path and the command family.
     Index,
+    /// Std's export record (design T15): what a release build takes from
+    /// std besides its code, under the build ID and std's release
+    /// settings.
+    Export,
 }
 
 impl KeyKind {
@@ -57,6 +61,7 @@ impl KeyKind {
             Self::CObj => "cobj",
             Self::NativeLib => "nlib",
             Self::Index => "index",
+            Self::Export => "export",
         }
     }
 }

@@ -27,6 +27,11 @@
 //!   each other's bodies, and std's release masks are inferred over the
 //!   optimized code ([`ReleaseStd`]), so std has one release code per
 //!   lever set. Its exports are the bodies a package's units inline.
+//! - **The export record** (design T15): std's exports and release masks,
+//!   what a release build needs from std besides std's release code
+//!   records, lie in one record under the build ID and std's release
+//!   settings ([`exports`]), so a warm release command, like a warm debug
+//!   one, parses, checks, lowers and optimizes no std module.
 //! - **One code per module and settings** (D-958, D-980): each std
 //!   module's code record lies under [`std_code_key`], the build ID, the
 //!   module's path, `BuildKind::Std` with the command's other settings
@@ -67,6 +72,12 @@ use crate::cache::front::FrontRecord;
 use crate::cache::{BuildId, BuildKind, CacheLog, Key, KeyKind, Settings, StoreShare};
 use crate::frontend::{self, Frontend};
 use crate::{Error, Module, Package, parse_file, std_lib};
+
+mod exports;
+
+pub(crate) use exports::{StdExports, std_exports};
+#[cfg(test)]
+pub(crate) use exports::{in_process as exports_in_process, std_export_key};
 
 /// Whether a front end reads std's front records instead of parsing std
 /// (D-980); `load_set.rs`'s walk reads a std hit's summaries
@@ -842,27 +853,28 @@ pub(crate) fn std_masks_in(front: &Frontend) -> Result<borrow::Masks, Ice> {
     Ok(masks)
 }
 
-/// Std's release masks ([`ReleaseStd`]) by def of `front`, found by name:
-/// what a release build writes into its package units, whose inlined std
-/// bodies may call std functions that borrow (design T9, refining D-787
-/// and D-968's rule that the package calls only std's `pub` functions,
-/// which never borrow). A name `front` cannot see is skipped: no unit of
-/// the build can call it.
+/// Std's release masks ([`ReleaseStd`]), as `exports` holds them, by def
+/// of `front`, found by name: what a release build writes into its package
+/// units, whose inlined std bodies may call std functions that borrow
+/// (design T9, refining D-787 and D-968's rule that the package calls only
+/// std's `pub` functions, which never borrow). A name `front` cannot see
+/// is skipped: no unit of the build can call it.
 ///
 /// # Errors
 ///
-/// [`release_std`]'s errors, and an internal error when a name cannot be
-/// read.
-pub(crate) fn std_release_masks_in(front: &Frontend) -> Result<borrow::Masks, Ice> {
-    let release = release_std()?;
-    let names: Vec<(&str, &str)> = release
-        .named
+/// An internal error when a name cannot be read.
+pub(crate) fn std_release_masks_in(
+    front: &Frontend,
+    exports: &StdExports,
+) -> Result<borrow::Masks, Ice> {
+    let names: Vec<(&str, &str)> = exports
+        .named()
         .iter()
         .map(|(module, item, _)| (module.as_str(), item.as_str()))
         .collect();
     let found = crate::borrowing::with_build_defs(front, |defs| borrow::find_defs(&names, defs))?;
     let mut masks = borrow::Masks::new();
-    for ((_, _, mask), def) in release.named.iter().zip(found) {
+    for ((_, _, mask), def) in exports.named().iter().zip(found) {
         if let Some(def) = def {
             masks.insert(def, *mask);
         }

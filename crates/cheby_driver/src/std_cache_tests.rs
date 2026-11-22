@@ -867,3 +867,82 @@ fn std_cache_priv_constant_of_std_is_evaluated() {
         "{from_records:?}"
     );
 }
+
+/// Design T15: std's export record gives back every std export and std's
+/// release masks as `ReleaseStd` holds them, its bytes are a function of
+/// what it holds, and a damaged or cut record decodes to nothing (a miss).
+#[test]
+fn std_cache_export_record_round_trips() {
+    let release = std_cache::release_std().unwrap();
+    let made = std_cache::exports_in_process().unwrap();
+    assert_eq!(made.decoded().unwrap(), *release.exports());
+    assert!(!made.bodies().is_empty() && !made.named().is_empty());
+    // Every body alone, then the whole record.
+    for (name, body) in release.exports() {
+        let one: cheby_mir::export::PortableBodies =
+            std::iter::once((name.clone(), body.clone())).collect();
+        let bytes = cheby_mir::export::encode_bodies(&one);
+        assert_eq!(
+            cheby_mir::export::decode_bodies(&bytes).unwrap(),
+            one,
+            "{}::{}",
+            name.0,
+            name.1
+        );
+    }
+    let payload = made.encode();
+    let back = std_cache::StdExports::decode(&payload).unwrap();
+    assert!(back.same(&made));
+    assert_eq!(back.named(), made.named());
+    assert_eq!(back.encode(), payload);
+    // A body is decoded alone, as a build asks for it.
+    let encoded =
+        cheby_mir::export::EncodedBodies::read(cheby_mir::export::encode_bodies(release.exports()))
+            .unwrap();
+    assert_eq!(encoded.decode_all().unwrap(), *release.exports());
+    for (name, body) in release.exports() {
+        assert_eq!(encoded.get(name).unwrap().as_ref(), Some(body));
+    }
+    let absent = (Box::from("std::nothing"), Box::from("nothing"));
+    assert_eq!(encoded.get(&absent).unwrap(), None);
+    assert!(std_cache::StdExports::decode(&payload[..payload.len() - 1]).is_none());
+    let sealed = cache::front::sealed(payload);
+    for at in [0, sealed.len() / 2, sealed.len() - 1] {
+        let mut damaged = sealed.clone();
+        damaged[at] ^= 0x40;
+        assert!(
+            cache::front::unsealed(&damaged)
+                .and_then(std_cache::StdExports::decode)
+                .is_none(),
+            "byte {at}"
+        );
+    }
+}
+
+/// Design T15: the export record's key holds std's release settings, so
+/// each lever set has its own record and a debug build's settings name
+/// none of them.
+#[test]
+fn std_cache_export_key_follows_the_release_settings() {
+    let mir = cheby_mir::MirOptions {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..cheby_mir::MirOptions::default()
+    };
+    let settings = std_settings(&borrowing::settings(BuildKind::Std, mir));
+    let key = std_cache::std_export_key(BUILD, &settings);
+    assert_eq!(key, std_cache::std_export_key(BUILD, &settings));
+    let other = Settings {
+        release: None,
+        ..settings.clone()
+    };
+    assert_ne!(key, std_cache::std_export_key(BUILD, &other));
+    let fewer = Settings {
+        release: Some(cheby_mir::ReleaseOptions {
+            clif: false,
+            ..cheby_mir::ReleaseOptions::ALL
+        }),
+        ..settings.clone()
+    };
+    assert_ne!(key, std_cache::std_export_key(BUILD, &fewer));
+    assert_ne!(key, std_cache::std_export_key(BuildId([13; 16]), &settings));
+}

@@ -1661,11 +1661,18 @@ fn lower_through_cache(
         tags.push(Some(at));
         units.push(unit);
     }
+    // Design T15: what a release build takes from std besides std's code,
+    // its exports and release masks, read once from std's export record.
+    let std_release = if std.whole && crate::std_cache::is_release(std.mir) {
+        Some(crate::std_cache::std_exports(front, std.mir)?)
+    } else {
+        None
+    };
     // The release passes run before borrowing is inferred over the units,
     // so the masks describe the optimized code. A release build lowers
     // every package unit here: it reads no package record.
     if mir.release.is_some_and(|levers| levers.inline) {
-        optimize_release(front, &mut units, std.whole)?;
+        optimize_release(front, &mut units, std.whole, std_release.as_deref())?;
     }
     if let Some(unit) = entries {
         tags.push(None);
@@ -1707,8 +1714,10 @@ fn lower_through_cache(
         // Design T9: a release build's package units may call std
         // functions that borrow, from std bodies they inlined, so they get
         // std's release masks by name too (refining D-787 and D-968).
-        if std.whole && crate::std_cache::is_release(std.mir) && std.mir.borrows() {
-            by_def.extend(crate::std_cache::std_release_masks_in(front)?);
+        if let Some(exports) = &std_release
+            && std.mir.borrows()
+        {
+            by_def.extend(crate::std_cache::std_release_masks_in(front, exports)?);
         }
         records::infer_with(front, &mut units, facts, &by_def, &|unit, facts| {
             cx.masks_for(unit, facts, std.whole)
@@ -1904,7 +1913,8 @@ fn lower_through_cache(
 /// The release profile's `inline` lever over lowered `units` (design T6,
 /// T8, T9): the units inlined as one build, layer by layer, each unit
 /// taking the bodies of the units it calls and, with `std_whole`, std's
-/// bodies by name from std's release code ([`crate::std_cache::ReleaseStd`]),
+/// bodies by name from `std`, std's export record
+/// ([`crate::std_cache::StdExports`]),
 /// and every function cleaned up; each unit is then checked as lowered
 /// again ([`cheby_mir::export::optimize_build`]). With `std_whole`,
 /// std's units come from std's records and are not among `units`; a
@@ -1914,14 +1924,14 @@ fn lower_through_cache(
 /// optimized. The units of a layer run in parallel; each one's result
 /// depends on the layers before it only, and the first error in build
 /// order is reported (D-264).
-fn optimize_release(front: &Frontend, units: &mut [MirModule], std_whole: bool) -> Result<(), Ice> {
-    let release = if std_whole {
-        Some(crate::std_cache::release_std()?)
-    } else {
-        None
-    };
+fn optimize_release(
+    front: &Frontend,
+    units: &mut [MirModule],
+    std_whole: bool,
+    std: Option<&crate::std_cache::StdExports>,
+) -> Result<(), Ice> {
     let none = cheby_mir::export::PortableBodies::new();
-    let portable = release.as_ref().map_or(&none, |r| r.exports());
+    let portable: &dyn cheby_mir::export::PortableSource = std.map_or(&none, |s| s.bodies());
     let selected = |unit: &MirModule| match unit.unit {
         UnitKind::Code(module) | UnitKind::Tests(module) => !(std_whole && is_std(front, module)),
         UnitKind::Entries => false,

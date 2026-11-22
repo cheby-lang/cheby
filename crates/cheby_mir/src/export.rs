@@ -38,9 +38,10 @@
 //! reading build's interfaces, so the body names that build's defs. The
 //! locals lose their source names and types, which belong to the other
 //! front end and which nothing after lowering needs (`hoist` ran, and
-//! borrowing reads only the parameters' types, D-715's rule 5). The form
-//! holds no pointer into a front end besides those defs, so a later cache
-//! record can store it.
+//! borrowing reads only the parameters' types, D-715's rule 5), and
+//! their spans name the other front end's files. The form holds nothing
+//! of a front end besides those defs, so the build cache stores std's in
+//! its export record ([`encode_bodies`], design T15).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -351,12 +352,15 @@ pub struct PortableBody {
 
 impl PortableBody {
     /// `body` with its defs named through `defs`, the interfaces of the
-    /// front end it was lowered in.
+    /// front end it was lowered in, in the form its bytes keep: its locals
+    /// lose their names and types, its functions their spans and sites
+    /// (module docs).
     ///
     /// # Errors
     ///
     /// An [`Ice`] if `defs` cannot name a def the body names.
-    pub fn of(body: Exported, defs: &Defs<'_>) -> Result<Self, Ice> {
+    pub fn of(mut body: Exported, defs: &Defs<'_>) -> Result<Self, Ice> {
+        bytes::portable_form(&mut body);
         let mut names = Vec::new();
         for def in defs_of(&body)? {
             let (module, item) = crate::borrow::def_text(def, defs)?;
@@ -459,6 +463,30 @@ impl PortableBody {
 /// them.
 pub type PortableBodies = BTreeMap<(Box<str>, Box<str>), PortableBody>;
 
+/// Where a build's inliner finds portable bodies by the module path and
+/// item of their function ([`BuildBodies`]): in memory
+/// ([`PortableBodies`]) or in their bytes, each decoded when it is asked
+/// for ([`EncodedBodies`], design T15). Both give the same bodies.
+pub trait PortableSource: Sync {
+    /// Whether the source holds no body.
+    fn is_empty(&self) -> bool;
+
+    /// The body of `name`'s function imported through `defs`
+    /// ([`PortableBody::import`]); `None` when there is none or it does
+    /// not import.
+    fn import(&self, name: &(Box<str>, Box<str>), defs: &Defs<'_>) -> Option<Exported>;
+}
+
+impl PortableSource for PortableBodies {
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+
+    fn import(&self, name: &(Box<str>, Box<str>), defs: &Defs<'_>) -> Option<Exported> {
+        self.get(name)?.import(defs).ok().flatten()
+    }
+}
+
 /// The exports of `units` ([`exports`]) as portable bodies, named
 /// through `defs`, the interfaces of the front end that lowered them.
 ///
@@ -490,7 +518,7 @@ pub fn portable_exports(
 /// not import is not inlined.
 pub struct BuildBodies<'d, 'a> {
     own: BTreeMap<DefId, Arc<Exported>>,
-    portable: &'d PortableBodies,
+    portable: &'d dyn PortableSource,
     defs: &'d Defs<'a>,
     /// The portable bodies imported so far, by def: an import is a function
     /// of the body and the interfaces, so the order of the requests cannot
@@ -502,7 +530,7 @@ impl std::fmt::Debug for BuildBodies<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BuildBodies")
             .field("own", &self.own.len())
-            .field("portable", &self.portable.len())
+            .field("portable", &!self.portable.is_empty())
             .finish_non_exhaustive()
     }
 }
@@ -510,7 +538,7 @@ impl std::fmt::Debug for BuildBodies<'_, '_> {
 impl<'d, 'a> BuildBodies<'d, 'a> {
     /// No exports of the build yet, and `portable`'s bodies.
     #[must_use]
-    pub fn new(portable: &'d PortableBodies, defs: &'d Defs<'a>) -> Self {
+    pub fn new(portable: &'d dyn PortableSource, defs: &'d Defs<'a>) -> Self {
         Self {
             own: BTreeMap::new(),
             portable,
@@ -541,8 +569,7 @@ impl crate::inline::Bodies for BuildBodies<'_, '_> {
         }
         let found = crate::borrow::def_text(def, self.defs)
             .ok()
-            .and_then(|key| self.portable.get(&key))
-            .and_then(|portable| portable.import(self.defs).ok().flatten())
+            .and_then(|key| self.portable.import(&key, self.defs))
             .map(Arc::new);
         imported.insert(def, found.clone());
         found
@@ -574,7 +601,7 @@ pub type LayerRun<'r> =
 pub fn optimize_build(
     units: &mut [MirModule],
     selected: &dyn Fn(&MirModule) -> bool,
-    portable: &PortableBodies,
+    portable: &dyn PortableSource,
     defs: &Defs<'_>,
     budget: &InlineBudget,
     each: &LayerRun<'_>,
@@ -915,3 +942,7 @@ fn for_operands_mut(value: &mut Rvalue, f: &mut dyn FnMut(&mut Operand)) {
         | Rvalue::DropReuse { .. } => {}
     }
 }
+
+mod bytes;
+
+pub use bytes::{EncodedBodies, PLACEHOLDER_SPAN, decode_bodies, encode_bodies};

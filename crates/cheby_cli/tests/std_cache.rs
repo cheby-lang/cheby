@@ -431,3 +431,80 @@ fn std_cache_expect_panics_at_its_call_on_every_run() {
     assert_eq!(warm.out.stderr, EXPECT_PANIC);
     assert!(warm.lines("parse.std").is_empty(), "{:?}", warm.log);
 }
+
+/// Design T15: a warm `cheby run --release` reads std's export record and
+/// std's release code records, so it parses, checks, lowers and optimizes
+/// no std module; a damaged export record is a miss that the command
+/// computes again and rewrites, so the command after it hits.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn std_cache_release_reads_the_export_record() {
+    let s = Scratch::new("release");
+    let app = s.package("app", JSON);
+    let cache = s.path().join("cache");
+    let run = |n: u32| {
+        cheby(
+            &app,
+            &["run", "--release"],
+            &cache,
+            &s.path().join(format!("{n}.log")),
+        )
+    };
+    let first = run(1);
+    assert_eq!(first.out.status, Some(0), "{}", first.out.stderr);
+    assert_eq!(
+        first.lines("export.std"),
+        ["export.std release miss"],
+        "{:?}",
+        first.log
+    );
+    assert!(!first.lines("parse.std").is_empty(), "{:?}", first.log);
+    let second = run(2);
+    assert_eq!(
+        second.lines("export.std"),
+        ["export.std release hit"],
+        "{:?}",
+        second.log
+    );
+    assert!(second.lines("parse.std").is_empty(), "{:?}", second.log);
+    assert!(second.misses("code.std").is_empty(), "{:?}", second.log);
+    assert!(second.misses("front.std").is_empty(), "{:?}", second.log);
+    assert_eq!(first.out.stdout, second.out.stdout);
+    assert_eq!(first.out.stderr, second.out.stderr);
+    // The record's file is named by its key, which the log names.
+    let key = second
+        .lines("key")
+        .into_iter()
+        .find_map(|l| l.strip_prefix("key export.std release "))
+        .unwrap()
+        .to_owned();
+    let path = cache
+        .join("v1")
+        .join("rec")
+        .join(key.get(..2).unwrap())
+        .join(&key);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0x40;
+    std::fs::write(&path, &bytes).unwrap();
+    let third = run(3);
+    assert_eq!(
+        third.lines("export.std"),
+        ["export.std release miss"],
+        "{:?}",
+        third.log
+    );
+    assert!(!third.lines("parse.std").is_empty(), "{:?}", third.log);
+    assert_eq!(first.out.stdout, third.out.stdout);
+    let fourth = run(4);
+    assert_eq!(
+        fourth.lines("export.std"),
+        ["export.std release hit"],
+        "{:?}",
+        fourth.log
+    );
+    assert!(fourth.lines("parse.std").is_empty(), "{:?}", fourth.log);
+}

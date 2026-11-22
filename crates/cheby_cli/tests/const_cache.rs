@@ -220,7 +220,7 @@ fn const_cache_warm_run_parses_no_constant_module() {
 /// The profile changes every code key and no constant key (`--release`):
 /// a release run after a debug run of one package hits every constant,
 /// reads and writes no package record (no `code.run`, `facts`, `masks` or
-/// `key` line), and compiles std for itself (`parse.std`). A second
+/// package `key` line), and compiles std for itself (`parse.std`). A second
 /// release run hits std's release records and parses no std module, a
 /// release run with a lever off compiles std again, and a debug run after
 /// them still hits its own records. Every run prints what the first
@@ -247,7 +247,13 @@ fn const_cache_release_shares_constants_and_no_code() {
     same_output(&debug, &release);
     assert_eq!(release.lines("const "), every(&LINES, "hit"));
     for prefix in ["code.run ", "code.plain ", "facts ", "masks ", "key "] {
-        assert_eq!(release.lines(prefix), Vec::<String>::new(), "{prefix}");
+        // Std's export record is std's, not the package's (design T15).
+        let lines: Vec<String> = release
+            .lines(prefix)
+            .into_iter()
+            .filter(|l| !l.starts_with("key export.std "))
+            .collect();
+        assert_eq!(lines, Vec::<String>::new(), "{prefix}");
     }
     assert!(!release.lines("parse.std ").is_empty(), "{:?}", release.log);
     let again = cheby(&dir, &["run", "--release"], &cache, &log(3), &[]);
