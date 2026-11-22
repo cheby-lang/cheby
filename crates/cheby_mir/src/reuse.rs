@@ -1048,6 +1048,9 @@ pub fn decisions(module: &MirModule, function: &Function) -> Result<Vec<ReuseDec
                 | Rvalue::FloatArith { .. }
                 | Rvalue::Bitwise { .. }
                 | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
                 | Rvalue::Not(_)
                 | Rvalue::ReadTag { .. }
                 | Rvalue::DropReuse { .. } => continue,

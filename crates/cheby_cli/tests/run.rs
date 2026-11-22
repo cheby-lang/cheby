@@ -1898,6 +1898,267 @@ fn indexed_list_steps_allocate_nothing() {
     }
 }
 
+/// Every std kernel that is an instruction (`cheby_mir::kernels_instr`),
+/// called directly, gives what its kernel gives through a function value,
+/// which calls the wrapper: on the edges of each type and on 500
+/// pseudo-random inputs from a fixed seed, in both profiles. Constants
+/// evaluated with the instruction agree too (D-537). Results are compared
+/// by their text, which tells `-0.0` from `0.0` and NaN from any number;
+/// `cheby_codegen_clif`'s `instr_kernels_tests` compares the bits.
+#[test]
+fn instruction_kernels_compute_what_their_kernels_compute() {
+    let dir = package(
+        "instruction_kernels",
+        &[
+            (
+                "cheby.toml",
+                "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n",
+            ),
+            ("src/main.cheby", INSTRUCTION_KERNELS),
+        ],
+    );
+    for args in [&["run"][..], &["run", "--release"][..]] {
+        let out = cheby(&dir, args);
+        assert_eq!(out.stderr, "", "{args:?}");
+        assert_eq!(
+            out.stdout, "82 kernels, 51929 inputs, 0 missed, constants True\n",
+            "{args:?}"
+        );
+        assert_eq!(out.status, Some(0), "{args:?}");
+    }
+}
+
+/// The program of [`instruction_kernels_compute_what_their_kernels_compute`].
+const INSTRUCTION_KERNELS: &str = r#"//! Every std kernel that is an instruction, called directly, against its kernel through
+//! a function value, which calls the wrapper.
+
+import std::f32
+import std::float
+import std::i16
+import std::i32
+import std::i64
+import std::i8
+import std::int
+import std::io
+import std::list
+import std::u16
+import std::u32
+import std::u64
+import std::u8
+
+/// A constant evaluated with the instruction (D-537).
+const root_two: Float = float::sqrt(2.0)
+
+/// A conversion that rounds, as a constant.
+const rounded: Float = float::from_int(9_007_199_254_740_993)
+
+/// The number of inputs and how many of them `direct` and `kernel` show
+/// differently.
+fn misses<A, B>(
+  xs: List<A>,
+  direct: fn(A) -> B,
+  kernel: fn(A) -> B,
+  show: fn(B) -> String,
+) -> (Int, Int) {
+  list::fold(xs, (0, 0), fn((n, missed), x) {
+    case show(direct(x)) == show(kernel(x)) {
+      True => (n + 1, missed)
+      False => (n + 1, missed + 1)
+    }
+  })
+}
+
+/// [`misses`] of a function of two arguments, over every pair of `xs` and
+/// its reverse.
+fn misses2<A>(
+  xs: List<A>,
+  direct: fn(A, A) -> A,
+  kernel: fn(A, A) -> A,
+  show: fn(A) -> String,
+) -> (Int, Int) {
+  let pairs = list::zip(xs, list::reverse(xs))
+  misses(pairs, fn((a, b)) { direct(a, b) }, fn((a, b)) { kernel(a, b) }, show)
+}
+
+/// `n` pseudo-random words after `state`, from a 64-bit LCG.
+fn words(state: U64, n: Int, out: List<U64>) -> List<U64> {
+  case n {
+    0 => out
+    _ => {
+      let product = u64::wrapping_mul(state, 6_364_136_223_846_793_005)
+      let next = u64::wrapping_add(product, 1_442_695_040_888_963_407)
+      words(next, n - 1, list::push(out, next ^ (next >> 29)))
+    }
+  }
+}
+
+/// Pseudo-random floats of every magnitude, with the edges of `Float` and
+/// of `F32`'s range.
+fn floats(ws: List<U64>) -> List<Float> {
+  let scales = [1.0e-320, 1.0e-300, 1.0e-40, 1.0e-19, 1.0, 1.0e19, 1.0e38, 1.0e300]
+  let random = list::flat_map(scales, fn(s) {
+    list::map(ws, fn(w) { float::from_i64(i64::wrapping_from_u64(w)) * s })
+  })
+  let edges = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    0.5,
+    1.0 / 0.0,
+    -1.0 / 0.0,
+    0.0 / 0.0,
+    float::max_value,
+    float::min_value,
+    5.0e-324,
+    2.2250738585072014e-308,
+    3.4028234663852886e38,
+    3.4028235677973366e38,
+    3.4028235677973367e38,
+    1.401298464324817e-45,
+    7.006492321624085e-46,
+    16_777_217.0,
+    0.1,
+  ]
+  list::append(edges, random)
+}
+
+fn main() {
+  let ws = words(42, 500, [])
+  let ints = list::append(
+    [0, 1, -1, int::min_value, int::max_value, 9_007_199_254_740_993, 16_777_217],
+    list::map(ws, int::wrapping_from_u64),
+  )
+  let i8s =
+    list::append([0, 1, -1, i8::min_value, i8::max_value], list::map(ws, i8::wrapping_from_u64))
+  let i16s =
+    list::append([0, 1, -1, i16::min_value, i16::max_value], list::map(ws, i16::wrapping_from_u64))
+  let i32s = list::append(
+    [0, 1, -1, i32::min_value, i32::max_value, 16_777_217],
+    list::map(ws, i32::wrapping_from_u64),
+  )
+  let i64s = list::append(
+    [0, 1, -1, i64::min_value, i64::max_value, 9_007_199_254_740_993],
+    list::map(ws, i64::wrapping_from_u64),
+  )
+  let u8s = list::append([0, 1, u8::max_value], list::map(ws, u8::wrapping_from_u64))
+  let u16s = list::append([0, 1, u16::max_value], list::map(ws, u16::wrapping_from_u64))
+  let u32s = list::append([0, 1, u32::max_value, 16_777_217], list::map(ws, u32::wrapping_from_u64))
+  let u64s = list::append(
+    [
+      0,
+      1,
+      u64::max_value,
+      9_223_372_036_854_775_808,
+      9_223_372_036_854_775_809,
+      18_446_744_073_709_550_593,
+    ],
+    ws,
+  )
+  let fs = floats(ws)
+  let f32s = list::map(fs, f32::from_float)
+  let results = [
+    misses(fs, fn(x) { f32::from_float(x) }, f32::from_float, f32::show),
+    misses(ints, fn(x) { f32::from_int(x) }, f32::from_int, f32::show),
+    misses(i8s, fn(x) { f32::from_i8(x) }, f32::from_i8, f32::show),
+    misses(i16s, fn(x) { f32::from_i16(x) }, f32::from_i16, f32::show),
+    misses(i32s, fn(x) { f32::from_i32(x) }, f32::from_i32, f32::show),
+    misses(i64s, fn(x) { f32::from_i64(x) }, f32::from_i64, f32::show),
+    misses(u8s, fn(x) { f32::from_u8(x) }, f32::from_u8, f32::show),
+    misses(u16s, fn(x) { f32::from_u16(x) }, f32::from_u16, f32::show),
+    misses(u32s, fn(x) { f32::from_u32(x) }, f32::from_u32, f32::show),
+    misses(u64s, fn(x) { f32::from_u64(x) }, f32::from_u64, f32::show),
+    misses(f32s, fn(x) { float::from_f32(x) }, float::from_f32, float::show),
+    misses(ints, fn(x) { float::from_int(x) }, float::from_int, float::show),
+    misses(i8s, fn(x) { float::from_i8(x) }, float::from_i8, float::show),
+    misses(i16s, fn(x) { float::from_i16(x) }, float::from_i16, float::show),
+    misses(i32s, fn(x) { float::from_i32(x) }, float::from_i32, float::show),
+    misses(i64s, fn(x) { float::from_i64(x) }, float::from_i64, float::show),
+    misses(u8s, fn(x) { float::from_u8(x) }, float::from_u8, float::show),
+    misses(u16s, fn(x) { float::from_u16(x) }, float::from_u16, float::show),
+    misses(u32s, fn(x) { float::from_u32(x) }, float::from_u32, float::show),
+    misses(u64s, fn(x) { float::from_u64(x) }, float::from_u64, float::show),
+    misses(fs, fn(x) { float::sqrt(x) }, float::sqrt, float::show),
+    misses(i8s, fn(x) { i16::from_i8(x) }, i16::from_i8, i16::show),
+    misses(u8s, fn(x) { i16::from_u8(x) }, i16::from_u8, i16::show),
+    misses(i8s, fn(x) { i32::from_i8(x) }, i32::from_i8, i32::show),
+    misses(i16s, fn(x) { i32::from_i16(x) }, i32::from_i16, i32::show),
+    misses(u8s, fn(x) { i32::from_u8(x) }, i32::from_u8, i32::show),
+    misses(u16s, fn(x) { i32::from_u16(x) }, i32::from_u16, i32::show),
+    misses(ints, fn(x) { i64::from_int(x) }, i64::from_int, i64::show),
+    misses(i8s, fn(x) { i64::from_i8(x) }, i64::from_i8, i64::show),
+    misses(i16s, fn(x) { i64::from_i16(x) }, i64::from_i16, i64::show),
+    misses(i32s, fn(x) { i64::from_i32(x) }, i64::from_i32, i64::show),
+    misses(u8s, fn(x) { i64::from_u8(x) }, i64::from_u8, i64::show),
+    misses(u16s, fn(x) { i64::from_u16(x) }, i64::from_u16, i64::show),
+    misses(u32s, fn(x) { i64::from_u32(x) }, i64::from_u32, i64::show),
+    misses(i8s, fn(x) { int::from_i8(x) }, int::from_i8, int::show),
+    misses(i16s, fn(x) { int::from_i16(x) }, int::from_i16, int::show),
+    misses(i32s, fn(x) { int::from_i32(x) }, int::from_i32, int::show),
+    misses(u8s, fn(x) { int::from_u8(x) }, int::from_u8, int::show),
+    misses(u16s, fn(x) { int::from_u16(x) }, int::from_u16, int::show),
+    misses(u32s, fn(x) { int::from_u32(x) }, int::from_u32, int::show),
+    misses(u8s, fn(x) { u16::from_u8(x) }, u16::from_u8, u16::show),
+    misses(u8s, fn(x) { u32::from_u8(x) }, u32::from_u8, u32::show),
+    misses(u16s, fn(x) { u32::from_u16(x) }, u32::from_u16, u32::show),
+    misses(u8s, fn(x) { u64::from_u8(x) }, u64::from_u8, u64::show),
+    misses(u16s, fn(x) { u64::from_u16(x) }, u64::from_u16, u64::show),
+    misses(u32s, fn(x) { u64::from_u32(x) }, u64::from_u32, u64::show),
+    misses2(ints, fn(a, b) { int::wrapping_add(a, b) }, int::wrapping_add, int::show),
+    misses2(ints, fn(a, b) { int::wrapping_sub(a, b) }, int::wrapping_sub, int::show),
+    misses2(ints, fn(a, b) { int::wrapping_mul(a, b) }, int::wrapping_mul, int::show),
+    misses(ints, fn(x) { int::wrapping_neg(x) }, int::wrapping_neg, int::show),
+    misses2(i8s, fn(a, b) { i8::wrapping_add(a, b) }, i8::wrapping_add, i8::show),
+    misses2(i8s, fn(a, b) { i8::wrapping_sub(a, b) }, i8::wrapping_sub, i8::show),
+    misses2(i8s, fn(a, b) { i8::wrapping_mul(a, b) }, i8::wrapping_mul, i8::show),
+    misses(i8s, fn(x) { i8::wrapping_neg(x) }, i8::wrapping_neg, i8::show),
+    misses2(i16s, fn(a, b) { i16::wrapping_add(a, b) }, i16::wrapping_add, i16::show),
+    misses2(i16s, fn(a, b) { i16::wrapping_sub(a, b) }, i16::wrapping_sub, i16::show),
+    misses2(i16s, fn(a, b) { i16::wrapping_mul(a, b) }, i16::wrapping_mul, i16::show),
+    misses(i16s, fn(x) { i16::wrapping_neg(x) }, i16::wrapping_neg, i16::show),
+    misses2(i32s, fn(a, b) { i32::wrapping_add(a, b) }, i32::wrapping_add, i32::show),
+    misses2(i32s, fn(a, b) { i32::wrapping_sub(a, b) }, i32::wrapping_sub, i32::show),
+    misses2(i32s, fn(a, b) { i32::wrapping_mul(a, b) }, i32::wrapping_mul, i32::show),
+    misses(i32s, fn(x) { i32::wrapping_neg(x) }, i32::wrapping_neg, i32::show),
+    misses2(i64s, fn(a, b) { i64::wrapping_add(a, b) }, i64::wrapping_add, i64::show),
+    misses2(i64s, fn(a, b) { i64::wrapping_sub(a, b) }, i64::wrapping_sub, i64::show),
+    misses2(i64s, fn(a, b) { i64::wrapping_mul(a, b) }, i64::wrapping_mul, i64::show),
+    misses(i64s, fn(x) { i64::wrapping_neg(x) }, i64::wrapping_neg, i64::show),
+    misses2(u8s, fn(a, b) { u8::wrapping_add(a, b) }, u8::wrapping_add, u8::show),
+    misses2(u8s, fn(a, b) { u8::wrapping_sub(a, b) }, u8::wrapping_sub, u8::show),
+    misses2(u8s, fn(a, b) { u8::wrapping_mul(a, b) }, u8::wrapping_mul, u8::show),
+    misses(u8s, fn(x) { u8::wrapping_neg(x) }, u8::wrapping_neg, u8::show),
+    misses2(u16s, fn(a, b) { u16::wrapping_add(a, b) }, u16::wrapping_add, u16::show),
+    misses2(u16s, fn(a, b) { u16::wrapping_sub(a, b) }, u16::wrapping_sub, u16::show),
+    misses2(u16s, fn(a, b) { u16::wrapping_mul(a, b) }, u16::wrapping_mul, u16::show),
+    misses(u16s, fn(x) { u16::wrapping_neg(x) }, u16::wrapping_neg, u16::show),
+    misses2(u32s, fn(a, b) { u32::wrapping_add(a, b) }, u32::wrapping_add, u32::show),
+    misses2(u32s, fn(a, b) { u32::wrapping_sub(a, b) }, u32::wrapping_sub, u32::show),
+    misses2(u32s, fn(a, b) { u32::wrapping_mul(a, b) }, u32::wrapping_mul, u32::show),
+    misses(u32s, fn(x) { u32::wrapping_neg(x) }, u32::wrapping_neg, u32::show),
+    misses2(u64s, fn(a, b) { u64::wrapping_add(a, b) }, u64::wrapping_add, u64::show),
+    misses2(u64s, fn(a, b) { u64::wrapping_sub(a, b) }, u64::wrapping_sub, u64::show),
+    misses2(u64s, fn(a, b) { u64::wrapping_mul(a, b) }, u64::wrapping_mul, u64::show),
+    misses(u64s, fn(x) { u64::wrapping_neg(x) }, u64::wrapping_neg, u64::show),
+  ]
+  let (checked, missed) = list::fold(results, (0, 0), fn((n, m), (a, b)) { (n + a, m + b) })
+  let sqrt = float::sqrt
+  let from_int = float::from_int
+  let constants = case float::show(root_two) == float::show(sqrt(2.0)) {
+    True => float::show(rounded) == float::show(from_int(9_007_199_254_740_993))
+    False => False
+  }
+  list::each(list::enumerate(results), fn((i, (n, m))) {
+    case m {
+      0 => Nil
+      _ => io::println("{i}: {m} of {n}")
+    }
+  })
+  let kernels = list::length(results)
+  io::println("{kernels} kernels, {checked} inputs, {missed} missed, constants {constants}")
+}
+"#;
+
 /// The program of [`indexed_list_steps_allocate_nothing`].
 const INDEXED_LIST_STEPS: &str = r#"//! Reversals of a prefix of a list of ten numbers with `list::get` and `list::set`.
 

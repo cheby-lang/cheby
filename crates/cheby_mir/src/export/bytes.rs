@@ -14,7 +14,9 @@
 //! The bodies come one after the other, each under its name and with its
 //! length, so a reader decodes only the bodies a build asks for
 //! ([`EncodedBodies`]). Integers are little-endian; a count or a length is
-//! a `u32`; an enum is a tag byte in declaration order, then its fields.
+//! a `u32`; an enum is a tag byte in declaration order, then its fields,
+//! except that the rvalues `Convert`, `FloatSqrt` and `Wrapping`, added
+//! later, take the tags after the last one.
 //! The decoder never panics and never preallocates from a count it read:
 //! malformed bytes are an [`Ice`], which the cache reads as a miss.
 
@@ -36,8 +38,9 @@ use crate::repr::{CType, ForeignSig, Repr};
 
 /// The first bytes of [`encode_bodies`].
 const MAGIC: &[u8; 4] = b"CBXB";
-/// The version of the form.
-const VERSION: u8 = 1;
+/// The version of the form: 2 added the operations of the instruction
+/// kernels (`crate::kernels_instr`).
+const VERSION: u8 = 2;
 
 /// The span of every function of a body in [`portable_form`]: the
 /// exporter's spans name files of its own source map, which no reader
@@ -620,6 +623,26 @@ impl Writer {
             Rvalue::FloatNeg { value, repr } => {
                 self.u8(16);
                 self.operand(value);
+                self.repr(*repr);
+            }
+            // The operations of the instruction kernels came later: their
+            // tags follow the others', so those keep their values.
+            Rvalue::Convert { value, from, to } => {
+                self.u8(21);
+                self.operand(value);
+                self.repr(*from);
+                self.repr(*to);
+            }
+            Rvalue::FloatSqrt { value, repr } => {
+                self.u8(22);
+                self.operand(value);
+                self.repr(*repr);
+            }
+            Rvalue::Wrapping { op, lhs, rhs, repr } => {
+                self.u8(23);
+                self.arith(*op);
+                self.operand(lhs);
+                self.operand(rhs);
                 self.repr(*repr);
             }
             Rvalue::Not(op) => {
@@ -1361,6 +1384,21 @@ impl<'a> Reader<'a> {
                 layout: self.layout()?,
                 fields: self.operands()?,
             },
+            21 => Rvalue::Convert {
+                value: self.operand()?,
+                from: self.repr()?,
+                to: self.repr()?,
+            },
+            22 => Rvalue::FloatSqrt {
+                value: self.operand()?,
+                repr: self.repr()?,
+            },
+            23 => Rvalue::Wrapping {
+                op: self.arith()?,
+                lhs: self.operand()?,
+                rhs: self.operand()?,
+                repr: self.repr()?,
+            },
             _ => return None,
         })
     }
@@ -1535,6 +1573,83 @@ mod tests {
         for (n, &kind) in PanicKind::ALL.iter().enumerate() {
             assert_eq!(usize::try_from(kind.code()).ok(), Some(n), "{kind:?}");
         }
+    }
+
+    /// A body with each operation of the instruction kernels
+    /// (`crate::kernels_instr`) decodes to itself. Std's exports cover
+    /// `Convert` and `Wrapping` too, but no exported std body takes a
+    /// square root.
+    #[test]
+    fn export_bytes_round_trip_instruction_kernels() {
+        let def = DefId::new(ModuleId::from_u32(1), DefIndex::from_u32(0));
+        let mut b = crate::builder::FunctionBuilder::new(
+            FnKey::Item(def),
+            Abi::Cheby,
+            Repr::Value,
+            PLACEHOLDER_SPAN,
+        )
+        .unwrap();
+        let n = b.add_param(Repr::I8, None, None).unwrap();
+        let x = b.add_param(Repr::Float, None, None).unwrap();
+        let wide = b
+            .assign(
+                Repr::Int,
+                Rvalue::Convert {
+                    value: Operand::Local(n),
+                    from: Repr::I8,
+                    to: Repr::Int,
+                },
+            )
+            .unwrap();
+        let product = b
+            .assign(
+                Repr::Int,
+                Rvalue::Wrapping {
+                    op: ArithOp::Mul,
+                    lhs: Operand::Local(wide),
+                    rhs: Operand::Const(Const::Int(-3)),
+                    repr: Repr::Int,
+                },
+            )
+            .unwrap();
+        let root = b
+            .assign(
+                Repr::Float,
+                Rvalue::FloatSqrt {
+                    value: Operand::Local(x),
+                    repr: Repr::Float,
+                },
+            )
+            .unwrap();
+        let _ = product;
+        let boxed = b
+            .assign(
+                Repr::Value,
+                Rvalue::Box {
+                    value: Operand::Local(root),
+                    from: Repr::Float,
+                },
+            )
+            .unwrap();
+        b.terminate(Terminator::Return(Operand::Local(boxed)))
+            .unwrap();
+        let mut body = Exported {
+            def,
+            function: b.finish().unwrap(),
+            closures: Vec::new(),
+            shared: Vec::new(),
+            statics: Vec::new(),
+            source: None,
+        };
+        portable_form(&mut body);
+        let portable = PortableBody {
+            body,
+            names: vec![(def, "app".into(), "f".into())],
+        };
+        let bodies: PortableBodies =
+            std::iter::once(((Box::from("app"), Box::from("f")), portable)).collect();
+        let bytes = encode_bodies(&bodies);
+        assert_eq!(decode_bodies(&bytes).unwrap(), bodies);
     }
 
     #[test]

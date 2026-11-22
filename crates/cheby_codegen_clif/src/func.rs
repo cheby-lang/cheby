@@ -1118,6 +1118,9 @@ impl Translator<'_, '_> {
                 let v = self.operand(value)?;
                 self.b.ins().fneg(v)
             }
+            Rvalue::Convert { value, from, to } => self.convert(value, *from, *to)?,
+            Rvalue::FloatSqrt { value, .. } => self.sqrt(value)?,
+            Rvalue::Wrapping { op, lhs, rhs, repr } => self.wrapping(*op, lhs, rhs, *repr)?,
             Rvalue::Not(value) => {
                 let v = self.operand(value)?;
                 self.b.ins().bxor_imm_u(v, 1)

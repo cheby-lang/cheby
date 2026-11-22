@@ -123,6 +123,8 @@ mod data;
 mod decls;
 mod error;
 mod func;
+#[cfg(test)]
+mod instr_kernels_tests;
 pub mod isa;
 pub mod jit_unit;
 mod layout;

@@ -871,12 +871,25 @@ fn std_cache_priv_constant_of_std_is_evaluated() {
 /// Design T15: std's export record gives back every std export and std's
 /// release masks as `ReleaseStd` holds them, its bytes are a function of
 /// what it holds, and a damaged or cut record decodes to nothing (a miss).
+/// Std's exports use the `Convert` and `Wrapping` of the instruction
+/// kernels (`cheby_mir::kernels_instr`), so the round trips cover their
+/// tags; no exported std body takes a square root, and `cheby_mir`'s
+/// `export_bytes_round_trip_instruction_kernels` covers `FloatSqrt`.
 #[test]
 fn std_cache_export_record_round_trips() {
     let release = std_cache::release_std().unwrap();
     let made = std_cache::exports_in_process().unwrap();
     assert_eq!(made.decoded().unwrap(), *release.exports());
     assert!(!made.bodies().is_empty() && !made.named().is_empty());
+    for operation in ["Convert {", "Wrapping {"] {
+        assert!(
+            release
+                .exports()
+                .values()
+                .any(|body| format!("{body:?}").contains(operation)),
+            "no std export uses {operation}"
+        );
+    }
     // Every body alone, then the whole record.
     for (name, body) in release.exports() {
         let one: cheby_mir::export::PortableBodies =

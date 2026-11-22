@@ -584,8 +584,8 @@ fn named<'u>(unit: &'u MirModule, item: &str) -> &'u Function {
 
 /// The helper of cheby-compare's `spectral_norm`: inlined into the loop, its
 /// result's box and the loop's unbox cancel, so the loop boxes only what
-/// it returns. The kernel call it makes keeps its unwind edge after
-/// counting (D-698).
+/// it returns. Its `float::from_int` is a conversion, with no call and no
+/// unwind edge (`crate::kernels_instr`).
 #[test]
 fn a_float_helper_inlines_to_no_box() {
     let counted = program(true);
@@ -594,10 +594,8 @@ fn a_float_helper_inlines_to_no_box() {
     assert!(!row.contains("app::a_of"), "{row}");
     assert_eq!(row.matches("box float").count(), 1, "{row}");
     assert!(!row.contains("unbox"), "{row}");
-    assert!(
-        row.contains("call_foreign \"cheby_float_from_int\"") && row.contains("; unwind"),
-        "{row}"
-    );
+    assert!(row.contains("= convert int float "), "{row}");
+    assert!(!row.contains("call_foreign"), "{row}");
 }
 
 /// A function in a cycle of the call graph is never inlined: every loop

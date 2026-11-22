@@ -436,6 +436,9 @@ fn in_place_call(
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. }
         | Rvalue::DropReuse { .. }
@@ -540,6 +543,9 @@ fn constants(f: &Function, incoming: &BTreeMap<Local, Vec<Option<Local>>>) -> BT
                 | Rvalue::FloatArith { .. }
                 | Rvalue::Bitwise { .. }
                 | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
                 | Rvalue::Not(_)
                 | Rvalue::ReadTag { .. }
                 | Rvalue::DropReuse { .. } => None,
@@ -1089,6 +1095,9 @@ impl<'f> Flow<'f> {
             | Rvalue::FloatArith { .. }
             | Rvalue::Bitwise { .. }
             | Rvalue::FloatNeg { .. }
+            | Rvalue::Convert { .. }
+            | Rvalue::FloatSqrt { .. }
+            | Rvalue::Wrapping { .. }
             | Rvalue::Not(_)
             | Rvalue::ReadTag { .. }
             | Rvalue::DropReuse { .. } => false,

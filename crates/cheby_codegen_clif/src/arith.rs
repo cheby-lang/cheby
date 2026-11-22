@@ -1,9 +1,13 @@
 //! Scalar operations (E1, D6): checked integer arithmetic (§3.3, §5.4.6,
 //! D-025, D-069), comparisons with the float rules of §3.3.2 and D-527,
-//! IEEE float arithmetic, and bitwise operators.
+//! IEEE float arithmetic, and bitwise operators. Also the std kernels that
+//! are instructions (`cheby_mir::kernels_instr`): conversions that cannot
+//! fail, the square root and wrapping arithmetic, each one Cranelift
+//! instruction, or none for `Int` and `I64`, which are the same word.
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{self, InstBuilder, Value};
+use cranelift_codegen::ir::{self, InstBuilder, Value, types};
+use cranelift_frontend::FunctionBuilder;
 
 use cheby_mir::{ArithOp, BitOp, CmpOp, Operand, PanicKind, Repr, StrId};
 
@@ -23,7 +27,89 @@ const fn signedness(repr: Repr) -> Option<bool> {
     }
 }
 
+/// [`cheby_mir::Rvalue::Convert`] of `v`, a raw `from`, into `to`.
+/// An integer widens by `sextend` from a signed type and `uextend` from
+/// an unsigned one, and stays as it is at the same width (`Int` and
+/// `I64`). An integer becomes a float by `fcvt_from_sint` or
+/// `fcvt_from_uint`, which round to nearest, ties to even, as Rust's `as`
+/// does in the kernels (D-359). `fpromote` and `fdemote` convert between
+/// `F32` and `Float`. None of these is a libcall on the targets of
+/// D-921: `fcvt_from_uint` of a 64-bit integer is a short sequence on
+/// x86-64, one instruction on aarch64.
+pub(crate) fn convert(
+    b: &mut FunctionBuilder<'_>,
+    v: Value,
+    from: Repr,
+    to: Repr,
+) -> Result<Value, CodegenError> {
+    if !from.converts_exactly(to) {
+        return Err(unsupported(&format!("a conversion from {from} to {to}")));
+    }
+    let to_ty = repr_type(to);
+    Ok(match (signedness(from), to) {
+        (Some(_), _) if to_ty == repr_type(from) => v,
+        (Some(true), Repr::Float | Repr::F32) => b.ins().fcvt_from_sint(to_ty, v),
+        (Some(false), Repr::Float | Repr::F32) => b.ins().fcvt_from_uint(to_ty, v),
+        (Some(true), _) => b.ins().sextend(to_ty, v),
+        (Some(false), _) => b.ins().uextend(to_ty, v),
+        (None, Repr::Float) => b.ins().fpromote(types::F64, v),
+        (None, _) => b.ins().fdemote(types::F32, v),
+    })
+}
+
+/// [`cheby_mir::Rvalue::Wrapping`]: `a op c` at the width of the integer
+/// `repr`, modulo 2^width (D-025), as Rust's `wrapping_` methods compute
+/// it in the kernels.
+pub(crate) fn wrapping(
+    b: &mut FunctionBuilder<'_>,
+    op: ArithOp,
+    a: Value,
+    c: Value,
+    repr: Repr,
+) -> Result<Value, CodegenError> {
+    signedness(repr).ok_or_else(|| unsupported(&format!("wrapping arithmetic on {repr}")))?;
+    Ok(match op {
+        ArithOp::Add => b.ins().iadd(a, c),
+        ArithOp::Sub => b.ins().isub(a, c),
+        ArithOp::Mul => b.ins().imul(a, c),
+        ArithOp::Div | ArithOp::Rem | ArithOp::Shl | ArithOp::Shr => {
+            return Err(unsupported(&format!("wrapping {}", op.name())));
+        }
+    })
+}
+
 impl Translator<'_, '_> {
+    /// [`cheby_mir::Rvalue::Convert`] of `value` ([`convert`]).
+    pub(crate) fn convert(
+        &mut self,
+        value: &Operand,
+        from: Repr,
+        to: Repr,
+    ) -> Result<Value, CodegenError> {
+        let v = self.operand(value)?;
+        convert(&mut self.b, v, from, to)
+    }
+
+    /// [`cheby_mir::Rvalue::FloatSqrt`] of `value`: `sqrt`, IEEE 754's
+    /// square root, as `f64::sqrt` computes it in the kernel.
+    pub(crate) fn sqrt(&mut self, value: &Operand) -> Result<Value, CodegenError> {
+        let v = self.operand(value)?;
+        Ok(self.b.ins().sqrt(v))
+    }
+
+    /// [`cheby_mir::Rvalue::Wrapping`] of `lhs` and `rhs` ([`wrapping`]).
+    pub(crate) fn wrapping(
+        &mut self,
+        op: ArithOp,
+        lhs: &Operand,
+        rhs: &Operand,
+        repr: Repr,
+    ) -> Result<Value, CodegenError> {
+        let a = self.operand(lhs)?;
+        let c = self.operand(rhs)?;
+        wrapping(&mut self.b, op, a, c, repr)
+    }
+
     /// An integer constant of type `ty` with the value `n` (wrapped to the
     /// width), as Cranelift wants narrow immediates.
     fn int_const(&mut self, ty: ir::Type, n: i64) -> Value {

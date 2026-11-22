@@ -427,6 +427,9 @@ fn rvalue_local_only(value: &Rvalue, out: &mut FxHashSet<Local>) {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. } => {}
     }
@@ -722,6 +725,21 @@ impl<'c> Copier<'c> {
             },
             Rvalue::FloatNeg { value, repr } => Rvalue::FloatNeg {
                 value: self.operand(value)?,
+                repr: *repr,
+            },
+            Rvalue::Convert { value, from, to } => Rvalue::Convert {
+                value: self.operand(value)?,
+                from: *from,
+                to: *to,
+            },
+            Rvalue::FloatSqrt { value, repr } => Rvalue::FloatSqrt {
+                value: self.operand(value)?,
+                repr: *repr,
+            },
+            Rvalue::Wrapping { op, lhs, rhs, repr } => Rvalue::Wrapping {
+                op: *op,
+                lhs: self.operand(lhs)?,
+                rhs: self.operand(rhs)?,
                 repr: *repr,
             },
             Rvalue::Not(op) => Rvalue::Not(self.operand(op)?),
@@ -1283,6 +1301,9 @@ pub(crate) fn is_callee(unit: &MirModule, f: &Function) -> bool {
                 | Rvalue::FloatArith { .. }
                 | Rvalue::Bitwise { .. }
                 | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
                 | Rvalue::Not(_)
                 | Rvalue::ReadTag { .. }
                 | Rvalue::DropReuse { .. }

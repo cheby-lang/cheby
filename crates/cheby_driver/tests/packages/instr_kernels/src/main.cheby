@@ -1,0 +1,48 @@
+//! Std kernels that are instructions: a float case, an integer case and
+//! the pull of the comparison's n-body.
+
+import std::float
+import std::io
+import std::u64
+
+/// A body of the comparison's n-body, as `pull` reads it.
+type Body {
+  x: Float,
+  y: Float,
+  z: Float,
+  vx: Float,
+  mass: Float,
+}
+
+/// The distance of `(x, y)` from the origin: `float::sqrt` is `sqrt`.
+fn hypot(x: Float, y: Float) -> Float {
+  float::sqrt(x * x + y * y)
+}
+
+/// One step of FNV-1a: `u64::from_u8` is `uextend` and the wrapping
+/// product is `imul`.
+fn fnv_step(state: U64, byte: U8) -> U64 {
+  u64::wrapping_mul(state ^ u64::from_u8(byte), 1_099_511_628_211)
+}
+
+/// The pull of `b` on `a` for one step, as the n-body computes it: the
+/// square root is an instruction, so no call clobbers the floats that are
+/// live across it.
+fn pull(a: Body, b: Body) -> Body {
+  let dx = a.x - b.x
+  let dy = a.y - b.y
+  let dz = a.z - b.z
+  let d2 = dx * dx + dy * dy + dz * dz
+  let mag = 0.01 / (d2 * float::sqrt(d2))
+  Body { ..a, vx: a.vx - dx * b.mass * mag }
+}
+
+fn main() {
+  let d = hypot(3.0, 4.0)
+  let h = fnv_step(14_695_981_039_346_656_037, 97)
+  let sun = Body { x: 0.0, y: 0.0, z: 0.0, vx: 0.0, mass: 39.47 }
+  let planet = Body { x: 4.0, y: 3.0, z: 0.0, vx: 1.0, mass: 0.04 }
+  let pulled = pull(planet, sun)
+  let vx = pulled.vx
+  io::println("{d} {h} {vx}")
+}

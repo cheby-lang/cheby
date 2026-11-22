@@ -143,6 +143,8 @@ fn rvalue_mut(
         | Rvalue::Box { value: o, .. }
         | Rvalue::Unbox { value: o, .. }
         | Rvalue::FloatNeg { value: o, .. }
+        | Rvalue::Convert { value: o, .. }
+        | Rvalue::FloatSqrt { value: o, .. }
         | Rvalue::Not(o)
         | Rvalue::ReadTag { base: o, .. } => op(o),
         Rvalue::Call { callee, args } => {
@@ -164,7 +166,8 @@ fn rvalue_mut(
         Rvalue::Checked { lhs, rhs, .. }
         | Rvalue::Compare { lhs, rhs, .. }
         | Rvalue::FloatArith { lhs, rhs, .. }
-        | Rvalue::Bitwise { lhs, rhs, .. } => {
+        | Rvalue::Bitwise { lhs, rhs, .. }
+        | Rvalue::Wrapping { lhs, rhs, .. } => {
             op(lhs);
             op(rhs);
         }
@@ -369,6 +372,9 @@ const fn is_pure(value: &Rvalue) -> bool {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. }
         | Rvalue::Alloc { .. }
@@ -482,6 +488,9 @@ fn fold_rvalue(
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::DropReuse { .. }
         | Rvalue::AllocReuse { .. } => None,
     }

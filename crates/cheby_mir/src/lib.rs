@@ -54,6 +54,7 @@ mod inline_across_tests;
 mod inline_tests;
 pub mod ir;
 pub mod kernels_in_place;
+pub mod kernels_instr;
 pub mod kernels_reading;
 pub mod layout;
 mod liveness;

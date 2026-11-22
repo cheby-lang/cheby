@@ -19,7 +19,7 @@ bb2:
   _14: int = checked div int _13, const int 2 at str#4 ; unwind bb3
   _15: int = checked add int _14, _0 at str#4 ; unwind bb3
   _16: int = checked add int _15, const int 1 at str#4 ; unwind bb3
-  _17: float = call_foreign "cheby_float_from_int"(borrow _16) -> f64 ; unwind bb3
+  _17: float = convert int float _16
   _18: float = float_arith div float const float 1.0, _17
   _9: float = float_arith add float _3, _18
   tail_call app::row_sum(_0, _6, _2, _9)

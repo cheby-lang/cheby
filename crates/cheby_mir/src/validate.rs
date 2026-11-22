@@ -1806,6 +1806,9 @@ impl FnCx<'_> {
             | Rvalue::Bitwise { .. }
             | Rvalue::FloatNeg { .. }
             | Rvalue::Not(_) => self.check_arith(value),
+            Rvalue::Convert { .. } | Rvalue::FloatSqrt { .. } | Rvalue::Wrapping { .. } => {
+                self.check_instr(value)
+            }
         }
     }
 
@@ -1885,6 +1888,64 @@ impl FnCx<'_> {
             | Rvalue::LoadConst(_)
             | Rvalue::Box { .. }
             | Rvalue::Unbox { .. }
+            | Rvalue::ReadTag { .. }
+            | Rvalue::Convert { .. }
+            | Rvalue::FloatSqrt { .. }
+            | Rvalue::Wrapping { .. }
+            | Rvalue::DropReuse { .. }
+            | Rvalue::AllocReuse { .. } => None,
+        }
+    }
+
+    /// The operations of the std kernels that are instructions
+    /// (`crate::kernels_instr`), on raw values.
+    fn check_instr(&mut self, value: &Rvalue) -> Option<Repr> {
+        let integer = |r: Repr| r.is_signed_int() || r.is_unsigned_int();
+        let float = |r: Repr| matches!(r, Repr::Float | Repr::F32);
+        match value {
+            Rvalue::Convert { value, from, to } => {
+                if !from.converts_exactly(*to) {
+                    self.err(format!("convert {from} {to}"));
+                }
+                self.expect_repr(value, *from, "convert operand");
+                Some(*to)
+            }
+            Rvalue::FloatSqrt { value, repr } => {
+                if !float(*repr) {
+                    self.err(format!("float_sqrt on {repr}"));
+                }
+                self.expect_repr(value, *repr, "float_sqrt operand");
+                Some(*repr)
+            }
+            Rvalue::Wrapping { op, lhs, rhs, repr } => {
+                if !integer(*repr) {
+                    self.err(format!("wrapping {} on {repr}", op.name()));
+                }
+                if !matches!(op, ArithOp::Add | ArithOp::Sub | ArithOp::Mul) {
+                    self.err(format!("wrapping {}", op.name()));
+                }
+                self.expect_repr(lhs, *repr, "wrapping operand");
+                self.expect_repr(rhs, *repr, "wrapping operand");
+                Some(*repr)
+            }
+            Rvalue::Use(_)
+            | Rvalue::Call { .. }
+            | Rvalue::CallForeign { .. }
+            | Rvalue::CallRuntime { .. }
+            | Rvalue::Alloc { .. }
+            | Rvalue::AllocPlaceholder { .. }
+            | Rvalue::InitField { .. }
+            | Rvalue::Field { .. }
+            | Rvalue::ReadLayout { .. }
+            | Rvalue::LoadConst(_)
+            | Rvalue::Box { .. }
+            | Rvalue::Unbox { .. }
+            | Rvalue::Checked { .. }
+            | Rvalue::Compare { .. }
+            | Rvalue::FloatArith { .. }
+            | Rvalue::Bitwise { .. }
+            | Rvalue::FloatNeg { .. }
+            | Rvalue::Not(_)
             | Rvalue::ReadTag { .. }
             | Rvalue::DropReuse { .. }
             | Rvalue::AllocReuse { .. } => None,
@@ -2516,6 +2577,9 @@ fn is_void_call(value: &Rvalue) -> bool {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. }
         | Rvalue::DropReuse { .. }

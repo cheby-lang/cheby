@@ -800,6 +800,77 @@ fn clif_of_hello_world() {
     assert_eq!(again, clif);
 }
 
+/// The blocks of `text`, a MIR or CLIF dump, whose first line is one of
+/// `heads`, each up to its closing `}` line, in the order of `heads`.
+fn dumped(text: &str, heads: &[&str]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::new();
+    for head in heads {
+        let at = lines
+            .iter()
+            .position(|l| l.starts_with(head))
+            .unwrap_or_else(|| panic!("no `{head}` in:\n{text}"));
+        let end = lines[at..]
+            .iter()
+            .position(|l| *l == "}")
+            .map_or(lines.len(), |n| at.saturating_add(n));
+        for line in &lines[at..=end] {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The std kernels that are instructions (`cheby_mir::kernels_instr`), a
+/// float case and an integer case: `float::sqrt` is `float_sqrt`, and
+/// `u64::from_u8` and `u64::wrapping_mul` are `convert` and `wrapping`,
+/// with no foreign call and no unwind edge.
+#[test]
+fn mir_of_instruction_kernels() {
+    let (out, mir) = dump_mir(&test_package("instr_kernels")).unwrap();
+    assert!(!out.has_errors(), "{}", out.render());
+    let picked = dumped(&mir, &["fn app::hypot(", "fn app::fnv_step("]);
+    assert!(!picked.contains("call_foreign"), "{picked}");
+    let pull = dumped(&mir, &["fn app::pull("]);
+    assert!(pull.contains("= float_sqrt float "), "{pull}");
+    assert!(!pull.contains("call_foreign"), "{pull}");
+    golden("instr_kernels.mir", &picked);
+}
+
+/// The CLIF of [`mir_of_instruction_kernels`]'s functions: `sqrt`,
+/// `uextend` and `imul`, and no call but the entry check's slow path and
+/// the box of the result.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn clif_of_instruction_kernels() {
+    let (out, clif) = dump_clif(&test_package("instr_kernels")).unwrap();
+    assert!(!out.has_errors(), "{}", out.render());
+    let clif = normalize_clif(&clif);
+    let picked = dumped(&clif, &["; cb$fn$app$hypot", "; cb$fn$app$fnv_step"]);
+    for instruction in ["= sqrt ", "= uextend.i64 ", "= imul "] {
+        assert!(picked.contains(instruction), "no {instruction}:\n{picked}");
+    }
+    assert!(!picked.contains("cheby_float_sqrt"), "{picked}");
+    assert!(!picked.contains("cheby_u64_"), "{picked}");
+    golden("instr_kernels.clif", &picked);
+    // The n-body's `pull`: its square root is `sqrt`, and it imports no
+    // kernel, so its only calls are the runtime's (the entry check's slow
+    // path, the record's allocation and releases).
+    let pull = dumped(&clif, &["; cb$fn$app$pull"]);
+    assert!(pull.contains("= sqrt "), "{pull}");
+    assert!(!pull.contains("cb$imp$cheby_float"), "{pull}");
+    assert!(
+        pull.lines()
+            .filter(|l| l.starts_with("; userextname") && l.contains("cb$imp$"))
+            .all(|l| l.contains("cb$imp$cheby_rt_")),
+        "{pull}"
+    );
+}
+
 #[test]
 fn dumps_of_a_package_with_errors_are_empty() {
     let dir = package(

@@ -19,7 +19,8 @@
 //! temporary that the call borrows, so a value used after the call is
 //! `dup`ed first and the kernel never updates it in place. A kernel that
 //! only reads its arguments (`crate::kernels_reading`) borrows them as
-//! they are, with no temporary. The result
+//! they are, with no temporary. A kernel that is one machine instruction
+//! (`crate::kernels_instr`) is that instruction, with no call. The result
 //! keeps its own representation, so a `Float` result is never boxed. The
 //! wrapper stays for function values, dictionaries and every other call.
 //! A foreign call may raise (out of memory, a callback's panic), so it
@@ -426,7 +427,9 @@ impl BodyCx<'_, '_> {
     /// updated in place; a value used afterwards is `dup`ed into its
     /// temporary, so the kernel sees it shared and copies it. A kernel of
     /// [`crate::kernels_reading`] only reads its arguments, so the call
-    /// borrows them as they are, as a Cheby call borrows a parameter.
+    /// borrows them as they are, as a Cheby call borrows a parameter. A
+    /// kernel of [`crate::kernels_instr`] is no call at all, but the
+    /// instruction it computes, on its raw arguments.
     /// `list::set` is the helper `list_set` instead, which owns the list
     /// and the item, so a unique list is written in place without a
     /// temporary. The result
@@ -452,6 +455,14 @@ impl BodyCx<'_, '_> {
         let sig = self.cx.defs.fn_sig(def)?;
         let fsig = foreign_sig_with_context(sig, globals, false);
         let ret_repr = repr_of(sig.ret, globals);
+        if let Some(op) = crate::kernels_instr::op_of(&symbol) {
+            // The kernel is an instruction (`crate::kernels_instr`): its
+            // operands are raw numbers, so nothing is counted or unwound.
+            let params: Vec<Repr> = sig.params.iter().map(|p| repr_of(p.ty, globals)).collect();
+            let value = crate::kernels_instr::rvalue(op, &params, ret_repr, args)?;
+            let raw = self.b.assign(ret_repr, value)?;
+            return self.kernel_result(Operand::Local(raw), ret_repr, ret_ty, tail);
+        }
         if &*symbol == LIST_SET {
             // `list::set` takes its list and its item over, so code
             // generation can write a unique list in place (`list_set`).
@@ -524,6 +535,19 @@ impl BodyCx<'_, '_> {
             }
             (Operand::Local(raw), ret_repr)
         };
+        self.kernel_result(result, repr, ret_ty, tail)
+    }
+
+    /// The result of a direct kernel call, `result` of `repr`, converted to
+    /// `ret_ty`'s representation, or returned as a uniform word in tail
+    /// position (`tail`).
+    fn kernel_result(
+        &mut self,
+        result: Operand,
+        repr: Repr,
+        ret_ty: Ty,
+        tail: bool,
+    ) -> Result<Option<Operand>, Ice> {
         if tail && self.b.abi() == Abi::Cheby {
             let uniform = self.to_repr(result, repr, Repr::Value, ret_ty)?;
             self.terminate(Terminator::Return(uniform))?;

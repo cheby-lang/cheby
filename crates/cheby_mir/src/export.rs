@@ -750,6 +750,8 @@ fn map_rvalue(
         | Rvalue::Box { value: op, .. }
         | Rvalue::Unbox { value: op, .. }
         | Rvalue::FloatNeg { value: op, .. }
+        | Rvalue::Convert { value: op, .. }
+        | Rvalue::FloatSqrt { value: op, .. }
         | Rvalue::Not(op) => map_operand(op, defs, statics)?,
         Rvalue::ReadTag { base, ty } => {
             map_operand(base, defs, statics)?;
@@ -779,7 +781,8 @@ fn map_rvalue(
         Rvalue::Checked { lhs, rhs, .. }
         | Rvalue::Compare { lhs, rhs, .. }
         | Rvalue::FloatArith { lhs, rhs, .. }
-        | Rvalue::Bitwise { lhs, rhs, .. } => {
+        | Rvalue::Bitwise { lhs, rhs, .. }
+        | Rvalue::Wrapping { lhs, rhs, .. } => {
             map_operand(lhs, defs, statics)?;
             map_operand(rhs, defs, statics)?;
         }
@@ -920,6 +923,8 @@ fn for_operands_mut(value: &mut Rvalue, f: &mut dyn FnMut(&mut Operand)) {
         | Rvalue::Box { value: op, .. }
         | Rvalue::Unbox { value: op, .. }
         | Rvalue::FloatNeg { value: op, .. }
+        | Rvalue::Convert { value: op, .. }
+        | Rvalue::FloatSqrt { value: op, .. }
         | Rvalue::Not(op)
         | Rvalue::ReadTag { base: op, .. }
         | Rvalue::InitField { value: op, .. } => f(op),
@@ -931,7 +936,8 @@ fn for_operands_mut(value: &mut Rvalue, f: &mut dyn FnMut(&mut Operand)) {
         Rvalue::Checked { lhs, rhs, .. }
         | Rvalue::Compare { lhs, rhs, .. }
         | Rvalue::FloatArith { lhs, rhs, .. }
-        | Rvalue::Bitwise { lhs, rhs, .. } => {
+        | Rvalue::Bitwise { lhs, rhs, .. }
+        | Rvalue::Wrapping { lhs, rhs, .. } => {
             f(lhs);
             f(rhs);
         }

@@ -300,6 +300,90 @@ fn float_arithmetic_is_for_floats_only() {
     );
 }
 
+/// The operations of the std kernels that are instructions
+/// (`crate::kernels_instr`): a conversion only where every value converts
+/// (`Repr::converts_exactly`), a square root only of a float, wrapping
+/// arithmetic only of integers, and only `+`, `-` and `*`.
+#[test]
+fn instruction_kernels_take_only_what_they_compute() {
+    for (from, to) in [
+        (Repr::Int, Repr::Float),
+        (Repr::U64, Repr::F32),
+        (Repr::I8, Repr::Int),
+        (Repr::U8, Repr::I16),
+        (Repr::U32, Repr::U64),
+        (Repr::Int, Repr::I64),
+        (Repr::F32, Repr::Float),
+        (Repr::Float, Repr::F32),
+    ] {
+        ok(assigning(&[from], to, |p| Rvalue::Convert {
+            value: local(p[0]),
+            from,
+            to,
+        }));
+    }
+    for (from, to) in [
+        (Repr::Int, Repr::I32),
+        (Repr::I8, Repr::U8),
+        (Repr::I16, Repr::U64),
+        (Repr::U32, Repr::I32),
+        (Repr::Float, Repr::Int),
+        (Repr::Int, Repr::Int),
+        (Repr::Bool, Repr::Int),
+        (Repr::U64, Repr::I64),
+    ] {
+        rejected(
+            assigning(&[from], to, |p| Rvalue::Convert {
+                value: local(p[0]),
+                from,
+                to,
+            }),
+            &format!("convert {from} {to}"),
+        );
+    }
+    ok(assigning(&[Repr::Float], Repr::Float, |p| {
+        Rvalue::FloatSqrt {
+            value: local(p[0]),
+            repr: Repr::Float,
+        }
+    }));
+    rejected(
+        assigning(&[Repr::Int], Repr::Int, |p| Rvalue::FloatSqrt {
+            value: local(p[0]),
+            repr: Repr::Int,
+        }),
+        "float_sqrt on int",
+    );
+    for repr in [Repr::Int, Repr::I8, Repr::U64] {
+        ok(assigning(&[repr, repr], repr, |p| Rvalue::Wrapping {
+            op: ArithOp::Mul,
+            lhs: local(p[0]),
+            rhs: local(p[1]),
+            repr,
+        }));
+    }
+    rejected(
+        assigning(&[Repr::Float, Repr::Float], Repr::Float, |p| {
+            Rvalue::Wrapping {
+                op: ArithOp::Add,
+                lhs: local(p[0]),
+                rhs: local(p[1]),
+                repr: Repr::Float,
+            }
+        }),
+        "wrapping add on float",
+    );
+    rejected(
+        assigning(&[Repr::Int, Repr::Int], Repr::Int, |p| Rvalue::Wrapping {
+            op: ArithOp::Div,
+            lhs: local(p[0]),
+            rhs: local(p[1]),
+            repr: Repr::Int,
+        }),
+        "wrapping div",
+    );
+}
+
 #[test]
 fn bitwise_is_for_integers_only() {
     for repr in [Repr::Int, Repr::I32, Repr::U16] {

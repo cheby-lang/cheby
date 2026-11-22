@@ -822,6 +822,30 @@ pub enum Rvalue {
     /// Sign flip of a `Float`/`F32` (built-in unary `-`, D-118, D-527):
     /// `-0.0` for `0.0`.
     FloatNeg { value: Operand, repr: Repr },
+    /// A raw number of `from` as a `to`, for the conversions that cannot
+    /// fail ([`Repr::converts_exactly`]): an integer into an integer type
+    /// that holds every value of `from`, sign-extended from a signed type
+    /// and zero-extended from an unsigned one; an integer into `Float` or
+    /// `F32`, to nearest, ties to even; `F32` into `Float`, exactly; and
+    /// `Float` into `F32`, to nearest, ties to even, an infinity beyond
+    /// `F32`'s range (D-308, D-359). These are the std conversions that
+    /// return their target directly. Never panics.
+    Convert {
+        value: Operand,
+        from: Repr,
+        to: Repr,
+    },
+    /// The square root of a `Float` or `F32`, correctly rounded (IEEE
+    /// 754): NaN for a negative operand, `-0.0` for `-0.0`. Never panics.
+    FloatSqrt { value: Operand, repr: Repr },
+    /// `Add`, `Sub` or `Mul` on `Int` or a sized integer, modulo 2^width
+    /// (the std `wrapping_` functions, D-025). Never panics.
+    Wrapping {
+        op: ArithOp,
+        lhs: Operand,
+        rhs: Operand,
+        repr: Repr,
+    },
     /// `!` on an unboxed `Bool`.
     Not(Operand),
     /// The constructor tag (declaration order) of `base` (borrowed), a
@@ -974,6 +998,8 @@ impl Rvalue {
             Self::Box { value, .. }
             | Self::Unbox { value, .. }
             | Self::FloatNeg { value, .. }
+            | Self::Convert { value, .. }
+            | Self::FloatSqrt { value, .. }
             | Self::Not(value)
             | Self::ReadTag { base: value, .. } => {
                 operand_uses(std::slice::from_ref(value), UseKind::Borrowed, &mut out);
@@ -981,7 +1007,8 @@ impl Rvalue {
             Self::Checked { lhs, rhs, .. }
             | Self::Compare { lhs, rhs, .. }
             | Self::FloatArith { lhs, rhs, .. }
-            | Self::Bitwise { lhs, rhs, .. } => {
+            | Self::Bitwise { lhs, rhs, .. }
+            | Self::Wrapping { lhs, rhs, .. } => {
                 operand_uses(&[lhs.clone(), rhs.clone()], UseKind::Borrowed, &mut out);
             }
         }
@@ -997,6 +1024,8 @@ impl Rvalue {
             | Self::Box { value: op, .. }
             | Self::Unbox { value: op, .. }
             | Self::FloatNeg { value: op, .. }
+            | Self::Convert { value: op, .. }
+            | Self::FloatSqrt { value: op, .. }
             | Self::Not(op)
             | Self::ReadTag { base: op, .. } => vec![op.clone()],
             Self::Call { callee, args } => {
@@ -1022,7 +1051,8 @@ impl Rvalue {
             Self::Checked { lhs, rhs, .. }
             | Self::Compare { lhs, rhs, .. }
             | Self::FloatArith { lhs, rhs, .. }
-            | Self::Bitwise { lhs, rhs, .. } => vec![lhs.clone(), rhs.clone()],
+            | Self::Bitwise { lhs, rhs, .. }
+            | Self::Wrapping { lhs, rhs, .. } => vec![lhs.clone(), rhs.clone()],
         }
     }
 
@@ -1057,6 +1087,9 @@ impl Rvalue {
             | Self::FloatArith { .. }
             | Self::Bitwise { .. }
             | Self::FloatNeg { .. }
+            | Self::Convert { .. }
+            | Self::FloatSqrt { .. }
+            | Self::Wrapping { .. }
             | Self::Not(_)
             | Self::ReadTag { .. }
             | Self::AllocReuse { .. } => &[],
