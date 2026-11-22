@@ -589,3 +589,27 @@ The three concurrency programs are still unread: their counts move too much from
 - Threading `ctx` through the list module's own allocations, about 4% of `nbody`.
 - `string::split`'s copies in `word_freq`, a `map` operation that removes a key and returns its value, a block cache that adapts, clones of a whole cycle.
 
+## 2026-11-23: the comparison measured again
+
+The Cheby rows of `../cheby-compare` were measured again at `e6c538a4` with its own runner, on a quiet machine: medians of 10 timed runs, or 3 for a run over 5 seconds. The executable row is now `cheby build --release`. The `cheby run` row stays the debug profile, by the user's choice, so the report shows both. "Before" is the reading of 2026-11-22 at `7a586d82`, when both rows were debug builds.
+
+| Benchmark        | Executable before | Executable now | Against Rust | `cheby run` now | Rank of the executable |
+| ---------------- | ----------------: | -------------: | -----------: | --------------: | ---------------------: |
+| `binary_trees`   |            1.06 s |         1.03 s |        1.04× |          1.06 s |               15 of 21 |
+| `nbody`          |           27.24 s |        15.70 s |        30.5× |         17.22 s |               15 of 21 |
+| `spectral_norm`  |           21.48 s |         5.62 s |        7.00× |          6.04 s |               14 of 21 |
+| `mandelbrot`     |            1.67 s |         946 ms |        1.32× |          967 ms |               13 of 21 |
+| `fannkuch_redux` |            3.74 s |         722 ms |        4.65× |          1.07 s |               13 of 21 |
+| `word_freq`      |            2.07 s |         1.88 s |        5.36× |          1.93 s |               12 of 21 |
+| `json_roundtrip` |            3.76 s |         3.04 s |        7.85× |          3.13 s |               12 of 21 |
+| `lru_cache`      |           25.75 s |         9.51 s |        14.4× |          9.90 s |               15 of 21 |
+| `ping_pong`      |             57 ms |          56 ms |      0.0827× |           64 ms |                2 of 23 |
+| `spawn_many`     |             76 ms |          52 ms |      0.0649× |           61 ms |                3 of 23 |
+| `prime_sieve`    |             19 ms |          21 ms |      0.0398× |           29 ms |                1 of 23 |
+
+Geometric means against Rust, before and now: the executables 9.68× and 4.24× on the CPU group, 13.1× and 8.47× on the data group, 10.8× and 5.49× on both together. `cheby run`: 9.62× and 4.78×, 13.5× and 8.75×, 10.9× and 6.00×. On CPU and data together the executables now stand between Clojure (5.13×) and Koka (5.70×), where they stood with the BEAM languages (11.0× to 14.7×).
+
+Compile time did not pay for it. `cheby build --release` of `hello_world` takes 54 ms, as the debug build did. For `compile_large`'s 200 modules a cold `cheby run` takes 302 ms where it took 571 ms, a cold `cheby build --release` 539 ms where the debug build took 716 ms, and a cold `cheby check` 80 ms where it took 304 ms, all three because of D-1764.
+
+Checks behind the round: the whole suite passes on the final code (8,265 tests), with std's own tests in both profiles, the determinism check in both profiles, and every lint of CI. Miri, the address sanitizer and the thread sanitizer passed on `68d73eee`, which holds every runtime change of the round except the shared-leaf step of D-1781; that one passed Miri's list group and the address sanitizer's runtime step on its own.
+
