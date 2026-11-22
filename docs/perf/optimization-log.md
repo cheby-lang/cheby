@@ -452,3 +452,38 @@ Against the executables of `7a586d82`, as before. The load on the machine was lo
 | `word_freq`      |               −7.5% |        −38.6% |                 −9.4% |          −28.0% |
 | `binary_trees`   |               −2.3% |        −12.6% |                 −5.3% |          −13.0% |
 
+### The block cache stays at 512 blocks per class
+
+Measured after D-1772, by instructions retired and peak memory, for 512, 2,048, 8,192, 16,384 and 65,536 blocks per size class. Only `binary_trees` gains, and the gain grows with the logarithm of the size: 2.5%, 5.0%, 5.9% and 8.7%. At 16,384 `json_roundtrip`'s peak memory grows by 10% to 12%, and a thread may hold 73 MB. No value keeps three quarters of the gain within 5% more peak memory and 64 MB per thread, so the size is unchanged. A cache that grows while a thread keeps overflowing it and shrinks when the thread parks is a possible later task; `spawn_many` may gain from it too, which a quiet machine has to show.
+
+### The entry check's slow paths clobber no register (D-1775)
+
+Since D-1761 the entry check sits inside every loop, and its cold call clobbered every float register, so a loop kept each `Float` it carried on the stack. The slow-path stubs now save every register themselves and are called with Cranelift's `preserve_all` convention. The loop of `mandelbrot` has no stack store or load left. Measured alone: `mandelbrot` −12.9% instructions and −38.3% cycles in debug, −10.1% and −24.8% in release; the other programs within 1.5%.
+
+Looked at and left alone: the calls of drop, free and allocation are not cold in allocation-heavy code, so a stub that saves everything would cost more than the spills it removes. In `nbody`'s `pull`, most of the 21 spill stores and 29 reloads sit around the call of `float::sqrt`'s kernel.
+
+### Release inlining across the package's modules and from std (D-1776, D-1777)
+
+The inliner takes bodies from the other units of the build, and std's by name. Std's own release code is optimized the same way, and its release masks are inferred over the optimized code. Instructions retired, release against debug of the same compiler: `lru_cache` −7.7%, `fannkuch_redux` −6.9%, `sorted_set` −8.0%, `sorted_map` −5.1%, `spectral_norm` −4.6%, `nbody` −2.7%, `word_freq` and `json_roundtrip` under 1%. The larger gains wait for clones of generic functions: a call through a dictionary or a closure is not a direct call yet.
+
+Found on the way:
+
+- Inlining a helper with a join into `sorted_map::insert` parted the matched node from the node rebuilt after the call. Reuse hits fell from 15.9 million to 0.3 million and instructions rose by 11.6%. A body with several blocks is now not inlined at a call in a statement when a counted copy of the host pairs fewer drops with allocations.
+- Two faults in the clean-up pass of D-1770: an unbox of a removed block parameter stayed, and a sized constant was compared with a case of another width, so `i16::checked_div(min_value, -1)` panicked in release. Std's own tests run as release code found both.
+- A release command checks and optimizes all of std in every process: a warm `cheby build --release` of `hello_world` retires 1.49 G instructions against 0.14 G in debug. Std's release bodies and masks in the cache are the next step.
+
+### Readings after these, all changes of the round together
+
+Against the executables of `7a586d82`.
+
+| Program          | Debug, instructions | Debug, cycles | Release, instructions | Release, cycles |
+| ---------------- | ------------------: | ------------: | --------------------: | --------------: |
+| `fannkuch_redux` |              −70.7% |        −68.2% |                −76.7% |          −75.8% |
+| `lru_cache`      |              −66.3% |        −59.0% |                −68.9% |          −66.3% |
+| `spectral_norm`  |              −57.1% |        −59.3% |                −59.6% |          −60.3% |
+| `mandelbrot`     |              −49.3% |        −54.3% |                −52.9% |          −51.7% |
+| `nbody`          |              −34.6% |        −39.1% |                −36.7% |          −43.4% |
+| `json_roundtrip` |              −18.7% |        −22.1% |                −19.5% |          −21.9% |
+| `word_freq`      |               −7.4% |        −39.5% |                 −7.9% |          −39.8% |
+| `binary_trees`   |               −1.7% |        −11.0% |                 −4.7% |          −11.6% |
+

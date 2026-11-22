@@ -474,6 +474,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1772    | A free that kills no field skips the worklist; `free_unique` takes the size from generated code     |
 | D-1773    | `list::get` and `map::get` matched at once build no `Some`; helpers `map_find`, `map_value_at`      |
 | D-1774    | Reading kernels borrow their arguments; `list::get`/`set` on a one-leaf list are inline             |
+| D-1775    | The entry check's slow paths save every register and are called with `preserve_all`                 |
+| D-1776    | Release inlining takes bodies from the build's other units and std's by name                        |
+| D-1777    | Std's kernel bindings, release masks and bodies may cross into a package's build (ADR-0082)         |
 
 ## Open questions
 
