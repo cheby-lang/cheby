@@ -105,6 +105,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         clamped: Box::new([]),
         initializer: None,
         call_site: None,
+        kernel: None,
     };
     let kernel_sig = FnSig {
         generics: Generics::empty(),
@@ -113,6 +114,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         clamped: Box::new([]),
         initializer: None,
         call_site: None,
+        kernel: None,
     };
     let nullary_sig = FnSig {
         generics: Generics::empty(),
@@ -121,6 +123,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         clamped: Box::new([]),
         initializer: None,
         call_site: None,
+        kernel: None,
     };
     let mut items = IndexVec::new();
     for (n, name, sig) in [

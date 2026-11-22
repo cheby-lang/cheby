@@ -167,8 +167,8 @@ fn positions_of_calls_and_entries() {
     );
 }
 
-/// An interpolation's value parts: each part's `show` call and append are
-/// at the part, on the interpolation's line.
+/// An interpolation's value parts: each part's `show` call, a direct call
+/// of its kernel, and append are at the part, on the interpolation's line.
 #[test]
 fn positions_of_interpolation_parts() {
     let lowered = lower_source_uncounted(&[("", CALLS)]);
@@ -192,7 +192,16 @@ fn positions_of_interpolation_parts() {
     assert!(appends.iter().all(|p| p.line == 12), "{appends:?}");
     let columns: Vec<u32> = appends.iter().map(|p| p.column).collect();
     assert_eq!(columns, vec![15, 19, 15, 25], "{appends:?}");
-    let shows = call_positions(app, main, "std::int::show");
+    // `int::show` is a kernel, called at the call site (D-525).
+    let shows = stmt_positions(main, |s| {
+        matches!(
+            s,
+            Stmt::Assign {
+                value: Rvalue::CallForeign { symbol, .. },
+                ..
+            } if &**symbol == "cheby_int_show"
+        )
+    });
     assert_eq!(shows, vec![pos(12, 19), pos(12, 25)]);
 }
 

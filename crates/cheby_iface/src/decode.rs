@@ -301,6 +301,7 @@ enum RawSig<'a> {
         clamped: Vec<u32>,
         initializer: Option<&'a str>,
         call_site: Option<&'a str>,
+        kernel: Option<&'a str>,
     },
     Type {
         generics: RawGenerics<'a>,
@@ -630,6 +631,11 @@ impl<'a> Reader<'a> {
         } else {
             None
         };
+        let kernel = if self.bool()? {
+            Some(self.str()?)
+        } else {
+            None
+        };
         Ok(RawSig::Fn {
             generics,
             params,
@@ -637,6 +643,7 @@ impl<'a> Reader<'a> {
             clamped,
             initializer,
             call_site,
+            kernel,
         })
     }
 
@@ -984,6 +991,7 @@ impl Resolver<'_, '_> {
                 clamped,
                 initializer,
                 call_site,
+                kernel,
             } => ItemSig::Fn(FnSig {
                 generics: self.generics(generics)?,
                 params: params
@@ -999,6 +1007,7 @@ impl Resolver<'_, '_> {
                 clamped: clamped.as_slice().into(),
                 initializer: initializer.map(|constructor| self.name(constructor)),
                 call_site: call_site.map(|constructor| self.name(constructor)),
+                kernel: kernel.map(Into::into),
             }),
             RawSig::Type {
                 generics,

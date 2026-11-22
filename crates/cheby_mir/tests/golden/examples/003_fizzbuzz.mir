@@ -67,7 +67,7 @@ bb5(_4: value):
 bb6:
   goto bb5(const str#5)
 bb7:
-  _7: value = call std::int::show(_0) ; unwind bb8
+  _7: value = call_foreign "cheby_int_show"(borrow _0) -> ptr ; unwind bb8
   goto bb5(_7)
 bb8:
   resume
@@ -75,7 +75,6 @@ bb8:
 
 callee fizzbuzz::fizzbuzz(int) -> value
 callee std::io::println(value) -> value
-callee std::int::show(int) -> value
 
 entries
 

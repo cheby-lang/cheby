@@ -4,7 +4,9 @@
 //!
 //! A call of one of these functions whose first argument is a local at its
 //! last use gets a line saying that the update is in place when that value
-//! is unique at run time. Every entry is a `pub` function of `std` with an
+//! is unique at run time, whether the call goes through the wrapper or,
+//! as a direct call of the kernel, is a foreign call of the symbol at the
+//! call site. Every entry is a `pub` function of `std` with an
 //! `@external(native, …)` wrapper (D-455), whose native kernel writes into
 //! a unique first argument: the list root updates (F3), the map and set
 //! updates (§9.3), and the `String` and `Bytes` appends (D-316, D-577).
@@ -40,6 +42,17 @@ pub const IN_PLACE_KERNELS: &[(&str, &str, &str)] = &[
     ("std::set", "remove", "cheby_set_remove"),
     ("std::string", "add", "cheby_string_add"),
 ];
+
+/// The kernel of [`IN_PLACE_KERNELS`] whose native symbol is `symbol`, as
+/// `(module, function)`: how the report names a direct call of the kernel,
+/// which is a foreign call at the call site (`lower/external.rs`).
+#[must_use]
+pub fn by_symbol(symbol: &str) -> Option<(&'static str, &'static str)> {
+    IN_PLACE_KERNELS
+        .iter()
+        .find(|&&(_, _, s)| s == symbol)
+        .map(|&(module, function, _)| (module, function))
+}
 
 /// Whether `module::function` (as `std::set` and `insert`) is a kernel of
 /// [`IN_PLACE_KERNELS`].
@@ -104,5 +117,7 @@ mod tests {
         assert!(!updates_in_place("std::io", "println"));
         assert!(!updates_in_place("std::set", "contains"));
         assert!(!updates_in_place("app", "insert"));
+        assert_eq!(by_symbol("cheby_set_insert"), Some(("std::set", "insert")));
+        assert_eq!(by_symbol("cheby_set_contains"), None);
     }
 }

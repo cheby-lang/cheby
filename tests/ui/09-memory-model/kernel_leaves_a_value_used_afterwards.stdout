@@ -1,0 +1,5 @@
+list: [1, 2, 3] [9, 2, 3] [1, 2, 3, 4]
+map: [1, 2, 0] Some(1) Some(11)
+set: [2, 3, 1]
+text: ab abcd [2, 3, 4]
+shelf: kitchen Some(3) Some(5)

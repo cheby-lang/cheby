@@ -1792,3 +1792,124 @@ fn const_verdict_near_the_memory_limit_is_one_across_commands() {
         }
     }
 }
+
+/// Std kernels called at the call site, without their wrappers (D-525):
+/// a list, a map and a text updated at their last use are updated in
+/// place, and the same updates of a value used again after the call copy
+/// it, once each. Both RC modes count the same, since the kernel sees the
+/// counts the wrapper gave it: an argument moved into an owned temporary
+/// at its last use, and `dup`ed into it otherwise. Run with poisoning
+/// off, so the inline paths run.
+#[test]
+fn direct_kernel_calls_update_in_place_only_at_a_last_use() {
+    let dir = package(
+        "direct_kernel_updates",
+        &[MANIFEST, ("src/main.cheby", DIRECT_KERNEL_UPDATES)],
+    );
+    for rc in [None, Some("naive")] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "3 3003 7 1859 1002\n", "{rc:?}");
+        let count = |name: &str| {
+            stat(&out.stderr, name).unwrap_or_else(|| panic!("no `{name}` line:\n{}", out.stderr))
+        };
+        // `grown`'s 1000 updates in place, `kept`'s 1000 copies.
+        assert!(
+            count("list update in place") >= 1000,
+            "{rc:?}: {}",
+            out.stderr
+        );
+        assert_eq!(count("list update copied"), 1000, "{rc:?}: {}", out.stderr);
+        // `filled`'s inserts but the first, into the empty static map,
+        // in place; `shared`'s 1000 copies.
+        assert!(
+            count("map/set update in place") >= 999,
+            "{rc:?}: {}",
+            out.stderr
+        );
+        assert_eq!(
+            count("map/set update copied"),
+            1000,
+            "{rc:?}: {}",
+            out.stderr
+        );
+        // `appended` grows one text: no copy after the first append.
+        assert!(
+            count("string/bytes kernel copied") <= 1,
+            "{rc:?}: {}",
+            out.stderr
+        );
+    }
+}
+
+/// The program of [`direct_kernel_calls_update_in_place_only_at_a_last_use`].
+const DIRECT_KERNEL_UPDATES: &str = r#"//! Updates with std kernels, at their last use and with the old value used afterwards.
+
+import std::io
+import std::list
+import std::map
+import std::string
+
+fn grown(xs: List<Int>, n: Int) -> List<Int> {
+  case n {
+    0 => xs
+    _ => grown(list::set(xs, 0, n), n - 1)
+  }
+}
+
+fn kept(xs: List<Int>, n: Int, total: Int) -> Int {
+  case n {
+    0 => total + list::length(xs)
+    _ => {
+      let changed = list::set(xs, 0, n)
+      kept(xs, n - 1, total + list::length(changed))
+    }
+  }
+}
+
+fn filled(m: map::Map<Int, Int>, n: Int) -> map::Map<Int, Int> {
+  case n {
+    0 => m
+    _ => filled(map::insert(m, n % 7, n), n - 1)
+  }
+}
+
+fn shared(m: map::Map<Int, Int>, n: Int, total: Int) -> Int {
+  case n {
+    0 => total + map::size(m)
+    _ => {
+      let more = map::insert(m, n % 7, n)
+      shared(m, n - 1, total + map::size(more))
+    }
+  }
+}
+
+fn appended(text: String, n: Int) -> String {
+  case n {
+    0 => text
+    _ => appended(string::add(text, "x"), n - 1)
+  }
+}
+
+fn main() {
+  let a = list::length(grown([0, 1, 2], 1000))
+  let b = kept([0, 1, 2], 1000, 0)
+  let c = map::size(filled(map::new(), 1000))
+  let d = shared(map::from_list([(0, 0)]), 1000, 0)
+  let e = string::length(appended(string::add("a", "b"), 1000))
+  io::println("{a} {b} {c} {d} {e}")
+}
+"#;

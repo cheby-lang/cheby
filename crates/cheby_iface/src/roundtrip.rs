@@ -189,6 +189,7 @@ impl Compare<'_> {
                     && a.clamped == b.clamped
                     && a.initializer == b.initializer
                     && a.call_site == b.call_site
+                    && a.kernel == b.kernel
             }
             (ItemSig::Type(a), ItemSig::Type(b)) => {
                 self.generics(&a.generics, &b.generics)

@@ -78,6 +78,7 @@ fn an_unreplaced_call_or_value_is_an_internal_error() {
         clamped: Box::new([]),
         initializer: None,
         call_site: call_site.map(|name| globals.names.intern(name)),
+        kernel: None,
     };
     let here_ty = globals.types.func([Ty::STRING], Ty::NIL);
     let mut items = IndexVec::new();

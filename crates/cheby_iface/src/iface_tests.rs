@@ -169,6 +169,7 @@ fn rich(f: &Fixture) -> ModuleInterface {
                 clamped: Box::new([]),
                 initializer: None,
                 call_site: None,
+                kernel: None,
             }),
         ),
         // 1: a test, left out.
@@ -273,6 +274,7 @@ fn rich(f: &Fixture) -> ModuleInterface {
                     clamped: Box::new([2]),
                     initializer: Some(g.names.intern("paint")),
                     call_site: None,
+                    kernel: None,
                 }),
             )
         },
@@ -320,6 +322,7 @@ fn rich(f: &Fixture) -> ModuleInterface {
                 clamped: Box::new([]),
                 initializer: None,
                 call_site: Some(g.names.intern("apply_at")),
+                kernel: None,
             }),
         ),
         // 11: a function whose signature had an error.

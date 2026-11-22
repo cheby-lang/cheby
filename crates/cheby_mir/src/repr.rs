@@ -316,6 +316,7 @@ mod tests {
             clamped: Box::new([]),
             initializer: None,
             call_site: None,
+            kernel: None,
         };
         let plain = ForeignSig {
             params: vec![CType::I64, CType::Ptr],
@@ -335,6 +336,7 @@ mod tests {
             clamped: Box::new([]),
             initializer: None,
             call_site: None,
+            kernel: None,
         };
         assert_eq!(
             foreign_sig_with_context(&nullary, &globals, true),

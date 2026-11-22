@@ -247,6 +247,7 @@ mod tests {
             clamped: Box::new([]),
             initializer: None,
             call_site: None,
+            kernel: None,
         }
     }
 

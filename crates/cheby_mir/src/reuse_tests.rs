@@ -622,8 +622,9 @@ fn reuse_arm_of_several_tags_proves_no_layout() {
 }
 
 /// An owned last-use argument of an in-place kernel (D-525) stays owned
-/// and is passed without a `dup`, so the kernel updates in place: reuse
-/// and its refinement of D-806 change nothing there.
+/// and is moved into the kernel's temporary without a `dup`, so the
+/// kernel updates in place: reuse and its refinement of D-806 change
+/// nothing there.
 #[test]
 fn reuse_owned_last_use_kernel_argument_stays_in_place() {
     let text = function_of(
@@ -645,7 +646,11 @@ fn main() {
         text.starts_with("fn app::add(_0: value, _1: int)"),
         "{text}"
     );
-    assert!(text.contains("call std::set::insert(_0, "), "{text}");
+    assert!(text.contains("_3: value = _0\n"), "{text}");
+    assert!(
+        text.contains("call_foreign \"cheby_set_insert\"(borrow _3, "),
+        "{text}"
+    );
     assert!(!text.contains("dup _0"), "{text}");
 }
 

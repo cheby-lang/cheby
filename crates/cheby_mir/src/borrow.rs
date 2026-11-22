@@ -1142,17 +1142,29 @@ fn initial_mask(
     BorrowMask(mask.0 & !forced.0)
 }
 
-/// Whether `f` calls a foreign function: the shape of an `@external`
-/// wrapper (D-455), which D-525 needs owned.
+/// Whether `f` passes one of its counted parameters to a foreign
+/// function: the shape of an `@external` wrapper (D-455), which D-525
+/// needs owned. A direct call of a std kernel (`lower/external.rs`)
+/// passes owned temporaries, never a counted parameter, and its move into
+/// the temporary consumes the parameter as the wrapper's call did. A raw
+/// parameter (`Int`, `Float`, …) is never in a mask.
 fn has_foreign_call(f: &Function) -> bool {
-    f.blocks.iter().flat_map(|b| &b.stmts).any(|s| {
-        matches!(
-            s,
-            Stmt::Assign {
-                value: Rvalue::CallForeign { .. },
-                ..
-            } | Stmt::Eval(Rvalue::CallForeign { .. })
-        )
+    let counted_param =
+        |l: Local| f.params.contains(&l) && f.local(l).is_ok_and(|decl| decl.repr == Repr::Value);
+    f.blocks.iter().flat_map(|b| &b.stmts).any(|s| match s {
+        Stmt::Assign {
+            value: Rvalue::CallForeign { args, .. },
+            ..
+        }
+        | Stmt::Eval(Rvalue::CallForeign { args, .. }) => {
+            args.iter().any(|a| a.local().is_some_and(counted_param))
+        }
+        Stmt::Assign { .. }
+        | Stmt::Eval(_)
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => false,
     })
 }
 

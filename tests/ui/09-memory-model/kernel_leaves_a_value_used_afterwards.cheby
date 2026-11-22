@@ -1,0 +1,82 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-525, D-187, D-455
+//! A std kernel that updates its first argument in place when the
+//! argument is unique leaves a value that is used after the call
+//! unchanged: the call gives the kernel a shared reference, so the kernel
+//! copies (D-525). Each update here is a direct call of the kernel, and
+//! each old value is read after it: a list, a map, a set, a string and
+//! bytes, and an entry of a record, as in `027_lru_cache`, read again
+//! after the update of the map that holds it.
+
+import std::bytes
+import std::io
+import std::list
+import std::map
+import std::set
+import std::string
+
+type Shelf {
+  stock: map::Map<String, Int>,
+  label: String,
+}
+
+fn lists() {
+  let before = [1, 2, 3]
+  let changed = list::set(before, 0, 9)
+  let appended = list::append(before, [4])
+  io::println("list: {before} {changed} {appended}")
+}
+
+fn bumped(old: Option<Int>) -> Int {
+  case old {
+    Some(n) => n + 10
+    None => 0
+  }
+}
+
+fn maps() {
+  let before = map::from_list([("a", 1)])
+  let inserted = map::insert(before, "b", 2)
+  let removed = map::remove(before, "a")
+  let upserted = map::upsert(before, "a", bumped)
+  let sizes = [map::size(before), map::size(inserted), map::size(removed)]
+  let old = map::get(before, "a")
+  let new = map::get(upserted, "a")
+  io::println("map: {sizes} {old} {new}")
+}
+
+fn sets() {
+  let before = set::from_list([1, 2])
+  let inserted = set::insert(before, 3)
+  let removed = set::remove(before, 1)
+  let sizes = [set::size(before), set::size(inserted), set::size(removed)]
+  io::println("set: {sizes}")
+}
+
+fn texts() {
+  let before = "ab"
+  let longer = string::add(before, "cd")
+  let data = bytes::from_string(before)
+  let pushed = bytes::push(data, 33)
+  let appended = bytes::append(data, data)
+  let sizes = [bytes::length(data), bytes::length(pushed), bytes::length(appended)]
+  io::println("text: {before} {longer} {sizes}")
+}
+
+fn shelves() {
+  let shelf = Shelf { stock: map::from_list([("tea", 3)]), label: "kitchen" }
+  let restocked = Shelf { ..shelf, stock: map::insert(shelf.stock, "tea", 5) }
+  let old = map::get(shelf.stock, "tea")
+  let new = map::get(restocked.stock, "tea")
+  let label = shelf.label
+  io::println("shelf: {label} {old} {new}")
+}
+
+fn main() {
+  lists()
+  maps()
+  sets()
+  texts()
+  shelves()
+}

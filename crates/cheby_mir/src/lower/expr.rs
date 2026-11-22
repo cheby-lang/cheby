@@ -181,6 +181,13 @@ impl BodyCx<'_, '_> {
         // Every direct call of a THIR callee, an operator's function and an
         // interpolation's `show` included, comes here.
         self.cx.defs.replaced(def)?;
+        // A plain std kernel is called at the call site, without its
+        // wrapper (`external.rs`).
+        if dicts.is_empty()
+            && let Some(symbol) = crate::lower::external::direct_kernel(def, &self.cx.defs)?
+        {
+            return self.call_kernel(def, symbol, args, ret_ty, tail);
+        }
         let mut ops = dicts;
         ops.extend(args);
         let callee = Callee::Direct(def);
