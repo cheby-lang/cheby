@@ -18,6 +18,47 @@ instead, and this document only points to them.
 - With a warm build cache, the time of `cheby run` outside `main` is under 25 ms for every
   benchmark and 8 ms for `001_hello_world`, so the work below is all about run time.
 
+## Summary of the 2026-11-21 round
+
+Five changes went in after the lists of D-1757, each described under [Done](#done). Medians of
+nine runs of `bench-run`, the final commit against the commit the round started from:
+
+| Benchmark                      | `c160f89e` | `a36c5bb2` | Change                         |
+| ------------------------------ | ---------- | ---------- | ------------------------------ |
+| `collections/multimap`         | 1.030 s    | 0.975 s    | −5.3%                          |
+| `collections/ordered_map`      | 0.714 s    | 0.641 s    | −10.3%                         |
+| `collections/ordered_multimap` | 1.049 s    | 0.925 s    | −11.9%                         |
+| `collections/ordered_set`      | 0.532 s    | 0.482 s    | −9.4%                          |
+| `collections/sorted_map`       | 0.776 s    | 0.761 s    | −2.0%                          |
+| `collections/sorted_multimap`  | 0.603 s    | 0.585 s    | −3.0%                          |
+| `collections/sorted_set`       | 0.684 s    | 0.681 s    | −0.4%                          |
+| `fiber/buffered_4x4`           | 0.581 s    | 0.476 s    | −18.0% (second reading −16.8%) |
+| `fiber/ping_pong`              | 0.115 s    | 0.102 s    | −11.5% (second reading −14.2%) |
+| `fiber/scope_open_close`       | 0.825 s    | 0.821 s    | −0.4% (second reading −7.2%)   |
+| `fiber/sieve`                  | 0.169 s    | 0.155 s    | −8.6% (second reading −10.7%)  |
+| `fiber/spawn_join`             | 0.093 s    | 0.092 s    | −2.0% (second reading −2.1%)   |
+| `json/roundtrip`               | 0.268 s    | 0.255 s    | −4.6%                          |
+| `json/value`                   | 0.216 s    | 0.202 s    | −6.2%                          |
+| `rc/list_pipeline`             | 0.169 s    | 0.155 s    | −8.0%                          |
+| `rc/map_updates`               | 0.445 s    | 0.335 s    | −24.8%                         |
+| `rc/record_updates`            | 0.244 s    | 0.235 s    | −3.7%                          |
+| `rc/string_building`           | 0.614 s    | 0.402 s    | −34.6%                         |
+| `rc/tree_inserts`              | 0.359 s    | 0.357 s    | −0.5%                          |
+| `time/now_loop`                | 0.743 s    | 0.750 s    | +0.9%                          |
+
+Geometric means: all 20 benchmarks −8.7%, the RC group −15.4%, collections −6.1%, JSON
+−5.4%, fiber −8.3% and −10.4% in a second reading. The fiber benchmarks run on several threads and
+swing between readings: `fiber/scope_open_close` read −12% when its change was measured alone.
+
+On the final commit the whole suite passes (8,127 tests), as do std's own tests, every step of the
+address sanitizer, and the other checks CI runs locally. Each change ran Miri on the groups it
+touched (`hamt`, `generic`, `list`, `alloc`, `rc`, `string`, `text`, `bytes`, `values`), and the two
+that touch what several threads read ran the thread sanitizer's runtime step. Linux and x86-64
+were not measured: the `bench.yml` reading of D-895 and D-1255 is still to be dispatched.
+
+None of the five changes what a program can observe, a required cost or a logged layout, so none
+has a decision-log entry.
+
 ## 2026-11-21: the survey after D-1757
 
 Baseline: commit `c160f89e`, the lists of D-1757 to D-1760. Where the time goes, by benchmark:
@@ -244,3 +285,44 @@ Tried and not kept:
   `int::from_u8`.
 - The `show` of a float still builds Rust strings. No benchmark spends time there.
 
+## Looked at and left alone
+
+- **`std::int::compare`.** It is about half the samples of `collections/sorted_map`,
+  `sorted_set` and `sorted_multimap`, and a quarter of `rc/tree_inserts`. The function is 25
+  instructions; what it costs is the mispredicted branch on a random key, once per tree level. A
+  branch-free `compare` would only move the misprediction to the `case` in the caller. Inlining
+  `compare` into `sorted_map::insert` is the fix, and the inliner is M6's (ADR-0046).
+- **The context switch and the channel's lock.** `fiber/sieve` spends 40% of its samples in the
+  switch's assembly, and `fiber/buffered_4x4` 40% in contention on one channel's lock from four
+  threads. Neither has a safe local fix.
+- **Two and three allocations per `time::now` and per scope.** They are the boxed results of
+  Cheby functions and a scope's handle. Removing them needs results returned unboxed or the calls
+  inlined, which is the compiler's work.
+- **The placement of hot functions.** `time/now_loop` moved by a few percent when
+  `cheby_rt_alloc` and `cheby_rt_free_unique` stopped falling on 64-byte boundaries. Forcing an
+  alignment on the runtime's entry points was not tried.
+
+## Not done: each needs a decision first
+
+These would be faster, but each changes something the decision log pins, so none was built or
+committed. They are proposals.
+
+- **`[item, ..xs]` as `list_prepend`.** The literal lowers to a push and an append today, O(log n)
+  where D-1757 makes a prepend amortized O(1). The result is the same list, but MIR and the lines
+  of `--reuse-report` change (D-717, D-852). It is an Open item of the 2026-11-21 session.
+- **An `Int` interpolated straight into the accumulator.** `"{n}"` calls `show`, which allocates
+  a string, appends it and frees it. A helper that appends the digits to the accumulator would
+  remove two of the four allocations per line of `rc/string_building`. It adds a runtime helper to
+  D-520's fixed set and changes interpolation's lowering (D-1170).
+- **Calls of std kernels without their wrapper.** Already an Open item of the 2026-10-19 session,
+  which measured −8% on its yardstick. It is what a byte loop over `bytes::get` and every
+  `list::push` still pay. It changes D-455: std's interfaces would carry the binding.
+- **No stack check in a function that calls nothing.** `int::compare` and its like spend a good
+  part of their few instructions on the entry check and the frame it needs. The check is also where a fiber is interrupted and
+  cancelled (D-124, D-688), so leaving it out changes when those are delivered.
+- **The running fiber read inline in generated code or kernels.** One lookup costs 1.9 ns on
+  macOS. D-686 keeps every thread-local access behind an accessor that is never inlined, because
+  an inlined one may keep another thread's address across a switch.
+
+The first Open item of the decision log's 2026-11-21 session, the hole in place of the shifted
+branch, is done by the list-walk change above and can be struck through there.
