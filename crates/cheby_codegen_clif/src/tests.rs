@@ -673,9 +673,10 @@ fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
         // Two words: the `Int` at offset 0, the `Float`'s bits at 8.
         assert!(text.contains("stack_addr.i64 ss0+8"), "{text}");
         assert!(!text.contains("ss0+16"), "{text}");
-        // The edge after the blocking call tests the flag; the box tests
-        // its own result, and the entry check releases nothing.
-        assert_eq!(text.matches(&load_flag).count(), 1, "{text}");
+        // The edge after the blocking call tests the flag, and so does
+        // the entry check's releasing slow path, which releases nothing
+        // (D-775); the box tests its own result.
+        assert_eq!(text.matches(&load_flag).count(), 2, "{text}");
         assert!(
             !text.contains("= kern"),
             "the function calls the shim:\n{text}"
@@ -747,8 +748,13 @@ fn slice_runtime_functions() {
         .chain(words)
         .collect();
     let expected = [
-        (RuntimeFunc::StackSlowUnwind, 27, (&*plain), CType::U32),
-        (RuntimeFunc::StackSlowFrameUnwind, 28, (&*frame), CType::U32),
+        (RuntimeFunc::StackSlowUnwind, 27, (&*plain), CType::Void),
+        (
+            RuntimeFunc::StackSlowFrameUnwind,
+            28,
+            (&*frame),
+            CType::Void,
+        ),
         (
             RuntimeFunc::StackSlowFrame,
             24,
@@ -1183,9 +1189,10 @@ fn unwind_pads_are_translated_as_cold_blocks() {
         cheby_runtime::abi::CTX_UNWIND
     );
     assert_eq!(plain.matches(&load_flag).count(), 0, "{plain}");
-    // The foreign call's; the entry check goes through the releasing slow
-    // path, which tests its own result (D-775).
-    assert_eq!(padded_text.matches(&load_flag).count(), 1, "{padded_text}");
+    // The foreign call's, and the entry check's: it goes through the
+    // releasing slow path, which returns nothing, so the flag tells
+    // (D-775).
+    assert_eq!(padded_text.matches(&load_flag).count(), 2, "{padded_text}");
     assert!(
         padded_text.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
         "{padded_text}"
@@ -1370,10 +1377,10 @@ fn the_flag_lowers_every_edge() {
     );
     // With edges.
     let loads = flag.matches(&load_flag).count();
-    // The foreign call; the Cheby call, the allocation, the panic and the
-    // entry check's releasing slow path (D-775) do not
-    // load the flag.
-    assert_eq!(loads, 1, "{flag}");
+    // The foreign call and the entry check's releasing slow path (D-775),
+    // which returns nothing; the Cheby call, the allocation and the panic
+    // do not load the flag.
+    assert_eq!(loads, 2, "{flag}");
     assert!(
         flag.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
         "{flag}"
@@ -1426,11 +1433,13 @@ fn counted_params_unit(n: u32) -> MirModule {
 }
 
 /// D-775: the entry check's slow path of a function
-/// with at most four counted parameters is `r = call
-/// cheby_rt_stack_slow_unwind(ctx, loc, n, p…, 0…); brif r, resume, bb0`,
-/// with no flag load, no continuation block and no translated entry pad
-/// chain; with five, it calls `cheby_rt_stack_slow`, loads the flag and
-/// translates the chain, whose drops call `cheby_rt_drop` out of line.
+/// with at most four counted parameters is `call
+/// cheby_rt_stack_slow_unwind(ctx, loc, n, p…, 0…); v = load.i32 ctx+12;
+/// brif v, resume, bb0`, with no continuation block and no translated
+/// entry pad chain; with five, it calls `cheby_rt_stack_slow`, loads the
+/// flag and translates the chain, whose drops call `cheby_rt_drop` out of
+/// line. Both helpers are called with `preserve_all` where the runtime's
+/// stubs save every register, and return nothing.
 #[test]
 #[cfg_attr(
     windows,
@@ -1447,10 +1456,12 @@ fn entry_unwind_through_the_releasing_slow_path() {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         let at = lines
             .iter()
-            .position(|line| line.contains("= call_indirect") && line.contains("(v0, "))
+            .position(|line| line.starts_with("call_indirect") && line.contains("(v0, "))
             .unwrap_or_else(|| panic!("{n}: no helper call in:\n{text}"));
         let call = lines[at];
-        let result = call.split(" = ").next().unwrap();
+        let flag = lines[at + 1]
+            .strip_suffix(&format!(" = {load_flag}"))
+            .unwrap_or_else(|| panic!("{n}: the flag is loaded after the call:\n{text}"));
         // The parameters after `ctx` and the `Int` are `v2` on, and the
         // unused words are one zero.
         let words: Vec<String> = (0..n).map(|i| format!("v{}", i + 2)).collect();
@@ -1459,10 +1470,16 @@ fn entry_unwind_through_the_releasing_slow_path() {
             "{n}: {call}"
         );
         assert!(
-            lines[at + 1].starts_with(&format!("brif {result}, block"))
-                && lines[at + 1].ends_with(", block0"),
-            "{n}: the result goes to `resume` or the body:\n{text}"
+            lines[at + 2].starts_with(&format!("brif {flag}, block"))
+                && lines[at + 2].ends_with(", block0"),
+            "{n}: the flag goes to `resume` or the body:\n{text}"
         );
+        if cfg!(all(
+            any(target_arch = "aarch64", target_arch = "x86_64"),
+            not(windows)
+        )) {
+            assert!(text.contains(") preserve_all\n"), "{n}: {text}");
+        }
         assert!(
             text.contains(&format!("iconst.i32 {n}")),
             "{n}: the count:\n{text}"
@@ -1478,7 +1495,7 @@ fn entry_unwind_through_the_releasing_slow_path() {
                 .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow")),
             "{n}: {text}"
         );
-        assert!(!text.contains(&load_flag), "{n}: no flag load:\n{text}");
+        assert_eq!(text.matches(&load_flag).count(), 1, "{n}: {text}");
         // Only the shared `resume` of the entry pad chain is translated:
         // its `return 0` is the only return of 0 besides the body's.
         assert_eq!(text.matches("return").count(), 2, "{n}: {text}");
@@ -1803,16 +1820,16 @@ fn unboxed_result_call_tests_the_flag_not_the_result() {
         !unboxed.contains(&format!("brif {result},")),
         "the unboxed result {result} is never tested:\n{unboxed}"
     );
-    // Only the call: the entry check's releasing slow path tests its own
-    // result (D-775).
-    assert_eq!(unboxed.matches(&load_flag).count(), 1, "{unboxed}");
+    // The call and the entry check's releasing slow path, which returns
+    // nothing (D-775).
+    assert_eq!(unboxed.matches(&load_flag).count(), 2, "{unboxed}");
     let uniform = clif_of(&[unboxed_call_unit(Repr::Value)], &opts);
     let (_, result, next) = call_and_next(&uniform);
     assert!(
         next.starts_with(&format!("brif {result},")),
         "a uniform word is tested:\n{uniform}"
     );
-    assert_eq!(uniform.matches(&load_flag).count(), 0, "{uniform}");
+    assert_eq!(uniform.matches(&load_flag).count(), 1, "{uniform}");
 }
 
 /// `f(x) { t = alloc_placeholder tuple/<arity>; init_field t.<last> = x;

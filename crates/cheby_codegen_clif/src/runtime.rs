@@ -18,7 +18,8 @@ pub enum RuntimeFunc {
     /// `void cheby_rt_panic(ExecCtx *ctx, uint32_t kind, uint64_t message, uint64_t location)`:
     /// records the panic, sets the flag and returns (D-733).
     Panic,
-    /// `void cheby_rt_stack_slow(ExecCtx *ctx, uint64_t location)`.
+    /// `void cheby_rt_stack_slow(ExecCtx *ctx, uint64_t location)`, which
+    /// saves every register it uses ([`Self::preserves_all`]).
     StackSlow,
     /// `uint64_t cheby_rt_box_i64(ExecCtx *ctx, int64_t value)`.
     BoxI64,
@@ -66,12 +67,12 @@ pub enum RuntimeFunc {
     ScopeOpen,
     /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)` (D-693).
     ScopeClose,
-    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
+    /// `void cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
     /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path that
-    /// releases up to four counted parameters itself when it starts an unwinding, and then
-    /// returns nonzero (D-775).
+    /// releases up to four counted parameters itself when it starts an unwinding, which the
+    /// caller reads from the flag (D-775).
     StackSlowUnwind,
-    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
+    /// `void cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
     /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
     /// the same for a large function's outer entry (D-743, D-775).
     StackSlowFrameUnwind,
@@ -249,11 +250,31 @@ impl RuntimeFunc {
             Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
             Self::ScopeOpen => (&[Ptr, Bool, I64, I64], U64),
             Self::ScopeClose => (&[Ptr, U64, Bool], Bool),
-            Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], U32),
-            Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], U32),
+            Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], Void),
+            Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], Void),
             Self::BlockingCall => (&[Ptr, Ptr, Ptr, U64], U64),
             Self::ListUncons | Self::ListUnconsOwned => (&[Ptr, U64, I64, I64, I64, Ptr], U64),
         }
+    }
+
+    /// Whether the function is one of the entry check's slow paths, which
+    /// save every register generated code may keep a value in and load them
+    /// back before they return (`cheby_runtime::panic`). On a target whose
+    /// runtime has those stubs ([`crate::decls::Decls::saving_slow_paths`]),
+    /// generated code calls them with Cranelift's `preserve_all`
+    /// convention, so the call clobbers nothing, and the values that live
+    /// across the entry check stay in registers on the fast path: in a
+    /// self tail call's loop, every value it carries. They return no
+    /// result, as `preserve_all` allows none.
+    #[must_use]
+    pub const fn preserves_all(self) -> bool {
+        matches!(
+            self,
+            Self::StackSlow
+                | Self::StackSlowFrame
+                | Self::StackSlowUnwind
+                | Self::StackSlowFrameUnwind
+        )
     }
 
     /// Whether the function is declared only when a unit first uses it.

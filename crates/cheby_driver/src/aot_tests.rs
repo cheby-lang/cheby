@@ -303,7 +303,9 @@ fn lowered_and_compiled(root: &Path) -> (Vec<MirModule>, Vec<(String, CodeRecord
 /// A unit that defines no user layout or external type writes the module
 /// record it wrote before the records carried types (d13dbbf): 001's
 /// `hello_world` code record, encoded, is pinned on macOS arm64 by its
-/// size and digest (4398 bytes at version 4 with the profile byte; 4397
+/// size and digest (4390 bytes at version 4 since the entry check's
+/// releasing slow path is called with `preserve_all` and tested through
+/// the flag; 4398 before, at version 4 with the profile byte; 4397
 /// at version 3 with the functions' names, D-1041; 4352 at version 2 with
 /// positions, D-938; 4320 at version 1, D-1115), and on every target its module record lists no
 /// type, external type, hook or free shape. `std::io`'s record grows by its types' tables; both sizes are
@@ -327,7 +329,9 @@ fn aot_001_hello_world_record_unchanged() {
         // 2's 4352 bytes with positions, D-938, 4320 at version 1, D-1115,
         // plus 8 bytes per function entry and the functions' names in its
         // string table), plus the profile byte.
-        assert_eq!(sizes["hello_world"], (4398, 0x324d_c5e3_9d11_5e17));
+        // The entry checks' slow paths then became `preserve_all` calls
+        // followed by the flag's test, which made the code 8 bytes shorter.
+        assert_eq!(sizes["hello_world"], (4390, 0x0b43_83e2_be1e_051d));
     }
     let (_, hello) = &records[1];
     let (bytes, _) = record_object(hello, "cb$mod$hello_world");

@@ -58,7 +58,13 @@
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
 //! `cheby_rt_stack_slow_unwind`, which also releases up to four counted
-//! parameters when it starts an unwinding (D-775). The
+//! parameters when it starts an unwinding (D-775). The slow paths save
+//! every register generated code may use, so on aarch64 and x86-64
+//! outside Windows they are called with Cranelift's `preserve_all`
+//! convention, which clobbers nothing: the values that live across the
+//! check, a self tail call's loop-carried ones included, stay in registers
+//! on the fast path. They return nothing; the code reads the flag at
+//! `ctx+12` after them. The
 //! check runs after the prologue has allocated the frame, so a function
 //! whose frame exceeds [`CodegenOptions::large_frame_threshold`] (64 KiB)
 //! is compiled as two (D-679): an outer function with its symbol and a
@@ -256,7 +262,7 @@ pub struct CodegenOptions {
     /// outer function, which checks the stack for its whole frame, and an
     /// unchecked inner body `cb$big$…` (D-679). Only consulted when
     /// [`CodegenOptions::stack_check`] is set. Tests lower it to split
-    /// small functions.
+    /// small functions; 0 splits every function whose frame is not empty.
     pub large_frame_threshold: u32,
     /// Compile a top-level function's tail calls of itself as every other
     /// call, through its slot, instead of as a jump inside the function.

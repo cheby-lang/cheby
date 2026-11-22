@@ -140,10 +140,10 @@ fn lowered_edges_lead_to_untaken_pads() {
     let clif = jit.take_clif().join("\n");
     let (_, text) = clif.split_once("; cb$fn$app$f\n").unwrap();
     let (text, _) = text.split_once("\n}").unwrap();
-    // The three helper calls; the entry check's releasing slow path tests
-    // its own result (D-775).
+    // The three helper calls and the entry check's releasing slow path,
+    // which returns nothing (D-775).
     let load_flag = format!("load.i32 notrap aligned v0+{}", abi::CTX_UNWIND);
-    assert_eq!(text.matches(&load_flag).count(), 3, "{text}");
+    assert_eq!(text.matches(&load_flag).count(), 4, "{text}");
     assert!(text.contains("cheby_rt_stack_slow_unwind"), "{text}");
     assert!(text.contains(" cold:"), "{text}");
     assert!(!text.contains("trap user"), "{text}");

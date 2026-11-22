@@ -147,6 +147,8 @@ pub(crate) struct PendingStatic {
 #[derive(Clone)]
 pub struct Decls {
     call_conv: CallConv,
+    /// [`Self::saving_slow_paths`].
+    saving_slow_paths: bool,
     frontend: TargetFrontendConfig,
     funcs: FxHashMap<FnKey, FuncDecl>,
     slots: FxHashMap<SlotKey, SlotDecl>,
@@ -418,6 +420,13 @@ impl Decls {
         }
         Ok(Self {
             call_conv: isa.default_call_conv(),
+            // The runtime's naked stubs exist on these targets only; the
+            // plain functions of Miri and Windows clobber what C allows.
+            saving_slow_paths: matches!(isa.name(), "aarch64" | "x64")
+                && matches!(
+                    isa.default_call_conv(),
+                    CallConv::SystemV | CallConv::AppleAarch64
+                ),
             frontend: isa.frontend_config(),
             funcs: FxHashMap::default(),
             slots: FxHashMap::default(),
@@ -560,6 +569,26 @@ impl Decls {
     #[must_use]
     pub const fn c_call_conv(&self) -> CallConv {
         self.call_conv
+    }
+
+    /// Whether the entry check's slow paths
+    /// ([`RuntimeFunc::preserves_all`]) are called with Cranelift's
+    /// `preserve_all` convention: on aarch64 and x86-64 outside Windows,
+    /// where the runtime's slow paths are naked stubs that save every
+    /// register generated code may use. Elsewhere they are plain C
+    /// functions, called with the C convention.
+    #[must_use]
+    pub const fn saving_slow_paths(&self) -> bool {
+        self.saving_slow_paths
+    }
+
+    /// These declarations with the slow paths called with the C
+    /// convention, as on a target without the saving stubs: for tests that
+    /// compare the two.
+    #[cfg(test)]
+    pub(crate) fn without_saving_slow_paths(mut self) -> Self {
+        self.saving_slow_paths = false;
+        self
     }
 
     pub(crate) const fn frontend_config(&self) -> TargetFrontendConfig {
@@ -1112,7 +1141,12 @@ impl Decls {
             return Ok(());
         }
         let (params, ret) = f.ctypes();
-        let signature = sig::c_signature(params, ret, self.call_conv);
+        let call_conv = if f.preserves_all() && self.saving_slow_paths {
+            CallConv::PreserveAll
+        } else {
+            self.call_conv
+        };
+        let signature = sig::c_signature(params, ret, call_conv);
         // The function is declared first, in the order it always was, so
         // the ids of generated functions do not move (D-264).
         let id = self.import_word(module, f.symbol(), ImportTarget::Function(&signature))?;

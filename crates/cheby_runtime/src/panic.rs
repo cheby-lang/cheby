@@ -223,6 +223,179 @@ pub(crate) unsafe fn report_of(kind: u32, message: Word, location: Word) -> Pani
     }
 }
 
+/// The entry check's slow paths save every register generated code may
+/// keep a value in, so that their call clobbers nothing: generated code
+/// calls them with Cranelift's `preserve_all` convention, and the values
+/// that live across the entry check, those a self tail call's loop carries
+/// included, stay in registers on the fast path. The C convention lets the
+/// Rust body clobber `x0`-`x17` and every vector register (of `v8`-`v15`
+/// the upper halves), and `preserve_all` promises all of them back, so the
+/// stub saves `x0`-`x17` and `q0`-`q31` whole: 656 bytes below its frame
+/// record, which keeps `sp` 16-byte aligned. `x18` (the platform
+/// register), `x19`-`x28` (callee-saved), `x29` and `x30` (the frame
+/// record) need nothing more. The flags, NZCV, are never live across a
+/// call in generated code.
+///
+/// The text runs with `x29` at the stub's frame record and `sp` right
+/// below it; it leaves `sp` 656 bytes lower. [`restore_all_aarch64`]
+/// undoes it.
+#[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+macro_rules! save_all_aarch64 {
+    () => {
+        concat!(
+            "sub sp, sp, #656\n",
+            "stp x0, x1, [sp, #0]\n",
+            "stp x2, x3, [sp, #16]\n",
+            "stp x4, x5, [sp, #32]\n",
+            "stp x6, x7, [sp, #48]\n",
+            "stp x8, x9, [sp, #64]\n",
+            "stp x10, x11, [sp, #80]\n",
+            "stp x12, x13, [sp, #96]\n",
+            "stp x14, x15, [sp, #112]\n",
+            "stp x16, x17, [sp, #128]\n",
+            "stp q0, q1, [sp, #144]\n",
+            "stp q2, q3, [sp, #176]\n",
+            "stp q4, q5, [sp, #208]\n",
+            "stp q6, q7, [sp, #240]\n",
+            "stp q8, q9, [sp, #272]\n",
+            "stp q10, q11, [sp, #304]\n",
+            "stp q12, q13, [sp, #336]\n",
+            "stp q14, q15, [sp, #368]\n",
+            "stp q16, q17, [sp, #400]\n",
+            "stp q18, q19, [sp, #432]\n",
+            "stp q20, q21, [sp, #464]\n",
+            "stp q22, q23, [sp, #496]\n",
+            "stp q24, q25, [sp, #528]\n",
+            "stp q26, q27, [sp, #560]\n",
+            "stp q28, q29, [sp, #592]\n",
+            "stp q30, q31, [sp, #624]",
+        )
+    };
+}
+#[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+pub(crate) use save_all_aarch64;
+
+/// The registers [`save_all_aarch64`] saved, loaded back, and `sp` back
+/// at the stub's frame record.
+#[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+macro_rules! restore_all_aarch64 {
+    () => {
+        concat!(
+            "ldp q30, q31, [sp, #624]\n",
+            "ldp q28, q29, [sp, #592]\n",
+            "ldp q26, q27, [sp, #560]\n",
+            "ldp q24, q25, [sp, #528]\n",
+            "ldp q22, q23, [sp, #496]\n",
+            "ldp q20, q21, [sp, #464]\n",
+            "ldp q18, q19, [sp, #432]\n",
+            "ldp q16, q17, [sp, #400]\n",
+            "ldp q14, q15, [sp, #368]\n",
+            "ldp q12, q13, [sp, #336]\n",
+            "ldp q10, q11, [sp, #304]\n",
+            "ldp q8, q9, [sp, #272]\n",
+            "ldp q6, q7, [sp, #240]\n",
+            "ldp q4, q5, [sp, #208]\n",
+            "ldp q2, q3, [sp, #176]\n",
+            "ldp q0, q1, [sp, #144]\n",
+            "ldp x16, x17, [sp, #128]\n",
+            "ldp x14, x15, [sp, #112]\n",
+            "ldp x12, x13, [sp, #96]\n",
+            "ldp x10, x11, [sp, #80]\n",
+            "ldp x8, x9, [sp, #64]\n",
+            "ldp x6, x7, [sp, #48]\n",
+            "ldp x4, x5, [sp, #32]\n",
+            "ldp x2, x3, [sp, #16]\n",
+            "ldp x0, x1, [sp, #0]\n",
+            "add sp, sp, #656",
+        )
+    };
+}
+#[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+pub(crate) use restore_all_aarch64;
+
+/// [`save_all_aarch64`] for System V x86-64: the C convention lets the
+/// Rust body clobber `rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`-`r11` and
+/// `xmm0`-`xmm15`, so the stub saves those: 336 bytes below its frame
+/// record (`rbp`), the nine words, a pad word and the sixteen vector
+/// registers, which keeps `rsp` 16-byte aligned. Generated code uses no
+/// AVX register, so the upper halves of `ymm` need nothing.
+///
+/// The text runs with `rsp` right below the stub's frame record and
+/// leaves it 336 bytes lower. [`restore_all_x86_64`] undoes it.
+#[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+macro_rules! save_all_x86_64 {
+    () => {
+        concat!(
+            "sub rsp, 336\n",
+            "mov qword ptr [rsp], rax\n",
+            "mov qword ptr [rsp + 8], rcx\n",
+            "mov qword ptr [rsp + 16], rdx\n",
+            "mov qword ptr [rsp + 24], rsi\n",
+            "mov qword ptr [rsp + 32], rdi\n",
+            "mov qword ptr [rsp + 40], r8\n",
+            "mov qword ptr [rsp + 48], r9\n",
+            "mov qword ptr [rsp + 56], r10\n",
+            "mov qword ptr [rsp + 64], r11\n",
+            "movups xmmword ptr [rsp + 80], xmm0\n",
+            "movups xmmword ptr [rsp + 96], xmm1\n",
+            "movups xmmword ptr [rsp + 112], xmm2\n",
+            "movups xmmword ptr [rsp + 128], xmm3\n",
+            "movups xmmword ptr [rsp + 144], xmm4\n",
+            "movups xmmword ptr [rsp + 160], xmm5\n",
+            "movups xmmword ptr [rsp + 176], xmm6\n",
+            "movups xmmword ptr [rsp + 192], xmm7\n",
+            "movups xmmword ptr [rsp + 208], xmm8\n",
+            "movups xmmword ptr [rsp + 224], xmm9\n",
+            "movups xmmword ptr [rsp + 240], xmm10\n",
+            "movups xmmword ptr [rsp + 256], xmm11\n",
+            "movups xmmword ptr [rsp + 272], xmm12\n",
+            "movups xmmword ptr [rsp + 288], xmm13\n",
+            "movups xmmword ptr [rsp + 304], xmm14\n",
+            "movups xmmword ptr [rsp + 320], xmm15",
+        )
+    };
+}
+#[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+pub(crate) use save_all_x86_64;
+
+/// The registers [`save_all_x86_64`] saved, loaded back, and `rsp` back
+/// right below the stub's frame record.
+#[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+macro_rules! restore_all_x86_64 {
+    () => {
+        concat!(
+            "movups xmm15, xmmword ptr [rsp + 320]\n",
+            "movups xmm14, xmmword ptr [rsp + 304]\n",
+            "movups xmm13, xmmword ptr [rsp + 288]\n",
+            "movups xmm12, xmmword ptr [rsp + 272]\n",
+            "movups xmm11, xmmword ptr [rsp + 256]\n",
+            "movups xmm10, xmmword ptr [rsp + 240]\n",
+            "movups xmm9, xmmword ptr [rsp + 224]\n",
+            "movups xmm8, xmmword ptr [rsp + 208]\n",
+            "movups xmm7, xmmword ptr [rsp + 192]\n",
+            "movups xmm6, xmmword ptr [rsp + 176]\n",
+            "movups xmm5, xmmword ptr [rsp + 160]\n",
+            "movups xmm4, xmmword ptr [rsp + 144]\n",
+            "movups xmm3, xmmword ptr [rsp + 128]\n",
+            "movups xmm2, xmmword ptr [rsp + 112]\n",
+            "movups xmm1, xmmword ptr [rsp + 96]\n",
+            "movups xmm0, xmmword ptr [rsp + 80]\n",
+            "mov r11, qword ptr [rsp + 64]\n",
+            "mov r10, qword ptr [rsp + 56]\n",
+            "mov r9, qword ptr [rsp + 48]\n",
+            "mov r8, qword ptr [rsp + 40]\n",
+            "mov rdi, qword ptr [rsp + 32]\n",
+            "mov rsi, qword ptr [rsp + 24]\n",
+            "mov rdx, qword ptr [rsp + 16]\n",
+            "mov rcx, qword ptr [rsp + 8]\n",
+            "mov rax, qword ptr [rsp]\n",
+            "add rsp, 336",
+        )
+    };
+}
+#[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+pub(crate) use restore_all_x86_64;
+
 /// What the body of the slow paths found ([`stack_slow`]); 0, the guard's
 /// sentinel, when a raise inside it (the deadline) set the flag already.
 mod found {
@@ -248,24 +421,37 @@ mod found {
 /// `String` object naming the function.
 ///
 /// D-1040: a naked stub that passes its caller's frame pointer and return
-/// address to [`stack_slow_from`] and jumps to it, so a stack overflow's
-/// backtrace starts at the function whose entry check found it. AAPCS64:
-/// the arguments are in `x0` and `x1`; `x29` goes to `x2`, `x30` to `x3`.
+/// address to [`stack_slow_from`], so a stack overflow's backtrace starts
+/// at the function whose entry check found it. It also saves every
+/// register generated code may use and loads them back before it returns
+/// ([`save_all_aarch64`]), so a call of it clobbers nothing. AAPCS64: it
+/// pushes a frame record of its own (`x29`, `x30`), saves the registers
+/// below it, and calls the body with the arguments still in `x0` and
+/// `x1`, the caller's `x29` (from the record) in `x2` and `x30` in `x3`.
 #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) {
     core::arch::naked_asm!(
-        "mov x2, x29",
+        "stp x29, x30, [sp, #-16]!",
+        "mov x29, sp",
+        save_all_aarch64!(),
+        "ldr x2, [x29]",
         "mov x3, x30",
-        "b {body}",
+        "bl {body}",
+        restore_all_aarch64!(),
+        "ldp x29, x30, [sp], #16",
+        "ret",
         body = sym stack_slow_from,
     )
 }
 
-/// The entry check's slow path (above), as a System V x86-64 stub (D-1040): the
-/// arguments are in `rdi` and `rsi`; `rbp` goes to `rdx` and the return
-/// address, the word at `[rsp]`, to `rcx`.
+/// The entry check's slow path (above), as a System V x86-64 stub (D-1040),
+/// which saves every register generated code may use as well
+/// ([`save_all_x86_64`]): it pushes `rbp` as a frame record of its own,
+/// saves the registers below it, and calls the body with the arguments
+/// still in `rdi` and `rsi`, the caller's `rbp` (from the record) in
+/// `rdx` and the return address in `rcx`.
 ///
 /// # Safety
 ///
@@ -275,9 +461,15 @@ pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_stack_slow(ctx: *mut ExecCtx, location: Word) {
     core::arch::naked_asm!(
-        "mov rdx, rbp",
-        "mov rcx, qword ptr [rsp]",
-        "jmp {body}",
+        "push rbp",
+        "mov rbp, rsp",
+        save_all_x86_64!(),
+        "mov rdx, qword ptr [rbp]",
+        "mov rcx, qword ptr [rbp + 8]",
+        "call {body}",
+        restore_all_x86_64!(),
+        "pop rbp",
+        "ret",
         body = sym stack_slow_from,
     )
 }
@@ -369,10 +561,11 @@ pub const LARGE_FRAME_MARGIN: u64 = 64 << 10;
 ///
 /// As for [`cheby_rt_stack_slow`].
 ///
-/// D-1040: a naked stub, as [`cheby_rt_stack_slow`]'s, that passes its
-/// caller's frame pointer and return address to [`stack_slow_frame_from`]
-/// and jumps to it. AAPCS64: the arguments are in `x0`-`x2`; `x29` goes to
-/// `x3`, `x30` to `x4`.
+/// D-1040: a naked stub, as [`cheby_rt_stack_slow`]'s, that saves every
+/// register generated code may use and passes its caller's frame pointer
+/// and return address to [`stack_slow_frame_from`]. AAPCS64: the
+/// arguments stay in `x0`-`x2`; the caller's `x29` goes to `x3`, `x30` to
+/// `x4`.
 #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
@@ -382,16 +575,22 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_frame(
     frame_size: u64,
 ) {
     core::arch::naked_asm!(
-        "mov x3, x29",
+        "stp x29, x30, [sp, #-16]!",
+        "mov x29, sp",
+        save_all_aarch64!(),
+        "ldr x3, [x29]",
         "mov x4, x30",
-        "b {body}",
+        "bl {body}",
+        restore_all_aarch64!(),
+        "ldp x29, x30, [sp], #16",
+        "ret",
         body = sym stack_slow_frame_from,
     )
 }
 
-/// A large function's slow path (above), as a System V x86-64 stub (D-1040):
-/// the arguments are in `rdi`, `rsi` and `rdx`; `rbp` goes to `rcx` and the
-/// return address, the word at `[rsp]`, to `r8`.
+/// A large function's slow path (above), as a System V x86-64 stub (D-1040),
+/// as [`cheby_rt_stack_slow`]'s: the arguments stay in `rdi`, `rsi` and
+/// `rdx`; the caller's `rbp` goes to `rcx` and the return address to `r8`.
 ///
 /// # Safety
 ///
@@ -405,9 +604,15 @@ pub unsafe extern "C" fn cheby_rt_stack_slow_frame(
     frame_size: u64,
 ) {
     core::arch::naked_asm!(
-        "mov rcx, rbp",
-        "mov r8, qword ptr [rsp]",
-        "jmp {body}",
+        "push rbp",
+        "mov rbp, rsp",
+        save_all_x86_64!(),
+        "mov rcx, qword ptr [rbp]",
+        "mov r8, qword ptr [rbp + 8]",
+        "call {body}",
+        restore_all_x86_64!(),
+        "pop rbp",
+        "ret",
         body = sym stack_slow_frame_from,
     )
 }

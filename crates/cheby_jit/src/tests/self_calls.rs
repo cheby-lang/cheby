@@ -4,6 +4,9 @@
 //! through its slot (D-015, D-453). A REPL session and the inner body of a
 //! large frame keep the call (D-043, D-679).
 
+use cheby_mir::{CType, ForeignSig};
+use cheby_runtime::{ExecCtx, RuntimeConfig};
+
 use super::*;
 
 /// The blocks of one function's CLIF text, by label (`block3`), each with
@@ -69,15 +72,32 @@ fn assert_loops(text: &str) {
 }
 
 /// `count(n: Int, acc: Int) { if n == 0 { return box acc } m = n - 1;
-/// s = acc + n; tail count(m, s) }`: the sum of `1..=n`.
-fn count_prog() -> (Prog, DefId) {
+/// s = acc + n; tail count(m, s) }`: the sum of `1..=n`. With `boxes`,
+/// each iteration also boxes `s` and drops the box, whose out-of-line
+/// paths are calls that `n` and `s` live across, so the function has a
+/// frame of saved registers.
+fn count_prog(boxes: bool) -> (Prog, DefId) {
     let mut p = Prog::default();
     let count = def(1, 0);
+    let boxing = if boxes {
+        vec![
+            assign(
+                6,
+                Rvalue::Box {
+                    value: op(5),
+                    from: Repr::Int,
+                },
+            ),
+            Stmt::Drop(local(6)),
+        ]
+    } else {
+        Vec::new()
+    };
     p.item(
         0,
         "count",
         &[Repr::Int, Repr::Int],
-        &[Repr::Bool, Repr::Value, Repr::Int, Repr::Int],
+        &[Repr::Bool, Repr::Value, Repr::Int, Repr::Int, Repr::Value],
         vec![
             block(
                 vec![assign(
@@ -127,7 +147,10 @@ fn count_prog() -> (Prog, DefId) {
                             loc: StrId::from_u32(1),
                         },
                     ),
-                ],
+                ]
+                .into_iter()
+                .chain(boxing)
+                .collect(),
                 Terminator::TailCall {
                     callee: Callee::Direct(count),
                     args: vec![op(4), op(5)],
@@ -139,10 +162,15 @@ fn count_prog() -> (Prog, DefId) {
     (p, count)
 }
 
-/// `count_prog` compiled with `codegen` and its CLIF captured, with a
-/// thunk running `count(n, 0)`.
+/// `count_prog(false)` compiled with `codegen` and its CLIF captured,
+/// with a thunk running `count(n, 0)`.
 fn compile_count(codegen: CodegenOptions, n: i64) -> (Jit, Vec<String>, DefId) {
-    let (mut p, count) = count_prog();
+    compile_count_with(codegen, n, false)
+}
+
+/// [`compile_count`] of `count_prog(boxes)`.
+fn compile_count_with(codegen: CodegenOptions, n: i64, boxes: bool) -> (Jit, Vec<String>, DefId) {
+    let (mut p, count) = count_prog(boxes);
     let target = p.call(
         count,
         vec![Operand::Const(Const::Int(n)), Operand::Const(Const::Int(0))],
@@ -234,7 +262,7 @@ fn a_repl_session_keeps_self_calls_on_the_slot() {
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
 fn a_session_item_keeps_self_calls_on_the_slot() {
-    let (p, count) = count_prog();
+    let (p, count) = count_prog(false);
     let mut jit = Jit::with_options(CodegenOptions {
         capture_clif: true,
         ..CodegenOptions::default()
@@ -265,7 +293,7 @@ fn a_session_item_keeps_self_calls_on_the_slot() {
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
 fn a_tail_call_of_another_function_is_unchanged() {
-    let (mut p, count) = count_prog();
+    let (mut p, count) = count_prog(false);
     p.item(
         1,
         "start",
@@ -298,9 +326,10 @@ fn a_tail_call_of_another_function_is_unchanged() {
     );
 }
 
-/// Under a large frame (D-679, a threshold of 0 splits every function),
-/// the unchecked inner body keeps its self tail call on the slot, which
-/// leads through the outer function's check; the loop still runs in
+/// Under a large frame (D-679, a threshold of 0 splits every function
+/// whose frame is not empty, so `count` boxes and drops its sum to have
+/// one), the unchecked inner body keeps its self tail call on the slot,
+/// which leads through the outer function's check; the loop still runs in
 /// constant stack.
 #[test]
 #[cfg_attr(
@@ -309,12 +338,13 @@ fn a_tail_call_of_another_function_is_unchanged() {
 )]
 fn a_large_frame_keeps_self_calls_on_the_outer_check() {
     let n = 1_000_000;
-    let (jit, clif, target) = compile_count(
+    let (jit, clif, target) = compile_count_with(
         CodegenOptions {
             large_frame_threshold: 0,
             ..CodegenOptions::default()
         },
         n,
+        true,
     );
     let inner = function_text(&clif, "cb$big$fn$app$count");
     assert!(inner.contains("return_call_indirect"), "{inner}");
@@ -759,5 +789,381 @@ fn a_local_function_jumps_on_its_own_self_only() {
         if cheby_runtime::LEAK_CHECK_ENABLED {
             assert_eq!(jit.domain().live_objects(), 0);
         }
+    }
+}
+
+/// The rotation step of `float_spin`: `(cos, sin)` of a small angle,
+/// not exactly a rotation, so every iteration's Floats are new.
+const SPIN_C: f64 = 0.999_999_5;
+const SPIN_S: f64 = 0.000_999_999_8;
+
+/// The Floats of `float_spin`: `x`, `y`, `u`, `v` and the sum `acc`.
+type SpinState = [f64; 5];
+
+/// The start of root `root` of `float_spin`, distinct for each root.
+fn spin_start(root: u32) -> SpinState {
+    let r = f64::from(root);
+    [1.0 + r * 0.25, 0.5 - r * 0.125, r, -r, 0.0]
+}
+
+/// `float_spin`'s state after `k` iterations from `state`, with the
+/// same operations in the same order as its MIR, which Cranelift neither
+/// reorders nor fuses.
+fn spin_after(k: u32, state: SpinState) -> SpinState {
+    (0..k).fold(state, |[x, y, u, v, acc], _| {
+        let x1 = x * SPIN_C - y * SPIN_S;
+        let y1 = x * SPIN_S + y * SPIN_C;
+        let u1 = u * 0.5 + x1;
+        let v1 = v * 0.75 + y1;
+        [x1, y1, u1, v1, acc + (x1 * u1 - y1 * v1)]
+    })
+}
+
+/// The context each root of `float_spin` publishes while its loop runs,
+/// as an address, and the number of interrupts its slow path had handled
+/// when the loop ended. The host requests interrupts only under this lock
+/// and only of a published context, which its fiber cannot retire before
+/// `cheby_test_spin_end` takes the lock.
+static SPIN_ROOTS: Mutex<[(usize, u64); 2]> = Mutex::new([(0, 0); 2]);
+
+/// The slot of root `root` in [`SPIN_ROOTS`].
+fn spin_slot(roots: &mut [(usize, u64); 2], root: i64) -> &mut (usize, u64) {
+    usize::try_from(root)
+        .ok()
+        .and_then(|n| roots.get_mut(n))
+        .expect("a root of float_spin")
+}
+
+/// `cheby_test_spin_begin(ctx, root)`: publishes the running fiber's
+/// context.
+extern "C" fn cheby_test_spin_begin(ctx: *mut ExecCtx, root: i64) {
+    let mut roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+    *spin_slot(&mut roots, root) = (ctx.expose_provenance(), 0);
+}
+
+/// `cheby_test_spin_end(ctx, root)`: withdraws the context and records how
+/// many interrupts its slow path handled.
+extern "C" fn cheby_test_spin_end(ctx: *mut ExecCtx, root: i64) {
+    // SAFETY: the context of the fiber that runs this call.
+    let interrupts = unsafe { &*ctx }.interrupts();
+    let mut roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+    *spin_slot(&mut roots, root) = (0, interrupts);
+}
+
+/// `spin(k, x, y, u, v, acc)`, item `index`: while `k != 0`, tail-calls
+/// itself with [`spin_after`]'s step; at 0 returns the tagged 1 if every
+/// Float equals `expected`, and `Nil` otherwise. Its loop carries five
+/// Floats and an Int across the entry check.
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR function")]
+fn spin_item(p: &mut Prog, index: u32, expected: SpinState) -> DefId {
+    let spin = def(1, index);
+    let float = |n: f64| Operand::Const(Const::Float(n.to_bits()));
+    let arith = |dst: u32, op_: ArithOp, lhs: Operand, rhs: Operand| {
+        assign(
+            dst,
+            Rvalue::FloatArith {
+                op: op_,
+                lhs,
+                rhs,
+                repr: Repr::Float,
+            },
+        )
+    };
+    let compare = |dst: u32, lhs: u32, rhs: Const, repr: Repr| {
+        assign(
+            dst,
+            Rvalue::Compare {
+                op: CmpOp::Eq,
+                lhs: op(lhs),
+                rhs: Operand::Const(rhs),
+                repr,
+            },
+        )
+    };
+    // bb2..bb6 check one Float each, on to the next block or to bb8.
+    let check = |dst: u32, param: u32, want: f64, next: u32| {
+        block(
+            vec![compare(
+                dst,
+                param,
+                Const::Float(want.to_bits()),
+                Repr::Float,
+            )],
+            Terminator::Branch {
+                cond: op(dst),
+                then_: bb(next),
+                else_: bb(8),
+            },
+        )
+    };
+    let [ex, ey, eu, ev, eacc] = expected;
+    let params = [
+        Repr::Int,
+        Repr::Float,
+        Repr::Float,
+        Repr::Float,
+        Repr::Float,
+        Repr::Float,
+    ];
+    // Locals 6..: the test of `k`, the fourteen steps, `k - 1`, the five
+    // checks and the result.
+    let mut locals = vec![Repr::Bool];
+    locals.extend([Repr::Float; 14]);
+    locals.push(Repr::Int);
+    locals.extend([Repr::Bool; 5]);
+    locals.push(Repr::Value);
+    let blocks = vec![
+        // bb0: k == 0?
+        block(
+            vec![compare(6, 0, Const::Int(0), Repr::Int)],
+            Terminator::Branch {
+                cond: op(6),
+                then_: bb(2),
+                else_: bb(1),
+            },
+        ),
+        // bb1: one step, then the self tail call.
+        block(
+            vec![
+                arith(7, ArithOp::Mul, op(1), float(SPIN_C)),
+                arith(8, ArithOp::Mul, op(2), float(SPIN_S)),
+                arith(9, ArithOp::Sub, op(7), op(8)),
+                arith(10, ArithOp::Mul, op(1), float(SPIN_S)),
+                arith(11, ArithOp::Mul, op(2), float(SPIN_C)),
+                arith(12, ArithOp::Add, op(10), op(11)),
+                arith(13, ArithOp::Mul, op(3), float(0.5)),
+                arith(14, ArithOp::Add, op(13), op(9)),
+                arith(15, ArithOp::Mul, op(4), float(0.75)),
+                arith(16, ArithOp::Add, op(15), op(12)),
+                arith(17, ArithOp::Mul, op(9), op(14)),
+                arith(18, ArithOp::Mul, op(12), op(16)),
+                arith(19, ArithOp::Sub, op(17), op(18)),
+                arith(20, ArithOp::Add, op(5), op(19)),
+                assign(
+                    21,
+                    Rvalue::Checked {
+                        op: ArithOp::Sub,
+                        lhs: op(0),
+                        rhs: Operand::Const(Const::Int(1)),
+                        repr: Repr::Int,
+                        loc: StrId::from_u32(1),
+                    },
+                ),
+            ],
+            Terminator::TailCall {
+                callee: Callee::Direct(spin),
+                args: vec![op(21), op(9), op(12), op(14), op(16), op(20)],
+            },
+        ),
+        check(22, 1, ex, 3),
+        check(23, 2, ey, 4),
+        check(24, 3, eu, 5),
+        check(25, 4, ev, 6),
+        check(26, 5, eacc, 7),
+        // bb7: every Float matched.
+        block(
+            vec![assign(
+                27,
+                Rvalue::Box {
+                    value: Operand::Const(Const::Int(1)),
+                    from: Repr::Int,
+                },
+            )],
+            ret(27),
+        ),
+        // bb8: a mismatch.
+        block(Vec::new(), Terminator::Return(Operand::Const(Const::Nil))),
+    ];
+    p.item(
+        index,
+        &format!("spin{index}"),
+        &params,
+        &locals,
+        blocks,
+        &[LOC],
+    )
+}
+
+/// `start(root, k)`, item `index`: publishes its context, runs `spin` for
+/// `k` iterations from root `root`'s start, withdraws the context and
+/// returns what `spin` returned.
+fn spin_root(p: &mut Prog, index: u32, root: u32, spin: DefId) -> DefId {
+    let float = |n: f64| Operand::Const(Const::Float(n.to_bits()));
+    let foreign = |symbol: &str| {
+        Stmt::Eval(Rvalue::CallForeign {
+            symbol: symbol.into(),
+            sig: ForeignSig {
+                params: vec![CType::Ptr, CType::I64],
+                ret: CType::Void,
+            },
+            args: vec![Operand::Const(Const::Ctx), op(0)],
+            blocking: false,
+        })
+    };
+    let [x0, y0, u0, v0, acc0] = spin_start(root);
+    p.item(
+        index,
+        &format!("start{index}"),
+        &[Repr::Int, Repr::Int],
+        &[Repr::Value],
+        straight(
+            vec![
+                foreign("cheby_test_spin_begin"),
+                assign(
+                    2,
+                    Rvalue::Call {
+                        callee: Callee::Direct(spin),
+                        args: vec![
+                            op(1),
+                            float(x0),
+                            float(y0),
+                            float(u0),
+                            float(v0),
+                            float(acc0),
+                        ],
+                    },
+                ),
+                foreign("cheby_test_spin_end"),
+            ],
+            2,
+        ),
+        &[],
+    )
+}
+
+/// A self tail call's loop whose Floats live in registers across the entry
+/// check (the slow path is called with `preserve_all` and saves every
+/// register) gets them back intact when the slow path switches its fiber
+/// out and in again. Two roots with distinct Floats run the loop at once,
+/// at one worker, where each runs while the other is switched out, and at
+/// two, where a root may resume on the other worker. The host requests an
+/// interrupt of each running loop every 200 µs, as the monitor does every
+/// 10 ms; each root's slow path handles some, and each root ends with the
+/// state the same steps give in Rust.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn a_float_loop_survives_preemption() {
+    const K: u32 = 3_000_000;
+    let mut p = Prog::default();
+    let mut targets = Vec::new();
+    for (root, start_index, spin_index) in [(0, 0, 1), (1, 2, 3)] {
+        let expected = spin_after(K, spin_start(root));
+        let spin = spin_item(&mut p, spin_index, expected);
+        let start = spin_root(&mut p, start_index, root, spin);
+        targets.push(p.call(
+            start,
+            vec![
+                Operand::Const(Const::Int(i64::from(root))),
+                Operand::Const(Const::Int(i64::from(K))),
+            ],
+        ));
+    }
+    let units = p.unwound_units();
+    let mut jit = Jit::configured(
+        CodegenOptions {
+            capture_clif: true,
+            ..CodegenOptions::default()
+        },
+        JitOptions::from_env(),
+    )
+    .unwrap();
+    let begin: extern "C" fn(*mut ExecCtx, i64) = cheby_test_spin_begin;
+    let end: extern "C" fn(*mut ExecCtx, i64) = cheby_test_spin_end;
+    #[expect(clippy::as_conversions, reason = "functions' addresses")]
+    let (begin, end) = (begin as *const u8, end as *const u8);
+    // SAFETY: both have the C signature their foreign calls use, and live
+    // as long as the process.
+    unsafe {
+        jit.define_symbol("cheby_test_spin_begin", begin);
+        jit.define_symbol("cheby_test_spin_end", end);
+    }
+    jit.compile(&units).unwrap();
+    let clif = jit.take_clif();
+    for index in [1, 3] {
+        let text = function_text(&clif, &format!("cb$fn$app$spin{index}"));
+        assert_loops(text);
+        assert!(text.contains("preserve_all"), "{text}");
+    }
+    for threads in [1, 2] {
+        run_spin_roots(&jit, &targets, threads);
+    }
+}
+
+/// Starts the roots `targets` of `a_float_loop_survives_preemption` on a
+/// runtime of `threads` workers, requests an interrupt of each running
+/// loop every 200 µs until both ended, and checks what they returned and
+/// that each handled an interrupt.
+fn run_spin_roots(jit: &Jit, targets: &[DefId], threads: usize) {
+    let runtime = Runtime::new(&RuntimeConfig {
+        threads: Some(threads),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let domain: Arc<Domain> = Domain::new();
+    let config = EntryConfig {
+        stack_size: 1 << 20,
+        domain: Arc::clone(&domain),
+        ..EntryConfig::new(EntryMode::Test)
+    };
+    let group = DetachedGroup::new();
+    let mut running: Vec<_> = targets
+        .iter()
+        .map(|&target| {
+            Some(
+                jit.entry(EntryKind::Const(target))
+                    .unwrap()
+                    .start_root_in(&runtime, &config, &group)
+                    .unwrap(),
+            )
+        })
+        .collect();
+    let mut outcomes: Vec<Option<EntryOutcome>> = running.iter().map(|_| None).collect();
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(600))
+        .unwrap();
+    while running.iter().any(Option::is_some) {
+        assert!(std::time::Instant::now() < deadline, "the roots hung");
+        {
+            let roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+            for &(ctx, _) in roots.iter() {
+                if ctx != 0 {
+                    // SAFETY: a published context: its fiber is inside
+                    // its loop and cannot withdraw it, and so cannot
+                    // end, while this lock is held.
+                    unsafe { &*std::ptr::with_exposed_provenance::<ExecCtx>(ctx) }
+                        .request_interrupt();
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        for (handle, outcome) in running.iter_mut().zip(&mut outcomes) {
+            if let Some(root) = handle.take() {
+                match root.wait_timeout(std::time::Duration::ZERO) {
+                    Ok(done) => *outcome = Some(done.unwrap()),
+                    Err(root) => *handle = Some(root),
+                }
+            }
+        }
+    }
+    let interrupts = *SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+    for (root, outcome) in outcomes.into_iter().enumerate() {
+        assert_eq!(
+            outcome,
+            Some(EntryOutcome::Returned(abi::tag_int(1).unwrap())),
+            "root {root} at {threads} threads"
+        );
+        let (ctx, handled) = interrupts.get(root).copied().unwrap();
+        assert_eq!(ctx, 0, "root {root} at {threads} threads");
+        assert!(
+            handled > 0,
+            "root {root} at {threads} threads: no interrupt"
+        );
+    }
+    runtime.shutdown();
+    if cheby_runtime::LEAK_CHECK_ENABLED {
+        assert_eq!(domain.live_objects(), 0, "at {threads} threads");
     }
 }

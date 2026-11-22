@@ -17,9 +17,9 @@ use cranelift_module::{
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, Ice, IndexVec, ModuleId};
 use cheby_mir::{
-    Abi, AbiSig, Block, CType, Callee, CalleeDecl, Const, DefName, FieldDesc, FnKey, ForeignSig,
-    Function, LayoutDesc, LayoutRef, Local, LocalDecl, Operand, Repr, Rvalue, Stmt, Terminator,
-    UnitKind,
+    Abi, AbiSig, ArithOp, Block, BlockId, CType, Callee, CalleeDecl, CmpOp, Const, DefName,
+    FieldDesc, FnKey, ForeignSig, Function, LayoutDesc, LayoutRef, Local, LocalDecl, Operand, Repr,
+    Rvalue, Stmt, Terminator, UnitKind,
 };
 
 use crate::*;
@@ -35,8 +35,12 @@ struct Recording {
 
 impl Recording {
     fn new() -> Self {
+        Self::with_isa(isa::host_isa().unwrap())
+    }
+
+    fn with_isa(isa: OwnedTargetIsa) -> Self {
         Self {
-            isa: isa::host_isa().unwrap(),
+            isa,
             declarations: ModuleDeclarations::default(),
             text: Vec::new(),
             data: Vec::new(),
@@ -670,5 +674,214 @@ fn isa_x86_64_apple_darwin_is_unsupported() {
         }
         Err(other) => panic!("not the unsupported-host error: {other}"),
         Ok(_) => panic!("x86_64-apple-darwin has an ISA"),
+    }
+}
+
+/// `app::spin(k: Int, cr, ci, zr, zi: Float)`, the shape of the
+/// comparison's `escape_time`: while `k != 0`, tail-calls itself as
+/// `spin(k - 1, cr, ci, zr * zr - zi * zi + cr, 2.0 * zr * zi + ci)`; at
+/// 0 returns `Nil`. The self tail call is a jump to the loop header,
+/// whose entry check's slow path is the loop's only call.
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR unit")]
+fn float_loop_unit() -> MirModule {
+    let spin = def(0);
+    let local = Local::from_u32;
+    let float = |n: f64| Operand::Const(Const::Float(n.to_bits()));
+    let arith = |dst: u32, op: ArithOp, lhs: Operand, rhs: Operand| Stmt::Assign {
+        dst: local(dst),
+        value: Rvalue::FloatArith {
+            op,
+            lhs,
+            rhs,
+            repr: Repr::Float,
+        },
+    };
+    let l = |n: u32| Operand::Local(local(n));
+    let mut body = function(
+        FnKey::Item(spin),
+        (0..5).map(local).collect(),
+        &[
+            // The parameters, then the test of `k`, the steps and `k - 1`.
+            Repr::Int,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Bool,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Int,
+        ],
+        Vec::new(),
+        Terminator::Return(Operand::Const(Const::Nil)),
+        &["a.cheby:1:4", "a.cheby:2:8"],
+    );
+    let blocks = vec![
+        Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: vec![Stmt::Assign {
+                dst: local(5),
+                value: Rvalue::Compare {
+                    op: CmpOp::Eq,
+                    lhs: l(0),
+                    rhs: Operand::Const(Const::Int(0)),
+                    repr: Repr::Int,
+                },
+            }],
+            term: Terminator::Branch {
+                cond: l(5),
+                then_: BlockId::from_u32(1),
+                else_: BlockId::from_u32(2),
+            },
+            unwind: Vec::new(),
+        },
+        Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: Vec::new(),
+            term: Terminator::Return(Operand::Const(Const::Nil)),
+            unwind: Vec::new(),
+        },
+        Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: vec![
+                arith(6, ArithOp::Mul, l(3), l(3)),
+                arith(7, ArithOp::Mul, l(4), l(4)),
+                arith(8, ArithOp::Sub, l(6), l(7)),
+                arith(9, ArithOp::Add, l(8), l(1)),
+                arith(10, ArithOp::Mul, float(2.0), l(3)),
+                arith(11, ArithOp::Mul, l(10), l(4)),
+                arith(12, ArithOp::Add, l(11), l(2)),
+                Stmt::Assign {
+                    dst: local(13),
+                    value: Rvalue::Checked {
+                        op: ArithOp::Sub,
+                        lhs: l(0),
+                        rhs: Operand::Const(Const::Int(1)),
+                        repr: Repr::Int,
+                        loc: StrId::from_u32(1),
+                    },
+                },
+            ],
+            term: Terminator::TailCall {
+                callee: Callee::Direct(spin),
+                args: vec![l(13), l(1), l(2), l(9), l(12)],
+            },
+            unwind: Vec::new(),
+        },
+    ];
+    body.blocks = IndexVec::from_raw(blocks).unwrap();
+    let float = Repr::Float;
+    MirModule {
+        externals: Vec::new(),
+        source: None,
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![body],
+        callees: vec![CalleeDecl {
+            def: spin,
+            sig: AbiSig::owned(
+                Abi::Cheby,
+                vec![Repr::Int, float, float, float, float],
+                Repr::Value,
+            ),
+        }],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![DefName {
+            def: spin,
+            module: "app".into(),
+            item: "spin".into(),
+        }],
+    }
+}
+
+/// `float_loop_unit`'s `spin` compiled for `isa` at `opt`, with the slow
+/// paths called with `preserve_all` when `saving` (and the target has
+/// the stubs): its CLIF text and the size of its frame below the frame
+/// record, its spill slots and saved callee-saved registers.
+fn float_loop(isa: OwnedTargetIsa, opt: OptLevel, saving: bool) -> (String, u32) {
+    let mut m = Recording::with_isa(isa);
+    let decls = Decls::new(m.isa()).unwrap();
+    let mut decls = if saving {
+        decls
+    } else {
+        decls.without_saving_slow_paths()
+    };
+    let cx = CodegenCx {
+        layouts: &PairLayout,
+    };
+    let opts = CodegenOptions {
+        opt_level: opt,
+        ..CodegenOptions::default()
+    };
+    let units = [float_loop_unit()];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let func = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+    let text = func.display().to_string();
+    let mut ctx = cranelift_codegen::Context::for_function(func);
+    ctx.compile(m.isa(), &mut ControlPlane::default()).unwrap();
+    let frame = ctx
+        .compiled_code()
+        .unwrap()
+        .buffer
+        .frame_layout()
+        .unwrap()
+        .frame_to_fp_offset;
+    (text, frame)
+}
+
+/// The targets whose Cranelift backend this build has (D-936): the
+/// host's architecture.
+fn built_targets() -> Vec<&'static str> {
+    [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+    ]
+    .into_iter()
+    .filter(|triple| isa::isa_for(triple).is_ok())
+    .collect()
+}
+
+/// The entry check's slow paths save every register (`cheby_runtime::panic`)
+/// and are called with `preserve_all` on aarch64 and x86-64 outside
+/// Windows, so the Floats a self tail call's loop carries stay in
+/// registers: the loop's function has no frame below its frame record,
+/// no spill slot and no saved register, in both profiles. Called with the
+/// C convention, as on Windows, the same loop keeps them in spill slots,
+/// since the call clobbers every vector register.
+#[test]
+fn a_float_loop_keeps_its_floats_in_registers() {
+    let targets = built_targets();
+    assert_ne!(targets.len(), 0, "no backend built");
+    for triple in targets {
+        let windows = triple.contains("windows");
+        for opt in [OptLevel::None, OptLevel::Speed] {
+            let isa = || isa::isa_with(triple, opt).unwrap();
+            let (text, frame) = float_loop(isa(), opt, true);
+            let context = format!("{triple} at {opt:?}");
+            assert_eq!(
+                text.contains("preserve_all"),
+                !windows,
+                "{context}:\n{text}"
+            );
+            if !windows {
+                assert_eq!(frame, 0, "{context}: a frame of {frame} bytes\n{text}");
+            }
+            let (text, frame) = float_loop(isa(), opt, false);
+            assert!(!text.contains("preserve_all"), "{context}:\n{text}");
+            assert!(frame > 0, "{context}: with the C convention, no frame");
+        }
     }
 }

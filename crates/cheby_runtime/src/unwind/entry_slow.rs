@@ -7,10 +7,16 @@
 //! function's counted parameters, which the MIR's entry pad drops (D-698,
 //! D-752). For a function with at most four counted parameters, code
 //! generation does not translate that entry-only pad chain: the slow block
-//! calls one of the helpers here with the parameters instead, and branches
-//! on its result to the function's shared `resume` (a nonzero result) or
-//! to the body (zero). The MIR keeps its entry pad; a function with more
-//! counted parameters keeps the translated chain.
+//! calls one of the helpers here with the parameters instead, and then
+//! branches on the fiber's unwind flag to the function's shared `resume`
+//! (set) or to the body (clear). The MIR keeps its entry pad; a function
+//! with more counted parameters keeps the translated chain.
+//!
+//! Like the plain slow paths, the helpers save every register generated
+//! code may use and load them back before they return
+//! ([`crate::panic::save_all_aarch64`]), so their call clobbers nothing.
+//! They return no result: Cranelift's `preserve_all` convention, which
+//! generated code calls them with, has none, and the flag tells the same.
 //!
 //! The helpers are not guarded themselves. Each calls the guarded slow
 //! path (`cheby_rt_stack_slow` or `cheby_rt_stack_slow_frame`), which
@@ -28,21 +34,26 @@ use crate::abi::{ENTRY_UNWIND_WORDS as MAX_WORDS, Word, unwind_flag};
 use crate::backtrace::{Start, start_at};
 use crate::ctx::ExecCtx;
 use crate::panic::{fatal, stack_slow_at, stack_slow_frame_at};
+#[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+use crate::panic::{restore_all_aarch64, save_all_aarch64};
+#[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+use crate::panic::{restore_all_x86_64, save_all_x86_64};
 use crate::rc;
 
 /// The entry check's slow path for a function with at most four counted
 /// parameters (D-775). Runs [`crate::panic::cheby_rt_stack_slow`]'s work;
 /// if that started an unwinding (the flag is set: overflow, cancellation,
-/// deadline), releases `p0..p(count-1)` and returns 1; else returns 0 and
-/// leaves them untouched. Never raises itself.
+/// deadline), releases `p0..p(count-1)`; else leaves them untouched. The
+/// caller reads the flag to tell. Never raises itself.
 ///
 /// D-1040 (D-1236): generated code reaches the
 /// slow path through this helper too, so it is a naked stub as well. Its
 /// arguments fill `x0`-`x6` (AAPCS64), so it pushes a frame record of its
-/// own (`x29`, `x30`), passes the record's address in `x7` and calls
-/// [`stack_slow_unwind_from`], which reads the caller's frame pointer and
-/// return address from it; then it pops the record and returns the body's
-/// result.
+/// own (`x29`, `x30`), saves every register generated code may use below
+/// it ([`save_all_aarch64`]), passes the record's address in `x7` and
+/// calls [`stack_slow_unwind_from`], which reads the caller's frame
+/// pointer and return address from it; then it loads the registers back,
+/// pops the record and returns.
 ///
 /// # Safety
 ///
@@ -61,12 +72,14 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     p1: Word,
     p2: Word,
     p3: Word,
-) -> u32 {
+) {
     core::arch::naked_asm!(
         "stp x29, x30, [sp, #-16]!",
         "mov x29, sp",
-        "mov x7, sp",
+        save_all_aarch64!(),
+        "mov x7, x29",
         "bl {body}",
+        restore_all_aarch64!(),
         "ldp x29, x30, [sp], #16",
         "ret",
         body = sym stack_slow_unwind_from,
@@ -75,10 +88,12 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
 
 /// The releasing slow path (above), as a System V x86-64 stub (D-1040): its
 /// arguments fill the six registers and one stack word, so it pushes
-/// `rbp` as a frame record of its own, then calls
+/// `rbp` as a frame record of its own, saves every register generated code
+/// may use below it ([`save_all_x86_64`]), then calls
 /// [`stack_slow_unwind_from`] with the seventh argument, `p3`, copied
 /// from `[rbp + 16]` and the record's address as the eighth, both on the
-/// stack, the call 16-byte aligned; `leave` pops the record.
+/// stack, the call 16-byte aligned; then it drops the two words, loads the
+/// registers back and pops the record.
 ///
 /// # Safety
 ///
@@ -94,14 +109,17 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     p1: Word,
     p2: Word,
     p3: Word,
-) -> u32 {
+) {
     core::arch::naked_asm!(
         "push rbp",
         "mov rbp, rsp",
+        save_all_x86_64!(),
         "push rbp",
         "push qword ptr [rbp + 16]",
         "call {body}",
-        "leave",
+        "add rsp, 16",
+        restore_all_x86_64!(),
+        "pop rbp",
         "ret",
         body = sym stack_slow_unwind_from,
     )
@@ -127,7 +145,7 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_unwind(
     p1: Word,
     p2: Word,
     p3: Word,
-) -> u32 {
+) {
     // SAFETY: forwarded from the caller; 0 is no frame record.
     unsafe { stack_slow_unwind_from(ctx, location, count, p0, p1, p2, p3, 0) }
 }
@@ -149,7 +167,7 @@ unsafe extern "C" fn stack_slow_unwind_from(
     p2: Word,
     p3: Word,
     record: usize,
-) -> u32 {
+) {
     // SAFETY: forwarded from the caller.
     let start = unsafe { start_of(record) };
     // SAFETY: forwarded from the caller.
@@ -164,9 +182,10 @@ unsafe extern "C" fn stack_slow_unwind_from(
 ///
 /// D-1040 (D-1236): a naked stub, as
 /// [`cheby_rt_stack_slow_unwind`]'s. Its arguments fill `x0`-`x7`
-/// (AAPCS64), so it makes 32 bytes of room, stores its frame record
-/// (`x29`, `x30`) at `sp + 16`, passes the record's address as the ninth
-/// argument at `[sp]`, and calls [`stack_slow_frame_unwind_from`].
+/// (AAPCS64), so it pushes its frame record (`x29`, `x30`), saves every
+/// register generated code may use below it, makes 16 bytes of room for
+/// the ninth argument, the record's address, at `[sp]`, and calls
+/// [`stack_slow_frame_unwind_from`].
 ///
 /// # Safety
 ///
@@ -183,15 +202,17 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     p1: Word,
     p2: Word,
     p3: Word,
-) -> u32 {
+) {
     core::arch::naked_asm!(
-        "sub sp, sp, #32",
-        "stp x29, x30, [sp, #16]",
-        "add x29, sp, #16",
+        "stp x29, x30, [sp, #-16]!",
+        "mov x29, sp",
+        save_all_aarch64!(),
+        "sub sp, sp, #16",
         "str x29, [sp]",
         "bl {body}",
-        "ldp x29, x30, [sp, #16]",
-        "add sp, sp, #32",
+        "add sp, sp, #16",
+        restore_all_aarch64!(),
+        "ldp x29, x30, [sp], #16",
         "ret",
         body = sym stack_slow_frame_unwind_from,
     )
@@ -199,11 +220,12 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
 
 /// A large function's releasing slow path (above), as a System V x86-64 stub
 /// (D-1040): its arguments fill the six registers and two stack words, so
-/// it pushes `rbp` as a frame record of its own, then calls
+/// it pushes `rbp` as a frame record of its own, saves every register
+/// generated code may use below it, then calls
 /// [`stack_slow_frame_unwind_from`] with `p2` and `p3` copied from
 /// `[rbp + 16]` and `[rbp + 24]` and the record's address as the ninth
-/// argument, the call 16-byte aligned by an 8-byte pad; `leave` pops the
-/// record.
+/// argument, the call 16-byte aligned by an 8-byte pad; then it drops the
+/// four words, loads the registers back and pops the record.
 ///
 /// # Safety
 ///
@@ -220,16 +242,19 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     p1: Word,
     p2: Word,
     p3: Word,
-) -> u32 {
+) {
     core::arch::naked_asm!(
         "push rbp",
         "mov rbp, rsp",
+        save_all_x86_64!(),
         "sub rsp, 8",
         "push rbp",
         "push qword ptr [rbp + 24]",
         "push qword ptr [rbp + 16]",
         "call {body}",
-        "leave",
+        "add rsp, 32",
+        restore_all_x86_64!(),
+        "pop rbp",
         "ret",
         body = sym stack_slow_frame_unwind_from,
     )
@@ -256,7 +281,7 @@ pub(crate) unsafe extern "C" fn cheby_rt_stack_slow_frame_unwind(
     p1: Word,
     p2: Word,
     p3: Word,
-) -> u32 {
+) {
     // SAFETY: forwarded from the caller; 0 is no frame record.
     unsafe { stack_slow_frame_unwind_from(ctx, location, frame_size, count, p0, p1, p2, p3, 0) }
 }
@@ -277,7 +302,7 @@ unsafe extern "C" fn stack_slow_frame_unwind_from(
     p2: Word,
     p3: Word,
     record: usize,
-) -> u32 {
+) {
     // SAFETY: forwarded from the caller.
     let start = unsafe { start_of(record) };
     // SAFETY: forwarded from the caller.
@@ -306,13 +331,12 @@ unsafe fn start_of(record: usize) -> Start {
 }
 
 /// After a slow path returned: when the flag of `ctx` shows an unwinding,
-/// releases the first `count` of `words` and returns 1; otherwise returns
-/// 0 and releases nothing.
+/// releases the first `count` of `words`; otherwise releases nothing.
 ///
 /// # Safety
 ///
 /// As for [`cheby_rt_stack_slow_unwind`]; the slow path has run on `ctx`.
-unsafe fn release_if_unwinding(ctx: *mut ExecCtx, count: u32, words: [Word; 4]) -> u32 {
+unsafe fn release_if_unwinding(ctx: *mut ExecCtx, count: u32, words: [Word; 4]) {
     // SAFETY: forwarded from the caller; the slow path found the context,
     // so it is the running fiber's live control block.
     let Some(fiber) = (unsafe { ctx.as_ref() }) else {
@@ -321,7 +345,7 @@ unsafe fn release_if_unwinding(ctx: *mut ExecCtx, count: u32, words: [Word; 4]) 
         ));
     };
     if super::flag::get(fiber) == unwind_flag::NONE {
-        return 0;
+        return;
     }
     if count > MAX_WORDS {
         fatal(format_args!(
@@ -336,7 +360,6 @@ unsafe fn release_if_unwinding(ctx: *mut ExecCtx, count: u32, words: [Word; 4]) 
         // raises.
         unsafe { rc::drop(word) };
     }
-    1
 }
 
 #[cfg(test)]
@@ -387,23 +410,27 @@ mod tests {
             .push(problem);
     }
 
-    /// Calls `helper` on the running fiber `ctx` with `words`.
+    /// Calls `helper` on the running fiber `ctx` with `words`, and returns
+    /// 1 when it started an unwinding (the flag is set), as generated code
+    /// tells it, and 0 otherwise.
     fn call(helper: Helper, ctx: &ExecCtx, words: &[Word]) -> u32 {
         let mut p = [0; 4];
         p[..words.len()].copy_from_slice(words);
         let count = u32::try_from(words.len()).unwrap();
+        let fiber = ctx;
         let ctx = ptr::from_ref(ctx).cast_mut();
         match helper {
             // SAFETY: the running fiber's context, no location, and words
             // the fiber owns.
             Helper::Plain => unsafe {
-                cheby_rt_stack_slow_unwind(ctx, 0, count, p[0], p[1], p[2], p[3])
+                cheby_rt_stack_slow_unwind(ctx, 0, count, p[0], p[1], p[2], p[3]);
             },
             // SAFETY: as above.
             Helper::Frame(size) => unsafe {
-                cheby_rt_stack_slow_frame_unwind(ctx, 0, size, count, p[0], p[1], p[2], p[3])
+                cheby_rt_stack_slow_frame_unwind(ctx, 0, size, count, p[0], p[1], p[2], p[3]);
             },
         }
+        u32::from(crate::unwind::flag::get(fiber) != unwind_flag::NONE)
     }
 
     /// `n` new one-element lists, each with a second reference that the
@@ -601,6 +628,260 @@ mod tests {
                     7
                 });
                 assert_eq!(outcome, EntryOutcome::Returned(7), "{helper:?}, {n} words");
+                assert_no_problems(&problems);
+            }
+        }
+    }
+
+    /// Every register a slow path's stub saves (`crate::panic::save_all_aarch64`):
+    /// `x0`-`x17`, then `q0`-`q31` as pairs of words, in the order the
+    /// test's assembly loads and stores them.
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    #[repr(C, align(16))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Regs {
+        x: [u64; 18],
+        q: [u64; 64],
+    }
+
+    /// Calls the stub at `stub` with `x0`-`x17` and `q0`-`q31` loaded from
+    /// `input`, and returns them as the stub left them.
+    ///
+    /// # Safety
+    ///
+    /// `stub` is one of the slow paths' stubs, and `input.x` starts with
+    /// arguments it accepts.
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    unsafe fn call_saving(stub: usize, input: &Regs) -> Regs {
+        let mut output = Regs {
+            x: [0; 18],
+            q: [0; 64],
+        };
+        let from = ptr::from_ref(input);
+        let to = ptr::from_mut(&mut output);
+        // SAFETY: loads every register from `input`, calls the stub, which
+        // the caller guarantees, and stores every register into `output`;
+        // both live through the block. Everything the block writes is an
+        // output or among the C convention's clobbers.
+        unsafe {
+            core::arch::asm!(
+            "ldp q0, q1, [x20, #144]",
+            "ldp q2, q3, [x20, #176]",
+            "ldp q4, q5, [x20, #208]",
+            "ldp q6, q7, [x20, #240]",
+            "ldp q8, q9, [x20, #272]",
+            "ldp q10, q11, [x20, #304]",
+            "ldp q12, q13, [x20, #336]",
+            "ldp q14, q15, [x20, #368]",
+            "ldp q16, q17, [x20, #400]",
+            "ldp q18, q19, [x20, #432]",
+            "ldp q20, q21, [x20, #464]",
+            "ldp q22, q23, [x20, #496]",
+            "ldp q24, q25, [x20, #528]",
+            "ldp q26, q27, [x20, #560]",
+            "ldp q28, q29, [x20, #592]",
+            "ldp q30, q31, [x20, #624]",
+            "ldp x2, x3, [x20, #16]",
+            "ldp x4, x5, [x20, #32]",
+            "ldp x6, x7, [x20, #48]",
+            "ldp x8, x9, [x20, #64]",
+            "ldp x10, x11, [x20, #80]",
+            "ldp x12, x13, [x20, #96]",
+            "ldp x14, x15, [x20, #112]",
+            "ldp x16, x17, [x20, #128]",
+            "ldp x0, x1, [x20, #0]",
+            "blr x22",
+            "stp x0, x1, [x21, #0]",
+            "stp x2, x3, [x21, #16]",
+            "stp x4, x5, [x21, #32]",
+            "stp x6, x7, [x21, #48]",
+            "stp x8, x9, [x21, #64]",
+            "stp x10, x11, [x21, #80]",
+            "stp x12, x13, [x21, #96]",
+            "stp x14, x15, [x21, #112]",
+            "stp x16, x17, [x21, #128]",
+            "stp q0, q1, [x21, #144]",
+            "stp q2, q3, [x21, #176]",
+            "stp q4, q5, [x21, #208]",
+            "stp q6, q7, [x21, #240]",
+            "stp q8, q9, [x21, #272]",
+            "stp q10, q11, [x21, #304]",
+            "stp q12, q13, [x21, #336]",
+            "stp q14, q15, [x21, #368]",
+            "stp q16, q17, [x21, #400]",
+            "stp q18, q19, [x21, #432]",
+            "stp q20, q21, [x21, #464]",
+            "stp q22, q23, [x21, #496]",
+            "stp q24, q25, [x21, #528]",
+            "stp q26, q27, [x21, #560]",
+            "stp q28, q29, [x21, #592]",
+            "stp q30, q31, [x21, #624]",
+                in("x20") from,
+                in("x21") to,
+                in("x22") stub,
+                out("v8") _,
+                out("v9") _,
+                out("v10") _,
+                out("v11") _,
+                out("v12") _,
+                out("v13") _,
+                out("v14") _,
+                out("v15") _,
+                clobber_abi("C"),
+            );
+        }
+        output
+    }
+
+    /// The address of the slow path's stub `case` names, the frame size it
+    /// is given, and whether it releases words.
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    #[expect(clippy::as_conversions, reason = "functions' addresses")]
+    fn stub_of(case: usize) -> (usize, Option<u64>, bool) {
+        use crate::panic::{cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
+        let plain: unsafe extern "C" fn(*mut ExecCtx, Word) = cheby_rt_stack_slow;
+        let frame: unsafe extern "C" fn(*mut ExecCtx, Word, u64) = cheby_rt_stack_slow_frame;
+        let unwind: unsafe extern "C" fn(*mut ExecCtx, Word, u32, Word, Word, Word, Word) =
+            cheby_rt_stack_slow_unwind;
+        let frame_unwind: unsafe extern "C" fn(
+            *mut ExecCtx,
+            Word,
+            u64,
+            u32,
+            Word,
+            Word,
+            Word,
+            Word,
+        ) = cheby_rt_stack_slow_frame_unwind;
+        match case {
+            0 => ((plain as *const ()).addr(), None, false),
+            1 => ((frame as *const ()).addr(), Some(1 << 10), false),
+            2 => ((unwind as *const ()).addr(), None, true),
+            _ => ((frame_unwind as *const ()).addr(), Some(1 << 10), true),
+        }
+    }
+
+    /// The input of `call_saving` for `stub_of(case)` on `ctx`, every word
+    /// a distinct pattern except the stub's arguments: `ctx`, no location,
+    /// the frame size `frame` for a large frame's stub and no counted word
+    /// for a releasing one.
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    fn saving_input(ctx: &ExecCtx, case: usize, frame: u64) -> Regs {
+        let mut input = Regs {
+            x: std::array::from_fn(|i| 0x1111_2222_0000_0000 | u64::try_from(i).unwrap()),
+            q: std::array::from_fn(|i| 0x5a5a_a5a5_0000_0000 | u64::try_from(i).unwrap()),
+        };
+        input.x[0] = u64::try_from(ptr::from_ref(ctx).expose_provenance()).unwrap();
+        input.x[1] = 0;
+        let (_, size, releases) = stub_of(case);
+        let count_at = if size.is_some() {
+            input.x[2] = frame;
+            3
+        } else {
+            2
+        };
+        if releases {
+            input.x[count_at] = 0;
+        }
+        input
+    }
+
+    /// Each slow path's stub gives back every register it saves, `x0`-`x17`
+    /// and `q0`-`q31` whole, on each of its ways out: after a yield it took
+    /// (the fiber was switched out and back, maybe onto the other worker),
+    /// after a cancellation it delivered and, for a large frame's stubs,
+    /// after a stack overflow it raised (the flag is set). Generated code
+    /// calls them with `preserve_all`, so a value of the caller may be in
+    /// any of them.
+    #[test]
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    fn entry_slow_stubs_preserve_every_register() {
+        for case in 0..4 {
+            for way in ["yield", "overflow", "cancel"] {
+                let (_, size, _) = stub_of(case);
+                if way == "overflow" && size.is_none() {
+                    // Only a large frame's stub overflows from here.
+                    continue;
+                }
+                let problems = Problems::default();
+                let seen = Arc::clone(&problems);
+                let runtime = testing::runtime(2);
+                let domain = Domain::new();
+                let config = EntryConfig {
+                    stack_size: 1 << 20,
+                    domain: Arc::clone(&domain),
+                    ..EntryConfig::new(EntryMode::Test)
+                };
+                let outcome = testing::start_root_with(&runtime, &config, move |ctx| {
+                    let (stub, size, _) = stub_of(case);
+                    let me = ptr::from_ref(ctx).cast_mut();
+                    let scope = (way == "cancel").then(|| {
+                        // SAFETY: the running fiber's context.
+                        let scope = unsafe { cheby_rt_scope_open(me, false, 0, 0) };
+                        cancel_running_fiber_at_next_entry(ctx);
+                        scope
+                    });
+                    if way == "yield" {
+                        request(ctx, reason::YIELD);
+                    }
+                    let frame = if way == "overflow" {
+                        u64::MAX
+                    } else {
+                        size.unwrap_or(0)
+                    };
+                    let input = saving_input(ctx, case, frame);
+                    let before = ctx.interrupts();
+                    // SAFETY: a stub, with the running fiber's context and
+                    // no counted word.
+                    let output = unsafe { call_saving(stub, &input) };
+                    let context = format!("stub {case}, {way}");
+                    if output != input {
+                        note(
+                            &seen,
+                            format!("{context}: {input:x?} came back as {output:x?}"),
+                        );
+                    }
+                    if way == "yield" && ctx.interrupts() == before {
+                        note(&seen, format!("{context}: the yield was not handled"));
+                    }
+                    let flag = crate::unwind::flag::get(ctx);
+                    let expected = match way {
+                        "yield" => unwind_flag::NONE,
+                        "overflow" => unwind_flag::PANIC,
+                        _ => unwind_flag::CANCEL,
+                    };
+                    if flag != expected {
+                        note(
+                            &seen,
+                            format!("{context}: the flag is {flag}, not {expected}"),
+                        );
+                    }
+                    if let Some(scope) = scope {
+                        crate::unwind::flag::clear(ctx);
+                        // SAFETY: the running fiber's context and its
+                        // scope's handle, consumed.
+                        if unsafe { cheby_rt_scope_close(me, scope, true) } {
+                            note(&seen, format!("{context}: the scope succeeded"));
+                        }
+                        // SAFETY: the running fiber's context, after a
+                        // failed close; the failure is released.
+                        unsafe { rc::drop(cheby_fiber_take_failure(me)) };
+                    }
+                    // An overflow leaves the flag set: the entry panics.
+                    7
+                })
+                .recv_timeout(testing::hang())
+                .expect("the root fiber hung");
+                runtime.shutdown();
+                assert_eq!(domain.live_objects(), 0, "objects leaked");
+                if way == "overflow" {
+                    let EntryOutcome::Panicked(report) = outcome else {
+                        panic!("stub {case}: expected a panic, got {outcome:?}");
+                    };
+                    assert_eq!(report.kind, PanicKind::StackOverflow);
+                } else {
+                    assert_eq!(outcome, EntryOutcome::Returned(7), "stub {case}, {way}");
+                }
                 assert_no_problems(&problems);
             }
         }
