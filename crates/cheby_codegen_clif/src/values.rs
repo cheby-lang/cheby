@@ -81,6 +81,20 @@ struct Shape {
     escaped: Option<(i32, u64)>,
 }
 
+/// The allocation size of an object of `shape`: its size rounded up to the
+/// header and the object alignment, as `cheby_rt_alloc` rounds it. A
+/// drop specialized by constructor hands it to `cheby_rt_free_unique`.
+fn alloc_size(shape: &Shape) -> Result<i64, CodegenError> {
+    u64::try_from(shape.size)
+        .ok()
+        .and_then(|s| {
+            s.max(abi::HEADER_SIZE)
+                .checked_next_multiple_of(abi::OBJECT_ALIGN)
+        })
+        .and_then(|s| i64::try_from(s).ok())
+        .ok_or_else(|| CodegenError::ice(format!("an object of {} bytes", shape.size)))
+}
+
 fn offset(index: u64, first: i64) -> Result<i32, CodegenError> {
     i64::try_from(index)
         .ok()
@@ -548,12 +562,12 @@ impl Translator<'_, '_> {
     /// (D-716, D-850). Inline, an object of count 1 hands each
     /// kept field's reference to its projection, releases its other value
     /// fields ([`Self::release_on_hit`]) and frees its block through
-    /// `cheby_rt_free_unique`; any other count first `dup`s each kept
-    /// projection, then gives up a reference as `drop` does: a count above
-    /// 1 is decremented, a static object (count 0) is skipped and a shared
-    /// one goes to `cheby_rt_drop`. A field read of `layout` pins the
-    /// object, so it is never a tagged integer. With `checked_rc`, the
-    /// `dup`s and the checked `drop`.
+    /// `cheby_rt_free_unique`, given the block's size; any other count
+    /// first `dup`s each kept projection, then gives up a reference as
+    /// `drop` does: a count above 1 is decremented, a static object (count
+    /// 0) is skipped and a shared one goes to `cheby_rt_drop`. A field read
+    /// of `layout` pins the object, so it is never a tagged integer. With
+    /// `checked_rc`, the `dup`s and the checked `drop`.
     pub(crate) fn drop_keep(
         &mut self,
         local: Local,
@@ -583,7 +597,8 @@ impl Translator<'_, '_> {
         self.b.ins().brif(unique, hit, &[], not_unique, &[]);
         self.b.switch_to_block(hit);
         self.release_on_hit(v, &kept, &rest, false)?;
-        self.runtime_call(RuntimeFunc::FreeUnique, &[ctx, v])?;
+        let size = self.b.ins().iconst(types::I64, alloc_size(&shape)?);
+        self.runtime_call(RuntimeFunc::FreeUnique, &[ctx, v, size])?;
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(not_unique);
         self.dup_kept(keep)?;

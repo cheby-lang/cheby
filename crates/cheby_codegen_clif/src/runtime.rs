@@ -95,9 +95,10 @@ pub enum RuntimeFunc {
     /// `uint64_t cheby_rt_alloc_reuse_checked(ExecCtx *ctx, uint64_t token, uint64_t size,
     /// uint64_t header)`: `alloc_reuse` under `checked_rc`; 0 when it raised.
     AllocReuseChecked,
-    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
-    /// of a drop specialized by constructor frees the block whose fields
-    /// it released or kept (D-716, D-850).
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj, uint64_t size)`: the hit
+    /// path of a drop specialized by constructor frees the block, of the
+    /// layout's allocation size, whose fields it released or kept (D-716,
+    /// D-850).
     FreeUnique,
     /// `uint64_t cheby_rt_list_uncons(ExecCtx *ctx, uint64_t list, int64_t at, int64_t start,
     /// int64_t end, uint64_t *head)`.
@@ -212,7 +213,8 @@ impl RuntimeFunc {
             | Self::ListAppend
             | Self::AllocMiss
             | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
-            Self::ReleaseFields | Self::FreeUnique => (&[Ptr, U64], Void),
+            Self::ReleaseFields => (&[Ptr, U64], Void),
+            Self::FreeUnique => (&[Ptr, U64, U64], Void),
             Self::ReuseHit => (&[], Void),
             Self::AllocReuseChecked => (&[Ptr, U64, U64, U64], U64),
             Self::Dup => (&[Ptr], Void),

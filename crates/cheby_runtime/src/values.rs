@@ -64,11 +64,38 @@ fn boxed(layout: LayoutId, bits: u64) -> Word {
     object::ptr_to_word(obj)
 }
 
+/// [`boxed`] by the fiber `ctx`, which a boxing helper of generated code
+/// is given: the allocation reads the block cache through its control
+/// block, with no `tls.rs` accessor call (D-739).
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+unsafe fn boxed_for(ctx: *mut ExecCtx, layout: LayoutId, bits: u64) -> Word {
+    // SAFETY: forwarded from the caller.
+    let obj = unsafe { alloc::alloc_for(ctx, 16, abi::header(abi::RC_UNIQUE, 0, layout)) };
+    // SAFETY: a fresh 16-byte object: the payload is its only field.
+    unsafe { write_field(obj, FIELD0, bits) };
+    object::ptr_to_word(obj)
+}
+
 /// The uniform word of an `Int` or `I64`: tagged, or a `BoxedInt` outside
 /// 63 bits.
 #[must_use]
 pub fn int_word(value: i64) -> Word {
     abi::tag_int(value).unwrap_or_else(|| boxed(layout::BOXED_INT, value.cast_unsigned()))
+}
+
+/// [`int_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn int_word_for(ctx: *mut ExecCtx, value: i64) -> Word {
+    abi::tag_int(value).unwrap_or_else(|| {
+        // SAFETY: forwarded from the caller.
+        unsafe { boxed_for(ctx, layout::BOXED_INT, value.cast_unsigned()) }
+    })
 }
 
 /// The uniform word of a `U64`: tagged up to 2^62 - 1, else a `BoxedU64`.
@@ -77,6 +104,19 @@ pub fn u64_word(value: u64) -> Word {
     match i64::try_from(value).ok().and_then(abi::tag_int) {
         Some(word) => word,
         None => boxed(layout::BOXED_U64, value),
+    }
+}
+
+/// [`u64_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn u64_word_for(ctx: *mut ExecCtx, value: u64) -> Word {
+    match i64::try_from(value).ok().and_then(abi::tag_int) {
+        Some(word) => word,
+        // SAFETY: forwarded from the caller.
+        None => unsafe { boxed_for(ctx, layout::BOXED_U64, value) },
     }
 }
 
@@ -132,6 +172,26 @@ pub fn f64_word(value: f64) -> Word {
 #[must_use]
 pub fn f32_word(value: f32) -> Word {
     boxed(layout::BOXED_F32, u64::from(value.to_bits()))
+}
+
+/// [`f64_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn f64_word_for(ctx: *mut ExecCtx, value: f64) -> Word {
+    // SAFETY: forwarded from the caller.
+    unsafe { boxed_for(ctx, layout::BOXED_FLOAT, value.to_bits()) }
+}
+
+/// [`f32_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn f32_word_for(ctx: *mut ExecCtx, value: f32) -> Word {
+    // SAFETY: forwarded from the caller.
+    unsafe { boxed_for(ctx, layout::BOXED_F32, u64::from(value.to_bits())) }
 }
 
 /// A one-field builtin constructor owning `value`.

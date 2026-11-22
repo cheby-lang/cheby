@@ -168,7 +168,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word {
-    guarded(Some(ctx), || values::int_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::int_word_for(ctx, value) })
 }
 
 /// `cheby_rt_box_u64(ctx, value)`: the uniform word of a `U64` (a
@@ -180,7 +181,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) 
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) -> Word {
-    guarded(Some(ctx), || values::u64_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::u64_word_for(ctx, value) })
 }
 
 /// `cheby_rt_box_f64(ctx, value)`: a new `BoxedFloat`.
@@ -191,7 +193,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) 
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) -> Word {
-    guarded(Some(ctx), || values::f64_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::f64_word_for(ctx, value) })
 }
 
 /// `cheby_rt_box_f32(ctx, value)`: a new `BoxedF32`.
@@ -202,7 +205,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) 
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_f32(ctx: *mut ExecCtx, value: f32) -> Word {
-    guarded(Some(ctx), || values::f32_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::f32_word_for(ctx, value) })
 }
 
 /// `cheby_rt_fmod_f64(a, b)`: `a % b` on `Float`, the exact remainder of

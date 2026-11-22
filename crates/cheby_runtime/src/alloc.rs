@@ -440,6 +440,8 @@ impl Domain {
     /// So a shard that only allocates while another only frees, as across
     /// a channel between two workers, reads the other's cache line only a
     /// logarithmic number of times, not on every allocation (D-691).
+    #[cold]
+    #[inline(never)]
     fn sample_peak(&self, shard: &Shard, now: i64) {
         #[cfg(test)]
         self.samples.fetch_add(1, Ordering::Relaxed);
@@ -778,10 +780,9 @@ enum FastMiss {
 )]
 #[inline(always)]
 fn fast_class(size: u64) -> Option<usize> {
-    let rounded = size
-        .max(abi::HEADER_SIZE)
-        .checked_next_multiple_of(abi::OBJECT_ALIGN)?;
-    let class = to_usize(rounded / abi::OBJECT_ALIGN).checked_sub(1)?;
+    // `(size - 1) / 8` is the class of every size up to the largest
+    // class's; 0, which rounds up to the header, is class 0 too.
+    let class = to_usize(size.saturating_sub(1) / abi::OBJECT_ALIGN);
     (class < CACHE_CLASSES).then_some(class)
 }
 
@@ -1344,52 +1345,147 @@ pub(crate) unsafe fn free(obj: *mut u8) {
 /// running on this thread.
 pub(crate) unsafe fn free_in(ctx: Option<&ExecCtx>, obj: *mut u8) {
     // SAFETY: forwarded from the caller.
-    if let Some(fast) = unsafe { fast_shape(obj) } {
-        // The fields first: the worklist is made only when one of them
-        // dies with the object (D-907).
-        let mut pending: Option<Pending> = None;
-        let mut offset = fast.first;
-        for _ in 0..fast.count {
-            // SAFETY: the shape lies within the object.
-            let child = unsafe { read_field(obj, offset) };
-            offset = offset.wrapping_add(8);
-            if abi::is_tagged_int(child) || child == 0 {
-                continue;
-            }
-            // SAFETY: a value field holds an owned reference.
-            unsafe { check_live(child, "freeing an object") };
-            // SAFETY: the dying object owned this reference to a live
-            // object.
-            if unsafe { rc::release(word_to_ptr(child)) } {
-                match pending.as_mut() {
-                    Some(list) => list.push(child),
-                    None => pending = Some(Pending::new(child)),
-                }
-            }
-        }
-        let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, mut cache| {
-            // SAFETY: allocated with this size, and no reference remains.
-            unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
-            let drained = match pending.as_mut() {
-                // SAFETY: every word on the list is an object whose count
-                // reached zero.
-                Some(list) => unsafe { drain(list, cache) },
-                None => (0, 0),
-            };
-            (ctx, drained)
-        });
-        charge_freed(
-            ctx,
-            objects.saturating_sub(1),
-            bytes.saturating_add(to_u64(fast.size)),
-        );
-        if let Some(list) = pending {
-            #[cfg(debug_assertions)]
-            charge_kinds(ctx, &list.kinds);
-            list.finish();
-        }
+    let Some(fast) = (unsafe { fast_shape(obj) }) else {
+        // SAFETY: forwarded from the caller.
+        unsafe { free_general(ctx, obj) };
         return;
+    };
+    // The fields first: the worklist is made only when one of them dies
+    // with the object (D-907), and then out of line, so that this path
+    // keeps a small frame.
+    let mut offset = fast.first;
+    for index in 0..fast.count {
+        // SAFETY: the shape lies within the object.
+        let child = unsafe { read_field(obj, offset) };
+        offset = offset.wrapping_add(8);
+        if abi::is_tagged_int(child) || child == 0 {
+            continue;
+        }
+        // SAFETY: a value field holds an owned reference.
+        unsafe { check_live(child, "freeing an object") };
+        // SAFETY: the dying object owned this reference to a live object.
+        if unsafe { rc::release(word_to_ptr(child)) } {
+            // SAFETY: forwarded from the caller; the fields before
+            // `index` are released, and `child`, the one at `index`,
+            // has no reference left.
+            unsafe { free_with_children(ctx, obj, fast, index, child) };
+            return;
+        }
     }
+    // SAFETY: allocated with this size, and no reference remains.
+    unsafe { free_block(ctx, obj, fast.size) };
+}
+
+/// The rest of [`free_in`] once the field at `index` of `obj`, `first`,
+/// has died with it: releases the fields after it, frees the block and
+/// drains the objects that died, charging them once.
+///
+/// # Safety
+///
+/// As for [`free_in`]; `fast` is `obj`'s shape, the fields before
+/// `index` are released and `first`, the one at `index`, has no
+/// reference left.
+#[inline(never)]
+unsafe fn free_with_children(
+    ctx: Option<&ExecCtx>,
+    obj: *mut u8,
+    fast: Fast,
+    index: usize,
+    first: Word,
+) {
+    let mut pending = Pending::new(first);
+    let mut offset = fast
+        .first
+        .wrapping_add(index.wrapping_add(1).wrapping_mul(8));
+    for _ in index.saturating_add(1)..fast.count {
+        // SAFETY: the shape lies within the object.
+        let child = unsafe { read_field(obj, offset) };
+        offset = offset.wrapping_add(8);
+        // SAFETY: a value field holds an owned reference.
+        unsafe { release_child(child, &mut pending) };
+    }
+    let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, mut cache| {
+        // SAFETY: allocated with this size, and no reference remains.
+        unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
+        // SAFETY: every word on the list is an object whose count reached
+        // zero.
+        (ctx, unsafe { drain(&mut pending, cache) })
+    });
+    charge_freed(
+        ctx,
+        objects.saturating_sub(1),
+        bytes.saturating_add(to_u64(fast.size)),
+    );
+    #[cfg(debug_assertions)]
+    charge_kinds(ctx, &pending.kinds);
+    pending.finish();
+}
+
+/// Frees the block of `obj`, an object of `size` bytes that owns nothing
+/// any more, and charges it as freed: into the block cache that the
+/// control block of `ctx`, or else of the running fiber, records, with no
+/// further accessor call (D-739, D-907). Host code, a fiber with no cache
+/// recorded and a cache in use take [`free_block_slow`].
+///
+/// # Safety
+///
+/// As for [`release_sized`]; `ctx`, when given, is the control block of
+/// the fiber running on this thread.
+#[expect(
+    clippy::inline_always,
+    reason = "a step of every free; the gain depends on it being inline (D-907)"
+)]
+#[inline(always)]
+unsafe fn free_block(ctx: Option<&ExecCtx>, obj: *mut u8, size: usize) {
+    if let Some(fiber) = ctx.or_else(current_fiber) {
+        debug_assert!(
+            current_fiber().is_some_and(|current| std::ptr::eq(current, fiber)),
+            "a block cache taken through a fiber that is not current on this thread"
+        );
+        // SAFETY: `fiber` is the fiber current on this thread (the
+        // callers' contract, checked in debug builds), whose recorded cache
+        // is null or this thread's, as in `tls::with_cache_of`; nothing
+        // here suspends.
+        if let Some(cell) = unsafe { fiber.block_cache().as_ref() }
+            && let Ok(mut cache) = cell.try_borrow_mut()
+        {
+            // SAFETY: forwarded from the caller.
+            unsafe { release_sized(obj, size, Some(&mut cache)) };
+            drop(cache);
+            let bytes = i64::try_from(size).unwrap_or(i64::MAX).saturating_neg();
+            fiber.domain().charge_through(fiber, -1, bytes);
+            return;
+        }
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { free_block_slow(ctx, obj, size) };
+}
+
+/// [`free_block`] where no cache could be borrowed through a control
+/// block: host code, a fiber with no cache recorded, a cache in use (a
+/// finalizer freeing directly) or gone (thread teardown).
+///
+/// # Safety
+///
+/// As for [`free_block`].
+#[inline(never)]
+unsafe fn free_block_slow(ctx: Option<&ExecCtx>, obj: *mut u8, size: usize) {
+    let ctx = with_fiber_cache(ctx, |ctx, cache| {
+        // SAFETY: forwarded from the caller.
+        unsafe { release_sized(obj, size, cache) };
+        ctx
+    });
+    charge_freed(ctx, -1, to_u64(size));
+}
+
+/// [`free_in`] of an object that [`fast_shape`] does not answer for: an
+/// escaped form, or a layout with no word in the free-shape table.
+///
+/// # Safety
+///
+/// As for [`free_in`].
+#[inline(never)]
+unsafe fn free_general(ctx: Option<&ExecCtx>, obj: *mut u8) {
     // SAFETY: forwarded from the caller.
     let (scan, id) = unsafe { scan_and_layout(obj) };
     // A scan count of 0 outside the runtime-defined kinds (26 to 63) is an
@@ -1489,50 +1585,61 @@ pub(crate) unsafe fn release_fields(ctx: Option<&ExecCtx>, obj: *mut u8) -> Opti
 /// Frees the block of `obj`, a unique object of a constructor or tuple
 /// layout whose value fields no longer own anything: generated code
 /// released each of them or moved it to a kept projection (a drop
-/// specialized by constructor, D-716, `crate::reuse`). The fields are not
-/// read. Charges `ctx`'s domain (or the running fiber's) as
-/// [`free_leaf`] does. Returns `None`, touching nothing, when `obj` is
-/// not of a constructor or tuple layout.
+/// specialized by constructor, D-716, `crate::reuse`). `size` is the
+/// allocation's size, which generated code knows from the layout, so
+/// nothing of the object is read. Debug builds check it, and that the
+/// layout is a constructor or a tuple, against the layout table, and end
+/// the process when either disagrees. Charges `ctx`'s domain (or the
+/// running fiber's) as [`free_leaf`] does.
 ///
 /// # Safety
 ///
-/// `obj` points to a live heap object whose count is 1, whose one
-/// reference the caller owns and gives up, and whose value fields hold
-/// no reference the object owns; `ctx`, when given, is the control block
-/// of the fiber running on this thread.
-pub(crate) unsafe fn free_unique(ctx: Option<&ExecCtx>, obj: *mut u8) -> Option<()> {
+/// `obj` points to a live heap object of a constructor or tuple layout
+/// whose count is 1, whose one reference the caller owns and gives up,
+/// whose value fields hold no reference the object owns, and whose
+/// allocation is `size` bytes, as [`try_object_layout`] rounds it;
+/// `ctx`, when given, is the control block of the fiber running on this
+/// thread.
+pub(crate) unsafe fn free_unique(ctx: Option<&ExecCtx>, obj: *mut u8, size: u64) {
+    #[cfg(debug_assertions)]
     // SAFETY: forwarded from the caller.
-    if let Some(fast) = unsafe { fast_shape(obj) }
-        && fast.reusable
-    {
-        let ctx = with_fiber_cache(ctx, |ctx, cache| {
-            // SAFETY: allocated with this size, and no reference remains:
-            // the caller gives up the only one, and the fields own nothing.
-            unsafe { release_sized(obj, fast.size, cache) };
-            ctx
-        });
-        charge_freed(ctx, -1, to_u64(fast.size));
-        return Some(());
+    unsafe {
+        check_unique_size(obj, size);
     }
+    // SAFETY: forwarded from the caller: allocated with this size, and no
+    // reference remains, since the caller gives up the only one and the
+    // fields own nothing.
+    unsafe { free_block(ctx, obj, to_usize(size)) };
+}
+
+/// Ends the process unless `obj` is of a constructor or tuple layout
+/// whose allocation is `size` bytes, as the layout table gives it: the
+/// guard of [`free_unique`], which frees a block with the size generated
+/// code computed (debug builds).
+///
+/// # Safety
+///
+/// `obj` points to a live heap object.
+#[cfg(debug_assertions)]
+#[inline(never)]
+unsafe fn check_unique_size(obj: *mut u8, size: u64) {
     // SAFETY: forwarded from the caller.
     let (_, id) = unsafe { scan_and_layout(obj) };
     let reusable = layout::get(id)
         .is_some_and(|info| matches!(info.kind, LayoutKind::Ctor { .. } | LayoutKind::Tuple));
     if !reusable {
-        return None;
+        fatal(format_args!(
+            "a specialized drop of an object that is not a constructor or a tuple"
+        ));
     }
     // SAFETY: forwarded from the caller.
     let shape = unsafe { shape_of(obj) };
-    let layout = object_layout(shape.size);
-    let ctx = with_fiber_cache(ctx, |ctx, cache| {
-        // SAFETY: allocated by `alloc_object` with this size, which
-        // `shape_of` recomputes exactly, and no reference remains: the
-        // caller gives up the only one, and the fields own nothing.
-        unsafe { release_block(obj, layout, cache) };
-        ctx
-    });
-    charge_freed(ctx, -1, to_u64(layout.size()));
-    Some(())
+    let actual = to_u64(object_layout(shape.size).size());
+    if actual != size {
+        fatal(format_args!(
+            "a specialized drop of a layout {id} object of {actual} bytes as one of {size}"
+        ));
+    }
 }
 
 /// Frees `obj` if it owns no reference and has no finalizer, with no
@@ -1700,8 +1807,10 @@ unsafe fn drain(list: &mut Pending, mut cache: Option<&mut BlockCache>) -> (i64,
                 // SAFETY: a value field holds an owned reference.
                 unsafe { release_child(child, list) };
             }
-            objects = objects.saturating_sub(1);
-            bytes = bytes.saturating_add(to_u64(fast.size));
+            // Neither total can wrap: they count live objects and their
+            // bytes, which the address space bounds.
+            objects = objects.wrapping_sub(1);
+            bytes = bytes.wrapping_add(to_u64(fast.size));
             // SAFETY: allocated with this size, and no reference remains.
             unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
             continue;

@@ -839,7 +839,7 @@ fn reuse_runtime_functions() {
         (
             RuntimeFunc::FreeUnique,
             35,
-            &[CType::Ptr, CType::U64][..],
+            &[CType::Ptr, CType::U64, CType::U64][..],
             CType::Void,
         ),
     ];

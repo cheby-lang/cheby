@@ -683,11 +683,12 @@ pub mod sym {
     /// token and both sizes, writes the header over it or allocates; 0
     /// when the allocation raised.
     pub const ALLOC_REUSE_CHECKED: &str = "cheby_rt_alloc_reuse_checked";
-    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
-    /// of a drop specialized by constructor (D-716, D-850):
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj, uint64_t size)`: the hit
+    /// path of a drop specialized by constructor (D-716, D-850):
     /// frees the block of a unique constructor or tuple object whose value
     /// fields generated code already released or moved to its kept
-    /// projections, charging the domain as a free does.
+    /// projections, charging the domain as a free does. `size` is the
+    /// object's allocation size, rounded as `cheby_rt_alloc` rounds it.
     pub const FREE_UNIQUE: &str = "cheby_rt_free_unique";
     /// `uint64_t cheby_rt_list_uncons(ExecCtx *ctx, uint64_t list, int64_t at, int64_t start,
     /// int64_t end, uint64_t *head)`: `LIST_GET` of `at`, written to `*head`, and the
