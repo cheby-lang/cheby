@@ -460,6 +460,15 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1758    | `list::push` and `list::prepend` are std intrinsics over helpers that own their arguments           |
 | D-1759    | Owned pattern steps at an end of a list are written inline; `abi::list` joins the ABI               |
 | D-1760    | Budget bounds and failure rules for the fold of a big root's leaves into its tree                   |
+| D-1761    | A self tail call is a jump inside its function, with the entry check in the loop                    |
+| D-1762    | `ordered_map` keeps its order as links through its hashed index, with no sorted tree                |
+| D-1763    | A list literal prepends up to eight leading elements onto its first spread                          |
+| D-1764    | A scalar literal constant is not evaluated, and its own module reads the literal                    |
+| D-1765    | A direct call of a plain std kernel is its foreign call at the call site                            |
+| D-1766    | The release profile is built now, in parts: `--release` on `build`, `run` and `test`                |
+| D-1767    | Code keys hold the profile; constants run on debug code; release compiles a package anew            |
+| D-1768    | Release code calls Cheby functions directly, with the borrow mask in the symbol                     |
+| D-1769    | Release code is compiled with Cranelift's `speed`                                                   |
 
 ## Open questions
 

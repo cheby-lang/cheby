@@ -132,7 +132,7 @@ Native symbols follow three rules (D-455):
 
 _Note:_ the reference implementation compiles every function of a module that the program reaches, so a module's code may name a missing symbol that only unreached functions use. It binds such a symbol to a stub of the runtime, which reach guarantees is never called (D-943, D-966). The `cheby` process may also define symbols, such as those of the toolchain's own libraries, that an executable does not link, so `cheby run` can accept a symbol that `cheby build` reports.
 
-_Note:_ the reference implementation compiles each native external to an ordinary Cheby function that makes the foreign call, so callers call it like any other function, and whether a function is external is not part of its module's interface (D-455).
+_Note:_ the reference implementation compiles each native external to an ordinary Cheby function that makes the foreign call, so callers call it like any other function, and whether a function is external is not part of its module's interface (D-455). The standard library is the exception: a direct call of one of its functions that is bound to a plain kernel is the foreign call itself, made at the call site, so a scalar result is never boxed (D-1765).
 
 ### 12.5.1 Native ABI
 

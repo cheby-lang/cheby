@@ -372,3 +372,33 @@ A cold build of `compile_large`'s 200 modules, from a cache that holds std, befo
 | `cheby check` |             17.87 G |  2.53 G |
 | `cheby run`   |             33.66 G | 13.54 G |
 | `cheby build` |             34.31 G | 14.16 G |
+
+### A direct call of a plain std kernel is its foreign call (D-1765)
+
+A call of a std function bound to a runtime kernel went through a Cheby wrapper, which boxed a scalar result. `float::from_int` allocated on every call. The call site now makes the foreign call itself, with each counted argument moved into an owned temporary, so the kernel sees the counts the wrapper gave it. `spectral_norm` at n = 550 makes 92,499 allocations where it made 12,192,500.
+
+### The release profile, first part (D-1766 to D-1769)
+
+`cheby build`, `cheby run` and `cheby test` take `--release`. So far release code calls Cheby functions directly and is compiled with Cranelift's `speed`. `CHEBY_RELEASE_OFF=direct` or `=clif` switches one of them off for a reading. On `mandelbrot`, `speed` is worth 9% of the instructions and direct calls under 1%: a loop no longer calls anything since D-1761.
+
+### Readings after these two, all changes of the round together
+
+The first two columns are the debug profile against `7a586d82`. The last is the release build against the debug build of the same compiler, in instructions.
+
+| Program          | Instructions | Cycles | Release against debug |
+| ---------------- | -----------: | -----: | --------------------: |
+| `spectral_norm`  |       −57.3% | −57.4% |                 −4.1% |
+| `lru_cache`      |       −63.1% | −67.6% |                 −0.8% |
+| `mandelbrot`     |       −41.8% | −20.1% |                 −9.8% |
+| `nbody`          |       −28.0% | −28.4% |                 −1.2% |
+| `fannkuch_redux` |        −7.8% | −12.5% |                 −0.0% |
+| `json_roundtrip` |        −9.6% |  −0.2% |                 −0.5% |
+| `word_freq`      |        −2.7% | −20.6% |                 −0.0% |
+| `binary_trees`   |        −0.2% |  −1.9% |                 −3.0% |
+
+The three concurrency programs are left out. Their instruction counts move by a factor of two between runs of one executable while the machine is loaded, because idle workers spin, so they wait for a quiet machine.
+
+Tried and not kept, or left open:
+
+- A check for interrupts at each direct kernel call. The wrapper's entry check ran before every kernel. Now an interrupt that arrives before a kernel call is noticed at the next function entry or loop iteration. That is what the language promises, and a check per call site would give back part of the gain.
+- A read-only kernel such as `list::get` still gets a dup and a drop around the call when its argument is used afterwards. A list of kernels that never write in place would remove the pair.

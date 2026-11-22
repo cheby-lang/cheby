@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-698, D-697, D-525
+// @decisions: D-698, D-697, D-525, D-1765
 //! A panic that passes through a std kernel called at the call site, here
 //! `map::upsert`'s callback, unwinds the calling function like a panic in
 //! a call of Cheby code: the values the function holds at the call, a

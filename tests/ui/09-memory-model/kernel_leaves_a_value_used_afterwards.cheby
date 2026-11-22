@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-525, D-187, D-455
+// @decisions: D-525, D-187, D-455, D-1765
 //! A std kernel that updates its first argument in place when the
 //! argument is unique leaves a value that is used after the call
 //! unchanged: the call gives the kernel a shared reference, so the kernel
