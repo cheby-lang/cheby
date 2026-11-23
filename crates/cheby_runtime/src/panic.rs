@@ -313,7 +313,7 @@ macro_rules! restore_all_aarch64 {
 #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
 pub(crate) use restore_all_aarch64;
 
-/// [`save_all_aarch64`] for System V x86-64: the C convention lets the
+/// `save_all_aarch64` for System V x86-64: the C convention lets the
 /// Rust body clobber `rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`-`r11` and
 /// `xmm0`-`xmm15`, so the stub saves those: 336 bytes below its frame
 /// record (`rbp`), the nine words, a pad word and the sixteen vector

@@ -102,8 +102,11 @@ macro_rules! saving_stub {
         )))]
         #[unsafe(no_mangle)]
         pub(crate) unsafe extern "C" fn $name($($arg: $ty),*) {
+            // A body may be a safe function; through an `unsafe` pointer
+            // every body is called the same way.
+            let body: unsafe extern "C" fn($($ty),*) = $body;
             // SAFETY: forwarded from the caller.
-            unsafe { $body($($arg),*) }
+            unsafe { body($($arg),*) }
         }
     };
 }

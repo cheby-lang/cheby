@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use super::cache::{BlockCache, CACHE_BLOCKS, REFILL_BLOCKS, class_layout, never_serving_cache};
 use super::{Domain, OUT_OF_MEMORY, keeps_freed_blocks, poison_enabled};
-use crate::abi::{self, Word, block_cache as cache_abi};
+use crate::abi::{self, block_cache as cache_abi};
 use crate::ctx::ExecCtx;
 use crate::entry::{self, EntryConfig, EntryMode, EntryOutcome};
 use crate::fiber::sanitizer;
@@ -471,13 +471,18 @@ fn the_slow_path_leaves_0_when_it_raises() {
     assert_eq!(report.message, OUT_OF_MEMORY);
 }
 
-/// The slow paths' stubs give back every register they save, `x0`-`x17`
-/// and `q0`-`q31` whole: generated code calls them with `preserve_all`.
+/// The slow paths' stubs give back every register they save, the vector
+/// registers whole: generated code calls them with `preserve_all`.
 /// The allocation's stub leaves the object in the control block, and the
 /// free's, the drop's and the reuse count's leave the domain as it was.
 #[test]
-#[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+#[cfg(all(
+    any(target_arch = "aarch64", target_arch = "x86_64"),
+    not(miri),
+    not(windows)
+))]
 fn the_slow_path_stubs_preserve_every_register() {
+    use crate::abi::Word;
     use crate::unwind::entry_slow::tests::{Regs, call_saving};
 
     #[expect(clippy::as_conversions, reason = "functions' addresses")]
@@ -509,13 +514,10 @@ fn the_slow_path_stubs_preserve_every_register() {
         let [alloc, miss, free, drop] = stubs();
         let address = u64::try_from(ptr::from_ref(ctx).expose_provenance()).unwrap();
         let input = |x0: u64, x1: u64, x2: u64| {
-            let mut regs = Regs {
-                x: std::array::from_fn(|i| 0x1111_2222_0000_0000 | u64::try_from(i).unwrap()),
-                q: std::array::from_fn(|i| 0x5a5a_a5a5_0000_0000 | u64::try_from(i).unwrap()),
-            };
-            regs.x[0] = x0;
-            regs.x[1] = x1;
-            regs.x[2] = x2;
+            let mut regs = Regs::patterned();
+            regs.set_argument(0, x0);
+            regs.set_argument(1, x1);
+            regs.set_argument(2, x2);
             regs
         };
         let call = |stub: usize, regs: &Regs, what: &str| {

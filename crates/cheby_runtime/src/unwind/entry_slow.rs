@@ -14,7 +14,8 @@
 //!
 //! Like the plain slow paths, the helpers save every register generated
 //! code may use and load them back before they return
-//! ([`crate::panic::save_all_aarch64`]), so their call clobbers nothing.
+//! (`crate::panic::save_all_aarch64`, `crate::panic::save_all_x86_64`), so
+//! their call clobbers nothing.
 //! They return no result: Cranelift's `preserve_all` convention, which
 //! generated code calls them with, has none, and the flag tells the same.
 //!
@@ -633,15 +634,70 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every register a slow path's stub saves (`crate::panic::save_all_aarch64`):
-    /// `x0`-`x17`, then `q0`-`q31` as pairs of words, in the order the
-    /// test's assembly loads and stores them.
-    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    /// Every register a slow path's stub saves, in the order the test's
+    /// assembly loads and stores them. On aarch64
+    /// (`crate::panic::save_all_aarch64`) `x` is `x0`-`x17` and `q` is
+    /// `q0`-`q31` as pairs of words; on x86-64
+    /// (`crate::panic::save_all_x86_64`) `x` is `rax`, `rcx`, `rdx`,
+    /// `rsi`, `rdi` and `r8`-`r11`, and `q` is `xmm0`-`xmm15` as pairs of
+    /// words.
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        not(miri),
+        not(windows)
+    ))]
     #[repr(C, align(16))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) struct Regs {
-        pub(crate) x: [u64; 18],
-        pub(crate) q: [u64; 64],
+        pub(crate) x: [u64; GENERAL],
+        pub(crate) q: [u64; VECTOR_WORDS],
+    }
+
+    /// The number of general registers in [`Regs`].
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    const GENERAL: usize = 18;
+
+    /// The number of words of vector registers in [`Regs`].
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    const VECTOR_WORDS: usize = 64;
+
+    /// Where in [`Regs::x`] the C convention's integer arguments go:
+    /// `x0`-`x7`.
+    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    const ARGUMENTS: [usize; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+    /// The number of general registers in [`Regs`].
+    #[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+    const GENERAL: usize = 9;
+
+    /// The number of words of vector registers in [`Regs`].
+    #[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+    const VECTOR_WORDS: usize = 32;
+
+    /// Where in [`Regs::x`] the C convention's integer arguments go:
+    /// `rdi`, `rsi`, `rdx`, `rcx`, `r8` and `r9`.
+    #[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+    const ARGUMENTS: [usize; 6] = [4, 3, 2, 1, 5, 6];
+
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        not(miri),
+        not(windows)
+    ))]
+    impl Regs {
+        /// Every word a distinct pattern.
+        pub(crate) fn patterned() -> Self {
+            Self {
+                x: std::array::from_fn(|i| 0x1111_2222_0000_0000 | u64::try_from(i).unwrap()),
+                q: std::array::from_fn(|i| 0x5a5a_a5a5_0000_0000 | u64::try_from(i).unwrap()),
+            }
+        }
+
+        /// Puts `value` where the C convention passes the integer argument
+        /// `index` in a register.
+        pub(crate) fn set_argument(&mut self, index: usize, value: u64) {
+            self.x[ARGUMENTS[index]] = value;
+        }
     }
 
     /// Calls the stub at `stub` with `x0`-`x17` and `q0`-`q31` loaded from
@@ -649,13 +705,13 @@ pub(crate) mod tests {
     ///
     /// # Safety
     ///
-    /// `stub` is one of the slow paths' stubs, and `input.x` starts with
-    /// arguments it accepts.
+    /// `stub` is one of the slow paths' stubs, and the arguments `input`
+    /// passes in registers are ones it accepts.
     #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
     pub(crate) unsafe fn call_saving(stub: usize, input: &Regs) -> Regs {
         let mut output = Regs {
-            x: [0; 18],
-            q: [0; 64],
+            x: [0; GENERAL],
+            q: [0; VECTOR_WORDS],
         };
         let from = ptr::from_ref(input);
         let to = ptr::from_mut(&mut output);
@@ -733,9 +789,98 @@ pub(crate) mod tests {
         output
     }
 
+    /// Calls the stub at `stub` with `rax`, `rcx`, `rdx`, `rsi`, `rdi`,
+    /// `r8`-`r11` and `xmm0`-`xmm15` loaded from `input`, and returns them
+    /// as the stub left them.
+    ///
+    /// # Safety
+    ///
+    /// `stub` is one of the slow paths' stubs, and the arguments `input`
+    /// passes in registers are ones it accepts. A stub that takes an
+    /// argument on the stack reads whatever word the call leaves there, so
+    /// that argument must be one the stub ignores.
+    #[cfg(all(target_arch = "x86_64", not(miri), not(windows)))]
+    pub(crate) unsafe fn call_saving(stub: usize, input: &Regs) -> Regs {
+        let mut output = Regs {
+            x: [0; GENERAL],
+            q: [0; VECTOR_WORDS],
+        };
+        let from = ptr::from_ref(input);
+        let to = ptr::from_mut(&mut output);
+        // SAFETY: loads every register from `input`, calls the stub, which
+        // the caller guarantees, and stores every register into `output`;
+        // both live through the block. Everything the block writes is an
+        // output or among the C convention's clobbers, and the stack is
+        // aligned for a call on entry to the block.
+        unsafe {
+            core::arch::asm!(
+            "movups xmm0, xmmword ptr [r12 + 72]",
+            "movups xmm1, xmmword ptr [r12 + 88]",
+            "movups xmm2, xmmword ptr [r12 + 104]",
+            "movups xmm3, xmmword ptr [r12 + 120]",
+            "movups xmm4, xmmword ptr [r12 + 136]",
+            "movups xmm5, xmmword ptr [r12 + 152]",
+            "movups xmm6, xmmword ptr [r12 + 168]",
+            "movups xmm7, xmmword ptr [r12 + 184]",
+            "movups xmm8, xmmword ptr [r12 + 200]",
+            "movups xmm9, xmmword ptr [r12 + 216]",
+            "movups xmm10, xmmword ptr [r12 + 232]",
+            "movups xmm11, xmmword ptr [r12 + 248]",
+            "movups xmm12, xmmword ptr [r12 + 264]",
+            "movups xmm13, xmmword ptr [r12 + 280]",
+            "movups xmm14, xmmword ptr [r12 + 296]",
+            "movups xmm15, xmmword ptr [r12 + 312]",
+            "mov rax, qword ptr [r12]",
+            "mov rcx, qword ptr [r12 + 8]",
+            "mov rdx, qword ptr [r12 + 16]",
+            "mov rsi, qword ptr [r12 + 24]",
+            "mov rdi, qword ptr [r12 + 32]",
+            "mov r8, qword ptr [r12 + 40]",
+            "mov r9, qword ptr [r12 + 48]",
+            "mov r10, qword ptr [r12 + 56]",
+            "mov r11, qword ptr [r12 + 64]",
+            "call r14",
+            "mov qword ptr [r13], rax",
+            "mov qword ptr [r13 + 8], rcx",
+            "mov qword ptr [r13 + 16], rdx",
+            "mov qword ptr [r13 + 24], rsi",
+            "mov qword ptr [r13 + 32], rdi",
+            "mov qword ptr [r13 + 40], r8",
+            "mov qword ptr [r13 + 48], r9",
+            "mov qword ptr [r13 + 56], r10",
+            "mov qword ptr [r13 + 64], r11",
+            "movups xmmword ptr [r13 + 72], xmm0",
+            "movups xmmword ptr [r13 + 88], xmm1",
+            "movups xmmword ptr [r13 + 104], xmm2",
+            "movups xmmword ptr [r13 + 120], xmm3",
+            "movups xmmword ptr [r13 + 136], xmm4",
+            "movups xmmword ptr [r13 + 152], xmm5",
+            "movups xmmword ptr [r13 + 168], xmm6",
+            "movups xmmword ptr [r13 + 184], xmm7",
+            "movups xmmword ptr [r13 + 200], xmm8",
+            "movups xmmword ptr [r13 + 216], xmm9",
+            "movups xmmword ptr [r13 + 232], xmm10",
+            "movups xmmword ptr [r13 + 248], xmm11",
+            "movups xmmword ptr [r13 + 264], xmm12",
+            "movups xmmword ptr [r13 + 280], xmm13",
+            "movups xmmword ptr [r13 + 296], xmm14",
+            "movups xmmword ptr [r13 + 312], xmm15",
+                in("r12") from,
+                in("r13") to,
+                in("r14") stub,
+                clobber_abi("C"),
+            );
+        }
+        output
+    }
+
     /// The address of the slow path's stub `case` names, the frame size it
     /// is given, and whether it releases words.
-    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        not(miri),
+        not(windows)
+    ))]
     #[expect(clippy::as_conversions, reason = "functions' addresses")]
     fn stub_of(case: usize) -> (usize, Option<u64>, bool) {
         use crate::panic::{cheby_rt_stack_slow, cheby_rt_stack_slow_frame};
@@ -765,36 +910,45 @@ pub(crate) mod tests {
     /// a distinct pattern except the stub's arguments: `ctx`, no location,
     /// the frame size `frame` for a large frame's stub and no counted word
     /// for a releasing one.
-    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        not(miri),
+        not(windows)
+    ))]
     fn saving_input(ctx: &ExecCtx, case: usize, frame: u64) -> Regs {
-        let mut input = Regs {
-            x: std::array::from_fn(|i| 0x1111_2222_0000_0000 | u64::try_from(i).unwrap()),
-            q: std::array::from_fn(|i| 0x5a5a_a5a5_0000_0000 | u64::try_from(i).unwrap()),
-        };
-        input.x[0] = u64::try_from(ptr::from_ref(ctx).expose_provenance()).unwrap();
-        input.x[1] = 0;
+        let mut input = Regs::patterned();
+        input.set_argument(
+            0,
+            u64::try_from(ptr::from_ref(ctx).expose_provenance()).unwrap(),
+        );
+        input.set_argument(1, 0);
         let (_, size, releases) = stub_of(case);
         let count_at = if size.is_some() {
-            input.x[2] = frame;
+            input.set_argument(2, frame);
             3
         } else {
             2
         };
         if releases {
-            input.x[count_at] = 0;
+            input.set_argument(count_at, 0);
         }
         input
     }
 
-    /// Each slow path's stub gives back every register it saves, `x0`-`x17`
-    /// and `q0`-`q31` whole, on each of its ways out: after a yield it took
-    /// (the fiber was switched out and back, maybe onto the other worker),
+    /// Each slow path's stub gives back every register it saves
+    /// ([`Regs`]), the vector registers whole, on each of its ways out:
+    /// after a yield it took (the fiber was switched out and back, maybe
+    /// onto the other worker),
     /// after a cancellation it delivered and, for a large frame's stubs,
     /// after a stack overflow it raised (the flag is set). Generated code
     /// calls them with `preserve_all`, so a value of the caller may be in
     /// any of them.
     #[test]
-    #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        not(miri),
+        not(windows)
+    ))]
     fn entry_slow_stubs_preserve_every_register() {
         for case in 0..4 {
             for way in ["yield", "overflow", "cancel"] {
