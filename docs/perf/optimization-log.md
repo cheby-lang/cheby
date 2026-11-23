@@ -722,3 +722,25 @@ Geometric means against Rust: the executables 3.85× on the CPU group, 7.15× on
 - CI passed all 17 jobs on `b4cfc7aa` (run 45196654481): Linux and Windows on x86-64 and aarch64, and macOS. Its first run on this branch failed on three lints that only other targets see and on one test that asserted aarch64's frame shape; the stubs themselves needed no change. Before that run, the x86-64 stubs had passed the runtime's tests under Rosetta.
 - One test was timing-dependent and failed once under load: it required an interrupt to arrive during a short loop. It now loops until one has.
 
+## 2026-11-23: two more items the user asked for
+
+### The entry check's slow paths take six arguments (D-1786)
+
+On x86-64 the releasing slow paths took a seventh and an eighth argument on the stack, so a function that called one never had an empty frame. They take six now, all in registers there. Frame sizes below the frame record, in bytes, compiled for x86-64 Linux: a parameterless recursive function 16 before and 0 after, the outer function of a large frame 16 to 32 before and 0 after, a self tail loop 16 before and 0 after. aarch64 frames are unchanged, and `mandelbrot` retires 2.6% fewer instructions there, because the dropped count had sat in the register `ctx` arrives in.
+
+### `list::sort_with` and `heap`'s updates call their comparison from generated code (D-1787)
+
+The algorithms stay in the runtime and run one comparison at a time; generated code calls the comparison. Instructions retired, in units of 10⁹:
+
+| Program                              | Debug before | After | Release before | After |
+| ------------------------------------ | -----------: | ----: | -------------: | ----: |
+| Sort of 1M `Int`s by a closure       |         4.65 |  4.36 |           4.15 |  2.97 |
+| `list::sort` of 1M `Int`s            |         5.76 |  5.48 |           5.62 |  2.99 |
+| Sort of 1M `(String, Int)`           |        12.99 | 12.53 |          11.56 | 11.07 |
+| Heap of a user type, 300k each way   |         9.85 |  8.83 |           9.23 |  6.87 |
+| Heap of `Int`s, 1M each way          |         9.22 |  9.27 |           8.99 |  9.09 |
+
+Tried and not kept: the merge sort written in Cheby. On a million `Int`s it retired 13.96 G instructions in debug and 12.47 G in release, three times the kernel's.
+
+Left open: in release a heap's `compare` is still a call, since `heap`'s updates reach their intrinsics through a private helper that builds a closure. The `Order` a comparison returns is still built and read through a block parameter in the sort's loop.
+

@@ -1,5 +1,5 @@
 // @mode: run-fail
-// @decisions: D-526, D-1613
+// @decisions: D-526, D-1613, D-1787
 //! A panic inside the `compare` that a heap's update calls is reported
 //! like any other panic, at its own location, even after the runtime has
 //! moved elements of the heap in place.
