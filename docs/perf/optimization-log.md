@@ -695,3 +695,23 @@ Tried and not kept: the steps as three arms in MIR. A record taken apart before 
 
 Left open: the clean-up does not substitute a constant field of a constructor it takes apart, because that gave invalid MIR in `std::option`'s release tests, for a reason not yet found. The other kernels that call back, `list::sort_with`, `heap`'s comparator calls and the hooks of equality, hashing and debug text, are unchanged.
 
+### The comparison with it
+
+The Cheby rows of `../cheby-compare` at `4480f4ae`, on a quiet machine, with the comparison's own runner. This reading replaces the earlier ones of the day in its results file.
+
+| Benchmark        | Executable on 11-22 | Executable now | Against Rust | `cheby run` now | Rank of the executable |
+| ---------------- | ------------------: | -------------: | -----------: | --------------: | ---------------------: |
+| `binary_trees`   |              1.06 s |         892 ms |       0.900× |          872 ms |               13 of 21 |
+| `nbody`          |             27.24 s |        13.04 s |        25.4× |         13.72 s |               15 of 21 |
+| `spectral_norm`  |             21.48 s |         5.18 s |        6.45× |          5.57 s |               14 of 21 |
+| `mandelbrot`     |              1.67 s |         942 ms |        1.32× |          963 ms |               13 of 21 |
+| `fannkuch_redux` |              3.74 s |         675 ms |        4.35× |          993 ms |               13 of 21 |
+| `word_freq`      |              2.07 s |         1.56 s |        4.48× |          1.72 s |               11 of 21 |
+| `json_roundtrip` |              3.76 s |         2.85 s |        7.37× |          2.91 s |               12 of 21 |
+| `lru_cache`      |             25.75 s |         7.33 s |        11.1× |          8.77 s |               15 of 21 |
+| `ping_pong`      |               57 ms |          54 ms |      0.0801× |           63 ms |                2 of 23 |
+| `spawn_many`     |               76 ms |          50 ms |      0.0624× |           59 ms |                3 of 23 |
+| `prime_sieve`    |               19 ms |          21 ms |      0.0391× |           26 ms |                1 of 23 |
+
+Geometric means against Rust: the executables 3.85× on the CPU group, 7.15× on the data group and 4.85× on both together, where they stood at 9.68×, 13.1× and 10.8× on 2026-11-22. `cheby run`, the debug profile: 4.26×, 7.89× and 5.37×. On CPU and data together the executables are ahead of Clojure (5.13×) and Koka (5.70×).
+
