@@ -394,9 +394,9 @@ fn code_model_text_is_pc_relative_to_generated_symbols() {
     }
     for symbol in [
         // A runtime function, twice: the entry check's slow path and the
-        // allocation.
+        // allocation's.
         "cb$imp$cheby_rt_stack_slow",
-        "cb$imp$cheby_rt_alloc",
+        "cb$imp$cheby_rt_alloc_slow",
         // `@blocking`'s runtime function and the shim's address.
         "cb$imp$cheby_rt_blocking_call",
         "cb$blk$cheby_test_blocking",
@@ -682,8 +682,12 @@ fn isa_x86_64_apple_darwin_is_unsupported() {
 /// `spin(k - 1, cr, ci, zr * zr - zi * zi + cr, 2.0 * zr * zi + ci)`; at
 /// 0 returns `Nil`. The self tail call is a jump to the loop header,
 /// whose entry check's slow path is the loop's only call.
+///
+/// With `allocates`, `spin` also carries a uniform word `acc` and each
+/// step makes `acc` the pair of the old `acc` and the new `zr` boxed, so
+/// the loop allocates twice per step, a box and a tuple.
 #[expect(clippy::too_many_lines, reason = "one hand-built MIR unit")]
-fn float_loop_unit() -> MirModule {
+fn float_loop_unit(allocates: bool) -> MirModule {
     let spin = def(0);
     let local = Local::from_u32;
     let float = |n: f64| Operand::Const(Const::Float(n.to_bits()));
@@ -697,9 +701,13 @@ fn float_loop_unit() -> MirModule {
         },
     };
     let l = |n: u32| Operand::Local(local(n));
+    let mut params: Vec<Local> = (0..5).map(local).collect();
+    if allocates {
+        params.push(local(14));
+    }
     let mut body = function(
         FnKey::Item(spin),
-        (0..5).map(local).collect(),
+        params,
         &[
             // The parameters, then the test of `k`, the steps and `k - 1`.
             Repr::Int,
@@ -716,11 +724,36 @@ fn float_loop_unit() -> MirModule {
             Repr::Float,
             Repr::Float,
             Repr::Int,
+            // `acc`, the box and the pair.
+            Repr::Value,
+            Repr::Value,
+            Repr::Value,
         ],
         Vec::new(),
         Terminator::Return(Operand::Const(Const::Nil)),
         &["a.cheby:1:4", "a.cheby:2:8"],
     );
+    let mut step = vec![l(13), l(1), l(2), l(9), l(12)];
+    let mut allocations = Vec::new();
+    if allocates {
+        allocations = vec![
+            Stmt::Assign {
+                dst: local(15),
+                value: Rvalue::Box {
+                    value: l(9),
+                    from: Repr::Float,
+                },
+            },
+            Stmt::Assign {
+                dst: local(16),
+                value: Rvalue::Alloc {
+                    layout: LayoutRef::Tuple(2),
+                    fields: vec![l(14), l(15)],
+                },
+            },
+        ];
+        step.push(l(16));
+    }
     let blocks = vec![
         Block {
             pos: Vec::new(),
@@ -769,16 +802,23 @@ fn float_loop_unit() -> MirModule {
                         loc: StrId::from_u32(1),
                     },
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(allocations)
+            .collect(),
             term: Terminator::TailCall {
                 callee: Callee::Direct(spin),
-                args: vec![l(13), l(1), l(2), l(9), l(12)],
+                args: step,
             },
             unwind: Vec::new(),
         },
     ];
     body.blocks = IndexVec::from_raw(blocks).unwrap();
     let float = Repr::Float;
+    let mut sig = vec![Repr::Int, float, float, float, float];
+    if allocates {
+        sig.push(Repr::Value);
+    }
     MirModule {
         externals: Vec::new(),
         source: None,
@@ -787,11 +827,7 @@ fn float_loop_unit() -> MirModule {
         functions: vec![body],
         callees: vec![CalleeDecl {
             def: spin,
-            sig: AbiSig::owned(
-                Abi::Cheby,
-                vec![Repr::Int, float, float, float, float],
-                Repr::Value,
-            ),
+            sig: AbiSig::owned(Abi::Cheby, sig, Repr::Value),
         }],
         layouts: Vec::new(),
         foreign_layouts: Vec::new(),
@@ -808,7 +844,12 @@ fn float_loop_unit() -> MirModule {
 /// paths called with `preserve_all` when `saving` (and the target has
 /// the stubs): its CLIF text and the size of its frame below the frame
 /// record, its spill slots and saved callee-saved registers.
-fn float_loop(isa: OwnedTargetIsa, opt: OptLevel, saving: bool) -> (String, u32) {
+fn float_loop(
+    isa: OwnedTargetIsa,
+    opt: OptLevel,
+    saving: bool,
+    allocates: bool,
+) -> (String, u32, String) {
     let mut m = Recording::with_isa(isa);
     let decls = Decls::new(m.isa()).unwrap();
     let mut decls = if saving {
@@ -823,20 +864,16 @@ fn float_loop(isa: OwnedTargetIsa, opt: OptLevel, saving: bool) -> (String, u32)
         opt_level: opt,
         ..CodegenOptions::default()
     };
-    let units = [float_loop_unit()];
+    let units = [float_loop_unit(allocates)];
     declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
     let func = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
     let text = func.display().to_string();
     let mut ctx = cranelift_codegen::Context::for_function(func);
+    ctx.set_disasm(true);
     ctx.compile(m.isa(), &mut ControlPlane::default()).unwrap();
-    let frame = ctx
-        .compiled_code()
-        .unwrap()
-        .buffer
-        .frame_layout()
-        .unwrap()
-        .frame_to_fp_offset;
-    (text, frame)
+    let code = ctx.compiled_code().unwrap();
+    let frame = code.buffer.frame_layout().unwrap().frame_to_fp_offset;
+    (text, frame, code.vcode.clone().unwrap_or_default())
 }
 
 /// The targets whose Cranelift backend this build has (D-936): the
@@ -869,7 +906,7 @@ fn a_float_loop_keeps_its_floats_in_registers() {
         let windows = triple.contains("windows");
         for opt in [OptLevel::None, OptLevel::Speed] {
             let isa = || isa::isa_with(triple, opt).unwrap();
-            let (text, frame) = float_loop(isa(), opt, true);
+            let (text, frame, _) = float_loop(isa(), opt, true, false);
             let context = format!("{triple} at {opt:?}");
             assert_eq!(
                 text.contains("preserve_all"),
@@ -879,9 +916,76 @@ fn a_float_loop_keeps_its_floats_in_registers() {
             if !windows {
                 assert_eq!(frame, 0, "{context}: a frame of {frame} bytes\n{text}");
             }
-            let (text, frame) = float_loop(isa(), opt, false);
+            let (text, frame, _) = float_loop(isa(), opt, false, false);
             assert!(!text.contains("preserve_all"), "{context}:\n{text}");
             assert!(frame > 0, "{context}: with the C convention, no frame");
+        }
+    }
+}
+
+/// Whether a line of disassembly stores a vector register to the stack or
+/// loads one from it: a spill or a reload.
+fn float_spill(line: &str) -> bool {
+    let line = line.trim();
+    let vector = |word: &str| {
+        let word = word.trim_start_matches('%').trim_end_matches(',');
+        ["d", "q", "v", "s", "xmm"].iter().any(|prefix| {
+            word.strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
+    };
+    let stack = line.contains("[sp") || line.contains("(%rsp)") || line.contains("(%rbp)");
+    stack && line.split_whitespace().skip(1).any(vector)
+}
+
+/// An allocation of a cached size is inline (`crate::alloc_inline`), and
+/// its slow path is a stub called with `preserve_all` on aarch64 and
+/// x86-64 outside Windows, so a loop that boxes a `Float` and allocates a
+/// tuple at every step makes no call on the hit path and keeps its Floats
+/// in registers: no frame below its frame record, in both profiles. Every
+/// call it has is to a stub. Where the stubs are called with the C
+/// convention, as on Windows, the loop calls the allocation helpers and
+/// keeps its Floats in spill slots.
+#[test]
+fn an_allocating_float_loop_keeps_its_floats_in_registers() {
+    let targets = built_targets();
+    assert_ne!(targets.len(), 0, "no backend built");
+    for triple in targets {
+        let windows = triple.contains("windows");
+        for opt in [OptLevel::None, OptLevel::Speed] {
+            let isa = || isa::isa_with(triple, opt).unwrap();
+            let (text, frame, code) = float_loop(isa(), opt, true, true);
+            let context = format!("{triple} at {opt:?}");
+            // The allocation helpers return the object; the stubs, and
+            // the overflow's panic, after which nothing is live, return
+            // nothing.
+            let helpers: Vec<&str> = text
+                .lines()
+                .filter(|line| line.trim_start().starts_with("sig") && line.contains("->"))
+                .collect();
+            if windows {
+                assert!(!text.contains("preserve_all"), "{context}:\n{text}");
+                assert!(!helpers.is_empty(), "{context}:\n{text}");
+                continue;
+            }
+            assert!(
+                helpers.is_empty() && text.contains("preserve_all"),
+                "{context}: an allocation helper's call\n{text}"
+            );
+            // A callee-saved integer register may be saved once at the
+            // entry; no vector register goes to or comes from the stack.
+            let spills: Vec<&str> = code.lines().filter(|line| float_spill(line)).collect();
+            assert!(
+                spills.is_empty(),
+                "{context}: {spills:?} in a frame of {frame} bytes\n{code}"
+            );
+            let (text, frame, code) = float_loop(isa(), opt, false, true);
+            assert!(!text.contains("preserve_all"), "{context}:\n{text}");
+            assert!(frame > 0, "{context}: with the C convention, no frame");
+            assert!(
+                code.lines().any(float_spill),
+                "{context}: with the C convention, no spill\n{code}"
+            );
         }
     }
 }

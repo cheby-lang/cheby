@@ -19,8 +19,10 @@
 //! the distinct allocation entry [`cheby_rt_alloc_miss`], which costs what
 //! `cheby_rt_alloc` costs; a hit makes no call, so generated code loads
 //! the counting flag ([`crate::stats::counting_flag`]) and calls
-//! [`cheby_rt_reuse_hit`] out of line only while counting is on or not
-//! yet settled: one load and one predictable branch per hit.
+//! [`cheby_rt_reuse_hit`](crate::alloc::slow::cheby_rt_reuse_hit) out of
+//! line only while counting is on or not yet settled: one load and one
+//! predictable branch per hit. A miss allocates inline where the block
+//! cache serves it, and its slow path counts it.
 //!
 //! With checked counting (`checked_rc`, poisoning mode) generated code
 //! calls [`cheby_rt_drop_reuse_checked`] and
@@ -80,14 +82,6 @@ pub unsafe extern "C" fn cheby_rt_free_unique(ctx: *mut ExecCtx, obj: Word, size
     unsafe { check_live(obj, "a specialized drop") };
     // SAFETY: forwarded from the caller.
     unsafe { crate::alloc::free_unique(ctx.as_ref(), word_to_ptr(obj), size) };
-}
-
-/// Counts one reuse hit (`CHEBY_RT_STATS`'s `reuse hits`) in the current
-/// accounting domain when events are counted. Generated code calls it out
-/// of line, only while the counting flag is not settled to off.
-#[unsafe(no_mangle)]
-pub extern "C" fn cheby_rt_reuse_hit() {
-    stats::record(Event::ReuseHit);
 }
 
 /// `cheby_rt_alloc` for an `alloc_reuse` whose token is 0 (a reuse miss):

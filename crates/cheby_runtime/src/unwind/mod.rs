@@ -1071,6 +1071,10 @@ mod tests {
                             (D-171, D-775)";
     const STUB: &str = "a naked stub that passes its caller's frame record to its body (D-1040), \
                         or a plain function calling that body";
+    const SAVING_STUB: &str = "a naked stub that saves every register around a call of its body, \
+                               or a plain function calling that body";
+    const ALLOC_BODY: &str = "calls `cheby_rt_alloc` or `cheby_rt_alloc_miss`, which run in their \
+                              guards, and stores the result, 0 when it raised (D-697)";
     const SLOW_BODY: &str = "runs the slow path in its guard (`stack_slow_at`), which sets the flag \
                              and returns (D-700)";
     const STREAM: &str = "loads and stores of the fiber's stream fields under its own lock; a \
@@ -1090,7 +1094,12 @@ mod tests {
         ("reuse.rs", "cheby_rt_release_fields", DROP),
         ("reuse.rs", "cheby_rt_drop_reuse_checked", DROP),
         ("reuse.rs", "cheby_rt_free_unique", DROP),
-        ("reuse.rs", "cheby_rt_reuse_hit", COUNTS),
+        ("alloc/slow.rs", "$name", SAVING_STUB),
+        ("alloc/slow.rs", "alloc_slow_from", ALLOC_BODY),
+        ("alloc/slow.rs", "alloc_miss_slow_from", ALLOC_BODY),
+        ("alloc/slow.rs", "free_unique_slow_from", DROP),
+        ("alloc/slow.rs", "drop_saving_from", DROP),
+        ("alloc/slow.rs", "reuse_hit_from", COUNTS),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
         ("panic.rs", "panic_from", RAISES_ITSELF),
         ("panic.rs", "cheby_rt_stack_slow", STUB),

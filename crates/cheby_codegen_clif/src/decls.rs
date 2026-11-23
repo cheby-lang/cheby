@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use cheby_iface::{DefId, ModuleId};
 use cheby_mir::{
     AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, ForeignSig, Function, LayoutDesc,
-    LayoutRef, MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator,
+    LayoutRef, MirModule, Operand, Repr, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator,
     UnitKind,
 };
 use cheby_runtime::abi;
@@ -1210,6 +1210,49 @@ impl Decls {
         self.declare_on_demand_data(module)
     }
 
+    /// Declares the saving stubs the inline allocations and sized frees of
+    /// `stmt` call on their slow paths (`crate::alloc_inline`), where the
+    /// runtime has such stubs.
+    fn declare_saving_stubs<M: Module>(
+        &mut self,
+        module: &mut M,
+        stmt: &Stmt,
+    ) -> Result<(), CodegenError> {
+        if !self.saving_slow_paths {
+            return Ok(());
+        }
+        let stubs: &[RuntimeFunc] = match stmt {
+            Stmt::Assign {
+                value:
+                    Rvalue::Alloc { .. }
+                    | Rvalue::AllocPlaceholder { .. }
+                    | Rvalue::Box {
+                        from: Repr::Float | Repr::F32,
+                        ..
+                    },
+                ..
+            } => &[RuntimeFunc::AllocSlow],
+            Stmt::Assign {
+                value: Rvalue::AllocReuse { .. },
+                ..
+            } => &[RuntimeFunc::AllocMissSlow],
+            Stmt::Assign {
+                value: Rvalue::DropReuse { .. },
+                ..
+            } => &[RuntimeFunc::DropSaving],
+            Stmt::DropKeep { .. } => &[RuntimeFunc::FreeUniqueSlow, RuntimeFunc::DropSaving],
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::ClearUnwind => &[],
+        };
+        for &f in stubs {
+            self.declare_runtime_func(module, f)?;
+        }
+        Ok(())
+    }
+
     /// Declares the counting flag ([`crate::runtime::ON_DEMAND_DATA`]),
     /// once: reuse's code, the inline pattern steps and the inline writes
     /// at an index test it (D-768).
@@ -1269,6 +1312,7 @@ impl Decls {
                         self.declare_runtime_func(module, RuntimeFunc::ReleaseFields)?;
                         self.declare_runtime_func(module, RuntimeFunc::FreeUnique)?;
                     }
+                    self.declare_saving_stubs(module, stmt)?;
                 }
             }
         }

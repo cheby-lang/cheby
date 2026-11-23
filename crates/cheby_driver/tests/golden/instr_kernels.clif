@@ -1,13 +1,13 @@
 ; cb$fn$app$hypot
 ; userextname0 = cb$str$fn$app$hypot$0
 ; userextname1 = cb$imp$cheby_rt_stack_slow_unwind
-; userextname2 = cb$imp$cheby_rt_box_f64
+; userextname2 = cb$imp$cheby_rt_alloc_slow
 function u0:24(i64, f64, f64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname1
     gv2 = symbol colocated userextname2
     sig0 = (i64, i64, i32 uext, i64, i64, i64, i64) preserve_all
-    sig1 = (i64, f64) -> i64 system_v
+    sig1 = (i64, i64, i64) preserve_all
 
 block2(v0: i64, v1: f64, v2: f64):
     v3 = get_stack_pointer.i64 
@@ -30,17 +30,48 @@ block0:
     v13 = fmul.f64 v2, v2
     v14 = fadd v12, v13
     v15 = sqrt v14
-    v16 = symbol_value.i64 gv2
-    v17 = load.i64 notrap aligned readonly v16
-    v18 = call_indirect sig1, v17(v0, v15)
-    brif v18, block4, block1
+    v16 = iconst.i64 0x0400_0000_0001
+    v18 = load.i64 notrap aligned v0+24
+    v19 = load.i64 notrap aligned v18+16
+    v20 = load.i64 notrap aligned v19
+    brif v20, block6, block4
 
-block4:
-    return v18
+block6:
+    v21 = load.i64 notrap aligned v18+512
+    v22 = load.i64 notrap aligned v21+8
+    v23 = load.i64 notrap aligned v21+16
+    v24 = iconst.i64 16
+    v25 = iadd v22, v24  ; v24 = 16
+    v26 = icmp sle v25, v23
+    brif v26, block7, block4
+
+block7:
+    v27 = load.i64 notrap aligned v21
+    v28 = iconst.i64 1
+    v29 = iadd v27, v28  ; v28 = 1
+    store notrap aligned v29, v21
+    store.i64 notrap aligned v25, v21+8
+    v30 = iconst.i64 -8
+    v31 = iadd.i64 v19, v30  ; v30 = -8
+    store notrap aligned v31, v18+16
+    store.i64 notrap aligned v16, v20  ; v16 = 0x0400_0000_0001
+    jump block5(v20)
+
+block4 cold:
+    v32 = iconst.i64 16
+    v33 = symbol_value.i64 gv2
+    v34 = load.i64 notrap aligned readonly v33
+    call_indirect sig1, v34(v0, v32, v16)  ; v32 = 16, v16 = 0x0400_0000_0001
+    v35 = load.i64 notrap aligned v0+32
+    brif v35, block5(v35), block1
+
+block5(v17: i64):
+    store.f64 notrap aligned v15, v17+8
+    return v17
 
 block1 cold:
-    v19 = iconst.i64 0
-    return v19  ; v19 = 0
+    v36 = iconst.i64 0
+    return v36  ; v36 = 0
 }
 ; cb$fn$app$fnv_step
 ; userextname0 = cb$str$fn$app$fnv_step$0

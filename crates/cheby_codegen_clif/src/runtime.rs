@@ -115,11 +115,24 @@ pub enum RuntimeFunc {
     MapValueAt,
     /// `uint64_t cheby_rt_list_set(ExecCtx *ctx, uint64_t list, int64_t index, uint64_t item)`.
     ListSet,
+    /// `void cheby_rt_alloc_slow(ExecCtx *ctx, uint64_t size, uint64_t header)`: what an
+    /// inline allocation does not serve; leaves the object, or 0 when it raised, at
+    /// `CTX_ALLOC_RESULT` (`crate::alloc_inline`).
+    AllocSlow,
+    /// `void cheby_rt_alloc_miss_slow(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// [`Self::AllocSlow`] for an `alloc_reuse` whose token is 0.
+    AllocMissSlow,
+    /// `void cheby_rt_free_unique_slow(ExecCtx *ctx, uint64_t obj, uint64_t size)`: what an
+    /// inline sized free does not serve.
+    FreeUniqueSlow,
+    /// `void cheby_rt_drop_saving(ExecCtx *ctx, uint64_t value)`: `Drop`, for the cold
+    /// drop of a shared object on the paths of a reuse and of a specialized drop.
+    DropSaving,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 46] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -162,6 +175,10 @@ impl RuntimeFunc {
         Self::MapFind,
         Self::MapValueAt,
         Self::ListSet,
+        Self::AllocSlow,
+        Self::AllocMissSlow,
+        Self::FreeUniqueSlow,
+        Self::DropSaving,
     ];
 
     /// The symbol.
@@ -210,6 +227,10 @@ impl RuntimeFunc {
             Self::MapFind => sym::MAP_FIND,
             Self::MapValueAt => sym::MAP_VALUE_AT,
             Self::ListSet => sym::LIST_SET,
+            Self::AllocSlow => sym::ALLOC_SLOW,
+            Self::AllocMissSlow => sym::ALLOC_MISS_SLOW,
+            Self::FreeUniqueSlow => sym::FREE_UNIQUE_SLOW,
+            Self::DropSaving => sym::DROP_SAVING,
         }
     }
 
@@ -228,12 +249,16 @@ impl RuntimeFunc {
             | Self::AllocMiss
             | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
             Self::ReleaseFields => (&[Ptr, U64], Void),
-            Self::FreeUnique => (&[Ptr, U64, U64], Void),
+            Self::FreeUnique | Self::AllocSlow | Self::AllocMissSlow | Self::FreeUniqueSlow => {
+                (&[Ptr, U64, U64], Void)
+            }
             Self::ReuseHit => (&[], Void),
             Self::AllocReuseChecked => (&[Ptr, U64, U64, U64], U64),
             Self::Dup => (&[Ptr], Void),
             Self::Panic => (&[Ptr, U32, Ptr, Ptr], Void),
-            Self::Drop | Self::StackSlow | Self::EffectCheck => (&[Ptr, Ptr], Void),
+            Self::Drop | Self::StackSlow | Self::EffectCheck | Self::DropSaving => {
+                (&[Ptr, Ptr], Void)
+            }
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
             Self::BoxU64 | Self::ConstMissing | Self::Debug => (&[Ptr, U64], U64),
             Self::BoxF64 => (&[Ptr, F64], U64),
@@ -257,9 +282,12 @@ impl RuntimeFunc {
         }
     }
 
-    /// Whether the function is one of the entry check's slow paths, which
+    /// Whether the function is one of the runtime's saving stubs, which
     /// save every register generated code may keep a value in and load them
-    /// back before they return (`cheby_runtime::panic`). On a target whose
+    /// back before they return (`cheby_runtime::panic`): the entry check's
+    /// slow paths, the slow paths of inline allocations and sized frees
+    /// (`crate::alloc_inline`), the cold drop of a shared object on the
+    /// paths of a reuse and the count of a reuse hit. On a target whose
     /// runtime has those stubs ([`crate::decls::Decls::saving_slow_paths`]),
     /// generated code calls them with Cranelift's `preserve_all`
     /// convention, so the call clobbers nothing, and the values that live
@@ -274,6 +302,11 @@ impl RuntimeFunc {
                 | Self::StackSlowFrame
                 | Self::StackSlowUnwind
                 | Self::StackSlowFrameUnwind
+                | Self::ReuseHit
+                | Self::AllocSlow
+                | Self::AllocMissSlow
+                | Self::FreeUniqueSlow
+                | Self::DropSaving
         )
     }
 
@@ -302,6 +335,10 @@ impl RuntimeFunc {
                 | Self::MapFind
                 | Self::MapValueAt
                 | Self::ListSet
+                | Self::AllocSlow
+                | Self::AllocMissSlow
+                | Self::FreeUniqueSlow
+                | Self::DropSaving
         )
     }
 
@@ -351,6 +388,10 @@ impl RuntimeFunc {
             Self::MapFind => 39,
             Self::MapValueAt => 40,
             Self::ListSet => 41,
+            Self::AllocSlow => 42,
+            Self::AllocMissSlow => 43,
+            Self::FreeUniqueSlow => 44,
+            Self::DropSaving => 45,
         }
     }
 

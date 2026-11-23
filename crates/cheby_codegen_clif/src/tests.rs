@@ -787,10 +787,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 42);
+    assert_eq!(RuntimeFunc::ALL.len(), 46);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        18,
+        22,
         "only the functions added since M2 are declared on demand"
     );
     // The lookups taken apart at once and `list::set` at a direct call.
@@ -838,6 +838,29 @@ fn slice_runtime_functions() {
         (RuntimeFunc::ScopeClose, true)
     );
     assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
+}
+
+/// The slow paths of inline allocations and sized frees, and the cold drop
+/// of a shared object on a reuse's path (`crate::alloc_inline`): saving
+/// stubs at indexes 42 to 45, declared on demand, like the entry check's
+/// slow paths and the count of a reuse hit, which is a saving stub too.
+#[test]
+fn inline_allocation_runtime_functions() {
+    use runtime::RuntimeFunc;
+    let sized = &[CType::Ptr, CType::U64, CType::U64][..];
+    for (f, index, params) in [
+        (RuntimeFunc::AllocSlow, 42, sized),
+        (RuntimeFunc::AllocMissSlow, 43, sized),
+        (RuntimeFunc::FreeUniqueSlow, 44, sized),
+        (RuntimeFunc::DropSaving, 45, &[CType::Ptr, CType::Ptr][..]),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert_eq!(RuntimeFunc::ALL[index], f);
+        assert_eq!(f.ctypes(), (params, CType::Void), "{f:?}");
+        assert!(f.on_demand() && f.preserves_all(), "{f:?}");
+    }
+    assert!(RuntimeFunc::ReuseHit.preserves_all());
+    assert!(!RuntimeFunc::Alloc.preserves_all() && !RuntimeFunc::FreeUnique.preserves_all());
 }
 
 /// Reuse's runtime entries (D-716), inline and checked, and fusion's

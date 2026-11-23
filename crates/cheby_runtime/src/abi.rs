@@ -316,9 +316,99 @@ pub const CTX_UNWIND: i32 = 12;
 /// `scope_close` (D-693), stored by generated code right before that call.
 /// The waiting kernels copy it into the fiber's wait site when they park,
 /// and a deadlock report starts its frame walk there
-/// (`locate::locate`). Generated code only writes it; the Rust part of
-/// the block starts after it, at byte 24.
+/// (`locate::locate`). Generated code only writes it.
 pub const CTX_WAIT_FRAME: i32 = 16;
+
+/// Byte offset of the fiber control block's inline allocation record, a
+/// pointer: the block cache that generated code takes blocks from and
+/// gives blocks back to without a call ([`block_cache`]). It is the cache
+/// of the thread the fiber runs on while the inline path may serve the
+/// fiber, and otherwise a cache that never serves, whose every stack is
+/// empty and full at once: a memory budget, event counting, poisoning, the
+/// address sanitizer or a shard the fiber does not hold alone. The runtime
+/// rewrites it whenever the fiber becomes current on a thread and when it
+/// stops being current, so generated code loads it again at each use.
+pub const CTX_ALLOC_CACHE: i32 = 24;
+
+/// Byte offset of the word where an allocation's slow path leaves its
+/// result: the object, or 0 when the allocation raised. The slow paths
+/// are called with a convention that returns nothing
+/// ([`sym::ALLOC_SLOW`]), so generated code loads the word after the
+/// call. The Rust part of the block starts after it, at byte 40.
+pub const CTX_ALLOC_RESULT: i32 = 32;
+
+/// The block cache as generated code reads and writes it
+/// (`crate::alloc::BlockCache`, at [`CTX_ALLOC_CACHE`]): for each of its
+/// [`CLASSES`](block_cache::CLASSES) size classes a stack of free blocks, then the shard of the
+/// domain counters that the current fiber charges.
+///
+/// A class's stack is a word array whose first slot holds 0. `top` points
+/// to the slot of the last block kept, so an empty stack's `top` points to
+/// a 0 and a pop is a load, a test and a store, with no count. `limit`
+/// points to the last slot: a push is inline while `top` is below it. A
+/// class whose stack does not exist yet has its `top` at a static 0 and
+/// a null `limit`, and so does every class of a cache that never serves,
+/// so its pops find nothing and its pushes find it full. A runtime with
+/// debug assertions keeps every `limit` null, so each sized free reaches
+/// the runtime, which checks its size (D-1772).
+///
+/// An inline allocation of class `c` loads `top`, loads the block it
+/// points to, and takes the slow path on 0; then it loads the shard and
+/// takes the slow path when the shard's bytes would pass its high, which
+/// is where the runtime samples the peak. Only then does it write: the
+/// shard's objects and bytes, `top` minus 8 and the block's header. An
+/// inline free of a block of class `c` takes the slow path unless `top`
+/// is below `limit`, then writes the shard's objects and bytes, the block
+/// in the slot after `top`, and `top` plus 8. A free never samples the
+/// peak, as the runtime's own frees do not.
+pub mod block_cache {
+    /// The number of size classes: allocations of 8 to 256 bytes, in steps
+    /// of 8.
+    pub const CLASSES: usize = 32;
+    /// The bytes of one class's entry: `top`, then `limit`.
+    pub const CLASS_SIZE: i32 = 16;
+    /// Byte offset in a class's entry of `top`.
+    pub const TOP_OFFSET: i32 = 0;
+    /// Byte offset in a class's entry of `limit`.
+    pub const LIMIT_OFFSET: i32 = 8;
+    /// Byte offset in the cache of the shard the current fiber charges,
+    /// exclusive to its thread.
+    pub const SHARD_OFFSET: i32 = 512;
+    /// Byte offset in a shard of its live objects, an `i64`.
+    pub const SHARD_OBJECTS_OFFSET: i32 = 0;
+    /// Byte offset in a shard of its live bytes, an `i64`.
+    pub const SHARD_BYTES_OFFSET: i32 = 8;
+    /// Byte offset in a shard of its high, an `i64`: an allocation that
+    /// takes the bytes above it samples the domain's peak in the runtime.
+    pub const SHARD_HIGH_OFFSET: i32 = 16;
+
+    /// The size class of an allocation of `size` bytes, as the runtime
+    /// rounds it: `(size - 1) / 8`, or `None` for 0 and past the last
+    /// class. Objects are at least the header's 8 bytes.
+    #[must_use]
+    pub fn class_of(size: u64) -> Option<usize> {
+        let class = usize::try_from(size.checked_sub(1)? / super::OBJECT_ALIGN).ok()?;
+        (class < CLASSES).then_some(class)
+    }
+
+    /// The size in bytes of the blocks of class `class`.
+    #[must_use]
+    pub fn class_bytes(class: usize) -> u64 {
+        u64::try_from(class)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+            .saturating_mul(super::OBJECT_ALIGN)
+    }
+
+    /// Byte offset in the cache of class `class`'s entry, for a class
+    /// below [`CLASSES`].
+    #[must_use]
+    pub fn class_offset(class: usize) -> Option<i32> {
+        (class < CLASSES)
+            .then(|| i32::try_from(class).ok()?.checked_mul(CLASS_SIZE))
+            .flatten()
+    }
+}
 
 /// List roots (D-563): the header (layout [`layout::LIST_FIRST`]), then
 /// the tree, the view's offset into it and the view's length, the last two
@@ -671,7 +761,8 @@ pub mod sym {
     /// value fields of a unique constructor or tuple object.
     pub const RELEASE_FIELDS: &str = "cheby_rt_release_fields";
     /// `void cheby_rt_reuse_hit(void)`: counts a reuse hit, out of line
-    /// behind [`STATS_COUNTING`] (D-716, D-768).
+    /// behind [`STATS_COUNTING`] (D-716, D-768). A stub that saves every
+    /// register, as [`ALLOC_SLOW`] is.
     pub const REUSE_HIT: &str = "cheby_rt_reuse_hit";
     /// `uint64_t cheby_rt_alloc_miss(ExecCtx *ctx, uint64_t size, uint64_t header)`:
     /// [`ALLOC`] for an `alloc_reuse` whose token is 0, counting the miss.
@@ -720,6 +811,28 @@ pub mod sym {
     /// released. Generated code writes a unique one-leaf list inline
     /// instead ([`super::list`]).
     pub const LIST_SET: &str = "cheby_rt_list_set";
+    /// `void cheby_rt_alloc_slow(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// what an inline allocation does not serve ([`super::block_cache`]).
+    /// Allocates as [`ALLOC`] does, refilling the size class's stack from
+    /// the system in a batch when it is empty, and leaves the object, or 0
+    /// when the allocation raised, at [`super::CTX_ALLOC_RESULT`]. A stub
+    /// that saves every register, called with Cranelift's `preserve_all`
+    /// convention where the runtime has such stubs, as the entry check's
+    /// slow paths are (D-1775).
+    pub const ALLOC_SLOW: &str = "cheby_rt_alloc_slow";
+    /// `void cheby_rt_alloc_miss_slow(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// [`ALLOC_SLOW`] for an `alloc_reuse` whose token is 0, counting the
+    /// miss as [`ALLOC_MISS`] does.
+    pub const ALLOC_MISS_SLOW: &str = "cheby_rt_alloc_miss_slow";
+    /// `void cheby_rt_free_unique_slow(ExecCtx *ctx, uint64_t obj, uint64_t size)`:
+    /// what an inline sized free does not serve: [`FREE_UNIQUE`], in a
+    /// stub that saves every register.
+    pub const FREE_UNIQUE_SLOW: &str = "cheby_rt_free_unique_slow";
+    /// `void cheby_rt_drop_saving(ExecCtx *ctx, uint64_t value)`: [`DROP`],
+    /// in a stub that saves every register, for the cold drop of a shared
+    /// object on the paths of a reuse and of a drop specialized by
+    /// constructor.
+    pub const DROP_SAVING: &str = "cheby_rt_drop_saving";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -819,7 +932,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 78] = [
+    pub const ALL: [&str; 82] = [
         ALLOC,
         DUP,
         DROP,
@@ -872,6 +985,10 @@ pub mod sym {
         MAP_FIND,
         MAP_VALUE_AT,
         LIST_SET,
+        ALLOC_SLOW,
+        ALLOC_MISS_SLOW,
+        FREE_UNIQUE_SLOW,
+        DROP_SAVING,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -1062,9 +1179,9 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(53..76), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(57..80), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
-            sym::ALL.get(76..),
+            sym::ALL.get(80..),
             Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
         );
         assert_eq!(
@@ -1092,15 +1209,22 @@ mod tests {
     }
 
     /// D-685, D-742, D-856: the generated-code view of the control block
-    /// ends at the wait-frame word (D-868), the
+    /// ends at the allocation result, after the wait-frame word (D-868), the
     /// measurement switch keeps its name, and a deadlock exits with 103
     /// (D-724).
     #[test]
     fn the_control_blocks_offsets_and_the_unwind_switch() {
         assert_eq!(UNWIND_EDGES_ENV, "CHEBY_UNWIND_EDGES");
         assert_eq!(
-            (CTX_STACK_LIMIT, CTX_MODE, CTX_UNWIND, CTX_WAIT_FRAME),
-            (0, 8, 12, 16)
+            (
+                CTX_STACK_LIMIT,
+                CTX_MODE,
+                CTX_UNWIND,
+                CTX_WAIT_FRAME,
+                CTX_ALLOC_CACHE,
+                CTX_ALLOC_RESULT
+            ),
+            (0, 8, 12, 16, 24, 32)
         );
         assert_eq!(
             (

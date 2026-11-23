@@ -12,9 +12,12 @@
 //!
 //! An allocation by a fiber without a memory budget, from generated code
 //! or a kernel, takes a block of its size class from the block cache that
-//! the fiber's control block records (D-739), or else from the system
-//! allocator, and charges the domain through the charge slot the control
-//! block caches. Everything else, a budget, a host thread, a size beyond
+//! the fiber's control block records (D-739), or else refills the class
+//! from the system allocator with a batch of blocks, and charges the domain
+//! through the charge slot the control block caches. Generated code does
+//! the same inline, through the control block's inline allocation record,
+//! and calls the runtime only for what that does not serve (`cache`,
+//! `slow`). Everything else, a budget, a host thread, a size beyond
 //! the cache's classes or a system refusal, takes the general path, which
 //! checks the budget, asks the system and raises as [`out_of_memory`] says
 //! (D-907).
@@ -183,8 +186,11 @@ pub fn leaked_kinds_line(kinds: [i64; RUNTIME_KINDS], live: i64) -> Option<Strin
     Some(format!("note: leaked {}", parts.join(", ")))
 }
 
-/// One shard of a domain's counters.
+/// One shard of a domain's counters. Inline allocations and frees in
+/// generated code charge it through the block cache (`abi::block_cache`),
+/// so its fields have fixed offsets.
 #[derive(Debug, Default)]
+#[repr(C)]
 struct Shard {
     objects: AtomicI64,
     bytes: AtomicI64,
@@ -763,8 +769,8 @@ unsafe fn alloc_slow(ctx: *mut ExecCtx, size: u64, header: u64, missed: FastMiss
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FastMiss {
     /// It did not apply: a memory budget, no class for the size, no
-    /// recorded cache or one in use, or `refuse_next_system_allocation`
-    /// armed. The general path tries the cache itself.
+    /// recorded cache, or `refuse_next_system_allocation` armed. The
+    /// general path tries the cache itself.
     NotTaken,
     /// The cache had no block and the system allocator refused one. The
     /// general path skips the cache and asks the system again, which
@@ -787,7 +793,7 @@ fn fast_class(size: u64) -> Option<usize> {
 }
 
 /// The size in bytes of the blocks of size class `class`, as
-/// [`class_layout`] gives it.
+/// [`class_layout`](cache::class_layout) gives it.
 #[expect(
     clippy::inline_always,
     reason = "a step of every allocation by a fiber; the gain depends on it being inline (D-907)"
@@ -802,7 +808,8 @@ const fn class_bytes(class: usize) -> usize {
 /// Allocates an object of `size` bytes with `header` for `ctx`, the fiber
 /// running on this thread, when it has no memory budget and the size has
 /// a class in the block cache: a block from the cache that its control
-/// block records (D-739), or on a miss from the system allocator, charged
+/// block records (D-739), or on a miss from the system allocator, which
+/// refills the class with a batch (`BlockCache::refill`), charged
 /// to its domain through its charge slot as [`init_object`] charges
 /// (D-907). It never raises: a system refusal is handed to the general
 /// path as [`FastMiss::Refused`].
@@ -832,26 +839,12 @@ fn fast_alloc(ctx: &ExecCtx, size: u64, header: u64) -> Result<*mut u8, FastMiss
     if let Some(missed) = fast_test_hook() {
         return Err(missed);
     }
-    let cached = cache
-        .try_borrow_mut()
-        .map_err(|_| FastMiss::NotTaken)?
-        .take(class);
     let bytes = class_bytes(class);
-    let ptr = if let Some(ptr) = cached {
-        ptr
-    } else {
-        // SAFETY: a nonzero multiple of the alignment, of at most the
-        // largest class, which `class_layout` builds the same way.
-        let ptr = unsafe {
-            std::alloc::alloc(Layout::from_size_align_unchecked(
-                bytes,
-                to_usize(abi::OBJECT_ALIGN),
-            ))
-        };
-        if ptr.is_null() {
-            return Err(FastMiss::Refused);
-        }
-        ptr
+    let ptr = match cache.take(class) {
+        Some(ptr) => ptr,
+        // An empty class takes a batch from the system, so the next
+        // allocations of the class are served from the cache.
+        None => cache.refill(class).ok_or(FastMiss::Refused)?,
     };
     // SAFETY: a block of at least 8 bytes, 8-aligned.
     unsafe { object::write_field(ptr, 0, header) };
@@ -1404,9 +1397,9 @@ unsafe fn free_with_children(
         // SAFETY: a value field holds an owned reference.
         unsafe { release_child(child, &mut pending) };
     }
-    let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, mut cache| {
+    let (ctx, (objects, bytes)) = with_fiber_cache(ctx, |ctx, cache| {
         // SAFETY: allocated with this size, and no reference remains.
-        unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
+        unsafe { release_sized(obj, fast.size, cache) };
         // SAFETY: every word on the list is an object whose count reached
         // zero.
         (ctx, unsafe { drain(&mut pending, cache) })
@@ -1424,8 +1417,8 @@ unsafe fn free_with_children(
 /// Frees the block of `obj`, an object of `size` bytes that owns nothing
 /// any more, and charges it as freed: into the block cache that the
 /// control block of `ctx`, or else of the running fiber, records, with no
-/// further accessor call (D-739, D-907). Host code, a fiber with no cache
-/// recorded and a cache in use take [`free_block_slow`].
+/// further accessor call (D-739, D-907). Host code and a fiber with no
+/// cache recorded take [`free_block_slow`].
 ///
 /// # Safety
 ///
@@ -1446,12 +1439,9 @@ unsafe fn free_block(ctx: Option<&ExecCtx>, obj: *mut u8, size: usize) {
         // callers' contract, checked in debug builds), whose recorded cache
         // is null or this thread's, as in `tls::with_cache_of`; nothing
         // here suspends.
-        if let Some(cell) = unsafe { fiber.block_cache().as_ref() }
-            && let Ok(mut cache) = cell.try_borrow_mut()
-        {
+        if let Some(cache) = unsafe { fiber.block_cache().as_ref() } {
             // SAFETY: forwarded from the caller.
-            unsafe { release_sized(obj, size, Some(&mut cache)) };
-            drop(cache);
+            unsafe { release_sized(obj, size, Some(cache)) };
             let bytes = i64::try_from(size).unwrap_or(i64::MAX).saturating_neg();
             fiber.domain().charge_through(fiber, -1, bytes);
             return;
@@ -1461,9 +1451,9 @@ unsafe fn free_block(ctx: Option<&ExecCtx>, obj: *mut u8, size: usize) {
     unsafe { free_block_slow(ctx, obj, size) };
 }
 
-/// [`free_block`] where no cache could be borrowed through a control
-/// block: host code, a fiber with no cache recorded, a cache in use (a
-/// finalizer freeing directly) or gone (thread teardown).
+/// [`free_block`] where no cache was found through a control block: host
+/// code, a fiber with no cache recorded, or a cache gone (thread
+/// teardown).
 ///
 /// # Safety
 ///
@@ -1667,9 +1657,8 @@ unsafe fn free_leaf(ctx: Option<&ExecCtx>, obj: *mut u8) -> bool {
 }
 
 /// Calls `f` with the control block of the fiber running on this thread
-/// and this thread's block cache, borrowed for the call: `None` when no
-/// fiber runs, and no cache when it is in use (a finalizer freeing
-/// directly) or gone (thread teardown). Given `known`, the running fiber's
+/// and this thread's block cache: `None` when no fiber runs, and no cache
+/// when it is gone (thread teardown). Given `known`, the running fiber's
 /// control block, the cache comes from its record and no `tls.rs`
 /// accessor is called (D-739, D-772). Otherwise one accessor call finds
 /// the running fiber and the cache comes from its record (D-907); without
@@ -1677,7 +1666,7 @@ unsafe fn free_leaf(ctx: Option<&ExecCtx>, obj: *mut u8) -> bool {
 /// cache (GATE1-1). `f` never suspends (D-686).
 fn with_fiber_cache<'a, R>(
     known: Option<&'a ExecCtx>,
-    f: impl FnOnce(Option<&'a ExecCtx>, Option<&mut BlockCache>) -> R,
+    f: impl FnOnce(Option<&'a ExecCtx>, Option<&BlockCache>) -> R,
 ) -> R {
     let mut f = Some(f);
     // Without `known`, one accessor call finds the running fiber, whose
@@ -1688,8 +1677,7 @@ fn with_fiber_cache<'a, R>(
     if let Some(ctx) = known {
         let result = tls::with_cache_of(Some(ctx), |cache| {
             let f = f.take()?;
-            let mut cache = cache.try_borrow_mut().ok();
-            Some(f(Some(ctx), cache.as_deref_mut()))
+            Some(f(Some(ctx), Some(cache)))
         })
         .flatten();
         return match (result, f.take()) {
@@ -1706,8 +1694,7 @@ fn with_fiber_cache<'a, R>(
         // stays live while it runs, and only shared references to it are
         // made.
         let ctx = unsafe { fiber.as_ref() };
-        let mut cache = cache.try_borrow_mut().ok();
-        Some(f(ctx, cache.as_deref_mut()))
+        Some(f(ctx, Some(cache)))
     })
     .flatten();
     match (result, f.take()) {
@@ -1792,7 +1779,7 @@ unsafe fn release_child(child: Word, list: &mut Pending) {
 /// # Safety
 ///
 /// Every word on `list` is a heap object whose count has reached zero.
-unsafe fn drain(list: &mut Pending, mut cache: Option<&mut BlockCache>) -> (i64, u64) {
+unsafe fn drain(list: &mut Pending, cache: Option<&BlockCache>) -> (i64, u64) {
     let mut objects: i64 = 0;
     let mut bytes: u64 = 0;
     while let Some(word) = list.pop() {
@@ -1812,7 +1799,7 @@ unsafe fn drain(list: &mut Pending, mut cache: Option<&mut BlockCache>) -> (i64,
             objects = objects.wrapping_sub(1);
             bytes = bytes.wrapping_add(to_u64(fast.size));
             // SAFETY: allocated with this size, and no reference remains.
-            unsafe { release_sized(obj, fast.size, cache.as_deref_mut()) };
+            unsafe { release_sized(obj, fast.size, cache) };
             continue;
         }
         // SAFETY: `obj` is a live object with no references left.
@@ -1856,7 +1843,7 @@ unsafe fn drain(list: &mut Pending, mut cache: Option<&mut BlockCache>) -> (i64,
         bytes = bytes.saturating_add(to_u64(layout.size()));
         // SAFETY: allocated by `alloc_object` with this size, which
         // `shape_of` recomputes exactly, and no reference remains.
-        unsafe { release_block(obj, layout, cache.as_deref_mut()) };
+        unsafe { release_block(obj, layout, cache) };
     }
     (objects, bytes)
 }
@@ -2075,7 +2062,7 @@ unsafe fn fast_shape_unchecked(obj: *mut u8) -> Option<Fast> {
     reason = "a step of every free; the gain depends on it being inline (D-907)"
 )]
 #[inline(always)]
-unsafe fn release_sized(obj: *mut u8, size: usize, cache: Option<&mut BlockCache>) {
+unsafe fn release_sized(obj: *mut u8, size: usize, cache: Option<&BlockCache>) {
     if keeps_freed_blocks() && !poison_enabled() {
         if let Some(cache) = cache
             && cache.keep_sized(obj, size)
@@ -2262,52 +2249,11 @@ pub fn quarantine_len() -> usize {
         .unwrap_or(0)
 }
 
-/// The size classes of the block cache: allocations of 8 to 256 bytes, in
-/// steps of 8 bytes.
-const CACHE_CLASSES: usize = 32;
-
-/// The most free blocks the cache keeps per size class and thread.
-pub const CACHE_BLOCKS: usize = 512;
-
-/// Freed blocks of small objects kept per thread for the next allocation
-/// of the same size, so that the short-lived objects of a running program
-/// do not go to the system allocator each time (W5-D: freeing and
-/// allocating were most of 004's run time). Bypassed in poisoning mode,
-/// whose quarantine must keep freed blocks out of use. One per thread, in
-/// `tls.rs`.
-#[derive(Debug)]
-pub(crate) struct BlockCache {
-    classes: [Vec<*mut u8>; CACHE_CLASSES],
-}
-
-impl BlockCache {
-    /// An empty cache.
-    pub(crate) const fn new() -> Self {
-        Self {
-            classes: [const { Vec::new() }; CACHE_CLASSES],
-        }
-    }
-
-    /// Returns every cached block to the system allocator.
-    fn release(&mut self) {
-        for (class, blocks) in self.classes.iter_mut().enumerate() {
-            let Some(layout) = class_layout(class) else {
-                continue;
-            };
-            for block in blocks.drain(..) {
-                // SAFETY: the cache holds only blocks allocated with their
-                // class's layout that nothing references.
-                unsafe { std::alloc::dealloc(block, layout) };
-            }
-        }
-    }
-}
-
-impl Drop for BlockCache {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
+pub use cache::CACHE_BLOCKS;
+use cache::CACHE_CLASSES;
+#[cfg(test)]
+use cache::class_layout;
+pub(crate) use cache::{BlockCache, inline_record, never_serving_cache};
 
 /// The block cache's size class of an allocation layout, if it has one.
 fn size_class(layout: Layout) -> Option<usize> {
@@ -2321,94 +2267,25 @@ fn size_class(layout: Layout) -> Option<usize> {
         .filter(|class| *class < CACHE_CLASSES)
 }
 
-/// The allocation layout of a size class.
-fn class_layout(class: usize) -> Option<Layout> {
-    let step = to_usize(abi::OBJECT_ALIGN);
-    Layout::from_size_align(class.checked_add(1)?.checked_mul(step)?, step).ok()
-}
-
 /// A cached free block for `layout`, if the current thread has one. With
 /// the running fiber `ctx`, the cache is found through its control block,
 /// with no thread-local lookup (D-686, GATE1-1).
 fn cached_block(ctx: Option<&ExecCtx>, layout: Layout) -> Option<*mut u8> {
     let class = size_class(layout)?;
-    tls::with_cache_of(ctx, |cache| cache.try_borrow_mut().ok()?.take(class)).flatten()
-}
-
-impl BlockCache {
-    /// A cached free block of size class `class`, if there is one. Inlined
-    /// into the fast paths (D-907).
-    #[expect(
-        clippy::inline_always,
-        reason = "a step of every allocation or free by a fiber; the gain depends on it being inline (D-907)"
-    )]
-    #[inline(always)]
-    fn take(&mut self, class: usize) -> Option<*mut u8> {
-        let block = self.classes.get_mut(class)?.pop()?;
-        // D-880: addressable again under the address
-        // cfg (`keep_sized` poisoned it); a no-op otherwise.
-        sanitizer::unpoison(block, class_bytes(class));
-        Some(block)
-    }
-
-    /// Keeps a free block of `size` bytes, a nonzero multiple of the
-    /// alignment, inlined into the fast free paths (D-907); false when the
-    /// cache is full or has no class for it.
-    #[expect(
-        clippy::inline_always,
-        reason = "a step of every allocation or free by a fiber; the gain depends on it being inline (D-907)"
-    )]
-    #[inline(always)]
-    fn keep_sized(&mut self, obj: *mut u8, size: usize) -> bool {
-        let step = to_usize(abi::OBJECT_ALIGN);
-        debug_assert!(
-            size.is_multiple_of(step),
-            "a block of {size} bytes kept in the block cache"
-        );
-        let Some(class) = size.checked_div(step).and_then(|n| n.checked_sub(1)) else {
-            return false;
-        };
-        match self.classes.get_mut(class) {
-            Some(blocks) if blocks.len() < CACHE_BLOCKS => {
-                // D-880: under the address cfg a use
-                // after free into a cached block is reported; the
-                // quarantine is not poisoned, since the runtime's own
-                // checks read its poisoned headers.
-                sanitizer::poison(obj, size);
-                blocks.push(obj);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Keeps a free block of `layout`; false when the cache is full or has
-    /// no class for it.
-    fn keep(&mut self, obj: *mut u8, layout: Layout) -> bool {
-        size_class(layout).is_some() && self.keep_sized(obj, layout.size())
-    }
+    tls::with_cache_of(ctx, |cache| cache.take(class)).flatten()
 }
 
 /// Returns the current thread's cached free blocks to the system allocator,
 /// for tests of the cache.
 #[cfg(test)]
 pub(crate) fn release_block_cache() {
-    tls::with_cache(|cache| {
-        if let Ok(mut cache) = cache.try_borrow_mut() {
-            cache.release();
-        }
-    });
+    tls::with_cache(BlockCache::release);
 }
 
 /// The number of blocks in the current thread's cache, for tests.
 #[cfg(test)]
 fn cached_blocks() -> usize {
-    tls::with_cache(|cache| {
-        cache
-            .try_borrow()
-            .map_or(0, |cache| cache.classes.iter().map(Vec::len).sum())
-    })
-    .unwrap_or(0)
+    tls::with_cache(BlockCache::len).unwrap_or(0)
 }
 
 /// Returns a freed block to the block cache `cache` (the current thread's,
@@ -2419,7 +2296,7 @@ fn cached_blocks() -> usize {
 ///
 /// `obj` was allocated by `alloc_object` with `layout` and no reference to
 /// it remains.
-unsafe fn release_block(obj: *mut u8, layout: Layout, cache: Option<&mut BlockCache>) {
+unsafe fn release_block(obj: *mut u8, layout: Layout, cache: Option<&BlockCache>) {
     if keeps_freed_blocks() {
         if poison_enabled() {
             // SAFETY: the block is still allocated and nothing else uses
@@ -2505,8 +2382,12 @@ unsafe fn check_header(word: Word, what: &str) {
     }
 }
 
+mod cache;
 pub(crate) mod scratch;
+pub(crate) mod slow;
 
+#[cfg(test)]
+mod cache_tests;
 #[cfg(test)]
 mod domain_tests;
 
@@ -3052,6 +2933,7 @@ pub(crate) mod tests {
     fn the_block_cache_works_without_poisoning() {
         for filter in [
             "alloc::tests::the_block_cache_reuses_and_bounds_blocks",
+            "alloc::cache_tests::",
             "list::tests::",
             "hamt::tests::",
             "text::tests::",

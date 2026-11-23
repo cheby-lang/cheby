@@ -20,6 +20,10 @@ use std::ptr;
 
 use crate::abi::sym;
 use crate::alloc::cheby_rt_alloc;
+use crate::alloc::slow::{
+    cheby_rt_alloc_miss_slow, cheby_rt_alloc_slow, cheby_rt_drop_saving, cheby_rt_free_unique_slow,
+    cheby_rt_reuse_hit,
+};
 use crate::consteval::{cheby_rt_const_missing, cheby_rt_effect_check, cheby_rt_unresolved};
 use crate::fiber_ops::scope::{cheby_rt_scope_close, cheby_rt_scope_open};
 use crate::hamt::{cheby_rt_map_find, cheby_rt_map_value_at};
@@ -41,7 +45,7 @@ use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_fram
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
 use crate::reuse::{
     cheby_rt_alloc_miss, cheby_rt_alloc_reuse_checked, cheby_rt_drop_reuse_checked,
-    cheby_rt_free_unique, cheby_rt_release_fields, cheby_rt_reuse_hit,
+    cheby_rt_free_unique, cheby_rt_release_fields,
 };
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
@@ -61,7 +65,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 53] {
+fn runtime_symbols() -> [(&'static str, *const u8); 57] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -139,6 +143,13 @@ fn runtime_symbols() -> [(&'static str, *const u8); 53] {
         (sym::MAP_FIND, cheby_rt_map_find as *const u8),
         (sym::MAP_VALUE_AT, cheby_rt_map_value_at as *const u8),
         (sym::LIST_SET, cheby_rt_list_set as *const u8),
+        (sym::ALLOC_SLOW, cheby_rt_alloc_slow as *const u8),
+        (sym::ALLOC_MISS_SLOW, cheby_rt_alloc_miss_slow as *const u8),
+        (
+            sym::FREE_UNIQUE_SLOW,
+            cheby_rt_free_unique_slow as *const u8,
+        ),
+        (sym::DROP_SAVING, cheby_rt_drop_saving as *const u8),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }

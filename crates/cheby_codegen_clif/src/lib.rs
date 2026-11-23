@@ -113,6 +113,7 @@
 //! call the runtime only on the slow paths, unless
 //! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
+mod alloc_inline;
 #[cfg(test)]
 mod alone_tests;
 mod arith;

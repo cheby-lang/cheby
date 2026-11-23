@@ -363,7 +363,7 @@ unsafe fn release_if_unwinding(ctx: *mut ExecCtx, count: u32, words: [Word; 4]) 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! The releasing slow paths on a root fiber of a runtime, with a fresh
     //! domain whose live count must end at zero: they release 0, 1 and 4
     //! counted words exactly when the slow path starts an unwinding (a stack
@@ -639,9 +639,9 @@ mod tests {
     #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
     #[repr(C, align(16))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    struct Regs {
-        x: [u64; 18],
-        q: [u64; 64],
+    pub(crate) struct Regs {
+        pub(crate) x: [u64; 18],
+        pub(crate) q: [u64; 64],
     }
 
     /// Calls the stub at `stub` with `x0`-`x17` and `q0`-`q31` loaded from
@@ -652,7 +652,7 @@ mod tests {
     /// `stub` is one of the slow paths' stubs, and `input.x` starts with
     /// arguments it accepts.
     #[cfg(all(target_arch = "aarch64", not(miri), not(windows)))]
-    unsafe fn call_saving(stub: usize, input: &Regs) -> Regs {
+    pub(crate) unsafe fn call_saving(stub: usize, input: &Regs) -> Regs {
         let mut output = Regs {
             x: [0; 18],
             q: [0; 64],

@@ -12,6 +12,7 @@ use cheby_mir::{BuiltinLayout, Const, LayoutRef, Local, Operand, Repr, RuntimeFn
 use cheby_runtime::abi;
 
 use crate::CodegenError;
+use crate::alloc_inline::AllocKind;
 use crate::data::is_user_ctor;
 use crate::decls::{ctor_header, escaped_count_index, header};
 use crate::func::{Translator, unsupported};
@@ -307,8 +308,7 @@ impl Translator<'_, '_> {
                     .load(types::I64, MemFlagsData::trusted(), address, 0)
             }
         };
-        let size = self.b.ins().iconst(types::I64, shape.size);
-        let object = self.edge_runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
+        let object = self.alloc_object(ctx, shape.size, header, AllocKind::Fresh)?;
         if let Some((at, count)) = shape.escaped {
             let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
                 .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
@@ -426,7 +426,7 @@ impl Translator<'_, '_> {
             .ins()
             .brif(static_object, join, &[BlockArg::Value(zero)], slow, &[]);
         self.b.switch_to_block(slow);
-        self.drop_call(v)?;
+        self.drop_shared(v)?;
         self.b.ins().jump(join, &[BlockArg::Value(zero)]);
         self.b.switch_to_block(join);
         Ok(token)
@@ -456,8 +456,8 @@ impl Translator<'_, '_> {
         let t = self.local(token)?;
         let ctx = self.ctx()?;
         let header = self.header_value(&shape);
-        let size = self.b.ins().iconst(types::I64, shape.size);
         let object = if self.opts.checked_rc {
+            let size = self.b.ins().iconst(types::I64, shape.size);
             self.edge_runtime_value(RuntimeFunc::AllocReuseChecked, &[ctx, t, size, header])?
         } else {
             let hit = self.b.create_block();
@@ -487,7 +487,7 @@ impl Translator<'_, '_> {
             self.runtime_call(RuntimeFunc::ReuseHit, &[])?;
             self.b.ins().jump(join, &[BlockArg::Value(t)]);
             self.b.switch_to_block(miss);
-            let fresh = self.edge_runtime_value(RuntimeFunc::AllocMiss, &[ctx, size, header])?;
+            let fresh = self.alloc_object(ctx, shape.size, header, AllocKind::ReuseMiss)?;
             self.b.ins().jump(join, &[BlockArg::Value(fresh)]);
             self.b.switch_to_block(join);
             object
@@ -597,8 +597,7 @@ impl Translator<'_, '_> {
         self.b.ins().brif(unique, hit, &[], not_unique, &[]);
         self.b.switch_to_block(hit);
         self.release_on_hit(v, &kept, &rest, false)?;
-        let size = self.b.ins().iconst(types::I64, alloc_size(&shape)?);
-        self.runtime_call(RuntimeFunc::FreeUnique, &[ctx, v, size])?;
+        self.free_sized(ctx, v, alloc_size(&shape)?)?;
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(not_unique);
         self.dup_kept(keep)?;
@@ -612,7 +611,7 @@ impl Translator<'_, '_> {
         let static_object = self.b.ins().icmp_imm_s(IntCC::Equal, rc, 0);
         self.b.ins().brif(static_object, done, &[], slow, &[]);
         self.b.switch_to_block(slow);
-        self.drop_call(v)?;
+        self.drop_shared(v)?;
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(done);
         Ok(())
@@ -660,8 +659,7 @@ impl Translator<'_, '_> {
         };
         let ctx = self.ctx()?;
         let header = self.b.ins().iconst(types::I64, word.cast_signed());
-        let size = self.b.ins().iconst(types::I64, shape.size);
-        let object = self.edge_runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
+        let object = self.alloc_object(ctx, shape.size, header, AllocKind::Fresh)?;
         if let Some((at, count)) = shape.escaped {
             let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
                 .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
@@ -963,15 +961,7 @@ impl Translator<'_, '_> {
                 let wide = self.b.ins().uextend(types::I64, v);
                 self.tag(wide)
             }
-            Repr::Float | Repr::F32 => {
-                let f = if from == Repr::Float {
-                    RuntimeFunc::BoxF64
-                } else {
-                    RuntimeFunc::BoxF32
-                };
-                let ctx = self.ctx()?;
-                self.edge_runtime_value(f, &[ctx, v])?
-            }
+            Repr::Float | Repr::F32 => self.box_float(v, from)?,
             Repr::Bool => {
                 let truth = self.static_object(abi::sym::STATIC_TRUE)?;
                 let falsity = self.static_object(abi::sym::STATIC_FALSE)?;
