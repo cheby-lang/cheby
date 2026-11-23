@@ -621,3 +621,29 @@ The round's first report left two rows of the original list measured and not bui
 
 The user chose the narrow form of the ninth row over raw `Float`s in list leaves. When an element is only unboxed to a `Float`, the read gives the number: from a shared leaf, and for an indexed read, with no count update at all. `spectral_norm` at 1100 retires 6.17 G instructions in release where it retired 6.79 G, 9.1% fewer, and 8.4% fewer in debug. `nbody` and `fannkuch_redux` do not move: their loops read no floats out of lists. From a unique leaf the gain is small, since the box is still freed there.
 
+### Allocation and sized frees inline, with slow paths that save every register (D-1784)
+
+The block cache got a fixed layout that generated code reads through the control block. An allocation pops a block and a sized free pushes one, with no call, and the calls that are left on those paths save every register, so a function that allocates keeps its `Float`s in registers. `nbody`'s inner function had 22 float spill stores and 27 reloads in release and has none.
+
+Instructions retired, in units of 10⁹, release executables, minimum of three runs:
+
+| Program          | Before | After | Change |
+| ---------------- | -----: | ----: | -----: |
+| `nbody`          |  38.68 | 32.44 | −16.1% |
+| `binary_trees`   |  21.46 | 18.92 | −11.8% |
+| `lru_cache`      |  28.09 | 25.54 |  −9.1% |
+| `json_roundtrip` |  23.21 | 21.73 |  −6.4% |
+| `fannkuch_redux` |  1.611 | 1.528 |  −5.2% |
+| `word_freq`      |  24.98 | 23.96 |  −4.1% |
+
+`spectral_norm`, `spawn_many` and `ping_pong` are within 3%. Peak memory is unchanged, but for 0.5 MB more in `spawn_many`.
+
+Tried and not kept:
+
+- A refill of one block per miss: `binary_trees`, whose trees are built from an empty cache, retired 24.81 G instructions against 21.46 G before the change, because every allocation then went through the register-saving stub. Batches of 16, 32 and 64 gave 19.10 G, 18.93 G and 19.01 G.
+- Sized frees through the stub in place of the inline push: `nbody` 35.70 G against 32.44 G, and `word_freq` slower than before the change.
+
+D-1772 had measured this path at 2% to 3.5% and left it. The estimate counted the instructions of the call and not the spills around it.
+
+Open: a toolchain built with debug assertions sends every sized free through the stub, to keep D-1772's size check, and so pays more there than before. The x86-64 stubs are first built in Linux CI.
+

@@ -483,6 +483,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1781    | A list pattern step on a shared leaf is inline; raw `Float`s in list leaves measured, not built     |
 | D-1782    | Release reads scalar constants of every module as their values, computed ones from images           |
 | D-1783    | A list element that is only unboxed to a `Float` is read as the number, with no count update        |
+| D-1784    | Generated code takes and gives back cached blocks inline; slow paths save every register            |
 
 ## Open questions
 
