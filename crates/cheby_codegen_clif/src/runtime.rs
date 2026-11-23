@@ -67,14 +67,16 @@ pub enum RuntimeFunc {
     ScopeOpen,
     /// `bool cheby_rt_scope_close(ExecCtx *ctx, uint64_t scope, bool unwound)` (D-693).
     ScopeClose,
-    /// `void cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
-    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path that
-    /// releases up to four counted parameters itself when it starts an unwinding, which the
-    /// caller reads from the flag (D-775).
+    /// `void cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint64_t p0,
+    /// uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path that releases up
+    /// to four counted parameters itself, 0 for each one the function lacks, when it starts
+    /// an unwinding, which the caller reads from the flag (D-775). Six arguments, so all
+    /// travel in registers on System V x86-64 too.
     StackSlowUnwind,
-    /// `void cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
-    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
-    /// the same for a large function's outer entry (D-743, D-775).
+    /// `void cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location, uint64_t p0,
+    /// uint64_t p1, uint64_t p2, uint64_t p3)`: the same for a large function's outer entry
+    /// (D-743, D-775), which writes its frame size at `ctx` + `CTX_FRAME_SIZE` right before
+    /// the call.
     StackSlowFrameUnwind,
     /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *, uint64_t *),
     /// const uint64_t *args, uintptr_t nargs)`: runs an `@blocking` call's shim on the blocking
@@ -296,8 +298,9 @@ impl RuntimeFunc {
             Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
             Self::ScopeOpen => (&[Ptr, Bool, I64, I64], U64),
             Self::ScopeClose => (&[Ptr, U64, Bool], Bool),
-            Self::StackSlowUnwind => (&[Ptr, Ptr, U32, Ptr, Ptr, Ptr, Ptr], Void),
-            Self::StackSlowFrameUnwind => (&[Ptr, Ptr, U64, U32, Ptr, Ptr, Ptr, Ptr], Void),
+            Self::StackSlowUnwind | Self::StackSlowFrameUnwind => {
+                (&[Ptr, Ptr, Ptr, Ptr, Ptr, Ptr], Void)
+            }
             Self::BlockingCall => (&[Ptr, Ptr, Ptr, U64], U64),
             Self::ListUncons | Self::ListUnconsOwned => (&[Ptr, U64, I64, I64, I64, Ptr], U64),
         }

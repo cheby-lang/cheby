@@ -748,7 +748,7 @@ impl Translator<'_, '_> {
                 let resume = self.block(release.resume)?;
                 self.releasing_slow_call(
                     RuntimeFunc::StackSlowUnwind,
-                    &[ctx, loc],
+                    [ctx, loc],
                     &words,
                     resume,
                     first,
@@ -774,7 +774,10 @@ impl Translator<'_, '_> {
     /// `LARGE_FRAME_MARGIN`, which its slow path uses too), whose slow path
     /// is `cheby_rt_stack_slow_frame(ctx, location, frame_size)`
     /// (D-743), then a `return_call` of the inner body
-    /// `inner` with every parameter.
+    /// `inner` with every parameter. The releasing slow path
+    /// (D-775) takes the frame size from `ctx`
+    /// ([`abi::CTX_FRAME_SIZE`]), stored right before its call, so that its
+    /// arguments fit System V x86-64's six registers.
     ///
     /// The check accounts for the frame before it is allocated: the inner
     /// body then starts with at least 64 KiB above the limit below its
@@ -820,17 +823,20 @@ impl Translator<'_, '_> {
         self.b.switch_to_block(slow);
         let loc = self.string(loc)?;
         let size = self.b.ins().iconst(types::I64, i64::from(frame_size));
-        let args = [ctx, loc, size];
         if let Some(release) = entry_release(self.func) {
             // D-775: the helper releases the parameters
             // when it starts an unwinding, and the outer function resumes
-            // from a cold block of its own.
+            // from a cold block of its own. It reads the frame size from
+            // the control block.
             let words = Self::param_words(&release, params.get(1..).unwrap_or_default())?;
+            self.b
+                .ins()
+                .store(MemFlagsData::trusted(), size, ctx, abi::CTX_FRAME_SIZE);
             let resume = self.b.create_block();
             self.b.set_cold_block(resume);
             self.releasing_slow_call(
                 RuntimeFunc::StackSlowFrameUnwind,
-                &args,
+                [ctx, loc],
                 &words,
                 resume,
                 call,
@@ -842,6 +848,7 @@ impl Translator<'_, '_> {
             self.b.switch_to_block(resume);
             return self.unwind_resume();
         }
+        let args = [ctx, loc, size];
         let outer_pad = if let Some(pad) = self.func.entry_unwind {
             // D-698: an overflow unwinds to the outer function's own pad,
             // which drops what the body's entry pad would drop.

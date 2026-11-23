@@ -12,7 +12,9 @@
 //! `scope_close`. It reads the inline allocation record at 24, the block
 //! cache it takes blocks from and gives them back to without a call, and
 //! the slow path of an allocation leaves its result at 32, which generated
-//! code then reads (`abi::block_cache`). The view ends at byte 40, where
+//! code then reads (`abi::block_cache`). A large function's outer function
+//! writes its frame size at 40 right before it calls the releasing slow
+//! path of its entry check. The view ends at byte 48, where
 //! the Rust part starts with the interrupt reasons; offsets 16 and 24 once
 //! held the exit record of a prototype that is gone (D-763), so nothing
 //! generated reads or writes anything else. The function-entry check
@@ -129,7 +131,11 @@ pub struct ExecCtx {
     /// At [`abi::CTX_ALLOC_RESULT`]: where an allocation's slow path
     /// leaves its result for generated code, the object or 0.
     alloc_result: AtomicU64,
-    // The Rust part, from byte 40: generated code never reads it.
+    /// At [`abi::CTX_FRAME_SIZE`]: where a large function's outer
+    /// function leaves its frame size for the releasing slow path of its
+    /// entry check (`crate::unwind::entry_slow`), right before the call.
+    frame_size: AtomicU64,
+    // The Rust part, from byte 48: generated code never reads it.
     /// Why an interrupt was requested: [`reason`] bits (D-688).
     reasons: AtomicU32,
     /// Whether the fiber's code was compiled with unwind edges (D-742).
@@ -204,8 +210,9 @@ const _: () = assert!(offset_of!(ExecCtx, unwind) == 12 && abi::CTX_UNWIND == 12
 const _: () = assert!(offset_of!(ExecCtx, wait_frame) == 16 && abi::CTX_WAIT_FRAME == 16);
 const _: () = assert!(offset_of!(ExecCtx, alloc_cache) == 24 && abi::CTX_ALLOC_CACHE == 24);
 const _: () = assert!(offset_of!(ExecCtx, alloc_result) == 32 && abi::CTX_ALLOC_RESULT == 32);
-// The generated-code view ends at 40: the Rust part starts there.
-const _: () = assert!(offset_of!(ExecCtx, reasons) == 40);
+const _: () = assert!(offset_of!(ExecCtx, frame_size) == 40 && abi::CTX_FRAME_SIZE == 40);
+// The generated-code view ends at 48: the Rust part starts there.
+const _: () = assert!(offset_of!(ExecCtx, reasons) == 48);
 
 /// What a new fiber control block starts with.
 #[derive(Debug)]
@@ -275,6 +282,7 @@ impl ExecCtx {
             wait_frame: AtomicUsize::new(0),
             alloc_cache: AtomicPtr::new(crate::alloc::never_serving_cache().cast_mut()),
             alloc_result: AtomicU64::new(0),
+            frame_size: AtomicU64::new(0),
             reasons: AtomicU32::new(0),
             unwind_edges: init.unwind_edges,
             soft_limit: AtomicUsize::new(init.soft_limit),
@@ -483,6 +491,19 @@ impl ExecCtx {
         self.alloc_result.load(Ordering::Relaxed)
     }
 
+    /// The frame size a large function's outer function left for its
+    /// releasing slow path ([`abi::CTX_FRAME_SIZE`]).
+    pub(crate) fn frame_size(&self) -> u64 {
+        self.frame_size.load(Ordering::Relaxed)
+    }
+
+    /// Leaves `size` where the releasing slow path of a large frame reads
+    /// it, as generated code does before the call.
+    #[cfg(test)]
+    pub(crate) fn set_frame_size(&self, size: u64) {
+        self.frame_size.store(size, Ordering::Relaxed);
+    }
+
     /// The memory budget, `u64::MAX` for none.
     pub(crate) fn budget(&self) -> u64 {
         self.budget.load(Ordering::Relaxed)
@@ -603,7 +624,8 @@ mod tests {
         assert_eq!(offset_of!(ExecCtx, wait_frame), 16);
         assert_eq!(offset_of!(ExecCtx, alloc_cache), 24);
         assert_eq!(offset_of!(ExecCtx, alloc_result), 32);
-        assert_eq!(offset_of!(ExecCtx, reasons), 40);
+        assert_eq!(offset_of!(ExecCtx, frame_size), 40);
+        assert_eq!(offset_of!(ExecCtx, reasons), 48);
         let ctx = fcb();
         // A block that is current nowhere names the cache that never
         // serves.

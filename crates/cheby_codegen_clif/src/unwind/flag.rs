@@ -20,13 +20,14 @@
 //! - `resume`: `return 0` (zero of each result type), in every ABI;
 //! - the entry check's slow path of a function whose entry pad drops at
 //!   most four counted parameters: `call
-//!   cheby_rt_stack_slow_unwind(ctx, loc, n, p0, p1, p2, p3); v = load.i32
-//!   notrap aligned ctx+12; brif v, resume, bb0`, where the helper has
-//!   released the parameters when it started an unwinding (the flag is
-//!   set), and `resume` is the entry pad chain's last block; the
-//!   entry-only part of the chain is not translated, and a large frame's
-//!   outer function does the same through
-//!   `cheby_rt_stack_slow_frame_unwind` (D-775). With
+//!   cheby_rt_stack_slow_unwind(ctx, loc, p0, p1, p2, p3); v = load.i32
+//!   notrap aligned ctx+12; brif v, resume, bb0`, with 0 for each word
+//!   the function lacks, where the helper has released the parameters
+//!   when it started an unwinding (the flag is set), and `resume` is the
+//!   entry pad chain's last block; the entry-only part of the chain is not
+//!   translated, and a large frame's outer function does the same through
+//!   `cheby_rt_stack_slow_frame_unwind`, after it stores its frame size at
+//!   `ctx+40` (D-775). With
 //!   more counted parameters the slow path is a C call with the flag's
 //!   test, and the chain is translated.
 //!
@@ -170,16 +171,19 @@ impl Translator<'_, '_> {
     }
 
     /// The entry check's releasing slow path (D-775):
-    /// `call f(leading…, n, p0, p1, p2, p3); v = load.i32 notrap aligned
-    /// ctx+12; brif v, resume, next`, where `n` is the number of `words`
-    /// and the unused `p`s are 0. The helper has no result: it saves every
+    /// `call f(ctx, loc, p0, p1, p2, p3); v = load.i32 notrap aligned
+    /// ctx+12; brif v, resume, next`, where the `p`s are `words` and 0 for
+    /// the rest, which the helper skips. Six arguments travel in registers
+    /// on every target with the saving stubs, so the call reserves no
+    /// outgoing argument area and leaves an empty frame empty. The helper
+    /// has no result: it saves every
     /// register and is called with `preserve_all`, which has none
     /// ([`RuntimeFunc::preserves_all`]), and the flag is set exactly when
     /// it started an unwinding. It ends the current block.
     pub(crate) fn releasing_slow_call(
         &mut self,
         f: RuntimeFunc,
-        leading: &[Value],
+        leading: [Value; 2],
         words: &[Value],
         resume: ir::Block,
         next: ir::Block,
@@ -189,11 +193,7 @@ impl Translator<'_, '_> {
         let unused = most
             .checked_sub(words.len())
             .ok_or_else(|| CodegenError::ice("more counted words than the entry helper takes"))?;
-        let count = i64::try_from(words.len())
-            .map_err(|_| CodegenError::ice("the helper's word count does not fit"))?;
-        let count = self.b.ins().iconst(types::I32, count);
         let mut args = leading.to_vec();
-        args.push(count);
         args.extend_from_slice(words);
         if unused > 0 {
             let zero = self.b.ins().iconst(types::I64, 0);

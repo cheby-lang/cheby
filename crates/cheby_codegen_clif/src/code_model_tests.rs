@@ -989,3 +989,140 @@ fn an_allocating_float_loop_keeps_its_floats_in_registers() {
         }
     }
 }
+
+/// `rec(x_0 … x_(k-1))`, which holds its `k` counted parameters across a
+/// call of itself and returns the call's result, as `cheby_jit`'s
+/// entry-unwind tests build it, after the unwind pass (D-698): its entry
+/// pad drops the parameters, so with at most four its entry check calls
+/// the releasing slow path (D-775).
+fn recursion_unit(k: u32) -> MirModule {
+    let rec = def(0);
+    let local = Local::from_u32;
+    let params: Vec<Local> = (0..k).map(local).collect();
+    let args: Vec<Operand> = params.iter().copied().map(Operand::Local).collect();
+    let mut stmts: Vec<Stmt> = params.iter().copied().map(Stmt::Dup).collect();
+    stmts.push(Stmt::Assign {
+        dst: local(k),
+        value: Rvalue::Call {
+            callee: Callee::Direct(rec),
+            args,
+        },
+    });
+    stmts.extend(params.iter().copied().map(Stmt::Drop));
+    let reprs: Vec<Repr> = (0..=k).map(|_| Repr::Value).collect();
+    let body = function(
+        FnKey::Item(rec),
+        params,
+        &reprs,
+        stmts,
+        Terminator::Return(Operand::Local(local(k))),
+        &["a.cheby:1:4"],
+    );
+    let mut unit = MirModule {
+        externals: Vec::new(),
+        source: None,
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![body],
+        callees: vec![CalleeDecl {
+            def: rec,
+            sig: AbiSig::owned(
+                Abi::Cheby,
+                vec![Repr::Value; usize::try_from(k).unwrap()],
+                Repr::Value,
+            ),
+        }],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![DefName {
+            def: rec,
+            module: "app".into(),
+            item: "rec".into(),
+        }],
+    };
+    unwound(&mut unit);
+    unit
+}
+
+/// Runs the unwind pass over `unit` (D-698), as the driver's pipeline does.
+fn unwound(unit: &mut MirModule) {
+    cheby_mir::unwind::insert_module(unit).unwrap();
+    cheby_mir::validate(unit, cheby_mir::Stage::Unwound).unwrap();
+}
+
+/// `unit`'s first function compiled for `isa` with the default options:
+/// its CLIF text and its frame size below the frame record; with `split`,
+/// those of its large frame's outer function (D-679).
+fn entry_frame(isa: OwnedTargetIsa, unit: &MirModule, split: bool) -> (String, u32) {
+    let mut m = Recording::with_isa(isa);
+    let mut decls = Decls::new(m.isa()).unwrap();
+    let cx = CodegenCx {
+        layouts: &PairLayout,
+    };
+    let opts = CodegenOptions {
+        capture_clif: true,
+        ..CodegenOptions::default()
+    };
+    let units = [unit.clone()];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let function = &units[0].functions[0];
+    if split {
+        let inner = decls.declare_large_frame_body(&mut m, function).unwrap();
+        let large =
+            compile_large_frame(m.isa(), &units[0], function, &decls, &opts, inner).unwrap();
+        return (large.outer_text.unwrap(), large.outer.frame_size);
+    }
+    let func = translate(&units[0], function, &decls, &cx, &opts).unwrap();
+    let text = decls.describe(&func);
+    let code = compile_function(m.isa(), func).unwrap();
+    (text, code.frame_size)
+}
+
+/// The entry check's releasing slow paths take six arguments, `ctx`, the
+/// location and four words (D-775), and a large frame's outer function
+/// leaves its frame size in the control block, so on every target with the
+/// saving stubs the call passes nothing on the stack and adds nothing to
+/// the frame: `rec` without parameters, a self tail call's loop and the
+/// outer function of every `rec` up to four counted parameters have no
+/// frame below their frame record. On System V x86-64 the seventh argument
+/// of the old helpers kept a 16-byte outgoing argument area in each.
+#[test]
+fn the_releasing_slow_paths_leave_an_empty_frame_empty() {
+    let targets = built_targets();
+    assert_ne!(targets.len(), 0, "no backend built");
+    let store = format!("v0+{}", cheby_runtime::abi::CTX_FRAME_SIZE);
+    for triple in targets.into_iter().filter(|t| !t.contains("windows")) {
+        let isa = || isa::isa_for(triple).unwrap();
+        for k in 0..=4 {
+            let unit = recursion_unit(k);
+            let (text, frame) = entry_frame(isa(), &unit, false);
+            let context = format!("{triple}, rec with {k}");
+            assert!(
+                text.contains("= cb$imp$cheby_rt_stack_slow_unwind")
+                    && text.contains("preserve_all"),
+                "{context}:\n{text}"
+            );
+            if k == 0 {
+                assert_eq!(frame, 0, "{context}: a frame of {frame} bytes\n{text}");
+            }
+            let (text, frame) = entry_frame(isa(), &unit, true);
+            assert!(
+                text.contains("= cb$imp$cheby_rt_stack_slow_frame_unwind") && text.contains(&store),
+                "{context}, outer:\n{text}"
+            );
+            assert_eq!(
+                frame, 0,
+                "{context}, outer: a frame of {frame} bytes\n{text}"
+            );
+        }
+        let mut unit = float_loop_unit(false);
+        unwound(&mut unit);
+        let (text, frame) = entry_frame(isa(), &unit, false);
+        assert!(
+            text.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
+            "{triple}, loop:\n{text}"
+        );
+        assert_eq!(frame, 0, "{triple}, loop: a frame of {frame} bytes\n{text}");
+    }
+}

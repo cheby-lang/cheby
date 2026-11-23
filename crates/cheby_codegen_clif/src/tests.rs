@@ -753,21 +753,20 @@ fn blocking_shim_names() {
 fn slice_runtime_functions() {
     use cheby_mir::RuntimeFn;
     use runtime::{RuntimeFunc, STATIC_DATA};
-    let words = [CType::Ptr; 4];
-    let plain: Vec<CType> = [CType::Ptr, CType::Ptr, CType::U32]
-        .into_iter()
-        .chain(words)
-        .collect();
-    let frame: Vec<CType> = [CType::Ptr, CType::Ptr, CType::U64, CType::U32]
-        .into_iter()
-        .chain(words)
-        .collect();
+    // `ctx`, the location and four words: six, which System V x86-64
+    // passes in registers.
+    let releasing = [CType::Ptr; 6];
     let expected = [
-        (RuntimeFunc::StackSlowUnwind, 27, (&*plain), CType::Void),
+        (
+            RuntimeFunc::StackSlowUnwind,
+            27,
+            &releasing[..],
+            CType::Void,
+        ),
         (
             RuntimeFunc::StackSlowFrameUnwind,
             28,
-            (&*frame),
+            &releasing[..],
             CType::Void,
         ),
         (
@@ -1472,8 +1471,9 @@ fn counted_params_unit(n: u32) -> MirModule {
 
 /// D-775: the entry check's slow path of a function
 /// with at most four counted parameters is `call
-/// cheby_rt_stack_slow_unwind(ctx, loc, n, p…, 0…); v = load.i32 ctx+12;
-/// brif v, resume, bb0`, with no continuation block and no translated
+/// cheby_rt_stack_slow_unwind(ctx, loc, p…, 0…); v = load.i32 ctx+12;
+/// brif v, resume, bb0`, six arguments with 0 for each word the function
+/// lacks, with no continuation block and no translated
 /// entry pad chain; with five, it calls `cheby_rt_stack_slow`, loads the
 /// flag and translates the chain, whose drops call `cheby_rt_drop` out of
 /// line. Both helpers are called with `preserve_all` where the runtime's
@@ -1500,12 +1500,27 @@ fn entry_unwind_through_the_releasing_slow_path() {
         let flag = lines[at + 1]
             .strip_suffix(&format!(" = {load_flag}"))
             .unwrap_or_else(|| panic!("{n}: the flag is loaded after the call:\n{text}"));
-        // The parameters after `ctx` and the `Int` are `v2` on, and the
-        // unused words are one zero.
+        // `ctx`, the location, then the parameters after `ctx` and the
+        // `Int`, `v2` on, in the entry pad's order, and one zero for the
+        // unused words.
+        let (head, consts) = call.split_once("  ; ").unwrap_or((call, ""));
+        let args: Vec<&str> = head
+            .rsplit_once('(')
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .unwrap_or_else(|| panic!("{n}: {call}"))
+            .split(", ")
+            .collect();
+        assert_eq!(args.len(), 6, "{n}: {call}");
+        assert_eq!(args[0], "v0", "{n}: {call}");
         let words: Vec<String> = (0..n).map(|i| format!("v{}", i + 2)).collect();
+        let used = usize::try_from(n).unwrap().checked_add(2).unwrap();
+        let mut passed = args[2..used].to_vec();
+        passed.sort_unstable();
+        assert_eq!(passed, words, "{n}: {call}");
+        let zero = format!("{} = 0", args[5]);
         assert!(
-            words.iter().all(|word| call.contains(word.as_str())),
-            "{n}: {call}"
+            n == 4 || (args[used..].iter().all(|a| *a == args[5]) && consts.contains(&zero)),
+            "{n}: {call}\n{text}"
         );
         assert!(
             lines[at + 2].starts_with(&format!("brif {flag}, block"))
@@ -1518,10 +1533,6 @@ fn entry_unwind_through_the_releasing_slow_path() {
         )) {
             assert!(text.contains(") preserve_all\n"), "{n}: {text}");
         }
-        assert!(
-            text.contains(&format!("iconst.i32 {n}")),
-            "{n}: the count:\n{text}"
-        );
         assert!(
             text.lines()
                 .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow_unwind")),

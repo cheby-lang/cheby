@@ -57,8 +57,10 @@
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
-//! `cheby_rt_stack_slow_unwind`, which also releases up to four counted
-//! parameters when it starts an unwinding (D-775). The slow paths save
+//! `cheby_rt_stack_slow_unwind(ctx, location, p0, p1, p2, p3)`, which also
+//! releases up to four counted parameters when it starts an unwinding
+//! (D-775); no slow path takes more than six arguments, so none passes one
+//! on the stack on System V x86-64. The slow paths save
 //! every register generated code may use, so on aarch64 and x86-64
 //! outside Windows they are called with Cranelift's `preserve_all`
 //! convention, which clobbers nothing: the values that live across the

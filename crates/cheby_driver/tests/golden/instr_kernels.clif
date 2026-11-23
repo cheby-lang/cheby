@@ -6,7 +6,7 @@ function u0:24(i64, f64, f64) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname1
     gv2 = symbol colocated userextname2
-    sig0 = (i64, i64, i32 uext, i64, i64, i64, i64) preserve_all
+    sig0 = (i64, i64, i64, i64, i64, i64) preserve_all
     sig1 = (i64, i64, i64) preserve_all
 
 block2(v0: i64, v1: f64, v2: f64):
@@ -17,61 +17,60 @@ block2(v0: i64, v1: f64, v2: f64):
 
 block3 cold:
     v6 = symbol_value.i64 gv0
-    v7 = iconst.i32 0
-    v8 = iconst.i64 0
-    v9 = symbol_value.i64 gv1
-    v10 = load.i64 notrap aligned readonly v9
-    call_indirect sig0, v10(v0, v6, v7, v8, v8, v8, v8)  ; v7 = 0, v8 = 0, v8 = 0, v8 = 0, v8 = 0
-    v11 = load.i32 notrap aligned v0+12
-    brif v11, block1, block0
+    v7 = iconst.i64 0
+    v8 = symbol_value.i64 gv1
+    v9 = load.i64 notrap aligned readonly v8
+    call_indirect sig0, v9(v0, v6, v7, v7, v7, v7)  ; v7 = 0, v7 = 0, v7 = 0, v7 = 0
+    v10 = load.i32 notrap aligned v0+12
+    brif v10, block1, block0
 
 block0:
-    v12 = fmul.f64 v1, v1
-    v13 = fmul.f64 v2, v2
-    v14 = fadd v12, v13
-    v15 = sqrt v14
-    v16 = iconst.i64 0x0400_0000_0001
-    v18 = load.i64 notrap aligned v0+24
-    v19 = load.i64 notrap aligned v18+16
-    v20 = load.i64 notrap aligned v19
-    brif v20, block6, block4
+    v11 = fmul.f64 v1, v1
+    v12 = fmul.f64 v2, v2
+    v13 = fadd v11, v12
+    v14 = sqrt v13
+    v15 = iconst.i64 0x0400_0000_0001
+    v17 = load.i64 notrap aligned v0+24
+    v18 = load.i64 notrap aligned v17+16
+    v19 = load.i64 notrap aligned v18
+    brif v19, block6, block4
 
 block6:
-    v21 = load.i64 notrap aligned v18+512
-    v22 = load.i64 notrap aligned v21+8
-    v23 = load.i64 notrap aligned v21+16
-    v24 = iconst.i64 16
-    v25 = iadd v22, v24  ; v24 = 16
-    v26 = icmp sle v25, v23
-    brif v26, block7, block4
+    v20 = load.i64 notrap aligned v17+512
+    v21 = load.i64 notrap aligned v20+8
+    v22 = load.i64 notrap aligned v20+16
+    v23 = iconst.i64 16
+    v24 = iadd v21, v23  ; v23 = 16
+    v25 = icmp sle v24, v22
+    brif v25, block7, block4
 
 block7:
-    v27 = load.i64 notrap aligned v21
-    v28 = iconst.i64 1
-    v29 = iadd v27, v28  ; v28 = 1
-    store notrap aligned v29, v21
-    store.i64 notrap aligned v25, v21+8
-    v30 = iconst.i64 -8
-    v31 = iadd.i64 v19, v30  ; v30 = -8
-    store notrap aligned v31, v18+16
-    store.i64 notrap aligned v16, v20  ; v16 = 0x0400_0000_0001
-    jump block5(v20)
+    v26 = load.i64 notrap aligned v20
+    v27 = iconst.i64 1
+    v28 = iadd v26, v27  ; v27 = 1
+    store notrap aligned v28, v20
+    store.i64 notrap aligned v24, v20+8
+    v29 = iconst.i64 -8
+    v30 = iadd.i64 v18, v29  ; v29 = -8
+    store notrap aligned v30, v17+16
+    store.i64 notrap aligned v15, v19  ; v15 = 0x0400_0000_0001
+    jump block5(v19)
 
 block4 cold:
-    v32 = iconst.i64 16
-    v33 = symbol_value.i64 gv2
-    v34 = load.i64 notrap aligned readonly v33
-    call_indirect sig1, v34(v0, v32, v16)  ; v32 = 16, v16 = 0x0400_0000_0001
-    v35 = load.i64 notrap aligned v0+32
-    brif v35, block5(v35), block1
+    v31 = iconst.i64 16
+    v32 = symbol_value.i64 gv2
+    v33 = load.i64 notrap aligned readonly v32
+    call_indirect sig1, v33(v0, v31, v15)  ; v31 = 16, v15 = 0x0400_0000_0001
+    v34 = load.i64 notrap aligned v0+32
+    brif v34, block5(v34), block1
 
-block5(v17: i64):
-    store.f64 notrap aligned v15, v17+8
-    return v17
+block5(v16: i64):
+    store.f64 notrap aligned v14, v16+8
+    return v16
 
 block1 cold:
-    v36 = iconst.i64 0
-    return v36  ; v36 = 0
+    v35 = iconst.i64 0
+    return v35  ; v35 = 0
 }
 ; cb$fn$app$fnv_step
 ; userextname0 = cb$str$fn$app$fnv_step$0
@@ -81,7 +80,7 @@ function u0:25(i64, i64, i8) -> i64 tail {
     gv0 = symbol colocated userextname0
     gv1 = symbol colocated userextname1
     gv2 = symbol colocated userextname2
-    sig0 = (i64, i64, i32 uext, i64, i64, i64, i64) preserve_all
+    sig0 = (i64, i64, i64, i64, i64, i64) preserve_all
     sig1 = (i64, i64) -> i64 system_v
 
 block2(v0: i64, v1: i64, v2: i8):
@@ -92,40 +91,39 @@ block2(v0: i64, v1: i64, v2: i8):
 
 block3 cold:
     v6 = symbol_value.i64 gv0
-    v7 = iconst.i32 0
-    v8 = iconst.i64 0
-    v9 = symbol_value.i64 gv1
-    v10 = load.i64 notrap aligned readonly v9
-    call_indirect sig0, v10(v0, v6, v7, v8, v8, v8, v8)  ; v7 = 0, v8 = 0, v8 = 0, v8 = 0, v8 = 0
-    v11 = load.i32 notrap aligned v0+12
-    brif v11, block1, block0
+    v7 = iconst.i64 0
+    v8 = symbol_value.i64 gv1
+    v9 = load.i64 notrap aligned readonly v8
+    call_indirect sig0, v9(v0, v6, v7, v7, v7, v7)  ; v7 = 0, v7 = 0, v7 = 0, v7 = 0
+    v10 = load.i32 notrap aligned v0+12
+    brif v10, block1, block0
 
 block0:
-    v12 = uextend.i64 v2
-    v13 = bxor.i64 v1, v12
-    v14 = iconst.i64 0x0100_0000_01b3
-    v15 = imul v13, v14  ; v14 = 0x0100_0000_01b3
-    v16 = iconst.i64 0x4000_0000_0000_0000
-    v17 = icmp ult v15, v16  ; v16 = 0x4000_0000_0000_0000
-    v18 = iconst.i64 1
-    v19 = ishl v15, v18  ; v18 = 1
-    v20 = iconst.i64 1
-    v21 = bor v19, v20  ; v20 = 1
-    brif v17, block5(v21), block4
+    v11 = uextend.i64 v2
+    v12 = bxor.i64 v1, v11
+    v13 = iconst.i64 0x0100_0000_01b3
+    v14 = imul v12, v13  ; v13 = 0x0100_0000_01b3
+    v15 = iconst.i64 0x4000_0000_0000_0000
+    v16 = icmp ult v14, v15  ; v15 = 0x4000_0000_0000_0000
+    v17 = iconst.i64 1
+    v18 = ishl v14, v17  ; v17 = 1
+    v19 = iconst.i64 1
+    v20 = bor v18, v19  ; v19 = 1
+    brif v16, block5(v20), block4
 
 block4 cold:
-    v23 = symbol_value.i64 gv2
-    v24 = load.i64 notrap aligned readonly v23
-    v25 = call_indirect sig1, v24(v0, v15)
-    brif v25, block6, block1
+    v22 = symbol_value.i64 gv2
+    v23 = load.i64 notrap aligned readonly v22
+    v24 = call_indirect sig1, v23(v0, v14)
+    brif v24, block6, block1
 
 block6 cold:
-    jump block5(v25)
+    jump block5(v24)
 
-block5(v22: i64):
-    return v22
+block5(v21: i64):
+    return v21
 
 block1 cold:
-    v26 = iconst.i64 0
-    return v26  ; v26 = 0
+    v25 = iconst.i64 0
+    return v25  ; v25 = 0
 }

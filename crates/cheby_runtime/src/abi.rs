@@ -334,8 +334,17 @@ pub const CTX_ALLOC_CACHE: i32 = 24;
 /// result: the object, or 0 when the allocation raised. The slow paths
 /// are called with a convention that returns nothing
 /// ([`sym::ALLOC_SLOW`]), so generated code loads the word after the
-/// call. The Rust part of the block starts after it, at byte 40.
+/// call.
 pub const CTX_ALLOC_RESULT: i32 = 32;
+
+/// Byte offset of the word where the outer function of a large frame
+/// (D-679) leaves its frame size, a `u64`, right before it calls
+/// [`sym::STACK_SLOW_FRAME_UNWIND`], which reads it there. Passed as an
+/// argument, it would be the helper's seventh, which System V x86-64
+/// passes on the stack, and the caller's frame would never be empty.
+/// Generated code only writes it. The Rust part of the block starts after
+/// it, at byte 48.
+pub const CTX_FRAME_SIZE: i32 = 40;
 
 /// The block cache as generated code reads and writes it
 /// (`crate::alloc::BlockCache`, at [`CTX_ALLOC_CACHE`]): for each of its
@@ -484,10 +493,13 @@ pub mod unwind_flag {
     pub const CANCEL: u32 = 2;
 }
 
-/// The most counted words the entry check's releasing slow paths
-/// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take in
-/// registers (D-775). Code generation keeps the
-/// translated entry pad chain for a function with more counted parameters.
+/// The counted words the entry check's releasing slow paths
+/// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take,
+/// after `ctx` and the location, so that all six arguments travel in
+/// registers on AAPCS64 and System V x86-64 (D-775). A function with fewer
+/// counted parameters passes 0 for the rest, which the helpers skip, and
+/// code generation keeps the translated entry pad chain for a function
+/// with more.
 pub const ENTRY_UNWIND_WORDS: u32 = 4;
 
 /// D-742's measurement switch: `CHEBY_UNWIND_EDGES=off` skips the unwind
@@ -748,16 +760,16 @@ pub mod sym {
     /// Data: the static `Err(Nil)` the `scope_run` intrinsic returns on
     /// failure (D-693).
     pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
-    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
-    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a
-    /// function with at most four counted parameters (D-775). Runs
-    /// [`STACK_SLOW`]; when that started an unwinding, releases `p0` to `p(count-1)` and
-    /// returns 1, else returns 0 and leaves them untouched.
+    /// `void cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint64_t p0,
+    /// uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a function
+    /// with at most four counted parameters (D-775), which passes 0 for the words it does
+    /// not use. Runs [`STACK_SLOW`]; when that started an unwinding (the unwind flag is
+    /// set), releases `p0` to `p3`, skipping 0, else leaves them untouched.
     pub const STACK_SLOW_UNWIND: &str = "cheby_rt_stack_slow_unwind";
-    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
-    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
-    /// [`STACK_SLOW_UNWIND`] for the outer function of a large frame, through
-    /// [`STACK_SLOW_FRAME`] (D-743, D-775).
+    /// `void cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location, uint64_t p0,
+    /// uint64_t p1, uint64_t p2, uint64_t p3)`: [`STACK_SLOW_UNWIND`] for the outer
+    /// function of a large frame, through [`STACK_SLOW_FRAME`] (D-743, D-775), with the
+    /// frame size that the caller wrote at [`super::CTX_FRAME_SIZE`] right before the call.
     pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
     /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *args,
     /// uint64_t *out), const uint64_t *args, size_t nargs)`: an `@blocking` call (D-683,
@@ -1246,7 +1258,7 @@ mod tests {
     }
 
     /// D-685, D-742, D-856: the generated-code view of the control block
-    /// ends at the allocation result, after the wait-frame word (D-868), the
+    /// ends at the large frame's size, after the wait-frame word (D-868), the
     /// measurement switch keeps its name, and a deadlock exits with 103
     /// (D-724).
     #[test]
@@ -1259,9 +1271,10 @@ mod tests {
                 CTX_UNWIND,
                 CTX_WAIT_FRAME,
                 CTX_ALLOC_CACHE,
-                CTX_ALLOC_RESULT
+                CTX_ALLOC_RESULT,
+                CTX_FRAME_SIZE
             ),
-            (0, 8, 12, 16, 24, 32)
+            (0, 8, 12, 16, 24, 32, 40)
         );
         assert_eq!(
             (
