@@ -819,15 +819,41 @@ fn spin_after(k: u32, state: SpinState) -> SpinState {
     })
 }
 
-/// The context each root of `float_spin` publishes while its loop runs,
-/// as an address, and the number of interrupts its slow path had handled
-/// when the loop ended. The host requests interrupts only under this lock
-/// and only of a published context, which its fiber cannot retire before
-/// `cheby_test_spin_end` takes the lock.
-static SPIN_ROOTS: Mutex<[(usize, u64); 2]> = Mutex::new([(0, 0); 2]);
+/// The most rounds of `spin` a root of `float_spin` runs while it waits
+/// for its first interrupt. A round takes milliseconds and the host asks
+/// every 200 µs, so reaching the bound means the slow path never ran.
+const SPIN_ROUNDS: u32 = 1_000;
+
+/// What a root of `float_spin` shares with the host.
+#[derive(Clone, Copy)]
+struct SpinSlot {
+    /// The context of the running fiber, as an address, while its rounds
+    /// run, and 0 otherwise.
+    ctx: usize,
+    /// The interrupts the context had handled when the rounds began.
+    before: u64,
+    /// The rounds of `spin` run so far.
+    rounds: u32,
+    /// The interrupts handled during the rounds, recorded at their end.
+    handled: u64,
+}
+
+impl SpinSlot {
+    const IDLE: Self = Self {
+        ctx: 0,
+        before: 0,
+        rounds: 0,
+        handled: 0,
+    };
+}
+
+/// The slots of the two roots of `float_spin`. The host requests
+/// interrupts only under this lock and only of a published context, which
+/// its fiber cannot retire before `cheby_test_spin_end` takes the lock.
+static SPIN_ROOTS: Mutex<[SpinSlot; 2]> = Mutex::new([SpinSlot::IDLE; 2]);
 
 /// The slot of root `root` in [`SPIN_ROOTS`].
-fn spin_slot(roots: &mut [(usize, u64); 2], root: i64) -> &mut (usize, u64) {
+fn spin_slot(roots: &mut [SpinSlot; 2], root: i64) -> &mut SpinSlot {
     usize::try_from(root)
         .ok()
         .and_then(|n| roots.get_mut(n))
@@ -835,19 +861,42 @@ fn spin_slot(roots: &mut [(usize, u64); 2], root: i64) -> &mut (usize, u64) {
 }
 
 /// `cheby_test_spin_begin(ctx, root)`: publishes the running fiber's
-/// context.
+/// context and the interrupts it handled before its rounds.
 extern "C" fn cheby_test_spin_begin(ctx: *mut ExecCtx, root: i64) {
+    // SAFETY: the context of the fiber that runs this call.
+    let before = unsafe { &*ctx }.interrupts();
     let mut roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
-    *spin_slot(&mut roots, root) = (ctx.expose_provenance(), 0);
+    *spin_slot(&mut roots, root) = SpinSlot {
+        ctx: ctx.expose_provenance(),
+        before,
+        ..SpinSlot::IDLE
+    };
+}
+
+/// `cheby_test_spin_again(ctx, root, result)`: counts a round that
+/// returned `result`, and says whether to run another: only if the round
+/// matched the reference, no interrupt was handled since the rounds began,
+/// and fewer than [`SPIN_ROUNDS`] ran. Only `spin`'s entry checks run
+/// between the rounds' begin and end, so a handled interrupt is one that
+/// stopped the loop with its Floats in registers.
+extern "C" fn cheby_test_spin_again(ctx: *mut ExecCtx, root: i64, result: u64) -> bool {
+    // SAFETY: the context of the fiber that runs this call.
+    let interrupts = unsafe { &*ctx }.interrupts();
+    let mut roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let slot = spin_slot(&mut roots, root);
+    slot.rounds = slot.rounds.checked_add(1).unwrap();
+    Some(result) == abi::tag_int(1) && interrupts == slot.before && slot.rounds < SPIN_ROUNDS
 }
 
 /// `cheby_test_spin_end(ctx, root)`: withdraws the context and records how
-/// many interrupts its slow path handled.
+/// many interrupts its slow path handled during the rounds.
 extern "C" fn cheby_test_spin_end(ctx: *mut ExecCtx, root: i64) {
     // SAFETY: the context of the fiber that runs this call.
     let interrupts = unsafe { &*ctx }.interrupts();
     let mut roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
-    *spin_slot(&mut roots, root) = (0, interrupts);
+    let slot = spin_slot(&mut roots, root);
+    slot.ctx = 0;
+    slot.handled = interrupts.checked_sub(slot.before).unwrap();
 }
 
 /// `spin(k, x, y, u, v, acc)`, item `index`: while `k != 0`, tail-calls
@@ -984,9 +1033,10 @@ fn spin_item(p: &mut Prog, index: u32, expected: SpinState) -> DefId {
     )
 }
 
-/// `start(root, k)`, item `index`: publishes its context, runs `spin` for
-/// `k` iterations from root `root`'s start, withdraws the context and
-/// returns what `spin` returned.
+/// `start(root, k)`, item `index`: publishes its context, then runs
+/// rounds of `spin`, each for `k` iterations from root `root`'s start,
+/// until `cheby_test_spin_again` says to stop, withdraws the context and
+/// returns what the last round returned.
 fn spin_root(p: &mut Prog, index: u32, root: u32, spin: DefId) -> DefId {
     let float = |n: f64| Operand::Const(Const::Float(n.to_bits()));
     let foreign = |symbol: &str| {
@@ -1005,28 +1055,64 @@ fn spin_root(p: &mut Prog, index: u32, root: u32, spin: DefId) -> DefId {
         index,
         &format!("start{index}"),
         &[Repr::Int, Repr::Int],
-        &[Repr::Value],
-        straight(
-            vec![
-                foreign("cheby_test_spin_begin"),
-                assign(
-                    2,
-                    Rvalue::Call {
-                        callee: Callee::Direct(spin),
-                        args: vec![
-                            op(1),
-                            float(x0),
-                            float(y0),
-                            float(u0),
-                            float(v0),
-                            float(acc0),
-                        ],
-                    },
-                ),
-                foreign("cheby_test_spin_end"),
-            ],
-            2,
-        ),
+        // 2 the round's result, 3 another round?
+        &[Repr::Value, Repr::Bool],
+        vec![
+            // bb0: publish the context.
+            block(
+                vec![foreign("cheby_test_spin_begin")],
+                Terminator::Goto {
+                    target: bb(1),
+                    args: Vec::new(),
+                },
+            ),
+            // bb1: one round, then another or the end.
+            block(
+                vec![
+                    assign(
+                        2,
+                        Rvalue::Call {
+                            callee: Callee::Direct(spin),
+                            args: vec![
+                                op(1),
+                                float(x0),
+                                float(y0),
+                                float(u0),
+                                float(v0),
+                                float(acc0),
+                            ],
+                        },
+                    ),
+                    assign(
+                        3,
+                        Rvalue::CallForeign {
+                            symbol: "cheby_test_spin_again".into(),
+                            sig: ForeignSig {
+                                params: vec![CType::Ptr, CType::I64, CType::Ptr],
+                                ret: CType::Bool,
+                            },
+                            args: vec![Operand::Const(Const::Ctx), op(0), op(2)],
+                            blocking: false,
+                        },
+                    ),
+                ],
+                Terminator::Branch {
+                    cond: op(3),
+                    then_: bb(3),
+                    else_: bb(2),
+                },
+            ),
+            // bb2: withdraw the context.
+            block(vec![foreign("cheby_test_spin_end")], ret(2)),
+            // bb3: release the round's result for the next.
+            block(
+                vec![Stmt::Drop(local(2))],
+                Terminator::Goto {
+                    target: bb(1),
+                    args: Vec::new(),
+                },
+            ),
+        ],
         &[],
     )
 }
@@ -1038,8 +1124,10 @@ fn spin_root(p: &mut Prog, index: u32, root: u32, spin: DefId) -> DefId {
 /// at one worker, where each runs while the other is switched out, and at
 /// two, where a root may resume on the other worker. The host requests an
 /// interrupt of each running loop every 200 µs, as the monitor does every
-/// 10 ms; each root's slow path handles some, and each root ends with the
-/// state the same steps give in Rust.
+/// 10 ms. Each root repeats its loop from the start until its slow path
+/// has handled an interrupt, so a loaded machine that runs the host late
+/// cannot let a root end unpreempted, and every round ends with the state
+/// the same steps give in Rust.
 #[test]
 #[cfg_attr(
     windows,
@@ -1071,13 +1159,15 @@ fn a_float_loop_survives_preemption() {
     )
     .unwrap();
     let begin: extern "C" fn(*mut ExecCtx, i64) = cheby_test_spin_begin;
+    let again: extern "C" fn(*mut ExecCtx, i64, u64) -> bool = cheby_test_spin_again;
     let end: extern "C" fn(*mut ExecCtx, i64) = cheby_test_spin_end;
     #[expect(clippy::as_conversions, reason = "functions' addresses")]
-    let (begin, end) = (begin as *const u8, end as *const u8);
-    // SAFETY: both have the C signature their foreign calls use, and live
-    // as long as the process.
+    let (begin, again, end) = (begin as *const u8, again as *const u8, end as *const u8);
+    // SAFETY: all three have the C signature their foreign calls use, and
+    // live as long as the process.
     unsafe {
         jit.define_symbol("cheby_test_spin_begin", begin);
+        jit.define_symbol("cheby_test_spin_again", again);
         jit.define_symbol("cheby_test_spin_end", end);
     }
     jit.compile(&units).unwrap();
@@ -1095,7 +1185,7 @@ fn a_float_loop_survives_preemption() {
 /// Starts the roots `targets` of `a_float_loop_survives_preemption` on a
 /// runtime of `threads` workers, requests an interrupt of each running
 /// loop every 200 µs until both ended, and checks what they returned and
-/// that each handled an interrupt.
+/// that each handled an interrupt within [`SPIN_ROUNDS`] rounds.
 fn run_spin_roots(jit: &Jit, targets: &[DefId], threads: usize) {
     let runtime = Runtime::new(&RuntimeConfig {
         threads: Some(threads),
@@ -1128,7 +1218,7 @@ fn run_spin_roots(jit: &Jit, targets: &[DefId], threads: usize) {
         assert!(std::time::Instant::now() < deadline, "the roots hung");
         {
             let roots = SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
-            for &(ctx, _) in roots.iter() {
+            for &SpinSlot { ctx, .. } in roots.iter() {
                 if ctx != 0 {
                     // SAFETY: a published context: its fiber is inside
                     // its loop and cannot withdraw it, and so cannot
@@ -1148,18 +1238,23 @@ fn run_spin_roots(jit: &Jit, targets: &[DefId], threads: usize) {
             }
         }
     }
-    let interrupts = *SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let slots = *SPIN_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
     for (root, outcome) in outcomes.into_iter().enumerate() {
         assert_eq!(
             outcome,
             Some(EntryOutcome::Returned(abi::tag_int(1).unwrap())),
             "root {root} at {threads} threads"
         );
-        let (ctx, handled) = interrupts.get(root).copied().unwrap();
+        let SpinSlot {
+            ctx,
+            rounds,
+            handled,
+            ..
+        } = slots.get(root).copied().unwrap();
         assert_eq!(ctx, 0, "root {root} at {threads} threads");
         assert!(
             handled > 0,
-            "root {root} at {threads} threads: no interrupt"
+            "root {root} at {threads} threads: no interrupt in {rounds} rounds"
         );
     }
     runtime.shutdown();
