@@ -672,3 +672,26 @@ Compile time: `cheby build --release` of `hello_world` takes 56 ms, and of `comp
 The whole suite passes on the final code (8,280 tests), with std's own tests and the determinism check in both profiles and every lint of CI.
 
 Miri, the address sanitizer and the thread sanitizer passed every step on `e9b6af0b`, which holds every change of the round, with no report.
+
+## 2026-11-23: `map::upsert` without the kernel calling back (D-1785)
+
+The round left one cost named as the largest: the callback of `map::upsert`, which a kernel called through a trampoline, with a `Some` and usually a closure allocated per call. The user asked for it to be built too. A direct call is now a block of steps in generated code: a helper finds or makes the entry's slot, the callback is called like any function, and the result is stored in the slot. In release the callback is inlined and the `Some` goes.
+
+Instructions retired, in units of 10⁹, and allocations in millions, release executables, minimum of three runs:
+
+| Program                        | Instructions before | After | Change | Allocations before | After |
+| ------------------------------ | ------------------: | ----: | -----: | -----------------: | ----: |
+| `lru_cache` 100000 4000000     |               25.55 | 19.14 | −25.1% |               40.8 |  18.8 |
+| `word_freq`                    |               24.01 | 20.51 | −14.6% |               33.2 |  21.4 |
+| `rc/map_updates`               |                3.95 |  2.98 | −24.6% |                3.1 |  0.33 |
+| `collections/ordered_map`      |                2.57 |  1.99 | −22.4% |                3.7 |   1.6 |
+| `collections/ordered_set`      |                2.61 |  2.12 | −18.6% |                2.9 |   1.1 |
+| `collections/ordered_multimap` |                3.96 |  3.26 | −17.6% |                8.6 |   5.7 |
+| `collections/multimap`         |                3.95 |  3.74 |  −5.4% |                5.3 |   5.3 |
+
+In debug the same programs retire 5% to 15% fewer instructions: the trampoline is gone, the `Some` and the closure stay. `json_roundtrip` and `nbody` do not move.
+
+Tried and not kept: the steps as three arms in MIR. A record taken apart before the upsert and rebuilt after it then lost its reuse, since a reuse token does not cross a join, and `multimap`'s reuse hits fell from 1.68 million to 0.08 million. The steps stay in one block, and the inliner's guard keeps a callback as a call where inlining it would lose such a reuse, as in `multimap::insert`.
+
+Left open: the clean-up does not substitute a constant field of a constructor it takes apart, because that gave invalid MIR in `std::option`'s release tests, for a reason not yet found. The other kernels that call back, `list::sort_with`, `heap`'s comparator calls and the hooks of equality, hashing and debug text, are unchanged.
+

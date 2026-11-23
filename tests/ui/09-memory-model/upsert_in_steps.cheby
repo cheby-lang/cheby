@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-588, D-525, D-233, D-1765
+// @decisions: D-588, D-525, D-233, D-1765, D-1785
 //! A direct call of `map::upsert` is the kernel's work in steps, with the
 //! callback called from the caller's code, and what a program sees is the
 //! kernel's: a present key's value goes to the callback and the stored key

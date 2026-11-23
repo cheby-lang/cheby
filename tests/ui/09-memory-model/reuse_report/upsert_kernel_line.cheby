@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-852, D-1765
+// @decisions: D-852, D-1765, D-1785
 // @flags: --reuse-report
 //! A direct call of `map::upsert`, which is the kernel's work in steps,
 //! gets the kernel line of its map at its last use, as the kernel's call

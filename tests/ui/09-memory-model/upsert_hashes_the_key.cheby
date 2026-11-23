@@ -1,6 +1,6 @@
 // @mode: run-fail
 // @milestone: M3
-// @decisions: D-233, D-1765
+// @decisions: D-233, D-1765, D-1785
 //! A direct call of `map::upsert` hashes its key where the kernel does: a
 //! key that holds a function value panics before the callback runs when
 //! the map has entries, and for an empty map after the callback, when its

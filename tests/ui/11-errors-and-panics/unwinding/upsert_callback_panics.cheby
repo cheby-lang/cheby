@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-698, D-697, D-525, D-1765
+// @decisions: D-698, D-697, D-525, D-1765, D-1785
 //! A panic in the callback of a direct call of `map::upsert`, which the
 //! caller's code calls, unwinds through the steps of the upsert: the map
 //! the steps opened, the key and the value moved out to the callback are

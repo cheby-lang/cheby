@@ -484,6 +484,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1782    | Release reads scalar constants of every module as their values, computed ones from images           |
 | D-1783    | A list element that is only unboxed to a `Float` is read as the number, with no count update        |
 | D-1784    | Generated code takes and gives back cached blocks inline; slow paths save every register            |
+| D-1785    | A direct `map::upsert` calls its callback from generated code, in steps around one slot             |
 
 ## Open questions
 

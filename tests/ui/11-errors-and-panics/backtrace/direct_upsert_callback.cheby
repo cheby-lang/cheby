@@ -1,6 +1,6 @@
 // @mode: run-fail
 // @milestone: M3
-// @decisions: D-1039, D-1040, D-1765
+// @decisions: D-1039, D-1040, D-1765, D-1785
 //! With `CHEBY_BACKTRACE=1`, a panic in the callback of a direct call of
 //! `map::upsert`, which the caller's code calls, lists the callback's frame
 //! and every frame below it, as for any call of a function value (§11.6).
