@@ -1,0 +1,113 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-588, D-525, D-233, D-1765
+//! A direct call of `map::upsert` is the kernel's work in steps, with the
+//! callback called from the caller's code, and what a program sees is the
+//! kernel's: a present key's value goes to the callback and the stored key
+//! stays (D-588), an absent key gets the callback's result for `None`, an
+//! empty map gets its first entry, a map that another value holds is left
+//! as it was, the callback is called once, and keys of every hashing kind
+//! work, in bitmap nodes and once the map has grown. A callback may itself
+//! upsert another map, and `map::upsert` as a value works as before.
+
+@!target(native)
+
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+type Shape {
+  Dot,
+  Circle(Int),
+}
+
+fn bump(found: Option<Int>) -> Int {
+  case found {
+    Some(n) => n + 1
+    None => 1
+  }
+}
+
+/// Counts `keys` and prints the counts of `probes`.
+fn counted<K>(label: String, keys: List<K>, probes: List<K>) {
+  let counts = list::fold(keys, map::new(), fn(acc, k) { map::upsert(acc, k, bump) })
+  let found = list::map(probes, fn(k) { map::get(counts, k) })
+  let size = map::size(counts)
+  io::println("{label}: {size} {found:?}")
+}
+
+fn main() {
+  // Present, absent, the empty map, and a shared map left alone.
+  let first = map::upsert(map::new(), "a", bump)
+  let second = map::upsert(first, "a", bump)
+  let third = map::upsert(second, "b", bump)
+  let kept = map::upsert(third, "a", fn(found) {
+    case found {
+      Some(n) => n * 100
+      None => -1
+    }
+  })
+  let pairs = list::sort(map::to_list(third))
+  let changed = list::sort(map::to_list(kept))
+  io::println("{pairs:?} {changed:?}")
+  // The stored key stays: `0.0` and `-0.0` are `==`.
+  let zero = map::upsert(map::from_list([(0.0, "first")]), -0.0, fn(found) {
+    case found {
+      Some(old) => old + "+"
+      None => "none"
+    }
+  })
+  let zeros = map::to_list(zero)
+  io::println("{zeros:?}")
+  // A list moved out of the map, pushed and stored back; another list
+  // that holds the same elements is unchanged.
+  let start = [1, 2]
+  let lists = map::from_list([("k", start)])
+  let grown = map::upsert(lists, "k", fn(found) {
+    case found {
+      Some(xs) => list::push(xs, 3)
+      None => []
+    }
+  })
+  let now = map::get(grown, "k")
+  io::println("{start:?} {now:?}")
+  // The callback upserts another map that it captured.
+  let calls = map::from_list([("outer", 0)])
+  let both = map::upsert(map::from_list([(1, calls)]), 1, fn(found) {
+    case found {
+      Some(inner) => map::upsert(map::upsert(inner, "outer", bump), "inner", bump)
+      None => map::new()
+    }
+  })
+  let nested = case map::get(both, 1) {
+    Some(inner) => list::sort(map::to_list(inner))
+    None => []
+  }
+  let untouched = map::to_list(calls)
+  io::println("{nested:?} {untouched:?}")
+  // Keys of every hashing kind, and enough of them to grow the map.
+  let big = 4_611_686_018_427_387_904
+  counted("ints", [1, 2, 1, big, big], [1, big, 3])
+  counted("strings", ["x", "yy", "x", ""], ["x", "", "z"])
+  counted("tuples", [(1, "a"), (1, "b"), (1, "a")], [(1, "a"), (2, "a")])
+  counted("records", [Point { x: 1, y: 2 }, Point { x: 1, y: 2 }], [Point { x: 1, y: 2 }])
+  counted("variants", [Dot, Circle(2), Circle(2), Dot, Dot], [Dot, Circle(2), Circle(3)])
+  counted("options", [Some(1), None, Some(1)], [Some(1), None])
+  counted("lists", [[1, 2], [], [1, 2]], [[1, 2], [], [2]])
+  counted("bools", [True, False, True], [True])
+  counted("floats", [1.5, 2.5, 1.5], [1.5, 0.5])
+  let many = list::range(0, 3_000)
+    |> list::map(_, fn(i) { i % 1_000 })
+  counted("many", many, [0, 999, 1_000])
+  // `map::upsert` as a value calls back from the kernel, as before.
+  let up = map::upsert
+  let by_value: Map<String, Int> = up(up(map::new(), "v", bump), "v", bump)
+  let v = map::get(by_value, "v")
+  io::println("{v:?}")
+}

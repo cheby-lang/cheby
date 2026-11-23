@@ -1475,11 +1475,49 @@ pub enum RuntimeFn {
     /// `(list borrowed, index: Int) -> F32`: [`Self::ListGetFloat`] for
     /// an element of type `F32`.
     ListGetF32,
+    /// `(map owned, key borrowed) -> Map`: the first step of a direct call
+    /// of `map::upsert`, whose callback generated code calls
+    /// (`lower/upsert.rs`). Returns the map with a root of its own, unique
+    /// or empty, and the path to the key's entry writable, and keeps a word
+    /// for the [`Self::MapUpsertAddress`] of the result that follows it in
+    /// the block, with no other `MapUpsert` between (the validator checks
+    /// it): the address of the entry's value slot when the key is present,
+    /// that address plus 1 when it was absent and is now in with a
+    /// placeholder value, or 1 for an empty map, whose key is not hashed.
+    /// The key is hashed and compared as `map::upsert` does, so the call
+    /// may run `@std_hooks` functions and raise (D-233, D-482). Consumes
+    /// the map even when it raises (D-698).
+    MapUpsert,
+    /// `(map borrowed) -> U64`: the word the [`Self::MapUpsert`] that
+    /// defined the map kept. Runs no code and cannot raise.
+    MapUpsertAddress,
+    /// `(map borrowed, address: U64) -> T`: the value in the slot at a
+    /// present key's address from [`Self::MapUpsertAddress`], moved out,
+    /// so the result is owned and has the count it had in the map; the
+    /// slot holds a placeholder that a release of the map skips. Writes
+    /// into the map, which only this code holds. Only the release clean-up
+    /// emits it, where it takes a [`Self::MapUpsertFound`] apart
+    /// ([`crate::lookup`]). Cannot raise.
+    MapSlotTake,
+    /// `(map borrowed, address: U64) -> Option<T>`: the `Option` the
+    /// callback of an upsert gets: `Some` of the value at a present key's
+    /// address from [`Self::MapUpsertAddress`], moved out as by
+    /// [`Self::MapSlotTake`], or the static `None`. Result owned. May
+    /// raise when the `Some` cannot be allocated, with the value released.
+    MapUpsertFound,
+    /// `(map owned, address: U64, key borrowed, value owned) -> Map`: the
+    /// last step of an upsert: stores `value` in the slot at an address
+    /// from [`Self::MapUpsertAddress`], over the placeholder there, and
+    /// returns the map; for an empty map (address 1) a map of the one entry
+    /// instead, whose key is hashed as `map::insert` hashes it, so it may
+    /// raise (D-233). Consumes the map and the value even when it raises
+    /// (D-698).
+    MapUpsertStore,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 30] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1505,6 +1543,11 @@ impl RuntimeFn {
         Self::ListUnconsHeadF32,
         Self::ListGetFloat,
         Self::ListGetF32,
+        Self::MapUpsert,
+        Self::MapUpsertAddress,
+        Self::MapSlotTake,
+        Self::MapUpsertFound,
+        Self::MapUpsertStore,
     ];
 
     /// Whether the helper is a head of the pattern step right before it
@@ -1548,7 +1591,12 @@ impl RuntimeFn {
             | Self::ListPrepend
             | Self::MapFind
             | Self::MapValueAt
-            | Self::ListSet => None,
+            | Self::ListSet
+            | Self::MapUpsert
+            | Self::MapUpsertAddress
+            | Self::MapSlotTake
+            | Self::MapUpsertFound
+            | Self::MapUpsertStore => None,
         }
     }
 
@@ -1565,8 +1613,9 @@ impl RuntimeFn {
 
     /// Whether a call of the helper may start or pass on an unwinding
     /// (D-698): false for `StrEq`, `ListLength`, `ListGet`, the heads of a
-    /// pattern step, `MapValueAt` and the reads of an element as a raw
-    /// number, true for every other helper.
+    /// pattern step, `MapValueAt`, the reads of an element as a raw
+    /// number and an upsert's address and `MapSlotTake`, true for every
+    /// other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
         !matches!(
@@ -1580,6 +1629,8 @@ impl RuntimeFn {
                 | Self::ListUnconsHeadF32
                 | Self::ListGetFloat
                 | Self::ListGetF32
+                | Self::MapUpsertAddress
+                | Self::MapSlotTake
         )
     }
 
@@ -1591,13 +1642,25 @@ impl RuntimeFn {
         use UseKind::{Borrowed, Owned};
         match self {
             Self::StrWithCapacity => &[(Int, Borrowed)],
-            Self::StrAppend | Self::ListAppend => &[(Value, Owned), (Value, Borrowed)],
+            Self::StrAppend | Self::ListAppend | Self::MapUpsert => {
+                &[(Value, Owned), (Value, Borrowed)]
+            }
             Self::StrEq | Self::MapFind => &[(Value, Borrowed), (Value, Borrowed)],
-            Self::MapValueAt => &[(Value, Borrowed), (U64, Borrowed)],
+            Self::MapValueAt | Self::MapSlotTake | Self::MapUpsertFound => {
+                &[(Value, Borrowed), (U64, Borrowed)]
+            }
+            Self::MapUpsertStore => &[
+                (Value, Owned),
+                (U64, Borrowed),
+                (Value, Borrowed),
+                (Value, Owned),
+            ],
             Self::Equal => &[(Value, Borrowed), (Value, Borrowed), (Value, Borrowed)],
             Self::ListPush | Self::ListPrepend => &[(Value, Owned), (Value, Owned)],
             Self::ListSet => &[(Value, Owned), (Int, Borrowed), (Value, Owned)],
-            Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
+            Self::ListLength | Self::Debug | Self::EffectCheck | Self::MapUpsertAddress => {
+                &[(Value, Borrowed)]
+            }
             Self::ListGet | Self::ListGetFloat | Self::ListGetF32 => {
                 &[(Value, Borrowed), (Int, Borrowed)]
             }
@@ -1640,10 +1703,14 @@ impl RuntimeFn {
             | Self::Debug
             | Self::ScopeOpen
             | Self::MapValueAt
-            | Self::ListSet => Some(Repr::Value),
+            | Self::ListSet
+            | Self::MapUpsert
+            | Self::MapSlotTake
+            | Self::MapUpsertFound
+            | Self::MapUpsertStore => Some(Repr::Value),
             Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
-            Self::MapFind => Some(Repr::U64),
+            Self::MapFind | Self::MapUpsertAddress => Some(Repr::U64),
             Self::ListUnconsHeadFloat | Self::ListGetFloat => Some(Repr::Float),
             Self::ListUnconsHeadF32 | Self::ListGetF32 => Some(Repr::F32),
             Self::EffectCheck => None,
@@ -1679,6 +1746,11 @@ impl RuntimeFn {
             Self::ListUnconsHeadF32 => "list_uncons_head_f32",
             Self::ListGetFloat => "list_get_float",
             Self::ListGetF32 => "list_get_f32",
+            Self::MapUpsert => "map_upsert",
+            Self::MapUpsertAddress => "map_upsert_address",
+            Self::MapSlotTake => "map_slot_take",
+            Self::MapUpsertFound => "map_upsert_found",
+            Self::MapUpsertStore => "map_upsert_store",
         }
     }
 }

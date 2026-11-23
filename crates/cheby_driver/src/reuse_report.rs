@@ -405,16 +405,17 @@ fn in_place_call(
             )
         }
         Rvalue::CallRuntime {
-            func: RuntimeFn::ListSet,
+            func: func @ (RuntimeFn::ListSet | RuntimeFn::MapUpsert),
             args,
         } => {
             let Some(Operand::Local(first)) = args.first() else {
                 return Ok(None);
             };
             let others = args.iter().skip(1).filter_map(Operand::local).collect();
+            let (module, item) = helper_kernel(*func);
             (
-                "std::list".to_owned(),
-                "set".to_owned(),
+                module.to_owned(),
+                item.to_owned(),
                 *first,
                 at,
                 others,
@@ -452,6 +453,16 @@ fn in_place_call(
         others,
         borrowed,
     }))
+}
+
+/// The kernel whose direct call is the helper `func`, `list_set` or
+/// `map_upsert`, as `(module, function)`.
+const fn helper_kernel(func: RuntimeFn) -> (&'static str, &'static str) {
+    if matches!(func, RuntimeFn::ListSet) {
+        ("std::list", "set")
+    } else {
+        ("std::map", "upsert")
+    }
 }
 
 /// The local that `temp` was moved from, `temp = x`, with the index of the
@@ -1030,16 +1041,27 @@ impl<'f> Flow<'f> {
                     RuntimeFn::ListPush
                     | RuntimeFn::ListAppend
                     | RuntimeFn::ListPrepend
-                    | RuntimeFn::ListSet => {
+                    | RuntimeFn::ListSet
+                    | RuntimeFn::MapUpsert
+                    | RuntimeFn::MapUpsertStore => {
                         args.iter().any(|op| held(holds, op)) && join_into(holds, dst, Hold::Any)
                     }
                     RuntimeFn::ListGet
                     | RuntimeFn::ListSlice
                     | RuntimeFn::ListSliceOwned
-                    | RuntimeFn::MapValueAt => {
+                    | RuntimeFn::MapValueAt
+                    | RuntimeFn::MapSlotTake
+                    | RuntimeFn::MapUpsertFound => {
                         // A map's value works as a list's element at an
-                        // unknown index.
-                        let get = matches!(func, RuntimeFn::ListGet | RuntimeFn::MapValueAt);
+                        // unknown index, and so does the `Some` an upsert
+                        // gives its callback.
+                        let get = matches!(
+                            func,
+                            RuntimeFn::ListGet
+                                | RuntimeFn::MapValueAt
+                                | RuntimeFn::MapSlotTake
+                                | RuntimeFn::MapUpsertFound
+                        );
                         // An element of a list that holds the object there,
                         // or a view of one, which shares its root.
                         let reaches =
@@ -1076,6 +1098,7 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ListUnconsOwned
                     | RuntimeFn::ListUnconsHead
                     | RuntimeFn::MapFind
+                    | RuntimeFn::MapUpsertAddress
                     // A raw number holds nothing.
                     | RuntimeFn::ListUnconsHeadFloat
                     | RuntimeFn::ListUnconsHeadF32

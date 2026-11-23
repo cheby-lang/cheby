@@ -26,7 +26,10 @@ use crate::alloc::slow::{
 };
 use crate::consteval::{cheby_rt_const_missing, cheby_rt_effect_check, cheby_rt_unresolved};
 use crate::fiber_ops::scope::{cheby_rt_scope_close, cheby_rt_scope_open};
-use crate::hamt::{cheby_rt_map_find, cheby_rt_map_value_at};
+use crate::hamt::{
+    cheby_rt_map_find, cheby_rt_map_slot_take, cheby_rt_map_upsert, cheby_rt_map_upsert_found,
+    cheby_rt_map_upsert_store, cheby_rt_map_value_at,
+};
 use crate::helpers::{
     cheby_rt_box_f32, cheby_rt_box_f64, cheby_rt_box_i64, cheby_rt_box_u64, cheby_rt_debug,
     cheby_rt_equal, cheby_rt_fmod_f32, cheby_rt_fmod_f64, cheby_rt_str_append, cheby_rt_str_eq,
@@ -65,7 +68,7 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 57] {
+fn runtime_symbols() -> [(&'static str, *const u8); 61] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -150,6 +153,16 @@ fn runtime_symbols() -> [(&'static str, *const u8); 57] {
             cheby_rt_free_unique_slow as *const u8,
         ),
         (sym::DROP_SAVING, cheby_rt_drop_saving as *const u8),
+        (sym::MAP_UPSERT, cheby_rt_map_upsert as *const u8),
+        (sym::MAP_SLOT_TAKE, cheby_rt_map_slot_take as *const u8),
+        (
+            sym::MAP_UPSERT_FOUND,
+            cheby_rt_map_upsert_found as *const u8,
+        ),
+        (
+            sym::MAP_UPSERT_STORE,
+            cheby_rt_map_upsert_store as *const u8,
+        ),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }

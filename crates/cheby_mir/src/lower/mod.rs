@@ -54,6 +54,7 @@ mod scalar_tests;
 mod split;
 #[cfg(test)]
 mod split_tests;
+mod upsert;
 
 use std::collections::{BTreeMap, BTreeSet};
 

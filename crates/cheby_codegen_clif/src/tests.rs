@@ -150,18 +150,33 @@ fn runtime_helper_signatures() {
             continue;
         }
         // `map_value_at`'s map only keeps the map held; the C function
-        // takes the address alone.
-        if helper == RuntimeFn::MapValueAt {
-            assert_eq!(RuntimeFunc::of(helper).0.ctypes().0.len(), 1);
+        // takes the address alone, and so do an upsert's `map_slot_take`
+        // and `map_upsert_found`.
+        if matches!(
+            helper,
+            RuntimeFn::MapValueAt | RuntimeFn::MapSlotTake | RuntimeFn::MapUpsertFound
+        ) {
+            let (f, takes_ctx) = RuntimeFunc::of(helper);
+            assert_eq!(
+                f.ctypes().0.len(),
+                helper.params().len() - 1 + usize::from(takes_ctx),
+                "{helper:?}"
+            );
+            continue;
+        }
+        // An upsert's address is read from the stack slot its
+        // `map_upsert` wrote.
+        if helper == RuntimeFn::MapUpsertAddress {
             continue;
         }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
         let (params, ret) = f.ctypes();
         let ctx = usize::from(takes_ctx);
-        // `list_uncons` also takes the address it writes the element to.
+        // `list_uncons` also takes the address it writes the element to,
+        // and `map_upsert` the address of its word.
         let out = usize::from(matches!(
             helper,
-            RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned
+            RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned | RuntimeFn::MapUpsert
         ));
         assert_eq!(
             params.len(),
@@ -787,10 +802,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 46);
+    assert_eq!(RuntimeFunc::ALL.len(), 50);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        22,
+        26,
         "only the functions added since M2 are declared on demand"
     );
     // The lookups taken apart at once and `list::set` at a direct call.
@@ -2479,6 +2494,153 @@ fn list_writes_at_an_index_are_written_inline() {
     assert!(text.contains(sym::LIST_SET), "{text}");
     assert!(!text.contains(sym::STATS_COUNTING), "{text}");
     assert!(!text.contains("store notrap aligned"), "{text}");
+}
+
+/// The helpers of a direct `map::upsert`: `map_upsert` takes `ctx`, the map,
+/// the key and the address of its word, its address step needs only its
+/// declaration, `map_slot_take` takes the address alone, and the
+/// `Option` and the store take `ctx` too.
+#[test]
+fn upsert_runtime_functions() {
+    use cheby_mir::RuntimeFn;
+    use runtime::RuntimeFunc;
+    for (f, index, helper, takes_ctx) in [
+        (RuntimeFunc::MapUpsert, 46, RuntimeFn::MapUpsert, true),
+        (
+            RuntimeFunc::MapUpsert,
+            46,
+            RuntimeFn::MapUpsertAddress,
+            true,
+        ),
+        (RuntimeFunc::MapSlotTake, 47, RuntimeFn::MapSlotTake, false),
+        (
+            RuntimeFunc::MapUpsertFound,
+            48,
+            RuntimeFn::MapUpsertFound,
+            true,
+        ),
+        (
+            RuntimeFunc::MapUpsertStore,
+            49,
+            RuntimeFn::MapUpsertStore,
+            true,
+        ),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+        assert_eq!(RuntimeFunc::of(helper), (f, takes_ctx), "{f:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::MapUpsert.ctypes(),
+        (
+            &[CType::Ptr, CType::U64, CType::U64, CType::Ptr][..],
+            CType::U64
+        )
+    );
+    assert_eq!(
+        RuntimeFunc::MapUpsertFound.ctypes(),
+        (&[CType::Ptr, CType::U64][..], CType::U64)
+    );
+    assert_eq!(
+        RuntimeFunc::MapUpsertStore.ctypes(),
+        (
+            &[CType::Ptr, CType::U64, CType::U64, CType::U64, CType::U64][..],
+            CType::U64
+        )
+    );
+}
+
+/// The steps of an upsert after its `map_upsert`: the address is a load of
+/// the stack slot whose address `map_upsert` was given, the value is moved
+/// out with a load and a store, and the result is stored with a store and
+/// the map given back, with the runtime's store called only in a cold block
+/// for an empty map; with `checked_rc` the value is taken by the runtime's
+/// call.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn upsert_steps_are_inline() {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    use cheby_runtime::abi::sym;
+    let steps = || {
+        let mut u = unit();
+        let function = &mut u.functions[0];
+        function.locals = IndexVec::from_raw(
+            [
+                Repr::Value,
+                Repr::Value,
+                Repr::U64,
+                Repr::Value,
+                Repr::Value,
+            ]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+        )
+        .unwrap();
+        let l = Local::from_u32;
+        let call = |func, args| Rvalue::CallRuntime { func, args };
+        let assign = |dst: u32, value| Stmt::Assign { dst: l(dst), value };
+        function.blocks = IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: vec![
+                assign(
+                    1,
+                    call(
+                        RuntimeFn::MapUpsert,
+                        vec![Operand::Local(l(0)), Operand::Const(Const::Nil)],
+                    ),
+                ),
+                assign(
+                    2,
+                    call(RuntimeFn::MapUpsertAddress, vec![Operand::Local(l(1))]),
+                ),
+                assign(
+                    3,
+                    call(
+                        RuntimeFn::MapSlotTake,
+                        vec![Operand::Local(l(1)), Operand::Local(l(2))],
+                    ),
+                ),
+                assign(
+                    4,
+                    call(
+                        RuntimeFn::MapUpsertStore,
+                        vec![
+                            Operand::Local(l(1)),
+                            Operand::Local(l(2)),
+                            Operand::Const(Const::Nil),
+                            Operand::Local(l(3)),
+                        ],
+                    ),
+                ),
+            ],
+            term: Terminator::Return(Operand::Local(l(4))),
+            unwind: Vec::new(),
+        }])
+        .unwrap();
+        u
+    };
+    let text = clif_of(&[steps()], &CodegenOptions::default());
+    assert!(text.contains(sym::MAP_UPSERT), "{text}");
+    assert!(text.contains("stack_addr"), "{text}");
+    assert!(text.contains("band"), "{text}");
+    assert!(text.contains("cold"), "{text}");
+    assert!(!text.contains(sym::MAP_SLOT_TAKE), "{text}");
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[steps()], &checked);
+    assert!(text.contains(sym::MAP_SLOT_TAKE), "{text}");
+    assert!(text.contains(sym::MAP_UPSERT_STORE), "{text}");
 }
 
 /// `map_value_at` is a load at the address `map_find` gave and an inline

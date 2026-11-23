@@ -432,6 +432,7 @@ impl FnCx<'_> {
         self.check_reprs(stage)?;
         self.check_init_fields();
         self.check_uncons(stage);
+        self.check_upsert_address();
         self.check_reuse(stage)?;
         if self.counted(stage) && self.errors.is_empty() {
             if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
@@ -976,6 +977,71 @@ impl FnCx<'_> {
                         id.as_u32(),
                         l.as_u32()
                     ));
+                }
+            }
+        }
+    }
+
+    /// The steps of an upsert (`lower/upsert.rs`): each
+    /// `map_upsert_address(m)` reads the word that the `map_upsert` which
+    /// defined `m` kept, so that `map_upsert` comes before it in its
+    /// block, with no other `map_upsert` between them.
+    fn check_upsert_address(&mut self) {
+        let f = self.f;
+        for (id, block) in f.blocks.iter_enumerated() {
+            // The map the last `map_upsert` of the block so far defined.
+            let mut opened: Option<Local> = None;
+            for (j, stmt) in block.stmts.iter().enumerate() {
+                let Stmt::Assign {
+                    dst,
+                    value: Rvalue::CallRuntime { func, args },
+                } = stmt
+                else {
+                    continue;
+                };
+                match func {
+                    RuntimeFn::MapUpsert => opened = Some(*dst),
+                    RuntimeFn::MapUpsertAddress => {
+                        let reads = match args.as_slice() {
+                            [Operand::Local(m)] => Some(*m),
+                            _ => None,
+                        };
+                        if reads.is_none() || reads != opened {
+                            self.err(format!(
+                                "bb{} statement {j}: map_upsert_address does not read the map \
+                                 of the last map_upsert before it in its block",
+                                id.as_u32()
+                            ));
+                        }
+                    }
+                    RuntimeFn::StrWithCapacity
+                    | RuntimeFn::StrAppend
+                    | RuntimeFn::StrEq
+                    | RuntimeFn::ListPush
+                    | RuntimeFn::ListAppend
+                    | RuntimeFn::ListLength
+                    | RuntimeFn::ListGet
+                    | RuntimeFn::ListSlice
+                    | RuntimeFn::ListSliceOwned
+                    | RuntimeFn::Equal
+                    | RuntimeFn::Debug
+                    | RuntimeFn::EffectCheck
+                    | RuntimeFn::ScopeOpen
+                    | RuntimeFn::ScopeClose
+                    | RuntimeFn::ListUncons
+                    | RuntimeFn::ListUnconsOwned
+                    | RuntimeFn::ListUnconsHead
+                    | RuntimeFn::ListPrepend
+                    | RuntimeFn::MapFind
+                    | RuntimeFn::MapValueAt
+                    | RuntimeFn::ListSet
+                    | RuntimeFn::ListUnconsHeadFloat
+                    | RuntimeFn::ListUnconsHeadF32
+                    | RuntimeFn::ListGetFloat
+                    | RuntimeFn::ListGetF32
+                    | RuntimeFn::MapSlotTake
+                    | RuntimeFn::MapUpsertFound
+                    | RuntimeFn::MapUpsertStore => {}
                 }
             }
         }

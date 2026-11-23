@@ -7,6 +7,9 @@
 //! from the callee record no site, so they get no line. `shift` itself
 //! keeps its line, where it builds its `Point` from `p`; the copies
 //! of its body in `twice` get none, and neither does the inlined call.
+//! The `Point` that `main` builds gets none either: after inlining only
+//! its fields are read, so the clean-up takes it apart and nothing is
+//! allocated there.
 
 import std::io
 

@@ -779,6 +779,16 @@ fn runtime_call(func: RuntimeFn) -> Function {
         .iter()
         .map(|&(r, _)| local(b.add_param(r, None, None).unwrap()))
         .collect();
+    if func == RuntimeFn::MapUpsertAddress {
+        // The address reads the word of the `map_upsert` that defined
+        // its map.
+        let key = local(b.add_param(Repr::Value, None, None).unwrap());
+        let opened = b
+            .call_runtime(RuntimeFn::MapUpsert, vec![args[0].clone(), key])
+            .unwrap()
+            .unwrap();
+        args[0] = local(opened);
+    }
     if func == RuntimeFn::Equal {
         // The location is a static string.
         args[2] = Operand::Const(Const::Str(b.string("src/main.cheby:1:1").unwrap()));
@@ -1118,7 +1128,12 @@ fn runtime_helpers_follow_their_ownership() {
         // Counting makes it of a `list_uncons`, below, and the reads of
         // an element as a number of a head or a `list_get` and its
         // `unbox` (`list_elements_read_as_numbers`).
-        if func == RuntimeFn::ListUnconsOwned || func.scalar_read().is_some() {
+        // An upsert's address reads the map of the `map_upsert` before
+        // it, not a parameter.
+        if func == RuntimeFn::ListUnconsOwned
+            || func.scalar_read().is_some()
+            || func == RuntimeFn::MapUpsertAddress
+        {
             continue;
         }
         let lines = counted(runtime_call(func));

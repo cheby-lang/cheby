@@ -1,0 +1,45 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-233, D-1765
+//! A direct call of `map::upsert` hashes its key where the kernel does: a
+//! key that holds a function value panics before the callback runs when
+//! the map has entries, and for an empty map after the callback, when its
+//! result goes in, since the kernel hashes the key of an empty map only
+//! then.
+
+import std::fiber
+import std::io
+import std::map
+
+fn one() -> Int {
+  1
+}
+
+fn noted(found: Option<Int>) -> Int {
+  case found {
+    Some(n) => n
+    None => {
+      io::println("the callback ran")
+      0
+    }
+  }
+}
+
+fn main() {
+  let full: map::Map<Option<fn() -> Int>, Int> = map::from_list([(None, 1)])
+  let outcome = {
+    use _ <- fiber::scope()
+    map::size(map::upsert(full, Some(one), noted))
+  }
+  case outcome {
+    Ok(n) => io::println("upserted: {n}")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("caught: {text}")
+    }
+  }
+  let empty: map::Map<Option<fn() -> Int>, Int> = map::new()
+  let grown = map::upsert(empty, Some(one), noted)
+  let n = map::size(grown)
+  io::println("upserted: {n}")
+}

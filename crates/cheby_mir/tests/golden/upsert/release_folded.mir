@@ -1,0 +1,68 @@
+fn app::count(_0: value, _1: value) -> value check str#0 {
+  str#0 = "src/main.cheby:12:4"
+  str#1 = "src/main.cheby:7:16"
+bb0:
+  _2: value = call_runtime map_upsert(_0, borrow _1)
+  _3: u64 = call_runtime map_upsert_address(borrow _2)
+  _13: u64 = bitwise and u64 _3, const u64 1
+  _14: bool = compare eq u64 _13, const u64 0
+  branch _14, bb1, bb2
+bb1:
+  _15: value = call_runtime map_slot_take(borrow _2, borrow _3)
+  _8: value = _15
+  _9: int = unbox int _8
+  _10: int = checked add int _9, const int 1 at str#1
+  goto bb3(_10)
+bb2:
+  goto bb3(const int 1)
+bb3(_11: int):
+  _12: value = box int _11
+  _6: value = call_runtime map_upsert_store(_2, borrow _3, borrow _1, _12)
+  return _6
+}
+
+fn app::add(_0: value, _1: value, _2: int) -> value check str#0 {
+  str#0 = "src/main.cheby:17:4"
+  str#1 = "src/main.cheby:20:18"
+bb0:
+  _5: value = call_runtime map_upsert(_0, borrow _1)
+  _6: u64 = call_runtime map_upsert_address(borrow _5)
+  _18: u64 = bitwise and u64 _6, const u64 1
+  _19: bool = compare eq u64 _18, const u64 0
+  branch _19, bb1, bb2
+bb1:
+  _20: value = call_runtime map_slot_take(borrow _5, borrow _6)
+  _13: value = _20
+  _14: int = unbox int _13
+  _15: int = checked add int _14, _2 at str#1
+  goto bb3(_15)
+bb2:
+  goto bb3(_2)
+bb3(_16: int):
+  _17: value = box int _16
+  _9: value = call_runtime map_upsert_store(_5, borrow _6, borrow _1, _17)
+  return _9
+}
+
+fn app::push(_0: value, _1: int, _2: value) -> value check str#0 {
+  str#0 = "src/main.cheby:26:4"
+bb0:
+  _3: value = box int _1
+  _5: value = call_runtime map_upsert(_0, borrow _3)
+  _6: u64 = call_runtime map_upsert_address(borrow _5)
+  _16: u64 = bitwise and u64 _6, const u64 1
+  _17: bool = compare eq u64 _16, const u64 0
+  branch _17, bb2, bb3
+bb1(_8: value):
+  _9: value = call_runtime map_upsert_store(_5, borrow _6, borrow _3, _8)
+  return _9
+bb2:
+  _18: value = call_runtime map_slot_take(borrow _5, borrow _6)
+  _12: value = _18
+  _15: value = call_runtime list_push(_12, _2)
+  goto bb1(_15)
+bb3:
+  _13: value = call_runtime list_push(const empty_list, _2)
+  goto bb1(_13)
+}
+

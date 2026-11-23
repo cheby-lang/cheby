@@ -432,7 +432,8 @@ impl BodyCx<'_, '_> {
     /// instruction it computes, on its raw arguments.
     /// `list::set` is the helper `list_set` instead, which owns the list
     /// and the item, so a unique list is written in place without a
-    /// temporary. The result
+    /// temporary, and `map::upsert` is the steps of `upsert.rs`, which call
+    /// the callback from here. The result
     /// is used as it comes: a scalar stays unboxed, a `Nil` result is the
     /// static `Nil`, and a counted one is owned by the caller. In tail
     /// position (`tail`) a Cheby function returns it as a uniform word,
@@ -462,6 +463,11 @@ impl BodyCx<'_, '_> {
             let value = crate::kernels_instr::rvalue(op, &params, ret_repr, args)?;
             let raw = self.b.assign(ret_repr, value)?;
             return self.kernel_result(Operand::Local(raw), ret_repr, ret_ty, tail);
+        }
+        if &*symbol == crate::lower::upsert::MAP_UPSERT {
+            // `map::upsert` in steps, with the callback called from here
+            // (`upsert.rs`).
+            return self.call_upsert(args, ret_ty, tail);
         }
         if &*symbol == LIST_SET {
             // `list::set` takes its list and its item over, so code
@@ -541,7 +547,7 @@ impl BodyCx<'_, '_> {
     /// The result of a direct kernel call, `result` of `repr`, converted to
     /// `ret_ty`'s representation, or returned as a uniform word in tail
     /// position (`tail`).
-    fn kernel_result(
+    pub(super) fn kernel_result(
         &mut self,
         result: Operand,
         repr: Repr,

@@ -90,6 +90,47 @@ fn a_local_closure_call_is_its_code() {
     assert!(!counted.function("app", "app::scaled").contains("alloc"));
 }
 
+/// A constructor whose only uses read its tag and its fields is taken
+/// apart (`scalar_ctors`): in `unwrapped`, the inlined `flatten` reads
+/// the `Some` built here, which goes. A field that is a constant, here
+/// the inner `None`, stays a definition, so a read of its fields in a
+/// case that cannot run still names a defined local.
+#[test]
+fn a_constructor_only_read_is_taken_apart() {
+    let source = "import std::io
+
+pub fn flatten<T>(o: Option<Option<T>>) -> Option<T> {
+  case o {
+    Some(inner) => inner
+    None => None
+  }
+}
+
+fn unwrapped(x: Int) -> Option<Int> {
+  flatten(Some(Some(x)))
+}
+
+fn main() {
+  let inner_none: Option<Option<Int>> = Some(None)
+  assert flatten(inner_none) == None
+  let v = unwrapped(4)
+  io::println(\"{v:?}\")
+}
+";
+    let lowered = lower_source_release(&[("", source)], false);
+    let unwrapped = lowered.function("app", "app::unwrapped");
+    assert_eq!(
+        unwrapped.matches("alloc ctor Some").count(),
+        1,
+        "{unwrapped}"
+    );
+    for gone in ["field", "read_tag", "call"] {
+        assert!(!unwrapped.contains(gone), "{gone}:\n{unwrapped}");
+    }
+    let counted = lower_source_release(&[("", source)], true);
+    assert!(counted.function("app", "app::main").contains("println"));
+}
+
 /// Folding settles the whole program: `main` computes no product at run
 /// time.
 #[test]

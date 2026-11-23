@@ -1,5 +1,5 @@
-panicked at tests/ui/11-errors-and-panics/backtrace/kernel_callback.cheby:13:16:
+panicked at tests/ui/11-errors-and-panics/backtrace/kernel_callback.cheby:15:16:
 cannot update 1
 backtrace:
-  in ui_test::refuse at tests/ui/11-errors-and-panics/backtrace/kernel_callback.cheby:13:16
+  in ui_test::refuse at tests/ui/11-errors-and-panics/backtrace/kernel_callback.cheby:15:16
   <called from outside Cheby code>

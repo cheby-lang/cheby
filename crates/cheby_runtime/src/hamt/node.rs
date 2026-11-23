@@ -322,8 +322,8 @@ fn unique(word: Word) -> bool {
 }
 
 /// The word left in a slot whose value was moved out (a tagged 0, which
-/// freeing skips).
-pub(super) const HOLE: Word = 1;
+/// freeing skips), also by generated code (`abi::map::HOLE`).
+pub(super) const HOLE: Word = abi::map::HOLE.cast_unsigned();
 
 // ---------------------------------------------------------------------
 // Roots

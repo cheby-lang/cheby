@@ -539,6 +539,44 @@ mod tests {
         assert_eq!(ran.domain.live_objects(), 0);
     }
 
+    /// A key that holds a function raises in `cheby_rt_map_upsert` as in
+    /// the kernel, `EqualityOnFunction`, and the map it was given is
+    /// released: a unique one whole, a shared one by one reference.
+    #[test]
+    fn map_upsert_releases_its_map_when_the_key_cannot_be_hashed() {
+        let ran = on_flag_entry(EntryMode::Test, None, Callbacks::default(), |ctx| {
+            let key = crate::generic::tests::closure(&[]);
+            let one = values::int_word(1);
+            // SAFETY: live words, borrowed; the empty map is static.
+            let build = || unsafe { hamt::cheby_map_insert(hamt::cheby_map_new(), one, one) };
+            let (unique, shared) = (build(), build());
+            // SAFETY: a live map; the test now holds two references.
+            unsafe { rc::dup(shared) };
+            let mut at = 0;
+            let ctx_ptr = std::ptr::from_ref(ctx).cast_mut();
+            // SAFETY: an owned map, given up, a live key and a writable word.
+            let first = unsafe { hamt::cheby_rt_map_upsert(ctx_ptr, unique, key, &raw mut at) };
+            let first_flag = flag_of(ctx);
+            record::take_unwound(ctx);
+            // SAFETY: as above; the test keeps its other reference.
+            let second = unsafe { hamt::cheby_rt_map_upsert(ctx_ptr, shared, key, &raw mut at) };
+            // SAFETY: a live map and key, borrowed.
+            let still = unsafe { hamt::cheby_map_has_key(shared, one) };
+            // SAFETY: the test's references.
+            unsafe {
+                rc::drop(shared);
+                rc::drop(key);
+            }
+            (first, first_flag, second, still, at)
+        });
+        let (first, first_flag, second, still, at) = ran.value;
+        assert_eq!((first, first_flag, second), (0, unwind_flag::PANIC, 0));
+        assert!(still);
+        assert_eq!(at, 0, "nothing is written when it raises");
+        assert_eq!(report(&ran.outcome).kind, PanicKind::EqualityOnFunction);
+        assert_eq!(ran.domain.live_objects(), 0);
+    }
+
     /// A one-field value of a test type registered as `name` with the test
     /// hooks: the type's layout id.
     fn hooked_type(name: &str) -> abi::LayoutId {
@@ -1054,6 +1092,7 @@ mod tests {
     const COUNTS: &str = "adds one to a counter of the current domain (D-768)";
     const LIST_GET: &str = "reads an element whose index lowering checked";
     const MAP_VALUE_AT: &str = "reads and dups the value word a lookup of a held map found";
+    const MAP_SLOT: &str = "moves a word out of a slot an upsert of a held map opened";
     const STATIC: &str = "returns a static object";
     const READS_STATIC: &str = "reads its arguments and returns a static object (D-902)";
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
@@ -1136,6 +1175,7 @@ mod tests {
         ("list/kernels.rs", "cheby_list_length", READS),
         ("hamt/kernels.rs", "cheby_map_new", STATIC),
         ("hamt/kernels.rs", "cheby_rt_map_value_at", MAP_VALUE_AT),
+        ("hamt/kernels.rs", "cheby_rt_map_slot_take", MAP_SLOT),
         ("hamt/kernels.rs", "cheby_map_size", READS),
         ("hamt/kernels.rs", "cheby_map_is_empty", READS),
         ("hamt/kernels.rs", "cheby_set_new", STATIC),

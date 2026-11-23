@@ -1,0 +1,6 @@
+panicked at tests/ui/11-errors-and-panics/backtrace/direct_upsert_callback.cheby:13:16:
+cannot update 1
+backtrace:
+  in ui_test::refuse at tests/ui/11-errors-and-panics/backtrace/direct_upsert_callback.cheby:13:16
+  in ui_test::update at tests/ui/11-errors-and-panics/backtrace/direct_upsert_callback.cheby:19:14
+  in ui_test::main at tests/ui/11-errors-and-panics/backtrace/direct_upsert_callback.cheby:24:11

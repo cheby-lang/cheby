@@ -1,0 +1,68 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-698, D-697, D-525, D-1765
+//! A panic in the callback of a direct call of `map::upsert`, which the
+//! caller's code calls, unwinds through the steps of the upsert: the map
+//! the steps opened, the key and the value moved out to the callback are
+//! each released once, so the scope that catches the panic leaves nothing
+//! leaked. That holds for a present and an absent key, for an empty map,
+//! for a map another value holds, which is unchanged and usable afterwards,
+//! and for a panic in an upsert nested in the callback of another.
+
+import std::fiber
+import std::io
+import std::list
+import std::map
+import std::map::{Map}
+import std::string
+
+fn refuse(old: Option<List<String>>) -> List<String> {
+  case old {
+    Some(xs) => {
+      let n = list::length(xs)
+      panic as "cannot update a list of {n}"
+    }
+    None => panic as "cannot add"
+  }
+}
+
+/// Runs `body` in a scope and prints how it ended.
+fn caught(label: String, body: fn() -> Int) {
+  let outcome = {
+    use _ <- fiber::scope()
+    body()
+  }
+  case outcome {
+    Ok(n) => io::println("{label}: {n}")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("{label}: {text}")
+    }
+  }
+}
+
+fn lists() -> Map<String, List<String>> {
+  map::from_list([("a", [string::add("x", "1")]), ("b", ["y", "z"])])
+}
+
+fn main() {
+  caught("present", fn() { map::size(map::upsert(lists(), "a", refuse)) })
+  caught("absent", fn() { map::size(map::upsert(lists(), "c", refuse)) })
+  caught("empty", fn() { map::size(map::upsert(map::new(), "c", refuse)) })
+  let shared = lists()
+  caught("shared", fn() { map::size(map::upsert(shared, "b", refuse)) })
+  let after = list::sort(map::to_list(shared))
+  io::println("{after:?}")
+  let outer = map::from_list([(1, shared)])
+  caught("nested", fn() {
+    let grown = map::upsert(outer, 1, fn(found) {
+      case found {
+        Some(inner) => map::upsert(inner, "a", refuse)
+        None => map::new()
+      }
+    })
+    map::size(grown)
+  })
+  let still = map::size(shared) + map::size(outer)
+  io::println("still {still}")
+}

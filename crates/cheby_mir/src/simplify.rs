@@ -13,6 +13,16 @@
 //!   predecessor;
 //! - comparisons, `not`, checked arithmetic that cannot panic and tag reads
 //!   of constants fold, and so do branches and switches on constants;
+//! - the `Option` that a direct `map::upsert` gives an inlined callback
+//!   that only takes it apart is no `Some`: the arm is chosen by the
+//!   address the upsert kept, and the `Some` arm moves the stored value
+//!   out (`crate::lookup::fold_upsert`);
+//! - a constructor or closure allocated in the function whose only uses
+//!   read its tag and its fields is taken apart: a tag read is its tag, a
+//!   field read the operand it was built from, and the allocation goes,
+//!   when every field that may hold a handle stays live after each read,
+//!   so that the object's release never released such a value
+//!   ([`scalar_ctors`]);
 //! - a jump with a static constructor into a block that only reads its
 //!   tag and switches on it goes to the case directly;
 //! - with the `spec` lever (design T11), what a local is known to hold
@@ -196,6 +206,8 @@ pub fn run(f: &mut Function, tags: &Known) -> Result<bool, Ice> {
     for _ in 0..ROUNDS {
         let mut round = devirt(f, tags)?;
         round |= fold(f, tags);
+        round |= crate::lookup::fold_upsert(f)?;
+        round |= scalar_ctors(f, tags)?;
         round |= same_params(f);
         round |= raw_params(f)?;
         round |= thread(f, tags);
@@ -1922,6 +1934,276 @@ fn join(p: &mut Block, c: Block) {
     }
     p.stmts.extend(c.stmts);
     p.term = c.term;
+}
+
+/// Where a constructor allocated in the function is read: the tag reads
+/// and the field reads, each as its block, its statement and, for a field
+/// read, the local it defines and the operand it reads.
+struct CtorReads {
+    tags: Vec<(BlockId, usize, i64)>,
+    fields: Vec<(BlockId, usize, Local, Operand)>,
+}
+
+/// Takes apart the constructors and closures allocated in `f` whose only
+/// uses read their tag or their fields (module docs): a tag read is the
+/// constructor's tag, a field read is the operand the field was built
+/// from, and the allocation goes, as the `Some` an upsert builds for its
+/// inlined callback and the callback's closure (`lower/upsert.rs`). A constructor is taken apart only
+/// when no release moves (D-205): every field that may hold a handle stays
+/// live after each read, so the object it holds is released where it was,
+/// at the last use of the field read's result. Returns whether anything
+/// changed.
+///
+/// # Errors
+///
+/// An [`Ice`] for an unknown local or malformed blocks.
+fn scalar_ctors(f: &mut Function, tags: &Known) -> Result<bool, Ice> {
+    let candidates: Vec<(Local, LayoutRef, Vec<Operand>)> = f
+        .blocks
+        .iter()
+        .flat_map(|b| &b.stmts)
+        .filter_map(|s| match s {
+            Stmt::Assign {
+                dst,
+                value:
+                    Rvalue::Alloc {
+                        layout: layout @ (LayoutRef::Ctor(_) | LayoutRef::Closure(_)),
+                        fields,
+                    },
+            } => Some((*dst, *layout, fields.clone())),
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => None,
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+    let defs = definitions(f);
+    let mut changed = false;
+    for (alloc, layout, fields) in candidates {
+        if defs.get(alloc.index()).copied() != Some(1) {
+            continue;
+        }
+        let Some(reads) = ctor_reads(f, alloc, layout, &fields, tags)? else {
+            continue;
+        };
+        let mut trial = f.clone();
+        let mut subst: FxHashMap<Local, Operand> = FxHashMap::default();
+        for b in &mut trial.blocks {
+            for s in &mut b.stmts {
+                if let Stmt::Assign {
+                    dst,
+                    value: v @ Rvalue::Alloc { .. },
+                } = s
+                    && *dst == alloc
+                {
+                    *v = Rvalue::Use(Operand::Const(Const::Nil));
+                }
+            }
+        }
+        for &(block, at, tag) in &reads.tags {
+            set_value(
+                &mut trial,
+                block,
+                at,
+                Rvalue::Use(Operand::Const(Const::Int(tag))),
+            );
+        }
+        for (block, at, dst, op) in &reads.fields {
+            // The definition stays a move, so a use where only a local may
+            // stand still reads the field's value. A local stands for the
+            // field's local everywhere; a constant is left to the passes
+            // that fold a constant's uses, which know where one may stand.
+            set_value(&mut trial, *block, *at, Rvalue::Use(op.clone()));
+            if let Operand::Local(_) = op {
+                subst.insert(*dst, op.clone());
+            }
+        }
+        substitute(&mut trial, &subst);
+        if !keeps_releases(&trial, &fields, &reads)? {
+            continue;
+        }
+        *f = trial;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// How often each local of `f` is defined: as a parameter of the function
+/// or of a block, or by a statement.
+fn definitions(f: &Function) -> Vec<u32> {
+    let mut defs = vec![0_u32; f.locals.len()];
+    let mut add = |l: Local| {
+        if let Some(n) = defs.get_mut(l.index()) {
+            *n = n.saturating_add(1);
+        }
+    };
+    f.params.iter().copied().for_each(&mut add);
+    for b in &f.blocks {
+        b.params.iter().copied().for_each(&mut add);
+        for s in &b.stmts {
+            if let Stmt::Assign { dst, .. } = s {
+                add(*dst);
+            }
+        }
+    }
+    defs
+}
+
+/// The reads of `alloc`, an allocation of `layout`, a constructor or a
+/// closure, with `fields`, when every use of it reads a constructor's
+/// tag, which `tags` knows, or one of its fields into a local of the
+/// field's representation; `None` when anything else uses it, or a read
+/// would take a closure's code word.
+fn ctor_reads(
+    f: &Function,
+    alloc: Local,
+    layout: LayoutRef,
+    fields: &[Operand],
+    tags: &Known,
+) -> Result<Option<CtorReads>, Ice> {
+    let mut reads = CtorReads {
+        tags: Vec::new(),
+        fields: Vec::new(),
+    };
+    for (id, b) in f.blocks.iter_enumerated() {
+        if b.term.uses().iter().any(|&(l, _)| l == alloc) {
+            return Ok(None);
+        }
+        for (at, s) in b.stmts.iter().enumerate() {
+            let uses = match s {
+                Stmt::Assign { value, .. } | Stmt::Eval(value) => value.uses(),
+                Stmt::Dup(l) | Stmt::Drop(l) => vec![(*l, crate::ir::UseKind::Owned)],
+                Stmt::DropKeep { local, .. } => vec![(*local, crate::ir::UseKind::Owned)],
+                Stmt::ClearUnwind => Vec::new(),
+            };
+            if !uses.iter().any(|&(l, _)| l == alloc) {
+                continue;
+            }
+            match s {
+                Stmt::Assign {
+                    value:
+                        Rvalue::ReadTag {
+                            base: Operand::Local(base),
+                            ty,
+                        },
+                    ..
+                } if *base == alloc => {
+                    let LayoutRef::Ctor(ctor) = layout else {
+                        return Ok(None);
+                    };
+                    let Some(tag) = tags.tag(ctor, *ty) else {
+                        return Ok(None);
+                    };
+                    reads.tags.push((id, at, i64::from(tag)));
+                }
+                Stmt::Assign {
+                    dst,
+                    value:
+                        Rvalue::Field {
+                            base,
+                            layout: read,
+                            field,
+                        },
+                } if *base == alloc && *read == layout => {
+                    let Some(op) = usize::try_from(*field).ok().and_then(|i| fields.get(i)) else {
+                        return Ok(None);
+                    };
+                    if matches!(op, Operand::Const(Const::Code(_))) {
+                        return Ok(None);
+                    }
+                    let want = f.local(*dst)?.repr;
+                    let repr = match op {
+                        Operand::Local(l) => f.local(*l)?.repr,
+                        Operand::Const(c) => const_repr(c),
+                    };
+                    if repr != want {
+                        return Ok(None);
+                    }
+                    reads.fields.push((id, at, *dst, op.clone()));
+                }
+                Stmt::Assign { .. }
+                | Stmt::Eval(_)
+                | Stmt::Dup(_)
+                | Stmt::Drop(_)
+                | Stmt::DropKeep { .. }
+                | Stmt::ClearUnwind => return Ok(None),
+            }
+        }
+    }
+    Ok(Some(reads))
+}
+
+/// The representation of constant `c` as an operand.
+const fn const_repr(c: &Const) -> Repr {
+    match c {
+        Const::Int(_) => Repr::Int,
+        Const::Float(_) => Repr::Float,
+        Const::Bool(_) => Repr::Bool,
+        Const::Sized { repr, .. } => *repr,
+        Const::Str(_)
+        | Const::Nil
+        | Const::StaticCtor(_)
+        | Const::FnValue(_)
+        | Const::Code(_)
+        | Const::EmptyList
+        | Const::Static(_)
+        | Const::BuiltinDesc(_)
+        | Const::Ctx
+        | Const::ErrNil => Repr::Value,
+    }
+}
+
+/// Replaces the value of statement `at` of `block`, an assignment.
+fn set_value(f: &mut Function, block: BlockId, at: usize, value: Rvalue) {
+    if let Some(Stmt::Assign { value: v, .. }) =
+        f.blocks.get_mut(block).and_then(|b| b.stmts.get_mut(at))
+    {
+        *v = value;
+    }
+}
+
+/// Whether `trial`, a function whose constructor of `fields` was taken
+/// apart at `reads`, keeps every field that may hold a handle live after
+/// each read: then the constructor's release, after its last read, never
+/// released the last reference of such a field, and nothing moves.
+fn keeps_releases(trial: &Function, fields: &[Operand], reads: &CtorReads) -> Result<bool, Ice> {
+    let plain = plain_locals(trial);
+    let held: Vec<Local> = fields
+        .iter()
+        .filter_map(Operand::local)
+        .filter(|l| plain.get(l.index()) != Some(&true))
+        .collect();
+    if held.is_empty() {
+        return Ok(true);
+    }
+    let live = Liveness::compute(trial)?;
+    let points = reads
+        .tags
+        .iter()
+        .map(|&(b, at, _)| (b, at))
+        .chain(reads.fields.iter().map(|&(b, at, _, _)| (b, at)));
+    for (block, at) in points {
+        let b = trial.block(block)?;
+        let mut after: rustc_hash::FxHashSet<Local> = live
+            .live_out
+            .get(block)
+            .map_or_else(Default::default, |s| s.iter().copied().collect());
+        after.extend(b.term.uses().into_iter().map(|(l, _)| l));
+        for s in b.stmts.iter().skip(at.saturating_add(1)) {
+            if let Stmt::Assign { value, .. } | Stmt::Eval(value) = s {
+                after.extend(value.uses().into_iter().map(|(l, _)| l));
+            }
+        }
+        if !held.iter().all(|l| after.contains(l)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Removes unused definitions of pure values and unused block parameters

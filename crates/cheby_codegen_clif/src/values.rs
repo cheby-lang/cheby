@@ -853,6 +853,24 @@ impl Translator<'_, '_> {
             self.dup(value)?;
             return Ok(Some(value));
         }
+        if let Some(value) = self.upsert_read_inline(helper, args)? {
+            // A read of an upsert after its `map_upsert`.
+            return Ok(Some(value));
+        }
+        if let (RuntimeFn::MapUpsertStore, [map, address, key, value]) = (helper, args) {
+            // The upsert's store, inline but for an empty map.
+            return self.upsert_store(map, address, key, value).map(Some);
+        }
+        if let (RuntimeFn::MapUpsertFound, [_, address]) = (helper, args) {
+            // The map operand only keeps the map held; the runtime's
+            // helper takes the address alone.
+            let address = self.operand(address)?;
+            let ctx = self.ctx()?;
+            return Ok(Some(self.edge_runtime_value(
+                RuntimeFunc::MapUpsertFound,
+                &[ctx, address],
+            )?));
+        }
         if helper == RuntimeFn::ListUnconsHead {
             // The word the `list_uncons` right before it wrote (D-909).
             return self.uncons_word().map(Some);
@@ -891,6 +909,12 @@ impl Translator<'_, '_> {
             let slot = self.make_uncons_slot();
             vals.push(self.b.ins().stack_addr(types::I64, slot, 0));
         }
+        if helper == RuntimeFn::MapUpsert {
+            // Where it writes the word the `map_upsert_address` after it
+            // reads, as `list_uncons` writes its element.
+            let slot = self.make_upsert_slot();
+            vals.push(self.b.ins().stack_addr(types::I64, slot, 0));
+        }
         if helper == RuntimeFn::ScopeClose {
             // The wait at a scope's end (D-856).
             self.store_wait_frame()?;
@@ -912,6 +936,104 @@ impl Translator<'_, '_> {
             .uncons_slot
             .ok_or_else(|| CodegenError::ice("a `list_uncons_head` without its `list_uncons`"))?;
         Ok(self.b.ins().stack_load(types::I64, types::I64, slot, 0))
+    }
+
+    /// The reads of an upsert after its `map_upsert` (`cheby_mir`'s
+    /// `lower/upsert.rs`), which call nothing: `map_upsert_address` loads
+    /// the word that `map_upsert` wrote to its stack slot, and
+    /// `map_slot_take` loads the value at the address and stores the
+    /// placeholder `HOLE` (the tagged word 1) there; under `checked_rc` the
+    /// latter calls the runtime's helper. `None` for every other helper.
+    fn upsert_read_inline(
+        &mut self,
+        helper: RuntimeFn,
+        args: &[Operand],
+    ) -> Result<Option<Value>, CodegenError> {
+        match (helper, args) {
+            (RuntimeFn::MapUpsertAddress, [_]) => {
+                let slot = self.upsert_slot.ok_or_else(|| {
+                    CodegenError::ice("a map_upsert_address without its map_upsert")
+                })?;
+                Ok(Some(self.b.ins().stack_load(
+                    types::I64,
+                    types::I64,
+                    slot,
+                    0,
+                )))
+            }
+            (RuntimeFn::MapSlotTake, [_, address]) => {
+                let address = self.operand(address)?;
+                if self.opts.checked_rc {
+                    return Ok(Some(
+                        self.runtime_value(RuntimeFunc::MapSlotTake, &[address])?,
+                    ));
+                }
+                let flags = MemFlagsData::trusted();
+                let value = self.b.ins().load(types::I64, flags, address, 0);
+                let hole = self.b.ins().iconst(types::I64, abi::map::HOLE);
+                self.b.ins().store(flags, hole, address, 0);
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `map_upsert_store`, the last step of an upsert: the value stored at
+    /// the address with its lowest bit cleared and the map as the result,
+    /// or for an empty map (address 1) the runtime's helper, which inserts
+    /// the key and may raise, in a cold block. Under `checked_rc` the
+    /// helper does both.
+    fn upsert_store(
+        &mut self,
+        map: &Operand,
+        address: &Operand,
+        key: &Operand,
+        value: &Operand,
+    ) -> Result<Value, CodegenError> {
+        let map = self.operand(map)?;
+        let address = self.operand(address)?;
+        let key = self.operand(key)?;
+        let value = self.operand(value)?;
+        if self.opts.checked_rc {
+            let ctx = self.ctx()?;
+            return self.edge_runtime_value(
+                RuntimeFunc::MapUpsertStore,
+                &[ctx, map, address, key, value],
+            );
+        }
+        let store = self.b.create_block();
+        let empty = self.b.create_block();
+        self.b.set_cold_block(empty);
+        let join = self.b.create_block();
+        let result = self.b.append_block_param(join, types::I64);
+        let is_empty = self.b.ins().icmp_imm_u(IntCC::Equal, address, 1);
+        self.b.ins().brif(is_empty, empty, &[], store, &[]);
+        self.b.switch_to_block(store);
+        let slot = self.b.ins().band_imm_s(address, -2);
+        self.b.ins().store(MemFlagsData::trusted(), value, slot, 0);
+        self.b.ins().jump(join, &[BlockArg::Value(map)]);
+        self.b.switch_to_block(empty);
+        let ctx = self.ctx()?;
+        let inserted = self.edge_runtime_value(
+            RuntimeFunc::MapUpsertStore,
+            &[ctx, map, address, key, value],
+        )?;
+        self.b.ins().jump(join, &[BlockArg::Value(inserted)]);
+        self.b.switch_to_block(join);
+        Ok(result)
+    }
+
+    /// The stack slot where a `map_upsert` writes the word for its
+    /// `map_upsert_address`, made at the function's first one.
+    pub(crate) fn make_upsert_slot(&mut self) -> StackSlot {
+        if let Some(slot) = self.upsert_slot {
+            return slot;
+        }
+        let slot =
+            self.b
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+        self.upsert_slot = Some(slot);
+        slot
     }
 
     /// The stack slot where a `list_uncons` writes its element (D-909),

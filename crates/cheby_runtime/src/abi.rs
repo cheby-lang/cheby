@@ -410,6 +410,16 @@ pub mod block_cache {
     }
 }
 
+pub mod map {
+    //! What generated code reads and writes in a map: the placeholder a
+    //! value slot holds while a direct call of `map::upsert` has the value
+    //! moved out (`sym::MAP_UPSERT`).
+
+    /// The placeholder: the tagged word of `Int` 0, which a release of
+    /// the map skips.
+    pub const HOLE: i64 = 1;
+}
+
 /// List roots (D-563): the header (layout [`layout::LIST_FIRST`]), then
 /// the tree, the view's offset into it and the view's length, the last two
 /// raw. Generated code reads a list's length from its root (D-910), and
@@ -833,6 +843,29 @@ pub mod sym {
     /// object on the paths of a reuse and of a drop specialized by
     /// constructor.
     pub const DROP_SAVING: &str = "cheby_rt_drop_saving";
+    /// `uint64_t cheby_rt_map_upsert(ExecCtx *ctx, uint64_t map, uint64_t key, uint64_t *out)`:
+    /// `map::upsert` at a direct call, whose callback generated code calls
+    /// (`MapUpsert`). Consumes `map` and borrows `key`; returns the map
+    /// with a root of the caller's own and the path to the key's entry
+    /// writable, and writes to `out` the address of the entry's value
+    /// slot, that address plus 1 for a key it put in with a placeholder,
+    /// or 1 for an empty map.
+    pub const MAP_UPSERT: &str = "cheby_rt_map_upsert";
+    /// `uint64_t cheby_rt_map_slot_take(uint64_t address)`: the value at a
+    /// present key's slot that [`MAP_UPSERT`] gave, moved out, with the
+    /// placeholder left. Generated code does this inline instead.
+    pub const MAP_SLOT_TAKE: &str = "cheby_rt_map_slot_take";
+    /// `uint64_t cheby_rt_map_upsert_found(ExecCtx *ctx, uint64_t address)`:
+    /// the `Option` an upsert's callback gets for an address [`MAP_UPSERT`]
+    /// gave: `Some` of the stored value, moved out with the placeholder
+    /// left, or the static `None`.
+    pub const MAP_UPSERT_FOUND: &str = "cheby_rt_map_upsert_found";
+    /// `uint64_t cheby_rt_map_upsert_store(ExecCtx *ctx, uint64_t map, uint64_t address, uint64_t key, uint64_t value)`:
+    /// stores the owned `value` over the placeholder in a slot that
+    /// [`MAP_UPSERT`] gave and returns the map it consumes, or for an empty
+    /// map inserts the key, hashing it. Generated code stores into a slot
+    /// inline.
+    pub const MAP_UPSERT_STORE: &str = "cheby_rt_map_upsert_store";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -932,7 +965,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 82] = [
+    pub const ALL: [&str; 86] = [
         ALLOC,
         DUP,
         DROP,
@@ -989,6 +1022,10 @@ pub mod sym {
         ALLOC_MISS_SLOW,
         FREE_UNIQUE_SLOW,
         DROP_SAVING,
+        MAP_UPSERT,
+        MAP_SLOT_TAKE,
+        MAP_UPSERT_FOUND,
+        MAP_UPSERT_STORE,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -1179,9 +1216,9 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(57..80), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(61..84), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
-            sym::ALL.get(80..),
+            sym::ALL.get(84..),
             Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
         );
         assert_eq!(

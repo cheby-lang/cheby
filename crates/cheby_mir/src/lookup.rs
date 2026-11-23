@@ -38,6 +38,10 @@
 //! The pass runs at the end of lowering, before the field reads move
 //! (`crate::hoist`, D-911), so every counting mode and borrowing
 //! inference see its result. A `precounted` body (D-693) is left alone.
+//!
+//! The release clean-up takes the `Option` that a direct `map::upsert`
+//! gives its callback apart in the same shape, once the callback is
+//! inlined ([`fold_upsert`], `crate::simplify`).
 
 use cheby_iface::{Ice, Idx, builtin};
 
@@ -236,6 +240,41 @@ fn plan(
     kind: Kind,
     args: Vec<Operand>,
 ) -> Result<Option<Plan>, Ice> {
+    let Some(apart) = taken_apart(f, graph, uses, block, result)? else {
+        return Ok(None);
+    };
+    Ok(Some(Plan {
+        result,
+        tag: apart.tag,
+        block,
+        some: apart.some,
+        none: apart.none,
+        kind,
+        args,
+        none_used: apart.none_used,
+    }))
+}
+
+/// How an `Option` defined in a block is taken apart at once: the tag read
+/// that the block's switch reads, the switch's targets for `Some` and
+/// `None`, and whether a block the `None` target dominates uses it.
+struct Apart {
+    tag: Local,
+    some: BlockId,
+    none: BlockId,
+    none_used: bool,
+}
+
+/// How the `Option` `result`, defined in `block`, is taken apart there,
+/// or `None` when it is not only taken apart at once (module
+/// documentation).
+fn taken_apart(
+    f: &Function,
+    graph: &Graph,
+    uses: &Uses,
+    block: BlockId,
+    result: Local,
+) -> Result<Option<Apart>, Ice> {
     let b = f.block(block)?;
     let Terminator::Switch {
         on: Operand::Local(tag),
@@ -302,14 +341,10 @@ fn plan(
     if tag_reads != 1 {
         return Ok(None);
     }
-    Ok(Some(Plan {
-        result,
+    Ok(Some(Apart {
         tag,
-        block,
         some,
         none,
-        kind,
-        args,
         none_used,
     }))
 }
@@ -505,6 +540,170 @@ fn assign(dst: Local, value: Rvalue) -> Stmt {
 
 fn compare(op: CmpOp, lhs: Operand, rhs: Operand, repr: Repr) -> Rvalue {
     Rvalue::Compare { op, lhs, rhs, repr }
+}
+
+/// The release clean-up's rewrite of the `Option` that a direct
+/// `map::upsert` gives its callback (`lower/upsert.rs`), once the inlined
+/// callback only takes it apart at once, in the shape of the module
+/// documentation: `map_upsert_found` goes, the arm is chosen by the
+/// address's lowest bit, which is 0 for a present key, the `Some` arm
+/// starts by moving the stored value out with `map_slot_take`, and each
+/// read of the `Some`'s field is that value. In the `None` arm the
+/// `Option`, if anything still uses it, is the static `None`. So nothing
+/// is allocated. The value is taken where the `Some` arm starts, right
+/// after the switch, where the `Some` would have released its reference
+/// when no read follows, so no release moves past anything a program sees
+/// (D-205). Returns whether anything changed.
+///
+/// # Errors
+///
+/// An [`Ice`] for malformed MIR.
+pub(crate) fn fold_upsert(f: &mut Function) -> Result<bool, Ice> {
+    if f.precounted {
+        return Ok(false);
+    }
+    let calls: Vec<(BlockId, Local, Local, Local)> = f
+        .blocks
+        .iter_enumerated()
+        .flat_map(|(id, b)| b.stmts.iter().map(move |s| (id, s)))
+        .filter_map(|(id, stmt)| {
+            let Stmt::Assign {
+                dst,
+                value:
+                    Rvalue::CallRuntime {
+                        func: RuntimeFn::MapUpsertFound,
+                        args,
+                    },
+            } = stmt
+            else {
+                return None;
+            };
+            match args.as_slice() {
+                [Operand::Local(map), Operand::Local(address)] => Some((id, *dst, *map, *address)),
+                _ => None,
+            }
+        })
+        .collect();
+    if calls.is_empty() {
+        return Ok(false);
+    }
+    let graph = Graph::of(f)?;
+    let uses = Uses::of(f);
+    let mut plans = Vec::new();
+    for (block, result, map, address) in calls {
+        if let Some(apart) = taken_apart(f, &graph, &uses, block, result)? {
+            plans.push((block, result, map, address, apart));
+        }
+    }
+    let changed = !plans.is_empty();
+    for (block, result, map, address, apart) in plans {
+        apply_upsert(f, block, result, map, address, &apart)?;
+    }
+    Ok(changed)
+}
+
+/// Carries out [`fold_upsert`] for the `Option` `result` of the upsert's
+/// `map` and `address`, defined in `block` and taken apart as `apart`.
+fn apply_upsert(
+    f: &mut Function,
+    block: BlockId,
+    result: Local,
+    map: Local,
+    address: Local,
+    apart: &Apart,
+) -> Result<(), Ice> {
+    let missing = || Ice::new("lookup: the planned upsert is gone");
+    let low = temp(f, Repr::U64)?;
+    let present = temp(f, Repr::Bool)?;
+    let value = temp(f, Repr::Value)?;
+    let u64_const = |bits| {
+        Operand::Const(Const::Sized {
+            repr: Repr::U64,
+            bits,
+        })
+    };
+    let test = vec![
+        assign(
+            low,
+            Rvalue::Bitwise {
+                op: crate::ir::BitOp::And,
+                lhs: Operand::Local(address),
+                rhs: u64_const(1),
+                repr: Repr::U64,
+            },
+        ),
+        assign(
+            present,
+            compare(CmpOp::Eq, Operand::Local(low), u64_const(0), Repr::U64),
+        ),
+    ];
+    let b = f
+        .blocks
+        .get_mut(block)
+        .ok_or_else(|| Ice::new("lookup: no such block"))?;
+    let defines =
+        |dst: Local| move |s: &Stmt| matches!(s, Stmt::Assign { dst: d, .. } if *d == dst);
+    let at = b
+        .stmts
+        .iter()
+        .position(defines(result))
+        .ok_or_else(missing)?;
+    let pos = b.pos_at(at);
+    b.remove_stmt(at);
+    b.insert_stmts(at, test, pos);
+    let tag_at = b
+        .stmts
+        .iter()
+        .position(defines(apart.tag))
+        .ok_or_else(missing)?;
+    b.remove_stmt(tag_at);
+    b.term = Terminator::Branch {
+        cond: Operand::Local(present),
+        then_: apart.some,
+        else_: apart.none,
+    };
+    let some = f
+        .blocks
+        .get_mut(apart.some)
+        .ok_or_else(|| Ice::new("lookup: no such block"))?;
+    let pos = some.first_pos();
+    some.insert_stmts(
+        0,
+        [assign(
+            value,
+            Rvalue::CallRuntime {
+                func: RuntimeFn::MapSlotTake,
+                args: vec![Operand::Local(map), Operand::Local(address)],
+            },
+        )],
+        pos,
+    );
+    // Each read of the `Some`'s field is the value taken.
+    for b in &mut f.blocks {
+        for stmt in &mut b.stmts {
+            if let Stmt::Assign { value: v, .. } = stmt
+                && is_some_field_value(v, result)
+            {
+                *v = Rvalue::Use(Operand::Local(value));
+            }
+        }
+    }
+    if apart.none_used {
+        let none = f
+            .blocks
+            .get_mut(apart.none)
+            .ok_or_else(|| Ice::new("lookup: no such block"))?;
+        let pos = none.first_pos();
+        none.insert_stmts(
+            0,
+            [assign(
+                result,
+                Rvalue::Use(Operand::Const(Const::StaticCtor(builtin::NONE))),
+            )],
+            pos,
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

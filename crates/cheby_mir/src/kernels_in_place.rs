@@ -6,7 +6,8 @@
 //! last use gets a line saying that the update is in place when that value
 //! is unique at run time, whether the call goes through the wrapper or,
 //! as a direct call of the kernel, is a foreign call of the symbol at the
-//! call site. Every entry is a `pub` function of `std` with an
+//! call site, or the helper a direct call becomes: `list_set` for
+//! `list::set` and `map_upsert` for `map::upsert`. Every entry is a `pub` function of `std` with an
 //! `@external(native, …)` wrapper (D-455), whose native kernel writes into
 //! a unique first argument: the list root updates (F3), the map and set
 //! updates (§9.3), and the `String` and `Bytes` appends (D-316, D-577).

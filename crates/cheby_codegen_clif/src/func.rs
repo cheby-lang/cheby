@@ -130,6 +130,7 @@ fn build(
         tokens: FxHashSet::default(),
         call_tag: None,
         uncons_slot: None,
+        upsert_slot: None,
         next_scalar_head: None,
         uncons_scalar: None,
         self_loop: None,
@@ -207,6 +208,9 @@ pub(crate) struct Translator<'a, 'f> {
     /// The stack slot where a `list_uncons` writes the element that the
     /// `list_uncons_head` right after it reads, made at the first one.
     pub(crate) uncons_slot: Option<StackSlot>,
+    /// The stack slot where a `map_upsert` writes the word that the
+    /// `map_upsert_address` after it reads, made at the first one.
+    pub(crate) upsert_slot: Option<StackSlot>,
     /// The representation of the number that the statement after the one
     /// being translated reads, when it is a head of a pattern step read
     /// as a raw number (`list_uncons_head_float`): the inline step then

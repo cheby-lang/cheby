@@ -605,7 +605,29 @@ fn the_builder_refuses_misplaced_edges() {
 
 #[test]
 fn the_scope_helpers() {
-    assert_eq!(RuntimeFn::ALL.len(), 25);
+    assert_eq!(RuntimeFn::ALL.len(), 30);
+    // An upsert's first step takes the map over and may raise; the steps
+    // after it only read and write the slot it opened.
+    assert_eq!(
+        RuntimeFn::MapUpsert.params(),
+        [
+            (Repr::Value, UseKind::Owned),
+            (Repr::Value, UseKind::Borrowed)
+        ]
+    );
+    assert!(RuntimeFn::MapUpsert.may_unwind());
+    assert_eq!(RuntimeFn::MapUpsertAddress.ret(), Some(Repr::U64));
+    assert!(RuntimeFn::MapUpsertFound.may_unwind());
+    assert!(RuntimeFn::MapUpsertStore.may_unwind());
+    assert_eq!(
+        RuntimeFn::MapUpsertStore.params(),
+        [
+            (Repr::Value, UseKind::Owned),
+            (Repr::U64, UseKind::Borrowed),
+            (Repr::Value, UseKind::Borrowed),
+            (Repr::Value, UseKind::Owned),
+        ]
+    );
     // `list_set` takes its list and its item over, and `map_find` and
     // `map_value_at` only read.
     assert_eq!(
@@ -669,6 +691,8 @@ fn the_scope_helpers() {
             RuntimeFn::ListUnconsHeadF32,
             RuntimeFn::ListGetFloat,
             RuntimeFn::ListGetF32,
+            RuntimeFn::MapUpsertAddress,
+            RuntimeFn::MapSlotTake,
         ]
     );
     assert_eq!(Const::Ctx.repr(), Repr::U64);

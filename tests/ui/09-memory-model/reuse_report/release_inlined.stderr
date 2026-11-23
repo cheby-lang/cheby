@@ -1,2 +1,1 @@
-reuse: tests/ui/09-memory-model/reuse_report/release_inlined.cheby:19:3: building `Point` reuses `p` when it is unique
-reuse: tests/ui/09-memory-model/reuse_report/release_inlined.cheby:27:21: building `Point` allocates: no value of the same size dies before it
+reuse: tests/ui/09-memory-model/reuse_report/release_inlined.cheby:22:3: building `Point` reuses `p` when it is unique

@@ -128,11 +128,20 @@ pub enum RuntimeFunc {
     /// `void cheby_rt_drop_saving(ExecCtx *ctx, uint64_t value)`: `Drop`, for the cold
     /// drop of a shared object on the paths of a reuse and of a specialized drop.
     DropSaving,
+    /// `uint64_t cheby_rt_map_upsert(ExecCtx *ctx, uint64_t map, uint64_t key, uint64_t *out)`.
+    MapUpsert,
+    /// `uint64_t cheby_rt_map_slot_take(uint64_t address)`.
+    MapSlotTake,
+    /// `uint64_t cheby_rt_map_upsert_found(ExecCtx *ctx, uint64_t address)`.
+    MapUpsertFound,
+    /// `uint64_t cheby_rt_map_upsert_store(ExecCtx *ctx, uint64_t map, uint64_t address,
+    /// uint64_t key, uint64_t value)`.
+    MapUpsertStore,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 50] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -179,6 +188,10 @@ impl RuntimeFunc {
         Self::AllocMissSlow,
         Self::FreeUniqueSlow,
         Self::DropSaving,
+        Self::MapUpsert,
+        Self::MapSlotTake,
+        Self::MapUpsertFound,
+        Self::MapUpsertStore,
     ];
 
     /// The symbol.
@@ -231,6 +244,10 @@ impl RuntimeFunc {
             Self::AllocMissSlow => sym::ALLOC_MISS_SLOW,
             Self::FreeUniqueSlow => sym::FREE_UNIQUE_SLOW,
             Self::DropSaving => sym::DROP_SAVING,
+            Self::MapUpsert => sym::MAP_UPSERT,
+            Self::MapSlotTake => sym::MAP_SLOT_TAKE,
+            Self::MapUpsertFound => sym::MAP_UPSERT_FOUND,
+            Self::MapUpsertStore => sym::MAP_UPSERT_STORE,
         }
     }
 
@@ -260,7 +277,9 @@ impl RuntimeFunc {
                 (&[Ptr, Ptr], Void)
             }
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
-            Self::BoxU64 | Self::ConstMissing | Self::Debug => (&[Ptr, U64], U64),
+            Self::BoxU64 | Self::ConstMissing | Self::Debug | Self::MapUpsertFound => {
+                (&[Ptr, U64], U64)
+            }
             Self::BoxF64 => (&[Ptr, F64], U64),
             Self::BoxF32 => (&[Ptr, F32], U64),
             Self::FmodF64 => (&[F64, F64], F64),
@@ -269,7 +288,9 @@ impl RuntimeFunc {
             Self::Equal => (&[Ptr, U64, U64, U64], Bool),
             Self::ListLength => (&[U64], I64),
             Self::ListGet => (&[U64, I64], U64),
-            Self::MapValueAt => (&[U64], U64),
+            Self::MapValueAt | Self::MapSlotTake => (&[U64], U64),
+            Self::MapUpsertStore => (&[Ptr, U64, U64, U64, U64], U64),
+            Self::MapUpsert => (&[Ptr, U64, U64, Ptr], U64),
             Self::ListSet => (&[Ptr, U64, I64, U64], U64),
             Self::ListSlice | Self::ListSliceOwned => (&[Ptr, U64, I64, I64], U64),
             Self::StackSlowFrame => (&[Ptr, Ptr, U64], Void),
@@ -339,6 +360,10 @@ impl RuntimeFunc {
                 | Self::AllocMissSlow
                 | Self::FreeUniqueSlow
                 | Self::DropSaving
+                | Self::MapUpsert
+                | Self::MapSlotTake
+                | Self::MapUpsertFound
+                | Self::MapUpsertStore
         )
     }
 
@@ -392,6 +417,10 @@ impl RuntimeFunc {
             Self::AllocMissSlow => 43,
             Self::FreeUniqueSlow => 44,
             Self::DropSaving => 45,
+            Self::MapUpsert => 46,
+            Self::MapSlotTake => 47,
+            Self::MapUpsertFound => 48,
+            Self::MapUpsertStore => 49,
         }
     }
 
@@ -431,6 +460,13 @@ impl RuntimeFunc {
             RuntimeFn::MapFind => (Self::MapFind, true),
             RuntimeFn::MapValueAt => (Self::MapValueAt, false),
             RuntimeFn::ListSet => (Self::ListSet, true),
+            // The address calls nothing: it loads the stack slot that the
+            // `map_upsert` before it wrote, so it needs that call's
+            // declaration only.
+            RuntimeFn::MapUpsert | RuntimeFn::MapUpsertAddress => (Self::MapUpsert, true),
+            RuntimeFn::MapSlotTake => (Self::MapSlotTake, false),
+            RuntimeFn::MapUpsertFound => (Self::MapUpsertFound, true),
+            RuntimeFn::MapUpsertStore => (Self::MapUpsertStore, true),
         }
     }
 }

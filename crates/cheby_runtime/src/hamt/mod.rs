@@ -44,7 +44,10 @@ pub use kernels::{
     cheby_set_is_empty, cheby_set_new, cheby_set_remove, cheby_set_size, cheby_set_sys_get,
     cheby_set_to_list,
 };
-pub use kernels::{cheby_rt_map_find, cheby_rt_map_value_at};
+pub use kernels::{
+    cheby_rt_map_find, cheby_rt_map_slot_take, cheby_rt_map_upsert, cheby_rt_map_upsert_found,
+    cheby_rt_map_upsert_store, cheby_rt_map_value_at,
+};
 pub use node::{Collection, EMPTY_MAP, EMPTY_SET, StaticRoot};
 
 use crate::abi::Word;
