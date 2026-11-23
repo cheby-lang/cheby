@@ -130,11 +130,17 @@ fn entry_unwind_releases_the_counted_parameters_on_overflow() {
 /// The same with every function whose frame is not empty split into an
 /// outer function and its large-frame body (D-679, threshold 0): the outer
 /// function of `rec` goes through `cheby_rt_stack_slow_frame_unwind` with
-/// one to four counted parameters, and keeps `cheby_rt_stack_slow_frame`
-/// and its own pad with five (D-743). Without parameters `rec` keeps
-/// nothing across its entry check or its call, whose slow path and callee
-/// may clobber no register of its own then, so its frame is empty and it
-/// is not split.
+/// up to four counted parameters, and keeps `cheby_rt_stack_slow_frame`
+/// and its own pad with five (D-743).
+///
+/// Whether `rec` without parameters is split depends on the target. On
+/// aarch64 it keeps nothing across its entry check or its call, whose slow
+/// path and callee may clobber no register of its own then, so its frame
+/// is empty and it is not split: its entry check calls
+/// `cheby_rt_stack_slow_unwind`. On x86-64 that slow path's seventh
+/// argument goes on the stack (System V passes six in registers), so the
+/// frame holds an outgoing argument area and `rec` is split as with
+/// parameters.
 #[test]
 #[cfg_attr(
     windows,
@@ -143,7 +149,7 @@ fn entry_unwind_releases_the_counted_parameters_on_overflow() {
 fn entry_unwind_releases_the_counted_parameters_of_a_large_frame() {
     for k in COUNTS {
         let outer = overflow_releases_everything(k, 0);
-        if k == 0 {
+        if k == 0 && cfg!(target_arch = "aarch64") {
             assert!(!outer.contains("return_call fn"), "split:\n{outer}");
             assert!(imports(&outer, "cheby_rt_stack_slow_unwind"), "{outer}");
             continue;

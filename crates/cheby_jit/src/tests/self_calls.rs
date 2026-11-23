@@ -328,9 +328,10 @@ fn a_tail_call_of_another_function_is_unchanged() {
 
 /// Under a large frame (D-679, a threshold of 0 splits every function
 /// whose frame is not empty, so `count` boxes and drops its sum to have
-/// one), the unchecked inner body keeps its self tail call on the slot,
-/// which leads through the outer function's check; the loop still runs in
-/// constant stack.
+/// one on aarch64 too, where it has none without; on x86-64 it has one
+/// either way), the unchecked inner body keeps its self tail call on the
+/// slot, which leads through the outer function's check; the loop still
+/// runs in constant stack.
 #[test]
 #[cfg_attr(
     windows,
