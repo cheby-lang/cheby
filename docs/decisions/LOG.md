@@ -3067,5 +3067,6 @@ Open:
 - ~~A read of a list's head as a `Float` in one step, with a flag for who owns the box, would save the dup and the drop that D-1781 measured at 10% of `spectral_norm`.~~ → D-1783
 - ~~An allocation fast path written inline, with a slow path that preserves registers as the entry check's does (D-1775), would remove the float spills around allocation calls in `nbody`'s inner function (D-1772, D-1779).~~ → D-1784
 - Release keeps no records of a package's own modules, so every release command compiles them anew (D-1767). Records need the exported bodies and the folded constant values in their keys (D-1776, D-1782).
-- The x86-64 stubs of D-1775 and the bit comparisons of D-1779 were written on an aarch64 host; Linux CI is the first to run them.
+- ~~The x86-64 stubs of D-1775 and the bit comparisons of D-1779 were written on an aarch64 host; Linux CI is the first to run them.~~ Done: the stubs of D-1775 and D-1784 passed the runtime's tests for `x86_64-apple-darwin` under Rosetta, with a register test of their own, and CI passed on Linux x86-64 and on Windows (run 45196654481).
+- On x86-64 the releasing slow path of the entry check takes its seventh argument on the stack, so a function that calls it reserves 16 bytes and never has an empty frame. Six register arguments would avoid that; it changes the helper's signature.
 - A backtrace of release code has no frame for an inlined call (D-1771).

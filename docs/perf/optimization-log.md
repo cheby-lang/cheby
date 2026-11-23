@@ -715,3 +715,10 @@ The Cheby rows of `../cheby-compare` at `4480f4ae`, on a quiet machine, with the
 
 Geometric means against Rust: the executables 3.85× on the CPU group, 7.15× on the data group and 4.85× on both together, where they stood at 9.68×, 13.1× and 10.8× on 2026-11-22. `cheby run`, the debug profile: 4.26×, 7.89× and 5.37×. On CPU and data together the executables are ahead of Clojure (5.13×) and Koka (5.70×).
 
+### Checks behind the final code
+
+- The whole suite, std's own tests in both profiles, the determinism check in both profiles and every lint of CI pass locally.
+- Miri, the address sanitizer and the thread sanitizer passed every step on `4480f4ae`, which holds every runtime change, with no report.
+- CI passed all 17 jobs on `b4cfc7aa` (run 45196654481): Linux and Windows on x86-64 and aarch64, and macOS. Its first run on this branch failed on three lints that only other targets see and on one test that asserted aarch64's frame shape; the stubs themselves needed no change. Before that run, the x86-64 stubs had passed the runtime's tests under Rosetta.
+- One test was timing-dependent and failed once under load: it required an interrupt to arrive during a short loop. It now loops until one has.
+
