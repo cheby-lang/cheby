@@ -59,17 +59,22 @@ use clap::{CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEn
 
 use crate::color::ColorWhen;
 
+// The executables' allocator, the same code for `cheby` (D-890).
+#[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
+#[path = "../../cheby_rt_exe/src/global.rs"]
+mod global;
+
 /// The global allocator of the toolchain and of the programs it runs:
 /// runtime objects are allocated through it (`cheby_runtime::alloc`).
 /// Sanitizer builds keep the system allocator, which the sanitizers
 /// intercept (D-721).
 #[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: global::Mimalloc = global::Mimalloc;
 // Sanitizer builds still depend on mimalloc; this keeps cargo's
 // `unused_dependencies` lint quiet in them.
 #[cfg(any(cheby_sanitize = "address", cheby_sanitize = "thread"))]
-use mimalloc as _;
+use libmimalloc_sys as _;
 
 #[derive(Debug, Parser)]
 #[command(name = "cheby", version, about = "The Cheby toolchain")]

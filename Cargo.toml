@@ -54,13 +54,13 @@ getrandom = "0.3"
 gimli = { version = "0.33", default-features = false, features = ["std", "write"] }
 httparse = "1.10"
 libc = "0.2"
+libmimalloc-sys = { version = "0.1.49", default-features = false }
 libtest-mimic = "0.8"
 loom = "0.7"
 # The language server's protocol (D-1351): synchronous, LSP 3.17.
 lsp-server = "0.10"
 lsp-types = "0.97"
 memchr = "2.8.3"
-mimalloc = "0.1.52"
 mio = { version = "1", features = ["os-poll"] }
 object = { version = "0.39", default-features = false, features = ["read", "std"] }
 parking_lot = "0.12"

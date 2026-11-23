@@ -61,7 +61,7 @@ The crates of the compiler depend on each other in pipeline order (D-284, D-465)
 - `cheby_mir` depends on `cheby_types` and `cheby_iface`.
 - `cheby_codegen_clif` depends on `cheby_mir`, `cheby_iface`, `cheby_diag` and `cheby_runtime`. From the runtime it uses only the `abi` module, which has no state and no dependencies and is the single source of header bits, layout ids, context offsets and runtime symbol names.
 - `cheby_jit` depends on `cheby_codegen_clif`, `cheby_mir`, `cheby_iface` and `cheby_runtime`, and `cheby_driver` on all of the above.
-- `cheby_rt_exe` depends only on `cheby_runtime` and `mimalloc`, and nothing depends on it (D-928).
+- `cheby_rt_exe` depends only on `cheby_runtime` and `libmimalloc-sys`, mimalloc's C API, and nothing depends on it (D-928).
 
 ## 2. Compiler pipeline
 

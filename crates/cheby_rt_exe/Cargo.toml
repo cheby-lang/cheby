@@ -14,7 +14,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 cheby_runtime.workspace = true
-mimalloc.workspace = true
+libmimalloc-sys.workspace = true
 
 [dev-dependencies]
 # `tests/archive.rs` reads the archive's symbol table (D-932, D-1036).
