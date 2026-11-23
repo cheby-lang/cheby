@@ -1,9 +1,10 @@
 //! Lookups whose `Option` is taken apart at once, without the `Some`.
 //!
-//! A direct call of `list::get` or `map::get` is the kernel's foreign
-//! call (`lower/external.rs`), and the kernel allocates a `Some` cell
-//! around the element it found. Most programs match that result at once
-//! and never use it as a value: `let assert Some(x) = list::get(xs, i)`,
+//! A direct call of `list::get`, `map::get` or `bytes::get` is the
+//! kernel's foreign call (`lower/external.rs`), and the first two kernels
+//! allocate a `Some` cell around the element they found. Most programs
+//! match that result at once and never use it as a value:
+//! `let assert Some(x) = list::get(xs, i)`,
 //! `let guard Some(v) = map::get(m, k) else { … }` or a `case` with
 //! `Some(…)` and `None` arms. Lowering then reads the result's tag right
 //! after the call and switches on it, and reads the element as field 0 of
@@ -16,6 +17,13 @@
 //! - `map::get(m, k)`: `map_find` looks the key up once and gives the
 //!   address of the stored value or 0; the arm is chosen by that address,
 //!   and the element is `map_value_at`'s, the word at the address, dup'd.
+//! - `bytes::get(b, i)`: the arm is chosen by `bytes_in_range`, which
+//!   tests `0 <= i < length` with the length the object holds, and the
+//!   byte is `bytes_byte`'s, a load. The kernel allocates nothing, since
+//!   its results are static objects, but it is a call where the read is
+//!   two loads, and the `Some`'s tag and field are two more. The byte is
+//!   boxed where the field was read, and each `unbox` of that word to
+//!   `U8` is the byte itself; a box nothing else reads goes.
 //!
 //! Each field read of the `Some` becomes the element's read, so the
 //! element's count ends where the cell's `dup` of its field left it. In
@@ -24,16 +32,19 @@
 //!
 //! The rewrite is taken only when the shape is exactly that: the tag is
 //! read in the call's block and the block ends in a switch on it; the
-//! `Some` and the `None` target are distinct blocks that only this block
-//! reaches; every other use of the result is a field read of `Some` in a
-//! block the `Some` target dominates, or any use in a block the `None`
-//! target dominates. Anything else, a result kept as a value or passed on,
-//! keeps the call. The values are the kernel's: a negative index, one past
-//! the end and an index no list reaches give `None`, and the key is hashed
-//! and compared as the kernel does, so a key that holds a function value
-//! panics the same way (D-233). Neither the bounds test nor `list_get` and
-//! `map_value_at` can raise, where the kernel could run out of memory for
-//! the cell.
+//! `Some` and the `None` target are distinct blocks, and only this block
+//! reaches the `Some` target; every other use of the result is a field
+//! read of `Some` in a block the `Some` target dominates, or any use in a
+//! block the `None` target dominates when only this block reaches that
+//! target too. Other blocks may reach a `None` target that does not use
+//! the result: the arm of a `_` pattern that a `Some` arm's literal or
+//! guard also falls to. Anything else, a result kept as a value or passed
+//! on, keeps the call. The values are the kernel's: a negative index, one
+//! past the end and an index no list reaches give `None`, and the key is
+//! hashed and compared as the kernel does, so a key that holds a function
+//! value panics the same way (D-233). Neither the bounds tests nor
+//! `list_get`, `map_value_at` and `bytes_byte` can raise, where the
+//! kernel could run out of memory for the cell.
 //!
 //! The pass runs at the end of lowering, before the field reads move
 //! (`crate::hoist`, D-911), so every counting mode and borrowing
@@ -58,11 +69,15 @@ pub const LIST_GET: &str = "cheby_list_get";
 /// The kernel of `map::get`.
 pub const MAP_GET: &str = "cheby_map_get";
 
+/// The kernel of `bytes::get`.
+pub const BYTES_GET: &str = "cheby_bytes_get";
+
 /// Which lookup a call is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     List,
     Map,
+    Bytes,
 }
 
 /// A call the pass rewrites, as the analysis found it.
@@ -140,6 +155,7 @@ fn lookup(stmt: &Stmt) -> Option<(Local, Kind, Vec<Operand>)> {
     let kind = match &**symbol {
         LIST_GET => Kind::List,
         MAP_GET => Kind::Map,
+        BYTES_GET => Kind::Bytes,
         _ => return None,
     };
     (args.len() == 2).then(|| (*dst, kind, args.clone()))
@@ -313,11 +329,7 @@ fn taken_apart(
     let (Some(some), Some(none)) = (target(0), target(1)) else {
         return Ok(None);
     };
-    if some == none
-        || cases.iter().any(|&(c, _)| c > 1)
-        || !graph.only_from(some, block)
-        || !graph.only_from(none, block)
-    {
+    if some == none || cases.iter().any(|&(c, _)| c > 1) || !graph.only_from(some, block) {
         return Ok(None);
     }
     let mut none_used = false;
@@ -338,7 +350,9 @@ fn taken_apart(
             return Ok(None);
         }
     }
-    if tag_reads != 1 {
+    // The static `None` is written where the `None` arm starts, which is
+    // right only when nothing else enters that arm.
+    if tag_reads != 1 || (none_used && !graph.only_from(none, block)) {
         return Ok(None);
     }
     Ok(Some(Apart {
@@ -427,6 +441,25 @@ fn test_and_element(f: &mut Function, plan: &Plan) -> Result<(Local, Vec<Stmt>, 
             };
             (found, test, element)
         }
+        Kind::Bytes => {
+            let [data, index] = plan.args.as_slice() else {
+                return Err(missing());
+            };
+            let found = temp(f, Repr::Bool)?;
+            let test = vec![assign(
+                found,
+                Rvalue::CallRuntime {
+                    func: RuntimeFn::BytesInRange,
+                    args: vec![data.clone(), index.clone()],
+                },
+            )];
+            // The raw byte; `apply` boxes it where the field was read.
+            let element = Rvalue::CallRuntime {
+                func: RuntimeFn::BytesByte,
+                args: vec![data.clone(), index.clone()],
+            };
+            (found, test, element)
+        }
         Kind::Map => {
             let [map, key] = plan.args.as_slice() else {
                 return Err(missing());
@@ -493,12 +526,16 @@ fn apply(f: &mut Function, plan: &Plan) -> Result<(), Ice> {
         else_: plan.none,
     };
     // Each read of the `Some`'s field is a read of the element.
-    for b in &mut f.blocks {
-        for stmt in &mut b.stmts {
-            if let Stmt::Assign { value, .. } = stmt
-                && is_some_field_value(value, plan.result)
-            {
-                *value = element.clone();
+    if plan.kind == Kind::Bytes {
+        byte_reads(f, plan.result, &element)?;
+    } else {
+        for b in &mut f.blocks {
+            for stmt in &mut b.stmts {
+                if let Stmt::Assign { value, .. } = stmt
+                    && is_some_field_value(value, plan.result)
+                {
+                    *value = element.clone();
+                }
             }
         }
     }
@@ -520,6 +557,101 @@ fn apply(f: &mut Function, plan: &Plan) -> Result<(), Ice> {
     // The result is no call's any more (D-852).
     f.sites.retain(|&(l, _)| l != plan.result);
     Ok(())
+}
+
+/// Replaces each read of field 0 of the `Some` `result` of a `bytes::get`
+/// with `read`, the byte as a `U8`, and a box of it into the field's
+/// word. An `unbox` of that word to `U8` is the byte, and a box that
+/// nothing reads any more goes, so a byte that is only matched against
+/// literals and guards is never boxed. Every value is a raw byte or a
+/// tagged word, so no count changes.
+fn byte_reads(f: &mut Function, result: Local, read: &Rvalue) -> Result<(), Ice> {
+    // Each field read: its block, its index and the word it defines.
+    let mut reads: Vec<(BlockId, usize, Local)> = Vec::new();
+    for (id, b) in f.blocks.iter_enumerated() {
+        for (i, stmt) in b.stmts.iter().enumerate() {
+            if let Stmt::Assign { dst, value } = stmt
+                && is_some_field_value(value, result)
+            {
+                reads.push((id, i, *dst));
+            }
+        }
+    }
+    // From the last, so the indexes of the earlier reads stay right.
+    let mut bytes: Vec<(Local, Local)> = Vec::with_capacity(reads.len());
+    for &(id, i, word) in reads.iter().rev() {
+        let byte = temp(f, Repr::U8)?;
+        let block = f
+            .blocks
+            .get_mut(id)
+            .ok_or_else(|| Ice::new("lookup: no such block"))?;
+        let pos = block.pos_at(i);
+        block.remove_stmt(i);
+        block.insert_stmts(
+            i,
+            [
+                assign(byte, read.clone()),
+                assign(
+                    word,
+                    Rvalue::Box {
+                        value: Operand::Local(byte),
+                        from: Repr::U8,
+                    },
+                ),
+            ],
+            pos,
+        );
+        bytes.push((word, byte));
+    }
+    for &(word, byte) in &bytes {
+        let mut boxed_read = false;
+        for b in &mut f.blocks {
+            for stmt in &mut b.stmts {
+                let Stmt::Assign { value, .. } = stmt else {
+                    if stmt_reads(stmt, word) {
+                        boxed_read = true;
+                    }
+                    continue;
+                };
+                if matches!(
+                    value,
+                    Rvalue::Unbox {
+                        value: Operand::Local(w),
+                        to: Repr::U8,
+                    } if *w == word
+                ) {
+                    *value = Rvalue::Use(Operand::Local(byte));
+                } else if value.uses().iter().any(|&(l, _)| l == word) {
+                    boxed_read = true;
+                }
+            }
+            if b.term.uses().iter().any(|&(l, _)| l == word) {
+                boxed_read = true;
+            }
+        }
+        if !boxed_read {
+            for b in &mut f.blocks {
+                if let Some(at) = b.stmts.iter().position(
+                    |s| matches!(s, Stmt::Assign { dst, value: Rvalue::Box { .. } } if *dst == word),
+                ) {
+                    b.remove_stmt(at);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `stmt`, which assigns nothing, reads `local`.
+fn stmt_reads(stmt: &Stmt, local: Local) -> bool {
+    match stmt {
+        Stmt::Eval(value) => value.uses().iter().any(|&(l, _)| l == local),
+        Stmt::Dup(l) | Stmt::Drop(l) => *l == local,
+        Stmt::DropKeep { local: l, keep, .. } => {
+            *l == local || keep.iter().any(|&(_, p)| p == local)
+        }
+        Stmt::Assign { .. } | Stmt::ClearUnwind => false,
+    }
 }
 
 /// Whether `value` reads field 0 of `result` as a `Some`.

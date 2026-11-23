@@ -835,6 +835,10 @@ impl Translator<'_, '_> {
                 abi::list::ROOT_LEN_OFFSET,
             )));
         }
+        if let Some(value) = self.text_inline(helper, args)? {
+            // A byte of a `Bytes` or a test of two strings' lengths.
+            return Ok(Some(value));
+        }
         if let Some(value) = self.steps_inline(helper, args)? {
             // A read of a pair or a heap's slot (`cheby_mir`'s
             // `lower/intrinsic.rs`).
@@ -936,6 +940,83 @@ impl Translator<'_, '_> {
                 "the runtime helper {helper:?} and its C signature disagree on a result"
             ))),
         }
+    }
+
+    /// The reads of text objects that call nothing, or `None` for every
+    /// other helper: `bytes_in_range` and `bytes_byte` (`cheby_mir`'s
+    /// `lookup`), and `str_eq`'s test of the lengths.
+    fn text_inline(
+        &mut self,
+        helper: RuntimeFn,
+        args: &[Operand],
+    ) -> Result<Option<Value>, CodegenError> {
+        if let (RuntimeFn::BytesInRange, [data, index]) = (helper, args) {
+            // A `Bytes` keeps its length in a raw word, a static one too
+            // (D-454). Unsigned, a negative index is above every length.
+            let data = self.operand(data)?;
+            let index = self.operand(index)?;
+            let len = self.b.ins().load(
+                types::I64,
+                MemFlagsData::trusted(),
+                data,
+                abi::string::LEN_OFFSET,
+            );
+            return Ok(Some(self.b.ins().icmp(IntCC::UnsignedLessThan, index, len)));
+        }
+        if let (RuntimeFn::BytesByte, [data, index]) = (helper, args) {
+            // The byte at an index the lookup pass checked is below the
+            // length: a load from the object's bytes, which no count guards.
+            let data = self.operand(data)?;
+            let index = self.operand(index)?;
+            let at = self.b.ins().iadd(data, index);
+            return Ok(Some(self.b.ins().load(
+                types::I8,
+                MemFlagsData::trusted(),
+                at,
+                abi::string::BYTES_OFFSET,
+            )));
+        }
+        if let (RuntimeFn::StrEq, [a, b]) = (helper, args)
+            && !self.opts.checked_rc
+        {
+            return self.str_eq(a, b).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// `str_eq(a, b)`: strings of different lengths differ, which two
+    /// loads tell, and only strings of one length are compared by the
+    /// helper. Both lengths are raw words of the objects, static strings
+    /// included (D-454). Under `checked_rc` the helper's call is the
+    /// whole test, so it checks both objects.
+    fn str_eq(&mut self, a: &Operand, b: &Operand) -> Result<Value, CodegenError> {
+        let a = self.operand(a)?;
+        let b = self.operand(b)?;
+        let compare = self.b.create_block();
+        let join = self.b.create_block();
+        let result = self.b.append_block_param(join, types::I8);
+        let len_a = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            a,
+            abi::string::LEN_OFFSET,
+        );
+        let len_b = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            b,
+            abi::string::LEN_OFFSET,
+        );
+        let same_len = self.b.ins().icmp(IntCC::Equal, len_a, len_b);
+        let differ = self.b.ins().iconst(types::I8, 0);
+        self.b
+            .ins()
+            .brif(same_len, compare, &[], join, &[BlockArg::Value(differ)]);
+        self.b.switch_to_block(compare);
+        let equal = self.runtime_value(RuntimeFunc::StrEq, &[a, b])?;
+        self.b.ins().jump(join, &[BlockArg::Value(equal)]);
+        self.b.switch_to_block(join);
+        Ok(result)
     }
 
     /// The word the `list_uncons` right before the head being translated

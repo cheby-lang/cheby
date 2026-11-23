@@ -1,0 +1,15 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-096, D-318, D-1773
+//! A `let assert Some(byte) = bytes::get(data, i)` whose index is outside
+//! the bytes fails as it always did: the panic is at the pattern and shows
+//! the `None` it did not match, though no kernel ran for the read.
+
+import std::bytes
+import std::io
+
+fn main() {
+  let data = bytes::from_list([1, 2])
+  let assert Some(byte) = bytes::get(data, 2)
+  io::println("{byte}")
+}

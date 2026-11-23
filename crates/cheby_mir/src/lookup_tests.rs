@@ -1,6 +1,6 @@
-//! Tests of the lookup pass: a `list::get` or `map::get` whose `Option`
-//! is taken apart at once reads the element without the `Some`, and every
-//! other use keeps the kernel's call.
+//! Tests of the lookup pass: a `list::get`, `map::get` or `bytes::get`
+//! whose `Option` is taken apart at once reads the element without the
+//! `Some`, and every other use keeps the kernel's call.
 
 use crate::golden_tests::check_golden;
 use crate::test_support::{lower_source, lower_source_uncounted};
@@ -85,12 +85,31 @@ const TAKEN_APART_FNS: [&str; 7] = [
 ];
 
 /// Results used as values: returned, passed on, bound and shown.
-const KEPT: &str = "import std::io
+const KEPT: &str = "import std::bytes
+import std::io
 import std::list
 import std::map
 
 fn returned(xs: List<Int>, i: Int) -> Option<Int> {
   list::get(xs, i)
+}
+
+fn byte_returned(data: bytes::Bytes, i: Int) -> Option<U8> {
+  bytes::get(data, i)
+}
+
+fn byte_shown(data: bytes::Bytes, i: Int) -> String {
+  case bytes::get(data, i) {
+    Some(0x0A) => \"newline\"
+    other => \"{other:?}\"
+  }
+}
+
+fn shared_shown(xs: List<Int>, i: Int) -> String {
+  case list::get(xs, i) {
+    Some(0) => \"zero\"
+    other => \"{other:?}\"
+  }
 }
 
 fn bound(xs: List<Int>, i: Int) -> Option<Int> {
@@ -123,7 +142,11 @@ fn main() {
   let b = bound(xs, 9)
   let c = shown(m, \"a\")
   let d = passed(xs, 1)
-  io::println(\"{a:?} {b:?} {c} {d}\")
+  let data = bytes::from_list([10, 32])
+  let e = byte_returned(data, 0)
+  let f = byte_shown(data, 1)
+  let g = shared_shown(xs, 1)
+  io::println(\"{a:?} {b:?} {c} {d} {e:?} {f} {g}\")
 }
 ";
 
@@ -182,10 +205,144 @@ fn lookups_used_as_values_keep_the_call() {
         ("bound", "cheby_list_get"),
         ("shown", "cheby_map_get"),
         ("passed", "cheby_list_get"),
+        ("byte_returned", "cheby_bytes_get"),
+        // A `_` arm that others enter too and that uses the result.
+        ("byte_shown", "cheby_bytes_get"),
+        ("shared_shown", "cheby_list_get"),
     ] {
         let f = lowered.function("app", &format!("app::{name}"));
         assert!(f.contains(&format!("call_foreign \"{symbol}\"")), "{f}");
         assert!(!f.contains("list_length"), "{f}");
         assert!(!f.contains("map_find"), "{f}");
+        assert!(!f.contains("bytes_in_range"), "{f}");
     }
+}
+
+/// The forms of a byte read that a scanner writes: literals, or-patterns
+/// and guards with a `_` arm that the `None` shares, a bound byte used as
+/// a number and as a value, and `let assert`.
+const BYTES: &str = "import std::bytes
+import std::int
+import std::io
+import std::list
+
+fn kind(data: bytes::Bytes, i: Int) -> Int {
+  case bytes::get(data, i) {
+    Some(0x20) | Some(0x0A) => 0
+    Some(0x22) => 1
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => int::from_u8(byte)
+    _ => -1
+  }
+}
+
+fn count_lines(data: bytes::Bytes, i: Int, n: Int) -> Int {
+  case bytes::get(data, i) {
+    Some(0x0A) => count_lines(data, i + 1, n + 1)
+    Some(_) => count_lines(data, i + 1, n)
+    None => n
+  }
+}
+
+fn kept(data: bytes::Bytes, i: Int) -> List<U8> {
+  case bytes::get(data, i) {
+    Some(byte) => [byte]
+    None => []
+  }
+}
+
+fn first(data: bytes::Bytes) -> U8 {
+  let assert Some(byte) = bytes::get(data, 0)
+  byte
+}
+
+fn main() {
+  let data = bytes::from_list([0x31, 0x0A, 0x22])
+  let a = kind(data, 0)
+  let b = count_lines(data, 0, 0)
+  let c = kept(data, 2)
+  let d = first(data)
+  io::println(\"{a} {b} {c:?} {d}\")
+}
+";
+
+/// The functions of [`BYTES`].
+const BYTES_FNS: [&str; 4] = ["kind", "count_lines", "kept", "first"];
+
+#[test]
+fn byte_reads_taken_apart_at_once_call_nothing() {
+    let lowered = lower_source(&[("", BYTES)]);
+    let mut text = String::new();
+    for name in BYTES_FNS {
+        let f = lowered.function("app", &format!("app::{name}"));
+        assert!(!f.contains("cheby_bytes_get"), "{f}");
+        assert!(!f.contains("read_tag"), "{f}");
+        assert!(!f.contains("ctor Some"), "{f}");
+        assert_eq!(f.matches("call_runtime bytes_in_range(").count(), 1, "{f}");
+        text.push_str(&f);
+        text.push('\n');
+    }
+    check_golden("lookup/bytes", &text);
+}
+
+#[test]
+fn a_byte_is_boxed_only_where_a_word_is_used() {
+    let lowered = lower_source_uncounted(&[("", BYTES)]);
+    // Matched against literals and a guard: the byte, never a word.
+    let f = lowered.function("app", "app::kind");
+    assert!(!f.contains("box u8"), "{f}");
+    assert!(!f.contains("unbox u8"), "{f}");
+    assert!(f.contains("call_runtime bytes_byte("), "{f}");
+    // Put into a list: one box, of the byte read.
+    let f = lowered.function("app", "app::kept");
+    assert_eq!(f.matches("call_runtime bytes_byte(").count(), 1, "{f}");
+    assert_eq!(f.matches("= box u8 ").count(), 1, "{f}");
+    // A `Some(_)` arm reads nothing.
+    let f = lowered.function("app", "app::count_lines");
+    assert_eq!(f.matches("call_runtime bytes_byte(").count(), 1, "{f}");
+}
+
+#[test]
+fn a_failed_byte_assert_still_prints_the_none() {
+    let lowered = lower_source_uncounted(&[("", BYTES)]);
+    let f = lowered.function("app", "app::first");
+    assert!(f.contains("= const ctor None"), "{f}");
+    assert!(f.contains("call_runtime debug("), "{f}");
+}
+
+/// A `_` arm that a `Some` arm's literal also falls to, and that does not
+/// use the result, no longer keeps a list's or a map's lookup either.
+const SHARED: &str = "import std::io
+import std::list
+import std::map
+
+fn zero_at(xs: List<Int>, i: Int) -> Bool {
+  case list::get(xs, i) {
+    Some(0) => True
+    _ => False
+  }
+}
+
+fn positive(m: map::Map<String, Int>, k: String) -> Int {
+  case map::get(m, k) {
+    Some(n) when n > 0 => n
+    _ => 0
+  }
+}
+
+fn main() {
+  let a = zero_at([0, 1], 1)
+  let b = positive(map::from_list([(\"a\", 2)]), \"a\")
+  io::println(\"{a} {b}\")
+}
+";
+
+#[test]
+fn a_shared_none_arm_that_ignores_the_result_takes_it_apart() {
+    let lowered = lower_source_uncounted(&[("", SHARED)]);
+    let f = lowered.function("app", "app::zero_at");
+    assert!(!f.contains("cheby_list_get"), "{f}");
+    assert!(f.contains("call_runtime list_get("), "{f}");
+    let f = lowered.function("app", "app::positive");
+    assert!(!f.contains("cheby_map_get"), "{f}");
+    assert!(f.contains("call_runtime map_find("), "{f}");
 }

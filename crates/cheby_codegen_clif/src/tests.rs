@@ -167,13 +167,16 @@ fn runtime_helper_signatures() {
         // An upsert's address is read from the stack slot its
         // `map_upsert` wrote; a heap's slot is a stack address and its
         // first pair a load from it; the loop's check calls the entry
-        // check's slow path with the function's location.
+        // check's slow path with the function's location; a `Bytes`'s
+        // bounds test and byte are loads.
         if matches!(
             helper,
             RuntimeFn::MapUpsertAddress
                 | RuntimeFn::HeapSlot
                 | RuntimeFn::HeapFirst
                 | RuntimeFn::LoopCheck
+                | RuntimeFn::BytesInRange
+                | RuntimeFn::BytesByte
         ) {
             continue;
         }

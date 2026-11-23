@@ -1,0 +1,31 @@
+//! Byte reads that a scanner makes, and string comparisons: `bytes::get`
+//! taken apart at once is a bounds test and a load, and `==` on strings
+//! tests the lengths before it calls.
+
+import std::bytes
+import std::int
+import std::io
+
+/// Counts the lines of `data` from `i` and sums their decimal numbers.
+fn scan(data: bytes::Bytes, i: Int, lines: Int, sum: Int) -> (Int, Int) {
+  case bytes::get(data, i) {
+    Some(0x0A) => scan(data, i + 1, lines + 1, sum)
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => {
+      scan(data, i + 1, lines, sum + int::from_u8(byte) - 0x30)
+    }
+    _ => (lines, sum)
+  }
+}
+
+/// Whether `key` names the field `name`.
+fn is_name(key: String) -> Bool {
+  key == "name"
+}
+
+fn main() {
+  let data = bytes::from_string("12\n3\n")
+  let (lines, sum) = scan(data, 0, 0, 0)
+  let named = is_name("name")
+  let other = is_name("id")
+  io::println("{lines} {sum} {named} {other}")
+}

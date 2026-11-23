@@ -1579,11 +1579,21 @@ pub enum RuntimeFn {
     /// through the statement's edge (D-028, D-124, D-453). Evaluated for
     /// effect ([`Stmt::Eval`]).
     LoopCheck,
+    /// `(data borrowed, index: Int) -> Bool`: whether `index` is in
+    /// `0..length` of a `Bytes`, whose object holds its length in a word
+    /// (D-454): a load and one unsigned comparison. Only the lookup pass
+    /// emits it, for a `bytes::get` taken apart at once
+    /// ([`crate::lookup`]). It cannot raise.
+    BytesInRange,
+    /// `(data borrowed, index: Int) -> U8`: the byte at `index` of a
+    /// `Bytes`, which the lookup pass has checked is in range: a load. It
+    /// cannot raise.
+    BytesByte,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 45] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1627,6 +1637,8 @@ impl RuntimeFn {
         Self::PairLeft,
         Self::PairRight,
         Self::LoopCheck,
+        Self::BytesInRange,
+        Self::BytesByte,
     ];
 
     /// Whether the helper is a head of the pattern step right before it
@@ -1688,7 +1700,9 @@ impl RuntimeFn {
             | Self::HeapStep
             | Self::PairLeft
             | Self::PairRight
-            | Self::LoopCheck => None,
+            | Self::LoopCheck
+            | Self::BytesInRange
+            | Self::BytesByte => None,
         }
     }
 
@@ -1707,7 +1721,8 @@ impl RuntimeFn {
     /// (D-698): false for `StrEq`, `ListLength`, `ListGet`, the heads of a
     /// pattern step, `MapValueAt`, the reads of an element as a raw
     /// number, an upsert's address and `MapSlotTake`, and `BufferStep`,
-    /// `HeapSlot` and the reads of a pair, true for every other helper.
+    /// `HeapSlot`, the reads of a pair and the reads of a `Bytes`, true for
+    /// every other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
         !matches!(
@@ -1728,6 +1743,8 @@ impl RuntimeFn {
                 | Self::HeapFirst
                 | Self::PairLeft
                 | Self::PairRight
+                | Self::BytesInRange
+                | Self::BytesByte
         )
     }
 
@@ -1758,9 +1775,12 @@ impl RuntimeFn {
             Self::ListLength | Self::Debug | Self::EffectCheck | Self::MapUpsertAddress => {
                 &[(Value, Borrowed)]
             }
-            Self::ListGet | Self::ListGetFloat | Self::ListGetF32 => {
-                &[(Value, Borrowed), (Int, Borrowed)]
-            }
+            Self::ListGet
+            | Self::ListGetFloat
+            | Self::ListGetF32
+            | Self::BufferStep
+            | Self::BytesInRange
+            | Self::BytesByte => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
             Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
             Self::ScopeOpen => &[(Bool, Borrowed), (Int, Borrowed), (Int, Borrowed)],
@@ -1784,7 +1804,6 @@ impl RuntimeFn {
             | Self::LoopCheck => &[],
             Self::SortStart => &[(Value, Borrowed)],
             Self::HeapListStart => &[(Value, Borrowed), (Bool, Borrowed), (Value, Borrowed)],
-            Self::BufferStep => &[(Value, Borrowed), (Int, Borrowed)],
             Self::BufferFinish => &[(Value, Owned), (Value, Borrowed)],
             Self::HeapPush => &[
                 (Value, Owned),
@@ -1836,8 +1855,9 @@ impl RuntimeFn {
             | Self::HeapHeapify
             | Self::PairLeft
             | Self::PairRight => Some(Repr::Value),
-            Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
+            Self::StrEq | Self::Equal | Self::ScopeClose | Self::BytesInRange => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
+            Self::BytesByte => Some(Repr::U8),
             Self::MapFind
             | Self::MapUpsertAddress
             | Self::BufferStep
@@ -1897,6 +1917,8 @@ impl RuntimeFn {
             Self::PairLeft => "pair_left",
             Self::PairRight => "pair_right",
             Self::LoopCheck => "loop_check",
+            Self::BytesInRange => "bytes_in_range",
+            Self::BytesByte => "bytes_byte",
         }
     }
 }

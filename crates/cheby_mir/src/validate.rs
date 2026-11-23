@@ -1054,7 +1054,9 @@ impl FnCx<'_> {
                     | RuntimeFn::HeapStep
                     | RuntimeFn::PairLeft
                     | RuntimeFn::PairRight
-                    | RuntimeFn::LoopCheck => {}
+                    | RuntimeFn::LoopCheck
+                    | RuntimeFn::BytesInRange
+                    | RuntimeFn::BytesByte => {}
                 }
             }
         }

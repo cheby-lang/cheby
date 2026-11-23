@@ -1,0 +1,304 @@
+; cb$fn$app$scan
+; userextname0 = cb$str$fn$app$scan$0
+; userextname1 = cb$imp$cheby_rt_stack_slow_unwind
+; userextname2 = cb$imp$cheby_rt_box_i64
+; userextname3 = cb$imp$cheby_rt_alloc_slow
+; userextname4 = cb$imp$cheby_rt_drop
+; userextname5 = cb$str$fn$app$scan$1
+; userextname6 = cb$imp$cheby_rt_panic
+; userextname7 = cb$str$fn$app$scan$2
+; userextname8 = cb$str$fn$app$scan$3
+; userextname9 = cb$str$fn$app$scan$4
+function u0:24(i64, i64, i64, i64, i64) -> i64 tail {
+    gv0 = symbol colocated userextname0
+    gv1 = symbol colocated userextname1
+    gv2 = symbol colocated userextname2
+    gv3 = symbol colocated userextname3
+    gv4 = symbol colocated userextname4
+    gv5 = symbol colocated userextname5
+    gv6 = symbol colocated userextname6
+    gv7 = symbol colocated userextname7
+    gv8 = symbol colocated userextname8
+    gv9 = symbol colocated userextname9
+    sig0 = (i64, i64, i64, i64, i64, i64) preserve_all
+    sig1 = (i64, i64) -> i64 system_v
+    sig2 = (i64, i64, i64) preserve_all
+    sig3 = (i64, i64) system_v
+    sig4 = (i64, i32 uext, i64, i64) system_v
+
+block15(v2: i64, v3: i64, v4: i64, v5: i64, v6: i64):
+    jump block16(v3, v4, v5, v6)
+
+block16(v7: i64, v8: i64, v9: i64, v10: i64):
+    v11 = get_stack_pointer.i64 
+    v12 = load.i64 notrap aligned v2
+    v13 = icmp ult v11, v12
+    brif v13, block17, block0
+
+block17 cold:
+    v14 = symbol_value.i64 gv0
+    v15 = iconst.i64 0
+    v16 = symbol_value.i64 gv1
+    v17 = load.i64 notrap aligned readonly v16
+    call_indirect sig0, v17(v2, v14, v15, v15, v15, v15)  ; v15 = 0, v15 = 0, v15 = 0, v15 = 0
+    v18 = load.i32 notrap aligned v2+12
+    brif v18, block12, block0
+
+block0:
+    v19 = load.i64 notrap aligned v7+8
+    v20 = icmp.i64 ult v8, v19
+    brif v20, block1, block2
+
+block1:
+    v21 = iadd.i64 v7, v8
+    v22 = load.i8 notrap aligned v21+24
+    v23 = iconst.i8 10
+    v24 = icmp eq v22, v23  ; v23 = 10
+    brif v24, block3, block4
+
+block3:
+    v25 = iconst.i64 1
+    v26, v27 = sadd_overflow.i64 v8, v25  ; v25 = 1
+    brif v27, block18, block19
+
+block19:
+    v28 = iconst.i64 1
+    v29, v30 = sadd_overflow.i64 v9, v28  ; v28 = 1
+    brif v30, block20, block21
+
+block21:
+    jump block16(v7, v26, v29, v10)
+
+block4:
+    v31 = iconst.i8 48
+    v32 = icmp.i8 uge v22, v31  ; v31 = 48
+    brif v32, block5, block6
+
+block5:
+    v33 = iconst.i8 57
+    v34 = icmp.i8 ule v22, v33  ; v33 = 57
+    jump block7(v34)
+
+block6:
+    v35 = iconst.i8 0
+    jump block7(v35)  ; v35 = 0
+
+block7(v0: i8):
+    brif v0, block8, block9
+
+block8:
+    v36 = iconst.i64 1
+    v37, v38 = sadd_overflow.i64 v8, v36  ; v36 = 1
+    brif v38, block22, block23
+
+block23:
+    v39 = uextend.i64 v22
+    v40, v41 = sadd_overflow.i64 v10, v39
+    brif v41, block24, block25
+
+block25:
+    v42 = iconst.i64 48
+    v43, v44 = ssub_overflow.i64 v40, v42  ; v42 = 48
+    brif v44, block24, block26
+
+block26:
+    jump block16(v7, v37, v9, v43)
+
+block9:
+    jump block10
+
+block2:
+    jump block10
+
+block10:
+    v45 = iconst.i64 1
+    v46 = ishl.i64 v9, v45  ; v45 = 1
+    v47 = iconst.i64 1
+    v48 = sshr v46, v47  ; v47 = 1
+    v49 = icmp eq v48, v9
+    v50 = iconst.i64 1
+    v51 = bor v46, v50  ; v50 = 1
+    brif v49, block28(v51), block27
+
+block27 cold:
+    v53 = symbol_value.i64 gv2
+    v54 = load.i64 notrap aligned readonly v53
+    v55 = call_indirect sig1, v54(v2, v9)
+    brif v55, block29, block12
+
+block29 cold:
+    jump block28(v55)
+
+block28(v52: i64):
+    v56 = iconst.i64 1
+    v57 = ishl.i64 v10, v56  ; v56 = 1
+    v58 = iconst.i64 1
+    v59 = sshr v57, v58  ; v58 = 1
+    v60 = icmp eq v59, v10
+    v61 = iconst.i64 1
+    v62 = bor v57, v61  ; v61 = 1
+    brif v60, block31(v62), block30
+
+block30 cold:
+    v64 = symbol_value.i64 gv2
+    v65 = load.i64 notrap aligned readonly v64
+    v66 = call_indirect sig1, v65(v2, v10)
+    brif v66, block32, block13
+
+block32 cold:
+    jump block31(v66)
+
+block31(v63: i64):
+    v67 = iconst.i64 0x0702_0000_0001
+    v69 = load.i64 notrap aligned v2+24
+    v70 = load.i64 notrap aligned v69+32
+    v71 = load.i64 notrap aligned v70
+    brif v71, block35, block33
+
+block35:
+    v72 = load.i64 notrap aligned v69+512
+    v73 = load.i64 notrap aligned v72+8
+    v74 = load.i64 notrap aligned v72+16
+    v75 = iconst.i64 24
+    v76 = iadd v73, v75  ; v75 = 24
+    v77 = icmp sle v76, v74
+    brif v77, block36, block33
+
+block36:
+    v78 = load.i64 notrap aligned v72
+    v79 = iconst.i64 1
+    v80 = iadd v78, v79  ; v79 = 1
+    store notrap aligned v80, v72
+    store.i64 notrap aligned v76, v72+8
+    v81 = iconst.i64 -8
+    v82 = iadd.i64 v70, v81  ; v81 = -8
+    store notrap aligned v82, v69+32
+    store.i64 notrap aligned v67, v71  ; v67 = 0x0702_0000_0001
+    jump block34(v71)
+
+block33 cold:
+    v83 = iconst.i64 24
+    v84 = symbol_value.i64 gv3
+    v85 = load.i64 notrap aligned readonly v84
+    call_indirect sig2, v85(v2, v83, v67)  ; v83 = 24, v67 = 0x0702_0000_0001
+    v86 = load.i64 notrap aligned v2+32
+    brif v86, block34(v86), block14
+
+block34(v68: i64):
+    store.i64 notrap aligned v52, v68+8
+    store.i64 notrap aligned v63, v68+16
+    jump block11(v68)
+
+block11(v1: i64):
+    return v1
+
+block14 cold:
+    v87 = symbol_value.i64 gv4
+    v88 = load.i64 notrap aligned readonly v87
+    call_indirect sig3, v88(v2, v63)
+    jump block13
+
+block13 cold:
+    v89 = symbol_value.i64 gv4
+    v90 = load.i64 notrap aligned readonly v89
+    call_indirect sig3, v90(v2, v52)
+    jump block12
+
+block12 cold:
+    v91 = iconst.i64 0
+    return v91  ; v91 = 0
+
+block18 cold:
+    v92 = iconst.i32 2
+    v93 = iconst.i64 0
+    v94 = symbol_value.i64 gv5
+    v95 = symbol_value.i64 gv6
+    v96 = load.i64 notrap aligned readonly v95
+    call_indirect sig4, v96(v2, v92, v93, v94)  ; v92 = 2, v93 = 0
+    jump block12
+
+block20 cold:
+    v97 = iconst.i32 2
+    v98 = iconst.i64 0
+    v99 = symbol_value.i64 gv7
+    v100 = symbol_value.i64 gv6
+    v101 = load.i64 notrap aligned readonly v100
+    call_indirect sig4, v101(v2, v97, v98, v99)  ; v97 = 2, v98 = 0
+    jump block12
+
+block22 cold:
+    v102 = iconst.i32 2
+    v103 = iconst.i64 0
+    v104 = symbol_value.i64 gv8
+    v105 = symbol_value.i64 gv6
+    v106 = load.i64 notrap aligned readonly v105
+    call_indirect sig4, v106(v2, v102, v103, v104)  ; v102 = 2, v103 = 0
+    jump block12
+
+block24 cold:
+    v107 = iconst.i32 2
+    v108 = iconst.i64 0
+    v109 = symbol_value.i64 gv9
+    v110 = symbol_value.i64 gv6
+    v111 = load.i64 notrap aligned readonly v110
+    call_indirect sig4, v111(v2, v107, v108, v109)  ; v107 = 2, v108 = 0
+    jump block12
+}
+; cb$fn$app$is_name
+; userextname0 = cb$str$fn$app$is_name$0
+; userextname1 = cb$imp$cheby_rt_stack_slow_unwind
+; userextname2 = cb$str$fn$app$is_name$1
+; userextname3 = cb$imp$cheby_rt_str_eq
+; userextname4 = cb$imp$cheby_rt_static_true
+; userextname5 = cb$imp$cheby_rt_static_false
+function u0:25(i64, i64) -> i64 tail {
+    gv0 = symbol colocated userextname0
+    gv1 = symbol colocated userextname1
+    gv2 = symbol colocated userextname2
+    gv3 = symbol colocated userextname3
+    gv4 = symbol colocated userextname4
+    gv5 = symbol colocated userextname5
+    sig0 = (i64, i64, i64, i64, i64, i64) preserve_all
+    sig1 = (i64, i64) -> i8 uext system_v
+
+block2(v0: i64, v1: i64):
+    v2 = get_stack_pointer.i64 
+    v3 = load.i64 notrap aligned v0
+    v4 = icmp ult v2, v3
+    brif v4, block3, block0
+
+block3 cold:
+    v5 = symbol_value.i64 gv0
+    v6 = iconst.i64 0
+    v7 = symbol_value.i64 gv1
+    v8 = load.i64 notrap aligned readonly v7
+    call_indirect sig0, v8(v0, v5, v6, v6, v6, v6)  ; v6 = 0, v6 = 0, v6 = 0, v6 = 0
+    v9 = load.i32 notrap aligned v0+12
+    brif v9, block1, block0
+
+block0:
+    v10 = symbol_value.i64 gv2
+    v12 = load.i64 notrap aligned v1+8
+    v13 = load.i64 notrap aligned v10+8
+    v14 = icmp eq v12, v13
+    v15 = iconst.i8 0
+    brif v14, block4, block5(v15)  ; v15 = 0
+
+block4:
+    v16 = symbol_value.i64 gv3
+    v17 = load.i64 notrap aligned readonly v16
+    v18 = call_indirect sig1, v17(v1, v10)
+    jump block5(v18)
+
+block5(v11: i8):
+    v19 = symbol_value.i64 gv4
+    v20 = load.i64 notrap aligned readonly v19
+    v21 = symbol_value.i64 gv5
+    v22 = load.i64 notrap aligned readonly v21
+    v23 = select v11, v20, v22
+    return v23
+
+block1 cold:
+    v24 = iconst.i64 0
+    return v24  ; v24 = 0
+}

@@ -1,0 +1,99 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-318, D-902, D-1773
+//! `bytes::get` taken apart at once at the edges of `Bytes` of 0, 1 and
+//! 4 bytes: an index of -1, of the length, of `int::max_value` or of
+//! `int::min_value` is outside and gives `None`. The forms a scanner
+//! writes: literals and or-patterns with a `_` arm that `None` shares,
+//! guards, `let guard` and `let assert`, a byte kept in a list and a
+//! byte read in a constant's initializer. Bytes of a multi-byte UTF-8
+//! sequence read as themselves, and a `Bytes` that was pushed to in place
+//! reads its new byte. The `.env` file turns poisoning off, so the inline
+//! paths of code generation run.
+
+@!target(native)
+
+import std::bytes
+import std::int
+import std::io
+import std::list
+
+/// A letter for the byte at `i`: `s` for a space or a newline, `q` for
+/// `"`, `d` for a digit, `o` for any other byte and `-` outside.
+fn kind(data: bytes::Bytes, i: Int) -> String {
+  case bytes::get(data, i) {
+    Some(0x20) | Some(0x0A) => "s"
+    Some(0x22) => "q"
+    Some(byte) when byte >= 0x30 && byte <= 0x39 => "d"
+    Some(_) => "o"
+    _ => "-"
+  }
+}
+
+/// The byte at `i` as a number, or -1 outside.
+fn number_at(data: bytes::Bytes, i: Int) -> Int {
+  let guard Some(byte) = bytes::get(data, i) else {
+    -1
+  }
+  int::from_u8(byte)
+}
+
+/// The byte at `i`, in a list, or an empty list outside.
+fn kept(data: bytes::Bytes, i: Int) -> List<U8> {
+  case bytes::get(data, i) {
+    Some(byte) => [byte]
+    None => []
+  }
+}
+
+/// The byte at `i`, which must be there.
+fn known(data: bytes::Bytes, i: Int) -> U8 {
+  let assert Some(byte) = bytes::get(data, i)
+  byte
+}
+
+/// Whether the byte at `i` is a newline; outside, it is not.
+fn is_newline(data: bytes::Bytes, i: Int) -> Bool {
+  case bytes::get(data, i) {
+    Some(0x0A) => True
+    _ => False
+  }
+}
+
+/// The number of newlines from `i` on.
+fn newlines(data: bytes::Bytes, i: Int, n: Int) -> Int {
+  case bytes::get(data, i) {
+    Some(0x0A) => newlines(data, i + 1, n + 1)
+    Some(_) => newlines(data, i + 1, n)
+    None => n
+  }
+}
+
+const counted: Int = newlines(bytes::from_list([0x0A, 0x41, 0x0A]), 0, 0)
+
+/// What each form reads at each edge of `data`.
+fn edges(data: bytes::Bytes) -> String {
+  let n = bytes::length(data)
+  let at = [-1, 0, n - 1, n, int::max_value, int::min_value]
+  let kinds = list::map(at, fn(i) { kind(data, i) })
+  let numbers = list::map(at, fn(i) { number_at(data, i) })
+  let lists = list::map(at, fn(i) { kept(data, i) })
+  let lines = list::map(at, fn(i) { is_newline(data, i) })
+  "{n}: {kinds} {numbers} {lists} {lines}"
+}
+
+fn main() {
+  io::println(edges(bytes::new()))
+  io::println(edges(bytes::from_list([0x0A])))
+  io::println(edges(bytes::from_list([0x22, 0x37, 0x20, 0xFF])))
+  let text = bytes::from_string("é\n")
+  let first = known(text, 0)
+  let second = known(text, 1)
+  let third = known(text, 2)
+  io::println("utf-8: {first} {second} {third}")
+  let grown = bytes::push(bytes::from_list([0x41]), 0x0A)
+  let last = known(grown, 1)
+  let lines = newlines(grown, 0, 0)
+  io::println("pushed: {last} {lines}")
+  io::println("constant: {counted}")
+}

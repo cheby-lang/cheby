@@ -1248,3 +1248,25 @@ proptest! {
         });
     }
 }
+
+proptest! {
+    /// The word-at-a-time scan for bytes JSON escapes finds the first one,
+    /// as a scan byte by byte does, at every alignment and length,
+    /// including bytes at and around 0x1F, 0x20, `"`, `\\` and 0x80.
+    #[test]
+    fn first_json_escape_is_the_first(
+        data in proptest::collection::vec(
+            prop_oneof![
+                Just(0x1F_u8), Just(0x20), Just(b'"'), Just(b'\\'), Just(0x21),
+                Just(0x5B), Just(0x5D), Just(0x7F), Just(0x80), Just(0xA2), Just(0xDC),
+                Just(0xFF), Just(0x00), 0x20_u8..0x7F
+            ],
+            0..40,
+        ),
+        skip in 0_usize..8,
+    ) {
+        let data = data.get(skip.min(data.len())..).unwrap_or_default();
+        let naive = data.iter().position(|&b| b < 0x20 || b == b'"' || b == b'\\');
+        prop_assert_eq!(first_json_escape(data), naive);
+    }
+}

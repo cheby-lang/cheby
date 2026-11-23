@@ -497,7 +497,12 @@ impl RuntimeFunc {
             RuntimeFn::StrEq => (Self::StrEq, false),
             RuntimeFn::ListPush => (Self::ListPush, true),
             RuntimeFn::ListAppend => (Self::ListAppend, true),
-            RuntimeFn::ListLength => (Self::ListLength, false),
+            // A `Bytes`'s bounds test and byte are loads (`values.rs`), as a
+            // list's length is: they call nothing, and `list_length` is
+            // always declared.
+            RuntimeFn::ListLength | RuntimeFn::BytesInRange | RuntimeFn::BytesByte => {
+                (Self::ListLength, false)
+            }
             // A read of the element as a raw number calls the read of its
             // word, where it calls anything (`list_index`).
             RuntimeFn::ListGet | RuntimeFn::ListGetFloat | RuntimeFn::ListGetF32 => {

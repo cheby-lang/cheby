@@ -871,6 +871,41 @@ fn clif_of_instruction_kernels() {
     );
 }
 
+/// A `bytes::get` taken apart at once is `bytes_in_range` and
+/// `bytes_byte`, with no foreign call and no `Some` (`cheby_mir::lookup`).
+#[test]
+fn mir_of_byte_reads() {
+    let (out, mir) = dump_mir(&test_package("byte_reads")).unwrap();
+    assert!(!out.has_errors(), "{}", out.render());
+    let picked = dumped(&mir, &["fn app::scan(", "fn app::is_name("]);
+    assert!(!picked.contains("cheby_bytes_get"), "{picked}");
+    assert!(picked.contains("call_runtime bytes_in_range("), "{picked}");
+    assert!(picked.contains("call_runtime bytes_byte("), "{picked}");
+    assert!(picked.contains("call_runtime str_eq("), "{picked}");
+    golden("byte_reads.mir", &picked);
+}
+
+/// The CLIF of [`mir_of_byte_reads`]'s functions: the byte read is a
+/// load of the length, an unsigned comparison and a load of the byte, and
+/// `==` on strings compares the lengths before it calls
+/// `cheby_rt_str_eq`.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn clif_of_byte_reads() {
+    let (out, clif) = dump_clif(&test_package("byte_reads")).unwrap();
+    assert!(!out.has_errors(), "{}", out.render());
+    let clif = normalize_clif(&clif);
+    let picked = dumped(&clif, &["; cb$fn$app$scan", "; cb$fn$app$is_name"]);
+    assert!(!picked.contains("cheby_bytes_get"), "{picked}");
+    assert!(picked.contains("icmp ult "), "{picked}");
+    assert!(picked.contains("= load.i8 "), "{picked}");
+    assert!(picked.contains("cb$imp$cheby_rt_str_eq"), "{picked}");
+    golden("byte_reads.clif", &picked);
+}
+
 #[test]
 fn dumps_of_a_package_with_errors_are_empty() {
     let dir = package(

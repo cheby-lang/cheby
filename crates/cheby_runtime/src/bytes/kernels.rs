@@ -160,7 +160,9 @@ pub(crate) unsafe extern "C" fn cheby_bytes_length(data: Word) -> i64 {
 
 /// `bytes::get`: `Some(byte)`, or `None` outside `0..length` (D-318).
 /// O(1). Both results are static objects, so it allocates nothing and
-/// never raises (D-902).
+/// never raises (D-902). A direct call whose result is only taken apart
+/// does not call it: generated code tests the bounds and loads the byte
+/// (`cheby_mir`'s `lookup`).
 ///
 /// # Safety
 ///
@@ -191,10 +193,7 @@ pub(crate) unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64
     let data = unsafe { arg(data) };
     let start = clamp(from, data.len());
     let rest = data.get(start..).unwrap_or_default();
-    let found = rest
-        .iter()
-        .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')
-        .unwrap_or(rest.len());
+    let found = crate::text::kernels::first_json_escape(rest).unwrap_or(rest.len());
     i64::try_from(start.saturating_add(found)).unwrap_or(i64::MAX)
 }
 

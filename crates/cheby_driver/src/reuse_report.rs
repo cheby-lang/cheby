@@ -1112,6 +1112,8 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ListUnconsHeadF32
                     | RuntimeFn::ListGetFloat
                     | RuntimeFn::ListGetF32
+                    | RuntimeFn::BytesInRange
+                    | RuntimeFn::BytesByte
                     // An address, or an element of a list held as an
                     // address, which the report does not follow: these are
                     // only in std's bodies, which it does not judge.
