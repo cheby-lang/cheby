@@ -647,3 +647,27 @@ D-1772 had measured this path at 2% to 3.5% and left it. The estimate counted th
 
 Open: a toolchain built with debug assertions sends every sized free through the stub, to keep D-1772's size check, and so pays more there than before. The x86-64 stubs are first built in Linux CI.
 
+### The comparison measured once more, with both rows built
+
+The Cheby rows of `../cheby-compare` at `e9b6af0b`, on a quiet machine, with the comparison's own runner. This reading replaces the one above in its results file.
+
+| Benchmark        | Executable on 11-22 | Executable now | Against Rust | `cheby run` now | Rank of the executable |
+| ---------------- | ------------------: | -------------: | -----------: | --------------: | ---------------------: |
+| `binary_trees`   |              1.06 s |         900 ms |       0.908× |          898 ms |               13 of 21 |
+| `nbody`          |             27.24 s |        13.16 s |        25.6× |         13.63 s |               15 of 21 |
+| `spectral_norm`  |             21.48 s |         5.16 s |        6.43× |          5.58 s |               14 of 21 |
+| `mandelbrot`     |              1.67 s |         945 ms |        1.32× |          966 ms |               13 of 21 |
+| `fannkuch_redux` |              3.74 s |         679 ms |        4.37× |          999 ms |               13 of 21 |
+| `word_freq`      |              2.07 s |         1.86 s |        5.31× |          1.90 s |               12 of 21 |
+| `json_roundtrip` |              3.76 s |         2.88 s |        7.45× |          2.86 s |               13 of 21 |
+| `lru_cache`      |             25.75 s |         8.93 s |        13.5× |          9.21 s |               15 of 21 |
+| `ping_pong`      |               57 ms |          55 ms |      0.0807× |           62 ms |                2 of 23 |
+| `spawn_many`     |               76 ms |          51 ms |      0.0637× |           61 ms |                3 of 23 |
+| `prime_sieve`    |               19 ms |          21 ms |      0.0388× |           27 ms |                1 of 23 |
+
+Geometric means against Rust: the executables 3.86× on the CPU group, 8.12× on the data group and 5.11× on both together, where they stood at 9.68×, 13.1× and 10.8× on 2026-11-22. `cheby run`, the debug profile: 4.29×, 8.25× and 5.48×. On CPU and data together the executables are level with Clojure (5.13×) and ahead of Koka (5.70×). `binary_trees` now runs faster than the Rust program.
+
+Compile time: `cheby build --release` of `hello_world` takes 56 ms, and of `compile_large`'s 200 modules 536 ms.
+
+The whole suite passes on the final code (8,280 tests), with std's own tests and the determinism check in both profiles and every lint of CI.
+
