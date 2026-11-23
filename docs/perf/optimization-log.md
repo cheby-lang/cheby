@@ -671,3 +671,4 @@ Compile time: `cheby build --release` of `hello_world` takes 56 ms, and of `comp
 
 The whole suite passes on the final code (8,280 tests), with std's own tests and the determinism check in both profiles and every lint of CI.
 
+Miri, the address sanitizer and the thread sanitizer passed every step on `e9b6af0b`, which holds every change of the round, with no report.
