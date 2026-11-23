@@ -139,11 +139,30 @@ pub enum RuntimeFunc {
     /// `uint64_t cheby_rt_map_upsert_store(ExecCtx *ctx, uint64_t map, uint64_t address,
     /// uint64_t key, uint64_t value)`.
     MapUpsertStore,
+    /// `uint64_t cheby_rt_sort_start(ExecCtx *ctx, uint64_t xs)`.
+    SortStart,
+    /// `uint64_t cheby_rt_heap_list_start(ExecCtx *ctx, uint64_t items, bool max, uint64_t by)`.
+    HeapListStart,
+    /// `uint64_t cheby_rt_buffer_step(uint64_t state, int64_t tag)`.
+    BufferStep,
+    /// `uint64_t cheby_rt_buffer_finish(ExecCtx *ctx, uint64_t state, uint64_t source)`.
+    BufferFinish,
+    /// `uint64_t cheby_rt_heap_push(ExecCtx *ctx, uint64_t items, uint64_t item, bool max,
+    /// uint64_t by, uint64_t *slot)`.
+    HeapPush,
+    /// `uint64_t cheby_rt_heap_pop(ExecCtx *ctx, uint64_t items, bool max, uint64_t by,
+    /// uint64_t *slot)`.
+    HeapPop,
+    /// `uint64_t cheby_rt_heap_heapify(ExecCtx *ctx, uint64_t items, bool max, uint64_t by,
+    /// uint64_t *slot)`.
+    HeapHeapify,
+    /// `uint64_t cheby_rt_heap_step(ExecCtx *ctx, uint64_t *slot, int64_t tag)`.
+    HeapStep,
 }
 
 impl RuntimeFunc {
     /// Every runtime function, in declaration order ([`Self::index`]).
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 58] = [
         Self::Alloc,
         Self::Dup,
         Self::Drop,
@@ -194,6 +213,14 @@ impl RuntimeFunc {
         Self::MapSlotTake,
         Self::MapUpsertFound,
         Self::MapUpsertStore,
+        Self::SortStart,
+        Self::HeapListStart,
+        Self::BufferStep,
+        Self::BufferFinish,
+        Self::HeapPush,
+        Self::HeapPop,
+        Self::HeapHeapify,
+        Self::HeapStep,
     ];
 
     /// The symbol.
@@ -250,6 +277,14 @@ impl RuntimeFunc {
             Self::MapSlotTake => sym::MAP_SLOT_TAKE,
             Self::MapUpsertFound => sym::MAP_UPSERT_FOUND,
             Self::MapUpsertStore => sym::MAP_UPSERT_STORE,
+            Self::SortStart => sym::SORT_START,
+            Self::HeapListStart => sym::HEAP_LIST_START,
+            Self::BufferStep => sym::BUFFER_STEP,
+            Self::BufferFinish => sym::BUFFER_FINISH,
+            Self::HeapPush => sym::HEAP_PUSH,
+            Self::HeapPop => sym::HEAP_POP,
+            Self::HeapHeapify => sym::HEAP_HEAPIFY,
+            Self::HeapStep => sym::HEAP_STEP,
         }
     }
 
@@ -266,7 +301,8 @@ impl RuntimeFunc {
             | Self::ListAppend
             | Self::MapFind
             | Self::AllocMiss
-            | Self::DropReuseChecked => (&[Ptr, U64, U64], U64),
+            | Self::DropReuseChecked
+            | Self::BufferFinish => (&[Ptr, U64, U64], U64),
             Self::ReleaseFields => (&[Ptr, U64], Void),
             Self::FreeUnique | Self::AllocSlow | Self::AllocMissSlow | Self::FreeUniqueSlow => {
                 (&[Ptr, U64, U64], Void)
@@ -279,9 +315,16 @@ impl RuntimeFunc {
                 (&[Ptr, Ptr], Void)
             }
             Self::BoxI64 | Self::StrWithCapacity => (&[Ptr, I64], U64),
-            Self::BoxU64 | Self::ConstMissing | Self::Debug | Self::MapUpsertFound => {
-                (&[Ptr, U64], U64)
-            }
+            Self::BoxU64
+            | Self::ConstMissing
+            | Self::Debug
+            | Self::MapUpsertFound
+            | Self::SortStart => (&[Ptr, U64], U64),
+            Self::HeapListStart => (&[Ptr, U64, Bool, U64], U64),
+
+            Self::HeapPush => (&[Ptr, U64, U64, Bool, U64, Ptr], U64),
+            Self::HeapPop | Self::HeapHeapify => (&[Ptr, U64, Bool, U64, Ptr], U64),
+            Self::HeapStep => (&[Ptr, Ptr, I64], U64),
             Self::BoxF64 => (&[Ptr, F64], U64),
             Self::BoxF32 => (&[Ptr, F32], U64),
             Self::FmodF64 => (&[F64, F64], F64),
@@ -289,7 +332,7 @@ impl RuntimeFunc {
             Self::StrEq => (&[U64, U64], Bool),
             Self::Equal => (&[Ptr, U64, U64, U64], Bool),
             Self::ListLength => (&[U64], I64),
-            Self::ListGet => (&[U64, I64], U64),
+            Self::ListGet | Self::BufferStep => (&[U64, I64], U64),
             Self::MapValueAt | Self::MapSlotTake => (&[U64], U64),
             Self::MapUpsertStore => (&[Ptr, U64, U64, U64, U64], U64),
             Self::MapUpsert => (&[Ptr, U64, U64, Ptr], U64),
@@ -367,6 +410,14 @@ impl RuntimeFunc {
                 | Self::MapSlotTake
                 | Self::MapUpsertFound
                 | Self::MapUpsertStore
+                | Self::SortStart
+                | Self::HeapListStart
+                | Self::BufferStep
+                | Self::BufferFinish
+                | Self::HeapPush
+                | Self::HeapPop
+                | Self::HeapHeapify
+                | Self::HeapStep
         )
     }
 
@@ -424,6 +475,14 @@ impl RuntimeFunc {
             Self::MapSlotTake => 47,
             Self::MapUpsertFound => 48,
             Self::MapUpsertStore => 49,
+            Self::SortStart => 50,
+            Self::HeapListStart => 51,
+            Self::BufferStep => 52,
+            Self::BufferFinish => 53,
+            Self::HeapPush => 54,
+            Self::HeapPop => 55,
+            Self::HeapHeapify => 56,
+            Self::HeapStep => 57,
         }
     }
 
@@ -461,7 +520,12 @@ impl RuntimeFunc {
             RuntimeFn::ListUnconsOwned => (Self::ListUnconsOwned, true),
             RuntimeFn::ListPrepend => (Self::ListPrepend, true),
             RuntimeFn::MapFind => (Self::MapFind, true),
-            RuntimeFn::MapValueAt => (Self::MapValueAt, false),
+            // A pair's element is loaded and dup'd inline, as a map's value
+            // is; under `checked_rc` the runtime's read of a word at an
+            // address does both.
+            RuntimeFn::MapValueAt | RuntimeFn::PairLeft | RuntimeFn::PairRight => {
+                (Self::MapValueAt, false)
+            }
             RuntimeFn::ListSet => (Self::ListSet, true),
             // The address calls nothing: it loads the stack slot that the
             // `map_upsert` before it wrote, so it needs that call's
@@ -470,6 +534,20 @@ impl RuntimeFunc {
             RuntimeFn::MapSlotTake => (Self::MapSlotTake, false),
             RuntimeFn::MapUpsertFound => (Self::MapUpsertFound, true),
             RuntimeFn::MapUpsertStore => (Self::MapUpsertStore, true),
+            RuntimeFn::SortStart => (Self::SortStart, true),
+            RuntimeFn::HeapListStart => (Self::HeapListStart, true),
+            RuntimeFn::BufferStep => (Self::BufferStep, false),
+            RuntimeFn::BufferFinish => (Self::BufferFinish, true),
+            // The slot and its first pair call nothing: the address of a
+            // stack slot, which the start after it takes, and a load from it.
+            RuntimeFn::HeapSlot | RuntimeFn::HeapFirst | RuntimeFn::HeapPush => {
+                (Self::HeapPush, true)
+            }
+            RuntimeFn::HeapPop => (Self::HeapPop, true),
+            RuntimeFn::HeapHeapify => (Self::HeapHeapify, true),
+            RuntimeFn::HeapStep => (Self::HeapStep, true),
+            // The loop's check is the entry check, whose slow path it calls.
+            RuntimeFn::LoopCheck => (Self::StackSlow, true),
         }
     }
 }

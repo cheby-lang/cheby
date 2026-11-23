@@ -165,8 +165,16 @@ fn runtime_helper_signatures() {
             continue;
         }
         // An upsert's address is read from the stack slot its
-        // `map_upsert` wrote.
-        if helper == RuntimeFn::MapUpsertAddress {
+        // `map_upsert` wrote; a heap's slot is a stack address and its
+        // first pair a load from it; the loop's check calls the entry
+        // check's slow path with the function's location.
+        if matches!(
+            helper,
+            RuntimeFn::MapUpsertAddress
+                | RuntimeFn::HeapSlot
+                | RuntimeFn::HeapFirst
+                | RuntimeFn::LoopCheck
+        ) {
             continue;
         }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
@@ -801,10 +809,10 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 50);
+    assert_eq!(RuntimeFunc::ALL.len(), 58);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        26,
+        34,
         "only the functions added since M2 are declared on demand"
     );
     // The lookups taken apart at once and `list::set` at a direct call.
@@ -852,6 +860,43 @@ fn slice_runtime_functions() {
         (RuntimeFunc::ScopeClose, true)
     );
     assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
+}
+
+/// The steps of std's stepped intrinsics (`cheby_mir`'s
+/// `lower/intrinsic.rs`): indexes 50 to 57, declared on demand; a pair's
+/// reads are `map_value_at`'s, and the loop's check is the entry check's
+/// slow path.
+#[test]
+fn step_runtime_functions() {
+    use cheby_mir::RuntimeFn;
+    use runtime::RuntimeFunc;
+    for (f, index, helper, takes_ctx) in [
+        (RuntimeFunc::SortStart, 50, RuntimeFn::SortStart, true),
+        (
+            RuntimeFunc::HeapListStart,
+            51,
+            RuntimeFn::HeapListStart,
+            true,
+        ),
+        (RuntimeFunc::BufferStep, 52, RuntimeFn::BufferStep, false),
+        (RuntimeFunc::BufferFinish, 53, RuntimeFn::BufferFinish, true),
+        (RuntimeFunc::HeapPush, 54, RuntimeFn::HeapPush, true),
+        (RuntimeFunc::HeapPop, 55, RuntimeFn::HeapPop, true),
+        (RuntimeFunc::HeapHeapify, 56, RuntimeFn::HeapHeapify, true),
+        (RuntimeFunc::HeapStep, 57, RuntimeFn::HeapStep, true),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+        assert_eq!(RuntimeFunc::of(helper), (f, takes_ctx), "{f:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::PairLeft),
+        (RuntimeFunc::MapValueAt, false)
+    );
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::LoopCheck),
+        (RuntimeFunc::StackSlow, true)
+    );
 }
 
 /// The slow paths of inline allocations and sized frees, and the cold drop

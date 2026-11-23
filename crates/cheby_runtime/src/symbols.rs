@@ -36,9 +36,11 @@ use crate::helpers::{
     cheby_rt_str_with_capacity,
 };
 use crate::list::{
-    cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_prepend,
-    cheby_rt_list_push, cheby_rt_list_set, cheby_rt_list_slice, cheby_rt_list_slice_owned,
-    cheby_rt_list_uncons, cheby_rt_list_uncons_owned, cheby_rt_static_empty_list,
+    cheby_rt_buffer_finish, cheby_rt_buffer_step, cheby_rt_heap_heapify, cheby_rt_heap_list_start,
+    cheby_rt_heap_pop, cheby_rt_heap_push, cheby_rt_heap_step, cheby_rt_list_append,
+    cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_prepend, cheby_rt_list_push,
+    cheby_rt_list_set, cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
+    cheby_rt_list_uncons_owned, cheby_rt_sort_start, cheby_rt_static_empty_list,
 };
 use crate::object::{
     cheby_rt_static_equal, cheby_rt_static_err_nil, cheby_rt_static_false, cheby_rt_static_greater,
@@ -68,7 +70,11 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 61] {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry per runtime symbol, in the order of `sym::ALL`"
+)]
+fn runtime_symbols() -> [(&'static str, *const u8); 69] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -163,6 +169,14 @@ fn runtime_symbols() -> [(&'static str, *const u8); 61] {
             sym::MAP_UPSERT_STORE,
             cheby_rt_map_upsert_store as *const u8,
         ),
+        (sym::SORT_START, cheby_rt_sort_start as *const u8),
+        (sym::BUFFER_STEP, cheby_rt_buffer_step as *const u8),
+        (sym::BUFFER_FINISH, cheby_rt_buffer_finish as *const u8),
+        (sym::HEAP_LIST_START, cheby_rt_heap_list_start as *const u8),
+        (sym::HEAP_PUSH, cheby_rt_heap_push as *const u8),
+        (sym::HEAP_POP, cheby_rt_heap_pop as *const u8),
+        (sym::HEAP_HEAPIFY, cheby_rt_heap_heapify as *const u8),
+        (sym::HEAP_STEP, cheby_rt_heap_step as *const u8),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }
@@ -875,14 +889,18 @@ mod tests {
 
     /// `std::heap`'s kernels have the C signatures of their `@external`
     /// declarations in `std/heap.cheby`, and none is `@std_context`: they
-    /// call `compare` back through `callback::call`, as `list::sort_with`
-    /// does (D-1613, D-526).
+    /// call `compare` back through `callback::call`, as
+    /// `list::sort_with`'s kernel does (D-1613, D-526). The updates a direct
+    /// call reaches are intrinsics, which have no kernel (D-693).
     #[test]
     fn heap_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
         let source = std::fs::read_to_string(root.join("heap.cheby")).unwrap();
         let mut declared = BTreeMap::new();
         for (symbol, context, signature) in kernel_declarations(&source) {
+            if sym::INTRINSICS.contains(&symbol.as_str()) {
+                continue;
+            }
             assert!(!context, "{symbol} is `@std_context`");
             assert!(
                 declared.insert(symbol.clone(), signature).is_none(),

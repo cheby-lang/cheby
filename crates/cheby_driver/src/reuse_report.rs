@@ -1043,7 +1043,15 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ListPrepend
                     | RuntimeFn::ListSet
                     | RuntimeFn::MapUpsert
-                    | RuntimeFn::MapUpsertStore => {
+                    | RuntimeFn::MapUpsertStore
+                    // The steps of std's intrinsics (`lower/intrinsic.rs`)
+                    // keep or return what they are given.
+                    | RuntimeFn::SortStart
+                    | RuntimeFn::HeapListStart
+                    | RuntimeFn::BufferFinish
+                    | RuntimeFn::HeapPush
+                    | RuntimeFn::HeapPop
+                    | RuntimeFn::HeapHeapify => {
                         args.iter().any(|op| held(holds, op)) && join_into(holds, dst, Hold::Any)
                     }
                     RuntimeFn::ListGet
@@ -1103,7 +1111,17 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ListUnconsHeadFloat
                     | RuntimeFn::ListUnconsHeadF32
                     | RuntimeFn::ListGetFloat
-                    | RuntimeFn::ListGetF32 => false,
+                    | RuntimeFn::ListGetF32
+                    // An address, or an element of a list held as an
+                    // address, which the report does not follow: these are
+                    // only in std's bodies, which it does not judge.
+                    | RuntimeFn::BufferStep
+                    | RuntimeFn::HeapSlot
+                    | RuntimeFn::HeapFirst
+                    | RuntimeFn::HeapStep
+                    | RuntimeFn::PairLeft
+                    | RuntimeFn::PairRight
+                    | RuntimeFn::LoopCheck => false,
                 }
             }
             Rvalue::Call { .. } | Rvalue::CallForeign { .. } => {

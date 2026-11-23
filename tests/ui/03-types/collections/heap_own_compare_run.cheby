@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @decisions: D-1612, D-1613
-//! The heap's kernels compare natively only the types whose `compare` is
+//! The heap's updates compare natively only the types whose `compare` is
 //! built in, and they read that from the element type, never from the
 //! values: `Level`'s nullary constructors may be stored like `Int`s, but
 //! its own `compare`, which reverses their order, decides, in both

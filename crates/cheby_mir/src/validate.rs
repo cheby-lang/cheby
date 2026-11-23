@@ -1041,7 +1041,20 @@ impl FnCx<'_> {
                     | RuntimeFn::ListGetF32
                     | RuntimeFn::MapSlotTake
                     | RuntimeFn::MapUpsertFound
-                    | RuntimeFn::MapUpsertStore => {}
+                    | RuntimeFn::MapUpsertStore
+                    | RuntimeFn::SortStart
+                    | RuntimeFn::HeapListStart
+                    | RuntimeFn::BufferStep
+                    | RuntimeFn::BufferFinish
+                    | RuntimeFn::HeapSlot
+                    | RuntimeFn::HeapPush
+                    | RuntimeFn::HeapPop
+                    | RuntimeFn::HeapHeapify
+                    | RuntimeFn::HeapFirst
+                    | RuntimeFn::HeapStep
+                    | RuntimeFn::PairLeft
+                    | RuntimeFn::PairRight
+                    | RuntimeFn::LoopCheck => {}
                 }
             }
         }

@@ -1,0 +1,7 @@
+panicked at tests/ui/11-errors-and-panics/backtrace/direct_sort_with_callback.cheby:15:13:
+cannot compare 4 and 3
+backtrace:
+  in ui_test::refuse at tests/ui/11-errors-and-panics/backtrace/direct_sort_with_callback.cheby:15:13
+  in std::list::sort_with
+  in ui_test::ordered at tests/ui/11-errors-and-panics/backtrace/direct_sort_with_callback.cheby:21:16
+  in ui_test::main at tests/ui/11-errors-and-panics/backtrace/direct_sort_with_callback.cheby:26:16

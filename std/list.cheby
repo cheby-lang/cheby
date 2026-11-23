@@ -814,9 +814,9 @@ test "sort orders by compare" {
 /// Returns the elements in increasing order by `by`, where `Less` means the first argument
 /// goes first, stably (D-299, D-335). It is a bottom-up merge sort: runs of one element are
 /// merged in adjacent pairs, front to back, until one run is left, and a merge takes from the
-/// left run unless `by` returns `Greater`, so equal elements keep their order. The runtime
-/// runs it, calling `by` back, with the same pairs and calls on every target (D-1448).
-@external(native, "cheby_list_sort_with")
+/// left run unless `by` returns `Greater`, so equal elements keep their order. It makes the
+/// same pairs and calls on every target (D-1448); the runtime keeps its state between calls.
+@external(native, "cheby_rt_std_list_sort_with")
 @external(js, "./list.mjs", "sort_with")
 pub fn sort_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> List<T>
 
@@ -1287,4 +1287,58 @@ test "max_index and min_index point at max and min" {
     None => None
   }
   assert at_max == max(xs)
+}
+
+// `sort_with` as its kernel runs it, calling `by` back from the runtime
+// (D-1448, D-526). A direct call of `sort_with` runs the same algorithm in
+// steps and calls `by` itself, so the tests below compare the two.
+
+@external(native, "cheby_list_sort_with")
+@external(js, "./list.mjs", "sort_with")
+priv fn kernel_sort_with<T>(xs: List<T>, by: fn(T, T) -> Order) -> List<T>
+
+/// A comparison of `Int`s for the tests below, chosen by `kind`: in order,
+/// reversed, always `Equal`, and two that are not consistent orders.
+priv fn test_order(kind: Int) -> fn(Int, Int) -> Order {
+  case kind {
+    0 => fn(a, b) { int::compare(a, b) }
+    1 => fn(a, b) { int::compare(b, a) }
+    2 => fn(_, _) { Equal }
+    3 => fn(a, b) {
+      case (a * 7 + b * 3) % 5 {
+        0 => Greater
+        1 => Equal
+        _ => Less
+      }
+    }
+    _ => fn(a, b) {
+      case (a + b) % 3 == 0 {
+        True => Greater
+        False => int::compare(a % 4, b % 4)
+      }
+    }
+  }
+}
+
+/// `n` numbers with repeats, in a scrambled order.
+priv fn test_numbers(n: Int) -> List<Int> {
+  map(range(0, n), fn(i) { i * 7919 % 211 - 100 })
+}
+
+test "sort_with sorts as its kernel does for any comparison" {
+  let sizes = [0, 1, 2, 3, 5, 31, 32, 33, 34, 100, 1000, 1025]
+  each(sizes, fn(n) {
+    let xs = test_numbers(n)
+    each(range(0, 5), fn(kind) {
+      let by = test_order(kind)
+      assert sort_with(xs, by) == kernel_sort_with(xs, by)
+    })
+  })
+}
+
+test "sort_with keeps equal elements in their order" {
+  let tagged = map(range(0, 300), fn(i) { (i % 7, i) })
+  let by_first = fn((a, _), (b, _)) { int::compare(a, b) }
+  assert sort_with(tagged, by_first) == kernel_sort_with(tagged, by_first)
+  assert sort_with(tagged, fn(_, _) { Greater }) == kernel_sort_with(tagged, fn(_, _) { Greater })
 }

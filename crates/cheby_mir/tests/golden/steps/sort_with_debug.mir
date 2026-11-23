@@ -1,0 +1,37 @@
+fn std::list::sort_with(_0: value, _1: value) -> value check str#0 {
+  entry unwind bb6
+  str#0 = "std/list.cheby:821:8"
+bb0:
+  _2: value = call_runtime sort_start(borrow _0) ; unwind bb6
+  _3: u64 = call_runtime buffer_step(borrow _2, borrow const int -1)
+  goto bb1(_3)
+bb1(_4: u64):
+  _5: bool = compare ne u64 _4, const u64 0
+  branch _5, bb2, bb3
+bb2:
+  call_runtime loop_check() ; unwind bb7
+  _6: value = call_runtime pair_left(borrow _4)
+  _7: value = call_runtime pair_right(borrow _4)
+  dup _1
+  _8: value = call _1(_6, _7) ; unwind bb7
+  _9: int = read_tag _8 of order
+  drop _8
+  _10: u64 = call_runtime buffer_step(borrow _2, borrow _9)
+  goto bb1(_10)
+bb3:
+  drop _1
+  _11: value = call_runtime buffer_finish(_2, borrow _0) ; unwind bb5
+  drop _0
+  return _11
+bb4:
+  resume
+bb5:
+  drop _0
+  goto bb4()
+bb6:
+  drop _1
+  goto bb5()
+bb7:
+  drop _2
+  goto bb6()
+}

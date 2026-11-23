@@ -1513,11 +1513,77 @@ pub enum RuntimeFn {
     /// raise (D-233). Consumes the map and the value even when it raises
     /// (D-698).
     MapUpsertStore,
+    /// `(xs borrowed) -> State`: the state of a direct `list::sort_with`
+    /// whose comparison generated code calls (`lower/intrinsic.rs`): an
+    /// object that holds the elements of `xs` borrowed, so `xs` must stay
+    /// held until the [`Self::BufferFinish`], or a tagged word for fewer
+    /// than two elements. Result owned. May raise when the state cannot be
+    /// allocated.
+    SortStart,
+    /// `(items borrowed, max: Bool, by borrowed) -> State`: the state of a
+    /// direct `heap::to_list`, stepped as [`Self::SortStart`]'s; when the
+    /// elements' `compare` is built in, the work is done here (D-1613).
+    HeapListStart,
+    /// `(state borrowed, tag: Int) -> U64`: takes the tag of the `Order`
+    /// that answers the pending comparison of a [`Self::SortStart`] or
+    /// [`Self::HeapListStart`] state (any value before the first) and
+    /// returns the address of the next two elements to compare, which
+    /// [`Self::PairLeft`] and [`Self::PairRight`] read, or 0 when the
+    /// algorithm is done. Writes into the state, which only this code
+    /// holds. Cannot raise.
+    BufferStep,
+    /// `(state owned, source borrowed) -> List`: the result of a state
+    /// whose last step returned 0, a new list of its elements, or `source`,
+    /// the list its start was given, for a sort of fewer than two
+    /// elements. Consumes the state even when it raises (D-698).
+    BufferFinish,
+    /// `() -> U64`: the address of a stack slot of this statement's own,
+    /// where the [`Self::HeapPush`], [`Self::HeapPop`] or
+    /// [`Self::HeapHeapify`] that takes it leaves the steps of a sift. Runs
+    /// no code and cannot raise.
+    HeapSlot,
+    /// `(items owned, item owned, max: Bool, by borrowed, slot: U64) ->
+    /// List`: the start of a direct `heap::push`: `items` with `item` at
+    /// the end, in place when `items` is unique, and the steps of its
+    /// sift-up in `slot`, done when the elements' `compare` is built in
+    /// (D-1613). Result owned; the steps borrow it, so it must stay held
+    /// until the last [`Self::HeapStep`]. Consumes `items` and `item`
+    /// even when it raises (D-698).
+    HeapPush,
+    /// `(items owned, max: Bool, by borrowed, slot: U64) -> List`: the
+    /// start of a direct `heap::pop` once its root is read, as
+    /// [`Self::HeapPush`]'s.
+    HeapPop,
+    /// `(items owned, max: Bool, by borrowed, slot: U64) -> List`: the
+    /// start of a direct `heap::from_list`, as [`Self::HeapPush`]'s.
+    HeapHeapify,
+    /// `(slot: U64) -> U64`: the address of the first pair to compare that
+    /// the start before it left in `slot`, or 0 when there is none. A load:
+    /// it runs no code and cannot raise.
+    HeapFirst,
+    /// `(slot: U64, tag: Int) -> U64`: the next step of the steps in
+    /// `slot`, as [`Self::BufferStep`] steps a state. Writes into the list
+    /// its start returned, in place; may raise when it copies a shared path.
+    HeapStep,
+    /// `(address: U64) -> T`: the first element of a pair whose address a
+    /// [`Self::BufferStep`] or [`Self::HeapStep`] returned, dup'd, so the
+    /// result is owned. A load and a dup: it cannot raise.
+    PairLeft,
+    /// `(address: U64) -> T`: the second element of such a pair, as
+    /// [`Self::PairLeft`] reads the first.
+    PairRight,
+    /// `() -> void`: the check a function's entry makes, inside a loop of
+    /// an intrinsic body that is no self tail call: when the fiber is asked
+    /// to yield, is cancelled or is past its deadline, the runtime's slow
+    /// path of the entry check runs, and the unwinding it may start leaves
+    /// through the statement's edge (D-028, D-124, D-453). Evaluated for
+    /// effect ([`Stmt::Eval`]).
+    LoopCheck,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 43] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1548,6 +1614,19 @@ impl RuntimeFn {
         Self::MapSlotTake,
         Self::MapUpsertFound,
         Self::MapUpsertStore,
+        Self::SortStart,
+        Self::HeapListStart,
+        Self::BufferStep,
+        Self::BufferFinish,
+        Self::HeapSlot,
+        Self::HeapPush,
+        Self::HeapPop,
+        Self::HeapHeapify,
+        Self::HeapFirst,
+        Self::HeapStep,
+        Self::PairLeft,
+        Self::PairRight,
+        Self::LoopCheck,
     ];
 
     /// Whether the helper is a head of the pattern step right before it
@@ -1596,7 +1675,20 @@ impl RuntimeFn {
             | Self::MapUpsertAddress
             | Self::MapSlotTake
             | Self::MapUpsertFound
-            | Self::MapUpsertStore => None,
+            | Self::MapUpsertStore
+            | Self::SortStart
+            | Self::HeapListStart
+            | Self::BufferStep
+            | Self::BufferFinish
+            | Self::HeapSlot
+            | Self::HeapPush
+            | Self::HeapPop
+            | Self::HeapHeapify
+            | Self::HeapFirst
+            | Self::HeapStep
+            | Self::PairLeft
+            | Self::PairRight
+            | Self::LoopCheck => None,
         }
     }
 
@@ -1614,8 +1706,8 @@ impl RuntimeFn {
     /// Whether a call of the helper may start or pass on an unwinding
     /// (D-698): false for `StrEq`, `ListLength`, `ListGet`, the heads of a
     /// pattern step, `MapValueAt`, the reads of an element as a raw
-    /// number and an upsert's address and `MapSlotTake`, true for every
-    /// other helper.
+    /// number, an upsert's address and `MapSlotTake`, and `BufferStep`,
+    /// `HeapSlot` and the reads of a pair, true for every other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
         !matches!(
@@ -1631,6 +1723,11 @@ impl RuntimeFn {
                 | Self::ListGetF32
                 | Self::MapUpsertAddress
                 | Self::MapSlotTake
+                | Self::BufferStep
+                | Self::HeapSlot
+                | Self::HeapFirst
+                | Self::PairLeft
+                | Self::PairRight
         )
     }
 
@@ -1680,7 +1777,30 @@ impl RuntimeFn {
                 (Int, Borrowed),
                 (Int, Borrowed),
             ],
-            Self::ListUnconsHead | Self::ListUnconsHeadFloat | Self::ListUnconsHeadF32 => &[],
+            Self::ListUnconsHead
+            | Self::ListUnconsHeadFloat
+            | Self::ListUnconsHeadF32
+            | Self::HeapSlot
+            | Self::LoopCheck => &[],
+            Self::SortStart => &[(Value, Borrowed)],
+            Self::HeapListStart => &[(Value, Borrowed), (Bool, Borrowed), (Value, Borrowed)],
+            Self::BufferStep => &[(Value, Borrowed), (Int, Borrowed)],
+            Self::BufferFinish => &[(Value, Owned), (Value, Borrowed)],
+            Self::HeapPush => &[
+                (Value, Owned),
+                (Value, Owned),
+                (Bool, Borrowed),
+                (Value, Borrowed),
+                (U64, Borrowed),
+            ],
+            Self::HeapPop | Self::HeapHeapify => &[
+                (Value, Owned),
+                (Bool, Borrowed),
+                (Value, Borrowed),
+                (U64, Borrowed),
+            ],
+            Self::HeapStep => &[(U64, Borrowed), (Int, Borrowed)],
+            Self::PairLeft | Self::PairRight | Self::HeapFirst => &[(U64, Borrowed)],
         }
     }
 
@@ -1707,13 +1827,26 @@ impl RuntimeFn {
             | Self::MapUpsert
             | Self::MapSlotTake
             | Self::MapUpsertFound
-            | Self::MapUpsertStore => Some(Repr::Value),
+            | Self::MapUpsertStore
+            | Self::SortStart
+            | Self::HeapListStart
+            | Self::BufferFinish
+            | Self::HeapPush
+            | Self::HeapPop
+            | Self::HeapHeapify
+            | Self::PairLeft
+            | Self::PairRight => Some(Repr::Value),
             Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
-            Self::MapFind | Self::MapUpsertAddress => Some(Repr::U64),
+            Self::MapFind
+            | Self::MapUpsertAddress
+            | Self::BufferStep
+            | Self::HeapSlot
+            | Self::HeapFirst
+            | Self::HeapStep => Some(Repr::U64),
             Self::ListUnconsHeadFloat | Self::ListGetFloat => Some(Repr::Float),
             Self::ListUnconsHeadF32 | Self::ListGetF32 => Some(Repr::F32),
-            Self::EffectCheck => None,
+            Self::EffectCheck | Self::LoopCheck => None,
         }
     }
 
@@ -1751,6 +1884,19 @@ impl RuntimeFn {
             Self::MapSlotTake => "map_slot_take",
             Self::MapUpsertFound => "map_upsert_found",
             Self::MapUpsertStore => "map_upsert_store",
+            Self::SortStart => "sort_start",
+            Self::HeapListStart => "heap_list_start",
+            Self::BufferStep => "buffer_step",
+            Self::BufferFinish => "buffer_finish",
+            Self::HeapSlot => "heap_slot",
+            Self::HeapPush => "heap_push",
+            Self::HeapPop => "heap_pop",
+            Self::HeapHeapify => "heap_heapify",
+            Self::HeapFirst => "heap_first",
+            Self::HeapStep => "heap_step",
+            Self::PairLeft => "pair_left",
+            Self::PairRight => "pair_right",
+            Self::LoopCheck => "loop_check",
         }
     }
 }

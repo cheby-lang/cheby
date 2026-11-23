@@ -294,7 +294,8 @@ fn intrinsic_scope_run_passes_validation() {
 }
 
 /// The table holds `scope_run` under its runtime name (D-693), then
-/// `std::list`'s `push` and `prepend`.
+/// `std::list`'s `push`, `prepend` and `sort_with`, then the updates of
+/// `std::heap`.
 #[test]
 fn intrinsic_table() {
     assert_eq!(
@@ -302,9 +303,20 @@ fn intrinsic_table() {
         [
             "cheby_rt_scope_run",
             "cheby_rt_std_list_push",
-            "cheby_rt_std_list_prepend"
+            "cheby_rt_std_list_prepend",
+            "cheby_rt_std_list_sort_with",
+            "cheby_rt_std_heap_push",
+            "cheby_rt_std_heap_pop",
+            "cheby_rt_std_heap_from_list",
+            "cheby_rt_std_heap_to_list"
         ]
     );
+    assert_eq!(
+        Intrinsic::from_symbol("cheby_rt_std_list_sort_with"),
+        Some(Intrinsic::ListSortWith)
+    );
+    // The kernel a direct call no longer reaches is no intrinsic.
+    assert_eq!(Intrinsic::from_symbol("cheby_list_sort_with"), None);
     assert_eq!(
         Intrinsic::from_symbol("cheby_rt_std_list_push"),
         Some(Intrinsic::ListPush)

@@ -1,8 +1,8 @@
 // @mode: run-fail
 // @decisions: D-526, D-1613
-//! A panic inside the `compare` that a heap's kernel calls back is
-//! reported like any other panic, at its own location, even after the
-//! kernel has moved elements of the heap in place.
+//! A panic inside the `compare` that a heap's update calls is reported
+//! like any other panic, at its own location, even after the runtime has
+//! moved elements of the heap in place.
 
 import std::heap
 import std::int

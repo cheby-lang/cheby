@@ -34,6 +34,7 @@ mod heap;
 pub(crate) mod kernels;
 mod node;
 mod ops;
+mod steps;
 mod tree;
 
 #[cfg(test)]
@@ -41,6 +42,8 @@ mod tests;
 
 pub use heap::{
     cheby_heap_sys_from_list, cheby_heap_sys_pop, cheby_heap_sys_push, cheby_heap_sys_to_list,
+    cheby_rt_heap_heapify, cheby_rt_heap_list_start, cheby_rt_heap_pop, cheby_rt_heap_push,
+    cheby_rt_heap_step,
 };
 pub use kernels::{
     cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_set,
@@ -51,6 +54,7 @@ pub use kernels::{
 };
 pub use node::{StaticList, cheby_rt_static_empty_list};
 pub(crate) use ops::Iter;
+pub use steps::{cheby_rt_buffer_finish, cheby_rt_buffer_step, cheby_rt_sort_start};
 
 use crate::abi::Word;
 

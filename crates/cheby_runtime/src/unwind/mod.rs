@@ -1093,6 +1093,8 @@ mod tests {
     const LIST_GET: &str = "reads an element whose index lowering checked";
     const MAP_VALUE_AT: &str = "reads and dups the value word a lookup of a held map found";
     const MAP_SLOT: &str = "moves a word out of a slot an upsert of a held map opened";
+    const STEP: &str =
+        "advances a state only its caller holds, over buffers it allocated, and allocates nothing";
     const STATIC: &str = "returns a static object";
     const READS_STATIC: &str = "reads its arguments and returns a static object (D-902)";
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
@@ -1172,6 +1174,7 @@ mod tests {
         ("helpers.rs", "cheby_rt_fmod_f32", ARITHMETIC),
         ("list/kernels.rs", "cheby_rt_list_length", READS),
         ("list/kernels.rs", "cheby_rt_list_get", LIST_GET),
+        ("list/steps.rs", "cheby_rt_buffer_step", STEP),
         ("list/kernels.rs", "cheby_list_length", READS),
         ("hamt/kernels.rs", "cheby_map_new", STATIC),
         ("hamt/kernels.rs", "cheby_rt_map_value_at", MAP_VALUE_AT),

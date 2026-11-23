@@ -419,6 +419,20 @@ pub mod block_cache {
     }
 }
 
+pub mod heap {
+    //! The stack slot of a direct call of `std::heap`'s updates
+    //! (`sym::HEAP_PUSH`), where their start leaves the steps of a sift.
+
+    /// The slot's size in bytes; the runtime checks that its steps fit.
+    pub const STEPS_SIZE: usize = 512;
+    /// Byte offset in the slot of the address of the first pair to
+    /// compare, or 0 when there is none, which the start writes.
+    pub const STEPS_FIRST_OFFSET: i32 = 0;
+    /// [`STEPS_SIZE`] as code generation's slot size.
+    pub const STEPS_SLOT_SIZE: u32 = 512;
+    const _: () = assert!(STEPS_SIZE == 512 && STEPS_SLOT_SIZE == 512);
+}
+
 pub mod map {
     //! What generated code reads and writes in a map: the placeholder a
     //! value slot holds while a direct call of `map::upsert` has the value
@@ -878,6 +892,38 @@ pub mod sym {
     /// map inserts the key, hashing it. Generated code stores into a slot
     /// inline.
     pub const MAP_UPSERT_STORE: &str = "cheby_rt_map_upsert_store";
+    /// `uint64_t cheby_rt_sort_start(ExecCtx *ctx, uint64_t xs)`: the state of a
+    /// direct `list::sort_with` of the borrowed `xs`, whose comparison
+    /// generated code calls: an object it owns, or a tagged word for fewer
+    /// than two elements (`list/steps.rs`).
+    pub const SORT_START: &str = "cheby_rt_sort_start";
+    /// `uint64_t cheby_rt_buffer_step(uint64_t state, int64_t tag)`: takes the tag
+    /// of the `Order` that answers the pending comparison of a
+    /// [`SORT_START`] or [`HEAP_LIST_START`] state and returns the
+    /// address of the next two elements to compare, or 0 when done.
+    pub const BUFFER_STEP: &str = "cheby_rt_buffer_step";
+    /// `uint64_t cheby_rt_buffer_finish(ExecCtx *ctx, uint64_t state, uint64_t source)`:
+    /// the list a finished state holds, consuming the state; the borrowed
+    /// `source` is the list its start was given.
+    pub const BUFFER_FINISH: &str = "cheby_rt_buffer_finish";
+    /// `uint64_t cheby_rt_heap_list_start(ExecCtx *ctx, uint64_t items, bool max, uint64_t by)`:
+    /// the state of a direct `heap::to_list`, stepped as [`SORT_START`]'s.
+    pub const HEAP_LIST_START: &str = "cheby_rt_heap_list_start";
+    /// `uint64_t cheby_rt_heap_push(ExecCtx *ctx, uint64_t items, uint64_t item, bool max,
+    /// uint64_t by, uint64_t *slot)`: `heap::push`'s start at a direct call: the
+    /// list with `item` added, consuming both, and the steps of its sift in
+    /// `slot` ([`super::heap::STEPS_SIZE`] bytes).
+    pub const HEAP_PUSH: &str = "cheby_rt_heap_push";
+    /// `uint64_t cheby_rt_heap_pop(ExecCtx *ctx, uint64_t items, bool max, uint64_t by,
+    /// uint64_t *slot)`: `heap::pop`'s start, as [`HEAP_PUSH`]'s.
+    pub const HEAP_POP: &str = "cheby_rt_heap_pop";
+    /// `uint64_t cheby_rt_heap_heapify(ExecCtx *ctx, uint64_t items, bool max, uint64_t by,
+    /// uint64_t *slot)`: `heap::from_list`'s start, as [`HEAP_PUSH`]'s.
+    pub const HEAP_HEAPIFY: &str = "cheby_rt_heap_heapify";
+    /// `uint64_t cheby_rt_heap_step(ExecCtx *ctx, uint64_t *slot, int64_t tag)`: the next step of
+    /// the steps a [`HEAP_PUSH`], [`HEAP_POP`] or [`HEAP_HEAPIFY`] wrote, as
+    /// [`BUFFER_STEP`] steps a state.
+    pub const HEAP_STEP: &str = "cheby_rt_heap_step";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -887,10 +933,15 @@ pub mod sym {
     pub const COUNTING_OFF: u8 = crate::stats::COUNTING_OFF;
     /// Std externals whose bodies the compiler generates (D-693, D-1758).
     /// Never registered.
-    pub const INTRINSICS: [&str; 3] = [
+    pub const INTRINSICS: [&str; 8] = [
         "cheby_rt_scope_run",
         "cheby_rt_std_list_push",
         "cheby_rt_std_list_prepend",
+        "cheby_rt_std_list_sort_with",
+        "cheby_rt_std_heap_push",
+        "cheby_rt_std_heap_pop",
+        "cheby_rt_std_heap_from_list",
+        "cheby_rt_std_heap_to_list",
     ];
     /// `void cheby_io_print(uint64_t text)`, `text` borrowed.
     pub const IO_PRINT: &str = "cheby_io_print";
@@ -977,7 +1028,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 86] = [
+    pub const ALL: [&str; 94] = [
         ALLOC,
         DUP,
         DROP,
@@ -1038,6 +1089,14 @@ pub mod sym {
         MAP_SLOT_TAKE,
         MAP_UPSERT_FOUND,
         MAP_UPSERT_STORE,
+        SORT_START,
+        BUFFER_STEP,
+        BUFFER_FINISH,
+        HEAP_LIST_START,
+        HEAP_PUSH,
+        HEAP_POP,
+        HEAP_HEAPIFY,
+        HEAP_STEP,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -1228,9 +1287,9 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(61..84), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(69..92), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
-            sym::ALL.get(84..),
+            sym::ALL.get(92..),
             Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
         );
         assert_eq!(

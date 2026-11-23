@@ -1169,7 +1169,8 @@ fn optimize_inner(
 ) -> Result<Vec<Function>, Ice> {
     let index = unit.function_index();
     let graph = call_graph(unit, &index);
-    let (order, in_cycle) = components(&graph);
+    let (order, mut in_cycle) = components(&graph);
+    with_loops(unit, &mut in_cycle);
     let mut tags = crate::simplify::Known::of(unit);
     tags.set_devirt(passes.spec);
     if let Some((bodies, _)) = across {
@@ -1340,9 +1341,65 @@ fn specialize_host(
 
 /// Which functions of `unit` are in a cycle of its call graph, by index
 /// into [`MirModule::functions`] (`index` is the unit's
-/// [`MirModule::function_index`]).
+/// [`MirModule::function_index`]), or hold a loop of their own
+/// ([`has_loop`]).
 pub(crate) fn cycles(unit: &MirModule, index: &FxHashMap<FnKey, usize>) -> Vec<bool> {
-    components(&call_graph(unit, index)).1
+    let mut in_cycle = components(&call_graph(unit, index)).1;
+    with_loops(unit, &mut in_cycle);
+    in_cycle
+}
+
+/// Marks in `in_cycle` the functions of `unit` that hold a loop.
+fn with_loops(unit: &MirModule, in_cycle: &mut [bool]) {
+    for (cycle, f) in in_cycle.iter_mut().zip(&unit.functions) {
+        *cycle |= has_loop(f);
+    }
+}
+
+/// Whether a block of `f` reaches itself again through normal
+/// successors: a loop that is no self tail call, which only the stepped
+/// bodies of std's intrinsics have (`lower/intrinsic.rs`). Such a
+/// function counts as one in a cycle: it is cloned for what its calls
+/// know, never inlined, as every other loop of Cheby is a cycle of calls.
+/// A clone then gets its own clean-up and inlining, which reach the
+/// function value its loop calls; a copy inlined into the caller would
+/// not be searched again (module docs).
+pub(crate) fn has_loop(f: &Function) -> bool {
+    // Depth first from the entry: a successor on the current path is a
+    // back edge.
+    const UNSEEN: u8 = 0;
+    const ON_PATH: u8 = 1;
+    const DONE: u8 = 2;
+    let mut state = vec![UNSEEN; f.blocks.len()];
+    let mut stack: Vec<(usize, Vec<BlockId>)> = Vec::new();
+    if let (Some(first), Ok(entry)) = (state.first_mut(), f.block(BlockId::from_u32(0))) {
+        *first = ON_PATH;
+        stack.push((0, entry.term.successors()));
+    }
+    while let Some((block, next)) = stack.last_mut() {
+        let Some(succ) = next.pop() else {
+            if let Some(s) = state.get_mut(*block) {
+                *s = DONE;
+            }
+            stack.pop();
+            continue;
+        };
+        let n = usize::try_from(succ.as_u32()).unwrap_or(usize::MAX);
+        match state.get(n).copied() {
+            Some(ON_PATH) => return true,
+            Some(UNSEEN) => {
+                if let Some(s) = state.get_mut(n) {
+                    *s = ON_PATH;
+                }
+                let succs = f
+                    .block(succ)
+                    .map_or_else(|_| Vec::new(), |b| b.term.successors());
+                stack.push((n, succs));
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The order in which the units of one build are optimized when they

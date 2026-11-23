@@ -22,11 +22,16 @@
 //! - `sys_to_list` lists the elements in the order repeated pops give,
 //!   popping a scratch copy.
 //!
-//! `compare` is called back through `callback::call`, as `list::sort_with`
-//! calls its comparison (D-1448, D-526), except when the element type's
-//! `compare` is built in, which [`order`] reads from the type's
+//! `compare` is called back through `callback::call`, as `list::sort_with`'s
+//! kernel calls its comparison (D-1448, D-526), except when the element
+//! type's `compare` is built in, which [`order`] reads from the type's
 //! descriptor: then the kernel compares natively, which gives the same
 //! `Order` and so the same heap.
+//!
+//! A direct call of the updates never reaches these kernels: std binds
+//! them to intrinsics that run the same sifts in [`steps`] and call
+//! `compare` from generated code. The kernels stay for std's tests, which
+//! compare the two.
 //!
 //! A kernel borrows its list (D-187). At count one, with a tree that holds
 //! exactly the list's elements, it updates the list in place and returns
@@ -40,8 +45,15 @@
 //! drop, or [`Array`]'s, releases whole.
 
 mod order;
+mod steps;
 #[cfg(test)]
 mod tests;
+
+pub use steps::{
+    cheby_rt_heap_heapify, cheby_rt_heap_list_start, cheby_rt_heap_pop, cheby_rt_heap_push,
+    cheby_rt_heap_step,
+};
+pub(super) use steps::{list_result, list_step};
 
 use std::cmp::Ordering;
 

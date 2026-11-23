@@ -605,7 +605,7 @@ fn the_builder_refuses_misplaced_edges() {
 
 #[test]
 fn the_scope_helpers() {
-    assert_eq!(RuntimeFn::ALL.len(), 30);
+    assert_eq!(RuntimeFn::ALL.len(), 43);
     // An upsert's first step takes the map over and may raise; the steps
     // after it only read and write the slot it opened.
     assert_eq!(
@@ -693,6 +693,11 @@ fn the_scope_helpers() {
             RuntimeFn::ListGetF32,
             RuntimeFn::MapUpsertAddress,
             RuntimeFn::MapSlotTake,
+            RuntimeFn::BufferStep,
+            RuntimeFn::HeapSlot,
+            RuntimeFn::HeapFirst,
+            RuntimeFn::PairLeft,
+            RuntimeFn::PairRight,
         ]
     );
     assert_eq!(Const::Ctx.repr(), Repr::U64);

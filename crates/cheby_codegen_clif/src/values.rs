@@ -835,6 +835,15 @@ impl Translator<'_, '_> {
                 abi::list::ROOT_LEN_OFFSET,
             )));
         }
+        if let Some(value) = self.steps_inline(helper, args)? {
+            // A read of a pair or a heap's slot (`cheby_mir`'s
+            // `lower/intrinsic.rs`).
+            return Ok(Some(value));
+        }
+        if let (RuntimeFn::LoopCheck, []) = (helper, args) {
+            self.loop_check()?;
+            return Ok(None);
+        }
         if let (RuntimeFn::MapValueAt, [_, address]) = (helper, args) {
             // The value word a `map_find` of the map found: loaded and
             // dup'd inline, as a field read and its `dup` are. The map
@@ -976,6 +985,89 @@ impl Translator<'_, '_> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// The reads of a stepped intrinsic's body (`cheby_mir`'s
+    /// `lower/intrinsic.rs`), which call nothing: `heap_slot` is the
+    /// address of a stack slot of its own for the steps of a heap's sift,
+    /// `heap_first` loads the first pair's address from such a slot,
+    /// and `pair_left` and `pair_right` load the word at offset 0 or 8 of
+    /// a pair's address and dup it; under `checked_rc` the runtime's read of
+    /// a word at an address does the load and the dup. `None` for every
+    /// other helper.
+    fn steps_inline(
+        &mut self,
+        helper: RuntimeFn,
+        args: &[Operand],
+    ) -> Result<Option<Value>, CodegenError> {
+        let offset = match (helper, args) {
+            (RuntimeFn::HeapSlot, []) => {
+                let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    abi::heap::STEPS_SLOT_SIZE,
+                    3,
+                ));
+                return Ok(Some(self.b.ins().stack_addr(types::I64, slot, 0)));
+            }
+            (RuntimeFn::HeapFirst, [slot]) => {
+                let slot = self.operand(slot)?;
+                return Ok(Some(self.b.ins().load(
+                    types::I64,
+                    MemFlagsData::trusted(),
+                    slot,
+                    abi::heap::STEPS_FIRST_OFFSET,
+                )));
+            }
+            (RuntimeFn::PairLeft, [_]) => 0,
+            (RuntimeFn::PairRight, [_]) => 8,
+            _ => return Ok(None),
+        };
+        let address = args
+            .first()
+            .ok_or_else(|| CodegenError::ice("a pair's read without its address"))?;
+        let address = self.operand(address)?;
+        if self.opts.checked_rc {
+            let at = self.b.ins().iadd_imm_u(address, offset);
+            return Ok(Some(self.runtime_value(RuntimeFunc::MapValueAt, &[at])?));
+        }
+        let value = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            address,
+            i32::try_from(offset).unwrap_or(0),
+        );
+        self.dup(value)?;
+        Ok(Some(value))
+    }
+
+    /// `loop_check`: the entry check inside a loop of a stepped
+    /// intrinsic's body, `sp <u [ctx+0]` with the runtime's slow path at the
+    /// function's entry location in a cold block, whose unwinding leaves
+    /// through the statement's edge (D-124, D-698).
+    fn loop_check(&mut self) -> Result<(), CodegenError> {
+        let ctx = self.ctx()?;
+        let loc = self
+            .func
+            .entry_loc
+            .ok_or_else(|| CodegenError::ice("a loop check without an entry location"))?;
+        let sp = self.b.ins().get_stack_pointer(types::I64);
+        let limit = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            ctx,
+            abi::CTX_STACK_LIMIT,
+        );
+        let below = self.b.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
+        let slow = self.b.create_block();
+        self.b.set_cold_block(slow);
+        let after = self.b.create_block();
+        self.b.ins().brif(below, slow, &[], after, &[]);
+        self.b.switch_to_block(slow);
+        let loc = self.string(loc)?;
+        self.edge_runtime_call(RuntimeFunc::StackSlow, &[ctx, loc])?;
+        self.b.ins().jump(after, &[]);
+        self.b.switch_to_block(after);
+        Ok(())
     }
 
     /// `map_upsert_store`, the last step of an upsert: the value stored at
